@@ -1,0 +1,19 @@
+# CPU-only Ollama sidecar with the embedding model baked in, so cold starts
+# never pull at runtime. Build context = repo root:
+#   docker build -f docker/Dockerfile.ollama -t mycelium-ollama .
+FROM ollama/ollama:latest
+
+ARG EMBED_MODEL=nomic-embed-text
+
+# Bake the model into an image layer: start the server, pull, stop. The pulled
+# blobs live in /root/.ollama and ship with the image.
+RUN ollama serve & \
+    pid=$! ; \
+    until ollama list >/dev/null 2>&1; do sleep 1; done ; \
+    ollama pull "${EMBED_MODEL}" ; \
+    kill "$pid" ; \
+    wait "$pid" 2>/dev/null || true
+
+ENV OLLAMA_HOST=0.0.0.0:11434
+EXPOSE 11434
+# Inherit the base image's `ollama serve` entrypoint.

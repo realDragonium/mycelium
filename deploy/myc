@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Convenience wrapper for running mycelium CLI commands on the server
+# against the production data dir. Drop this on the VPS at
+# /usr/local/bin/myc (root-owned, mode 0755) so any sudoer can do:
+#
+#   sudo myc users list
+#   sudo myc users set-role someone@example.com writer
+#
+# Without it, the full incantation is:
+#   sudo -u mycelium /opt/mycelium/.local/bin/uv \
+#        --project /opt/mycelium run mycelium \
+#        --data-dir /var/lib/mycelium users list
+
+exec sudo -u mycelium -H /opt/mycelium/.local/bin/uv \
+    --project /opt/mycelium run \
+    mycelium --data-dir /var/lib/mycelium "$@"

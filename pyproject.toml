@@ -1,0 +1,40 @@
+[project]
+name = "mycelium"
+version = "0.1.0"
+description = "AI-native knowledge base substrate exposed via MCP."
+readme = "README.md"
+authors = [
+    { name = "realDragonium", email = "drago@dragonium.nl" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.109.1",
+    "authlib>=1.7.2",
+    "fastapi>=0.136.1",
+    "hnswlib>=0.8.0",
+    "httpx>=0.28.1",
+    "itsdangerous>=2.2.0",
+    "matplotlib>=3.10.9",
+    "mcp>=1.27.0",
+    "numpy>=2.4.4",
+    "ollama>=0.6.2",
+    "pydantic>=2.13.3",
+    "pyinstrument>=5.1.2",
+    "python-dotenv>=1.2.2",
+    "spacy>=3.8.14",
+    "uvicorn>=0.46.0",
+]
+
+[project.scripts]
+mycelium = "mycelium.__main__:main"
+mycelium-http = "mycelium.http:main"
+mycelium-init = "mycelium.init_kb:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"

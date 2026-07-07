@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-density="comfortable" data-answer-voice="serif">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mycelium — cockpit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..700&family=Geist+Mono:wght@400..600&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="cockpit.css" />
+<link rel="stylesheet" href="coverage.css" />
+<style>
+  /* Pre-mount load / error screen — uses the same design tokens as the app. */
+  .load-screen { min-height: 100vh; display: grid; place-items: center; background: var(--bg, #0b0d0c); color: var(--ink-2, #c9d1cd); font-family: var(--sans, system-ui, sans-serif); }
+  .load-card { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; padding: 40px; max-width: 520px; }
+  .load-title { font-size: 17px; font-weight: 600; color: var(--ink-1, #e8efe9); }
+  .load-detail { font-family: var(--mono, ui-monospace, monospace); font-size: 12px; line-height: 1.6; color: var(--ink-4, #6b746f); }
+  .load-actions { margin-top: 8px; }
+  .load-btn { display: inline-flex; align-items: center; gap: 7px; padding: 9px 18px; border-radius: 8px; border: 1px solid var(--line, #232826); background: transparent; color: var(--ink-2, #c9d1cd); font: inherit; font-size: 13px; cursor: pointer; text-decoration: none; }
+  .load-btn.primary { background: var(--bio, oklch(0.875 0.185 146)); color: #07140c; border-color: transparent; font-weight: 600; }
+  .load-orb { position: relative; width: 34px; height: 34px; }
+  .load-orb .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--bio, #5fd08a); border-top-color: transparent; animation: load-spin 0.9s linear infinite; }
+  .load-orb .core { position: absolute; inset: 12px; border-radius: 50%; background: var(--bio, #5fd08a); opacity: 0.5; }
+  @keyframes load-spin { to { transform: rotate(360deg); } }
+
+  /* Inline statement editor (EditableStatementText) — uses the app's tokens. */
+  .stmt-editable-foot { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+  .stmt-edit-btn { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 6px;
+    border: 1px solid var(--line, #232826); background: transparent; color: var(--ink-4, #6b746f);
+    font-family: var(--mono, ui-monospace, monospace); font-size: var(--fs-2xs, 10.5px); cursor: pointer; opacity: 0.7; transition: opacity .12s, color .12s; }
+  .stmt-edit-btn:hover { opacity: 1; color: var(--ink-2, #c9d1cd); border-color: var(--ink-5, #3a423d); }
+  .stmt-edit-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: var(--fs-2xs, 10.5px); }
+  .stmt-edit-tag.saved { color: var(--bio, oklch(0.875 0.185 146)); }
+  .stmt-edit-tag.staged { color: var(--violet, #a78bfa); cursor: pointer; text-decoration: underline dotted; }
+  .stmt-edit { margin: 4px 0; }
+  .stmt-edit-area { width: 100%; box-sizing: border-box; resize: vertical; padding: 11px 13px; border-radius: 8px;
+    border: 1px solid var(--bio, #5fd08a); background: var(--surface, #11140f); color: var(--ink-1, #e8efe9);
+    font-family: var(--mono, 'Geist Mono', ui-monospace, monospace); font-size: 13.5px; line-height: 1.6; outline: none; }
+  .stmt-edit-actions { display: flex; gap: 8px; margin-top: 9px; align-items: center; }
+  .stmt-edit-actions .btn.ghost { background: transparent; border: 1px solid var(--line, #232826); color: var(--ink-3, #8b948f); }
+  .stmt-edit-warn { display: flex; gap: 8px; margin-top: 9px; padding: 9px 11px; border-radius: 7px;
+    background: rgba(217,119,6,0.10); border: 1px solid rgba(217,119,6,0.35); color: #d8a657; font-size: 12.5px; line-height: 1.5; }
+  .stmt-edit-warn .sev-row { font-family: var(--mono); font-size: var(--fs-2xs, 10.5px); margin-top: 3px; color: var(--ink-3, #8b948f); }
+  .stmt-edit-err { margin-top: 8px; font-family: var(--mono); font-size: var(--fs-xs, 11.5px); color: var(--bad, #e0533d); }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script>
+    window.MYC_TWEAKS = /*EDITMODE-BEGIN*/{
+      "theme": "dark",
+      "density": "comfortable",
+      "answerVoice": "serif",
+      "accent": "oklch(0.875 0.185 146)"
+    }/*EDITMODE-END*/;
+  </script>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <script src="api.js"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="lib.jsx"></script>
+  <script type="text/babel" src="find.jsx"></script>
+  <script type="text/babel" src="ask.jsx"></script>
+  <script type="text/babel" src="ingest.jsx"></script>
+  <script type="text/babel" src="drafts.jsx"></script>
+  <script type="text/babel" src="mentions.jsx"></script>
+  <script type="text/babel" src="inspect.jsx"></script>
+  <script type="text/babel" src="coverage.jsx"></script>
+  <script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

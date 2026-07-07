@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# uv
+.uv/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+
+# JS — defensive: the bundled UI loads React/Babel via CDN (no build step
+# today), so node_modules shouldn't appear, but ignore it pre-emptively.
+node_modules/
+
+# CDK (infra/)
+infra/cdk.out/
+infra/cdk.context.json
+
+# OS cruft
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+
+# Mycelium runtime data — should live in a separate knowledge-base folder,
+# never in this generic substrate repo.
+.mycelium/
+.ingest/
+
+# Local dev env file (loaded by load_dotenv at startup). Holds secrets
+# like ANTHROPIC_API_KEY — never commit it. See .env.example for the shape.
+.env
+
+# Ingestion-agent run output
+cleanup_log.jsonl
+
+# temp file for not using annotation anymore, need to have an overview of all existing annotation
+anns.json
+
+# Entity-graph layout cache — baked from the live DB by layout_baker on
+# first server start (and rebuilt on entity/link mutations). Per-KB, not
+# something to track in this generic substrate repo.
+/src/mycelium/ui/data/entity-positions.json
+
+
+.project-plan
+
+# Claude Code session worktrees — isolated per-session checkouts, never tracked.
+.claude/worktrees/

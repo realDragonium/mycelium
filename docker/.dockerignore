@@ -1,0 +1,20 @@
+# Build context is the repo root; keep the image lean and the context small.
+.git
+.venv
+.pytest_cache
+.mycelium
+infra/cdk.out
+infra/.venv
+**/__pycache__
+**/*.pyc
+tests
+bench
+docs
+scripts
+deploy
+*.md
+!README.md
+anns.json
+cleanup_log.jsonl
+.mcp.json
+.claude

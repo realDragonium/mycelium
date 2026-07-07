@@ -1,0 +1,36 @@
+# Litestream config. ${VAR} are expanded from the container environment
+# (LITESTREAM_BUCKET / LITESTREAM_REGION are set by the task definition).
+#
+# Credentials come from the ECS task role automatically (the AWS SDK reads the
+# container credentials endpoint) — no static keys here. S3 traffic uses the
+# VPC S3 gateway endpoint, so it never touches the NAT.
+#
+# One entry per SQLite file Mycelium persists. Each replicates independently.
+dbs:
+  - path: /data/mycelium.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: litestream/mycelium.db
+        region: ${LITESTREAM_REGION}
+
+  - path: /data/mycelium-history.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: litestream/mycelium-history.db
+        region: ${LITESTREAM_REGION}
+
+  - path: /data/mycelium-auth.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: litestream/mycelium-auth.db
+        region: ${LITESTREAM_REGION}
+
+  - path: /data/mycelium-drafts.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: litestream/mycelium-drafts.db
+        region: ${LITESTREAM_REGION}
