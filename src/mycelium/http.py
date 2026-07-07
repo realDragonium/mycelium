@@ -430,6 +430,13 @@ def _register(func: Callable[..., Any]) -> None:
         app.get(path, name=func.__name__)(_make_get_handler(func, required))
         return
 
+    if (
+        len(sig.parameters) == 1
+        and "draft_id" in sig.parameters
+        and sig.parameters["draft_id"].default is None
+    ):
+        app.get(path, name=func.__name__)(_make_get_handler(func, required))
+
     fields: dict[str, tuple[Any, Any]] = {}
     for name, param in sig.parameters.items():
         annotation = hints.get(name, Any)

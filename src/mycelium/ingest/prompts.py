@@ -161,6 +161,19 @@ def _compact_vocab_rows(rows: Any, key: str) -> list[dict[str, Any]]:
         when = row.get("when_to_use")
         if when:
             item["when_to_use"] = str(when)[:240]
+        direction = row.get("direction")
+        if isinstance(direction, dict):
+            source = direction.get("source_kinds")
+            target = direction.get("target_kinds")
+            if isinstance(source, list):
+                source_s = "/".join(str(k) for k in source)
+            else:
+                source_s = "any"
+            if isinstance(target, list):
+                target_s = "/".join(str(k) for k in target)
+            else:
+                target_s = "any"
+            item["direction"] = f"{source_s} -> {target_s}"
         if "usage_count" in row:
             item["usage_count"] = row["usage_count"]
         out.append(item)
