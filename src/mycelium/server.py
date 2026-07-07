@@ -24,7 +24,7 @@ from typing import Any, Callable, Literal, NotRequired, TypedDict
 
 from mcp.server.fastmcp import FastMCP
 
-from . import embed, layout_baker, phrasing, plurals, store, survey, tracing, vector, when_expression
+from . import embed, layout_baker, link_rules, phrasing, plurals, store, survey, tracing, vector, when_expression
 from .tracing import trace_span
 
 
@@ -521,6 +521,14 @@ class EdgeSpec(TypedDict):
     on read/delete is by canonicalized hash, so the literal shape sent
     to `remove_links` doesn't have to match what was originally sent to
     `add_links` — only the canonical form must match.
+
+    Direction note: source is the bigger/earlier/wrapping/primary side;
+    target is the smaller/later/contained/dependent side. Before
+    committing an edge, read it aloud as "FROM <link_type> TO" and check
+    it against the link type's description. For constrained statement
+    link types, provably flipped edges detected by statement kind are
+    rejected; e.g. `teaches` is `procedure -> capability`, so
+    `capability -> procedure` fails and should be swapped.
     """
     from_id: str
     to_id: str
@@ -532,7 +540,7 @@ class BatchStatementSpec(TypedDict):
     """One statement in a batch upsert.
 
     Same shape as the parameters of single-record `upsert_statement`, with
-    one extension: any `to_statement_id` (in `links`) or `from_id`
+    one extension: any `to_id` (in `links`) or `from_id`
     (in `incoming_links`) can be either an existing statement id like
     `"stm_abc..."` or the literal string `"@N"` (where N is a 0-based
     integer) to refer to the Nth statement in the same batch. This lets
@@ -884,6 +892,47 @@ def _link_dict(
     if when is not None:
         out["when"] = when
     return out
+
+
+def _statement_kind(
+    statement_rows: dict[str, sqlite3.Row],
+    statement_id: str,
+    *,
+    self_id: str | None = None,
+    self_kind: str | None = None,
+) -> str:
+    if self_id is not None and statement_id == self_id:
+        assert self_kind is not None
+        return self_kind
+    return statement_rows[statement_id]["kind"]
+
+
+def _direction_entry(link_type: str) -> dict[str, list[str] | None] | None:
+    direction = link_rules.LINK_DIRECTION.get(link_type)
+    if direction is None:
+        return None
+    source_kinds, target_kinds = direction
+    return {
+        "source_kinds": None if source_kinds is None else sorted(source_kinds),
+        "target_kinds": None if target_kinds is None else sorted(target_kinds),
+    }
+
+
+def _format_flip_error(
+    *,
+    position: str,
+    from_id: str,
+    to_id: str,
+    link_type: str,
+    from_kind: str,
+    to_kind: str,
+) -> str | None:
+    err = link_rules.flip_error(link_type, from_kind, to_kind)
+    if err is None:
+        return None
+    return (
+        f"{position}: {from_id} ({from_kind}) -> {to_id} ({to_kind}): {err}"
+    )
 
 
 def _at_refs_in_when(when: dict[str, Any] | None) -> list[int]:
@@ -1438,7 +1487,7 @@ def upsert_statement(
     statement simply mentions whatever named entities its words contain.
 
     `links` are the OUTGOING typed edges from this statement to existing
-    targets — `{to_statement_id, link_type}`. `incoming_links` are the
+    targets — `{to_id, link_type}`. `incoming_links` are the
     INCOMING typed edges from existing sources to this statement —
     `{from_id, link_type}` — useful when wiring a new child
     statement under existing parents in one call instead of two. Both
@@ -1465,11 +1514,17 @@ def upsert_statement(
     # Validate every referenced statement id BEFORE mutating, so a typo can't
     # half-apply. Outgoing `links` targets, `incoming_links` sources, and
     # every `statement_id` leaf inside any `when` tree are all checked here.
+    statement_rows: dict[str, sqlite3.Row] = {}
+
     def _check_existing(ref: str, position: str) -> str:
-        if store.get_statement(_conn, ref) is None:
+        row = store.get_statement(_conn, ref)
+        if row is None:
             raise ValueError(f"{position}: statement {ref!r} does not exist")
+        statement_rows[ref] = row
         return ref
 
+    if id is not None:
+        _check_existing(id, "id")
     for i, spec in enumerate(links):
         _check_existing(spec["to_id"], f"links[{i}].to_id")
         if "when" in spec:
@@ -1479,6 +1534,40 @@ def upsert_statement(
         if "when" in il:
             _resolve_when_tree(il["when"], _check_existing, f"incoming_links[{i}].when")
 
+    flip_errors: list[str] = []
+    for i, spec in enumerate(links):
+        to_id = spec["to_id"]
+        to_kind = _statement_kind(
+            statement_rows, to_id, self_id=id, self_kind=kind
+        )
+        err = _format_flip_error(
+            position=f"links[{i}]",
+            from_id=id or "<new statement>",
+            to_id=to_id,
+            link_type=spec["link_type"],
+            from_kind=kind,
+            to_kind=to_kind,
+        )
+        if err is not None:
+            flip_errors.append(err)
+    for i, il in enumerate(incoming_links):
+        from_id = il["from_id"]
+        from_kind = _statement_kind(
+            statement_rows, from_id, self_id=id, self_kind=kind
+        )
+        err = _format_flip_error(
+            position=f"incoming_links[{i}]",
+            from_id=from_id,
+            to_id=id or "<new statement>",
+            link_type=il["link_type"],
+            from_kind=from_kind,
+            to_kind=kind,
+        )
+        if err is not None:
+            flip_errors.append(err)
+    if flip_errors:
+        raise ValueError("flipped link direction:\n" + "\n".join(flip_errors))
+
     vec = embed.embed(text)
     link_pairs = [
         (item["to_id"], item["link_type"], item.get("when"))
@@ -1486,8 +1575,6 @@ def upsert_statement(
     ]
 
     if id is not None:
-        if store.get_statement(_conn, id) is None:
-            raise ValueError(f"statement {id!r} does not exist")
         store.update_statement(_conn, id, kind, text)
         vector_id = store.get_vector_id(_conn, id)
         assert vector_id is not None
@@ -1575,6 +1662,7 @@ def upsert_statements(
     # without bypass are marked directly rejected.
     item_violations: list[list[phrasing.Violation]] = []
     direct_rejected: set[int] = set()
+    item_errors: list[list[str]] = [[] for _ in range(n)]
     for i, spec in enumerate(statements):
         viols = phrasing.check(spec["text"], kind=spec["kind"])
         item_violations.append(viols)
@@ -1622,6 +1710,8 @@ def upsert_statements(
 
     # Phase 1: validate every cross-reference for SURVIVING items only.
     # Rejected items aren't created, so their refs don't need checking.
+    statement_rows: dict[str, sqlite3.Row] = {}
+
     def _resolve_ref(ref: str, position: str) -> int | str:
         if ref.startswith("@"):
             try:
@@ -1633,9 +1723,19 @@ def upsert_statements(
                     f"{position}: batch index @{idx} out of range [0, {n})"
                 )
             return idx
-        if store.get_statement(_conn, ref) is None:
+        row = store.get_statement(_conn, ref)
+        if row is None:
             raise ValueError(f"{position}: statement {ref!r} does not exist")
+        statement_rows[ref] = row
         return ref
+
+    def _ref_kind(ref: int | str) -> str:
+        if isinstance(ref, int):
+            return statements[ref]["kind"]
+        return statement_rows[ref]["kind"]
+
+    def _ref_label(ref: int | str) -> str:
+        return f"@{ref}" if isinstance(ref, int) else ref
 
     # Each resolved entry is (endpoint_ref, link_type, when_raw_tree).
     # `endpoint_ref` is int (sibling index) or str (existing id).
@@ -1660,6 +1760,48 @@ def upsert_statements(
             if when_raw is not None:
                 _resolve_when_tree(when_raw, _resolve_ref, f"statements[{i}].incoming_links[{j}].when")
             resolved_incoming[i].append((source, il["link_type"], when_raw))
+
+    for i, spec in enumerate(statements):
+        if i in rejected:
+            continue
+        for j, (target, link_type, _when) in enumerate(resolved_outgoing[i]):
+            err = _format_flip_error(
+                position=f"statements[{i}].links[{j}]",
+                from_id=f"@{i}",
+                to_id=_ref_label(target),
+                link_type=link_type,
+                from_kind=spec["kind"],
+                to_kind=_ref_kind(target),
+            )
+            if err is not None:
+                item_errors[i].append(err)
+        for j, (source, link_type, _when) in enumerate(resolved_incoming[i]):
+            err = _format_flip_error(
+                position=f"statements[{i}].incoming_links[{j}]",
+                from_id=_ref_label(source),
+                to_id=f"@{i}",
+                link_type=link_type,
+                from_kind=_ref_kind(source),
+                to_kind=spec["kind"],
+            )
+            if err is not None:
+                item_errors[i].append(err)
+
+    flip_rejected = {i for i, errors in enumerate(item_errors) if errors}
+    if flip_rejected:
+        direct_rejected.update(flip_rejected)
+        rejected.update(flip_rejected)
+        changed = True
+        while changed:
+            changed = False
+            for i, spec in enumerate(statements):
+                if i in rejected:
+                    continue
+                deps = sorted({r for r in _spec_at_refs(spec) if r in rejected})
+                if deps:
+                    rejected.add(i)
+                    cascade_reasons[i] = deps
+                    changed = True
 
     # Phase 3: embed surviving items only. Slow path runs first so an
     # Ollama failure aborts cleanly without leaving partial state.
@@ -1721,7 +1863,9 @@ def upsert_statements(
     # Build per-item results.
     results: list[dict[str, Any]] = []
     for i in range(n):
-        if i in direct_rejected:
+        if item_errors[i]:
+            results.append({"rejected": True, "errors": item_errors[i]})
+        elif i in direct_rejected:
             results.append({"rejected": True, "violations": item_violations[i]})
         elif i in rejected:
             results.append({
@@ -2364,6 +2508,14 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     (`stm_…`) or entities (`ent_…`) in any combination except
     entity↔entity (use `add_entity_links` for those).
 
+    Direction note: source is the bigger/earlier/wrapping/primary side;
+    target is the smaller/later/contained/dependent side. Before
+    committing an edge, read it aloud as "FROM <link_type> TO" and check
+    it against the link type's description. For constrained statement
+    link types, provably flipped edges detected by statement kind are
+    rejected; e.g. `teaches` is `procedure -> capability`, so
+    `capability -> procedure` fails and should be swapped.
+
     Idempotent — pre-existing edges (matched on the canonical
     `(from, to, link_type, when_hash)`) are silently skipped, so the
     count returned can be smaller than the number of `links` you
@@ -2395,12 +2547,34 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
         if "when" in l:
             when_expression.validate(l["when"])
             needed_statements.update(when_expression.leaves(l["when"]))
+    statement_rows: dict[str, sqlite3.Row] = {}
     for sid in needed_statements:
-        if store.get_statement(_conn, sid) is None:
+        row = store.get_statement(_conn, sid)
+        if row is None:
             raise ValueError(f"statement {sid!r} does not exist")
+        statement_rows[sid] = row
     for eid in needed_entities:
         if store.get_entity_by_id(_conn, eid) is None:
             raise ValueError(f"entity {eid!r} does not exist")
+
+    flip_errors: list[str] = []
+    for i, l in enumerate(links):
+        if _id_kind(l["from_id"]) != "statement" or _id_kind(l["to_id"]) != "statement":
+            continue
+        from_kind = statement_rows[l["from_id"]]["kind"]
+        to_kind = statement_rows[l["to_id"]]["kind"]
+        err = _format_flip_error(
+            position=f"links[{i}]",
+            from_id=l["from_id"],
+            to_id=l["to_id"],
+            link_type=l["link_type"],
+            from_kind=from_kind,
+            to_kind=to_kind,
+        )
+        if err is not None:
+            flip_errors.append(err)
+    if flip_errors:
+        raise ValueError("flipped link direction:\n" + "\n".join(flip_errors))
 
     inserted = 0
     if stmt_edges:
@@ -2810,7 +2984,7 @@ def discover_facts(
 def list_link_types() -> list[dict[str, Any]]:
     """List the statement→statement link types known to the substrate.
 
-    Returns `[{link_type, description, usage_count}]` sorted
+    Returns `[{link_type, description, usage_count, direction?}]` sorted
     alphabetically. `description` comes from the
     `statement_link_type_glossary` table (DB-backed, editable via the
     website or `upsert_link_type`); empty string for any type that's
@@ -2861,14 +3035,20 @@ def list_link_types() -> list[dict[str, Any]]:
         for r in store.list_statement_link_type_glossary(_conn)
     }
     all_types = sorted(set(counts) | set(glossary))
-    return [
-        {
+    rows: list[dict[str, Any]] = []
+    for t in all_types:
+        row: dict[str, Any] = {
             "link_type": t,
+            "type": t,
             "description": glossary.get(t, ""),
             "usage_count": counts.get(t, 0),
+            "in_use": "true" if counts.get(t, 0) else "false",
         }
-        for t in all_types
-    ]
+        direction = _direction_entry(t)
+        if direction is not None:
+            row["direction"] = direction
+        rows.append(row)
+    return rows
 
 
 class EntityEdgeSpec(TypedDict):
@@ -3004,8 +3184,10 @@ def list_entity_link_types() -> list[dict[str, Any]]:
     return [
         {
             "link_type": t,
+            "type": t,
             "description": glossary.get(t, ""),
             "usage_count": counts.get(t, 0),
+            "in_use": "true" if counts.get(t, 0) else "false",
         }
         for t in all_types
     ]
