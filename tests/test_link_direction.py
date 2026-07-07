@@ -64,6 +64,23 @@ def test_flip_error_detects_only_provable_flips():
     assert "swap" in err
 
 
+def test_flip_error_detects_target_only_constraint_flips():
+    err = flip_error("establishes", "state", "event")
+    assert err is not None
+    assert "swap" in err
+    assert flip_error("establishes", "event", "state") is None
+
+    err = flip_error("valued-by", "rule", "property")
+    assert err is not None
+    assert "swap" in err
+    assert flip_error("valued-by", "property", "rule") is None
+
+    err = flip_error("governed-by", "rule", "procedure")
+    assert err is not None
+    assert "swap" in err
+    assert flip_error("governed-by", "procedure", "rule") is None
+
+
 def test_add_links_rejects_flipped_teaches_with_ids(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         capability = _stmt(client, "capability", "the user can export reports")
@@ -150,6 +167,115 @@ def test_upsert_statements_reports_flip_through_sibling_ref(tmp_path, monkeypatc
         assert results[0]["rejected"] is True
         assert "swap" in results[0]["errors"][0]
         assert results[1]["statement_id"].startswith("stm_")
+
+
+def test_upsert_statements_cascades_rejection_from_flipped_sibling_ref(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        r = client.post("/upsert-statements", json={"statements": [
+            {
+                "kind": "capability",
+                "text": "the user can configure notifications",
+                "links": [{"to_id": "@1", "link_type": "teaches"}],
+                "allow_phrasing_violations": True,
+            },
+            {
+                "kind": "procedure",
+                "text": "configure notifications",
+                "links": [],
+                "allow_phrasing_violations": True,
+            },
+            {
+                "kind": "event",
+                "text": "notification settings are reviewed",
+                "links": [{"to_id": "@0", "link_type": "contains"}],
+                "allow_phrasing_violations": True,
+            },
+        ]})
+
+        assert r.status_code == 200
+        results = r.json()["results"]
+        assert results[0]["rejected"] is True
+        assert "swap" in results[0]["errors"][0]
+
+        survivor_id = results[1]["statement_id"]
+        assert survivor_id.startswith("stm_")
+
+        assert results[2] == {
+            "rejected": True,
+            "reason": "depends_on_rejected",
+            "depends_on": [0],
+        }
+        assert "statement_id" not in results[2]
+
+        listed = client.post("/list-statements", json={}).json()
+        assert listed["total"] == 1
+        assert listed["statements"] == [
+            {
+                "id": survivor_id,
+                "kind": "procedure",
+                "text": "configure notifications",
+            },
+        ]
+
+
+def test_upsert_statement_kind_change_uses_new_kind_for_flip_check(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        capability = _stmt(client, "capability", "the user can rotate keys")
+        r = client.post("/upsert-statement", json={
+            "kind": "procedure",
+            "text": "rotate keys",
+            "links": [{"to_id": capability, "link_type": "teaches"}],
+            "allow_phrasing_violations": True,
+        })
+        assert r.status_code == 200, r.text
+        procedure = r.json()["statement_id"]
+
+        r = client.post("/upsert-statement", json={
+            "id": capability,
+            "kind": "procedure",
+            "text": "prepare key rotation",
+            "links": [],
+            "allow_phrasing_violations": True,
+        })
+        assert r.status_code == 200, r.text
+
+        r = client.post("/upsert-statement", json={
+            "id": procedure,
+            "kind": "capability",
+            "text": "the user can rotate keys",
+            "links": [{"to_id": capability, "link_type": "teaches"}],
+            "allow_phrasing_violations": True,
+        })
+
+        assert r.status_code == 400
+        detail = r.json()["detail"]
+        assert "swap" in detail
+        assert procedure in detail
+        assert capability in detail
+
+
+def test_upsert_statement_accepts_unconstrained_self_link(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        statement_id = _stmt(client, "event", "the workflow records itself")
+
+        r = client.post("/upsert-statement", json={
+            "id": statement_id,
+            "kind": "event",
+            "text": "the workflow records itself",
+            "links": [{"to_id": statement_id, "link_type": "contains"}],
+            "allow_phrasing_violations": True,
+        })
+
+        assert r.status_code == 200, r.text
+        assert r.json()["statement_id"] == statement_id
+
+        body = client.post(
+            "/get-statements",
+            json={"ids": [statement_id]},
+        ).json()["statements"][0]
+        assert body["links"] == [
+            {"to_id": statement_id, "link_type": "contains"},
+        ]
 
 
 def test_entity_touching_edges_are_not_direction_checked(tmp_path, monkeypatch):
