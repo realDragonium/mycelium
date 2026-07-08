@@ -15,7 +15,6 @@ import json
 import os
 import secrets
 import time
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
@@ -765,25 +764,15 @@ def list_knowledge_gaps(request: Request, status: str | None = None) -> dict[str
     _require_principal(request)
     conn = server._conn
     assert conn is not None
-    where = ""
-    if status == "open":
-        where = "WHERE resolved_at IS NULL AND dismissed_at IS NULL"
-    elif status == "resolved":
-        where = "WHERE resolved_at IS NOT NULL"
-    elif status == "dismissed":
-        where = "WHERE dismissed_at IS NOT NULL"
-    elif status not in (None, "", "all"):
+    status = status or "all"
+    if status not in ("all", "open", "resolved", "dismissed"):
         from fastapi import HTTPException
 
         raise HTTPException(
             status_code=400,
             detail="status must be one of: all, open, resolved, dismissed",
         )
-    rows = conn.execute(
-        f"SELECT id, text, created_at, created_by, resolved_at, resolved_by, "
-        f"       dismissed_at, dismissed_by "
-        f"FROM knowledge_gaps {where} ORDER BY created_at DESC"
-    ).fetchall()
+    rows = store.list_knowledge_gaps(conn, status=status)
     return {"gaps": [_serialize_gap(r) for r in rows]}
 
 
@@ -802,50 +791,18 @@ def update_knowledge_gap(
     p = _require_principal(request)
     conn = server._conn
     assert conn is not None
-    row = conn.execute(
-        "SELECT id FROM knowledge_gaps WHERE id = ?", (gap_id,)
-    ).fetchone()
-    if row is None:
+    if store.get_knowledge_gap(conn, gap_id) is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="gap not found")
-
-    from datetime import datetime, timezone
-
-    now = datetime.now(timezone.utc).isoformat()
-
-    if body.action == "resolve":
-        conn.execute(
-            "UPDATE knowledge_gaps SET resolved_at = ?, resolved_by = ?, "
-            "dismissed_at = NULL, dismissed_by = NULL WHERE id = ?",
-            (now, p.id, gap_id),
-        )
-    elif body.action == "dismiss":
-        conn.execute(
-            "UPDATE knowledge_gaps SET dismissed_at = ?, dismissed_by = ?, "
-            "resolved_at = NULL, resolved_by = NULL WHERE id = ?",
-            (now, p.id, gap_id),
-        )
-    elif body.action == "reopen":
-        conn.execute(
-            "UPDATE knowledge_gaps SET resolved_at = NULL, resolved_by = NULL, "
-            "dismissed_at = NULL, dismissed_by = NULL WHERE id = ?",
-            (gap_id,),
-        )
-    else:
+    if body.action not in ("resolve", "dismiss", "reopen"):
         from fastapi import HTTPException
 
         raise HTTPException(
             status_code=400,
             detail="action must be one of: resolve, dismiss, reopen",
         )
-    conn.commit()
-
-    updated = conn.execute(
-        "SELECT id, text, created_at, created_by, resolved_at, resolved_by, "
-        "       dismissed_at, dismissed_by FROM knowledge_gaps WHERE id = ?",
-        (gap_id,),
-    ).fetchone()
+    updated = store.set_knowledge_gap_status(conn, gap_id, body.action, p.id)
     return {"gap": _serialize_gap(updated)}
 
 
@@ -1105,14 +1062,7 @@ def list_my_tokens(request: Request) -> dict[str, Any]:
     p = _require_principal(request)
     conn = server._auth_conn
     assert conn is not None
-    # Synthetic local-admin reads from the lazily-created placeholder
-    # row (id = LOCAL_ADMIN_ID); see `create_my_token` for the rationale.
-    owner_id = auth.LOCAL_ADMIN_ID if p.synthetic else p.id
-    rows = conn.execute(
-        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
-        "FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC",
-        (owner_id,),
-    ).fetchall()
+    rows = auth.list_tokens(conn, auth.owner_id_for(p))
     return {"tokens": [_serialize_token_row(r) for r in rows]}
 
 
@@ -1133,38 +1083,7 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
     conn = server._auth_conn
     assert conn is not None
-    capped_scope = auth._clamp_scope(body.scope, p.role)
-
-    # The synthetic local-admin has no row in `users`; before it can own
-    # tokens we need a real row. Create one once, lazily, and bind it
-    # to the synthetic id so subsequent tokens accumulate against the
-    # same owner. This row is invisible until auth is turned on; if it
-    # then is, the user will be the bootstrap admin's email if it matches.
-    owner_id = p.id
-    if p.synthetic:
-        existing = conn.execute(
-            "SELECT id FROM users WHERE id = ?", (auth.LOCAL_ADMIN_ID,)
-        ).fetchone()
-        if existing is None:
-            conn.execute(
-                "INSERT INTO users (id, type, name, role, status, created_at) "
-                "VALUES (?, 'human', 'Local admin', 'admin', 'active', ?)",
-                (auth.LOCAL_ADMIN_ID, auth._now()),
-            )
-            conn.commit()
-        owner_id = auth.LOCAL_ADMIN_ID
-
-    raw, token_id = auth.issue_token(
-        conn,
-        user_id=owner_id,
-        name=body.name,
-        scope=capped_scope,
-    )
-    row = conn.execute(
-        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
-        "FROM mcp_tokens WHERE id = ?",
-        (token_id,),
-    ).fetchone()
+    raw, row = auth.mint_own_token(conn, principal=p, name=body.name, scope=body.scope)
     return {"token": raw, **_serialize_token_row(row)}
 
 
@@ -1173,15 +1092,12 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
     conn = server._auth_conn
     assert conn is not None
-    owner_id = auth.LOCAL_ADMIN_ID if p.synthetic else p.id
-    row = conn.execute(
-        "SELECT id, user_id FROM mcp_tokens WHERE id = ?", (token_id,)
-    ).fetchone()
-    if row is None or row["user_id"] != owner_id:
+    try:
+        auth.revoke_own_token(conn, token_id=token_id, owner_id=auth.owner_id_for(p))
+    except LookupError as ex:
         from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="token not found")
-    auth.revoke_token(conn, token_id)
+        raise HTTPException(status_code=404, detail=str(ex))
     return {"ok": True}
 
 
@@ -1209,32 +1125,16 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
 
     conn = server._drafts_conn
     assert conn is not None
-    if status == "open":
-        where = "WHERE submitted_at IS NULL AND decided_at IS NULL"
-    elif status == "submitted":
-        where = "WHERE submitted_at IS NOT NULL AND decided_at IS NULL"
-    elif status in ("approved", "rejected", "withdrawn"):
-        where = f"WHERE decision = '{status}'"
-    elif status in (None, "", "all"):
-        where = ""
-    else:
+    status = status or "all"
+    if status not in ("all", "open", "submitted", "approved", "rejected", "withdrawn"):
         from fastapi import HTTPException
 
         raise HTTPException(
             status_code=400,
             detail="status must be one of: all, open, submitted, approved, rejected, withdrawn",
         )
-    rows = conn.execute(
-        f"SELECT * FROM drafts {where} ORDER BY created_at DESC"
-    ).fetchall()
-    # Include lightweight op-count so the list UI can show "12 ops"
-    # without a per-row roundtrip.
-    counts = {
-        r["draft_id"]: int(r["n"])
-        for r in conn.execute(
-            "SELECT draft_id, COUNT(*) AS n FROM draft_ops GROUP BY draft_id"
-        ).fetchall()
-    }
+    rows = drafts_store.list_drafts(conn, status=status)
+    counts = drafts_store.count_ops_by_draft(conn)
     out = []
     for r in rows:
         d = drafts_store.serialize_draft(r)
@@ -1473,10 +1373,7 @@ def list_users(request: Request) -> dict[str, Any]:
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    rows = conn.execute(
-        "SELECT id, type, email, name, role, status, oidc_issuer, created_at, last_login_at "
-        "FROM users ORDER BY created_at ASC"
-    ).fetchall()
+    rows = auth.list_users(conn)
     return {"users": [_serialize_user_row(r) for r in rows]}
 
 
@@ -1509,11 +1406,7 @@ def create_user(body: CreateUserBody, request: Request) -> dict[str, Any]:
         created_by=admin.id,
     )
     conn.commit()
-    row = conn.execute(
-        "SELECT id, type, email, name, role, status, oidc_issuer, created_at, last_login_at "
-        "FROM users WHERE id = ?",
-        (user_id,),
-    ).fetchone()
+    row = auth.get_user(conn, user_id)
     return {"user": _serialize_user_row(row)}
 
 
@@ -1528,40 +1421,18 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
-    if row is None:
+    try:
+        row = auth.update_user(
+            conn,
+            user_id,
+            role=body.role,
+            status=body.status,
+            name=body.name,
+        )
+    except LookupError as ex:
         from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="user not found")
-    # Guard against the only admin demoting themselves and locking the
-    # surface — at least one active admin must remain.
-    if body.role and body.role != "admin" and row["role"] == "admin":
-        n_admins = conn.execute(
-            "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'"
-        ).fetchone()["n"]
-        if n_admins <= 1:
-            from fastapi import HTTPException
-
-            raise HTTPException(
-                status_code=400,
-                detail="cannot demote the last admin",
-            )
-    if body.role is not None:
-        conn.execute("UPDATE users SET role = ? WHERE id = ?", (body.role, user_id))
-    if body.status is not None:
-        if body.status not in ("active", "suspended"):
-            from fastapi import HTTPException
-
-            raise HTTPException(status_code=400, detail="invalid status")
-        conn.execute("UPDATE users SET status = ? WHERE id = ?", (body.status, user_id))
-    if body.name is not None:
-        conn.execute("UPDATE users SET name = ? WHERE id = ?", (body.name, user_id))
-    conn.commit()
-    row = conn.execute(
-        "SELECT id, type, email, name, role, status, oidc_issuer, created_at, last_login_at "
-        "FROM users WHERE id = ?",
-        (user_id,),
-    ).fetchone()
+        raise HTTPException(status_code=404, detail=str(ex))
     return {"user": _serialize_user_row(row)}
 
 
@@ -1570,11 +1441,7 @@ def list_user_tokens(user_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    rows = conn.execute(
-        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
-        "FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC",
-        (user_id,),
-    ).fetchall()
+    rows = auth.list_tokens(conn, user_id)
     return {"tokens": [_serialize_token_row(r) for r in rows]}
 
 
@@ -1593,25 +1460,14 @@ def mint_token_for_user(
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    user = conn.execute(
-        "SELECT id, role FROM users WHERE id = ?", (user_id,)
-    ).fetchone()
-    if user is None:
+    try:
+        raw, row = auth.mint_token_for_user(
+            conn, user_id=user_id, name=body.name, scope=body.scope
+        )
+    except LookupError as ex:
         from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="user not found")
-    capped = auth._clamp_scope(body.scope, user["role"])
-    raw, token_id = auth.issue_token(
-        conn,
-        user_id=user_id,
-        name=body.name,
-        scope=capped,
-    )
-    row = conn.execute(
-        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
-        "FROM mcp_tokens WHERE id = ?",
-        (token_id,),
-    ).fetchone()
+        raise HTTPException(status_code=404, detail=str(ex))
     return {"token": raw, **_serialize_token_row(row)}
 
 
@@ -1640,10 +1496,7 @@ def list_invites(request: Request) -> dict[str, Any]:
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    rows = conn.execute(
-        "SELECT id, email, role, token, created_at, expires_at "
-        "FROM invites WHERE accepted_at IS NULL ORDER BY created_at DESC"
-    ).fetchall()
+    rows = auth.list_invites(conn)
     return {"invites": [_serialize_invite_row(r, request=request) for r in rows]}
 
 
@@ -1657,25 +1510,9 @@ def create_invite(body: CreateInviteBody, request: Request) -> dict[str, Any]:
     admin = _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    invite_id = str(uuid.uuid4())
-    token = secrets.token_urlsafe(24)
-    conn.execute(
-        "INSERT INTO invites (id, email, role, token, invited_by, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (
-            invite_id,
-            body.email.strip().lower(),
-            body.role,
-            token,
-            admin.id,
-            auth._now(),
-        ),
+    row = auth.create_invite(
+        conn, email=body.email, role=body.role, invited_by=admin.id
     )
-    conn.commit()
-    row = conn.execute(
-        "SELECT id, email, role, token, created_at, expires_at FROM invites WHERE id = ?",
-        (invite_id,),
-    ).fetchone()
     return _serialize_invite_row(row, request=request)
 
 
@@ -1684,10 +1521,7 @@ def revoke_invite(invite_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    conn.execute(
-        "DELETE FROM invites WHERE id = ? AND accepted_at IS NULL", (invite_id,)
-    )
-    conn.commit()
+    auth.revoke_invite(conn, invite_id)
     return {"ok": True}
 
 

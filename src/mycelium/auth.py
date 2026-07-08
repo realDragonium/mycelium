@@ -374,3 +374,204 @@ def revoke_token(conn: sqlite3.Connection, token_id: str) -> None:
         (_now(), token_id),
     )
     conn.commit()
+
+
+# --- HTTP admin surface: user / token / invite queries --------------------
+# Named helpers backing the /api/me and /api/admin endpoints. Each endpoint
+# stays translation-only (parse request → call helper → serialize row);
+# every query and every business rule (token ownership, the last-admin
+# guard) lives here. Reads return raw `sqlite3.Row`s so the HTTP layer keeps
+# its own presentation shaping. Not-found conditions raise `LookupError`
+# (endpoints map that to 404); rule violations raise `ValueError` (mapped to
+# 400 by the app-wide handler). Write helpers follow the same commit
+# discipline as `create_user` / `issue_token` above — noted per helper.
+
+
+def owner_id_for(principal: Principal) -> str:
+    """The `users.id` that owns a principal's personal tokens. The synthetic
+    local-admin owns its tokens under `LOCAL_ADMIN_ID`, not its in-memory
+    placeholder id."""
+    return LOCAL_ADMIN_ID if principal.synthetic else principal.id
+
+
+def list_tokens(conn: sqlite3.Connection, user_id: str) -> list[sqlite3.Row]:
+    """Every MCP token owned by `user_id`, newest first. Revoked tokens are
+    included (the UI greys them out rather than hiding them)."""
+    return conn.execute(
+        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
+        "FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,),
+    ).fetchall()
+
+
+def get_token(conn: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
+    """A single token row by id, or None. Used to read back a freshly minted
+    token for serialization."""
+    return conn.execute(
+        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
+        "FROM mcp_tokens WHERE id = ?",
+        (token_id,),
+    ).fetchone()
+
+
+def _ensure_local_admin_row(conn: sqlite3.Connection) -> str:
+    """Lazily materialize a real `users` row for the synthetic local-admin so
+    it can own tokens, and return its id (`LOCAL_ADMIN_ID`). The row stays
+    invisible until auth is switched on. Commits on first creation."""
+    existing = conn.execute(
+        "SELECT id FROM users WHERE id = ?", (LOCAL_ADMIN_ID,)
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            "INSERT INTO users (id, type, name, role, status, created_at) "
+            "VALUES (?, 'human', 'Local admin', 'admin', 'active', ?)",
+            (LOCAL_ADMIN_ID, _now()),
+        )
+        conn.commit()
+    return LOCAL_ADMIN_ID
+
+
+def mint_own_token(
+    conn: sqlite3.Connection,
+    *,
+    principal: Principal,
+    name: str,
+    scope: Scope,
+) -> tuple[str, sqlite3.Row]:
+    """Mint a token owned by the calling principal, capping `scope` at the
+    principal's current role. Returns `(raw_token, token_row)` — the raw
+    secret to show once plus the persisted row for serialization. Commits
+    (via `_ensure_local_admin_row` / `issue_token`)."""
+    capped = _clamp_scope(scope, principal.role)
+    owner_id = _ensure_local_admin_row(conn) if principal.synthetic else principal.id
+    raw, token_id = issue_token(conn, user_id=owner_id, name=name, scope=capped)
+    row = get_token(conn, token_id)
+    assert row is not None  # just inserted
+    return raw, row
+
+
+def revoke_own_token(conn: sqlite3.Connection, *, token_id: str, owner_id: str) -> None:
+    """Revoke a token the caller owns. Raises `LookupError` when the token is
+    unknown *or* owned by someone else — the endpoint maps both to 404 so a
+    caller can't probe other users' token ids. Commits (via `revoke_token`)."""
+    row = conn.execute(
+        "SELECT id, user_id FROM mcp_tokens WHERE id = ?", (token_id,)
+    ).fetchone()
+    if row is None or row["user_id"] != owner_id:
+        raise LookupError("token not found")
+    revoke_token(conn, token_id)
+
+
+def mint_token_for_user(
+    conn: sqlite3.Connection, *, user_id: str, name: str, scope: Scope
+) -> tuple[str, sqlite3.Row]:
+    """Admin path: mint a token for any user, capping `scope` at that user's
+    role. Raises `LookupError` (→ 404) when the user is unknown. Returns
+    `(raw_token, token_row)`. Commits (via `issue_token`)."""
+    user = get_user(conn, user_id)
+    if user is None:
+        raise LookupError("user not found")
+    capped = _clamp_scope(scope, user["role"])
+    raw, token_id = issue_token(conn, user_id=user_id, name=name, scope=capped)
+    row = get_token(conn, token_id)
+    assert row is not None
+    return raw, row
+
+
+def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """All users, oldest first."""
+    return conn.execute(
+        "SELECT id, type, email, name, role, status, oidc_issuer, created_at, "
+        "last_login_at FROM users ORDER BY created_at ASC"
+    ).fetchall()
+
+
+def get_user(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row | None:
+    """A single user row by id, or None."""
+    return conn.execute(
+        "SELECT id, type, email, name, role, status, oidc_issuer, created_at, "
+        "last_login_at FROM users WHERE id = ?",
+        (user_id,),
+    ).fetchone()
+
+
+def update_user(
+    conn: sqlite3.Connection,
+    user_id: str,
+    *,
+    role: Role | None = None,
+    status: str | None = None,
+    name: str | None = None,
+) -> sqlite3.Row:
+    """Apply an admin edit to a user and return the updated row. Only the
+    supplied fields change. Enforced rules, in order:
+
+    - unknown user → `LookupError` (endpoint maps to 404);
+    - **last-admin guard**: demoting the sole remaining active admin off the
+      admin role is refused with `ValueError("cannot demote the last admin")`
+      (→ 400), so the surface can't lock itself out;
+    - an out-of-range `status` → `ValueError("invalid status")` (→ 400).
+
+    Commits once all requested updates are applied."""
+    row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise LookupError("user not found")
+    # Guard against the only admin demoting themselves and locking the
+    # surface — at least one active admin must remain.
+    if role and role != "admin" and row["role"] == "admin":
+        n_admins = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'"
+        ).fetchone()["n"]
+        if n_admins <= 1:
+            raise ValueError("cannot demote the last admin")
+    if role is not None:
+        conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+    if status is not None:
+        if status not in ("active", "suspended"):
+            raise ValueError("invalid status")
+        conn.execute("UPDATE users SET status = ? WHERE id = ?", (status, user_id))
+    if name is not None:
+        conn.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
+    conn.commit()
+    updated = get_user(conn, user_id)
+    assert updated is not None
+    return updated
+
+
+def list_invites(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Pending (unaccepted) invites, newest first."""
+    return conn.execute(
+        "SELECT id, email, role, token, created_at, expires_at "
+        "FROM invites WHERE accepted_at IS NULL ORDER BY created_at DESC"
+    ).fetchall()
+
+
+def create_invite(
+    conn: sqlite3.Connection, *, email: str, role: Role, invited_by: str
+) -> sqlite3.Row:
+    """Create an invite binding a normalized email to a role and return its
+    row. The email is stripped and lowercased; the opaque token is generated
+    here. Commits."""
+    invite_id = str(uuid.uuid4())
+    token = secrets.token_urlsafe(24)
+    conn.execute(
+        "INSERT INTO invites (id, email, role, token, invited_by, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (invite_id, email.strip().lower(), role, token, invited_by, _now()),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, email, role, token, created_at, expires_at FROM invites WHERE id = ?",
+        (invite_id,),
+    ).fetchone()
+    assert row is not None
+    return row
+
+
+def revoke_invite(conn: sqlite3.Connection, invite_id: str) -> None:
+    """Delete a pending invite. No-op when the invite is already accepted or
+    absent (matches the endpoint's idempotent DELETE). Commits."""
+    conn.execute(
+        "DELETE FROM invites WHERE id = ? AND accepted_at IS NULL", (invite_id,)
+    )
+    conn.commit()
