@@ -152,19 +152,61 @@ _CLARIFY_SCHEMA: dict[str, Any] = {
 }
 
 
-def terminal_tool_defs() -> list[dict]:
-    """The two terminal tools. `strict` guarantees schema-valid inputs."""
+_SUBMIT_DESC_FLOOR = (
+    "Conclude with the structured answer. Only call this once the "
+    "floor is met: recon ran, at least one targeted retrieval round "
+    "happened, and at least one concept-seeded adjacency re-search "
+    "was attempted and is reported in adjacency_note."
+)
+#: Quick-mode: the floor is off, so don't demand the adjacency re-search — call
+#: as soon as recon plus a targeted read or two answer the question.
+_SUBMIT_DESC_QUICK = (
+    "Conclude with the structured answer. Call this as soon as recon plus a "
+    "targeted retrieval or two answer the question — no adjacency re-search is "
+    "required in quick mode (put 'skipped — quick mode' in adjacency_note if you "
+    "skip it). Still fill every required field honestly."
+)
+
+#: Quick-mode text for the `adjacency_note` *field*. The floor version (baked
+#: into `_SUBMIT_SCHEMA`) says the loop won't let you conclude without it — false
+#: in quick mode, and left uncorrected it would push the model to re-search
+#: anyway, defeating the point. So the field description is depth-aware too.
+_ADJACENCY_DESC_QUICK = (
+    "What a concept-seeded re-search surfaced (statements with no edge pointing "
+    "at them, reachable via mentions / shared entity / embedding proximity) — or "
+    "'nothing new'. OPTIONAL in quick mode: if you skipped the re-search, put "
+    "'skipped — quick mode' here. Still a required field, so never leave it empty."
+)
+
+
+def _submit_schema(*, enforce_floor: bool) -> dict[str, Any]:
+    """The `submit_answer` input schema, adjacency_note description tuned to the
+    depth. Floor-on returns the module constant unchanged (so `standard` is
+    byte-for-byte identical); floor-off swaps only that one field's description."""
+    if enforce_floor:
+        return _SUBMIT_SCHEMA
+    props = dict(_SUBMIT_SCHEMA["properties"])
+    props["adjacency_note"] = {
+        **props["adjacency_note"],
+        "description": _ADJACENCY_DESC_QUICK,
+    }
+    return {**_SUBMIT_SCHEMA, "properties": props}
+
+
+def terminal_tool_defs(*, enforce_floor: bool = True) -> list[dict]:
+    """The two terminal tools. `strict` guarantees schema-valid inputs.
+
+    `enforce_floor` tunes the `submit_answer` description AND its adjacency_note
+    field text (the structural gate itself lives in the loop): off, both drop the
+    adjacency demand so a quick-mode model isn't told to do work the loop won't
+    require.
+    """
     return [
         {
             "name": SUBMIT_TOOL,
-            "description": (
-                "Conclude with the structured answer. Only call this once the "
-                "floor is met: recon ran, at least one targeted retrieval round "
-                "happened, and at least one concept-seeded adjacency re-search "
-                "was attempted and is reported in adjacency_note."
-            ),
+            "description": _SUBMIT_DESC_FLOOR if enforce_floor else _SUBMIT_DESC_QUICK,
             "strict": True,
-            "input_schema": _SUBMIT_SCHEMA,
+            "input_schema": _submit_schema(enforce_floor=enforce_floor),
         },
         {
             "name": CLARIFY_TOOL,
@@ -180,13 +222,13 @@ def terminal_tool_defs() -> list[dict]:
     ]
 
 
-def build_tools(specs: list[ToolSpec]) -> list[dict]:
+def build_tools(specs: list[ToolSpec], *, enforce_floor: bool = True) -> list[dict]:
     """Full tool list handed to the model: read primitives + terminal tools."""
     read_tools = [
         {"name": s.name, "description": s.description, "input_schema": s.input_schema}
         for s in specs
     ]
-    return read_tools + terminal_tool_defs()
+    return read_tools + terminal_tool_defs(enforce_floor=enforce_floor)
 
 
 def answered_from_tool_input(data: dict, trace: dict) -> Answered:

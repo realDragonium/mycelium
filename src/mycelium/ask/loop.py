@@ -101,7 +101,7 @@ def _execute(
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
     )
-    tools = build_tools(substrate.tool_specs())
+    tools = build_tools(substrate.tool_specs(), enforce_floor=config.enforce_floor)
     collected_ids: set[str] = set()
     ops_after_recon: list[str] = []  # substrate read names after recon, for the floor
 
@@ -110,7 +110,12 @@ def _execute(
     _collect_ids(recon, collected_ids)
 
     messages: list[dict[str, Any]] = [
-        {"role": "user", "content": prompts.initial_user_message(question, recon)}
+        {
+            "role": "user",
+            "content": prompts.initial_user_message(
+                question, recon, quick=not config.enforce_floor
+            ),
+        }
     ]
 
     nudged = False
@@ -226,7 +231,9 @@ def _execute(
         if name == SUBMIT_TOOL:
             floor = _floor_state(ops_after_recon)
             adjacency_note = (tool_input.get("adjacency_note") or "").strip()
-            if not floor["satisfied"] or not adjacency_note:
+            # `quick` depth (enforce_floor off) skips the gate entirely: accept
+            # the first well-formed answer instead of forcing the re-search dance.
+            if config.enforce_floor and (not floor["satisfied"] or not adjacency_note):
                 if floor_blocks < _MAX_FLOOR_BLOCKS:
                     floor_blocks += 1
                     if not floor["satisfied"]:

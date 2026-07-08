@@ -16,13 +16,23 @@ under ~40s. The id is config, never hardcoded in logic; set
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .. import tracing
 
 #: Current Haiku model id (confirmed against Anthropic's model catalog:
 #: claude-haiku-4-5, 200K context, $1/$5 per MTok).
 DEFAULT_MODEL = "claude-haiku-4-5"
+
+#: The `quick` depth profile (see `for_depth`). A time-boxed caller — e.g.
+#: Intercom, which drops an MCP call at ~30s — cannot afford the floor's forced
+#: retrieve -> re-search -> re-search dance. `quick` drops the floor and tightens
+#: the caps so the loop collapses to recon -> a targeted read or two -> answer,
+#: returning a real (not degraded) answer inside the window. These are *ceilings*
+#: applied via min(), so a lower global env override still wins.
+QUICK_OP_CAP = 8
+QUICK_WALL_CLOCK_S = 25.0
+QUICK_REQUEST_TIMEOUT_S = 20.0
 
 
 @dataclass(frozen=True)
@@ -37,6 +47,11 @@ class AskConfig:
     #: and the client sees a generic error. 45s returns a fast partial instead.
     #: Raise with MYCELIUM_ASK_WALL_CLOCK_S once /mcp gets its own keepalive.
     wall_clock_s: float = 45.0
+    #: The anti-premature-closure floor (loop.py: recon + a targeted retrieval +
+    #: a concept-seeded adjacency re-search before an answer is accepted). ON by
+    #: default — it's what buys thoroughness. The `quick` depth turns it OFF so a
+    #: latency-boxed caller gets a fast, direct answer. See `for_depth`.
+    enforce_floor: bool = True
     #: `k` for the step-0 recon survey_statements call.
     recon_k: int = 8
     #: max_tokens per model turn. Comfortably above a structured answer.
@@ -100,3 +115,22 @@ class AskConfig:
                 or str(tracing.default_trace_dir())
             ),
         )
+
+
+def for_depth(config: AskConfig, depth: str) -> AskConfig:
+    """Return `config` adjusted for the requested `depth`. Pure.
+
+    `quick` drops the floor and lowers the op-cap / wall-clock / per-call timeout
+    to *ceilings* (via min, so an already-lower env override still wins), so the
+    loop is structurally shorter and finishes well inside a tight client window.
+    Anything other than `quick` (incl. `standard`) returns `config` unchanged.
+    """
+    if depth != "quick":
+        return config
+    return replace(
+        config,
+        enforce_floor=False,
+        op_cap=min(config.op_cap, QUICK_OP_CAP),
+        wall_clock_s=min(config.wall_clock_s, QUICK_WALL_CLOCK_S),
+        request_timeout_s=min(config.request_timeout_s, QUICK_REQUEST_TIMEOUT_S),
+    )

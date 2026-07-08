@@ -245,6 +245,73 @@ def test_floor_prevents_premature_conclusion():
     assert result.trace["floor"]["satisfied"] is True
 
 
+def test_quick_depth_accepts_first_submit_without_the_floor():
+    """`quick` (enforce_floor off) takes the first well-formed submit_answer —
+    the very premature submit that `standard` blocks — with no forced retrieval
+    or adjacency re-search, and without degrading."""
+    responses = [
+        # premature under standard; accepted immediately under quick
+        _message([_tool_use("submit_answer", _submit_input(), id="early")]),
+    ]
+    result, client, substrate = _run(responses, enforce_floor=False)
+
+    assert isinstance(result, Answered)
+    assert result.confidence == "high"  # a real answer, not a degraded partial
+    assert result.trace["degraded"] is False
+    assert result.trace["forced_finalize"] is None
+    # recon ran, but the loop was NOT driven to retrieve or re-search
+    assert len(client.calls) == 1
+    assert result.trace["floor"]["satisfied"] is False
+    assert ("search_statements", {"query": "retry"}) not in substrate.calls
+
+
+def test_quick_depth_tool_defs_drop_the_adjacency_requirement():
+    """The submit tool the model sees in quick mode must not claim the adjacency
+    re-search is required/gating — otherwise the model does the expensive work
+    anyway and the latency win evaporates. Floor-on text is left untouched."""
+    from mycelium.ask.tools import terminal_tool_defs
+
+    floor = next(t for t in terminal_tool_defs(enforce_floor=True) if t["name"] == "submit_answer")
+    quick = next(t for t in terminal_tool_defs(enforce_floor=False) if t["name"] == "submit_answer")
+
+    # floor-on: unchanged — still demands the re-search in both the tool
+    # description and the adjacency_note field.
+    assert "adjacency re-search" in floor["description"]
+    assert "loop will" in floor["input_schema"]["properties"]["adjacency_note"]["description"]
+
+    # quick: neither the description nor the field claims it's required/gating.
+    quick_note = quick["input_schema"]["properties"]["adjacency_note"]["description"]
+    assert "no adjacency re-search is required in quick mode" in quick["description"]
+    assert "OPTIONAL in quick mode" in quick_note
+    assert "loop will" not in quick_note
+    # still a required schema field in both modes (model must fill it)
+    assert "adjacency_note" in quick["input_schema"]["required"]
+
+
+def test_quick_depth_config_drops_floor_and_tightens_caps():
+    """`for_depth(cfg, 'quick')` turns the floor off and lowers the caps to
+    ceilings; `standard` is a no-op."""
+    from mycelium.ask.config import (
+        QUICK_OP_CAP,
+        QUICK_REQUEST_TIMEOUT_S,
+        QUICK_WALL_CLOCK_S,
+        for_depth,
+    )
+
+    base = AskConfig()  # defaults: floor on, op_cap 25, wall_clock 45
+    assert for_depth(base, "standard") is base  # unchanged
+
+    quick = for_depth(base, "quick")
+    assert quick.enforce_floor is False
+    assert quick.op_cap == min(base.op_cap, QUICK_OP_CAP)
+    assert quick.wall_clock_s == min(base.wall_clock_s, QUICK_WALL_CLOCK_S)
+    assert quick.request_timeout_s == min(base.request_timeout_s, QUICK_REQUEST_TIMEOUT_S)
+    # ceilings only: an already-tighter budget still wins
+    tight = AskConfig(op_cap=3, wall_clock_s=10.0)
+    assert for_depth(tight, "quick").op_cap == 3
+    assert for_depth(tight, "quick").wall_clock_s == 10.0
+
+
 def test_floor_stuck_eventually_force_finalizes_rather_than_looping():
     """A model that only ever tries to submit prematurely is force-finalized,
     and the forced model turn actually produces the structured answer."""
