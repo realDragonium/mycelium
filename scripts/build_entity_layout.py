@@ -477,6 +477,8 @@ def force_atlas_linlog(
 def normalize_positions(pos: np.ndarray, target_radius: float = 2000.0) -> np.ndarray:
     """Centre on origin and scale so the 95th-percentile radius equals
     ``target_radius``. Robust to a handful of far-flung outliers."""
+    if pos.size == 0:
+        return pos
     pos = pos - pos.mean(axis=0)
     r = np.sqrt((pos**2).sum(axis=1))
     p95 = np.percentile(r, 95)
