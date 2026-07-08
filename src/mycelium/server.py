@@ -18,7 +18,7 @@ import os
 import sqlite3
 import sys
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, NotRequired, TypedDict
 
@@ -2112,6 +2112,78 @@ def _assemble_batch_results(
     return results
 
 
+@dataclass
+class _BatchPlan:
+    """The read-only plan for a batch upsert: which items survive, why the
+    rest were rejected, and the resolved-but-unwritten edges for survivors.
+
+    Computed by `_plan_batch` before any embedding or write, so the whole
+    rejection decision (phrasing → cascade → flip → cascade) is a pure
+    function of the input plus read-only substrate lookups — testable
+    without Ollama or a write transaction."""
+
+    item_violations: list[list[phrasing.Violation]]
+    item_errors: list[list[str]]
+    direct_rejected: set[int]
+    rejected: set[int]
+    cascade_reasons: dict[int, list[int]]
+    resolved_outgoing: list[list[tuple[int | str, str, dict[str, Any] | None]]]
+    resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]]
+
+
+def _plan_batch(statements: list[BatchStatementSpec]) -> _BatchPlan:
+    """Decide the fate of every item in a batch upsert without mutating
+    anything: run the phrasing gate, cascade @-ref rejections to a fixed
+    point, validate/resolve each survivor's cross-references, then reject
+    items whose links flip a directional rule (cascading once more).
+
+    Reads existing statements to validate non-sibling refs, but performs no
+    writes — the caller embeds and persists the survivors."""
+    n = len(statements)
+
+    # Phrasing check per item; items that trip the catalog without bypass
+    # are directly rejected.
+    item_violations, direct_rejected = _batch_phrasing_pass(statements)
+    item_errors: list[list[str]] = [[] for _ in range(n)]
+
+    # Cascade rejection — transitive closure on @-refs.
+    rejected: set[int] = set(direct_rejected)
+    cascade_reasons: dict[int, list[int]] = {}
+    _close_cascade(statements, rejected, cascade_reasons)
+
+    # Validate every cross-reference for SURVIVING items only. Rejected
+    # items aren't created, so their refs don't need checking.
+    resolved_outgoing, resolved_incoming, statement_rows = _resolve_batch_refs(
+        statements, rejected
+    )
+
+    _collect_batch_flip_errors(
+        statements,
+        rejected,
+        resolved_outgoing,
+        resolved_incoming,
+        statement_rows,
+        item_errors,
+    )
+
+    # A flip error rejects that item, which can cascade to its @-ref dependents.
+    flip_rejected = {i for i, errors in enumerate(item_errors) if errors}
+    if flip_rejected:
+        direct_rejected.update(flip_rejected)
+        rejected.update(flip_rejected)
+        _close_cascade(statements, rejected, cascade_reasons)
+
+    return _BatchPlan(
+        item_violations=item_violations,
+        item_errors=item_errors,
+        direct_rejected=direct_rejected,
+        rejected=rejected,
+        cascade_reasons=cascade_reasons,
+        resolved_outgoing=resolved_outgoing,
+        resolved_incoming=resolved_incoming,
+    )
+
+
 @tool
 def upsert_statements(
     statements: list[BatchStatementSpec],
@@ -2162,52 +2234,24 @@ def upsert_statements(
     if n == 0:
         return {"results": [], "near_duplicates": {}}
 
-    # Phase 0: phrasing check per item. Items whose text trips the catalog
-    # without bypass are marked directly rejected.
-    item_violations, direct_rejected = _batch_phrasing_pass(statements)
-    item_errors: list[list[str]] = [[] for _ in range(n)]
+    # Phase 0: decide who survives (phrasing → cascade → flip) with no writes.
+    plan = _plan_batch(statements)
 
-    # Phase 0b: cascade rejection — transitive closure on @-refs.
-    rejected: set[int] = set(direct_rejected)
-    cascade_reasons: dict[int, list[int]] = {}
-    _close_cascade(statements, rejected, cascade_reasons)
-
-    # Phase 1: validate every cross-reference for SURVIVING items only.
-    # Rejected items aren't created, so their refs don't need checking.
-    resolved_outgoing, resolved_incoming, statement_rows = _resolve_batch_refs(
-        statements, rejected
-    )
-
-    _collect_batch_flip_errors(
-        statements,
-        rejected,
-        resolved_outgoing,
-        resolved_incoming,
-        statement_rows,
-        item_errors,
-    )
-
-    flip_rejected = {i for i, errors in enumerate(item_errors) if errors}
-    if flip_rejected:
-        direct_rejected.update(flip_rejected)
-        rejected.update(flip_rejected)
-        _close_cascade(statements, rejected, cascade_reasons)
-
-    # Phase 3: embed surviving items only. Slow path runs first so an
+    # Phase 1: embed surviving items only. Slow path runs first so an
     # Ollama failure aborts cleanly without leaving partial state.
     vecs: dict[int, Any] = {}
     for i, spec in enumerate(statements):
-        if i not in rejected:
+        if i not in plan.rejected:
             vecs[i] = embed.embed(spec["text"])
 
-    # Phase 4: create surviving statements with their derived mentions, no
+    # Phase 2: create surviving statements with their derived mentions, no
     # links yet. The name index is stable across the batch (statements
     # don't create names), so build it once.
     name_index = store.build_name_index(_conn)
     statement_ids: dict[int, str] = {}
     with store.transaction(_conn):
         for i, spec in enumerate(statements):
-            if i in rejected:
+            if i in plan.rejected:
                 continue
             bid = store.create_statement(_conn, spec["kind"], spec["text"])
             vid = store.next_vector_id(_conn)
@@ -2216,12 +2260,16 @@ def upsert_statements(
             store.derive_mentions(_conn, bid, spec["text"], name_index)
             statement_ids[i] = bid
 
-        # Phase 5: insert edges between surviving items. Cascade guarantees no
-        # @-ref endpoint is in `rejected`, so every edge has a real id at both
-        # ends — but the when-trees still carry "@N" leaves that need final
-        # substitution to real ids.
+        # Phase 3: insert edges between surviving items. Cascade guarantees no
+        # @-ref endpoint is in `plan.rejected`, so every edge has a real id at
+        # both ends — but the when-trees still carry "@N" leaves that need
+        # final substitution to real ids.
         edges = _materialize_batch_edges(
-            n, rejected, resolved_outgoing, resolved_incoming, statement_ids
+            n,
+            plan.rejected,
+            plan.resolved_outgoing,
+            plan.resolved_incoming,
+            statement_ids,
         )
         if edges:
             store.insert_links(_conn, edges)
@@ -2237,11 +2285,11 @@ def upsert_statements(
 
     results = _assemble_batch_results(
         n,
-        item_errors,
-        item_violations,
-        direct_rejected,
-        rejected,
-        cascade_reasons,
+        plan.item_errors,
+        plan.item_violations,
+        plan.direct_rejected,
+        plan.rejected,
+        plan.cascade_reasons,
         statement_ids,
     )
 
