@@ -1093,9 +1093,7 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
     conn = server._auth_conn
     assert conn is not None
     try:
-        auth.revoke_own_token(
-            conn, token_id=token_id, owner_id=auth.owner_id_for(p)
-        )
+        auth.revoke_own_token(conn, token_id=token_id, owner_id=auth.owner_id_for(p))
     except LookupError as ex:
         from fastapi import HTTPException
 

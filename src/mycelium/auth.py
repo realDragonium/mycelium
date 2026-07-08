@@ -450,9 +450,7 @@ def mint_own_token(
     return raw, row
 
 
-def revoke_own_token(
-    conn: sqlite3.Connection, *, token_id: str, owner_id: str
-) -> None:
+def revoke_own_token(conn: sqlite3.Connection, *, token_id: str, owner_id: str) -> None:
     """Revoke a token the caller owns. Raises `LookupError` when the token is
     unknown *or* owned by someone else — the endpoint maps both to 404 so a
     caller can't probe other users' token ids. Commits (via `revoke_token`)."""
@@ -515,9 +513,7 @@ def update_user(
     - an out-of-range `status` → `ValueError("invalid status")` (→ 400).
 
     Commits once all requested updates are applied."""
-    row = conn.execute(
-        "SELECT id, role FROM users WHERE id = ?", (user_id,)
-    ).fetchone()
+    row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
     if row is None:
         raise LookupError("user not found")
     # Guard against the only admin demoting themselves and locking the
