@@ -28,6 +28,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import tracing
+
+# Reuse ask's read seam wholesale — do NOT duplicate it.
+from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
 from .config import IngestConfig
 from .draft import DraftEmitter, InProcessDraftEmitter
@@ -41,17 +45,15 @@ from .schema import (
 )
 from .tools import EMIT_TOOL, build_tools, parse_emit_input
 from .trace import TraceBuilder
-from .. import tracing
-
-# Reuse ask's read seam wholesale — do NOT duplicate it.
-from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 
 #: Reconcile reads — at least one must have happened before emit is accepted.
 _RECONCILE_TOOLS = frozenset(
     {"discover_facts", "find_duplicates", "search_statements", "survey_statements"}
 )
 #: Adjacency searches — at least one must have happened before emit is accepted.
-_ADJACENCY_TOOLS = frozenset({"search_statements", "survey_statements", "grep_statements"})
+_ADJACENCY_TOOLS = frozenset(
+    {"search_statements", "survey_statements", "grep_statements"}
+)
 
 #: The deterministic vocab fetch (each counts toward the op cap).
 _VOCAB_CALLS = (
@@ -113,7 +115,9 @@ def run_ingest(
     doctrine_text, doctrine_note = _load_doctrine(config)
 
     with tracing.profile_to_html("ingest", f"{len(text)} chars"):
-        result = _execute(text, client, substrate, emitter, config, doctrine_text, doctrine_note)
+        result = _execute(
+            text, client, substrate, emitter, config, doctrine_text, doctrine_note
+        )
 
     if config.trace_log_path:
         from .trace import write_record
@@ -187,28 +191,66 @@ def _execute(
         # ---- Budget gates first — forced finalize bypasses the floor ----
         if trace.op_count >= config.op_cap:
             return _forced_finalize(
-                "op_cap", system_prompt, client, config, tools, messages, emitter,
-                trace, start, reads_after_vocab, text,
+                "op_cap",
+                system_prompt,
+                client,
+                config,
+                tools,
+                messages,
+                emitter,
+                trace,
+                start,
+                reads_after_vocab,
+                text,
             )
         if (time.monotonic() - start) > config.wall_clock_s:
             return _forced_finalize(
-                "wall_clock", system_prompt, client, config, tools, messages, emitter,
-                trace, start, reads_after_vocab, text,
+                "wall_clock",
+                system_prompt,
+                client,
+                config,
+                tools,
+                messages,
+                emitter,
+                trace,
+                start,
+                reads_after_vocab,
+                text,
             )
         if trace.model_turns >= max_turns:
             return _forced_finalize(
-                "turn_limit", system_prompt, client, config, tools, messages, emitter,
-                trace, start, reads_after_vocab, text,
+                "turn_limit",
+                system_prompt,
+                client,
+                config,
+                tools,
+                messages,
+                emitter,
+                trace,
+                start,
+                reads_after_vocab,
+                text,
             )
 
         try:
             with trace.span("model_turn"):
-                resp = _model_turn(client, config, system_prompt, messages, tools, force=False)
+                resp = _model_turn(
+                    client, config, system_prompt, messages, tools, force=False
+                )
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             trace.notes.append(f"model error: {exc}")
             return _forced_finalize(
-                "api_error", system_prompt, client, config, tools, messages, emitter,
-                trace, start, reads_after_vocab, text,
+                "api_error",
+                system_prompt,
+                client,
+                config,
+                tools,
+                messages,
+                emitter,
+                trace,
+                start,
+                reads_after_vocab,
+                text,
             )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -222,8 +264,17 @@ def _execute(
                 messages.append({"role": "user", "content": prompts.NO_TERMINAL_NUDGE})
                 continue
             return _forced_finalize(
-                "no_terminal", system_prompt, client, config, tools, messages, emitter,
-                trace, start, reads_after_vocab, text,
+                "no_terminal",
+                system_prompt,
+                client,
+                config,
+                tools,
+                messages,
+                emitter,
+                trace,
+                start,
+                reads_after_vocab,
+                text,
             )
 
         # The model is calling a tool again — reset the no-terminal nudge so a
@@ -246,8 +297,11 @@ def _execute(
                     continue
                 trace.notes.append(f"emit_draft malformed twice: {exc}")
                 return _degrade_no_draft(
-                    "degraded: emit_draft malformed twice", trace, start,
-                    reads_after_vocab, config,
+                    "degraded: emit_draft malformed twice",
+                    trace,
+                    start,
+                    reads_after_vocab,
+                    config,
                 )
 
             floor = _floor_state(reads_after_vocab)
@@ -259,7 +313,8 @@ def _execute(
                 if floor_blocks < _MAX_FLOOR_BLOCKS:
                     floor_blocks += 1
                     _append_tool_error(
-                        messages, tool_use.id,
+                        messages,
+                        tool_use.id,
                         prompts.floor_block_message(_floor_detail(floor, unmet)),
                     )
                     continue
@@ -267,17 +322,36 @@ def _execute(
                 # degrade via a forced finalize rather than accepting a floorless
                 # emit.
                 _append_tool_error(
-                    messages, tool_use.id,
+                    messages,
+                    tool_use.id,
                     "Floor still unmet after repeated attempts; finalizing with "
                     "what has been reconciled.",
                 )
                 return _forced_finalize(
-                    "floor_stuck", system_prompt, client, config, tools, messages,
-                    emitter, trace, start, reads_after_vocab, text,
+                    "floor_stuck",
+                    system_prompt,
+                    client,
+                    config,
+                    tools,
+                    messages,
+                    emitter,
+                    trace,
+                    start,
+                    reads_after_vocab,
+                    text,
                 )
             return _assemble_draft(
-                ops, ledger, flagged, skipped, emitter, trace, start,
-                reads_after_vocab, config, text, degraded=False,
+                ops,
+                ledger,
+                flagged,
+                skipped,
+                emitter,
+                trace,
+                start,
+                reads_after_vocab,
+                config,
+                text,
+                degraded=False,
             )
 
         # ---- A substrate READ primitive ----
@@ -311,8 +385,9 @@ def _fetch_vocab(substrate: SubstrateReader, trace: TraceBuilder) -> dict[str, A
     for key, name in _VOCAB_CALLS:
         if not _substrate_has(substrate, name):
             vocab[key] = []
-            trace.record_tool_call(name, {}, None, ok=False, counts_as_op=True,
-                                   error="unknown tool")
+            trace.record_tool_call(
+                name, {}, None, ok=False, counts_as_op=True, error="unknown tool"
+            )
             trace.notes.append(f"vocab fetch skipped: {name} not available")
             continue
         try:
@@ -322,8 +397,9 @@ def _fetch_vocab(substrate: SubstrateReader, trace: TraceBuilder) -> dict[str, A
             vocab[key] = result
         except SubstrateError as exc:
             vocab[key] = []
-            trace.record_tool_call(name, {}, None, ok=False, counts_as_op=True,
-                                   error=str(exc))
+            trace.record_tool_call(
+                name, {}, None, ok=False, counts_as_op=True, error=str(exc)
+            )
             trace.notes.append(f"vocab fetch failed: {name}: {exc}")
     return vocab
 
@@ -339,8 +415,9 @@ def _dispatch_read(
     """Execute one read; return True only if it succeeded (so the caller knows
     whether it counts toward the floor)."""
     if not _substrate_has(substrate, name):
-        trace.record_tool_call(name, arguments, None, ok=False, counts_as_op=True,
-                               error="unknown tool")
+        trace.record_tool_call(
+            name, arguments, None, ok=False, counts_as_op=True, error="unknown tool"
+        )
         _append_tool_error(messages, tool_use_id, f"unknown tool: {name}")
         return False
     try:
@@ -351,8 +428,9 @@ def _dispatch_read(
         return True
     except SubstrateError as exc:
         # Absence/failure is reported, never fabricated into an empty success.
-        trace.record_tool_call(name, arguments, None, ok=False, counts_as_op=True,
-                               error=str(exc))
+        trace.record_tool_call(
+            name, arguments, None, ok=False, counts_as_op=True, error=str(exc)
+        )
         _append_tool_result(messages, tool_use_id, {"error": str(exc)}, is_error=True)
         return False
 
@@ -375,30 +453,48 @@ def _forced_finalize(
     live-write."""
     trace.forced_finalize = reason
     trace.degraded = True
-    messages.append({"role": "user", "content": prompts.forced_finalize_message(reason)})
+    messages.append(
+        {"role": "user", "content": prompts.forced_finalize_message(reason)}
+    )
     try:
         with trace.span("model_turn:forced"):
-            resp = _model_turn(client, config, system_prompt, messages, tools, force=True)
+            resp = _model_turn(
+                client, config, system_prompt, messages, tools, force=True
+            )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
         tool_use = _first_tool_use(resp)
         if tool_use is not None and tool_use.name == EMIT_TOOL:
             try:
-                ops, ledger, flagged, skipped = parse_emit_input(dict(tool_use.input or {}))
+                ops, ledger, flagged, skipped = parse_emit_input(
+                    dict(tool_use.input or {})
+                )
             except ValueError as exc:
                 trace.notes.append(f"forced finalize: emit_draft malformed: {exc}")
             else:
                 return _assemble_draft(
-                    ops, ledger, flagged, skipped, emitter, trace, start,
-                    reads_after_vocab, config, text, degraded=True,
+                    ops,
+                    ledger,
+                    flagged,
+                    skipped,
+                    emitter,
+                    trace,
+                    start,
+                    reads_after_vocab,
+                    config,
+                    text,
+                    degraded=True,
                 )
         else:
             trace.notes.append("forced finalize: model did not emit emit_draft")
     except Exception as exc:  # noqa: BLE001
         trace.notes.append(f"forced finalize failed: {exc}")
     return _degrade_no_draft(
-        f"degraded: could not assemble a draft ({reason})", trace, start,
-        reads_after_vocab, config,
+        f"degraded: could not assemble a draft ({reason})",
+        trace,
+        start,
+        reads_after_vocab,
+        config,
     )
 
 
@@ -487,7 +583,10 @@ def _assemble_draft(
         trace.notes.append(f"draft create failed: {exc}")
         return _degrade_no_draft(
             f"degraded: could not assemble a draft (draft store error: {exc})",
-            trace, start, reads_after_vocab, config,
+            trace,
+            start,
+            reads_after_vocab,
+            config,
         )
 
     queued: list[ProposedOp] = []
@@ -542,16 +641,16 @@ def _validate_op(
     # deliberately NOT in _REQUIRED_KEYS — they still normalize to [] below.
     missing = [k for k in _REQUIRED_KEYS.get(kind, ()) if payload.get(k) is None]
     if missing:
-        flagged.append(
-            f"op[{idx}] ({kind}) dropped: missing required key(s) {missing}"
-        )
+        flagged.append(f"op[{idx}] ({kind}) dropped: missing required key(s) {missing}")
         return None
 
     # Inner-shape validation + replay-safe normalization. The real tools do NO
     # validation at curator replay (the curator's all-or-nothing replay calls
     # wrapper(**payload) directly), so this is the only guard against a payload
     # that explodes at replay.
-    payload, rationale, dropped = _normalize_and_check(kind, payload, rationale, flagged, idx)
+    payload, rationale, dropped = _normalize_and_check(
+        kind, payload, rationale, flagged, idx
+    )
     if dropped:
         return None
 
@@ -651,7 +750,9 @@ def _normalize_and_check(
         return normalized, rationale, False
 
     if kind == "add_links":
-        offending = _check_edges(payload.get("links"), ("from_id", "to_id", "link_type"))
+        offending = _check_edges(
+            payload.get("links"), ("from_id", "to_id", "link_type")
+        )
         if offending is not None:
             flagged.append(f"op[{idx}] (add_links) dropped: {offending}")
             return payload, rationale, True
@@ -760,7 +861,9 @@ def _nothing(
     reads_after_vocab: list[str],
     config: IngestConfig,
 ) -> NothingToIngest:
-    trace_dict = _build_trace(trace, "nothing_to_ingest", start, reads_after_vocab, config)
+    trace_dict = _build_trace(
+        trace, "nothing_to_ingest", start, reads_after_vocab, config
+    )
     return NothingToIngest(reason=reason, trace=trace_dict)
 
 
@@ -773,7 +876,9 @@ def _degrade_no_draft(
 ) -> NothingToIngest:
     trace.degraded = True
     trace.candidate_ledger = trace.candidate_ledger or []
-    trace_dict = _build_trace(trace, "nothing_to_ingest", start, reads_after_vocab, config)
+    trace_dict = _build_trace(
+        trace, "nothing_to_ingest", start, reads_after_vocab, config
+    )
     return NothingToIngest(reason=reason, trace=trace_dict)
 
 
@@ -857,9 +962,7 @@ def _coverage_unmet(ops: list[dict], ledger: list[dict]) -> str | None:
     new/refinement ledger row. Count-based (no text matching). Returns a reason
     string when coverage is unmet, else None."""
     needed = _statement_op_count(ops)
-    backing = sum(
-        1 for r in ledger if r.get("classification") in ("new", "refinement")
-    )
+    backing = sum(1 for r in ledger if r.get("classification") in ("new", "refinement"))
     if needed > backing:
         return (
             f"{needed} statement-creating op(s) but only {backing} new/refinement "
@@ -930,7 +1033,14 @@ def _normalize_ledger_row(row: dict) -> dict:
     """Round-trip a ledger row through CandidateLedger so the trace carries the
     validated shape (and an unknown classification is coerced sanely)."""
     cls = row.get("classification")
-    allowed = {"new", "duplicate", "refinement", "contradiction", "unphraseable", "unprocessed"}
+    allowed = {
+        "new",
+        "duplicate",
+        "refinement",
+        "contradiction",
+        "unphraseable",
+        "unprocessed",
+    }
     if cls not in allowed:
         cls = "unprocessed"
     return CandidateLedger(
@@ -1003,7 +1113,8 @@ def _strip_thinking(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         content = message.get("content")
         if isinstance(content, list):
             filtered = [
-                b for b in content
+                b
+                for b in content
                 if _block_type(b) not in ("thinking", "redacted_thinking")
             ]
             out.append({**message, "content": filtered or content})

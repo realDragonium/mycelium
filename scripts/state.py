@@ -38,10 +38,7 @@ class CheckpointState:
                     entry = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                if (
-                    entry.get("event") in _TERMINAL_EVENTS
-                    and "behavior_id" in entry
-                ):
+                if entry.get("event") in _TERMINAL_EVENTS and "behavior_id" in entry:
                     self._done.add(entry["behavior_id"])
 
     def is_done(self, behavior_id: str) -> bool:

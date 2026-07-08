@@ -30,12 +30,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import prompts, sources
-from .config import ResearchConfig
-from .schema import NothingFound, ProposedOp, ResearchDraftCreated, ResearchResult
-from .sources import Source, SourceError
-from .workspace import WorkspaceError, WorkspaceReader
 from .. import tracing
+from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 
 # Reuse ingest's harness machinery wholesale — do NOT duplicate it. The loop
 # below imports only read/validate/assemble helpers; no write tool exists in
@@ -62,7 +58,11 @@ from ..ingest.loop import (
 )
 from ..ingest.tools import EMIT_TOOL, build_tools, parse_emit_input
 from ..ingest.trace import TraceBuilder
-from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
+from . import prompts, sources
+from .config import ResearchConfig
+from .schema import NothingFound, ProposedOp, ResearchDraftCreated, ResearchResult
+from .sources import Source, SourceError
+from .workspace import WorkspaceError, WorkspaceReader
 
 #: Exploration floor: this many successful workspace reads, at least one of
 #: which actually read a file (listing/grepping without reading is not
@@ -119,25 +119,40 @@ def run_research(
             if src is None:
                 return NothingFound(
                     reason="no source given and no workspace injected",
-                    source="", topic=topic,
+                    source="",
+                    topic=topic,
                 )
             try:
                 with sources.fetch(src) as root:
                     result = _execute(
-                        topic, source_name, client, substrate,
-                        WorkspaceReader(root), emitter, config,
-                        doctrine_text, doctrine_note,
+                        topic,
+                        source_name,
+                        client,
+                        substrate,
+                        WorkspaceReader(root),
+                        emitter,
+                        config,
+                        doctrine_text,
+                        doctrine_note,
                     )
             except SourceError as exc:
                 # Message is pre-scrubbed by sources; never re-raise.
                 return NothingFound(
                     reason=f"source fetch failed: {exc}",
-                    source=source_name, topic=topic,
+                    source=source_name,
+                    topic=topic,
                 )
         else:
             result = _execute(
-                topic, source_name, client, substrate, workspace, emitter,
-                config, doctrine_text, doctrine_note,
+                topic,
+                source_name,
+                client,
+                substrate,
+                workspace,
+                emitter,
+                config,
+                doctrine_text,
+                doctrine_note,
             )
 
     if config.trace_log_path:
@@ -199,7 +214,10 @@ def _execute(
     vocab = _fetch_vocab(substrate, trace)
 
     messages: list[dict[str, Any]] = [
-        {"role": "user", "content": prompts.initial_user_message(topic, source_name, vocab)}
+        {
+            "role": "user",
+            "content": prompts.initial_user_message(topic, source_name, vocab),
+        }
     ]
 
     # Successful read names, split by seam: substrate reads feed ingest's
@@ -210,10 +228,18 @@ def _execute(
     files_read: set[str] = set()
 
     ctx = _RunContext(
-        topic=topic, source_name=source_name, system_prompt=system_prompt,
-        client=client, config=config, tools=tools, messages=messages,
-        emitter=emitter, trace=trace, start=start,
-        substrate_reads=substrate_reads, workspace_reads=workspace_reads,
+        topic=topic,
+        source_name=source_name,
+        system_prompt=system_prompt,
+        client=client,
+        config=config,
+        tools=tools,
+        messages=messages,
+        emitter=emitter,
+        trace=trace,
+        start=start,
+        substrate_reads=substrate_reads,
+        workspace_reads=workspace_reads,
         files_read=files_read,
     )
 
@@ -233,7 +259,9 @@ def _execute(
 
         try:
             with trace.span("model_turn"):
-                resp = _model_turn(client, config, system_prompt, messages, tools, force=False)
+                resp = _model_turn(
+                    client, config, system_prompt, messages, tools, force=False
+                )
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             trace.notes.append(f"model error: {exc}")
             return _forced_finalize("api_error", ctx)
@@ -265,9 +293,7 @@ def _execute(
                     )
                     continue
                 trace.notes.append(f"emit_draft malformed twice: {exc}")
-                return _degrade_no_draft(
-                    "degraded: emit_draft malformed twice", ctx
-                )
+                return _degrade_no_draft("degraded: emit_draft malformed twice", ctx)
 
             floor = _research_floor(workspace_reads, substrate_reads)
             unmet = _ledger_unmet(ledger)
@@ -278,19 +304,21 @@ def _execute(
                 if floor_blocks < _MAX_FLOOR_BLOCKS:
                     floor_blocks += 1
                     _append_tool_error(
-                        messages, tool_use.id,
-                        prompts.floor_block_message(_research_floor_detail(floor, unmet)),
+                        messages,
+                        tool_use.id,
+                        prompts.floor_block_message(
+                            _research_floor_detail(floor, unmet)
+                        ),
                     )
                     continue
                 _append_tool_error(
-                    messages, tool_use.id,
+                    messages,
+                    tool_use.id,
                     "Floor still unmet after repeated attempts; finalizing with "
                     "what has been established.",
                 )
                 return _forced_finalize("floor_stuck", ctx)
-            return _assemble_draft(
-                ops, ledger, flagged, skipped, ctx, degraded=False
-            )
+            return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=False)
 
         # ---- A read: workspace or substrate, dispatched by name ----
         _dispatch_read(name, tool_input, tool_use.id, substrate, workspace, ctx)
@@ -352,14 +380,18 @@ def _dispatch_read(
             if name == _FILE_READ_TOOL and arguments.get("path"):
                 ctx.files_read.add(str(arguments["path"]))
         except WorkspaceError as exc:
-            trace.record_tool_call(name, arguments, None, ok=False, counts_as_op=True,
-                                   error=str(exc))
-            _append_tool_result(messages, tool_use_id, {"error": str(exc)}, is_error=True)
+            trace.record_tool_call(
+                name, arguments, None, ok=False, counts_as_op=True, error=str(exc)
+            )
+            _append_tool_result(
+                messages, tool_use_id, {"error": str(exc)}, is_error=True
+            )
         return
 
     if not _substrate_has(substrate, name):
-        trace.record_tool_call(name, arguments, None, ok=False, counts_as_op=True,
-                               error="unknown tool")
+        trace.record_tool_call(
+            name, arguments, None, ok=False, counts_as_op=True, error="unknown tool"
+        )
         _append_tool_error(messages, tool_use_id, f"unknown tool: {name}")
         return
     try:
@@ -369,8 +401,9 @@ def _dispatch_read(
         _append_tool_result(messages, tool_use_id, result, is_error=False)
         ctx.substrate_reads.append(name)
     except SubstrateError as exc:
-        trace.record_tool_call(name, arguments, None, ok=False, counts_as_op=True,
-                               error=str(exc))
+        trace.record_tool_call(
+            name, arguments, None, ok=False, counts_as_op=True, error=str(exc)
+        )
         _append_tool_result(messages, tool_use_id, {"error": str(exc)}, is_error=True)
 
 
@@ -387,7 +420,11 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> ResearchResult:
     try:
         with trace.span("model_turn:forced"):
             resp = _model_turn(
-                ctx.client, ctx.config, ctx.system_prompt, ctx.messages, ctx.tools,
+                ctx.client,
+                ctx.config,
+                ctx.system_prompt,
+                ctx.messages,
+                ctx.tools,
                 force=True,
             )
         trace.model_turns += 1
@@ -395,18 +432,20 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> ResearchResult:
         tool_use = _first_tool_use(resp)
         if tool_use is not None and tool_use.name == EMIT_TOOL:
             try:
-                ops, ledger, flagged, skipped = parse_emit_input(dict(tool_use.input or {}))
+                ops, ledger, flagged, skipped = parse_emit_input(
+                    dict(tool_use.input or {})
+                )
             except ValueError as exc:
                 trace.notes.append(f"forced finalize: emit_draft malformed: {exc}")
             else:
-                return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=True)
+                return _assemble_draft(
+                    ops, ledger, flagged, skipped, ctx, degraded=True
+                )
         else:
             trace.notes.append("forced finalize: model did not emit emit_draft")
     except Exception as exc:  # noqa: BLE001
         trace.notes.append(f"forced finalize failed: {exc}")
-    return _degrade_no_draft(
-        f"degraded: could not assemble a draft ({reason})", ctx
-    )
+    return _degrade_no_draft(f"degraded: could not assemble a draft ({reason})", ctx)
 
 
 # --------------------------------------------------------------------------- #
@@ -592,4 +631,6 @@ def _research_floor_detail(floor: dict, unmet: list[str]) -> str:
 
 def _draft_title(source_name: str, topic: str) -> str:
     snippet = " ".join((topic or "").split())[:60]
-    return f"research: {source_name}: {snippet}" if snippet else f"research: {source_name}"
+    return (
+        f"research: {source_name}: {snippet}" if snippet else f"research: {source_name}"
+    )

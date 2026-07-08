@@ -4,6 +4,7 @@ Covers: fresh DB fast-forwards to current; legacy DB (pre-versioning,
 missing audit columns) runs v1; idempotency on re-run; rejection of
 a future-version DB (downgrade safety).
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -158,9 +159,7 @@ def test_v2_widens_when_nodes_check_constraint():
         "INSERT INTO statement_links (from_statement_id, to_statement_id, link_type, when_hash) "
         "VALUES ('stm_x', 'stm_x', 'triggers', 'NONE')"
     )
-    link_id = conn.execute(
-        "SELECT link_id FROM statement_links"
-    ).fetchone()["link_id"]
+    link_id = conn.execute("SELECT link_id FROM statement_links").fetchone()["link_id"]
     conn.execute(
         "INSERT INTO when_nodes (link_id, parent_id, op, statement_id, child_index) "
         "VALUES (?, NULL, 'and', NULL, 0)",
@@ -203,6 +202,7 @@ def test_backup_schema_version_matches_runner():
     """The backup format's SCHEMA_VERSION must track the migration
     runner's CURRENT_VERSION — they describe the same notion."""
     from mycelium import backup
+
     assert backup.SCHEMA_VERSION == migrations.CURRENT_VERSION
 
 

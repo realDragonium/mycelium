@@ -13,9 +13,7 @@ import types
 import pytest
 
 from mycelium.ask import Answered, AskConfig, NeedsClarification, run_ask
-from mycelium.ask.schema import Answered as AnsweredModel
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
-
 
 # --------------------------------------------------------------------------- #
 # Fakes
@@ -103,7 +101,11 @@ def _submit_input(**over):
             "reframe_reason": None,
         },
         "sub_questions": [
-            {"sub_question": "what triggers retry", "status": "resolved", "note": "found"}
+            {
+                "sub_question": "what triggers retry",
+                "status": "resolved",
+                "note": "found",
+            }
         ],
         "adjacency_note": "Re-searched on 'retry'/'embed' concepts; nothing new surfaced.",
         "gaps": [],
@@ -117,7 +119,10 @@ def _clarify_input(**over):
     data = {
         "question": "Do you mean the staging deploy or the prod deploy?",
         "candidates": [
-            {"interpretation": "staging deploy", "would_pull": "staging env statements"},
+            {
+                "interpretation": "staging deploy",
+                "would_pull": "staging env statements",
+            },
             {"interpretation": "prod deploy", "would_pull": "prod env statements"},
         ],
         "known_so_far": "Recon found two distinct deploy flows.",
@@ -128,9 +133,13 @@ def _clarify_input(**over):
 
 def _run(responses, results=None, **config_over):
     client = FakeAnthropic(responses)
-    substrate = FakeSubstrate(results or {"survey_statements": [{"id": "stm_1", "text": "x"}]})
+    substrate = FakeSubstrate(
+        results or {"survey_statements": [{"id": "stm_1", "text": "x"}]}
+    )
     cfg = AskConfig(thinking=True, trace_log_path=None, **config_over)
-    result = run_ask("why does it retry?", client=client, substrate=substrate, config=cfg)
+    result = run_ask(
+        "why does it retry?", client=client, substrate=substrate, config=cfg
+    )
     return result, client, substrate
 
 
@@ -143,7 +152,9 @@ def test_well_formed_question_returns_answered_with_provenance_and_confidence():
     """#1 — answered with non-empty provenance and gaps-grounded confidence."""
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "embed retry"})]),  # adjacency
+        _message(
+            [_tool_use("survey_statements", {"query": "embed retry"})]
+        ),  # adjacency
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     result, _client, substrate = _run(responses)
@@ -168,7 +179,9 @@ def test_misframed_but_resolvable_returns_reframed_answer():
     responses = [
         _message([_tool_use("search_statements", {"query": "cache"})]),
         _message([_tool_use("survey_statements", {"query": "cache invalidate"})]),
-        _message([_tool_use("submit_answer", _submit_input(interpretation=reframed_interp))]),
+        _message(
+            [_tool_use("submit_answer", _submit_input(interpretation=reframed_interp))]
+        ),
     ]
     result, _client, _sub = _run(responses)
 
@@ -192,9 +205,16 @@ def test_genuinely_ambiguous_returns_needs_clarification_no_answer():
 def test_clarification_with_too_few_candidates_is_reprompted():
     """A one-candidate clarification is rejected once, then the model proceeds."""
     responses = [
-        _message([_tool_use("request_clarification", _clarify_input(candidates=[
-            {"interpretation": "only one", "would_pull": "x"}
-        ]))]),
+        _message(
+            [
+                _tool_use(
+                    "request_clarification",
+                    _clarify_input(
+                        candidates=[{"interpretation": "only one", "would_pull": "x"}]
+                    ),
+                )
+            ]
+        ),
         # after the re-prompt, the model retrieves and answers instead
         _message([_tool_use("search_statements", {"query": "x"})]),
         _message([_tool_use("survey_statements", {"query": "x adj"})]),
@@ -271,13 +291,24 @@ def test_quick_depth_tool_defs_drop_the_adjacency_requirement():
     anyway and the latency win evaporates. Floor-on text is left untouched."""
     from mycelium.ask.tools import terminal_tool_defs
 
-    floor = next(t for t in terminal_tool_defs(enforce_floor=True) if t["name"] == "submit_answer")
-    quick = next(t for t in terminal_tool_defs(enforce_floor=False) if t["name"] == "submit_answer")
+    floor = next(
+        t
+        for t in terminal_tool_defs(enforce_floor=True)
+        if t["name"] == "submit_answer"
+    )
+    quick = next(
+        t
+        for t in terminal_tool_defs(enforce_floor=False)
+        if t["name"] == "submit_answer"
+    )
 
     # floor-on: unchanged — still demands the re-search in both the tool
     # description and the adjacency_note field.
     assert "adjacency re-search" in floor["description"]
-    assert "loop will" in floor["input_schema"]["properties"]["adjacency_note"]["description"]
+    assert (
+        "loop will"
+        in floor["input_schema"]["properties"]["adjacency_note"]["description"]
+    )
 
     # quick: neither the description nor the field claims it's required/gating.
     quick_note = quick["input_schema"]["properties"]["adjacency_note"]["description"]
@@ -305,7 +336,9 @@ def test_quick_depth_config_drops_floor_and_tightens_caps():
     assert quick.enforce_floor is False
     assert quick.op_cap == min(base.op_cap, QUICK_OP_CAP)
     assert quick.wall_clock_s == min(base.wall_clock_s, QUICK_WALL_CLOCK_S)
-    assert quick.request_timeout_s == min(base.request_timeout_s, QUICK_REQUEST_TIMEOUT_S)
+    assert quick.request_timeout_s == min(
+        base.request_timeout_s, QUICK_REQUEST_TIMEOUT_S
+    )
     # ceilings only: an already-tighter budget still wins
     tight = AskConfig(op_cap=3, wall_clock_s=10.0)
     assert for_depth(tight, "quick").op_cap == 3
@@ -318,11 +351,18 @@ def test_floor_stuck_eventually_force_finalizes_rather_than_looping():
     # 4 premature submits get blocked / trigger the stuck branch, then the
     # forced finalize turn returns a distinctive structured answer.
     responses = [
-        _message([_tool_use("submit_answer", _submit_input(), id=f"p{i}")]) for i in range(4)
+        _message([_tool_use("submit_answer", _submit_input(), id=f"p{i}")])
+        for i in range(4)
     ]
     responses.append(
-        _message([_tool_use("submit_answer", _submit_input(
-            answer="forced structured answer", confidence="high"))])
+        _message(
+            [
+                _tool_use(
+                    "submit_answer",
+                    _submit_input(answer="forced structured answer", confidence="high"),
+                )
+            ]
+        )
     )
     result, _client, _sub = _run(responses)
 
@@ -376,9 +416,22 @@ def test_trace_record_is_complete():
     result, _client, _sub = _run(responses)
     trace = result.trace
     for key in (
-        "question", "model", "outcome", "op_count", "op_cap", "wall_clock_s_limit",
-        "latency_ms", "model_turns", "tool_calls", "sub_question_ledger",
-        "adjacency_note", "floor", "tokens", "cost_usd", "forced_finalize", "degraded",
+        "question",
+        "model",
+        "outcome",
+        "op_count",
+        "op_cap",
+        "wall_clock_s_limit",
+        "latency_ms",
+        "model_turns",
+        "tool_calls",
+        "sub_question_ledger",
+        "adjacency_note",
+        "floor",
+        "tokens",
+        "cost_usd",
+        "forced_finalize",
+        "degraded",
         "notes",
     ):
         assert key in trace, f"trace missing {key}"
@@ -443,9 +496,11 @@ def test_interleaved_text_turn_does_not_prematurely_degrade():
     """A stray text turn early must not doom a later one once the model is back
     to calling tools — the nudge budget is per text-streak, not per session."""
     responses = [
-        _message([_text("let me think")], stop="end_turn"),          # nudge #1
+        _message([_text("let me think")], stop="end_turn"),  # nudge #1
         _message([_tool_use("search_statements", {"query": "retry"})]),  # back to tools
-        _message([_text("hmm, one more thought")], stop="end_turn"),  # nudge again, not doom
+        _message(
+            [_text("hmm, one more thought")], stop="end_turn"
+        ),  # nudge again, not doom
         _message([_tool_use("survey_statements", {"query": "retry adj"})]),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
@@ -485,7 +540,9 @@ def test_substrate_read_failure_is_surfaced_not_fabricated():
     ]
     result, _client, _sub = _run(responses, results=results)
     assert isinstance(result, Answered)
-    failed = [tc for tc in result.trace["tool_calls"] if tc["name"] == "search_statements"]
+    failed = [
+        tc for tc in result.trace["tool_calls"] if tc["name"] == "search_statements"
+    ]
     assert failed and failed[0]["ok"] is False and failed[0]["error"]
 
 
@@ -497,6 +554,7 @@ def test_substrate_read_failure_is_surfaced_not_fabricated():
 def _reader(name):
     def fn(**kwargs):
         return {"ok": name}
+
     fn.__name__ = name
     fn._mycelium_required_role = "reader"
     return fn
@@ -505,6 +563,7 @@ def _reader(name):
 def _writer(name):
     def fn(**kwargs):
         return {}
+
     fn.__name__ = name
     fn._mycelium_required_role = "writer"
     return fn
@@ -515,15 +574,15 @@ def test_discovery_auto_includes_new_read_primitive_excludes_writes():
     change; writers and the denylist are excluded."""
     stub = types.SimpleNamespace(
         TOOLS=[
-            _reader("search_widgets"),       # a hypothetical FUTURE read primitive
+            _reader("search_widgets"),  # a hypothetical FUTURE read primitive
             _reader("report_knowledge_gap"),  # denylisted (reader-role write)
-            _reader("ask"),                   # denylisted (self)
-            _writer("upsert_widget"),         # a write — excluded by role
+            _reader("ask"),  # denylisted (self)
+            _writer("upsert_widget"),  # a write — excluded by role
         ]
     )
     sub = InProcessSubstrate(stub)
     names = {s.name for s in sub.tool_specs()}
-    assert "search_widgets" in names          # auto-discovered, no edit needed
+    assert "search_widgets" in names  # auto-discovered, no edit needed
     assert "report_knowledge_gap" not in names
     assert "ask" not in names
     assert "upsert_widget" not in names
@@ -535,20 +594,30 @@ def test_strip_thinking_sanitizes_forced_turn_history():
     from mycelium.ask.loop import _strip_thinking
 
     th = types.SimpleNamespace(type="thinking", thinking="...")
-    tu = types.SimpleNamespace(type="tool_use", id="x", name="search_statements", input={})
+    tu = types.SimpleNamespace(
+        type="tool_use", id="x", name="search_statements", input={}
+    )
     msgs = [
         {"role": "user", "content": "q"},
         {"role": "assistant", "content": [th, tu]},
-        {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": "x", "content": "r", "is_error": False}
-        ]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "x",
+                    "content": "r",
+                    "is_error": False,
+                }
+            ],
+        },
         {"role": "assistant", "content": [th]},  # thinking-only: must not be emptied
     ]
     out = _strip_thinking(msgs)
     assert [b.type for b in out[1]["content"]] == ["tool_use"]  # thinking dropped
-    assert out[2]["content"][0]["type"] == "tool_result"        # tool_result kept
-    assert out[0]["content"] == "q"                             # string content untouched
-    assert out[3]["content"] == [th]                            # not emptied
+    assert out[2]["content"][0]["type"] == "tool_result"  # tool_result kept
+    assert out[0]["content"] == "q"  # string content untouched
+    assert out[3]["content"] == [th]  # not emptied
 
 
 def test_substrate_retries_once_then_raises():
@@ -564,7 +633,9 @@ def test_substrate_retries_once_then_raises():
     flaky.__name__ = "search_flaky"
     flaky._mycelium_required_role = "reader"
 
-    always_fail = lambda **kw: (_ for _ in ()).throw(RuntimeError("down"))
+    def always_fail(**kw):
+        return (_ for _ in ()).throw(RuntimeError("down"))
+
     always_fail.__name__ = "search_dead"
     always_fail._mycelium_required_role = "reader"
 
@@ -628,9 +699,10 @@ def test_caching_off_sends_plain_system_and_no_breakpoints():
     _result, client, _sub = _run(responses, cache=False)
 
     call = client.calls[0]
-    assert call["system"] == __import__(
-        "mycelium.ask.prompts", fromlist=["SYSTEM_PROMPT"]
-    ).SYSTEM_PROMPT
+    assert (
+        call["system"]
+        == __import__("mycelium.ask.prompts", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT
+    )
     last = _last_block(call["messages"][-1])
     if isinstance(last, dict):
         assert "cache_control" not in last

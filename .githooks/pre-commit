@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fast shape check before every commit. Enable once per clone with:
+#   git config core.hooksPath .githooks
+# Tests stay in CI — this hook only guards format/lint so commits stay quick.
+set -e
+
+uv run ruff check src tests scripts
+uv run ruff format --check src tests scripts

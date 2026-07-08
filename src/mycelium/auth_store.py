@@ -22,7 +22,6 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-
 AUTH_SCHEMA = """
 -- Identities. Humans authenticate via OIDC (oidc_issuer + oidc_subject
 -- populated); service accounts represent third-party agents and have
@@ -226,12 +225,17 @@ def _drop_role_check(conn: sqlite3.Connection) -> bool:
             marker = "CHECK (scope IN" if table == "mcp_tokens" else "CHECK (role IN"
             if marker not in current_sql:
                 continue  # already free-form (no role/scope CHECK)
-            cols = [c["name"] for c in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+            cols = [
+                c["name"]
+                for c in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            ]
             col_list = ", ".join(cols)
             conn.execute("BEGIN")
             try:
                 conn.executescript(new_ddl)
-                conn.execute(f"INSERT INTO {table}_new ({col_list}) SELECT {col_list} FROM {table}")
+                conn.execute(
+                    f"INSERT INTO {table}_new ({col_list}) SELECT {col_list} FROM {table}"
+                )
                 conn.execute(f"DROP TABLE {table}")
                 conn.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
                 # Sanity check: surfaces FK breakage before we commit.

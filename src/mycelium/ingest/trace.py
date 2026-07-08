@@ -112,7 +112,9 @@ class TraceBuilder:
             return
         self.tokens["input"] += int(getattr(usage, "input_tokens", 0) or 0)
         self.tokens["output"] += int(getattr(usage, "output_tokens", 0) or 0)
-        self.tokens["cache_read"] += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+        self.tokens["cache_read"] += int(
+            getattr(usage, "cache_read_input_tokens", 0) or 0
+        )
         self.tokens["cache_creation"] += int(
             getattr(usage, "cache_creation_input_tokens", 0) or 0
         )

@@ -50,7 +50,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("data_dir", type=Path, help="mycelium data directory")
     parser.add_argument(
-        "--apply", action="store_true", help="Actually re-embed and write. Default is dry-run."
+        "--apply",
+        action="store_true",
+        help="Actually re-embed and write. Default is dry-run.",
     )
     args = parser.parse_args()
 
@@ -69,11 +71,11 @@ def main() -> int:
     # Sanity check: confirm we're pointed at the substrate the operator
     # thinks they're pointed at. A wrong data_dir is the most likely
     # reason "no stranded vectors found" is a false negative.
-    total_statements = conn.execute("SELECT COUNT(*) AS n FROM statements").fetchone()["n"]
+    total_statements = conn.execute("SELECT COUNT(*) AS n FROM statements").fetchone()[
+        "n"
+    ]
     sample = conn.execute("SELECT text FROM statements LIMIT 1").fetchone()
-    sample_preview = (
-        sample["text"][:80].replace("\n", " ") if sample else "<empty>"
-    )
+    sample_preview = sample["text"][:80].replace("\n", " ") if sample else "<empty>"
     print(f"Substrate at {args.data_dir}")
     print(f"  statements: {total_statements}")
     print(f"  sample:    {sample_preview!r}")
@@ -110,8 +112,10 @@ def main() -> int:
     # before exiting — confirms the save actually took.
     remaining = find_stranded(conn, index)
     print(f"\nSaved {vec_path}. Stranded vectors after recovery: {len(remaining)}")
-    print("Verify with `find_duplicates` — recovered statements will surface "
-          "if the texts genuinely duplicate existing records.")
+    print(
+        "Verify with `find_duplicates` — recovered statements will surface "
+        "if the texts genuinely duplicate existing records."
+    )
     return 0
 
 

@@ -13,8 +13,8 @@ from pydantic import BaseModel, Field
 
 
 class Interpretation(BaseModel):
-    as_asked: str           # the caller's literal question
-    resolved_to: str        # what we actually set out to answer
+    as_asked: str  # the caller's literal question
+    resolved_to: str  # what we actually set out to answer
     reframed: bool
     reframe_reason: str | None = None
 

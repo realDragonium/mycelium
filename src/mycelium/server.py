@@ -24,7 +24,17 @@ from typing import Any, Callable, Literal, NotRequired, TypedDict
 
 from mcp.server.fastmcp import FastMCP
 
-from . import embed, layout_baker, link_rules, phrasing, plurals, store, survey, tracing, vector, when_expression
+from . import (
+    embed,
+    layout_baker,
+    link_rules,
+    phrasing,
+    plurals,
+    store,
+    survey,
+    vector,
+    when_expression,
+)
 from .tracing import trace_span
 
 logger = logging.getLogger(__name__)
@@ -58,7 +68,9 @@ def _profile_enabled() -> bool:
 
 
 def _profile_dir() -> Path:
-    return Path(os.environ.get("MYCELIUM_PROFILE_DIR") or "./.mycelium/profiles").expanduser()
+    return Path(
+        os.environ.get("MYCELIUM_PROFILE_DIR") or "./.mycelium/profiles"
+    ).expanduser()
 
 
 def _profile_filename(tool_name: str) -> Path:
@@ -82,14 +94,19 @@ def _run_with_profile(func: Callable[..., Any], args: tuple, kwargs: dict) -> An
             profiler.dump_stats(str(path))
             _PROFILE_LOG.info(
                 "tool=%s duration_ms=%.2f profile=%s",
-                func.__name__, elapsed_ms, path,
+                func.__name__,
+                elapsed_ms,
+                path,
             )
         except OSError as ex:
             # Don't let a profile-dump failure mask the tool's own result.
             _PROFILE_LOG.warning(
                 "tool=%s duration_ms=%.2f profile_write_failed=%s",
-                func.__name__, elapsed_ms, ex,
+                func.__name__,
+                elapsed_ms,
+                ex,
             )
+
 
 # `MYCELIUM_INSTRUCTIONS` lets each deployment tell Claude Desktop / other
 # MCP clients *when* to reach for this server — naming the product, the
@@ -97,6 +114,7 @@ def _run_with_profile(func: Callable[..., Any], args: tuple, kwargs: dict) -> An
 # the strongest signal for "use this server for X" because it lands in
 # the system prompt alongside the tool list.
 _INSTRUCTIONS = (os.environ.get("MYCELIUM_INSTRUCTIONS") or "").strip() or None
+
 
 # When Mycelium is fronted by a reverse proxy (nginx, Cloudflare),
 # requests reach FastMCP with the public Host header — not 127.0.0.1.
@@ -110,13 +128,21 @@ def _build_transport_security() -> Any:
     if not raw:
         return None
     from mcp.server.transport_security import TransportSecuritySettings
+
     hosts = [h.strip() for h in raw.split(",") if h.strip()]
     # Allow https origins for each host. Wildcard ports keep dev-tool
     # quirks from rejecting traffic.
     origins: list[str] = []
     for h in hosts:
         bare = h.split(":", 1)[0]
-        origins.extend([f"https://{bare}", f"https://{bare}:*", f"http://{bare}", f"http://{bare}:*"])
+        origins.extend(
+            [
+                f"https://{bare}",
+                f"https://{bare}:*",
+                f"http://{bare}",
+                f"http://{bare}:*",
+            ]
+        )
     return TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=origins)
 
 
@@ -170,14 +196,16 @@ def _install_role_based_tool_filter() -> None:
         # are honored. Fall back to prefix-derivation if a wrapper
         # is missing for some reason (shouldn't happen in practice).
         wrappers_by_name = {w.__name__: w for w in TOOLS}
+
         def _role_for(name: str) -> str:
             w = wrappers_by_name.get(name)
-            return getattr(w, "_mycelium_required_role", None) or _auth.required_role_for(name)
+            return getattr(
+                w, "_mycelium_required_role", None
+            ) or _auth.required_role_for(name)
 
         tools = result.root.tools
         kept = [
-            t for t in tools
-            if _auth.principal_satisfies(principal, _role_for(t.name))
+            t for t in tools if _auth.principal_satisfies(principal, _role_for(t.name))
         ]
         result.root.tools = kept
         return result
@@ -237,7 +265,9 @@ def tool(
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             principal = _auth.current_principal.get()
-            if principal is not None and not _auth.principal_satisfies(principal, required):
+            if principal is not None and not _auth.principal_satisfies(
+                principal, required
+            ):
                 raise PermissionError(
                     f"tool '{func.__name__}' requires the {required} role; "
                     f"caller has {principal.role}"
@@ -255,7 +285,9 @@ def tool(
                     # signature so positional args become named — keeps
                     # the stored payload uniform regardless of how the
                     # caller invoked the tool.
-                    bound = _ORIG_SIGNATURES[func.__name__].bind_partial(*args, **kwargs)
+                    bound = _ORIG_SIGNATURES[func.__name__].bind_partial(
+                        *args, **kwargs
+                    )
                     payload = dict(bound.arguments)
                     return _queue_draft_op(redirect, func.__name__, payload, principal)
 
@@ -289,10 +321,14 @@ def tool(
 # `draft_id` kwarg, and a drafter principal automatically routes them
 # to a session-scoped draft instead of touching the substrate.
 _MUTATION_PREFIXES = (
-    "upsert_", "add_",
-    "delete_", "remove_",
-    "replace_", "patch_",
-    "rename_", "move_",
+    "upsert_",
+    "add_",
+    "delete_",
+    "remove_",
+    "replace_",
+    "patch_",
+    "rename_",
+    "move_",
     "merge_",
 )
 
@@ -309,12 +345,12 @@ _MUTATION_PREFIXES = (
 # op payloads gets fragile fast. Use `get_draft(draft_id)` if you need
 # the full op list for one draft.
 _LIST_TOOL_KINDS: dict[str, tuple[str, ...]] = {
-    "list_statements":         ("upsert_statement",),
-    "list_entities":           ("upsert_entity",),
-    "list_link_types":         ("upsert_link_type",),
-    "list_entity_link_types":  ("upsert_entity_link_type",),
-    "list_statement_kinds":    ("upsert_statement_kind",),
-    "list_annotations":        ("upsert_annotation",),
+    "list_statements": ("upsert_statement",),
+    "list_entities": ("upsert_entity",),
+    "list_link_types": ("upsert_link_type",),
+    "list_entity_link_types": ("upsert_entity_link_type",),
+    "list_statement_kinds": ("upsert_statement_kind",),
+    "list_annotations": ("upsert_annotation",),
 }
 
 #: Cached unmodified signatures of mutation tools, so the wrapper can
@@ -323,7 +359,9 @@ _LIST_TOOL_KINDS: dict[str, tuple[str, ...]] = {
 _ORIG_SIGNATURES: dict[str, inspect.Signature] = {}
 
 
-def _add_draft_id_to_signature(func: Callable[..., Any], wrapper: Callable[..., Any]) -> None:
+def _add_draft_id_to_signature(
+    func: Callable[..., Any], wrapper: Callable[..., Any]
+) -> None:
     """Splice an optional `draft_id: str | None = None` onto the wrapper's
     public signature. FastMCP's tool-schema introspection and http.py's
     body-model generation both read `inspect.signature(wrapper)`, so
@@ -378,7 +416,8 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
          session-scoped open draft. Requires a session id.
       3. Anything else — return None.
     """
-    from . import auth as _auth, drafts_store
+    from . import auth as _auth
+    from . import drafts_store
 
     if draft_id is not None:
         assert _drafts_conn is not None
@@ -484,6 +523,7 @@ class LinkSpec(TypedDict):
     condition C is absent" — e.g. `{"op": "and", "of": [{"statement_id":
     "stm_X"}, {"op": "not", "of": [{"statement_id": "stm_Y"}]}]}`.
     """
+
     to_id: str
     link_type: str
     when: NotRequired[dict[str, Any]]
@@ -499,6 +539,7 @@ class IncomingLinkSpec(TypedDict):
 
     `when` is an optional condition expression; see `LinkSpec`.
     """
+
     from_id: str
     link_type: str
     when: NotRequired[dict[str, Any]]
@@ -531,6 +572,7 @@ class EdgeSpec(TypedDict):
     rejected; e.g. `teaches` is `procedure -> capability`, so
     `capability -> procedure` fails and should be swapped.
     """
+
     from_id: str
     to_id: str
     link_type: str
@@ -548,6 +590,7 @@ class BatchStatementSpec(TypedDict):
     callers wire siblings together in one call without round-tripping for
     ids first.
     """
+
     kind: str
     text: str
     links: NotRequired[list[LinkSpec]]
@@ -705,9 +748,7 @@ def _drop_name_from_index(name_id: str) -> None:
         _persist_name_index()
 
 
-def _resolve_or_create_names(
-    name_texts: list[str], strict: bool = False
-) -> list[str]:
+def _resolve_or_create_names(name_texts: list[str], strict: bool = False) -> list[str]:
     """Resolve name texts to name_ids, auto-creating a fresh entity + name
     for unknown text (or raising when `strict`).
 
@@ -808,9 +849,13 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
     affected: list[str] = []
     for child in store.get_generated_children(_conn, source_name_id):
         affected.extend(store.statements_mentioning_name(_conn, child["id"]))
-        _conn.execute("DELETE FROM statement_mentions WHERE name_id = ?", (child["id"],))
+        _conn.execute(
+            "DELETE FROM statement_mentions WHERE name_id = ?", (child["id"],)
+        )
         _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (child["id"],))
-        _conn.execute("DELETE FROM annotation_mentions WHERE name_id = ?", (child["id"],))
+        _conn.execute(
+            "DELETE FROM annotation_mentions WHERE name_id = ?", (child["id"],)
+        )
         _drop_name_from_index(child["id"])
         _conn.execute("DELETE FROM names WHERE id = ?", (child["id"],))
     _conn.commit()
@@ -881,8 +926,11 @@ def _near_duplicates(
 
 
 def _link_dict(
-    *, to_id: str | None = None, from_id: str | None = None,
-    link_type: str, when: dict[str, Any] | None,
+    *,
+    to_id: str | None = None,
+    from_id: str | None = None,
+    link_type: str,
+    when: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """Build the response dict for an edge, omitting `when` when None so
     unconditional edges keep the simpler shape callers expect.
@@ -937,9 +985,7 @@ def _format_flip_error(
     err = link_rules.flip_error(link_type, from_kind, to_kind)
     if err is None:
         return None
-    return (
-        f"{position}: {from_id} ({from_kind}) -> {to_id} ({to_kind}): {err}"
-    )
+    return f"{position}: {from_id} ({from_kind}) -> {to_id} ({to_kind}): {err}"
 
 
 def _at_refs_in_when(when: dict[str, Any] | None) -> list[int]:
@@ -999,9 +1045,7 @@ def _hydrate_statement(statement_id: str, score: float | None) -> dict[str, Any]
     # Mix in entity-endpoint edges where the statement is the source
     # (direction='se'). Externally indistinguishable from statement→statement
     # edges — caller reads the id prefix on `to_id` to know the kind.
-    es_outgoing, _ = store.get_entity_statement_links_for_statement(
-        _conn, statement_id
-    )
+    es_outgoing, _ = store.get_entity_statement_links_for_statement(_conn, statement_id)
     links.extend(
         _link_dict(to_id=ent_id, link_type=lt, when=when)
         for ent_id, lt, when in es_outgoing
@@ -1059,16 +1103,36 @@ def _hydrate_statement_full(
 
     when_refs: list[dict[str, Any]] = [
         {"from_id": from_id, "to_id": to_id, "link_type": lt, "when": when_tree}
-        for from_id, to_id, lt, when_tree in store.get_when_references(_conn, statement_id)
+        for from_id, to_id, lt, when_tree in store.get_when_references(
+            _conn, statement_id
+        )
     ]
     # Entity↔statement edges that condition on this statement.
-    for ent_id, stmt_id, direction, lt, when_tree in (
-        store.get_entity_statement_when_references(_conn, statement_id)
-    ):
+    for (
+        ent_id,
+        stmt_id,
+        direction,
+        lt,
+        when_tree,
+    ) in store.get_entity_statement_when_references(_conn, statement_id):
         if direction == "es":
-            when_refs.append({"from_id": ent_id, "to_id": stmt_id, "link_type": lt, "when": when_tree})
+            when_refs.append(
+                {
+                    "from_id": ent_id,
+                    "to_id": stmt_id,
+                    "link_type": lt,
+                    "when": when_tree,
+                }
+            )
         else:
-            when_refs.append({"from_id": stmt_id, "to_id": ent_id, "link_type": lt, "when": when_tree})
+            when_refs.append(
+                {
+                    "from_id": stmt_id,
+                    "to_id": ent_id,
+                    "link_type": lt,
+                    "when": when_tree,
+                }
+            )
 
     if reverse_cap is not None and len(incoming) > reverse_cap:
         out["incoming_links_truncated"] = len(incoming)
@@ -1221,7 +1285,9 @@ def search_statements(
     direct: list[dict[str, Any]] = []
     for statement_id, final, _cos in scored[:limit]:
         direct.append(
-            _hydrate_statement_full(statement_id, score=final, reverse_cap=_REVERSE_EDGE_CAP)
+            _hydrate_statement_full(
+                statement_id, score=final, reverse_cap=_REVERSE_EDGE_CAP
+            )
         )
     seen = {item[0] for item in scored[:limit]}
 
@@ -1333,7 +1399,9 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
         try:
             embedded.append((sub, _embed_with_retry(sub)))
         except Exception as exc:  # noqa: BLE001
-            _SURVEY_LOG.warning("survey: dropping sub-query %r (embed failed: %s)", sub, exc)
+            _SURVEY_LOG.warning(
+                "survey: dropping sub-query %r (embed failed: %s)", sub, exc
+            )
 
     embedded = survey.dedup_subqueries(embedded)
 
@@ -1361,12 +1429,18 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
             cosine = 1.0 - distance
             count, best = union.get(statement_id, (0, float("-inf")))
             union[statement_id] = (count + 1, max(best, cosine))
-        _SURVEY_LOG.debug("survey: sub-query %r surfaced %d statements", sub, len(surfaced))
+        _SURVEY_LOG.debug(
+            "survey: sub-query %r surfaced %d statements", sub, len(surfaced)
+        )
 
     ranked = survey.rank_statements(union)
     _SURVEY_LOG.info(
         "survey: produced=%d hygiene_dropped=%d searched=%d fallback=%s results=%d",
-        len(raw_subqueries), dropped, len(embedded), fallback, len(ranked),
+        len(raw_subqueries),
+        dropped,
+        len(embedded),
+        fallback,
+        len(ranked),
     )
     return [
         _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
@@ -1460,7 +1534,9 @@ def _resolve_research_source(name: str | None) -> str:
 
     if name is not None:
         if name not in configured:
-            raise ValueError(f"unknown source '{name}'; configured: {sorted(configured)}")
+            raise ValueError(
+                f"unknown source '{name}'; configured: {sorted(configured)}"
+            )
         return name
 
     if not configured:
@@ -1487,7 +1563,8 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
     configured. Returns {run row: id, topic, source, created_at, created_by,
     started_at, finished_at, outcome, draft_id, error, trace_ref, status}."""
     assert _drafts_conn is not None and _data_dir is not None
-    from . import auth as _auth, research_runs, research_store
+    from . import auth as _auth
+    from . import research_runs, research_store
 
     source_name = _resolve_research_source(source)
     principal = _auth.current_principal.get()
@@ -1669,9 +1746,7 @@ def upsert_statement(
     flip_errors: list[str] = []
     for i, spec in enumerate(links):
         to_id = spec["to_id"]
-        to_kind = _statement_kind(
-            statement_rows, to_id, self_id=id, self_kind=kind
-        )
+        to_kind = _statement_kind(statement_rows, to_id, self_id=id, self_kind=kind)
         err = _format_flip_error(
             position=f"links[{i}]",
             from_id=id or "<new statement>",
@@ -1684,9 +1759,7 @@ def upsert_statement(
             flip_errors.append(err)
     for i, il in enumerate(incoming_links):
         from_id = il["from_id"]
-        from_kind = _statement_kind(
-            statement_rows, from_id, self_id=id, self_kind=kind
-        )
+        from_kind = _statement_kind(statement_rows, from_id, self_id=id, self_kind=kind)
         err = _format_flip_error(
             position=f"incoming_links[{i}]",
             from_id=from_id,
@@ -1702,8 +1775,7 @@ def upsert_statement(
 
     vec = embed.embed(text)
     link_pairs = [
-        (item["to_id"], item["link_type"], item.get("when"))
-        for item in links
+        (item["to_id"], item["link_type"], item.get("when")) for item in links
     ]
 
     if id is not None:
@@ -1874,8 +1946,12 @@ def upsert_statements(
     # `when_raw_tree` is None or a tree whose leaves carry statement_ids
     # that are still in raw form ("@N" or existing ids); siblings get
     # remapped to real ids in Phase 5 once they're created.
-    resolved_outgoing: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [[] for _ in range(n)]
-    resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [[] for _ in range(n)]
+    resolved_outgoing: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [
+        [] for _ in range(n)
+    ]
+    resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [
+        [] for _ in range(n)
+    ]
     for i, spec in enumerate(statements):
         if i in rejected:
             continue
@@ -1884,13 +1960,17 @@ def upsert_statements(
             when_raw = link.get("when")
             if when_raw is not None:
                 # Validate shape + every leaf @N is in range / every existing id exists.
-                _resolve_when_tree(when_raw, _resolve_ref, f"statements[{i}].links[{j}].when")
+                _resolve_when_tree(
+                    when_raw, _resolve_ref, f"statements[{i}].links[{j}].when"
+                )
             resolved_outgoing[i].append((target, link["link_type"], when_raw))
         for j, il in enumerate(spec.get("incoming_links", []) or []):
             source = _resolve_ref(il["from_id"], f"statements[{i}].incoming_links[{j}]")
             when_raw = il.get("when")
             if when_raw is not None:
-                _resolve_when_tree(when_raw, _resolve_ref, f"statements[{i}].incoming_links[{j}].when")
+                _resolve_when_tree(
+                    when_raw, _resolve_ref, f"statements[{i}].incoming_links[{j}].when"
+                )
             resolved_incoming[i].append((source, il["link_type"], when_raw))
 
     for i, spec in enumerate(statements):
@@ -1977,9 +2057,23 @@ def upsert_statements(
         if i in rejected:
             continue
         for target, link_type, when in resolved_outgoing[i]:
-            edges.append((statement_ids[i], _resolve_endpoint(target), link_type, _materialize_when(when)))
+            edges.append(
+                (
+                    statement_ids[i],
+                    _resolve_endpoint(target),
+                    link_type,
+                    _materialize_when(when),
+                )
+            )
         for source, link_type, when in resolved_incoming[i]:
-            edges.append((_resolve_endpoint(source), statement_ids[i], link_type, _materialize_when(when)))
+            edges.append(
+                (
+                    _resolve_endpoint(source),
+                    statement_ids[i],
+                    link_type,
+                    _materialize_when(when),
+                )
+            )
     if edges:
         store.insert_links(_conn, edges)
 
@@ -2000,11 +2094,13 @@ def upsert_statements(
         elif i in direct_rejected:
             results.append({"rejected": True, "violations": item_violations[i]})
         elif i in rejected:
-            results.append({
-                "rejected": True,
-                "reason": "depends_on_rejected",
-                "depends_on": cascade_reasons[i],
-            })
+            results.append(
+                {
+                    "rejected": True,
+                    "reason": "depends_on_rejected",
+                    "depends_on": cascade_reasons[i],
+                }
+            )
         else:
             entry: dict[str, Any] = {"statement_id": statement_ids[i]}
             if item_violations[i]:
@@ -2168,9 +2264,7 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
 
 
 @tool
-def merge_entities(
-    from_entity_id: str, into_entity_id: str
-) -> dict[str, Any]:
+def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
     """Move every name from `from_entity_id` to `into_entity_id` and delete
     the source entity. Statements that mentioned the moved names continue
     to point at the same names (now under the new entity)."""
@@ -2193,12 +2287,8 @@ def merge_entities(
     store.rewrite_entity_link_endpoints(_conn, from_entity_id, into_entity_id)
     # Mixed entity↔statement edges anchored on the source entity move
     # onto the target; UNIQUE collisions drop the rewriting row.
-    store.rewrite_entity_statement_endpoints(
-        _conn, from_entity_id, into_entity_id
-    )
-    store.merge_entity_annotation_attachments(
-        _conn, from_entity_id, into_entity_id
-    )
+    store.rewrite_entity_statement_endpoints(_conn, from_entity_id, into_entity_id)
+    store.merge_entity_annotation_attachments(_conn, from_entity_id, into_entity_id)
     store.delete_entity(_conn, from_entity_id)
     affected: list[str] = []
     for nid in moved_name_ids:
@@ -2342,9 +2432,7 @@ def delete_entity(id: str) -> dict[str, Any]:
             "DELETE FROM statement_mentions WHERE name_id = ?", (nid,)
         ).rowcount
         _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (nid,))
-        _conn.execute(
-            "DELETE FROM annotation_mentions WHERE name_id = ?", (nid,)
-        )
+        _conn.execute("DELETE FROM annotation_mentions WHERE name_id = ?", (nid,))
         _drop_name_from_index(nid)
     if name_ids:
         # Break generated-plural self-references within this entity before
@@ -2383,9 +2471,7 @@ def delete_entity(id: str) -> dict[str, Any]:
 
 
 @tool
-def merge_statements(
-    from_id: str, into_id: str
-) -> dict[str, Any]:
+def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     """Merge one Statement into another and delete the source.
 
     Use case: you discover two statements are saying the same fact under
@@ -2447,20 +2533,14 @@ def merge_statements(
     # can be deleted under FK enforcement. Nothing is moved.
     mentions_moved = 0
     store.clear_derived_for_statement(_conn, from_id)
-    outgoing_moved = store.merge_outgoing_links_into(
-        _conn, from_id, into_id
-    )
-    incoming_moved = store.merge_incoming_links_into(
-        _conn, from_id, into_id
-    )
+    outgoing_moved = store.merge_outgoing_links_into(_conn, from_id, into_id)
+    incoming_moved = store.merge_incoming_links_into(_conn, from_id, into_id)
     # Any remaining links that referenced the source as a `when` condition
     # need their reference rewritten to the target before deleting the
     # source, otherwise FK enforcement blocks the delete. Both link kinds
     # are handled — statement_links and entity_statement_links.
     store.rewrite_when_references(_conn, from_id, into_id)
-    store.rewrite_entity_statement_when_references(
-        _conn, from_id, into_id
-    )
+    store.rewrite_entity_statement_when_references(_conn, from_id, into_id)
     # Entity↔statement edges whose endpoint is the source statement
     # need to move onto the target. Use INSERT OR IGNORE through delete
     # + re-insert via the existing store helpers — but cheaper to UPDATE
@@ -2476,9 +2556,7 @@ def merge_statements(
         "DELETE FROM entity_statement_links WHERE statement_id = ?",
         (from_id,),
     )
-    store.merge_statement_annotation_attachments(
-        _conn, from_id, into_id
-    )
+    store.merge_statement_annotation_attachments(_conn, from_id, into_id)
 
     vector_id = store.get_vector_id(_conn, from_id)
     if vector_id is not None:
@@ -2583,9 +2661,7 @@ def delete_statement(id: str) -> dict[str, Any]:
         "incoming_links_removed": incoming_removed,
         "outgoing_links_removed": outgoing_removed,
         "when_references_removed": when_removed,
-        "entity_statement_links_removed": (
-            es_endpoint_removed + es_when_removed
-        ),
+        "entity_statement_links_removed": (es_endpoint_removed + es_when_removed),
     }
 
 
@@ -2612,23 +2688,23 @@ def _split_edges(
     `add_entity_links`) and on unknown id prefixes."""
     stmt_edges: list[tuple[str, str, str, dict[str, Any] | None]] = []
     es_edges: list[tuple[str, str, str, str, dict[str, Any] | None]] = []
-    for l in links:
-        fk = _id_kind(l["from_id"])
-        tk = _id_kind(l["to_id"])
-        when = l.get("when")
+    for link in links:
+        fk = _id_kind(link["from_id"])
+        tk = _id_kind(link["to_id"])
+        when = link.get("when")
         if fk == "statement" and tk == "statement":
-            stmt_edges.append((l["from_id"], l["to_id"], l["link_type"], when))
+            stmt_edges.append((link["from_id"], link["to_id"], link["link_type"], when))
         elif fk == "entity" and tk == "statement":
             es_edges.append(
-                (l["from_id"], l["to_id"], "es", l["link_type"], when)
+                (link["from_id"], link["to_id"], "es", link["link_type"], when)
             )
         elif fk == "statement" and tk == "entity":
             es_edges.append(
-                (l["to_id"], l["from_id"], "se", l["link_type"], when)
+                (link["to_id"], link["from_id"], "se", link["link_type"], when)
             )
         else:  # entity → entity
             raise ValueError(
-                f"entity↔entity edge {l['from_id']!r} → {l['to_id']!r} is not "
+                f"entity↔entity edge {link['from_id']!r} → {link['to_id']!r} is not "
                 "supported by add_links/remove_links; use add_entity_links instead"
             )
     return stmt_edges, es_edges
@@ -2670,15 +2746,15 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     # Validate every referenced id exists across both kinds.
     needed_statements: set[str] = set()
     needed_entities: set[str] = set()
-    for l in links:
-        for endpoint in (l["from_id"], l["to_id"]):
+    for link in links:
+        for endpoint in (link["from_id"], link["to_id"]):
             if _id_kind(endpoint) == "statement":
                 needed_statements.add(endpoint)
             else:
                 needed_entities.add(endpoint)
-        if "when" in l:
-            when_expression.validate(l["when"])
-            needed_statements.update(when_expression.leaves(l["when"]))
+        if "when" in link:
+            when_expression.validate(link["when"])
+            needed_statements.update(when_expression.leaves(link["when"]))
     statement_rows: dict[str, sqlite3.Row] = {}
     for sid in needed_statements:
         row = store.get_statement(_conn, sid)
@@ -2690,16 +2766,19 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
             raise ValueError(f"entity {eid!r} does not exist")
 
     flip_errors: list[str] = []
-    for i, l in enumerate(links):
-        if _id_kind(l["from_id"]) != "statement" or _id_kind(l["to_id"]) != "statement":
+    for i, link in enumerate(links):
+        if (
+            _id_kind(link["from_id"]) != "statement"
+            or _id_kind(link["to_id"]) != "statement"
+        ):
             continue
-        from_kind = statement_rows[l["from_id"]]["kind"]
-        to_kind = statement_rows[l["to_id"]]["kind"]
+        from_kind = statement_rows[link["from_id"]]["kind"]
+        to_kind = statement_rows[link["to_id"]]["kind"]
         err = _format_flip_error(
             position=f"links[{i}]",
-            from_id=l["from_id"],
-            to_id=l["to_id"],
-            link_type=l["link_type"],
+            from_id=link["from_id"],
+            to_id=link["to_id"],
+            link_type=link["link_type"],
             from_kind=from_kind,
             to_kind=to_kind,
         )
@@ -2835,9 +2914,7 @@ def get_entity(id: str) -> dict[str, Any]:
         raise ValueError(f"entity {id!r} does not exist")
     outgoing = store.get_entity_links_outgoing(_conn, id)
     incoming = store.get_entity_links_incoming(_conn, id)
-    es_outgoing, es_incoming = store.get_entity_statement_links_for_entity(
-        _conn, id
-    )
+    es_outgoing, es_incoming = store.get_entity_statement_links_for_entity(_conn, id)
     return {
         "id": row["id"],
         "description": row["description"] or "",
@@ -2849,13 +2926,9 @@ def get_entity(id: str) -> dict[str, Any]:
             {"id": n["id"], "text": n["text"]}
             for n in store.get_names_by_entity(_conn, id)
         ],
-        "links": [
-            {"to_entity_id": to_id, "link_type": lt}
-            for (to_id, lt) in outgoing
-        ],
+        "links": [{"to_entity_id": to_id, "link_type": lt} for (to_id, lt) in outgoing],
         "incoming_links": [
-            {"from_entity_id": from_id, "link_type": lt}
-            for (from_id, lt) in incoming
+            {"from_entity_id": from_id, "link_type": lt} for (from_id, lt) in incoming
         ],
         # Mixed entity↔statement edges. Separate from `links` /
         # `incoming_links` (which carry the entity↔entity vocabulary
@@ -2890,9 +2963,7 @@ def list_entities(
     of one entity, use `get_entity(id)`.
     """
     assert _conn is not None
-    rows = store.list_entities(
-        _conn, prefix=prefix or None, limit=limit, offset=offset
-    )
+    rows = store.list_entities(_conn, prefix=prefix or None, limit=limit, offset=offset)
     return {
         "total": store.count_entities(_conn),
         "entities": [
@@ -3096,9 +3167,7 @@ def discover_facts(
             row = store.get_statement(_conn, bid)
             if row is None:
                 continue
-            matches.append(
-                {"id": bid, "text": _snippet(row["text"]), "score": score}
-            )
+            matches.append({"id": bid, "text": _snippet(row["text"]), "score": score})
 
         if matches and matches[0]["score"] >= exists_threshold:
             status = "exists"
@@ -3227,7 +3296,8 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
         if store.get_entity_by_id(_conn, eid) is None:
             raise ValueError(f"entity {eid!r} does not exist")
     edges = [
-        (l["from_entity_id"], l["to_entity_id"], l["link_type"]) for l in links
+        (link["from_entity_id"], link["to_entity_id"], link["link_type"])
+        for link in links
     ]
     inserted = store.insert_entity_links(_conn, edges)
     if inserted:
@@ -3250,7 +3320,8 @@ def remove_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     if not links:
         return {"removed": 0}
     edges = [
-        (l["from_entity_id"], l["to_entity_id"], l["link_type"]) for l in links
+        (link["from_entity_id"], link["to_entity_id"], link["link_type"])
+        for link in links
     ]
     removed = store.delete_entity_links(_conn, edges)
     if removed:
@@ -3280,8 +3351,7 @@ def list_statement_kinds() -> list[dict[str, Any]]:
     assert _conn is not None
     glossary_rows = store.list_statement_kind_glossary(_conn)
     glossary = {
-        r["kind"]: (r["description"], r["when_to_use"] or "")
-        for r in glossary_rows
+        r["kind"]: (r["description"], r["when_to_use"] or "") for r in glossary_rows
     }
     counts = store.count_statements_by_kind_all(_conn)
     all_kinds = sorted(set(counts) | set(glossary))
@@ -3345,9 +3415,7 @@ def upsert_statement_kind(
         raise ValueError("kind cannot be empty")
     if not description or not description.strip():
         raise ValueError("description cannot be empty")
-    store.upsert_statement_kind_glossary(
-        _conn, kind, description, when_to_use
-    )
+    store.upsert_statement_kind_glossary(_conn, kind, description, when_to_use)
     return {"kind": kind}
 
 
@@ -3402,9 +3470,7 @@ def delete_link_type(link_type: str) -> dict[str, str]:
 
 
 @tool
-def upsert_entity_link_type(
-    link_type: str, description: str
-) -> dict[str, str]:
+def upsert_entity_link_type(link_type: str, description: str) -> dict[str, str]:
     """Create or update an entity→entity link-type glossary entry.
 
     The `link_type` value is the primary key. Entity link types live
@@ -3469,7 +3535,9 @@ def _annotation_near_duplicates(
     return out
 
 
-def _hydrate_annotation(annotation_id: str, score: float | None = None) -> dict[str, Any]:
+def _hydrate_annotation(
+    annotation_id: str, score: float | None = None
+) -> dict[str, Any]:
     """Full hydrated annotation: id, kind, text, mentions, attached
     statements AND entities (an annotation can attach to either layer)."""
     assert _conn is not None
@@ -3829,7 +3897,6 @@ def grep_statements(
         limit=10_000 if (match_aliased_mentions and entity_id is None) else limit,
         offset=0 if (match_aliased_mentions and entity_id is None) else offset,
     )
-    text_ids = {r["id"]: r for r in text_rows}
 
     if not match_aliased_mentions or entity_id is not None:
         total = store.count_grep_statements(
@@ -3864,7 +3931,13 @@ def grep_statements(
         seen.add(sid)
         matched_via = "both" if sid in mention_ids else "text"
         combined.append(
-            {"id": sid, "kind": r["kind"], "text": r["text"], "matched_via": matched_via, "_rid": r["rid"]}
+            {
+                "id": sid,
+                "kind": r["kind"],
+                "text": r["text"],
+                "matched_via": matched_via,
+                "_rid": r["rid"],
+            }
         )
     for r in mention_rows:
         sid = r["id"]
@@ -3872,7 +3945,13 @@ def grep_statements(
             continue
         seen.add(sid)
         combined.append(
-            {"id": sid, "kind": r["kind"], "text": r["text"], "matched_via": "mention", "_rid": r["rid"]}
+            {
+                "id": sid,
+                "kind": r["kind"],
+                "text": r["text"],
+                "matched_via": "mention",
+                "_rid": r["rid"],
+            }
         )
 
     combined.sort(key=lambda x: x["_rid"])
@@ -3881,7 +3960,12 @@ def grep_statements(
     return {
         "total": total,
         "statements": [
-            {"id": s["id"], "kind": s["kind"], "text": s["text"], "matched_via": s["matched_via"]}
+            {
+                "id": s["id"],
+                "kind": s["kind"],
+                "text": s["text"],
+                "matched_via": s["matched_via"],
+            }
             for s in sliced
         ],
     }
@@ -3958,7 +4042,8 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
 
     Returns the submitted draft's id and final op count.
     """
-    from . import auth as _auth, drafts_store
+    from . import auth as _auth
+    from . import drafts_store
 
     assert _drafts_conn is not None
     principal = _auth.current_principal.get()
@@ -3993,7 +4078,8 @@ def list_my_drafts() -> list[dict[str, Any]]:
     Useful for an agent to inspect what it queued in earlier sessions
     or check on the review state of submitted work.
     """
-    from . import auth as _auth, drafts_store
+    from . import auth as _auth
+    from . import drafts_store
 
     assert _drafts_conn is not None
     principal = _auth.current_principal.get()

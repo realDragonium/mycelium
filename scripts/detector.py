@@ -17,10 +17,8 @@ Patterns flagged:
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from mcp_client import MyceliumClient
-
 
 _SUFFIX_RE = re.compile(
     r"\b[A-Z][a-zA-Z]*(?:Service|Manager|Repository|Provider|Factory|Handler|Processor|Helper|Validator|Serializer|Deserializer|Controller|Resolver)\b"
@@ -73,9 +71,7 @@ def find_candidates(
     import random
 
     rows = mcp.list_all_behaviors()
-    leaks = [
-        {"id": r["id"], "text": r["text"]} for r in rows if is_leaky(r["text"])
-    ]
+    leaks = [{"id": r["id"], "text": r["text"]} for r in rows if is_leaky(r["text"])]
     if sample and sample > 0 and len(leaks) > sample:
         leaks = random.sample(leaks, sample)
     return leaks

@@ -26,9 +26,7 @@ from typing import Any
 from mycelium import store
 
 
-def fetch_annotations(
-    conn: sqlite3.Connection, kind: str | None
-) -> list[sqlite3.Row]:
+def fetch_annotations(conn: sqlite3.Connection, kind: str | None) -> list[sqlite3.Row]:
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(annotations)")}
     select = ["id", "kind", "text"]
     for opt in ("created_at", "created_by"):
@@ -53,9 +51,7 @@ def attached_statements(
         "ORDER BY s.rowid",
         (annotation_id,),
     ).fetchall()
-    return [
-        {"id": r["id"], "kind": r["kind"], "text": r["text"]} for r in rows
-    ]
+    return [{"id": r["id"], "kind": r["kind"], "text": r["text"]} for r in rows]
 
 
 def attached_entities(
@@ -72,10 +68,7 @@ def attached_entities(
         "ORDER BY e.rowid",
         (annotation_id,),
     ).fetchall()
-    return [
-        {"id": r["id"], "name": r["primary_name"] or "<unnamed>"}
-        for r in rows
-    ]
+    return [{"id": r["id"], "name": r["primary_name"] or "<unnamed>"} for r in rows]
 
 
 def mentioned_entities(
@@ -126,9 +119,7 @@ def render_text(records: list[dict[str, Any]]) -> str:
             out.append(f"  {r['id']}")
             out.append(f"    text: {r['text']!r}")
             if r["created_by"] or r["created_at"]:
-                out.append(
-                    f"    created: {r['created_at']} by {r['created_by']!r}"
-                )
+                out.append(f"    created: {r['created_at']} by {r['created_by']!r}")
             if r["attached_statements"]:
                 out.append(
                     f"    attached to {len(r['attached_statements'])} statement(s):"

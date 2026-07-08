@@ -120,9 +120,7 @@ class Index:
                 return None
             raise
 
-    def search(
-        self, vec: list[float], k: int
-    ) -> list[tuple[int, float]]:
+    def search(self, vec: list[float], k: int) -> list[tuple[int, float]]:
         assert self._index is not None
         if self._index.get_current_count() == 0:
             return []
@@ -139,4 +137,10 @@ class Index:
                 k -= 1
         else:
             return []
-        return list(zip((int(x) for x in labels[0]), (float(x) for x in distances[0])))
+        return list(
+            zip(
+                (int(x) for x in labels[0]),
+                (float(x) for x in distances[0]),
+                strict=False,
+            )
+        )

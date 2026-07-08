@@ -80,6 +80,7 @@ def emit_error(*, where: str, exc: BaseException, **fields: Any) -> None:
     except Exception:  # noqa: BLE001
         pass
 
+
 _active: ContextVar["SpanRecorder | None"] = ContextVar(
     "mycelium_trace_recorder", default=None
 )
@@ -93,7 +94,10 @@ _profiling: ContextVar[bool] = ContextVar("mycelium_profiling", default=False)
 # initial state can be forced on at boot with MYCELIUM_TRACE_ENABLED=1.
 _TOGGLE_LOCK = threading.Lock()
 _enabled: bool = os.environ.get("MYCELIUM_TRACE_ENABLED", "").lower() in (
-    "1", "on", "true", "yes",
+    "1",
+    "on",
+    "true",
+    "yes",
 )
 _enabled_until: float | None = None  # monotonic deadline; None = no expiry
 
@@ -279,7 +283,9 @@ def profile_to_html(kind: str, label: str) -> Iterator[None]:
                         {
                             "kind": kind,
                             "label": str(label),
-                            "latency_ms": round((time.monotonic() - started) * 1000.0, 2),
+                            "latency_ms": round(
+                                (time.monotonic() - started) * 1000.0, 2
+                            ),
                         }
                     ),
                     encoding="utf-8",

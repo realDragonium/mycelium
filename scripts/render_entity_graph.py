@@ -28,10 +28,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = REPO_ROOT / ".mycelium" / "mycelium.db"
-DEFAULT_POSITIONS = REPO_ROOT / "src" / "mycelium" / "ui" / "data" / "entity-positions.json"
+DEFAULT_POSITIONS = (
+    REPO_ROOT / "src" / "mycelium" / "ui" / "data" / "entity-positions.json"
+)
 DEFAULT_OUTPUT = REPO_ROOT / "entity-graph.png"
 
 
@@ -43,9 +44,18 @@ THEMES = {
         "label": "#e4e4e7",
         # 12-stop palette covering the typical n_components range
         "palette": [
-            "#f87171", "#fbbf24", "#a3e635", "#4ade80",
-            "#22d3ee", "#60a5fa", "#a78bfa", "#f472b6",
-            "#fb923c", "#facc15", "#34d399", "#818cf8",
+            "#f87171",
+            "#fbbf24",
+            "#a3e635",
+            "#4ade80",
+            "#22d3ee",
+            "#60a5fa",
+            "#a78bfa",
+            "#f472b6",
+            "#fb923c",
+            "#facc15",
+            "#34d399",
+            "#818cf8",
         ],
     },
     "light": {
@@ -54,9 +64,18 @@ THEMES = {
         "edge_alpha": 0.4,
         "label": "#0f172a",
         "palette": [
-            "#dc2626", "#d97706", "#65a30d", "#16a34a",
-            "#0891b2", "#2563eb", "#7c3aed", "#db2777",
-            "#ea580c", "#ca8a04", "#059669", "#4f46e5",
+            "#dc2626",
+            "#d97706",
+            "#65a30d",
+            "#16a34a",
+            "#0891b2",
+            "#2563eb",
+            "#7c3aed",
+            "#db2777",
+            "#ea580c",
+            "#ca8a04",
+            "#059669",
+            "#4f46e5",
         ],
     },
 }

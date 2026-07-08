@@ -52,8 +52,14 @@ _SUBMIT_SCHEMA: dict[str, Any] = {
             "type": "object",
             "additionalProperties": False,
             "properties": {
-                "as_asked": {"type": "string", "description": "the caller's literal question"},
-                "resolved_to": {"type": "string", "description": "what you set out to answer"},
+                "as_asked": {
+                    "type": "string",
+                    "description": "the caller's literal question",
+                },
+                "resolved_to": {
+                    "type": "string",
+                    "description": "what you set out to answer",
+                },
                 "reframed": {"type": "boolean"},
                 "reframe_reason": {
                     "anyOf": [{"type": "string"}, {"type": "null"}],
@@ -74,7 +80,10 @@ _SUBMIT_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
                 "properties": {
                     "sub_question": {"type": "string"},
-                    "status": {"type": "string", "enum": ["resolved", "partial", "unresolved"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["resolved", "partial", "unresolved"],
+                    },
                     "note": {"type": "string"},
                 },
                 "required": ["sub_question", "status", "note"],

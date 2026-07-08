@@ -96,7 +96,9 @@ def test_longer_match_starting_later_wins():
         suspect=lambda _t: False,
     )
     result = match_text("alpha beta gamma delta", index)
-    assert _ids(result.mentions) == {"long"}  # "alpha beta" suppressed, not just deferred
+    assert _ids(result.mentions) == {
+        "long"
+    }  # "alpha beta" suppressed, not just deferred
 
 
 def test_prefix_name_of_different_entity_is_shadowed():
@@ -148,12 +150,12 @@ def test_plural_stored_as_separate_name():
 
 
 def test_is_suspect_name_predicate():
-    assert is_suspect_name("flow") is True       # short single token
-    assert is_suspect_name("result") is True     # 6 chars, at threshold
-    assert is_suspect_name("the") is True         # stopword
+    assert is_suspect_name("flow") is True  # short single token
+    assert is_suspect_name("result") is True  # 6 chars, at threshold
+    assert is_suspect_name("the") is True  # stopword
     assert is_suspect_name("candidate") is False  # long single token
     assert is_suspect_name("assessment part") is False  # multi-token
-    assert is_suspect_name("android") is False    # 7 chars, over threshold
+    assert is_suspect_name("android") is False  # 7 chars, over threshold
 
 
 def test_is_suspect_name_flags_verb_participles():
@@ -177,7 +179,7 @@ def test_suspect_alone_is_queued_not_linked():
     assert _ids(result.suspects) == {"n1"}
     occ = result.suspects[0]
     assert occ.entity_id == "e1"
-    assert "flow" == "the flow continues"[occ.start:occ.end]
+    assert "flow" == "the flow continues"[occ.start : occ.end]
 
 
 def test_suspect_within_claimed_span_is_dropped_not_queued():
@@ -186,7 +188,7 @@ def test_suspect_within_claimed_span_is_dropped_not_queued():
     index = build_index(
         [
             ("long", "e_long", "assessment part result"),  # distinctive (multi-token)
-            ("susp", "e_susp", "result"),                  # suspect (short single token)
+            ("susp", "e_susp", "result"),  # suspect (short single token)
         ]
     )
     result = match_text("the assessment part result here", index)
@@ -200,7 +202,7 @@ def test_distinctive_hit_suppresses_entity_suspect_queue():
     index = build_index(
         [
             ("dist", "e1", "candidate pipeline"),  # distinctive
-            ("susp", "e1", "flow"),                # suspect, same entity
+            ("susp", "e1", "flow"),  # suspect, same entity
         ]
     )
     result = match_text("the candidate pipeline drives the flow", index)
@@ -245,9 +247,7 @@ def test_same_span_collision_distinctive_plus_suspect():
 
 
 def test_distinct_suspect_names_each_queued_once():
-    index = build_index(
-        [("f", "e1", "flow"), ("r", "e2", "result")]
-    )
+    index = build_index([("f", "e1", "flow"), ("r", "e2", "result")])
     # Same suspect word twice → still one occurrence for that (statement, name).
     result = match_text("flow then flow then result", index)
     assert result.mentions == []
@@ -262,7 +262,7 @@ def test_match_offsets_point_into_original_text():
     text = "the Candidate applied"
     index = build_index([("n1", "e1", "candidate")])
     m = match_text(text, index).mentions[0]
-    assert text[m.start:m.end] == "Candidate"  # original casing preserved
+    assert text[m.start : m.end] == "Candidate"  # original casing preserved
 
 
 def test_empty_and_no_match():

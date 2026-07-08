@@ -44,6 +44,7 @@ def output_path() -> Path | None:
     write. Returns None when configure() hasn't been called yet."""
     return _output_path
 
+
 # Wait this long after the last schedule_rebake() call before firing.
 # Tuned to absorb the burst of writes from a single upsert_statements
 # batch (typically completes well under 1s for normal workloads).
@@ -79,9 +80,14 @@ def ensure_initial() -> None:
     log.info("entity-positions.json missing; running initial bake (db=%s)", _db_path)
     _output_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        [sys.executable, str(_SCRIPT),
-         "--db", str(_db_path),
-         "--output", str(_output_path)],
+        [
+            sys.executable,
+            str(_SCRIPT),
+            "--db",
+            str(_db_path),
+            "--output",
+            str(_output_path),
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         cwd=str(_REPO_ROOT),
@@ -125,9 +131,14 @@ def _fire() -> None:
         assert _db_path is not None and _output_path is not None
         log.info("triggering layout rebake (db=%s)", _db_path)
         _process = subprocess.Popen(
-            [sys.executable, str(_SCRIPT),
-             "--db", str(_db_path),
-             "--output", str(_output_path)],
+            [
+                sys.executable,
+                str(_SCRIPT),
+                "--db",
+                str(_db_path),
+                "--output",
+                str(_output_path),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(_REPO_ROOT),

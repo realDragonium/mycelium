@@ -41,7 +41,6 @@ import hashlib
 import json
 from typing import Any, Callable
 
-
 HASH_NONE = "NONE"
 
 
@@ -72,7 +71,7 @@ def validate(expr: Any) -> None:
         raise ValueError(f"when expression must be a dict, got {type(expr).__name__}")
     if is_leaf(expr) and is_internal(expr):
         raise ValueError(
-            f"expression has both 'statement_id' and 'op' — must be one or the other"
+            "expression has both 'statement_id' and 'op' — must be one or the other"
         )
     if is_leaf(expr):
         if set(expr.keys()) != {"statement_id"}:

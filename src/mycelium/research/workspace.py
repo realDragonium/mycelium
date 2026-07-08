@@ -9,7 +9,6 @@ from typing import Any
 
 from ..ask.substrate import ToolSpec
 
-
 #: Path component that marks VCS internals — never enumerated or read (it can
 #: hold clone credentials; `sources.fetch` strips it, this is defense in depth).
 _VCS_DIR = ".git"
@@ -200,9 +199,8 @@ class WorkspaceReader:
         total_lines = len(raw_lines)
         requested = raw_lines[offset : offset + limit]
         lines = [line[: self._max_line_chars] for line in requested]
-        truncated = (
-            offset + limit < total_lines
-            or any(len(line) > self._max_line_chars for line in requested)
+        truncated = offset + limit < total_lines or any(
+            len(line) > self._max_line_chars for line in requested
         )
         lines, size_truncated = self._cap_lines(lines)
         truncated = truncated or size_truncated

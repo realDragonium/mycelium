@@ -62,7 +62,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
@@ -148,7 +147,15 @@ _RULE_ADV_LEMMAS = {"never", "always"}
 _PERIPHRASTIC_LEMMAS = {"need", "have"}
 
 # Verbs whose passive "is/are <lemma>d to <verb>" form is rule-like
-_COPULA_RULE_LEMMAS = {"require", "allow", "permit", "prohibit", "forbid", "oblige", "obligate"}
+_COPULA_RULE_LEMMAS = {
+    "require",
+    "allow",
+    "permit",
+    "prohibit",
+    "forbid",
+    "oblige",
+    "obligate",
+}
 
 # Verbs that describe structural relationships, not events
 _PROPERTY_VERB_LEMMAS = {"consist", "belong", "comprise"}
@@ -163,7 +170,18 @@ _PROPERTY_VERB_LEMMAS = {"consist", "belong", "comprise"}
 _CAPABILITY_MODAL_LEMMAS = {"can", "could", "may", "might"}
 
 # Subordinating conjunctions that signal a precondition leaking into text
-_PRECONDITION_SCONJ = {"when", "before", "after", "while", "until", "since", "if", "unless", "because", "though"}
+_PRECONDITION_SCONJ = {
+    "when",
+    "before",
+    "after",
+    "while",
+    "until",
+    "since",
+    "if",
+    "unless",
+    "because",
+    "though",
+}
 
 # Universal quantifiers — describe a population, not an instance event.
 # Note: "no" is intentionally excluded — it routinely appears in legitimate
@@ -173,16 +191,28 @@ _PRECONDITION_SCONJ = {"when", "before", "after", "while", "until", "since", "if
 # rejected because they always denote a population.
 _UNIVERSAL_DET_LEMMAS = {"every", "all", "each", "any"}
 _UNIVERSAL_PRON_LEMMAS = {
-    "everyone", "everybody", "anyone", "anybody",
-    "no one", "nobody", "none",
+    "everyone",
+    "everybody",
+    "anyone",
+    "anybody",
+    "no one",
+    "nobody",
+    "none",
 }
 
 
 # ─── hedges (regex on normalized text) ──────────────────────────────────────
 
 _HEDGE_WORDS = [
-    "usually", "often", "mostly", "typically", "sometimes",
-    "generally", "occasionally", "frequently", "rarely",
+    "usually",
+    "often",
+    "mostly",
+    "typically",
+    "sometimes",
+    "generally",
+    "occasionally",
+    "frequently",
+    "rarely",
 ]
 _HEDGE_RE = re.compile(r"\b(" + "|".join(_HEDGE_WORDS) + r")\b")
 _HEDGE_PHRASE_RE = re.compile(r"\bin\s+most\s+cases\b")
@@ -192,7 +222,10 @@ _HEDGE_PHRASE_RE = re.compile(r"\bin\s+most\s+cases\b")
 # the construction starts mid-clause; literal phrases catch the long tail.
 _COMPOUND_PHRASES = [
     (re.compile(r"\band\s+then\b"), '"and then" joins two events into one statement'),
-    (re.compile(r"\band\s+also\b"), '"and also" joins multiple actions into one statement'),
+    (
+        re.compile(r"\band\s+also\b"),
+        '"and also" joins multiple actions into one statement',
+    ),
     (re.compile(r",\s+then\b"), '", then" joins sequential events into one statement'),
 ]
 
@@ -202,11 +235,26 @@ _COMPOUND_PHRASES = [
 # "transitions to <X>" — same.
 # "gets marked as <X>" — same.
 _HIDDEN_EVENT_STATE_PHRASES = [
-    (re.compile(r"\bis\s+set\s+to\b"), '"is set to" hides the underlying event (something set the value) and the resulting state (the value now equals X)'),
-    (re.compile(r"\bare\s+set\s+to\b"), '"are set to" hides the underlying event (something set the value) and the resulting state (the value now equals X)'),
-    (re.compile(r"\bbecomes?\b"), '"become(s)" hides the underlying event (the transition) and the resulting state'),
-    (re.compile(r"\btransitions?\s+to\b"), '"transition(s) to" hides the underlying event (the transition) and the resulting state'),
-    (re.compile(r"\bgets?\s+marked\s+as\b"), '"gets marked as" hides the underlying event (the marking) and the resulting state'),
+    (
+        re.compile(r"\bis\s+set\s+to\b"),
+        '"is set to" hides the underlying event (something set the value) and the resulting state (the value now equals X)',
+    ),
+    (
+        re.compile(r"\bare\s+set\s+to\b"),
+        '"are set to" hides the underlying event (something set the value) and the resulting state (the value now equals X)',
+    ),
+    (
+        re.compile(r"\bbecomes?\b"),
+        '"become(s)" hides the underlying event (the transition) and the resulting state',
+    ),
+    (
+        re.compile(r"\btransitions?\s+to\b"),
+        '"transition(s) to" hides the underlying event (the transition) and the resulting state',
+    ),
+    (
+        re.compile(r"\bgets?\s+marked\s+as\b"),
+        '"gets marked as" hides the underlying event (the marking) and the resulting state',
+    ),
 ]
 
 
@@ -264,7 +312,7 @@ _REC_PROPERTY_STRUCTURAL = (
 _REC_PRECONDITION = (
     "Split into two statements (the precondition and the action) and connect "
     "them with add_links, setting `when` on the edge to a leaf "
-    "({\"statement_id\": ...}) — or an AND/OR tree if multiple preconditions "
+    '({"statement_id": ...}) — or an AND/OR tree if multiple preconditions '
     "compose."
 )
 _REC_UNIVERSAL = (
@@ -290,7 +338,7 @@ _REC_HIDDEN_EVENT_STATE = (
     "link_type, e.g. `establishes`)."
 )
 _REC_CAPABILITY_IN_STATE = (
-    "Modal verbs like \"can\", \"may\", \"is able to\" describe a "
+    'Modal verbs like "can", "may", "is able to" describe a '
     "capability, not a state. Either rephrase to describe the condition "
     "directly, or use kind='capability' for this statement."
 )
@@ -343,42 +391,58 @@ def _check_modals(doc: "Doc", original: str, pos_map: list[int]) -> list[Violati
             continue
         if tok.lemma_ in _MODAL_LEMMAS:
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="rule_shaped",
-                n_start=n_start, n_end=n_end,
-                rule=f'"{tok.text}" is a modal verb describing a rule, not an event',
-                recommendation=_REC_RULE,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="rule_shaped",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"{tok.text}" is a modal verb describing a rule, not an event',
+                    recommendation=_REC_RULE,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
         elif tok.lemma_ in _SEQUENCING_MODAL_LEMMAS:
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="sequencing",
-                n_start=n_start, n_end=n_end,
-                rule=f'"{tok.text}" usually names a follow-up statement; that follow-up belongs as its own statement connected by a link',
-                recommendation=_REC_SEQUENCING,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="sequencing",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"{tok.text}" usually names a follow-up statement; that follow-up belongs as its own statement connected by a link',
+                    recommendation=_REC_SEQUENCING,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_rule_adverbs(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_rule_adverbs(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """ADV "never" / "always" → rule_shaped."""
     out: list[Violation] = []
     for tok in doc:
         if tok.pos_ == "ADV" and tok.lemma_ in _RULE_ADV_LEMMAS:
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="rule_shaped",
-                n_start=n_start, n_end=n_end,
-                rule=f'"{tok.text}" describes an invariant or prohibition, not an event',
-                recommendation=_REC_RULE,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="rule_shaped",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"{tok.text}" describes an invariant or prohibition, not an event',
+                    recommendation=_REC_RULE,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_periphrastic_modals(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_periphrastic_modals(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """need to + verb / have to + verb → rule_shaped.
 
     Detection: token with lemma in {need, have}, POS=VERB (not AUX —
@@ -390,17 +454,23 @@ def _check_periphrastic_modals(doc: "Doc", original: str, pos_map: list[int]) ->
             continue
         if any(c.dep_ == "xcomp" and c.pos_ == "VERB" for c in tok.children):
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="rule_shaped",
-                n_start=n_start, n_end=n_end,
-                rule=f'"{tok.text} to" describes an obligation, not an event',
-                recommendation=_REC_RULE,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="rule_shaped",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"{tok.text} to" describes an obligation, not an event',
+                    recommendation=_REC_RULE,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_copula_rules(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_copula_rules(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """is/are required/allowed/prohibited/... to + verb → rule_shaped.
 
     Detection: VERB token with lemma in COPULA_RULE_LEMMAS, an auxpass
@@ -413,17 +483,23 @@ def _check_copula_rules(doc: "Doc", original: str, pos_map: list[int]) -> list[V
         has_xcomp = any(c.dep_ == "xcomp" and c.pos_ == "VERB" for c in tok.children)
         if has_auxpass and has_xcomp:
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="rule_shaped",
-                n_start=n_start, n_end=n_end,
-                rule=f'"is {tok.text} to" describes an obligation or permission, not an event',
-                recommendation=_REC_RULE,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="rule_shaped",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"is {tok.text} to" describes an obligation or permission, not an event',
+                    recommendation=_REC_RULE,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_copula_property(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_copula_property(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """is/are/was a/an <noun> → property_shaped (entity description).
 
     Detection: AUX with lemma=be, attr child whose own children include
@@ -438,18 +514,24 @@ def _check_copula_property(doc: "Doc", original: str, pos_map: list[int]) -> lis
                 continue
             if any(c.dep_ == "det" and c.lemma_ in ("a", "an") for c in attr.children):
                 n_start, n_end = _token_span(tok)
-                out.append(_violation(
-                    category="property_shaped",
-                    n_start=n_start, n_end=n_end,
-                    rule='"is a / is an" describes what something IS — an entity description or property annotation',
-                    recommendation=_REC_PROPERTY_BE,
-                    original_text=original, pos_map=pos_map,
-                ))
+                out.append(
+                    _violation(
+                        category="property_shaped",
+                        n_start=n_start,
+                        n_end=n_end,
+                        rule='"is a / is an" describes what something IS — an entity description or property annotation',
+                        recommendation=_REC_PROPERTY_BE,
+                        original_text=original,
+                        pos_map=pos_map,
+                    )
+                )
                 break
     return out
 
 
-def _check_have_property(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_have_property(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """has/have a/an <noun> → property_shaped.
 
     Detection: VERB lemma=have (not AUX, which excludes "has logged"),
@@ -463,34 +545,46 @@ def _check_have_property(doc: "Doc", original: str, pos_map: list[int]) -> list[
                 continue
             if any(c.dep_ == "det" and c.lemma_ in ("a", "an") for c in dobj.children):
                 n_start, n_end = _token_span(tok)
-                out.append(_violation(
-                    category="property_shaped",
-                    n_start=n_start, n_end=n_end,
-                    rule='"has a / has an" describes a property, not an event',
-                    recommendation=_REC_PROPERTY_HAVE,
-                    original_text=original, pos_map=pos_map,
-                ))
+                out.append(
+                    _violation(
+                        category="property_shaped",
+                        n_start=n_start,
+                        n_end=n_end,
+                        rule='"has a / has an" describes a property, not an event',
+                        recommendation=_REC_PROPERTY_HAVE,
+                        original_text=original,
+                        pos_map=pos_map,
+                    )
+                )
                 break
     return out
 
 
-def _check_structural_verbs(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_structural_verbs(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """consists of / belongs to / comprises → property_shaped."""
     out: list[Violation] = []
     for tok in doc:
         if tok.pos_ == "VERB" and tok.lemma_ in _PROPERTY_VERB_LEMMAS:
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="property_shaped",
-                n_start=n_start, n_end=n_end,
-                rule=f'"{tok.text}" describes a structural relationship, not an event',
-                recommendation=_REC_PROPERTY_STRUCTURAL,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="property_shaped",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"{tok.text}" describes a structural relationship, not an event',
+                    recommendation=_REC_PROPERTY_STRUCTURAL,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_compound_clauses(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_compound_clauses(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """CCONJ "and" joining two VERB heads → compound.
 
     Detection: CCONJ with head.pos_=VERB and the head has a conj child
@@ -505,13 +599,17 @@ def _check_compound_clauses(doc: "Doc", original: str, pos_map: list[int]) -> li
             continue
         if any(c.dep_ == "conj" and c.pos_ == "VERB" for c in head.children):
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="compound",
-                n_start=n_start, n_end=n_end,
-                rule='"and" joining two events makes the statement compound',
-                recommendation=_REC_COMPOUND,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="compound",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule='"and" joining two events makes the statement compound',
+                    recommendation=_REC_COMPOUND,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
@@ -521,17 +619,23 @@ def _check_semicolons(doc: "Doc", original: str, pos_map: list[int]) -> list[Vio
     for tok in doc:
         if tok.text == ";":
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="compound",
-                n_start=n_start, n_end=n_end,
-                rule="Statements must be atomic — no semicolons joining clauses",
-                recommendation=_REC_COMPOUND,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="compound",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule="Statements must be atomic — no semicolons joining clauses",
+                    recommendation=_REC_COMPOUND,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_precondition_sconj(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_precondition_sconj(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """when/before/after/while/until/if/... → precondition_in_text.
 
     Preconditions belong on the link as `when_statement_id`, not in the
@@ -542,20 +646,26 @@ def _check_precondition_sconj(doc: "Doc", original: str, pos_map: list[int]) -> 
     for tok in doc:
         if tok.lemma_ in _PRECONDITION_SCONJ and tok.pos_ in ("SCONJ", "ADP"):
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="precondition_in_text",
-                n_start=n_start, n_end=n_end,
-                rule=f'"{tok.text}" introduces a precondition; preconditions belong on the link as when_statement_id, not in the statement text',
-                recommendation=_REC_PRECONDITION,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="precondition_in_text",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"{tok.text}" introduces a precondition; preconditions belong on the link as when_statement_id, not in the statement text',
+                    recommendation=_REC_PRECONDITION,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
 # ─── hedge detection (regex on normalized text) ─────────────────────────────
 
 
-def _check_universal_quantifier(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_universal_quantifier(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """every/all/each/any <noun> or everyone/nobody/... → universal_claim.
 
     These describe a population or invariant ("every user must verify"),
@@ -570,53 +680,69 @@ def _check_universal_quantifier(doc: "Doc", original: str, pos_map: list[int]) -
         if not (is_det or is_pron):
             continue
         n_start, n_end = _token_span(tok)
-        out.append(_violation(
-            category="universal_claim",
-            n_start=n_start, n_end=n_end,
-            rule=f'"{tok.text}" describes a population or invariant, not an event for a single instance',
-            recommendation=_REC_UNIVERSAL,
-            original_text=original, pos_map=pos_map,
-        ))
+        out.append(
+            _violation(
+                category="universal_claim",
+                n_start=n_start,
+                n_end=n_end,
+                rule=f'"{tok.text}" describes a population or invariant, not an event for a single instance',
+                recommendation=_REC_UNIVERSAL,
+                original_text=original,
+                pos_map=pos_map,
+            )
+        )
     return out
 
 
-def _check_compound_phrases(normalized: str, original: str, pos_map: list[int]) -> list[Violation]:
+def _check_compound_phrases(
+    normalized: str, original: str, pos_map: list[int]
+) -> list[Violation]:
     """Literal phrase patterns that always indicate compound events,
     regardless of how spaCy parses the surrounding clause."""
     out: list[Violation] = []
     for pattern, rule in _COMPOUND_PHRASES:
         for match in pattern.finditer(normalized):
-            out.append(_violation(
-                category="compound",
-                n_start=match.start(),
-                n_end=match.end(),
-                rule=rule,
-                recommendation=_REC_COMPOUND,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="compound",
+                    n_start=match.start(),
+                    n_end=match.end(),
+                    rule=rule,
+                    recommendation=_REC_COMPOUND,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_hidden_event_state(normalized: str, original: str, pos_map: list[int]) -> list[Violation]:
-    """"is set to / becomes / transitions to / gets marked as" — these
+def _check_hidden_event_state(
+    normalized: str, original: str, pos_map: list[int]
+) -> list[Violation]:
+    """ "is set to / becomes / transitions to / gets marked as" — these
     phrases conceal an event (the change) and a state (the new value)
     into a single statement. Reject regardless of kind so the writer
     splits them."""
     out: list[Violation] = []
     for pattern, rule in _HIDDEN_EVENT_STATE_PHRASES:
         for match in pattern.finditer(normalized):
-            out.append(_violation(
-                category="hidden_event_state",
-                n_start=match.start(),
-                n_end=match.end(),
-                rule=rule,
-                recommendation=_REC_HIDDEN_EVENT_STATE,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="hidden_event_state",
+                    n_start=match.start(),
+                    n_end=match.end(),
+                    rule=rule,
+                    recommendation=_REC_HIDDEN_EVENT_STATE,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     return out
 
 
-def _check_capability_modals_in_state(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_capability_modals_in_state(
+    doc: "Doc", original: str, pos_map: list[int]
+) -> list[Violation]:
     """can / may / could / might / is able to → capability_in_state.
 
     Detected when validating a kind='state' statement: capability text
@@ -625,13 +751,17 @@ def _check_capability_modals_in_state(doc: "Doc", original: str, pos_map: list[i
     for tok in doc:
         if tok.pos_ == "AUX" and tok.lemma_ in _CAPABILITY_MODAL_LEMMAS:
             n_start, n_end = _token_span(tok)
-            out.append(_violation(
-                category="capability_in_state",
-                n_start=n_start, n_end=n_end,
-                rule=f'"{tok.text}" expresses capability or possibility, not a state',
-                recommendation=_REC_CAPABILITY_IN_STATE,
-                original_text=original, pos_map=pos_map,
-            ))
+            out.append(
+                _violation(
+                    category="capability_in_state",
+                    n_start=n_start,
+                    n_end=n_end,
+                    rule=f'"{tok.text}" expresses capability or possibility, not a state',
+                    recommendation=_REC_CAPABILITY_IN_STATE,
+                    original_text=original,
+                    pos_map=pos_map,
+                )
+            )
     # Detect "is able to <verb>" via dependency: ADJ "able" with head
     # being an AUX "be" and an xcomp child verb. spaCy parses
     # "user is able to leave" as: is(AUX, ROOT) → able(ADJ, acomp) →
@@ -639,41 +769,55 @@ def _check_capability_modals_in_state(doc: "Doc", original: str, pos_map: list[i
     for tok in doc:
         if tok.lemma_ == "able" and tok.pos_ == "ADJ":
             head_is_be = tok.head.lemma_ == "be" and tok.head.pos_ == "AUX"
-            has_xcomp = any(c.dep_ == "xcomp" and c.pos_ == "VERB" for c in tok.children)
+            has_xcomp = any(
+                c.dep_ == "xcomp" and c.pos_ == "VERB" for c in tok.children
+            )
             if head_is_be and has_xcomp:
                 n_start, n_end = _token_span(tok)
-                out.append(_violation(
-                    category="capability_in_state",
-                    n_start=n_start, n_end=n_end,
-                    rule='"is able to" expresses capability, not a state',
-                    recommendation=_REC_CAPABILITY_IN_STATE,
-                    original_text=original, pos_map=pos_map,
-                ))
+                out.append(
+                    _violation(
+                        category="capability_in_state",
+                        n_start=n_start,
+                        n_end=n_end,
+                        rule='"is able to" expresses capability, not a state',
+                        recommendation=_REC_CAPABILITY_IN_STATE,
+                        original_text=original,
+                        pos_map=pos_map,
+                    )
+                )
     return out
 
 
-def _check_hedges(normalized: str, original: str, pos_map: list[int]) -> list[Violation]:
+def _check_hedges(
+    normalized: str, original: str, pos_map: list[int]
+) -> list[Violation]:
     """Hedges are a literal word list. Regex against normalized text."""
     out: list[Violation] = []
     for match in _HEDGE_RE.finditer(normalized):
         word = match.group(1)
-        out.append(_violation(
-            category="hedge",
-            n_start=match.start(),
-            n_end=match.end(),
-            rule=f'"{word}" hedges the statement; if it is conditional, name the precondition',
-            recommendation=_REC_HEDGE,
-            original_text=original, pos_map=pos_map,
-        ))
+        out.append(
+            _violation(
+                category="hedge",
+                n_start=match.start(),
+                n_end=match.end(),
+                rule=f'"{word}" hedges the statement; if it is conditional, name the precondition',
+                recommendation=_REC_HEDGE,
+                original_text=original,
+                pos_map=pos_map,
+            )
+        )
     for match in _HEDGE_PHRASE_RE.finditer(normalized):
-        out.append(_violation(
-            category="hedge",
-            n_start=match.start(),
-            n_end=match.end(),
-            rule='"in most cases" hedges the statement; the conditional shape belongs in the model',
-            recommendation=_REC_HEDGE,
-            original_text=original, pos_map=pos_map,
-        ))
+        out.append(
+            _violation(
+                category="hedge",
+                n_start=match.start(),
+                n_end=match.end(),
+                rule='"in most cases" hedges the statement; the conditional shape belongs in the model',
+                recommendation=_REC_HEDGE,
+                original_text=original,
+                pos_map=pos_map,
+            )
+        )
     return out
 
 

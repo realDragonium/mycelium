@@ -53,7 +53,9 @@ def test_value_error_keeps_400_and_is_not_logged_as_error(caplog):
         r = client.get("/bad")
     assert r.status_code == 400
     assert r.json() == {"detail": "nope"}
-    assert tracing.ERROR_TOKEN not in "\n".join(rec.getMessage() for rec in caplog.records)
+    assert tracing.ERROR_TOKEN not in "\n".join(
+        rec.getMessage() for rec in caplog.records
+    )
 
 
 def test_emit_error_is_structured_and_never_raises(caplog):

@@ -77,7 +77,9 @@ def _format_action(idx: int, action: dict[str, Any]) -> str:
         if args.get("incoming_links"):
             body_lines.append(f"     incoming: {args['incoming_links']}")
     elif name in ("add_mentions", "remove_mentions"):
-        body_lines.append(f"     id: {args.get('id')}  mentions: {args.get('mentions')}")
+        body_lines.append(
+            f"     id: {args.get('id')}  mentions: {args.get('mentions')}"
+        )
     elif name in ("add_links", "remove_links"):
         for link in args.get("links", []) or []:
             arrow = "→" if name == "add_links" else "↛"
@@ -95,9 +97,13 @@ def _format_action(idx: int, action: dict[str, Any]) -> str:
             f"     {args.get('from_behavior_id')} → {args.get('into_behavior_id')}"
         )
     elif name == "upsert_entity":
-        body_lines.append(f"     name: {args.get('name')}  desc: {_short(args.get('description', ''), 60)}")
+        body_lines.append(
+            f"     name: {args.get('name')}  desc: {_short(args.get('description', ''), 60)}"
+        )
     elif name == "upsert_annotation":
-        body_lines.append(f"     kind: {args.get('kind')}  text: {_short(args.get('text', ''), 80)}")
+        body_lines.append(
+            f"     kind: {args.get('kind')}  text: {_short(args.get('text', ''), 80)}"
+        )
         if args.get("behavior_ids"):
             body_lines.append(f"     attached behaviors: {args['behavior_ids']}")
         if args.get("entity_ids"):
@@ -113,7 +119,9 @@ def _texts_in_plan(actions: list[dict[str, Any]]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     for a in actions:
         if a["name"] == "replace_text":
-            out.append((f"replace_text({a['args'].get('id')})", a["args"].get("text", "")))
+            out.append(
+                (f"replace_text({a['args'].get('id')})", a["args"].get("text", ""))
+            )
         elif a["name"] == "upsert_behavior":
             label = f"upsert_behavior({a.get('synthetic') or a['args'].get('id')})"
             out.append((label, a["args"].get("text", "")))
@@ -169,9 +177,7 @@ def main() -> None:
     )
 
     print(f"Scanning substrate for leaky behaviors via {args.mcp_url}…")
-    candidates = find_candidates(
-        mcp, sample=args.sample if args.sample > 0 else None
-    )
+    candidates = find_candidates(mcp, sample=args.sample if args.sample > 0 else None)
     print(f"Found {len(candidates)} suspect(s).")
     logger.log("detection_complete", count=len(candidates))
 
@@ -238,7 +244,7 @@ def main() -> None:
 
             if status == "needs-input":
                 question = decision.get("question", "(no question)")
-                print(f"\n  Model needs clarification:")
+                print("\n  Model needs clarification:")
                 print(f"  Q: {question}")
                 answer = input("  Your answer (blank to skip suspect): ").strip()
                 if not answer:
@@ -275,11 +281,9 @@ def main() -> None:
                 # execute (e.g. "Deleted X" without calling
                 # delete_behavior). Send it back with a corrective
                 # prompt instead of silently skipping.
-                print(f"  → agent reported done but recorded no actions.")
+                print("  → agent reported done but recorded no actions.")
                 print(f"     summary: {summary}")
-                logger.log(
-                    "done_with_empty_plan", behavior_id=bid, summary=summary
-                )
+                logger.log("done_with_empty_plan", behavior_id=bid, summary=summary)
                 revisions += 1
                 if revisions > args.max_revisions:
                     print(
@@ -294,9 +298,11 @@ def main() -> None:
                     )
                     terminal = "skip"
                     break
-                print(f"  → asking agent to reconcile (round {revisions}/{args.max_revisions})…")
+                print(
+                    f"  → asking agent to reconcile (round {revisions}/{args.max_revisions})…"
+                )
                 followup = (
-                    f"You returned status=\"done\" with this summary:\n"
+                    f'You returned status="done" with this summary:\n'
                     f"  {summary}\n\n"
                     "But you did NOT make any tool calls in this round. "
                     "The summary is supposed to describe what you DID, "
@@ -306,12 +312,12 @@ def main() -> None:
                     "actually enact it now by calling the appropriate "
                     "write tools (delete_behavior, replace_text, "
                     "upsert_behavior, add_links, etc.), then return "
-                    "status=\"done\" with a summary that matches.\n"
+                    'status="done" with a summary that matches.\n'
                     "  (b) If the suspect should not be changed, return "
-                    "status=\"skip\" with a reason.\n"
+                    'status="skip" with a reason.\n'
                     "  (c) If you're uncertain, return "
-                    "status=\"needs-input\" with a specific question.\n\n"
-                    "Returning status=\"done\" with no tool calls is invalid."
+                    'status="needs-input" with a specific question.\n\n'
+                    'Returning status="done" with no tool calls is invalid.'
                 )
                 continue
 
@@ -325,18 +331,14 @@ def main() -> None:
                 print("\n  Plan warnings:")
                 for w in plan_warnings:
                     print(f"    ⚠ {w}")
-                logger.log(
-                    "plan_warnings", behavior_id=bid, warnings=plan_warnings
-                )
+                logger.log("plan_warnings", behavior_id=bid, warnings=plan_warnings)
 
             # Dedup check on any new or rewritten text in the plan.
             text_actions = _texts_in_plan(actions)
             exclude = {bid}
             warnings: list[str] = []
             for label, t in text_actions:
-                hit = _dedup_hit(
-                    mcp, t, exclude, args.dedup_threshold
-                )
+                hit = _dedup_hit(mcp, t, exclude, args.dedup_threshold)
                 if hit:
                     warnings.append(
                         f"{label} → near-duplicate of {hit['id']} "
@@ -406,12 +408,16 @@ def main() -> None:
                     for r in results:
                         if "error" in r:
                             failed.append(r)
-                        elif isinstance(r.get("result"), dict) and r["result"].get("rejected"):
+                        elif isinstance(r.get("result"), dict) and r["result"].get(
+                            "rejected"
+                        ):
                             failed.append(
                                 {
                                     "action": r["action"],
                                     "error": "rejected by substrate: "
-                                    + json.dumps(r["result"].get("violations", []))[:300],
+                                    + json.dumps(r["result"].get("violations", []))[
+                                        :300
+                                    ],
                                 }
                             )
                     succeeded = len(results) - len(failed)
@@ -444,18 +450,14 @@ def main() -> None:
                 break
 
             if choice == "skip":
-                logger.log(
-                    "skipped", behavior_id=bid, reason="user rejected plan"
-                )
+                logger.log("skipped", behavior_id=bid, reason="user rejected plan")
                 terminal = "skip"
                 break
 
             # choice == "feedback": send back to agent for revision.
             revisions += 1
             if revisions > args.max_revisions:
-                print(
-                    f"  Max revisions ({args.max_revisions}) reached; skipping."
-                )
+                print(f"  Max revisions ({args.max_revisions}) reached; skipping.")
                 logger.log(
                     "skipped",
                     behavior_id=bid,

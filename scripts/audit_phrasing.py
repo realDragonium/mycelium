@@ -28,7 +28,6 @@ from pathlib import Path
 
 from mycelium import phrasing, store
 
-
 # Sort order for the `category` column. Cheaper / more mechanical fixes
 # come first so a reviewer working top-to-bottom hits the easy wins
 # before the interpretive ones. Unknown categories sort to the end.
@@ -67,27 +66,33 @@ def _audit(conn) -> tuple[int, list[dict[str, object]]]:
         for rec in records:
             total += 1
             for v in phrasing.check(rec["text"]):
-                rows.append({
-                    "statement_id": rec["id"],
-                    "text": rec["text"],
-                    "category": v["category"],
-                    "matched_text": v["matched_text"],
-                    "position": v["position"],
-                    "rule": v["rule"],
-                    "recommendation": v["recommendation"],
-                })
+                rows.append(
+                    {
+                        "statement_id": rec["id"],
+                        "text": rec["text"],
+                        "category": v["category"],
+                        "matched_text": v["matched_text"],
+                        "position": v["position"],
+                        "rule": v["rule"],
+                        "recommendation": v["recommendation"],
+                    }
+                )
         offset += page
 
-    rows.sort(key=lambda r: (
-        _CATEGORY_RANK.get(r["category"], len(_CATEGORY_ORDER)),
-        r["statement_id"],
-        r["position"],
-    ))
+    rows.sort(
+        key=lambda r: (
+            _CATEGORY_RANK.get(r["category"], len(_CATEGORY_ORDER)),
+            r["statement_id"],
+            r["position"],
+        )
+    )
     return total, rows
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--data-dir",
         type=Path,
@@ -116,7 +121,9 @@ def main() -> int:
         writer.writerows(rows)
 
     violators = len({r["statement_id"] for r in rows})
-    print(f"Scanned {total} statements; {violators} violators, {len(rows)} violation rows")
+    print(
+        f"Scanned {total} statements; {violators} violators, {len(rows)} violation rows"
+    )
     print(f"Report: {args.out}")
     return 0
 

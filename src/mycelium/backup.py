@@ -30,7 +30,7 @@ import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, TextIO
+from typing import Any, TextIO
 
 from . import migrations, store
 
@@ -131,7 +131,9 @@ def export_substrate(
                     _write_tables(conn, f, _VECTOR_ID_TABLES, row_counts)
 
             if include_history and history_db_path.exists():
-                history_count = _write_history(history_db_path, staging / "history.jsonl")
+                history_count = _write_history(
+                    history_db_path, staging / "history.jsonl"
+                )
                 row_counts["history_events"] = history_count
 
             if include_vectors:
@@ -260,8 +262,11 @@ def import_substrate(
         # Restore relational data into a fresh DB. History DB is only
         # attached when the archive carries one — keeps the import side
         # symmetric with how `connect` works at runtime.
-        history_db_path = data_dir / "mycelium-history.db" \
-            if manifest.get("includes_history") else None
+        history_db_path = (
+            data_dir / "mycelium-history.db"
+            if manifest.get("includes_history")
+            else None
+        )
         conn = store.connect(db_path, history_path=history_db_path)
         try:
             store.migrate(conn)

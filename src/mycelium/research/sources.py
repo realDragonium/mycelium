@@ -99,7 +99,9 @@ def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
             repo=_validate(str(name), "repo", str(repo), _OWNER_REPO_RE),
             ref=_validate(str(name), "ref", ref, _REF_RE) if ref else None,
             token_env=_optional_str(entry.get("token_env")),
-            host=_validate(str(name), "host", str(entry.get("host") or "github.com"), _HOST_RE),
+            host=_validate(
+                str(name), "host", str(entry.get("host") or "github.com"), _HOST_RE
+            ),
         )
     return sources
 
@@ -110,7 +112,9 @@ def get_source(name: str, env: Mapping[str, str] | None = None) -> Source:
         return sources[name]
     except KeyError as exc:
         configured = ", ".join(sorted(sources)) or "(none)"
-        raise SourceError(f"unknown source {name!r}; configured sources: {configured}") from exc
+        raise SourceError(
+            f"unknown source {name!r}; configured sources: {configured}"
+        ) from exc
 
 
 @contextmanager

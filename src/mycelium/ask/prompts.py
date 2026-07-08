@@ -100,7 +100,11 @@ def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
         "text": hit.get("text"),
     }
     if "score" in hit:
-        out["score"] = round(hit["score"], 4) if isinstance(hit["score"], (int, float)) else hit["score"]
+        out["score"] = (
+            round(hit["score"], 4)
+            if isinstance(hit["score"], (int, float))
+            else hit["score"]
+        )
     if links:
         out["links"] = links
     if mentions:

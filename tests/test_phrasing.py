@@ -1,6 +1,5 @@
 from mycelium import phrasing
 
-
 # ─── normalization ──────────────────────────────────────────────────────────
 
 
@@ -104,13 +103,17 @@ def test_possibility_modals_are_clean():
         "admin would receive a notification",
     ):
         v = phrasing.check(text)
-        assert "rule_shaped" not in categories(v), f"unexpected rule_shaped for {text!r}"
+        assert "rule_shaped" not in categories(v), (
+            f"unexpected rule_shaped for {text!r}"
+        )
 
 
 def test_sequencing_will():
     # "will" usually names a follow-up statement; it gets its own category
     # so the recommendation can point at split-and-link.
-    v = phrasing.check("user submits the form and the system will send a confirmation email")
+    v = phrasing.check(
+        "user submits the form and the system will send a confirmation email"
+    )
     assert "sequencing" in categories(v)
 
 
@@ -140,7 +143,10 @@ def test_rule_is_allowed_to():
 
 
 def test_rule_needs_to_has_to():
-    for text in ("worker needs to acknowledge the job", "user has to confirm via email"):
+    for text in (
+        "worker needs to acknowledge the job",
+        "user has to confirm via email",
+    ):
         v = phrasing.check(text)
         assert "rule_shaped" in categories(v), f"expected rule_shaped for {text!r}"
 
@@ -343,7 +349,13 @@ def test_violation_payload_shape():
     v = phrasing.check("user must log in")
     assert len(v) == 1
     item = v[0]
-    assert set(item.keys()) == {"category", "matched_text", "position", "rule", "recommendation"}
+    assert set(item.keys()) == {
+        "category",
+        "matched_text",
+        "position",
+        "rule",
+        "recommendation",
+    }
     assert item["category"] == "rule_shaped"
     assert isinstance(item["position"], int)
     assert isinstance(item["rule"], str) and item["rule"]
@@ -372,7 +384,9 @@ def test_copula_variants_caught_by_pos():
         "users were an unverified set",
     ):
         v = phrasing.check(text)
-        assert "property_shaped" in categories(v), f"expected property_shaped for {text!r}"
+        assert "property_shaped" in categories(v), (
+            f"expected property_shaped for {text!r}"
+        )
 
 
 def test_clause_compound_without_explicit_phrase():
@@ -404,7 +418,9 @@ def test_precondition_before_after_while_until():
         "retry continues until the server responds",
     ):
         v = phrasing.check(text)
-        assert "precondition_in_text" in categories(v), f"expected precondition for {text!r}"
+        assert "precondition_in_text" in categories(v), (
+            f"expected precondition for {text!r}"
+        )
 
 
 def test_precondition_if_unless_because():
@@ -414,7 +430,9 @@ def test_precondition_if_unless_because():
         "user is logged out because the session expired",
     ):
         v = phrasing.check(text)
-        assert "precondition_in_text" in categories(v), f"expected precondition for {text!r}"
+        assert "precondition_in_text" in categories(v), (
+            f"expected precondition for {text!r}"
+        )
 
 
 def test_precondition_recommendation_mentions_when_expression():
@@ -453,7 +471,9 @@ def test_universal_det_quantifier():
         "any admin can delete posts",
     ):
         v = phrasing.check(text)
-        assert "universal_claim" in categories(v), f"expected universal_claim for {text!r}"
+        assert "universal_claim" in categories(v), (
+            f"expected universal_claim for {text!r}"
+        )
 
 
 def test_no_determiner_is_allowed():
@@ -472,7 +492,9 @@ def test_universal_pron_quantifier():
         "anybody is allowed to comment",
     ):
         v = phrasing.check(text)
-        assert "universal_claim" in categories(v), f"expected universal_claim for {text!r}"
+        assert "universal_claim" in categories(v), (
+            f"expected universal_claim for {text!r}"
+        )
 
 
 def test_universal_recommendation_mentions_annotation():

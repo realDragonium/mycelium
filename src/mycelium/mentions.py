@@ -78,7 +78,7 @@ class _Token:
 
     text: str
     start: int  # char offset into the ORIGINAL (pre-normalization) text
-    end: int    # exclusive
+    end: int  # exclusive
 
 
 @dataclass(frozen=True)
@@ -88,7 +88,7 @@ class IndexedName:
     tokens: tuple[str, ...]
     name_id: str
     entity_id: str
-    text: str          # the stored name text, verbatim
+    text: str  # the stored name text, verbatim
     is_suspect: bool
 
 
@@ -132,8 +132,8 @@ class MatchResult:
 class _Candidate:
     """An in-progress match at a token position, before overlap resolution."""
 
-    start: int       # token index where the match begins
-    length: int      # number of tokens spanned
+    start: int  # token index where the match begins
+    length: int  # number of tokens spanned
     char_start: int  # original-text char offset
     char_end: int
     indexed: IndexedName
@@ -250,7 +250,9 @@ def build_index(
 # ─── matching ───────────────────────────────────────────────────────────────
 
 
-def _find_candidates(tokens: Sequence[_Token], index: dict[str, list[IndexedName]]) -> list[_Candidate]:
+def _find_candidates(
+    tokens: Sequence[_Token], index: dict[str, list[IndexedName]]
+) -> list[_Candidate]:
     """Every name match at every position, before overlap resolution."""
     candidates: list[_Candidate] = []
     n = len(tokens)
@@ -326,7 +328,9 @@ def match_text(text: str, index: dict[str, list[IndexedName]]) -> MatchResult:
     for entity_id, cands in by_entity.items():
         distinctive = [c for c in cands if not c.indexed.is_suspect]
         if distinctive:
-            rep = min(distinctive, key=lambda c: (c.char_start, -c.length, c.indexed.name_id))
+            rep = min(
+                distinctive, key=lambda c: (c.char_start, -c.length, c.indexed.name_id)
+            )
             mentions.append(
                 Mention(
                     entity_id=entity_id,

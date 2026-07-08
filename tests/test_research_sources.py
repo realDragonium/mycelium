@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import json as _json
 import subprocess
 from pathlib import Path
 
 import pytest
+import pytest as _pytest
 
-from mycelium.research.sources import Source, SourceError, fetch, get_source, load_sources
+from mycelium.research.sources import (
+    Source,
+    SourceError,
+    fetch,
+    get_source,
+    load_sources,
+)
 
 
 def test_load_sources_parses_json():
@@ -156,9 +164,7 @@ def test_fetch_failure_scrubs_token_and_removes_tempdir(monkeypatch):
     monkeypatch.setenv("ACME_GH_TOKEN", "secret-token")
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    source = Source(
-        name="api", owner="acme", repo="api", token_env="ACME_GH_TOKEN"
-    )
+    source = Source(name="api", owner="acme", repo="api", token_env="ACME_GH_TOKEN")
     with pytest.raises(SourceError) as excinfo:
         with fetch(source):
             pass
@@ -189,9 +195,7 @@ def test_fetch_failure_scrubs_token_and_removes_tempdir(monkeypatch):
 def test_fetch_missing_token_env_raises_without_value(monkeypatch):
     monkeypatch.delenv("ACME_GH_TOKEN", raising=False)
 
-    source = Source(
-        name="api", owner="acme", repo="api", token_env="ACME_GH_TOKEN"
-    )
+    source = Source(name="api", owner="acme", repo="api", token_env="ACME_GH_TOKEN")
     with pytest.raises(SourceError) as excinfo:
         with fetch(source):
             pass
@@ -245,19 +249,16 @@ def test_fetch_timeout_does_not_chain_token_bearing_exception(monkeypatch):
 # Input validation (arg-injection / PAT-exfiltration hardening)
 # --------------------------------------------------------------------------- #
 
-import json as _json
-import pytest as _pytest
-
 
 @_pytest.mark.parametrize(
     "entry",
     [
-        {"owner": "-oops", "repo": "r"},          # leading '-' → git option
-        {"owner": "o", "repo": "../evil"},         # path escape in repo
+        {"owner": "-oops", "repo": "r"},  # leading '-' → git option
+        {"owner": "o", "repo": "../evil"},  # path escape in repo
         {"owner": "o", "repo": "r", "ref": "--upload-pack=x"},  # option-shaped ref
         {"owner": "o", "repo": "r", "host": "evil.com/@github.com"},  # PAT redirect
-        {"owner": "o", "repo": "r", "host": "attacker@evil"},          # userinfo
-        {"owner": "o/../x", "repo": "r"},          # slash in owner
+        {"owner": "o", "repo": "r", "host": "attacker@evil"},  # userinfo
+        {"owner": "o/../x", "repo": "r"},  # slash in owner
     ],
 )
 def test_load_sources_rejects_injection_shaped_fields(monkeypatch, entry):
@@ -273,10 +274,21 @@ def test_load_sources_accepts_normal_and_enterprise_hosts(monkeypatch):
 
     monkeypatch.setenv(
         "MYCELIUM_SOURCES",
-        _json.dumps({
-            "a": {"owner": "acme", "repo": "api", "ref": "release/1.2", "host": "github.com"},
-            "b": {"owner": "acme", "repo": "web.app", "host": "ghe.corp.example:8443"},
-        }),
+        _json.dumps(
+            {
+                "a": {
+                    "owner": "acme",
+                    "repo": "api",
+                    "ref": "release/1.2",
+                    "host": "github.com",
+                },
+                "b": {
+                    "owner": "acme",
+                    "repo": "web.app",
+                    "host": "ghe.corp.example:8443",
+                },
+            }
+        ),
     )
     srcs = load_sources()
     assert srcs["a"].ref == "release/1.2"
@@ -293,13 +305,16 @@ def test_fetch_fails_closed_when_git_dir_survives(monkeypatch, tmp_path):
     def fake_run(cmd, **kwargs):
         dest = Path(cmd[-1])
         (dest / ".git").mkdir(parents=True)
-        (dest / ".git" / "config").write_text("url = https://x-access-token:tok@github.com/o/r")
+        (dest / ".git" / "config").write_text(
+            "url = https://x-access-token:tok@github.com/o/r"
+        )
         (dest / "README.md").write_text("hi")
         return sp.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(sp, "run", fake_run)
     # make .git removal a no-op so the dir "survives"
     import mycelium.research.sources as srcmod
+
     real_rmtree = srcmod.shutil.rmtree
 
     def fake_rmtree(path, *a, **k):

@@ -125,7 +125,18 @@ uv run python -m spacy download en_core_web_sm
 everything pinned. This takes about 10 seconds the first time and is a
 no-op on subsequent runs unless deps change. The second command installs
 the spaCy model that phrasing validation loads at runtime (the Docker
-image bakes it in the same way).
+image bakes it in the same way). Note: a plain `uv sync` prunes the
+model (it isn't in the lockfile), so re-run the download after syncing.
+
+If you'll be committing, enable the format/lint pre-commit hook once:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Style conventions live in `docs/STYLE.md`; `ruff` enforces them
+(`uv run ruff check` / `uv run ruff format`), and CI re-checks on every
+push and PR.
 
 ---
 
