@@ -41,6 +41,7 @@ function parseHash() {
   if (parts[0] === 'find') return { view: 'find', query: p.q || '', mode: p.mode || 'semantic' };
   if (parts[0] === 'ask') return { view: 'ask', query: p.q || '' };
   if (parts[0] === 'ingest') return { view: 'ingest' };
+  if (parts[0] === 'research') return { view: 'research' };
   if (parts[0] === 'coverage') return { view: 'coverage' };
   if (parts[0] === 'mentions') return { view: 'mentions' };
   if (parts[0] === 'drafts') return { view: 'drafts' };
@@ -53,6 +54,7 @@ function routeToHash(n) {
   if (n.view === 'find') return `#/find?q=${encodeURIComponent(n.query || '')}&mode=${n.mode || 'semantic'}`;
   if (n.view === 'ask') return `#/ask?q=${encodeURIComponent(n.query || '')}`;
   if (n.view === 'ingest') return '#/ingest';
+  if (n.view === 'research') return '#/research';
   if (n.view === 'coverage') return '#/coverage';
   if (n.view === 'mentions') return '#/mentions';
   if (n.view === 'drafts') return '#/drafts';
