@@ -4,7 +4,7 @@ The agent has the full read+write MCP surface. Reads pass through to
 the substrate; writes are intercepted by `PlanRecorder` and queued for
 operator review (see `plan.py`). The agent's job is to figure out the
 right set of changes — text rewrite, mention/link deltas, splits into
-new behaviors, annotations, deletions, merges — and emit the plan as a
+new behaviors, deletions, merges — and emit the plan as a
 sequence of write tool calls. When it's done, it returns a JSON message
 summarising what it did and why; the orchestrator shows that summary
 plus the recorded plan to the operator.
@@ -50,7 +50,7 @@ Step 2 — Locate the fact in the KB (search before deciding what to do)
 
   Search for the fact you just identified using `search_behaviors` (semantic, depth=1 to surface neighbors) and `grep_behaviors` (literal, for specific terms). Read the top candidates with `get_behavior`. Three outcomes:
 
-    A. The fact already exists under different wording → the suspect is a duplicate of a better-worded record. Use `merge_behaviors(from=suspect_id, into=existing_id)` so the suspect's mentions / incoming links / annotations migrate to the canonical record. Stop here — no further authoring needed.
+    A. The fact already exists under different wording → the suspect is a duplicate of a better-worded record. Use `merge_behaviors(from=suspect_id, into=existing_id)` so the suspect's mentions / incoming links migrate to the canonical record. Stop here — no further authoring needed.
 
     B. The fact is partially captured (right area, wrong scope) — a parent flow this fact belongs under, or a related sibling behavior. Plan to author the missing piece AND wire it in to the existing structure (don't author isolated records).
 
@@ -60,7 +60,7 @@ Step 3 — Decide the right shape AND place for the new fact
 
   With the fact in hand and a location identified in Step 2, choose:
 
-    - Event or proposition? If the fact reads as something that fires ("X happens", "the system does Y") → behavior. If it reads as something that holds ("X must Y", "every X has Y", "only X can Y", "X is rate-limited") → annotation via `upsert_annotation` with kind in {permission, invariant, property, compliance}, attached to the behavior(s) and/or entity(ies) it governs.
+    - Event or proposition? If the fact reads as something that fires ("X happens", "the system does Y") → behavior. If it reads as something that holds ("X must Y", "every X has Y", "only X can Y", "X is rate-limited") → author the rule as its own behavior (rephrased per the phrasing rules below) and connect it to the behavior(s) it governs with `add_links`.
 
     - Atomic or compound? If the fact is two events glued together, split into separate `upsert_behavior` calls and link them with the right link type.
 
@@ -74,7 +74,7 @@ Step 4 — Retire the suspect
 
     - `delete_behavior(suspect_id)` — when the new record(s) fully capture the fact and the suspect has nothing worth migrating (no important incoming links, mentions are easy to recreate on the new record).
 
-    - `merge_behaviors(from=suspect, into=new_or_existing)` — when the suspect carries incoming links / mentions / annotations from elsewhere in the graph that should be preserved on the canonical record.
+    - `merge_behaviors(from=suspect, into=new_or_existing)` — when the suspect carries incoming links / mentions from elsewhere in the graph that should be preserved on the canonical record.
 
     - `replace_text(suspect_id, …)` — ONLY when the suspect is the right record on every other axis (right level of granularity, right location in the graph, right links, right mentions) and only the wording is leaky. This is uncommon. If you find yourself reaching for `replace_text` reflexively, re-check Steps 2 and 3 — you might have skipped the search and missed a better home for the fact.
 
@@ -100,13 +100,10 @@ Worked example end-to-end. Suspect: *"AlreadyFilledInError is encountered during
     Outcome: B — partially captured, the fact is missing as a constraint.
 
   Step 3 — Shape and place:
-    "cannot resubmit when results already exist" reads as a *constraint*, not an event. Two reasonable shapes:
-      (a) a sibling behavior *"Test result resubmission is rejected"* with a `replaces` link to `beh_AAA` carrying a `when` clause referencing a behavior *"Results already recorded for this participant"* (which may need to be authored as a pending behavior in the same plan).
-      (b) An annotation `kind=invariant` attached to `beh_AAA`: *"Results cannot be submitted twice for the same participant."*
-    Both are valid; (b) is simpler. (a) is preferred when there's a downstream flow that branches on the rejection (e.g. an error page, a re-direct).
+    "cannot resubmit when results already exist" reads as a *constraint*, not an event. The right shape: a sibling behavior *"Test result resubmission is rejected"* with a `replaces` link to `beh_AAA` carrying a `when` clause referencing a behavior *"Results already recorded for this participant"* (which may need to be authored as a pending behavior in the same plan).
 
   Step 4 — Retire:
-    `delete_behavior(suspect_id)` — the suspect carries nothing worth migrating; the new annotation (or new behavior + link) fully captures the fact.
+    `delete_behavior(suspect_id)` — the suspect carries nothing worth migrating; the new behavior + link fully captures the fact.
 
 You have BOTH read tools (to investigate) AND write tools (to enact the cleanup). Writes are queued as a plan; the operator reviews and approves the whole plan at the end. Use writes freely to express the right cleanup.
 
@@ -118,7 +115,6 @@ Cleanup shapes you can compose:
   - REWRITE + mention/link delta: `replace_text` + `add_mentions` / `remove_mentions` + `add_links` / `remove_links` — when the suspect IS a product fact but worded badly.
   - SPLIT: `upsert_behavior` for each new atomic fact + `add_links` to wire them + `delete_behavior` or `merge_behaviors` for the original. Newly-created behaviors get a `pending_beh_<n>` id you can pass to later calls.
   - CONDITIONAL LINK: `add_links` with a `when` clause to express "X relates to Y, but only when Z holds." See "Conditional links" below.
-  - EXTRACT to annotation: `upsert_annotation(kind="invariant"|"property"|"permission"|…, text, behavior_ids=[…])` — for non-event facts (universal claims, permissions, invariants).
 
 Conditional links (`when` clauses)
 
@@ -162,17 +158,9 @@ The substrate will REJECT `upsert_behavior` / `replace_text` calls whose text is
   - Compound clauses joined by "and …", "; …", "then …" → split into atomic events.
   - Hedges: "most", "usually", "often", "sometimes", "typically".
 
-For rule-shaped facts you would otherwise have written as a behavior, use `upsert_annotation` instead:
+For rule-shaped facts you would otherwise have written as a behavior, rephrase to describe the observable event (a rejection, a grant, a refusal) and connect it to the behavior or entity it governs with `add_links`. If no behavior or entity is the right anchor in the current graph, search for one (`search_behaviors` for events the rule governs; `list_entities` / `get_entity` for the entity the rule constrains). If you genuinely cannot ground the rule against any existing record, prefer `needs-input` over creating an orphan.
 
-  - Permission ("only recruiters can …")            → kind="permission"
-  - Invariant ("every X has Y", "X is always Z")    → kind="invariant"
-  - Property ("X is rate-limited", "X is cached")   → kind="property"
-  - Constraint ("business names must be 1-50 chars") → kind="invariant" or "property"
-  - Compliance claim ("retained 7 years per GDPR")  → kind="compliance"
-
-Annotations attach to one or more behaviors via `behavior_ids` and/or one or more entities via `entity_ids` — pick whichever the proposition is *about*. If no behavior or entity is the right anchor in the current graph, search for one (`search_behaviors` for events the rule governs; `list_entities` / `get_entity` for the entity the rule constrains). If you genuinely cannot ground the annotation against any existing record, prefer `needs-input` over creating an orphan.
-
-If you have written rule-shaped text and the operator's feedback was specifically that they want it preserved verbatim, you can pass `allow_phrasing_violations: true` on the upsert — but the default should always be to route to an annotation.
+If you have written rule-shaped text and the operator's feedback was specifically that they want it preserved verbatim, you can pass `allow_phrasing_violations: true` on the upsert — but the default should always be to rephrase as an observable event.
   - Strip pure implementation: class names (`*Guard`, `*Service`, `*Manager`, `*Validator`, `*Repository`), exception types (`*Error`, `*Exception`), private/internal function names, table or column names.
   - PRESERVE named domain entities even when they look like code constants. Roles (`TSL Admin`, `TSL_SALES_FORM`, `Recruiter`), permission flags, named feature/plan tiers, configured constants the business actually refers to, third-party product names (`Auth0`, `Stripe`) — keep these verbatim. They are the product's vocabulary, not implementation. The rule of thumb: if the name appears in product documentation, contracts, customer-facing UI, business rules, or operations runbooks, it's a domain entity even if it also exists as a code constant.
 
@@ -218,7 +206,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_behavior",
-            "description": "Fetch a behavior by id. Returns text, mentions, outgoing/incoming links, annotations.",
+            "description": "Fetch a behavior by id. Returns text, mentions, outgoing/incoming links.",
             "parameters": {
                 "type": "object",
                 "properties": {"id": {"type": "string"}},
@@ -230,7 +218,7 @@ TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "get_entity",
-            "description": "Fetch an entity by id. Returns names, description, entity links, annotations.",
+            "description": "Fetch an entity by id. Returns names, description, entity links.",
             "parameters": {
                 "type": "object",
                 "properties": {"id": {"type": "string"}},
@@ -275,22 +263,6 @@ TOOLS: list[dict[str, Any]] = [
             "name": "list_link_types",
             "description": "List behavior-link types currently in use. Helpful when picking a relationship.",
             "parameters": {"type": "object", "properties": {}},
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "list_annotations",
-            "description": "List annotations attached to a behavior, entity, or of a given kind.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "behavior_id": {"type": "string"},
-                    "entity_id": {"type": "string"},
-                    "kind": {"type": "string"},
-                    "limit": {"type": "integer", "default": 20},
-                },
-            },
         },
     },
     # ---- Writes (queued as a plan) ---------------------------------
@@ -465,33 +437,6 @@ TOOLS: list[dict[str, Any]] = [
                     "description": {"type": "string"},
                 },
                 "required": ["name", "description"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "upsert_annotation",
-            "description": "Create an annotation — a typed proposition (invariant, property, permission, fact, rationale, example) attached to behaviors and/or entities. Use this for facts that aren't events.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "kind": {"type": "string"},
-                    "text": {"type": "string"},
-                    "behavior_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "entity_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                    "mentions": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                    },
-                },
-                "required": ["kind", "text"],
             },
         },
     },

@@ -45,10 +45,6 @@ def _seed_substrate(data_dir):
     store.insert_links(conn, [(b1, b2, "triggers", None)])
     store.insert_entity_links(conn, [(e1, e2, "contains")])
 
-    a1 = store.create_annotation(conn, "note", "default delay is 1 day")
-    store.attach_annotations_to_statements(conn, [(b1, a1)])
-    store.attach_annotations_to_entities(conn, [(e2, a1)])
-
     # Edit to ensure updated_at is set, generating an additional history event.
     store.set_actor("bob")
     store.update_statement_text(conn, b1, "user authenticates")
@@ -58,7 +54,6 @@ def _seed_substrate(data_dir):
         "entities": [e1, e2],
         "names": [n1, n2],
         "statements": [b1, b2],
-        "annotations": [a1],
     }
 
 
@@ -142,12 +137,9 @@ def test_round_trip_preserves_relational_data(tmp_path):
         "entities",
         "names",
         "statements",
-        "annotations",
         "statement_mentions",
         "statement_links",
         "entity_links",
-        "statement_annotations",
-        "entity_annotations",
     ):
         assert _row_count(dst, table) == _row_count(src, table), table
 
@@ -274,3 +266,71 @@ def test_import_rejects_wrong_schema_version(tmp_path):
     dst = tmp_path / "dst"
     with pytest.raises(ValueError, match="schema_version"):
         backup.import_substrate(tampered, dst)
+
+
+def test_import_skips_legacy_annotation_records(tmp_path, caplog):
+    """Archives exported before the annotation subsystem was removed still
+    carry annotation-kind records. Import must skip them (one info log),
+    not error, and restore everything else."""
+    import logging
+    import shutil
+
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    # Rebuild the archive with legacy annotation lines spliced into
+    # data.jsonl, mimicking a pre-removal export.
+    work = tmp_path / "work"
+    work.mkdir()
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(work, filter="data")
+    legacy_lines = [
+        {"_kind": "annotation", "id": "ann_1", "kind": "note", "text": "legacy"},
+        {
+            "_kind": "statement_annotation",
+            "statement_id": "stm_x",
+            "annotation_id": "ann_1",
+        },
+        {"_kind": "entity_annotation", "entity_id": "ent_x", "annotation_id": "ann_1"},
+        {"_kind": "annotation_mention", "annotation_id": "ann_1", "name_id": "nam_x"},
+        {"_kind": "annotation_vector_id", "annotation_id": "ann_1", "vector_id": 0},
+    ]
+    with (work / "data.jsonl").open("a", encoding="utf-8") as fp:
+        for line in legacy_lines:
+            fp.write(json.dumps(line) + "\n")
+    legacy_archive = tmp_path / "legacy.tar.gz"
+    with tarfile.open(legacy_archive, "w:gz") as tar:
+        for item in sorted(work.rglob("*")):
+            if item.is_file():
+                tar.add(item, arcname=str(item.relative_to(work)))
+    shutil.rmtree(work)
+
+    dst = tmp_path / "dst"
+    with caplog.at_level(logging.INFO, logger="mycelium.backup"):
+        backup.import_substrate(legacy_archive, dst)
+
+    skip_logs = [r for r in caplog.records if "legacy annotation" in r.getMessage()]
+    assert len(skip_logs) == 1
+    assert "5" in skip_logs[0].getMessage()
+    # Everything else restored.
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+    assert _row_count(dst, "entities") == _row_count(src, "entities")
+
+    # An unknown kind that is NOT a legacy annotation kind still errors.
+    work2 = tmp_path / "work2"
+    work2.mkdir()
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(work2, filter="data")
+    with (work2 / "data.jsonl").open("a", encoding="utf-8") as fp:
+        fp.write(json.dumps({"_kind": "mystery", "id": "x"}) + "\n")
+    bad_archive = tmp_path / "bad.tar.gz"
+    with tarfile.open(bad_archive, "w:gz") as tar:
+        for item in sorted(work2.rglob("*")):
+            if item.is_file():
+                tar.add(item, arcname=str(item.relative_to(work2)))
+    with pytest.raises(ValueError, match="unknown record kind"):
+        backup.import_substrate(bad_archive, tmp_path / "dst2")

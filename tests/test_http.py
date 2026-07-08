@@ -3,7 +3,7 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, server
+from mycelium import embed, mention_worker, server
 
 
 def fake_embed_factory():
@@ -28,8 +28,6 @@ def _client(tmp_path, monkeypatch, embedder):
     server._conn = None
     server._index = None
     server._index_path = None
-    server._ann_index = None
-    server._ann_index_path = None
     server._name_index = None
     server._name_index_path = None
     from mycelium.http import app
@@ -307,41 +305,37 @@ def test_upsert_name_idempotent_then_conflict(tmp_path, monkeypatch):
 
 def test_merge_entities_preserves_statement_mentions(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, deterministic_embed) as client:
+        # Multi-word names are distinctive, so the text-derived mention
+        # matcher auto-links them (single short tokens like "Login" are
+        # suspect and go to review instead).
         a = client.post(
-            "/upsert-entity", json={"name": "Login", "description": ""}
+            "/upsert-entity", json={"name": "Login page", "description": ""}
         ).json()["entity_id"]
         b = client.post(
-            "/upsert-entity", json={"name": "Sign-in", "description": ""}
+            "/upsert-entity", json={"name": "Sign-in page", "description": ""}
         ).json()["entity_id"]
-        # statements mentioning each separately
+        # Statements whose text mentions each entity separately.
+        alpha_text = "statement alpha describes the Login page"
+        beta_text = "statement beta describes the Sign-in page"
         client.post(
             "/upsert-statement",
-            json={
-                "kind": "event",
-                "text": "statement alpha",
-                "mentions": ["Login"],
-                "links": [],
-            },
+            json={"kind": "event", "text": alpha_text, "links": []},
         )
         client.post(
             "/upsert-statement",
-            json={
-                "kind": "event",
-                "text": "statement beta",
-                "mentions": ["Sign-in"],
-                "links": [],
-            },
+            json={"kind": "event", "text": beta_text, "links": []},
         )
 
-        # merge b into a
+        # merge b into a. names_moved counts every name row on the source
+        # entity: the primary "Sign-in page" plus its auto-generated
+        # plural "Sign-in pages".
         r = client.post(
             "/merge-entities", json={"from_entity_id": b, "into_entity_id": a}
         )
         assert r.status_code == 200
         assert r.json() == {
             "into_entity_id": a,
-            "names_moved": 1,
-            "annotation_attachments_moved": 0,
+            "names_moved": 2,
         }
 
         # source entity is gone
@@ -353,7 +347,7 @@ def test_merge_entities_preserves_statement_mentions(tmp_path, monkeypatch):
         )
 
         # both statements now report entity_id == a, but their original names persist
-        for query in ("statement alpha", "statement beta"):
+        for query in (alpha_text, beta_text):
             hits = client.post(
                 "/search-statements", json={"query": query, "min_score": 0.99}
             ).json()
@@ -365,10 +359,10 @@ def test_merge_entities_preserves_statement_mentions(tmp_path, monkeypatch):
                 client.post(
                     "/search-statements", json={"query": q, "min_score": 0.99}
                 ).json()[0]
-                for q in ("statement alpha", "statement beta")
+                for q in (alpha_text, beta_text)
             ]
         }
-        assert names == {"Login", "Sign-in"}
+        assert names == {"Login page", "Sign-in page"}
 
 
 def test_add_and_remove_links_bulk(tmp_path, monkeypatch):
@@ -1520,7 +1514,6 @@ def test_delete_statement_cascades_mentions_and_links(tmp_path, monkeypatch):
             json={
                 "kind": "event",
                 "text": "the obsolete fact about Login",
-                "mentions": ["Login", "Email"],
                 "links": [{"to_id": child, "link_type": "triggers"}],
                 "incoming_links": [{"from_id": parent, "link_type": "contains"}],
             },
@@ -1551,11 +1544,11 @@ def test_delete_statement_cascades_mentions_and_links(tmp_path, monkeypatch):
         r = client.post("/delete-statement", json={"id": target}).json()
         assert r == {
             "deleted": True,
-            "mentions_removed": 2,  # Login + Email
+            "mentions_removed": 0,  # mentions are text-derived; no names exist here
             "incoming_links_removed": 1,  # parent --contains--> target
             "outgoing_links_removed": 1,  # target --triggers--> child
             "when_references_removed": 1,  # x --triggers (when target)--> y
-            "annotation_attachments_removed": 0,  # no annotations attached
+            "entity_statement_links_removed": 0,  # none were created
         }
 
         # Statement is gone — get_statement raises (400)
@@ -2188,23 +2181,24 @@ def test_move_name_splits_into_new_entity(tmp_path, monkeypatch):
 
 
 def test_delete_name_drops_alias_and_its_mentions(tmp_path, monkeypatch):
-    """delete_name should remove the alias and every statement_mentions /
-    annotation_mentions row that referenced it. The owning entity stays."""
+    """delete_name should remove the alias and every statement_mentions
+    row that referenced it. The owning entity stays."""
     with _client(tmp_path, monkeypatch, deterministic_embed) as client:
         login_id = client.post(
-            "/upsert-entity", json={"name": "Login", "description": ""}
+            "/upsert-entity", json={"name": "Login page", "description": ""}
         ).json()["entity_id"]
         # Add a second alias for the same entity.
         signin_name_id = client.post(
-            "/upsert-name", json={"text": "sign-in", "entity_id": login_id}
+            "/upsert-name", json={"text": "sign-in page", "entity_id": login_id}
         ).json()["name_id"]
-        # Statement mentions both aliases.
+        # The text contains both aliases; mentions dedup to one row per
+        # entity, keyed on the LEFTMOST distinctive match — here the
+        # "sign-in page" alias we are about to delete.
         stm_id = client.post(
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "User completes Login via sign-in",
-                "mentions": ["Login", "sign-in"],
+                "text": "The sign-in page redirects to the Login page",
                 "links": [],
             },
         ).json()["statement_id"]
@@ -2213,15 +2207,17 @@ def test_delete_name_drops_alias_and_its_mentions(tmp_path, monkeypatch):
         assert r == {
             "deleted": True,
             "mentions_removed": 1,
-            "annotation_mentions_removed": 0,
         }
 
-        # The Login alias still resolves on the statement; sign-in is gone.
+        # The deleted alias was the mention's representative; delete_name
+        # queued a recompute so the surviving alias takes over. Drain the
+        # (suite-disabled) worker synchronously.
+        mention_worker.drain(server._conn)
         body = client.post("/get-statements", json={"ids": [stm_id]}).json()[
             "statements"
         ][0]
         mention_names = [m["name"] for m in body["mentions"]]
-        assert mention_names == ["Login"]
+        assert mention_names == ["Login page"]
 
         # Entity itself survives.
         assert client.post("/get-entity", json={"id": login_id}).status_code == 200
@@ -2238,10 +2234,12 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
     referencing those names, and entity_links touching the entity."""
     with _client(tmp_path, monkeypatch, deterministic_embed) as client:
         login_id = client.post(
-            "/upsert-entity", json={"name": "Login", "description": ""}
+            "/upsert-entity", json={"name": "Login page", "description": ""}
         ).json()["entity_id"]
         # Second alias on the same entity.
-        client.post("/upsert-name", json={"text": "sign-in", "entity_id": login_id})
+        client.post(
+            "/upsert-name", json={"text": "sign-in page", "entity_id": login_id}
+        )
         # An auxiliary entity to hang an entity_link off.
         auth_id = client.post(
             "/upsert-entity", json={"name": "Auth", "description": ""}
@@ -2268,8 +2266,7 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "first statement touches Login",
-                "mentions": ["Login"],
+                "text": "first statement touches the Login page",
                 "links": [],
             },
         ).json()["statement_id"]
@@ -2277,8 +2274,7 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "second statement touches sign-in",
-                "mentions": ["sign-in"],
+                "text": "second statement touches the sign-in page",
                 "links": [],
             },
         ).json()["statement_id"]
@@ -2286,12 +2282,13 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
         r = client.post("/delete-entity", json={"id": login_id}).json()
         assert r == {
             "deleted": True,
-            "names_removed": 2,
-            "mentions_removed": 2,
-            "annotation_mentions_removed": 0,
+            # "Login page" + "sign-in page" plus their auto-generated
+            # plurals "Login pages" / "sign-in pages".
+            "names_removed": 4,
+            "mentions_removed": 2,  # one text-derived mention per statement
             "outgoing_entity_links_removed": 1,
             "incoming_entity_links_removed": 1,
-            "annotation_attachments_removed": 0,
+            "entity_statement_links_removed": 0,  # none were created
         }
 
         # Entity is gone.

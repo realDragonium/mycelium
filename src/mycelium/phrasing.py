@@ -137,7 +137,7 @@ _MODAL_LEMMAS = {"must", "should", "shall", "ought"}
 
 # "will" is its own case: it usually points at a follow-up statement rather
 # than expressing a rule. Detected separately so the recommendation can
-# point at split-and-link instead of upsert_annotation.
+# point at split-and-link instead of a rule statement.
 _SEQUENCING_MODAL_LEMMAS = {"will"}
 
 # Adverbs of invariance/prohibition
@@ -295,14 +295,14 @@ _REC_COMPOUND = (
     "(use list_link_types to pick a fitting link_type for the relationship)."
 )
 _REC_RULE = (
-    "Use upsert_annotation with kind='requirement', 'permission', or "
-    "'invariant' and attach to the relevant statement or entity."
+    "Model the obligation as its own statement with kind='rule' and connect "
+    "it to the relevant statement or entity with add_links / add_entity_links."
 )
 _REC_PROPERTY_BE = (
-    "Use upsert_entity (description) or upsert_annotation with kind='property'."
+    "Use upsert_entity (description) or a separate statement with kind='property'."
 )
 _REC_PROPERTY_HAVE = (
-    "Use upsert_annotation with kind='property', or model the relationship "
+    "Use a separate statement with kind='property', or model the relationship "
     "via add_entity_links."
 )
 _REC_PROPERTY_STRUCTURAL = (
@@ -316,9 +316,8 @@ _REC_PRECONDITION = (
     "compose."
 )
 _REC_UNIVERSAL = (
-    "Rephrase to describe one instance, then attach an upsert_annotation "
-    "(kind='invariant' or 'property') for the universal claim — or annotate "
-    "the entity directly."
+    "Rephrase to describe one instance, then capture the universal claim as "
+    "its own statement (kind='rule' or kind='property') linked to the entity."
 )
 _REC_HEDGE = (
     "Rephrase precisely, or split out the precondition into its own statement "
@@ -519,7 +518,7 @@ def _check_copula_property(
                         category="property_shaped",
                         n_start=n_start,
                         n_end=n_end,
-                        rule='"is a / is an" describes what something IS — an entity description or property annotation',
+                        rule='"is a / is an" describes what something IS — an entity description or a property statement',
                         recommendation=_REC_PROPERTY_BE,
                         original_text=original,
                         pos_map=pos_map,
@@ -669,10 +668,10 @@ def _check_universal_quantifier(
     """every/all/each/any <noun> or everyone/nobody/... → universal_claim.
 
     These describe a population or invariant ("every user must verify"),
-    not an event for a single instance. The statement should either be
-    rephrased to describe one instance ("user verifies email" + an
-    invariant annotation that this applies to all users), or modeled as
-    an annotation directly on the entity."""
+    not an event for a single instance. The statement should be rephrased
+    to describe one instance ("user verifies email"), with the universal
+    claim captured as its own kind='rule' statement linked to the
+    entity."""
     out: list[Violation] = []
     for tok in doc:
         is_det = tok.pos_ == "DET" and tok.lemma_ in _UNIVERSAL_DET_LEMMAS

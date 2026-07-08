@@ -94,8 +94,8 @@ def test_rule_always():
 
 def test_possibility_modals_are_clean():
     # may / might / could / would describe a possibility, capability, or
-    # hypothetical — there's no underlying statement for an annotation to
-    # attach to, so they're treated as ordinary phrasing.
+    # hypothetical — there's no underlying statement for a rule statement
+    # to link to, so they're treated as ordinary phrasing.
     for text in (
         "admin may delete any post",
         "user might be redirected",
@@ -119,8 +119,8 @@ def test_sequencing_will():
 
 def test_can_variants_are_clean():
     # "can" and its negations describe a standalone capability — there is
-    # no underlying statement for a permission/prohibition annotation to
-    # attach to. Treated as ordinary phrasing.
+    # no underlying statement for a permission/prohibition rule to link
+    # to. Treated as ordinary phrasing.
     for text in (
         "multiple assessment steps can be added to a single selection flow",
         "user cannot delete their own posts",
@@ -497,10 +497,10 @@ def test_universal_pron_quantifier():
         )
 
 
-def test_universal_recommendation_mentions_annotation():
+def test_universal_recommendation_mentions_rule_statement():
     v = phrasing.check("every user must verify email")
     uni = next(x for x in v if x["category"] == "universal_claim")
-    assert "annotation" in uni["recommendation"].lower()
+    assert "kind='rule'" in uni["recommendation"]
 
 
 def test_all_as_pronoun_is_not_flagged():

@@ -8,9 +8,8 @@ const PAGE_SIZE = 50;
 
 const OP_OPTIONS = ['create', 'update', 'link', 'attach'];
 const KIND_OPTIONS = [
-  'entity', 'statement', 'name', 'annotation',
+  'entity', 'statement', 'name',
   'statement_link', 'entity_link', 'entity_statement_link',
-  'statement_annotation', 'entity_annotation',
 ];
 
 function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '' }) {
@@ -231,10 +230,6 @@ function describeTarget(ev) {
     const cur = (data?.names || []).find(n => n.id === id);
     return <><span className="row-id">{id}</span> {cur?.text ? <span style={{marginLeft:8, fontFamily:'var(--mono)'}}>“{cur.text}”</span> : null}</>;
   }
-  if (k === 'annotation') {
-    const cur = idx?.byId?.[id];
-    return <><span className="row-id">{id}</span> {cur?.text ? <span style={{marginLeft:8}}>{truncate(cur.text, 100)}</span> : null}</>;
-  }
   if (k === 'statement_link' || k === 'entity_link') {
     const [from, to, type] = id.split('|');
     return (
@@ -253,14 +248,6 @@ function describeTarget(ev) {
         <span className="row-id">{left}</span>
         {' '}<span style={{color:'var(--accent)'}}>—{type || '?'}→</span>{' '}
         <span className="row-id">{right}</span>
-      </span>
-    );
-  }
-  if (k === 'statement_annotation' || k === 'entity_annotation') {
-    const [a, b] = id.split('|');
-    return (
-      <span style={{fontFamily:'var(--mono)', fontSize:11}}>
-        <span className="row-id">{a}</span> ↔ <span className="row-id">{b}</span>
       </span>
     );
   }
@@ -330,7 +317,7 @@ function buildContextGraph(event, idx, data) {
   let anchors = [];
   let anchorEdge = null;
 
-  if (k === 'statement' || k === 'annotation') anchors = [resolveAnchor(k, id)];
+  if (k === 'statement') anchors = [resolveAnchor(k, id)];
   else if (k === 'entity') anchors = [resolveAnchor('entity', id)];
   else if (k === 'name') {
     const n = (data?.names || []).find(x => x.id === id);
@@ -349,14 +336,6 @@ function buildContextGraph(event, idx, data) {
     const b = resolveAnchor('statement', bid);
     anchors = dir === 'es' ? [a, b] : [b, a];
     anchorEdge = { linkType: type };
-  } else if (k === 'statement_annotation') {
-    const [bid, aid] = id.split('|');
-    anchors = [resolveAnchor('statement', bid), resolveAnchor('annotation', aid)];
-    anchorEdge = { linkType: 'annotates' };
-  } else if (k === 'entity_annotation') {
-    const [eid, aid] = id.split('|');
-    anchors = [resolveAnchor('entity', eid), resolveAnchor('annotation', aid)];
-    anchorEdge = { linkType: 'annotates' };
   }
 
   const neighborsByAnchor = {};
@@ -370,7 +349,7 @@ function buildContextGraph(event, idx, data) {
 }
 
 function labelFor(kind, id, idx, data) {
-  if (kind === 'statement' || kind === 'annotation') {
+  if (kind === 'statement') {
     const n = idx?.byId?.[id];
     return n?.text || id;
   }
@@ -387,7 +366,6 @@ function labelFor(kind, id, idx, data) {
 
 function shapeFor(kind) {
   if (kind === 'entity') return 'circle';
-  if (kind === 'annotation') return 'diamond';
   return 'rect';
 }
 
@@ -651,9 +629,6 @@ function GraphNode({ x, y, w, h, kind, id, label, anchor, onClick }) {
       <title>{`${id}\n${label}`}</title>
       {shape === 'rect' && <rect x={0} y={0} width={w} height={h} rx={5} />}
       {shape === 'circle' && <rect x={0} y={0} width={w} height={h} rx={h/2} />}
-      {shape === 'diamond' && (
-        <polygon points={`${w/2},0 ${w},${h/2} ${w/2},${h} 0,${h/2}`} />
-      )}
       <foreignObject x={6} y={4} width={w - 12} height={h - 8}>
         <div xmlns="http://www.w3.org/1999/xhtml" className="ctx-node-body">
           <div className="ctx-node-id-row">{id.slice(0, 16)}</div>

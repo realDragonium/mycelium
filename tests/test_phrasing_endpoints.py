@@ -50,7 +50,7 @@ def test_single_upsert_rejects_phrasing_violation(tmp_path, monkeypatch):
         v = body["violations"][0]
         assert v["category"] == "rule_shaped"
         assert v["matched_text"].lower() == "must"
-        assert "annotation" in v["recommendation"].lower()
+        assert "kind='rule'" in v["recommendation"]
 
 
 def test_single_upsert_bypass_returns_warning(tmp_path, monkeypatch):

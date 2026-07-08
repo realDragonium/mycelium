@@ -557,48 +557,12 @@ def get_substrate_dump() -> dict[str, Any]:
         for r in entity_link_rows
     ]
 
-    annotation_rows = conn.execute("SELECT id, kind, text FROM annotations").fetchall()
-    ba_rows = conn.execute(
-        "SELECT statement_id, annotation_id FROM statement_annotations"
-    ).fetchall()
-    ea_rows = conn.execute(
-        "SELECT entity_id, annotation_id FROM entity_annotations"
-    ).fetchall()
-    am_rows = conn.execute(
-        "SELECT am.annotation_id, n.entity_id "
-        "FROM annotation_mentions am "
-        "JOIN names n ON n.id = am.name_id"
-    ).fetchall()
-    statements_by_ann: dict[str, list[str]] = {}
-    for r in ba_rows:
-        statements_by_ann.setdefault(r["annotation_id"], []).append(r["statement_id"])
-    entities_by_ann: dict[str, list[str]] = {}
-    for r in ea_rows:
-        entities_by_ann.setdefault(r["annotation_id"], []).append(r["entity_id"])
-    mentions_by_ann: dict[str, list[str]] = {}
-    for r in am_rows:
-        bucket = mentions_by_ann.setdefault(r["annotation_id"], [])
-        if r["entity_id"] not in bucket:
-            bucket.append(r["entity_id"])
-    annotations = [
-        {
-            "id": r["id"],
-            "kind": r["kind"],
-            "text": r["text"],
-            "statements": statements_by_ann.get(r["id"], []),
-            "entities": entities_by_ann.get(r["id"], []),
-            "mentions": mentions_by_ann.get(r["id"], []),
-        }
-        for r in annotation_rows
-    ]
-
     return {
         "entities": entities,
         "names": names,
         "statements": statements,
         "links": links,
         "entity_links": entity_links,
-        "annotations": annotations,
     }
 
 
@@ -625,13 +589,6 @@ _ACTIVITY_UNION = """
       FROM names
      WHERE updated_at IS NOT NULL AND updated_at <> COALESCE(created_at, '')
     UNION ALL
-    SELECT created_at, 'create', 'annotation', id, created_by
-      FROM annotations WHERE created_at IS NOT NULL
-    UNION ALL
-    SELECT updated_at, 'update', 'annotation', id, updated_by
-      FROM annotations
-     WHERE updated_at IS NOT NULL AND updated_at <> COALESCE(created_at, '')
-    UNION ALL
     SELECT created_at, 'link', 'statement_link',
            from_statement_id || '|' || to_statement_id || '|' || link_type,
            created_by
@@ -646,14 +603,6 @@ _ACTIVITY_UNION = """
            entity_id || '|' || statement_id || '|' || direction || '|' || link_type,
            created_by
       FROM entity_statement_links WHERE created_at IS NOT NULL
-    UNION ALL
-    SELECT created_at, 'attach', 'statement_annotation',
-           statement_id || '|' || annotation_id, created_by
-      FROM statement_annotations WHERE created_at IS NOT NULL
-    UNION ALL
-    SELECT created_at, 'attach', 'entity_annotation',
-           entity_id || '|' || annotation_id, created_by
-      FROM entity_annotations WHERE created_at IS NOT NULL
 """
 
 
@@ -662,12 +611,9 @@ _ALLOWED_KINDS = {
     "entity",
     "statement",
     "name",
-    "annotation",
     "statement_link",
     "entity_link",
     "entity_statement_link",
-    "statement_annotation",
-    "entity_annotation",
 }
 
 

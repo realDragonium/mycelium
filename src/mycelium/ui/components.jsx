@@ -27,8 +27,7 @@ function buildIndex(data) {
   // Preserve the statement's own kind (event/state/capability) as
   // `claimKind`. The byId-`kind` slot is the *record* kind, used by
   // routers, search and component-dispatch — overwriting it loses the
-  // claim shape, so we save it under a different name. Annotations do
-  // the same with `annKind`.
+  // claim shape, so we save it under a different name.
   data.statements.forEach(b => byId[b.id] = { ...b, kind: 'statement', claimKind: b.kind });
   data.names.forEach(n => byId[n.id] = { ...n, kind: 'name' });
 
@@ -82,35 +81,10 @@ function buildIndex(data) {
     entityIncoming[l.to].push(l);
   });
 
-  // Annotations — typed propositions multi-attached to statements and
-  // entities. Three reverse-lookup tables for the detail screens:
-  // direct attachment to a statement, direct attachment to an entity,
-  // and `mentions`-membership on the entity (annotation references the
-  // entity but is attached elsewhere).
-  const annotationsByStatement = {}; // bid -> annotation[]
-  const annotationsByEntity = {};   // eid -> annotation[] (directly attached)
-  const annotationsMentioningEntity = {}; // eid -> annotation[]
-  (data.annotations || []).forEach(a => {
-    byId[a.id] = { ...a, kind: 'annotation', annKind: a.kind };
-    (a.statements || []).forEach(bid => {
-      annotationsByStatement[bid] = annotationsByStatement[bid] || [];
-      annotationsByStatement[bid].push(a);
-    });
-    (a.entities || []).forEach(eid => {
-      annotationsByEntity[eid] = annotationsByEntity[eid] || [];
-      annotationsByEntity[eid].push(a);
-    });
-    (a.mentions || []).forEach(eid => {
-      annotationsMentioningEntity[eid] = annotationsMentioningEntity[eid] || [];
-      annotationsMentioningEntity[eid].push(a);
-    });
-  });
-
   return {
     byId, namesByEntity, mentionsByEntity,
     outgoing, incoming, conditionUses,
     entityOutgoing, entityIncoming,
-    annotationsByStatement, annotationsByEntity, annotationsMentioningEntity,
   };
 }
 
@@ -184,10 +158,6 @@ function searchAll(data, query) {
   data.names.forEach(n => {
     const s = score(n.text);
     if (s > 0) results.push({ kind: 'name', record: n, score: s });
-  });
-  (data.annotations || []).forEach(a => {
-    const s = Math.max(score(a.text), score(a.kind));
-    if (s > 0) results.push({ kind: 'annotation', record: a, score: s });
   });
   results.sort((a, b) => b.score - a.score);
   return results;
@@ -311,7 +281,7 @@ function KindTag({ kind }) {
 
 // Tag for the per-statement claim kind (event / state / capability,
 // open-vocabulary). Distinct from KindTag, which tags the *record*
-// kind (statement / entity / name / annotation).
+// kind (statement / entity / name).
 function ClaimKindTag({ kind }) {
   if (!kind) return null;
   return <span className={`claim-kind ck-${kind}`}>{kind}</span>;
@@ -375,115 +345,16 @@ function StatementQuote({ statement, byId }) {
   return <StatementText statement={statement} byId={byId} className="bv-quote" />;
 }
 
-// ---------- Annotation list ----------
-//
-// Renders annotations grouped by `kind`. Used by both statement and
-// entity detail screens. `self` is the record we're rendering on,
-// passed so each row can show "shared with N other records" when an
-// annotation is multi-attached.
-
-function AnnotationList({ title, sub, annotations, self, style }) {
-  const idx = window.MYCELIUM_INDEX;
-
-  const groups = {};
-  annotations.forEach(a => {
-    const k = a.kind || 'other';
-    groups[k] = groups[k] || [];
-    groups[k].push(a);
-  });
-  const kinds = Object.keys(groups).sort();
-  const isEmpty = annotations.length === 0;
-
-  return (
-    <section style={style}>
-      <h3 className="section-title">
-        <span>{title}</span>
-        <span className="ct">{annotations.length}</span>
-      </h3>
-      {sub && (
-        <div style={{fontFamily:'var(--mono)', fontSize:11, color:'var(--ink-4)', marginTop:4}}>
-          {sub}
-        </div>
-      )}
-      {isEmpty ? (
-        <div className="rail-empty" style={{marginTop:10, paddingLeft:0}}>
-          // no annotations attached — author one with upsert_annotation
-        </div>
-      ) : (
-        <div style={{marginTop:10}}>
-          {kinds.map(k => (
-            <div key={k} style={{marginBottom:14}}>
-              <div style={{fontFamily:'var(--mono)', fontSize:11, color:'var(--ink-3)', marginBottom:6, textTransform:'lowercase'}}>
-                {k} <span style={{color:'var(--ink-4)'}}>· {groups[k].length}</span>
-              </div>
-              {groups[k].map(a => (
-                <AnnotationRow key={a.id} annotation={a} self={self} idx={idx} />
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function AnnotationRow({ annotation, self, idx }) {
-  const router = useRouter();
-  const otherStatements = (annotation.statements || []).filter(
-    bid => !(self?.kind === 'statement' && bid === self.id)
-  );
-  const otherEntities = (annotation.entities || []).filter(
-    eid => !(self?.kind === 'entity' && eid === self.id)
-  );
-  const sharedCount = otherStatements.length + otherEntities.length;
-  const mentioned = (annotation.mentions || [])
-    .map(eid => idx.byId[eid])
-    .filter(Boolean);
-
-  return (
-    <div className="ann-row">
-      <div className="ann-row-text">{annotation.text}</div>
-      {(sharedCount > 0 || mentioned.length > 0) && (
-        <div className="ann-row-meta">
-          {sharedCount > 0 && (
-            <span className="ann-shared">
-              shared with {sharedCount} other {sharedCount === 1 ? 'record' : 'records'}
-            </span>
-          )}
-          {mentioned.length > 0 && (
-            <span className="ann-mentions">
-              mentions{' '}
-              {mentioned.map((e, i) => (
-                <React.Fragment key={e.id}>
-                  {i > 0 && ', '}
-                  <a
-                    href="#"
-                    onClick={(ev) => { ev.preventDefault(); router.go({ view: 'entity', id: e.id }); }}
-                  >
-                    {e.name}
-                  </a>
-                </React.Fragment>
-              ))}
-            </span>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ---------- Footer ----------
 
 function Footer() {
   const data = window.MYCELIUM_DATA;
-  const annCount = (data.annotations || []).length;
   return (
     <footer className="footer">
       <div className="ftr-inner">
         <span>mycelium · v0.1 · read-only</span>
         <span>
           {data.entities.length}e · {data.statements.length}b · {data.names.length}n · {data.links.length}l
-          {annCount > 0 && <> · {annCount}a</>}
         </span>
       </div>
     </footer>
@@ -506,6 +377,5 @@ Object.assign(window, {
   searchAll, highlight,
   TopBar, ThemeToggle,
   KindTag, ClaimKindTag, EntityChip, StatementText, StatementQuote,
-  AnnotationList, AnnotationRow,
   Footer, EditHint,
 });

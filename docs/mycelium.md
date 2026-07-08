@@ -27,10 +27,9 @@ to use types coherently and adds new vocabulary as the data forces it.
 
 ## Data model
 
-The substrate stores four record kinds (entities, names, statements,
-annotations) and three link kinds (statement↔statement, entity↔entity,
-M:N attachments between annotations and statements/entities). That is
-the whole substrate.
+The substrate stores three record kinds (entities, names, statements)
+and three link kinds (statement↔statement, entity↔entity,
+entity↔statement). That is the whole substrate.
 
 An **entity** is a record holding an opaque id and a description. Entities
 are the nouns of the domain — features, concepts, capabilities, surfaces.
@@ -108,44 +107,13 @@ deterministic hash (`when_hash`) on the link row. The literal sentinel
 The tree itself lives in the `when_nodes` table, one row per node,
 cascading away with the link.
 
-An **annotation** is a record holding an opaque id, a `kind` string, and
-a chunk of text. Annotations are typed propositions that aren't
-themselves events but hold *about* a statement or entity — permissions
-(*"only recruiters can create invites"*), invariants (*"every invite
-has a non-empty email"*), properties (*"the create-invite endpoint is
-rate-limited"*), compliance facts, design rationale, illustrative
-examples. They get their own primitive because their lifecycle and
-consumption are different from statements: events compose into causal
-chains, propositions are static gravity that bends those chains.
-
-Annotation `kind` is the deliberate first-class discriminator for
-annotations, parallel to statement.kind but discriminating by *purpose
-of note* rather than shape of claim. The substrate enforces only that
-it is non-null. Starting vocabulary: `definition` (what something is),
-`default` (the implicit value or behavior when nothing overrides),
-`example` (a concrete instance), `note` (rationale or context that
-doesn't fit a more specific kind). Common adds as the corpus grows:
-`permission`, `invariant`, `property`, `compliance`, `rationale`. New
-kinds appear in `list_annotation_kinds()` as soon as one annotation
-uses them. No grammatical rules apply per annotation kind —
-annotations discriminate by purpose, not phrasing.
-
-Annotations multi-attach to records via two M:N tables:
-`statement_annotations(statement_id, annotation_id)` and
-`entity_annotations(entity_id, annotation_id)`. A single rule that
-governs many events is authored once and attached to all of them; one
-annotation can attach to both statements and entities. Annotations
-have their own embedding (in a separate `mycelium-annotations.vec`
-file, distinct from the statements index) and are queried via
-`search_annotations` — a separate lane from `search_statements`.
-
-Annotations have their own `mentions` (`annotation_mentions(annotation_id,
-name_id)`) following the same name→entity indirection as statement
-mentions. Annotations survive deletion of any record they were
-attached to: the join is dropped, the annotation persists. Orphans
-are tolerated; cleanup is an explicit user action via
-`delete_annotation`, never a side-effect of statement or entity
-deletion.
+Propositions that hold *about* a statement or entity — permissions,
+invariants, properties, compliance facts — are not a separate
+primitive. They are statements like any other (`kind='rule'`,
+`kind='property'`, …), connected to the statements and entities they
+govern via ordinary typed links. (An earlier annotation subsystem
+covered this ground; it was deprecated and removed. Legacy databases
+may still carry its inert tables.)
 
 There is no root statement, no canonical hierarchy, no global ordering.
 Any statement is a valid entry point into the graph.
@@ -320,13 +288,12 @@ frontier of `when` leaves) should batch them in a single call rather
 than loop. A single lookup is just `get_statements([id])`.
 
 Returns `{statements: [{id, kind, text, mentions, links,
-incoming_links, annotations, when_references}, ...]}` in the same order
+incoming_links, when_references}, ...]}` in the same order
 as the input ids, where `mentions` is `[{name_id, name, entity_id}]`,
-`links` is the outgoing edges this statement owns, `incoming_links` is
-`[{from_id, link_type}]` listing every node that points at this one
+`links` is the outgoing edges this statement owns, and `incoming_links`
+is `[{from_id, link_type}]` listing every node that points at this one
 (statement *or* entity — the substrate treats them uniformly on
-hydration), and `annotations` is every annotation attached to the
-record. Raises ValueError if `ids` is empty or if any id is unknown (no
+hydration). Raises ValueError if `ids` is empty or if any id is unknown (no
 partial results). Used by callers that already have ids in hand (from a
 search hit's links field, an entity mention chain, etc.) and want the
 full hydrated records.
@@ -569,22 +536,20 @@ per-text decision. No SQL writes; the call is read-only.
 The `near_duplicates` field on `upsert_statement` and `upsert_statements`
 uses the same snippet truncation for the same reason.
 
-### grep_statements and grep_annotations
+### grep_statements
 
 `grep_statements(query, case_sensitive=False, entity_id?, name?, kind?,
-limit=50, offset=0)` and `grep_annotations(query, case_sensitive=False,
-statement_id?, entity_id?, kind?, limit=50, offset=0)` are literal
-substring search tools — the deterministic counterpart to vector search.
-The statement variant accepts the same `kind` filter as `list_statements`
-and `search_statements`.
+limit=50, offset=0)` is a literal substring search tool — the
+deterministic counterpart to vector search. It accepts the same `kind`
+filter as `list_statements` and `search_statements`.
 
 When semantic search returns a fuzzy ranked list, grep returns every
 record whose `text` contains the query as a literal substring, in
 insertion order. Reach for grep when you need exact phrases,
 identifiers (a feature flag name, a service name), quoted strings, or
 specific tokens that semantic similarity might bury under broader
-matches. Reach for `search_statements` / `search_annotations` when you
-want concept-level recall.
+matches. Reach for `search_statements` when you want concept-level
+recall.
 
 Implementation note: substring matching uses SQLite's `instr()` rather
 than `LIKE`. SQLite's default `LIKE` is case-insensitive for ASCII
@@ -596,69 +561,15 @@ match literally without escape gymnastics. Empty `query` raises
 ValueError to avoid degenerating into a slow `list_*` scan.
 
 Filters mirror the corresponding `list_*` tools: `entity_id` / `name`
-for statements (mutually exclusive); `statement_id` / `entity_id` /
-`kind` for annotations (compose with AND). Response shapes also
-match `list_statements` / `list_annotations`, so a consumer can swap
-in either lookup without restructuring its result handling.
+(mutually exclusive) and `kind`. The response shape also matches
+`list_statements`, so a consumer can swap in either lookup without
+restructuring its result handling.
 
 Performance: linear scan of the relevant text column. At MVP scales
 (low thousands of records) it's sub-10ms. The natural upgrade path,
 when grep starts dominating the bench, is SQLite FTS5 — a virtual
 table that gives word-level prefix queries with proper indexing.
 Not worth the complexity for v1.
-
-### Annotation surface
-
-Annotations are exposed via eight tools that mirror the statement
-surface but operate on the separate annotations primitive (own table,
-own vector index, own mentions table).
-
-**Authoring.** `upsert_annotation(kind, text, statement_ids?,
-entity_ids?, mentions?, id?, strict_mentions?)` creates or updates an
-annotation and reconciles its full attachment sets to the statements
-and entities passed. `statement_ids` and `entity_ids` are independent
-— pass either, both, or neither (orphan-from-the-start is allowed).
-Mentions auto-resolve to entities the same way statement mentions do.
-On update, both attachment sets are wholesale-replaced; pass the
-complete intended set, not a delta. Returns
-`{annotation_id, near_duplicates}` against the annotations index.
-
-**Incremental attach/detach.** `attach_annotation(annotation_id,
-statement_id?, entity_id?)` and `detach_annotation(annotation_id,
-statement_id?, entity_id?)` mutate one attachment row at a time.
-Exactly one of the target ids must be supplied; passing both or
-neither raises 400. Both are idempotent — duplicate attaches and
-missing detaches are silent no-ops.
-
-**Lookup and listing.** `get_annotation(id)` returns the full
-hydrated record: kind, text, mentions (resolved to `{name_id, name,
-entity_id}`), attached statements (snippet-truncated text), attached
-entities (id + primary name). `list_annotations(statement_id?,
-entity_id?, kind?, limit, offset)` pages with composable filters.
-`list_annotation_kinds()` snapshots the open vocabulary.
-
-**Search.** `search_annotations(query, limit=10, min_score=-1.0,
-kind?, mentions=[])` queries the annotations vector index — a separate
-lane from `search_statements`. `kind` restricts to one annotation kind;
-`mentions` applies the same AND-semantics entity filter as
-`search_statements`. Each hit is `{id, kind, text, mentions, statements,
-entities, score}`.
-
-**Deletion.** `delete_annotation(id)` is permanent: it cascade-clears
-every statement and entity attachment, every mention row, frees the
-vector slot in the annotations index, and drops the record. Returns
-`{deleted, statement_attachments_removed, entity_attachments_removed,
-mentions_removed}`. Records that were attached are unaffected — only
-the joins are severed.
-
-**Cascade through merge and delete on the parent layer.**
-`merge_statements` moves the source's annotation attachments to the
-target (deduped on `annotation_id`); `merge_entities` does the same
-for entity attachments. `delete_statement` clears the
-`statement_annotations` join rows owned by that statement — annotations
-themselves persist as orphans if no other attachments remain. The
-substrate never garbage-collects orphan annotations as a side-effect;
-that's an explicit `delete_annotation` call.
 
 ## Phrasing validation
 
@@ -680,7 +591,8 @@ Common (every kind):
   link as a `when` expression, not in the statement text.
 - **universal_claim** — `every`, `all`, `each`, `any`, plus pronoun
   forms (`everyone`, `nobody`, `none`, `everybody`). Describes a
-  population, not one instance — usually wants an annotation. The
+  population, not one instance — usually wants a linked rule
+  statement. The
   determiner `No` is allowed (legitimate atomic-event text uses it:
   *"no flow is specified"*, *"no email is provided"*).
 - **hedge** — `usually`, `often`, `mostly`, `typically`, `sometimes`,

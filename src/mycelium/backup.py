@@ -12,7 +12,6 @@ Archive layout
                                 discriminated by `_kind`, dependency-ordered
     history.jsonl              audit log events (omit with --no-history)
     vectors/mycelium.vec       statement vector index (omit with --no-vectors)
-    vectors/mycelium-annotations.vec
     vectors/mycelium-names.vec
 
 Records carry their full column set, including audit columns and the
@@ -24,6 +23,7 @@ copied verbatim — they're binary blobs produced by hnswlib.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import sqlite3
 import tarfile
@@ -33,6 +33,21 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from . import migrations, store
+
+logger = logging.getLogger(__name__)
+
+# Record kinds from the removed annotation subsystem. Legacy archives
+# (exported before annotations were deprecated) still carry these lines;
+# the importer skips them rather than erroring on an unknown kind.
+_LEGACY_ANNOTATION_KINDS: frozenset[str] = frozenset(
+    {
+        "annotation",
+        "annotation_mention",
+        "statement_annotation",
+        "entity_annotation",
+        "annotation_vector_id",
+    }
+)
 
 # Archives carry the schema version the substrate was at when exported.
 # Sourced from the migration runner so the two stay in lock-step.
@@ -46,14 +61,10 @@ _DATA_TABLES: tuple[str, ...] = (
     "entities",
     "names",
     "statements",
-    "annotations",
     "statement_mentions",
-    "annotation_mentions",
     "statement_links",
     "when_nodes",
     "entity_links",
-    "statement_annotations",
-    "entity_annotations",
 )
 
 # *_vector_ids are gated on --include-vectors. When vectors aren't
@@ -62,14 +73,15 @@ _DATA_TABLES: tuple[str, ...] = (
 _VECTOR_ID_TABLES: tuple[str, ...] = (
     "statement_vector_ids",
     "name_vector_ids",
-    "annotation_vector_ids",
 )
 
 _VECTOR_FILES: tuple[str, ...] = (
     "mycelium.vec",
-    "mycelium-annotations.vec",
     "mycelium-names.vec",
 )
+
+# Vector files legacy archives may still carry; ignored on import.
+_LEGACY_VECTOR_FILES: tuple[str, ...] = ("mycelium-annotations.vec",)
 
 # Each row dict is tagged with `_kind` so the import dispatcher knows
 # which table to insert into. _kind is the singular form (entity, name,
@@ -78,17 +90,12 @@ _TABLE_TO_KIND: dict[str, str] = {
     "entities": "entity",
     "names": "name",
     "statements": "statement",
-    "annotations": "annotation",
     "statement_mentions": "statement_mention",
-    "annotation_mentions": "annotation_mention",
     "statement_links": "statement_link",
     "when_nodes": "when_node",
     "entity_links": "entity_link",
-    "statement_annotations": "statement_annotation",
-    "entity_annotations": "entity_annotation",
     "statement_vector_ids": "statement_vector_id",
     "name_vector_ids": "name_vector_id",
-    "annotation_vector_ids": "annotation_vector_id",
 }
 _KIND_TO_TABLE: dict[str, str] = {v: k for k, v in _TABLE_TO_KIND.items()}
 
@@ -280,8 +287,8 @@ def import_substrate(
         # Vector files: copy back if present in the archive. Otherwise
         # leave the data dir without them — the server's next `init()`
         # will create empty indexes and `_backfill_name_index` will
-        # rebuild names. Statement / annotation indexes stay empty until
-        # explicit reindex (a separate operation, out of scope here).
+        # rebuild names. The statement index stays empty until explicit
+        # reindex (a separate operation, out of scope here).
         vectors_src = staging / "vectors"
         if vectors_src.is_dir():
             for vf in _VECTOR_FILES:
@@ -295,6 +302,7 @@ def import_substrate(
 def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
     """Stream the JSONL back into the freshly-migrated DB. Each line
     becomes an INSERT into the table its `_kind` resolves to."""
+    legacy_skipped = 0
     with path.open("r", encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
@@ -302,6 +310,9 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
                 continue
             row = json.loads(line)
             kind = row.pop("_kind")
+            if kind in _LEGACY_ANNOTATION_KINDS:
+                legacy_skipped += 1
+                continue
             table = _KIND_TO_TABLE.get(kind)
             if table is None:
                 raise ValueError(f"unknown record kind in archive: {kind!r}")
@@ -311,6 +322,11 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
                 f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
                 [row[c] for c in cols],
             )
+    if legacy_skipped:
+        logger.info(
+            "skipped %d legacy annotation record(s) from pre-removal archive",
+            legacy_skipped,
+        )
 
 
 def _load_history_jsonl(conn: sqlite3.Connection, path: Path) -> None:
@@ -351,6 +367,7 @@ def _wipe_data_dir(data_dir: Path) -> None:
         "mycelium.db",
         "mycelium-history.db",
         *_VECTOR_FILES,
+        *_LEGACY_VECTOR_FILES,
     ):
         target = data_dir / name
         if target.exists():

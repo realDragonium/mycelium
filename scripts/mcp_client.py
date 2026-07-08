@@ -78,26 +78,6 @@ class MyceliumClient:
             {"prefix": prefix, "limit": limit, "offset": offset},
         )
 
-    def list_annotations(
-        self,
-        behavior_id: str | None = None,
-        entity_id: str | None = None,
-        kind: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"limit": limit, "offset": offset}
-        if behavior_id is not None:
-            body["behavior_id"] = behavior_id
-        if entity_id is not None:
-            body["entity_id"] = entity_id
-        if kind is not None:
-            body["kind"] = kind
-        return self._post("/list-annotations", body)
-
-    def get_annotation(self, id: str) -> dict[str, Any]:
-        return self._post("/get-annotation", {"id": id})
-
     def find_duplicates(
         self, threshold: float = 0.92, limit: int = 50
     ) -> list[dict[str, Any]]:
@@ -176,38 +156,3 @@ class MyceliumClient:
 
     def upsert_entity(self, name: str, description: str) -> dict[str, Any]:
         return self._post("/upsert-entity", {"name": name, "description": description})
-
-    def upsert_annotation(
-        self,
-        kind: str,
-        text: str,
-        behavior_ids: list[str] | None = None,
-        entity_ids: list[str] | None = None,
-        mentions: list[str] | None = None,
-        id: str | None = None,
-        strict_mentions: bool = False,
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "kind": kind,
-            "text": text,
-            "behavior_ids": behavior_ids or [],
-            "entity_ids": entity_ids or [],
-            "mentions": mentions or [],
-            "strict_mentions": strict_mentions,
-        }
-        if id is not None:
-            body["id"] = id
-        return self._post("/upsert-annotation", body)
-
-    def attach_annotation(
-        self,
-        annotation_id: str,
-        behavior_id: str | None = None,
-        entity_id: str | None = None,
-    ) -> dict[str, Any]:
-        body: dict[str, Any] = {"annotation_id": annotation_id}
-        if behavior_id is not None:
-            body["behavior_id"] = behavior_id
-        if entity_id is not None:
-            body["entity_id"] = entity_id
-        return self._post("/attach-annotation", body)
