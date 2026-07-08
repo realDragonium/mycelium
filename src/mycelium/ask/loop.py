@@ -10,15 +10,38 @@ with `.messages.create(...)`) and a `SubstrateReader`. Both are injectable, so
 the loop is exercisable with plain fakes — no server, no network. The framework
 seam (`run_ask`) wires the real Anthropic client + in-process substrate and
 writes the trace.
+
+The boundary-facing spine (client construction, the budget gate, thinking
+stripping, tool-result serialization, …) is shared with `ingest`/`research` via
+`..agentloop`; what stays here is ask-specific: recon, parallel tool use, the
+two terminals, and the semantic-adjacency floor.
 """
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
 from .. import tracing
+from ..agentloop import (
+    append_tool_error as _append_tool_error,
+)
+from ..agentloop import (
+    check_budget,
+    default_client,
+)
+from ..agentloop import (
+    first_tool_use as _first_tool_use,
+)
+from ..agentloop import (
+    serialize as _serialize,
+)
+from ..agentloop import (
+    strip_thinking as _strip_thinking,
+)
+from ..agentloop import (
+    substrate_has as _substrate_has,
+)
 from . import prompts
 from .config import AskConfig
 from .schema import Answered, AskResult, Interpretation, NeedsClarification
@@ -43,9 +66,6 @@ _MAX_MALFORMED_RETRIES = 1
 #: Hard ceiling on model turns, well above any real run (op cap bounds reads).
 _TURN_HEADROOM = 12
 
-#: Cap on a serialized tool_result fed back to the model.
-_TOOL_RESULT_MAX_CHARS = 20000
-
 
 def run_ask(
     question: str,
@@ -65,7 +85,7 @@ def run_ask(
     if substrate is None:
         substrate = InProcessSubstrate()
     if client is None:
-        client = _default_client(config)
+        client = default_client(config.max_retries)
 
     with tracing.profile_to_html("ask", question):
         result = _execute(question, client, substrate, config)
@@ -77,15 +97,17 @@ def run_ask(
     return result
 
 
-def _default_client(config: AskConfig) -> Any:
-    import anthropic  # local import: keeps the package importable without the key
-
-    return anthropic.Anthropic(max_retries=config.max_retries)
-
-
 # --------------------------------------------------------------------------- #
 # Core loop
 # --------------------------------------------------------------------------- #
+
+
+class _RunContext:
+    """Plain bag of per-run harness state, so the finalizers/handlers below
+    don't each need ten-plus positional parameters (mirrors research/loop.py)."""
+
+    def __init__(self, **kw: Any) -> None:
+        self.__dict__.update(kw)
 
 
 def _execute(
@@ -118,75 +140,38 @@ def _execute(
         }
     ]
 
-    nudged = False
-    floor_blocks = 0
-    clarify_retries = 0
-    malformed_retries = 0
     max_turns = config.op_cap + _TURN_HEADROOM
+
+    ctx = _RunContext(
+        question=question,
+        recon=recon,
+        collected_ids=collected_ids,
+        client=client,
+        substrate=substrate,
+        config=config,
+        tools=tools,
+        messages=messages,
+        trace=trace,
+        start=start,
+        ops_after_recon=ops_after_recon,
+        nudged=False,
+        floor_blocks=0,
+        clarify_retries=0,
+        malformed_retries=0,
+    )
 
     while True:
         # Budget gates — forced finalize bypasses the floor and degrades.
-        if trace.op_count >= config.op_cap:
-            return _forced_finalize(
-                "op_cap",
-                question,
-                recon,
-                collected_ids,
-                client,
-                config,
-                tools,
-                messages,
-                trace,
-                start,
-                ops_after_recon,
-            )
-        if (time.monotonic() - start) > config.wall_clock_s:
-            return _forced_finalize(
-                "wall_clock",
-                question,
-                recon,
-                collected_ids,
-                client,
-                config,
-                tools,
-                messages,
-                trace,
-                start,
-                ops_after_recon,
-            )
-        if trace.model_turns >= max_turns:
-            return _forced_finalize(
-                "turn_limit",
-                question,
-                recon,
-                collected_ids,
-                client,
-                config,
-                tools,
-                messages,
-                trace,
-                start,
-                ops_after_recon,
-            )
+        reason = check_budget(trace, config, start, max_turns)
+        if reason:
+            return _forced_finalize(reason, ctx)
 
         try:
             with trace.span("model_turn"):
                 resp = _model_turn(client, config, messages, tools, force=False)
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             trace.notes.append(f"model error: {exc}")
-            return _forced_finalize(
-                "api_error",
-                question,
-                recon,
-                collected_ids,
-                client,
-                config,
-                tools,
-                messages,
-                trace,
-                start,
-                ops_after_recon,
-            )
+            return _forced_finalize("api_error", ctx)
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
         messages.append({"role": "assistant", "content": resp.content})
@@ -194,160 +179,131 @@ def _execute(
         tool_uses = _tool_uses(resp)
         if not tool_uses:
             # Text only / end_turn with no tool call.
-            if not nudged:
-                nudged = True
+            if not ctx.nudged:
+                ctx.nudged = True
                 messages.append({"role": "user", "content": prompts.NO_TERMINAL_NUDGE})
                 continue
-            return _forced_finalize(
-                "no_terminal",
-                question,
-                recon,
-                collected_ids,
-                client,
-                config,
-                tools,
-                messages,
-                trace,
-                start,
-                ops_after_recon,
-            )
+            return _forced_finalize("no_terminal", ctx)
 
         # The model is calling a tool again — reset the no-terminal nudge so a
         # single stray text turn earlier doesn't doom a later one. The nudge
         # budget is per consecutive-text-streak, not per session.
-        nudged = False
+        ctx.nudged = False
 
-        # Execute every substrate read in this turn FIRST. With parallel tool use
-        # a turn may carry several reads (and, rarely, a terminal alongside them);
-        # the API needs a tool_result for each tool_use before the next turn, so
-        # we answer the reads here whether or not a sibling terminal then finishes
-        # or degrades the loop. All of this turn's read results go back in one
-        # user message.
-        read_results: list[dict[str, Any]] = []
-        for tu in tool_uses:
-            if tu.name in TERMINAL_TOOLS:
-                continue
-            if _dispatch_read(
-                tu.name,
-                dict(tu.input or {}),
-                tu.id,
-                substrate,
-                trace,
-                read_results,
-                collected_ids,
-            ):
-                ops_after_recon.append(tu.name)
-        if read_results:
-            messages.append({"role": "user", "content": read_results})
+        # Execute every substrate read in this turn FIRST (see `_run_reads`), so
+        # each tool_use gets its tool_result before the next turn even when a
+        # sibling terminal then finishes or degrades the loop.
+        _run_reads(tool_uses, ctx)
 
         # A terminal tool finishes (or degrades) the loop; with none, loop again
         # to keep retrieving. If the model emitted several, the first wins.
         tool_use = next((t for t in tool_uses if t.name in TERMINAL_TOOLS), None)
         if tool_use is None:
             continue
-        name = tool_use.name
-        tool_input = dict(tool_use.input or {})
+        if tool_use.name == CLARIFY_TOOL:
+            result = _handle_clarify(tool_use, ctx)
+        else:
+            result = _handle_submit(tool_use, ctx)
+        if result is not None:
+            return result
 
-        # ---- Terminal: request_clarification (allowed any time after recon) ----
-        if name == CLARIFY_TOOL:
-            candidates = tool_input.get("candidates") or []
-            if len(candidates) < 2:
-                if clarify_retries < _MAX_CLARIFY_RETRIES:
-                    clarify_retries += 1
-                    _append_tool_error(
-                        messages,
-                        tool_use.id,
-                        "request_clarification needs at least two genuinely distinct "
-                        "candidates, each naming what it would pull. If it isn't "
-                        "genuinely ambiguous, retrieve and submit_answer instead.",
-                    )
-                    continue
-                # Retry spent and still under-specified: never emit a broken
-                # clarification (the contract requires >=2 candidates). Degrade
-                # to a forced answer rather than handing back a useless one.
-                _append_tool_error(
-                    messages,
-                    tool_use.id,
-                    "Clarification still under-specified; finalizing with what has "
-                    "been gathered.",
-                )
-                return _forced_finalize(
-                    "clarify_stuck",
-                    question,
-                    recon,
-                    collected_ids,
-                    client,
-                    config,
-                    tools,
-                    messages,
-                    trace,
-                    start,
-                    ops_after_recon,
-                )
-            return _finish_clarification(
-                tool_input, trace, start, ops_after_recon, config
+
+def _run_reads(tool_uses: list[Any], ctx: _RunContext) -> None:
+    """Execute this turn's substrate reads. With parallel tool use a turn may
+    carry several reads (and, rarely, a terminal alongside them); the API needs
+    a tool_result for each tool_use before the next turn, so every read's result
+    goes back in one user message here, whether or not a sibling terminal then
+    finishes the loop."""
+    read_results: list[dict[str, Any]] = []
+    for tu in tool_uses:
+        if tu.name in TERMINAL_TOOLS:
+            continue
+        if _dispatch_read(
+            tu.name,
+            dict(tu.input or {}),
+            tu.id,
+            ctx.substrate,
+            ctx.trace,
+            read_results,
+            ctx.collected_ids,
+        ):
+            ctx.ops_after_recon.append(tu.name)
+    if read_results:
+        ctx.messages.append({"role": "user", "content": read_results})
+
+
+def _handle_clarify(tool_use: Any, ctx: _RunContext) -> AskResult | None:
+    """Terminal: request_clarification (allowed any time after recon). Returns a
+    result to finish, or None to keep looping after a re-prompt."""
+    tool_input = dict(tool_use.input or {})
+    candidates = tool_input.get("candidates") or []
+    if len(candidates) < 2:
+        if ctx.clarify_retries < _MAX_CLARIFY_RETRIES:
+            ctx.clarify_retries += 1
+            _append_tool_error(
+                ctx.messages,
+                tool_use.id,
+                "request_clarification needs at least two genuinely distinct "
+                "candidates, each naming what it would pull. If it isn't "
+                "genuinely ambiguous, retrieve and submit_answer instead.",
             )
+            return None
+        # Retry spent and still under-specified: never emit a broken
+        # clarification (the contract requires >=2 candidates). Degrade
+        # to a forced answer rather than handing back a useless one.
+        _append_tool_error(
+            ctx.messages,
+            tool_use.id,
+            "Clarification still under-specified; finalizing with what has "
+            "been gathered.",
+        )
+        return _forced_finalize("clarify_stuck", ctx)
+    return _finish_clarification(tool_input, ctx)
 
-        # ---- Terminal: submit_answer (gated by the floor) ----
-        if name == SUBMIT_TOOL:
-            floor = _floor_state(ops_after_recon)
-            adjacency_note = (tool_input.get("adjacency_note") or "").strip()
-            # `quick` depth (enforce_floor off) skips the gate entirely: accept
-            # the first well-formed answer instead of forcing the re-search dance.
-            if config.enforce_floor and (not floor["satisfied"] or not adjacency_note):
-                if floor_blocks < _MAX_FLOOR_BLOCKS:
-                    floor_blocks += 1
-                    if not floor["satisfied"]:
-                        detail = prompts.floor_block_message(_floor_detail(floor))
-                    else:
-                        detail = (
-                            "adjacency_note is empty — report what your concept-seeded "
-                            "re-search surfaced, or 'nothing new'."
-                        )
-                    _append_tool_error(messages, tool_use.id, detail)
-                    continue
-                # Stuck below the floor: never accept a floorless answer. Respond
-                # to the pending tool_use, then degrade via a forced finalize.
-                _append_tool_error(
-                    messages,
-                    tool_use.id,
-                    "Floor still unmet after repeated attempts; finalizing with "
-                    "what has been gathered.",
+
+def _handle_submit(tool_use: Any, ctx: _RunContext) -> AskResult | None:
+    """Terminal: submit_answer (gated by the floor). Returns a result to finish,
+    or None to keep looping after a re-prompt."""
+    tool_input = dict(tool_use.input or {})
+    floor = _floor_state(ctx.ops_after_recon)
+    adjacency_note = (tool_input.get("adjacency_note") or "").strip()
+    # `quick` depth (enforce_floor off) skips the gate entirely: accept the first
+    # well-formed answer instead of forcing the re-search dance.
+    if ctx.config.enforce_floor and (not floor["satisfied"] or not adjacency_note):
+        if ctx.floor_blocks < _MAX_FLOOR_BLOCKS:
+            ctx.floor_blocks += 1
+            if not floor["satisfied"]:
+                detail = prompts.floor_block_message(_floor_detail(floor))
+            else:
+                detail = (
+                    "adjacency_note is empty — report what your concept-seeded "
+                    "re-search surfaced, or 'nothing new'."
                 )
-                return _forced_finalize(
-                    "floor_stuck",
-                    question,
-                    recon,
-                    collected_ids,
-                    client,
-                    config,
-                    tools,
-                    messages,
-                    trace,
-                    start,
-                    ops_after_recon,
-                )
-            try:
-                return _finish_answer(
-                    tool_input, trace, start, ops_after_recon, config, degraded=False
-                )
-            except Exception as exc:  # noqa: BLE001 — malformed submit input
-                if malformed_retries < _MAX_MALFORMED_RETRIES:
-                    malformed_retries += 1
-                    _append_tool_error(
-                        messages, tool_use.id, prompts.malformed_retry_message(str(exc))
-                    )
-                    continue
-                trace.notes.append(f"submit_answer malformed twice: {exc}")
-                return _fallback_answer(
-                    question,
-                    collected_ids,
-                    trace,
-                    start,
-                    ops_after_recon,
-                    config,
-                    gap="answer formatting failed — returned a low-confidence partial",
-                )
+            _append_tool_error(ctx.messages, tool_use.id, detail)
+            return None
+        # Stuck below the floor: never accept a floorless answer. Respond
+        # to the pending tool_use, then degrade via a forced finalize.
+        _append_tool_error(
+            ctx.messages,
+            tool_use.id,
+            "Floor still unmet after repeated attempts; finalizing with "
+            "what has been gathered.",
+        )
+        return _forced_finalize("floor_stuck", ctx)
+    try:
+        return _finish_answer(tool_input, ctx, degraded=False)
+    except Exception as exc:  # noqa: BLE001 — malformed submit input
+        if ctx.malformed_retries < _MAX_MALFORMED_RETRIES:
+            ctx.malformed_retries += 1
+            _append_tool_error(
+                ctx.messages, tool_use.id, prompts.malformed_retry_message(str(exc))
+            )
+            return None
+        ctx.trace.notes.append(f"submit_answer malformed twice: {exc}")
+        return _fallback_answer(
+            ctx,
+            gap="answer formatting failed — returned a low-confidence partial",
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -420,52 +376,30 @@ def _dispatch_read(
         return False
 
 
-def _forced_finalize(
-    reason: str,
-    question: str,
-    recon: Any,
-    collected_ids: set[str],
-    client: Any,
-    config: AskConfig,
-    tools: list[dict],
-    messages: list[dict[str, Any]],
-    trace: TraceBuilder,
-    start: float,
-    ops_after_recon: list[str],
-) -> Answered:
+def _forced_finalize(reason: str, ctx: _RunContext) -> Answered:
     """Last resort: force one structured submit (floor bypassed), else synthesise
     a low-confidence partial. Never throws."""
+    trace: TraceBuilder = ctx.trace
     trace.forced_finalize = reason
     trace.degraded = True
-    messages.append(
+    ctx.messages.append(
         {"role": "user", "content": prompts.forced_finalize_message(reason)}
     )
     try:
         with trace.span("model_turn:forced"):
-            resp = _model_turn(client, config, messages, tools, force=True)
+            resp = _model_turn(
+                ctx.client, ctx.config, ctx.messages, ctx.tools, force=True
+            )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
         tool_use = _first_tool_use(resp)
         if tool_use is not None and tool_use.name == SUBMIT_TOOL:
-            return _finish_answer(
-                dict(tool_use.input or {}),
-                trace,
-                start,
-                ops_after_recon,
-                config,
-                degraded=True,
-            )
+            return _finish_answer(dict(tool_use.input or {}), ctx, degraded=True)
         trace.notes.append("forced finalize: model did not emit submit_answer")
     except Exception as exc:  # noqa: BLE001
         trace.notes.append(f"forced finalize failed: {exc}")
     return _fallback_answer(
-        question,
-        collected_ids,
-        trace,
-        start,
-        ops_after_recon,
-        config,
-        gap=f"forced finalize ({reason}) — core left unresolved",
+        ctx, gap=f"forced finalize ({reason}) — core left unresolved"
     )
 
 
@@ -476,13 +410,11 @@ def _forced_finalize(
 
 def _finish_answer(
     tool_input: dict,
-    trace: TraceBuilder,
-    start: float,
-    ops_after_recon: list[str],
-    config: AskConfig,
+    ctx: _RunContext,
     *,
     degraded: bool,
 ) -> Answered:
+    trace: TraceBuilder = ctx.trace
     trace.sub_question_ledger = list(tool_input.get("sub_questions") or [])
     trace.adjacency_note = tool_input.get("adjacency_note")
     if degraded:
@@ -494,35 +426,19 @@ def _finish_answer(
             tool_input = dict(tool_input)
             tool_input["confidence"] = "low"
             trace.notes.append("confidence floored to low on degraded finalize")
-    trace_dict = _build_trace(trace, "answered", start, ops_after_recon, config)
+    trace_dict = _build_trace(ctx, "answered")
     return answered_from_tool_input(tool_input, trace_dict)
 
 
-def _finish_clarification(
-    tool_input: dict,
-    trace: TraceBuilder,
-    start: float,
-    ops_after_recon: list[str],
-    config: AskConfig,
-) -> NeedsClarification:
-    trace_dict = _build_trace(
-        trace, "needs_clarification", start, ops_after_recon, config
-    )
+def _finish_clarification(tool_input: dict, ctx: _RunContext) -> NeedsClarification:
+    trace_dict = _build_trace(ctx, "needs_clarification")
     return clarification_from_tool_input(tool_input, trace_dict)
 
 
-def _fallback_answer(
-    question: str,
-    collected_ids: set[str],
-    trace: TraceBuilder,
-    start: float,
-    ops_after_recon: list[str],
-    config: AskConfig,
-    *,
-    gap: str,
-) -> Answered:
+def _fallback_answer(ctx: _RunContext, *, gap: str) -> Answered:
+    trace: TraceBuilder = ctx.trace
     trace.degraded = True
-    trace_dict = _build_trace(trace, "answered", start, ops_after_recon, config)
+    trace_dict = _build_trace(ctx, "answered")
     return Answered(
         answer=(
             "The substrate did not yield enough to resolve this with confidence. "
@@ -530,26 +446,25 @@ def _fallback_answer(
         ),
         confidence="low",
         interpretation=Interpretation(
-            as_asked=question, resolved_to=question, reframed=False, reframe_reason=None
+            as_asked=ctx.question,
+            resolved_to=ctx.question,
+            reframed=False,
+            reframe_reason=None,
         ),
         gaps=[gap, "core sub-questions were unresolved when the call ended"],
-        provenance=sorted(collected_ids),
+        provenance=sorted(ctx.collected_ids),
         trace=trace_dict,
     )
 
 
-def _build_trace(
-    trace: TraceBuilder,
-    outcome: str,
-    start: float,
-    ops_after_recon: list[str],
-    config: AskConfig,
-) -> dict:
-    latency_ms = (time.monotonic() - start) * 1000.0
+def _build_trace(ctx: _RunContext, outcome: str) -> dict:
+    trace: TraceBuilder = ctx.trace
+    config: AskConfig = ctx.config
+    latency_ms = (time.monotonic() - ctx.start) * 1000.0
     record = trace.build(
         outcome=outcome,
         latency_ms=latency_ms,
-        floor=_floor_state(ops_after_recon),
+        floor=_floor_state(ctx.ops_after_recon),
         input_per_mtok=config.input_per_mtok,
         output_per_mtok=config.output_per_mtok,
     )
@@ -687,42 +602,6 @@ def _with_rolling_cache(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _block_type(block: Any) -> Any:
-    if isinstance(block, dict):
-        return block.get("type")
-    return getattr(block, "type", None)
-
-
-def _strip_thinking(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop thinking / redacted_thinking blocks from assistant turns.
-
-    Used only for the thinking-disabled forced-finalize request: a request
-    without thinking enabled should not carry thinking blocks. If filtering
-    would empty a message's content, the original is kept (an empty content
-    list is itself invalid).
-    """
-    out: list[dict[str, Any]] = []
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, list):
-            filtered = [
-                b
-                for b in content
-                if _block_type(b) not in ("thinking", "redacted_thinking")
-            ]
-            out.append({**message, "content": filtered or content})
-        else:
-            out.append(message)
-    return out
-
-
-def _first_tool_use(resp: Any) -> Any | None:
-    for block in getattr(resp, "content", None) or []:
-        if getattr(block, "type", None) == "tool_use":
-            return block
-    return None
-
-
 def _tool_uses(resp: Any) -> list[Any]:
     """Every tool_use block in the response, in order. With parallel tool use a
     single turn can carry more than one."""
@@ -742,37 +621,6 @@ def _tool_result_block(
         "content": content,
         "is_error": is_error,
     }
-
-
-def _append_tool_error(
-    messages: list[dict[str, Any]], tool_use_id: str, message: str
-) -> None:
-    """Answer a single (terminal) tool_use with an error, as its own user
-    message. Reads are batched by the caller; terminals are handled one at a
-    time, so a per-message append is correct here."""
-    messages.append(
-        {
-            "role": "user",
-            "content": [_tool_result_block(tool_use_id, message, is_error=True)],
-        }
-    )
-
-
-def _serialize(result: Any) -> str:
-    try:
-        text = json.dumps(result, ensure_ascii=False, default=str)
-    except Exception:  # noqa: BLE001
-        text = str(result)
-    if len(text) > _TOOL_RESULT_MAX_CHARS:
-        text = text[:_TOOL_RESULT_MAX_CHARS] + "\n…[truncated]"
-    return text
-
-
-def _substrate_has(substrate: SubstrateReader, name: str) -> bool:
-    has = getattr(substrate, "has", None)
-    if callable(has):
-        return bool(has(name))
-    return any(spec.name == name for spec in substrate.tool_specs())
 
 
 def _collect_ids(obj: Any, acc: set[str]) -> None:

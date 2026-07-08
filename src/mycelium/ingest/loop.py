@@ -23,12 +23,30 @@ write tool and never touches `server._conn`.
 
 from __future__ import annotations
 
-import json
 import time
-from pathlib import Path
 from typing import Any
 
 from .. import tracing
+from ..agentloop import (
+    append_tool_error as _append_tool_error,
+)
+from ..agentloop import (
+    check_budget,
+    default_client,
+    load_doctrine,
+)
+from ..agentloop import (
+    first_tool_use as _first_tool_use,
+)
+from ..agentloop import (
+    serialize as _serialize,
+)
+from ..agentloop import (
+    strip_thinking as _strip_thinking,
+)
+from ..agentloop import (
+    substrate_has as _substrate_has,
+)
 
 # Reuse ask's read seam wholesale — do NOT duplicate it.
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
@@ -84,9 +102,6 @@ _MAX_MALFORMED_RETRIES = 1
 #: Hard ceiling on model turns, well above any real run (op cap bounds reads).
 _TURN_HEADROOM = 16
 
-#: Cap on a serialized tool_result fed back to the model.
-_TOOL_RESULT_MAX_CHARS = 20000
-
 
 def run_ingest(
     text: str,
@@ -110,9 +125,9 @@ def run_ingest(
     if emitter is None:
         emitter = InProcessDraftEmitter()
     if client is None:
-        client = _default_client(config)
+        client = default_client(config.max_retries)
 
-    doctrine_text, doctrine_note = _load_doctrine(config)
+    doctrine_text, doctrine_note = load_doctrine(config.doctrine_path)
 
     with tracing.profile_to_html("ingest", f"{len(text)} chars"):
         result = _execute(
@@ -126,24 +141,17 @@ def run_ingest(
     return result
 
 
-def _default_client(config: IngestConfig) -> Any:
-    import anthropic  # local import: keeps the package importable without the key
-
-    return anthropic.Anthropic(max_retries=config.max_retries)
-
-
-def _load_doctrine(config: IngestConfig) -> tuple[str, str | None]:
-    """Read the reasoning doctrine best-effort. On failure, return ("", note)
-    so the loop proceeds on the base prompt and records why."""
-    try:
-        return Path(config.doctrine_path).read_text(encoding="utf-8"), None
-    except Exception as exc:  # noqa: BLE001 — best-effort; proceed without it
-        return "", f"doctrine unreadable ({config.doctrine_path}): {exc}"
-
-
 # --------------------------------------------------------------------------- #
 # Core loop
 # --------------------------------------------------------------------------- #
+
+
+class _RunContext:
+    """Plain bag of per-run harness state, so the finalizers/handlers below
+    don't each need ten-plus positional parameters (mirrors research/loop.py)."""
+
+    def __init__(self, **kw: Any) -> None:
+        self.__dict__.update(kw)
 
 
 def _execute(
@@ -182,55 +190,30 @@ def _execute(
     ]
 
     reads_after_vocab: list[str] = []  # successful read names, for the floor
-    nudged = False
-    floor_blocks = 0
-    malformed_retries = 0
     max_turns = config.op_cap + _TURN_HEADROOM
+
+    ctx = _RunContext(
+        text=text,
+        system_prompt=system_prompt,
+        client=client,
+        substrate=substrate,
+        config=config,
+        tools=tools,
+        messages=messages,
+        emitter=emitter,
+        trace=trace,
+        start=start,
+        reads_after_vocab=reads_after_vocab,
+        nudged=False,
+        floor_blocks=0,
+        malformed_retries=0,
+    )
 
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
-        if trace.op_count >= config.op_cap:
-            return _forced_finalize(
-                "op_cap",
-                system_prompt,
-                client,
-                config,
-                tools,
-                messages,
-                emitter,
-                trace,
-                start,
-                reads_after_vocab,
-                text,
-            )
-        if (time.monotonic() - start) > config.wall_clock_s:
-            return _forced_finalize(
-                "wall_clock",
-                system_prompt,
-                client,
-                config,
-                tools,
-                messages,
-                emitter,
-                trace,
-                start,
-                reads_after_vocab,
-                text,
-            )
-        if trace.model_turns >= max_turns:
-            return _forced_finalize(
-                "turn_limit",
-                system_prompt,
-                client,
-                config,
-                tools,
-                messages,
-                emitter,
-                trace,
-                start,
-                reads_after_vocab,
-                text,
-            )
+        reason = check_budget(trace, config, start, max_turns)
+        if reason:
+            return _forced_finalize(reason, ctx)
 
         try:
             with trace.span("model_turn"):
@@ -239,19 +222,7 @@ def _execute(
                 )
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             trace.notes.append(f"model error: {exc}")
-            return _forced_finalize(
-                "api_error",
-                system_prompt,
-                client,
-                config,
-                tools,
-                messages,
-                emitter,
-                trace,
-                start,
-                reads_after_vocab,
-                text,
-            )
+            return _forced_finalize("api_error", ctx)
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
         messages.append({"role": "assistant", "content": resp.content})
@@ -259,106 +230,76 @@ def _execute(
         tool_use = _first_tool_use(resp)
         if tool_use is None:
             # Text only / end_turn with no terminal tool.
-            if not nudged:
-                nudged = True
+            if not ctx.nudged:
+                ctx.nudged = True
                 messages.append({"role": "user", "content": prompts.NO_TERMINAL_NUDGE})
                 continue
-            return _forced_finalize(
-                "no_terminal",
-                system_prompt,
-                client,
-                config,
-                tools,
-                messages,
-                emitter,
-                trace,
-                start,
-                reads_after_vocab,
-                text,
-            )
+            return _forced_finalize("no_terminal", ctx)
 
         # The model is calling a tool again — reset the no-terminal nudge so a
         # single stray text turn earlier doesn't doom a later one. The nudge
         # budget is per consecutive-text-streak, not per session.
-        nudged = False
+        ctx.nudged = False
         name = tool_use.name
-        tool_input = dict(tool_use.input or {})
 
         # ---- Terminal: emit_draft (gated by the floor + ledger well-formedness) ----
         if name == EMIT_TOOL:
-            try:
-                ops, ledger, flagged, skipped = parse_emit_input(tool_input)
-            except ValueError as exc:
-                if malformed_retries < _MAX_MALFORMED_RETRIES:
-                    malformed_retries += 1
-                    _append_tool_error(
-                        messages, tool_use.id, prompts.malformed_retry_message(str(exc))
-                    )
-                    continue
-                trace.notes.append(f"emit_draft malformed twice: {exc}")
-                return _degrade_no_draft(
-                    "degraded: emit_draft malformed twice",
-                    trace,
-                    start,
-                    reads_after_vocab,
-                    config,
-                )
-
-            floor = _floor_state(reads_after_vocab)
-            unmet = _ledger_unmet(ledger)
-            coverage = _coverage_unmet(ops, ledger)
-            if coverage:
-                unmet = [*unmet, coverage]
-            if not floor["satisfied"] or unmet:
-                if floor_blocks < _MAX_FLOOR_BLOCKS:
-                    floor_blocks += 1
-                    _append_tool_error(
-                        messages,
-                        tool_use.id,
-                        prompts.floor_block_message(_floor_detail(floor, unmet)),
-                    )
-                    continue
-                # Stuck below the floor: respond to the pending tool_use, then
-                # degrade via a forced finalize rather than accepting a floorless
-                # emit.
-                _append_tool_error(
-                    messages,
-                    tool_use.id,
-                    "Floor still unmet after repeated attempts; finalizing with "
-                    "what has been reconciled.",
-                )
-                return _forced_finalize(
-                    "floor_stuck",
-                    system_prompt,
-                    client,
-                    config,
-                    tools,
-                    messages,
-                    emitter,
-                    trace,
-                    start,
-                    reads_after_vocab,
-                    text,
-                )
-            return _assemble_draft(
-                ops,
-                ledger,
-                flagged,
-                skipped,
-                emitter,
-                trace,
-                start,
-                reads_after_vocab,
-                config,
-                text,
-                degraded=False,
-            )
+            result = _handle_emit(tool_use, ctx)
+            if result is not None:
+                return result
+            continue
 
         # ---- A substrate READ primitive ----
         # Only a SUCCESSFUL read counts toward the floor — a SubstrateError
         # gathered no data. It still counts toward the op cap (recorded).
-        if _dispatch_read(name, tool_input, tool_use.id, substrate, trace, messages):
+        if _dispatch_read(
+            name, dict(tool_use.input or {}), tool_use.id, substrate, trace, messages
+        ):
             reads_after_vocab.append(name)
+
+
+def _handle_emit(tool_use: Any, ctx: _RunContext) -> IngestResult | None:
+    """Terminal: emit_draft (gated by the floor + ledger well-formedness).
+    Returns a result to finish, or None to keep looping after a re-prompt."""
+    trace: TraceBuilder = ctx.trace
+    messages: list[dict[str, Any]] = ctx.messages
+    tool_input = dict(tool_use.input or {})
+    try:
+        ops, ledger, flagged, skipped = parse_emit_input(tool_input)
+    except ValueError as exc:
+        if ctx.malformed_retries < _MAX_MALFORMED_RETRIES:
+            ctx.malformed_retries += 1
+            _append_tool_error(
+                messages, tool_use.id, prompts.malformed_retry_message(str(exc))
+            )
+            return None
+        trace.notes.append(f"emit_draft malformed twice: {exc}")
+        return _degrade_no_draft("degraded: emit_draft malformed twice", ctx)
+
+    floor = _floor_state(ctx.reads_after_vocab)
+    unmet = _ledger_unmet(ledger)
+    coverage = _coverage_unmet(ops, ledger)
+    if coverage:
+        unmet = [*unmet, coverage]
+    if not floor["satisfied"] or unmet:
+        if ctx.floor_blocks < _MAX_FLOOR_BLOCKS:
+            ctx.floor_blocks += 1
+            _append_tool_error(
+                messages,
+                tool_use.id,
+                prompts.floor_block_message(_floor_detail(floor, unmet)),
+            )
+            return None
+        # Stuck below the floor: respond to the pending tool_use, then degrade
+        # via a forced finalize rather than accepting a floorless emit.
+        _append_tool_error(
+            messages,
+            tool_use.id,
+            "Floor still unmet after repeated attempts; finalizing with "
+            "what has been reconciled.",
+        )
+        return _forced_finalize("floor_stuck", ctx)
+    return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -435,31 +376,25 @@ def _dispatch_read(
         return False
 
 
-def _forced_finalize(
-    reason: str,
-    system_prompt: str,
-    client: Any,
-    config: IngestConfig,
-    tools: list[dict],
-    messages: list[dict[str, Any]],
-    emitter: DraftEmitter,
-    trace: TraceBuilder,
-    start: float,
-    reads_after_vocab: list[str],
-    text: str,
-) -> IngestResult:
+def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
     """Last resort: force one emit_draft turn (floor bypassed, thinking off),
     else give up gracefully with NothingToIngest. Never throws, never partial
     live-write."""
+    trace: TraceBuilder = ctx.trace
     trace.forced_finalize = reason
     trace.degraded = True
-    messages.append(
+    ctx.messages.append(
         {"role": "user", "content": prompts.forced_finalize_message(reason)}
     )
     try:
         with trace.span("model_turn:forced"):
             resp = _model_turn(
-                client, config, system_prompt, messages, tools, force=True
+                ctx.client,
+                ctx.config,
+                ctx.system_prompt,
+                ctx.messages,
+                ctx.tools,
+                force=True,
             )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -473,29 +408,13 @@ def _forced_finalize(
                 trace.notes.append(f"forced finalize: emit_draft malformed: {exc}")
             else:
                 return _assemble_draft(
-                    ops,
-                    ledger,
-                    flagged,
-                    skipped,
-                    emitter,
-                    trace,
-                    start,
-                    reads_after_vocab,
-                    config,
-                    text,
-                    degraded=True,
+                    ops, ledger, flagged, skipped, ctx, degraded=True
                 )
         else:
             trace.notes.append("forced finalize: model did not emit emit_draft")
     except Exception as exc:  # noqa: BLE001
         trace.notes.append(f"forced finalize failed: {exc}")
-    return _degrade_no_draft(
-        f"degraded: could not assemble a draft ({reason})",
-        trace,
-        start,
-        reads_after_vocab,
-        config,
-    )
+    return _degrade_no_draft(f"degraded: could not assemble a draft ({reason})", ctx)
 
 
 # --------------------------------------------------------------------------- #
@@ -508,18 +427,15 @@ def _assemble_draft(
     ledger: list[dict],
     flagged: list[str],
     skipped: list[str],
-    emitter: DraftEmitter,
-    trace: TraceBuilder,
-    start: float,
-    reads_after_vocab: list[str],
-    config: IngestConfig,
-    text: str,
+    ctx: _RunContext,
     *,
     degraded: bool,
 ) -> IngestResult:
     """Validate the model's ops, queue the valid ones into a draft via the
     emitter, and return the structured outcome. Never throws; hard-validation
     failures are moved to `flagged`, not queued, and never become a live write."""
+    trace: TraceBuilder = ctx.trace
+    emitter: DraftEmitter = ctx.emitter
     if degraded:
         trace.degraded = True
 
@@ -541,7 +457,7 @@ def _assemble_draft(
             else "nothing extractable"
         )
         trace.flagged = flagged
-        return _nothing(reason, trace, start, reads_after_vocab, config)
+        return _nothing(reason, ctx)
 
     valid_kinds = _safe_valid_kinds(emitter)
     validated: list[ProposedOp] = []
@@ -563,7 +479,7 @@ def _assemble_draft(
             if ops
             else "nothing extractable"
         )
-        return _nothing(reason, trace, start, reads_after_vocab, config)
+        return _nothing(reason, ctx)
 
     # ---- The ONLY write path: create the draft + queue ops via the emitter ----
     # LOW-8 (deferred): a classification<->op cross-check (e.g. detecting a NEW
@@ -578,15 +494,11 @@ def _assemble_draft(
     # then always return DraftCreated with the real draft_id and whatever landed.
     # That honors "emit what was processed; never partial/orphaned write".
     try:
-        draft_id = emitter.create(title=_draft_title(text))
+        draft_id = emitter.create(title=_draft_title(ctx.text))
     except Exception as exc:  # noqa: BLE001 — no draft exists yet: degrade cleanly
         trace.notes.append(f"draft create failed: {exc}")
         return _degrade_no_draft(
-            f"degraded: could not assemble a draft (draft store error: {exc})",
-            trace,
-            start,
-            reads_after_vocab,
-            config,
+            f"degraded: could not assemble a draft (draft store error: {exc})", ctx
         )
 
     queued: list[ProposedOp] = []
@@ -602,7 +514,7 @@ def _assemble_draft(
     trace.proposed_ops = [p.model_dump() for p in queued]
     trace.flagged = flagged
 
-    trace_dict = _build_trace(trace, "draft_created", start, reads_after_vocab, config)
+    trace_dict = _build_trace(trace, "draft_created", ctx)
     return DraftCreated(
         draft_id=draft_id,
         ops=queued,
@@ -854,46 +766,26 @@ def _prevalidate_phrasing(
 # --------------------------------------------------------------------------- #
 
 
-def _nothing(
-    reason: str,
-    trace: TraceBuilder,
-    start: float,
-    reads_after_vocab: list[str],
-    config: IngestConfig,
-) -> NothingToIngest:
-    trace_dict = _build_trace(
-        trace, "nothing_to_ingest", start, reads_after_vocab, config
-    )
+def _nothing(reason: str, ctx: _RunContext) -> NothingToIngest:
+    trace_dict = _build_trace(ctx.trace, "nothing_to_ingest", ctx)
     return NothingToIngest(reason=reason, trace=trace_dict)
 
 
-def _degrade_no_draft(
-    reason: str,
-    trace: TraceBuilder,
-    start: float,
-    reads_after_vocab: list[str],
-    config: IngestConfig,
-) -> NothingToIngest:
+def _degrade_no_draft(reason: str, ctx: _RunContext) -> NothingToIngest:
+    trace: TraceBuilder = ctx.trace
     trace.degraded = True
     trace.candidate_ledger = trace.candidate_ledger or []
-    trace_dict = _build_trace(
-        trace, "nothing_to_ingest", start, reads_after_vocab, config
-    )
+    trace_dict = _build_trace(trace, "nothing_to_ingest", ctx)
     return NothingToIngest(reason=reason, trace=trace_dict)
 
 
-def _build_trace(
-    trace: TraceBuilder,
-    outcome: str,
-    start: float,
-    reads_after_vocab: list[str],
-    config: IngestConfig,
-) -> dict:
-    latency_ms = (time.monotonic() - start) * 1000.0
+def _build_trace(trace: TraceBuilder, outcome: str, ctx: _RunContext) -> dict:
+    config: IngestConfig = ctx.config
+    latency_ms = (time.monotonic() - ctx.start) * 1000.0
     record = trace.build(
         outcome=outcome,
         latency_ms=latency_ms,
-        floor=_floor_state(reads_after_vocab),
+        floor=_floor_state(ctx.reads_after_vocab),
         input_per_mtok=config.input_per_mtok,
         output_per_mtok=config.output_per_mtok,
     )
@@ -1095,41 +987,6 @@ def _model_turn(
     return c.messages.create(**kwargs)
 
 
-def _block_type(block: Any) -> Any:
-    if isinstance(block, dict):
-        return block.get("type")
-    return getattr(block, "type", None)
-
-
-def _strip_thinking(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop thinking / redacted_thinking blocks from assistant turns.
-
-    Used only for the thinking-disabled forced-finalize request. If filtering
-    would empty a message's content, the original is kept (an empty content list
-    is itself invalid).
-    """
-    out: list[dict[str, Any]] = []
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, list):
-            filtered = [
-                b
-                for b in content
-                if _block_type(b) not in ("thinking", "redacted_thinking")
-            ]
-            out.append({**message, "content": filtered or content})
-        else:
-            out.append(message)
-    return out
-
-
-def _first_tool_use(resp: Any) -> Any | None:
-    for block in getattr(resp, "content", None) or []:
-        if getattr(block, "type", None) == "tool_use":
-            return block
-    return None
-
-
 def _append_tool_result(
     messages: list[dict[str, Any]], tool_use_id: str, result: Any, *, is_error: bool
 ) -> None:
@@ -1147,41 +1004,6 @@ def _append_tool_result(
             ],
         }
     )
-
-
-def _append_tool_error(
-    messages: list[dict[str, Any]], tool_use_id: str, message: str
-) -> None:
-    messages.append(
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": message,
-                    "is_error": True,
-                }
-            ],
-        }
-    )
-
-
-def _serialize(result: Any) -> str:
-    try:
-        text = json.dumps(result, ensure_ascii=False, default=str)
-    except Exception:  # noqa: BLE001
-        text = str(result)
-    if len(text) > _TOOL_RESULT_MAX_CHARS:
-        text = text[:_TOOL_RESULT_MAX_CHARS] + "\n…[truncated]"
-    return text
-
-
-def _substrate_has(substrate: SubstrateReader, name: str) -> bool:
-    has = getattr(substrate, "has", None)
-    if callable(has):
-        return bool(has(name))
-    return any(spec.name == name for spec in substrate.tool_specs())
 
 
 def _safe_valid_kinds(emitter: DraftEmitter) -> set[str]:

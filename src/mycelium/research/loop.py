@@ -27,25 +27,37 @@ with ingest by construction.
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from typing import Any
 
 from .. import tracing
+from ..agentloop import (
+    append_tool_error as _append_tool_error,
+)
+from ..agentloop import (
+    check_budget,
+    default_client,
+    load_doctrine,
+)
+from ..agentloop import (
+    first_tool_use as _first_tool_use,
+)
+from ..agentloop import (
+    substrate_has as _substrate_has,
+)
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 
 # Reuse ingest's harness machinery wholesale — do NOT duplicate it. The loop
 # below imports only read/validate/assemble helpers; no write tool exists in
-# ingest.loop to import.
+# ingest.loop to import. The boundary-facing spine (client, budget gate, tool
+# helpers) comes from `..agentloop`, shared with ask/ingest.
 from ..ingest.draft import DraftEmitter, InProcessDraftEmitter
 from ..ingest.loop import (
     _MAX_FLOOR_BLOCKS,
     _MAX_MALFORMED_RETRIES,
     _TURN_HEADROOM,
-    _append_tool_error,
     _append_tool_result,
     _coverage_unmet,
     _fetch_vocab,
-    _first_tool_use,
     _floor_state,
     _ledger_empty_or_all_duplicate,
     _ledger_unmet,
@@ -53,7 +65,6 @@ from ..ingest.loop import (
     _model_turn,
     _normalize_ledger_row,
     _safe_valid_kinds,
-    _substrate_has,
     _validate_op,
 )
 from ..ingest.tools import EMIT_TOOL, build_tools, parse_emit_input
@@ -110,9 +121,9 @@ def run_research(
     if emitter is None:
         emitter = InProcessDraftEmitter()
     if client is None:
-        client = _default_client(config)
+        client = default_client(config.max_retries)
 
-    doctrine_text, doctrine_note = _load_doctrine(config)
+    doctrine_text, doctrine_note = load_doctrine(config.doctrine_path)
 
     with tracing.profile_to_html("research", f"{source_name}: {topic[:40]}"):
         if workspace is None:
@@ -160,21 +171,6 @@ def run_research(
 
         write_record(config.trace_log_path, result.trace)
     return result
-
-
-def _default_client(config: ResearchConfig) -> Any:
-    import anthropic  # local import: keeps the package importable without the key
-
-    return anthropic.Anthropic(max_retries=config.max_retries)
-
-
-def _load_doctrine(config: ResearchConfig) -> tuple[str, str | None]:
-    """Read the research doctrine best-effort. On failure, return ("", note)
-    so the loop proceeds on the base prompt and records why."""
-    try:
-        return Path(config.doctrine_path).read_text(encoding="utf-8"), None
-    except Exception as exc:  # noqa: BLE001 — best-effort; proceed without it
-        return "", f"doctrine unreadable ({config.doctrine_path}): {exc}"
 
 
 # --------------------------------------------------------------------------- #
@@ -241,21 +237,18 @@ def _execute(
         substrate_reads=substrate_reads,
         workspace_reads=workspace_reads,
         files_read=files_read,
+        nudged=False,
+        floor_blocks=0,
+        malformed_retries=0,
     )
 
-    nudged = False
-    floor_blocks = 0
-    malformed_retries = 0
     max_turns = config.op_cap + _TURN_HEADROOM
 
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
-        if trace.op_count >= config.op_cap:
-            return _forced_finalize("op_cap", ctx)
-        if (time.monotonic() - start) > config.wall_clock_s:
-            return _forced_finalize("wall_clock", ctx)
-        if trace.model_turns >= max_turns:
-            return _forced_finalize("turn_limit", ctx)
+        reason = check_budget(trace, config, start, max_turns)
+        if reason:
+            return _forced_finalize(reason, ctx)
 
         try:
             with trace.span("model_turn"):
@@ -271,57 +264,67 @@ def _execute(
 
         tool_use = _first_tool_use(resp)
         if tool_use is None:
-            if not nudged:
-                nudged = True
+            if not ctx.nudged:
+                ctx.nudged = True
                 messages.append({"role": "user", "content": prompts.NO_TERMINAL_NUDGE})
                 continue
             return _forced_finalize("no_terminal", ctx)
 
-        nudged = False
+        ctx.nudged = False
         name = tool_use.name
         tool_input = dict(tool_use.input or {})
 
         # ---- Terminal: emit_draft (gated by the floor + ledger checks) ----
         if name == EMIT_TOOL:
-            try:
-                ops, ledger, flagged, skipped = parse_emit_input(tool_input)
-            except ValueError as exc:
-                if malformed_retries < _MAX_MALFORMED_RETRIES:
-                    malformed_retries += 1
-                    _append_tool_error(
-                        messages, tool_use.id, prompts.malformed_retry_message(str(exc))
-                    )
-                    continue
-                trace.notes.append(f"emit_draft malformed twice: {exc}")
-                return _degrade_no_draft("degraded: emit_draft malformed twice", ctx)
-
-            floor = _research_floor(workspace_reads, substrate_reads)
-            unmet = _ledger_unmet(ledger)
-            coverage = _coverage_unmet(ops, ledger)
-            if coverage:
-                unmet = [*unmet, coverage]
-            if not floor["satisfied"] or unmet:
-                if floor_blocks < _MAX_FLOOR_BLOCKS:
-                    floor_blocks += 1
-                    _append_tool_error(
-                        messages,
-                        tool_use.id,
-                        prompts.floor_block_message(
-                            _research_floor_detail(floor, unmet)
-                        ),
-                    )
-                    continue
-                _append_tool_error(
-                    messages,
-                    tool_use.id,
-                    "Floor still unmet after repeated attempts; finalizing with "
-                    "what has been established.",
-                )
-                return _forced_finalize("floor_stuck", ctx)
-            return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=False)
+            result = _handle_emit(tool_use, ctx)
+            if result is not None:
+                return result
+            continue
 
         # ---- A read: workspace or substrate, dispatched by name ----
         _dispatch_read(name, tool_input, tool_use.id, substrate, workspace, ctx)
+
+
+def _handle_emit(tool_use: Any, ctx: _RunContext) -> ResearchResult | None:
+    """Terminal: emit_draft (gated by the floor + ledger checks). Returns a
+    result to finish, or None to keep looping after a re-prompt."""
+    trace: TraceBuilder = ctx.trace
+    messages: list[dict[str, Any]] = ctx.messages
+    tool_input = dict(tool_use.input or {})
+    try:
+        ops, ledger, flagged, skipped = parse_emit_input(tool_input)
+    except ValueError as exc:
+        if ctx.malformed_retries < _MAX_MALFORMED_RETRIES:
+            ctx.malformed_retries += 1
+            _append_tool_error(
+                messages, tool_use.id, prompts.malformed_retry_message(str(exc))
+            )
+            return None
+        trace.notes.append(f"emit_draft malformed twice: {exc}")
+        return _degrade_no_draft("degraded: emit_draft malformed twice", ctx)
+
+    floor = _research_floor(ctx.workspace_reads, ctx.substrate_reads)
+    unmet = _ledger_unmet(ledger)
+    coverage = _coverage_unmet(ops, ledger)
+    if coverage:
+        unmet = [*unmet, coverage]
+    if not floor["satisfied"] or unmet:
+        if ctx.floor_blocks < _MAX_FLOOR_BLOCKS:
+            ctx.floor_blocks += 1
+            _append_tool_error(
+                messages,
+                tool_use.id,
+                prompts.floor_block_message(_research_floor_detail(floor, unmet)),
+            )
+            return None
+        _append_tool_error(
+            messages,
+            tool_use.id,
+            "Floor still unmet after repeated attempts; finalizing with "
+            "what has been established.",
+        )
+        return _forced_finalize("floor_stuck", ctx)
+    return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=False)
 
 
 class _RunContext:
