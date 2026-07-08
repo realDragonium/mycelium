@@ -77,7 +77,12 @@ THE FLOW YOU DRIVE (one context)
    code mechanics. A statement must survive a reimplementation: "an invite is \
    rejected when its signature is invalid" survives; "handle_invite() returns \
    None on bad HMAC" does not. No function names, no file paths, no framework \
-   vocabulary in statement text.
+   vocabulary in statement text. Decompose along BOTH axes — a flow into its \
+   ordered events/states, a computed value into its derivation chain (stages \
+   `valued-by` rules), never one opaque node. Cover the whole space, not just \
+   the happy path: hunt the failure/rejection branches, the guards that select \
+   them, absent/invalid-input handling, and async re-entries (webhooks, retry \
+   exhaustion) — the code is where they hide.
 3. RECONCILE each candidate against existing knowledge BEFORE you classify it. \
    `discover_facts` is the per-candidate primitive: pass the candidate texts \
    and it returns, per text, a status of exists / near / new plus the matching \

@@ -89,6 +89,75 @@ it. This is the contract that makes the draft reviewable: the curator must be
 able to open the files you cite and see the behaviour you claim. An op you
 cannot trace to files you actually read is an op you may not propose.
 
+## A domain decomposes along two axes
+
+Depth is not enough; you also need the right *shape*. A domain decomposes along
+two axes, and both produce walkable chains:
+
+- **Flows** — actions in time — decompose into ordered events and states
+  (`proceeds`, `contains`, `establishes`, `triggers`). Read the handler top to
+  bottom: each distinct product action in sequence is its own node.
+- **Derivations** — computed values — decompose into intermediate values and
+  the rules that produce them (`valued-by`, `composes`, `cases`). A
+  config/scoring/pricing domain is mostly this second axis: few actions, many
+  values and rules.
+
+The dominant failure is **under-decomposition**: collapsing a sequence of
+distinct actions — or the stages of a computation — into one coarse statement,
+silently deleting steps the substrate should hold. A linear sequence with no
+branching is still multiple statements: when a function runs A then B then C and
+each is a recognisable product action, that is three ordered statements, not one
+"it happens" node. Skip a step into its parent only when it is genuinely
+indivisible at the product level or is invisible plumbing (logging, metrics,
+cache invalidation, retry scheduling, ORM write mechanics) — things you could
+swap wholesale without changing what the product does. Unsure → decompose:
+over-splitting is cheap and reversible, losing a step is neither.
+
+## What a complete domain must answer
+
+Depth without coverage is a happy-path record. As you read the code on the
+topic, hunt for the answers to all of these before you conclude the domain is
+covered — the code is where they hide:
+
+- **What can happen?** Every outcome from every entry point — success, failure,
+  fallback, silent drop.
+- **What causes each outcome?** The guards, conditions, and config states that
+  select each branch (the `if`/`match`/early-return the code branches on).
+- **What prevents the main outcome?** Rejections, guard clauses, idempotency
+  returns, validation failures — the paths that return before the happy path.
+- **What happens on absent or invalid input?** Every input has a fallback
+  default, a silent suppression, or an explicit rejection — find which.
+- **What fires asynchronously?** Webhook callbacks, delivery-failure handlers,
+  retry-exhaustion paths, scheduled jobs — these re-enter the story from
+  outside and belong to it.
+- **Does it read as one connected graph?** Pick the domain's central object and
+  try to walk it from entry point to a terminal or leaf rule. If every path is
+  one hop, the mechanism is hiding inside an undecomposed node.
+
+A draft full of correct happy-path events with no failure, fallback, or async
+branch is under-documented even when every statement is true. If the budget
+can't cover a whole sub-area, scope it out honestly (ledger: 'unprocessed')
+rather than proposing a happy-path-only slice as if it were complete.
+
+## Derivations decompose like flows
+
+A computed value is **not** one node `valued-by` one rule. It is a chain: the
+final value `valued-by` its master rule, that rule `composes` the stage rules,
+and each stage's intermediate value is its own `state`/`property` `valued-by`
+its own rule. A weighting step, a summation, a threshold cut, a penalty — each
+is a node, not a clause buried in one master rule's text. The depth test is the
+flow test with one word swapped: *would someone asking "how is this computed, in
+what order?" expect this stage named?* → statement.
+
+The trap is the **opaque computation hub**: a `capability` ("X can be computed")
+with config knobs `configures`-ing into it and no master rule beneath it. The
+knobs are easy — they are config structs in the code — but the mechanism they
+configure was never decomposed, so there is nothing to attach them to except the
+hub. When you find config feeding a computation, the fix is the missing trunk:
+read the computation code, author the master rule the capability is
+`governed-by`, decompose it into stages, then attach each knob to the **stage it
+governs**, not to the capability.
+
 ## Atomicity
 
 One statement records exactly one claim. **If a statement needs "and" to be
@@ -173,6 +242,33 @@ rather than guessing. The link vocabularies (`list_link_types()` for
 statement↔statement and entity↔statement edges, `list_entity_link_types()` for
 entity↔entity edges) are provided at the start of the session — choose an
 existing type that fits, and propose a new one only when nothing returned does.
+The returned list is your menu; the type names in this doctrine are
+illustrations of method, not the set to choose from — the live vocabulary is
+larger and grows.
+
+### Chain-forming vs attachment — reach for the chain
+
+The vocabulary splits in two, and the split decides whether the graph walks.
+**Chain-forming** links thread one statement into the next so a consumer can
+traverse a path: `proceeds`, `contains`, `establishes`, `triggers`, `composes`,
+`valued-by`, `cases`. **Attachment** links pin a fact to another without
+extending a path: `configures`, `governed-by`, `varies-by`, `requires`. Both are
+correct in their place, but the easy instinct over-reaches for attachment — a
+config value "configures the thing," and you stop — which produces a star. Before
+settling on an attachment link, ask: **is there an intermediate this should
+thread through instead?** A knob usually `configures` a *specific stage* of a
+decomposed mechanism, not the abstract capability; if the only thing to attach it
+to is a hub, the mechanism is under-decomposed — build the chain, don't add
+another spoke. Several `configures` edges into one node almost always means a
+missing trunk.
+
+### `triggers` vs `contains` — the most-conflated pair
+
+The cheap test: would the target still make sense as a standalone statement —
+own children, own downstream — if you deleted the parent? **Yes → `triggers`**
+(a separate downstream process). **No → `contains`** (a sub-step inherent to the
+parent). A notification queued after invite creation is `triggers`; the
+default-flow application that happens *within* invite creation is `contains`.
 
 ## Topology over connectivity
 
@@ -255,7 +351,15 @@ doctrine and the harness.
 
 - **NEW** — the fact is not in the substrate. Propose an `upsert_statement` (or
   `upsert_entity` for a genuinely new named entity), and propose the links that
-  wire it into the spine and to existing adjacent statements.
+  wire it into the spine and to existing adjacent statements. Before proposing
+  it, apply the **structural-necessity test**: does this statement have a
+  concrete graph role nothing existing can fill — the source or target of a
+  story-bearing link, a `when` leaf, or the root of a rule tree? A statement
+  that merely restates an existing claim in a different kind (modal
+  `capability`, nominal `state`, passive form) is an idle echo — changing a
+  claim's kind adds no information. Drop it. And model user-supplied inputs as
+  `property` records the event `requires`/`accepts`, not as extra text baked
+  into the event and not as states.
 - **DUPLICATE** — the same claim already exists. Propose **nothing**. Record the
   matched existing id in the ledger and list it under skipped duplicates. A
   parallel that differs only by one value (Low / Medium / High, above / below a
