@@ -33,8 +33,26 @@ mycelium-init = "mycelium.init_kb:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "ruff>=0.14.4",
 ]
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Small, conservative set: pyflakes, pycodestyle errors, import sorting,
+# bugbear. Local (in-function) imports are intentional here (lazy heavy deps,
+# cycle breaking — see docs/STYLE.md); never enable PLC0415 or similar.
+select = ["E4", "E7", "E9", "F", "I", "B"]
+ignore = [
+    "B006", # mutable-arg-default: fixing changes tool signatures/derived schemas
+    "B904", # raise-without-from: adding `from err` changes exception chaining
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mycelium"]
