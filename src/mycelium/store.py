@@ -1063,6 +1063,40 @@ def get_names_by_entity(conn: sqlite3.Connection, entity_id: str) -> list[sqlite
     ).fetchall()
 
 
+def delete_name_mentions(conn: sqlite3.Connection, name_id: str) -> int:
+    """Remove a name's derived mention rows — its `statement_mentions`
+    (count returned) and its `pending_mentions` review-queue rows — so the
+    name can be deleted under FK enforcement. No commit; the caller owns the
+    surrounding transaction."""
+    removed = conn.execute(
+        "DELETE FROM statement_mentions WHERE name_id = ?", (name_id,)
+    ).rowcount
+    conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (name_id,))
+    return removed
+
+
+def delete_name(conn: sqlite3.Connection, name_id: str) -> None:
+    """Delete a single name row. The caller must have cleared its derived
+    mention rows (`delete_name_mentions`) and any generated-plural
+    self-reference pointing at it first. No commit."""
+    conn.execute("DELETE FROM names WHERE id = ?", (name_id,))
+
+
+def delete_names_clearing_generated_refs(
+    conn: sqlite3.Connection, name_ids: list[str]
+) -> None:
+    """Delete a batch of names that may reference each other as generated
+    plurals: NULL out `generated_from_name_id` across the whole set first
+    (the self-reference is a RESTRICT FK), then drop the rows. No commit."""
+    if not name_ids:
+        return
+    conn.executemany(
+        "UPDATE names SET generated_from_name_id = NULL WHERE id = ?",
+        [(nid,) for nid in name_ids],
+    )
+    conn.executemany("DELETE FROM names WHERE id = ?", [(nid,) for nid in name_ids])
+
+
 def list_entities(
     conn: sqlite3.Connection,
     prefix: str | None = None,
@@ -2492,6 +2526,43 @@ def rewrite_when_references(
     return len(link_ids)
 
 
+def delete_links_touching_statement(
+    conn: sqlite3.Connection, statement_id: str
+) -> tuple[int, int, int, int]:
+    """Remove every link that touches `statement_id` so the statement can be
+    deleted under FK enforcement, returning
+    `(outgoing_removed, incoming_removed, when_removed, entity_statement_removed)`.
+
+    Order matters: outgoing `statement_links` are dropped before incoming so
+    a self-loop is counted exactly once. Conditional links whose when-tree
+    references the statement — both `statement_links` and
+    `entity_statement_links` — are then dropped by link_id (their `when_nodes`
+    rows cascade via trigger), and entity↔statement edges with the statement
+    as an endpoint go too. `entity_statement_removed` sums the endpoint and
+    when-tree removals. No commit; the caller owns the transaction."""
+    outgoing_removed = conn.execute(
+        "DELETE FROM statement_links WHERE from_statement_id = ?", (statement_id,)
+    ).rowcount
+    incoming_removed = conn.execute(
+        "DELETE FROM statement_links WHERE to_statement_id = ?", (statement_id,)
+    ).rowcount
+    when_removed = 0
+    for lid in links_referencing_statement(conn, statement_id):
+        when_removed += conn.execute(
+            "DELETE FROM statement_links WHERE link_id = ?", (lid,)
+        ).rowcount
+    es_removed = conn.execute(
+        "DELETE FROM entity_statement_links WHERE statement_id = ?", (statement_id,)
+    ).rowcount
+    for lid in links_referencing_statement(
+        conn, statement_id, link_kind="entity_statement"
+    ):
+        es_removed += conn.execute(
+            "DELETE FROM entity_statement_links WHERE link_id = ?", (lid,)
+        ).rowcount
+    return outgoing_removed, incoming_removed, when_removed, es_removed
+
+
 def delete_statement(conn: sqlite3.Connection, statement_id: str) -> None:
     """Delete a statement record and its vector_id mapping. Caller must
     ensure no statement_mentions or statement_links still reference it —
@@ -2779,6 +2850,36 @@ def delete_entity_statement_links(
     return removed
 
 
+def delete_entity_statement_links_for_entity(
+    conn: sqlite3.Connection, entity_id: str
+) -> int:
+    """Remove every entity↔statement edge anchored on `entity_id`, returning
+    the row count. The cascade trigger on `entity_statement_links` cleans up
+    their `when_nodes` rows. No commit."""
+    return conn.execute(
+        "DELETE FROM entity_statement_links WHERE entity_id = ?", (entity_id,)
+    ).rowcount
+
+
+def move_entity_statement_endpoints(
+    conn: sqlite3.Connection, from_statement_id: str, into_statement_id: str
+) -> None:
+    """Re-point entity↔statement edges from `from_statement_id` onto
+    `into_statement_id`. `UPDATE OR IGNORE` moves each edge unless it would
+    collide with an existing one under the UNIQUE constraint; rows left on the
+    source by a collision are then deleted so the source statement can be
+    removed. No commit."""
+    conn.execute(
+        "UPDATE OR IGNORE entity_statement_links SET statement_id = ? "
+        "WHERE statement_id = ?",
+        (into_statement_id, from_statement_id),
+    )
+    conn.execute(
+        "DELETE FROM entity_statement_links WHERE statement_id = ?",
+        (from_statement_id,),
+    )
+
+
 def get_entity_statement_links_for_entity(
     conn: sqlite3.Connection, entity_id: str
 ) -> tuple[
@@ -3046,6 +3147,20 @@ def list_entity_statement_link_types(conn: sqlite3.Connection) -> list[str]:
     return [r["link_type"] for r in rows]
 
 
+def delete_entity_links_touching(
+    conn: sqlite3.Connection, entity_id: str
+) -> tuple[int, int]:
+    """Remove every `entity_links` row from or to `entity_id`, returning
+    `(outgoing_removed, incoming_removed)`. No commit."""
+    outgoing_removed = conn.execute(
+        "DELETE FROM entity_links WHERE from_entity_id = ?", (entity_id,)
+    ).rowcount
+    incoming_removed = conn.execute(
+        "DELETE FROM entity_links WHERE to_entity_id = ?", (entity_id,)
+    ).rowcount
+    return outgoing_removed, incoming_removed
+
+
 def rewrite_entity_link_endpoints(
     conn: sqlite3.Connection, from_entity_id: str, into_entity_id: str
 ) -> None:
@@ -3145,3 +3260,83 @@ def rewrite_entity_link_endpoints(
             )
     conn.execute("DELETE FROM entity_links WHERE to_entity_id = ?", (from_entity_id,))
     conn.commit()
+
+
+# --- knowledge gaps ---------------------------------------------------------
+
+
+def create_knowledge_gap(conn: sqlite3.Connection, text: str) -> str:
+    """Insert an open knowledge-gap report and return its id. Timestamped
+    with a UTC offset (`datetime.now(timezone.utc).isoformat()`, the format
+    the reporting tool has always stored) and stamped with the current actor
+    as `created_by`. Commits."""
+    gap_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO knowledge_gaps (id, text, created_at, created_by) "
+        "VALUES (?, ?, ?, ?)",
+        (gap_id, text, now, get_actor()),
+    )
+    conn.commit()
+    return gap_id
+
+
+_GAP_STATUS_FILTERS = {
+    "all": "",
+    "open": "WHERE resolved_at IS NULL AND dismissed_at IS NULL",
+    "resolved": "WHERE resolved_at IS NOT NULL",
+    "dismissed": "WHERE dismissed_at IS NOT NULL",
+}
+
+
+def list_knowledge_gaps(
+    conn: sqlite3.Connection, status: str = "all"
+) -> list[sqlite3.Row]:
+    """Gap reports newest first. The status column is virtual — derived from
+    which terminal timestamp is set — so `status` filters on those."""
+    where = _GAP_STATUS_FILTERS[status]
+    return conn.execute(
+        f"SELECT id, text, created_at, created_by, resolved_at, resolved_by, "
+        f"       dismissed_at, dismissed_by "
+        f"FROM knowledge_gaps {where} ORDER BY created_at DESC"
+    ).fetchall()
+
+
+def get_knowledge_gap(conn: sqlite3.Connection, gap_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT id, text, created_at, created_by, resolved_at, resolved_by, "
+        "       dismissed_at, dismissed_by FROM knowledge_gaps WHERE id = ?",
+        (gap_id,),
+    ).fetchone()
+
+
+def set_knowledge_gap_status(
+    conn: sqlite3.Connection, gap_id: str, action: str, actor: str | None
+) -> sqlite3.Row:
+    """Apply `resolve` / `dismiss` / `reopen` to a gap and return the updated
+    row. Resolving clears any dismissal and vice versa; reopening clears both.
+    Terminal timestamps use the same UTC-offset format as `created_at`.
+    Commits."""
+    now = datetime.now(timezone.utc).isoformat()
+    if action == "resolve":
+        conn.execute(
+            "UPDATE knowledge_gaps SET resolved_at = ?, resolved_by = ?, "
+            "dismissed_at = NULL, dismissed_by = NULL WHERE id = ?",
+            (now, actor, gap_id),
+        )
+    elif action == "dismiss":
+        conn.execute(
+            "UPDATE knowledge_gaps SET dismissed_at = ?, dismissed_by = ?, "
+            "resolved_at = NULL, resolved_by = NULL WHERE id = ?",
+            (now, actor, gap_id),
+        )
+    elif action == "reopen":
+        conn.execute(
+            "UPDATE knowledge_gaps SET resolved_at = NULL, resolved_by = NULL, "
+            "dismissed_at = NULL, dismissed_by = NULL WHERE id = ?",
+            (gap_id,),
+        )
+    else:
+        raise ValueError("action must be one of: resolve, dismiss, reopen")
+    conn.commit()
+    return get_knowledge_gap(conn, gap_id)

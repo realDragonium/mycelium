@@ -130,6 +130,47 @@ def find_open_session_draft(
     ).fetchone()
 
 
+def list_drafts_by_creator(
+    conn: sqlite3.Connection, creator: str | None
+) -> list[sqlite3.Row]:
+    """All drafts created by `creator`, newest first."""
+    return conn.execute(
+        "SELECT * FROM drafts WHERE created_by = ? ORDER BY created_at DESC",
+        (creator,),
+    ).fetchall()
+
+
+_DRAFT_STATUS_FILTERS = {
+    "all": "",
+    "open": "WHERE submitted_at IS NULL AND decided_at IS NULL",
+    "submitted": "WHERE submitted_at IS NOT NULL AND decided_at IS NULL",
+    "approved": "WHERE decision = 'approved'",
+    "rejected": "WHERE decision = 'rejected'",
+    "withdrawn": "WHERE decision = 'withdrawn'",
+}
+
+
+def list_drafts(conn: sqlite3.Connection, status: str = "all") -> list[sqlite3.Row]:
+    """All drafts newest first, filtered by review status. Status is virtual
+    (see `status_for`): open/submitted derive from the lifecycle timestamps,
+    the rest match the recorded decision."""
+    where = _DRAFT_STATUS_FILTERS[status]
+    return conn.execute(
+        f"SELECT * FROM drafts {where} ORDER BY created_at DESC"
+    ).fetchall()
+
+
+def count_ops_by_draft(conn: sqlite3.Connection) -> dict[str, int]:
+    """Op counts keyed by draft id, for list views that show totals without
+    a per-draft roundtrip."""
+    return {
+        r["draft_id"]: int(r["n"])
+        for r in conn.execute(
+            "SELECT draft_id, COUNT(*) AS n FROM draft_ops GROUP BY draft_id"
+        ).fetchall()
+    }
+
+
 def get_draft(conn: sqlite3.Connection, draft_id: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
 

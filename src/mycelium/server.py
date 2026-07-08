@@ -788,12 +788,9 @@ def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
     mentions_removed = 0
     for nid in ids:
         affected.extend(store.statements_mentioning_name(_conn, nid))
-        mentions_removed += _conn.execute(
-            "DELETE FROM statement_mentions WHERE name_id = ?", (nid,)
-        ).rowcount
-        _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (nid,))
+        mentions_removed += store.delete_name_mentions(_conn, nid)
         _drop_name_from_index(nid)
-        _conn.execute("DELETE FROM names WHERE id = ?", (nid,))
+        store.delete_name(_conn, nid)
     _conn.commit()
     return mentions_removed, affected
 
@@ -806,12 +803,9 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
     affected: list[str] = []
     for child in store.get_generated_children(_conn, source_name_id):
         affected.extend(store.statements_mentioning_name(_conn, child["id"]))
-        _conn.execute(
-            "DELETE FROM statement_mentions WHERE name_id = ?", (child["id"],)
-        )
-        _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (child["id"],))
+        store.delete_name_mentions(_conn, child["id"])
         _drop_name_from_index(child["id"])
-        _conn.execute("DELETE FROM names WHERE id = ?", (child["id"],))
+        store.delete_name(_conn, child["id"])
     _conn.commit()
     src = store.get_name_by_id(_conn, source_name_id)
     if src is not None:
@@ -2570,33 +2564,20 @@ def delete_entity(id: str) -> dict[str, Any]:
         # Statements that mentioned this entity may now match a name they
         # were shadowing (e.g. "data" surfacing once "data science" is gone).
         affected.extend(store.statements_mentioning_name(_conn, nid))
-        mentions_removed += _conn.execute(
-            "DELETE FROM statement_mentions WHERE name_id = ?", (nid,)
-        ).rowcount
-        _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (nid,))
+        mentions_removed += store.delete_name_mentions(_conn, nid)
         _drop_name_from_index(nid)
-    if name_ids:
-        # Break generated-plural self-references within this entity before
-        # the bulk delete (generated_from_name_id REFERENCES names(id)).
-        _conn.executemany(
-            "UPDATE names SET generated_from_name_id = NULL WHERE id = ?",
-            [(nid,) for nid in name_ids],
-        )
-        _conn.executemany(
-            "DELETE FROM names WHERE id = ?", [(nid,) for nid in name_ids]
-        )
-    outgoing_entity_links_removed = _conn.execute(
-        "DELETE FROM entity_links WHERE from_entity_id = ?", (id,)
-    ).rowcount
-    incoming_entity_links_removed = _conn.execute(
-        "DELETE FROM entity_links WHERE to_entity_id = ?", (id,)
-    ).rowcount
+    # Break generated-plural self-references within this entity before the
+    # bulk delete (generated_from_name_id REFERENCES names(id)).
+    store.delete_names_clearing_generated_refs(_conn, name_ids)
+    outgoing_entity_links_removed, incoming_entity_links_removed = (
+        store.delete_entity_links_touching(_conn, id)
+    )
     # Mixed entity↔statement edges touching this entity must also go;
     # the cascade trigger on entity_statement_links cleans up their
     # when_nodes rows.
-    entity_statement_links_removed = _conn.execute(
-        "DELETE FROM entity_statement_links WHERE entity_id = ?", (id,)
-    ).rowcount
+    entity_statement_links_removed = store.delete_entity_statement_links_for_entity(
+        _conn, id
+    )
     store.delete_entity(_conn, id)
     store.enqueue_recompute_statements(_conn, affected)
     layout_baker.schedule_rebake()
@@ -2681,21 +2662,11 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     # are handled — statement_links and entity_statement_links.
     store.rewrite_when_references(_conn, from_id, into_id)
     store.rewrite_entity_statement_when_references(_conn, from_id, into_id)
-    # Entity↔statement edges whose endpoint is the source statement
-    # need to move onto the target. Use INSERT OR IGNORE through delete
-    # + re-insert via the existing store helpers — but cheaper to UPDATE
-    # in place with collision detection.
-    _conn.execute(
-        "UPDATE OR IGNORE entity_statement_links SET statement_id = ? "
-        "WHERE statement_id = ?",
-        (into_id, from_id),
-    )
-    # Any rows that hit a UNIQUE collision under OR IGNORE remain
-    # pointing at the source; drop them so the source can be deleted.
-    _conn.execute(
-        "DELETE FROM entity_statement_links WHERE statement_id = ?",
-        (from_id,),
-    )
+    # Entity↔statement edges whose endpoint is the source statement need to
+    # move onto the target — UPDATE in place with collision detection, then
+    # drop any rows a UNIQUE collision left pointing at the source so it can
+    # be deleted.
+    store.move_entity_statement_endpoints(_conn, from_id, into_id)
 
     vector_id = store.get_vector_id(_conn, from_id)
     if vector_id is not None:
@@ -2751,39 +2722,17 @@ def delete_statement(id: str) -> dict[str, Any]:
     if store.get_statement(_conn, id) is None:
         raise ValueError(f"statement {id!r} does not exist")
 
-    # Order matters under FK enforcement: drop everything that points
-    # AT this statement before dropping the statement itself. Outgoing
-    # before incoming so a self-loop is counted exactly once.
-    outgoing_removed = _conn.execute(
-        "DELETE FROM statement_links WHERE from_statement_id = ?", (id,)
-    ).rowcount
-    incoming_removed = _conn.execute(
-        "DELETE FROM statement_links WHERE to_statement_id = ?", (id,)
-    ).rowcount
-    # Conditional links whose when-tree references this statement become
-    # orphaned conditions on deletion — drop them. Indexed lookup via
-    # when_nodes(statement_id), then delete each link by id (when_nodes
-    # cascades via trigger).
-    referencing = store.links_referencing_statement(_conn, id)
-    when_removed = 0
-    for lid in referencing:
-        when_removed += _conn.execute(
-            "DELETE FROM statement_links WHERE link_id = ?", (lid,)
-        ).rowcount
-    # Entity↔statement edges that touch this statement, as endpoint or
-    # as `when` leaf, must also go before the row can be deleted (FK to
-    # statements(id) blocks otherwise).
-    es_endpoint_removed = _conn.execute(
-        "DELETE FROM entity_statement_links WHERE statement_id = ?", (id,)
-    ).rowcount
-    es_referencing = store.links_referencing_statement(
-        _conn, id, link_kind="entity_statement"
-    )
-    es_when_removed = 0
-    for lid in es_referencing:
-        es_when_removed += _conn.execute(
-            "DELETE FROM entity_statement_links WHERE link_id = ?", (lid,)
-        ).rowcount
+    # Order matters under FK enforcement: drop everything that points AT this
+    # statement before dropping the statement itself. This removes outgoing
+    # and incoming statement_links, any statement_links / entity_statement_links
+    # whose when-tree references it, and entity↔statement edges with it as an
+    # endpoint (see the helper for the exact ordering and counting rules).
+    (
+        outgoing_removed,
+        incoming_removed,
+        when_removed,
+        entity_statement_links_removed,
+    ) = store.delete_links_touching_statement(_conn, id)
     mentions_removed = store.clear_derived_for_statement(_conn, id, commit=False)
     _conn.commit()
 
@@ -2799,7 +2748,7 @@ def delete_statement(id: str) -> dict[str, Any]:
         "incoming_links_removed": incoming_removed,
         "outgoing_links_removed": outgoing_removed,
         "when_references_removed": when_removed,
-        "entity_statement_links_removed": (es_endpoint_removed + es_when_removed),
+        "entity_statement_links_removed": entity_statement_links_removed,
     }
 
 
@@ -3198,8 +3147,7 @@ def find_duplicates(
     seen_pairs: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
 
-    for row in _conn.execute("SELECT id FROM statements").fetchall():
-        bid = row["id"]
+    for bid in store.all_statement_ids(_conn):
         vid = store.get_vector_id(_conn, bid)
         if vid is None:
             continue
@@ -3811,18 +3759,7 @@ def report_knowledge_gap(text: str) -> dict[str, Any]:
     if not text:
         raise ValueError("text is required")
 
-    import uuid
-    from datetime import datetime, timezone
-
-    gap_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
-    actor = store.get_actor()
-    _conn.execute(
-        "INSERT INTO knowledge_gaps (id, text, created_at, created_by) "
-        "VALUES (?, ?, ?, ?)",
-        (gap_id, text, now, actor),
-    )
-    _conn.commit()
+    gap_id = store.create_knowledge_gap(_conn, text)
     return {"gap_id": gap_id}
 
 
@@ -3889,10 +3826,7 @@ def list_my_drafts() -> list[dict[str, Any]]:
     assert _drafts_conn is not None
     principal = _auth.current_principal.get()
     creator = principal.id if principal is not None else None
-    rows = _drafts_conn.execute(
-        "SELECT * FROM drafts WHERE created_by = ? ORDER BY created_at DESC",
-        (creator,),
-    ).fetchall()
+    rows = drafts_store.list_drafts_by_creator(_drafts_conn, creator)
     return [drafts_store.serialize_draft(r) for r in rows]
 
 
