@@ -366,7 +366,7 @@ def relax_overlaps(
         np.fill_diagonal(dist2, np.inf)
         dist = np.sqrt(dist2)
         deficit = np.maximum(0.0, min_dist - dist)
-        if deficit.max() < 1e-4:
+        if deficit.size == 0 or deficit.max() < 1e-4:
             break
         # Unit vector from j to i is (dx, dy)/dist. We push i in that
         # direction by `step * deficit * share_i`. Reciprocally for j.
