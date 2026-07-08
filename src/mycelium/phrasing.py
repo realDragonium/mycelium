@@ -76,7 +76,7 @@ _QUOTE_MAP = {"‘": "'", "’": "'", "ʼ": "'", "“": '"', "”": '"'}
 _EXTRA_SPACES = set("\xa0   ​　")  # NBSP, NNBSP, figure, thin, ZWSP, ideographic
 
 
-def _normalize_with_map(text: str) -> tuple[str, list[int]]:
+def normalize_with_map(text: str) -> tuple[str, list[int]]:
     """Returns (normalized_text, pos_map). pos_map[i] is the index in
     `text` that produced normalized_text[i]. NFKC-decomposed expansions
     (ligatures) and casefold expansions (ß → ss) all point back at the
@@ -111,7 +111,7 @@ def _normalize_with_map(text: str) -> tuple[str, list[int]]:
 
 def normalize(text: str) -> str:
     """Public wrapper: returns just the normalized form."""
-    normalized, _ = _normalize_with_map(text)
+    normalized, _ = normalize_with_map(text)
     return normalized
 
 
@@ -849,7 +849,7 @@ def check(text: str, kind: str = "event") -> list[Violation]:
     of resubmitting and hitting the next violation. Results are
     ordered by position. Empty list means clean.
     """
-    normalized, pos_map = _normalize_with_map(text)
+    normalized, pos_map = normalize_with_map(text)
     if not normalized.strip():
         return []
 

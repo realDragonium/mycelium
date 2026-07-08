@@ -37,6 +37,21 @@ _db_path: Path | None = None
 _output_path: Path | None = None
 
 
+def _bake_argv(db_path: Path, output_path: Path) -> list[str]:
+    """The subprocess argv for invoking the offline layout script against
+    `db_path`, writing positions to `output_path`. Shared by the initial
+    synchronous bake and the debounced background rebake so both spawn
+    the identical command."""
+    return [
+        sys.executable,
+        str(_SCRIPT),
+        "--db",
+        str(db_path),
+        "--output",
+        str(output_path),
+    ]
+
+
 def output_path() -> Path | None:
     """The path the baker writes positions to. Lives next to the DB
     (i.e. in the data dir, not the source tree) so deploys can't wipe
@@ -80,14 +95,7 @@ def ensure_initial() -> None:
     log.info("entity-positions.json missing; running initial bake (db=%s)", _db_path)
     _output_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
-        [
-            sys.executable,
-            str(_SCRIPT),
-            "--db",
-            str(_db_path),
-            "--output",
-            str(_output_path),
-        ],
+        _bake_argv(_db_path, _output_path),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         cwd=str(_REPO_ROOT),
@@ -131,14 +139,7 @@ def _fire() -> None:
         assert _db_path is not None and _output_path is not None
         log.info("triggering layout rebake (db=%s)", _db_path)
         _process = subprocess.Popen(
-            [
-                sys.executable,
-                str(_SCRIPT),
-                "--db",
-                str(_db_path),
-                "--output",
-                str(_output_path),
-            ],
+            _bake_argv(_db_path, _output_path),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             cwd=str(_REPO_ROOT),

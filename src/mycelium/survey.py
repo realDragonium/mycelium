@@ -29,7 +29,7 @@ DEDUP_COSINE = 0.95
 #: made up entirely of these (or of single-char fragments) is dropped by
 #: `usable` — it would only blur the search. Content words survive, so
 #: "how are permissions assigned" keeps "permissions"/"assigned".
-_STOPWORDS = frozenset(
+STOPWORDS = frozenset(
     {
         "a",
         "an",
@@ -167,7 +167,7 @@ def usable(subquery: str) -> bool:
     if len(stripped) < 2:
         return False
     words = _WORD_RE.findall(stripped.lower())
-    return any(word not in _STOPWORDS for word in words)
+    return any(word not in STOPWORDS for word in words)
 
 
 def cosine(a: list[float], b: list[float]) -> float:
