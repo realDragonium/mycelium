@@ -116,13 +116,31 @@ def format_recon(recon: Any) -> str:
     return json.dumps(compact, ensure_ascii=False, indent=2)
 
 
-def initial_user_message(question: str, recon: Any) -> str:
+#: Closing directive for the `quick` depth (floor off). Replaces the standard
+#: "re-search for adjacency before you conclude" instruction so the model stops
+#: as soon as it can answer, instead of dutifully doing the thorough dance.
+QUICK_CLOSING = (
+    "QUICK MODE — a latency-boxed caller needs a fast, direct answer. Orient on "
+    "recon, do at most one or two targeted retrievals to confirm the key facts, "
+    "then submit_answer. SKIP the concept-seeded adjacency re-search unless recon "
+    "left the core genuinely unresolved; if you skip it, put 'skipped — quick "
+    "mode' in adjacency_note. Stay honest: mark real gaps and do not round up "
+    "confidence."
+)
+
+#: Standard closing directive (floor on): push the thorough retrieve + re-search.
+STANDARD_CLOSING = (
+    "Orient on this, then retrieve (follow links AND re-search by gathered "
+    "concepts for semantic adjacency) before you conclude."
+)
+
+
+def initial_user_message(question: str, recon: Any, *, quick: bool = False) -> str:
     return (
         f"QUESTION: {question}\n\n"
         f"RECON (survey_statements of the question — a wide starting map, not an answer):\n"
         f"{format_recon(recon)}\n\n"
-        "Orient on this, then retrieve (follow links AND re-search by gathered "
-        "concepts for semantic adjacency) before you conclude."
+        f"{QUICK_CLOSING if quick else STANDARD_CLOSING}"
     )
 
 

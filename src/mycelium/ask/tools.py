@@ -152,17 +152,33 @@ _CLARIFY_SCHEMA: dict[str, Any] = {
 }
 
 
-def terminal_tool_defs() -> list[dict]:
-    """The two terminal tools. `strict` guarantees schema-valid inputs."""
+_SUBMIT_DESC_FLOOR = (
+    "Conclude with the structured answer. Only call this once the "
+    "floor is met: recon ran, at least one targeted retrieval round "
+    "happened, and at least one concept-seeded adjacency re-search "
+    "was attempted and is reported in adjacency_note."
+)
+#: Quick-mode: the floor is off, so don't demand the adjacency re-search — call
+#: as soon as recon plus a targeted read or two answer the question.
+_SUBMIT_DESC_QUICK = (
+    "Conclude with the structured answer. Call this as soon as recon plus a "
+    "targeted retrieval or two answer the question — no adjacency re-search is "
+    "required in quick mode (put 'skipped — quick mode' in adjacency_note if you "
+    "skip it). Still fill every required field honestly."
+)
+
+
+def terminal_tool_defs(*, enforce_floor: bool = True) -> list[dict]:
+    """The two terminal tools. `strict` guarantees schema-valid inputs.
+
+    `enforce_floor` only tunes the `submit_answer` *description* (the structural
+    gate lives in the loop): off, it drops the adjacency demand so a quick-mode
+    model isn't told to do work the loop won't require.
+    """
     return [
         {
             "name": SUBMIT_TOOL,
-            "description": (
-                "Conclude with the structured answer. Only call this once the "
-                "floor is met: recon ran, at least one targeted retrieval round "
-                "happened, and at least one concept-seeded adjacency re-search "
-                "was attempted and is reported in adjacency_note."
-            ),
+            "description": _SUBMIT_DESC_FLOOR if enforce_floor else _SUBMIT_DESC_QUICK,
             "strict": True,
             "input_schema": _SUBMIT_SCHEMA,
         },
@@ -180,13 +196,13 @@ def terminal_tool_defs() -> list[dict]:
     ]
 
 
-def build_tools(specs: list[ToolSpec]) -> list[dict]:
+def build_tools(specs: list[ToolSpec], *, enforce_floor: bool = True) -> list[dict]:
     """Full tool list handed to the model: read primitives + terminal tools."""
     read_tools = [
         {"name": s.name, "description": s.description, "input_schema": s.input_schema}
         for s in specs
     ]
-    return read_tools + terminal_tool_defs()
+    return read_tools + terminal_tool_defs(enforce_floor=enforce_floor)
 
 
 def answered_from_tool_input(data: dict, trace: dict) -> Answered:

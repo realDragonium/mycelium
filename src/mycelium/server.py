@@ -1368,7 +1368,9 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
 
 
 @tool(role="asker")
-def ask(question: str) -> dict[str, Any]:
+def ask(
+    question: str, depth: Literal["standard", "quick"] = "standard"
+) -> dict[str, Any]:
     """Resolve a natural-language question against the substrate, honestly.
 
     The higher-level entry point for callers who don't want to compose the read
@@ -1385,13 +1387,25 @@ def ask(question: str) -> dict[str, Any]:
         interpretations (each naming what it would pull), `known_so_far`,
         `trace`. Terminal: re-ask with the disambiguated question.
 
+    `depth` trades thoroughness for latency:
+      * `standard` (default) — the full loop: recon, targeted retrieval, and a
+        concept-seeded adjacency re-search before concluding. Most thorough;
+        can run tens of seconds.
+      * `quick` — a latency-boxed fast path for callers with a hard timeout
+        (e.g. an MCP client that drops the call at ~30s). Drops the adjacency
+        floor and tightens the caps so it collapses to recon -> a targeted read
+        or two -> answer, returning a real answer well inside the window. It can
+        miss unlinked-but-relevant statements the adjacency re-search would find,
+        so gaps/confidence are your guide.
+
     The call runs a multi-second reasoning loop bounded by an operation cap and
     a wall-clock budget; on exhaustion it degrades to a low-confidence partial
     answer rather than raising.
     """
     from .ask import AskConfig, run_ask
+    from .ask.config import for_depth
 
-    config = AskConfig.from_env()
+    config = for_depth(AskConfig.from_env(), depth)
     if config.trace_log_path is None and _data_dir is not None:
         config = replace(config, trace_log_path=str(_data_dir / "ask_trace.jsonl"))
     return run_ask(question, config=config).model_dump()
