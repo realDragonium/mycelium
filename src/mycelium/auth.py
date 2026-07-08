@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import logging
 import os
 import secrets
 import sqlite3
@@ -575,3 +576,189 @@ def revoke_invite(conn: sqlite3.Connection, invite_id: str) -> None:
         "DELETE FROM invites WHERE id = ? AND accepted_at IS NULL", (invite_id,)
     )
     conn.commit()
+
+
+# --- OIDC user provisioning -------------------------------------------------
+# Resolving an external OIDC identity to a `users` row is an auth-domain
+# decision (invites, bootstrap admin, JIT domains) — the OIDC module only
+# handles the protocol round-trip and hands the claims here.
+
+
+def _jit_domains() -> set[str]:
+    """Email domains pre-registered for just-in-time provisioning.
+
+    Read from `MYCELIUM_JIT_DOMAINS` — a comma-separated list, e.g.
+    `example.com, internal.org`. Empty or unset means JIT is off and the
+    server stays invite-only. Each entry is lowercased and a leading `@`
+    is tolerated, so both `example.com` and `@example.com` work."""
+    raw = os.environ.get("MYCELIUM_JIT_DOMAINS") or ""
+    return {d.strip().lstrip("@").lower() for d in raw.split(",") if d.strip()}
+
+
+def _jit_default_role() -> Role | None:
+    """Role granted to JIT-provisioned users — `MYCELIUM_JIT_DEFAULT_ROLE`,
+    defaulting to `reader`. Returns None for an unknown role name so the
+    caller refuses to provision rather than guess a privilege level."""
+    role = (os.environ.get("MYCELIUM_JIT_DEFAULT_ROLE") or "reader").strip().lower()
+    if not is_valid_role(role):
+        logging.getLogger("mycelium.auth").error(
+            "MYCELIUM_JIT_DEFAULT_ROLE=%r is not a valid role — refusing JIT "
+            "provisioning. Valid roles: asker, reader, drafter, writer, admin",
+            role,
+        )
+        return None
+    return role  # type: ignore[return-value]
+
+
+def _consume_invite(conn: sqlite3.Connection, email: str) -> str | None:
+    """Find an active (unaccepted, unexpired) invite for `email` and
+    mark it consumed. Returns the granted role or None if no invite
+    matched. Caller is expected to commit after consuming."""
+    row = conn.execute(
+        "SELECT id, role FROM invites "
+        "WHERE LOWER(email) = LOWER(?) AND accepted_at IS NULL "
+        "AND (expires_at IS NULL OR expires_at > ?) "
+        "ORDER BY created_at ASC LIMIT 1",
+        (email, _now()),
+    ).fetchone()
+    if row is None:
+        return None
+    return row["role"]
+
+
+def _accept_invite(conn: sqlite3.Connection, email: str, user_id: str) -> None:
+    conn.execute(
+        "UPDATE invites SET accepted_at = ?, accepted_by = ? "
+        "WHERE LOWER(email) = LOWER(?) AND accepted_at IS NULL "
+        "AND id = (SELECT id FROM invites "
+        "          WHERE LOWER(email) = LOWER(?) AND accepted_at IS NULL "
+        "          ORDER BY created_at ASC LIMIT 1)",
+        (_now(), user_id, email, email),
+    )
+
+
+def find_or_create_user(
+    conn: sqlite3.Connection,
+    *,
+    issuer: str,
+    subject: str,
+    email: str | None,
+    name: str | None,
+) -> str | None:
+    """Resolve an OIDC identity to a `users.id`. Returns the id, or
+    None when the issuer/email combination isn't authorized (no prior
+    invite, not the bootstrap admin, domain not pre-registered) — caller
+    turns that into a 403.
+
+    Sequence:
+      1. (issuer, subject) match → return existing id. Update
+         last_login_at.
+      2. (email) match → bind the OIDC subject to the existing row.
+         Useful when an admin pre-created a service account-ish row, or
+         when a user logged in via a different issuer previously.
+      3. Otherwise, check for an active invite or bootstrap-admin
+         match. Either grants the corresponding role; both leave a new
+         row in `users` with the OIDC subject bound.
+      4. Failing those, just-in-time provision when the email domain is
+         pre-registered (MYCELIUM_JIT_DOMAINS) — creates a new row with
+         the configured default role.
+
+    Anything else: refuse.
+    """
+    if not email:
+        # Authlib gave us an ID token with no email claim — we can't
+        # match invites or bootstrap, so we can't safely provision.
+        return None
+    email = email.lower().strip()
+
+    row = conn.execute(
+        "SELECT id FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
+        (issuer, subject),
+    ).fetchone()
+    if row is not None:
+        conn.execute(
+            "UPDATE users SET last_login_at = ? WHERE id = ?",
+            (_now(), row["id"]),
+        )
+        conn.commit()
+        return row["id"]
+
+    row = conn.execute(
+        "SELECT id, oidc_issuer FROM users WHERE LOWER(email) = ?",
+        (email,),
+    ).fetchone()
+    if row is not None:
+        # Bind the OIDC subject to an existing row that didn't have one
+        # (or migrate it to a new issuer). Don't overwrite a subject
+        # belonging to a *different* issuer silently — that's a sign of
+        # account confusion, treat as unauthorized.
+        if row["oidc_issuer"] not in (None, issuer):
+            return None
+        conn.execute(
+            "UPDATE users SET oidc_issuer = ?, oidc_subject = ?, last_login_at = ? "
+            "WHERE id = ?",
+            (issuer, subject, _now(), row["id"]),
+        )
+        conn.commit()
+        return row["id"]
+
+    invited_role = _consume_invite(conn, email)
+    bootstrap_email = (
+        (os.environ.get("MYCELIUM_BOOTSTRAP_ADMIN_EMAIL") or "").lower().strip()
+    )
+    is_bootstrap = (
+        bool(bootstrap_email)
+        and email == bootstrap_email
+        and (
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE role = 'admin'"
+            ).fetchone()["n"]
+            == 0
+        )
+    )
+
+    # Just-in-time provisioning: a login with no invite and no bootstrap
+    # match is still authorized if its email domain is pre-registered.
+    # Acts like a self-service invite — the user is created with the
+    # configured default role. Off unless MYCELIUM_JIT_DOMAINS is set.
+    jit_role: Role | None = None
+    if invited_role is None and not is_bootstrap:
+        domain = email.rpartition("@")[2]
+        if domain and domain in _jit_domains():
+            jit_role = _jit_default_role()
+        if jit_role is None:
+            return None
+
+    if is_bootstrap:
+        role = "admin"
+    elif invited_role is not None:
+        role = invited_role
+    else:
+        role = jit_role
+
+    user_id = str(uuid.uuid4())
+    conn.execute(
+        "INSERT INTO users "
+        "(id, type, email, name, role, status, oidc_issuer, oidc_subject, created_at, last_login_at) "
+        "VALUES (?, 'human', ?, ?, ?, 'active', ?, ?, ?, ?)",
+        (
+            user_id,
+            email,
+            name or email,
+            role,
+            issuer,
+            subject,
+            _now(),
+            _now(),
+        ),
+    )
+    if invited_role is not None:
+        _accept_invite(conn, email, user_id)
+    if jit_role is not None:
+        logging.getLogger("mycelium.auth").info(
+            "JIT-provisioned user email=%s role=%s (pre-registered domain)",
+            email,
+            role,
+        )
+    conn.commit()
+    return user_id
