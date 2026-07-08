@@ -13,6 +13,11 @@ else is judgment. When in doubt, match the surrounding code.
   import sorting (`I`), and bugbear (`B`) minus the two ignores documented
   in `pyproject.toml`. Deliberately a small set — a rule earns its place by
   catching real bugs, not by generating churn.
+- **Complexity ≤ 15** (`C901`, product code only — `scripts/` exempt).
+  When a function trips it, decompose along its real phase seams
+  (validate → normalize → write → respond), never by line count. The
+  extracted pieces should be nameable — if you can't name it, it wasn't
+  a seam.
 
 ## Local (in-function) imports are intentional
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..agentloop import read_tool_defs
 from .schema import Answered, Interpretation, NeedsClarification
 from .substrate import ToolSpec
 
@@ -233,11 +234,7 @@ def terminal_tool_defs(*, enforce_floor: bool = True) -> list[dict]:
 
 def build_tools(specs: list[ToolSpec], *, enforce_floor: bool = True) -> list[dict]:
     """Full tool list handed to the model: read primitives + terminal tools."""
-    read_tools = [
-        {"name": s.name, "description": s.description, "input_schema": s.input_schema}
-        for s in specs
-    ]
-    return read_tools + terminal_tool_defs(enforce_floor=enforce_floor)
+    return read_tool_defs(specs) + terminal_tool_defs(enforce_floor=enforce_floor)
 
 
 def answered_from_tool_input(data: dict, trace: dict) -> Answered:

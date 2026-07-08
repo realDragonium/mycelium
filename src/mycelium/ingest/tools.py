@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..agentloop import read_tool_defs
 from ..ask.substrate import ToolSpec
 from .schema import OpKind
 
@@ -186,11 +187,7 @@ def emit_tool_def() -> dict:
 
 def build_tools(read_specs: list[ToolSpec]) -> list[dict]:
     """Full tool list handed to the model: read primitives + the emit terminal."""
-    read_tools = [
-        {"name": s.name, "description": s.description, "input_schema": s.input_schema}
-        for s in read_specs
-    ]
-    return read_tools + [emit_tool_def()]
+    return read_tool_defs(read_specs) + [emit_tool_def()]
 
 
 def parse_emit_input(data: dict) -> tuple[list[dict], list[dict], list[str], list[str]]:

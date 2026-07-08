@@ -48,11 +48,20 @@ src = ["src", "tests"]
 # Small, conservative set: pyflakes, pycodestyle errors, import sorting,
 # bugbear. Local (in-function) imports are intentional here (lazy heavy deps,
 # cycle breaking — see docs/STYLE.md); never enable PLC0415 or similar.
-select = ["E4", "E7", "E9", "F", "I", "B"]
+select = ["E4", "E7", "E9", "F", "I", "B", "C901"]
 ignore = [
     "B006", # mutable-arg-default: fixing changes tool signatures/derived schemas
     "B904", # raise-without-from: adding `from err` changes exception chaining
 ]
+
+[tool.ruff.lint.mccabe]
+# Functions stay under 15: decompose along phase seams (validate ->
+# normalize -> write -> respond), not line-count splits. See docs/STYLE.md.
+max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+# One-off operator scripts aren't held to the complexity gate.
+"scripts/*" = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["mycelium"]

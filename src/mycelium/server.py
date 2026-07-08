@@ -988,6 +988,44 @@ def _format_flip_error(
     return f"{position}: {from_id} ({from_kind}) -> {to_id} ({to_kind}): {err}"
 
 
+def _collect_flip_errors(
+    edges: list[tuple[str, str, str, str, str, str]],
+) -> list[str]:
+    """Format the flip-direction error for each edge and return the non-empty
+    messages. Each edge is a positional tuple matching `_format_flip_error`'s
+    parameters: (position, from_id, to_id, link_type, from_kind, to_kind).
+    Callers keep their own raise-vs-accumulate handling; this is the shared
+    fold behind the single-record, batch, and add_links link checks."""
+    errors: list[str] = []
+    for position, from_id, to_id, link_type, from_kind, to_kind in edges:
+        err = _format_flip_error(
+            position=position,
+            from_id=from_id,
+            to_id=to_id,
+            link_type=link_type,
+            from_kind=from_kind,
+            to_kind=to_kind,
+        )
+        if err is not None:
+            errors.append(err)
+    return errors
+
+
+def _phrasing_gate(
+    text: str, kind: str, allow: bool
+) -> tuple[list[phrasing.Violation], dict[str, Any] | None]:
+    """Run the phrasing catalog check for `text` under `kind`. Returns
+    `(violations, reject)` where `reject` is the
+    `{"rejected": True, "violations": [...]}` response dict when the text trips
+    the catalog without bypass, else None. Callers that get a non-None `reject`
+    return it verbatim; otherwise they proceed and may surface `violations` as
+    a `phrasing_violations` warning on success."""
+    violations = phrasing.check(text, kind=kind)
+    if violations and not allow:
+        return violations, {"rejected": True, "violations": violations}
+    return violations, None
+
+
 def _at_refs_in_when(when: dict[str, Any] | None) -> list[int]:
     """Return every `@N` index referenced anywhere in a when-tree.
     Used by the batch upsert's cascade detection."""
@@ -1145,6 +1183,111 @@ def _hydrate_statement_full(
     return out
 
 
+def _alias_entity_boost(
+    vec: list[float], name_boost: float, name_top_k: int, name_min_score: float
+) -> dict[str, float]:
+    """Alias-aware recall: search the name index too. Top-K names above
+    `name_min_score` are resolved to their entity_ids; each entity gets
+    the max-scoring name. Statements mentioning a boosted entity get
+    final_score = cosine + name_boost * entity_score, lifting them
+    against alias-using queries without harming canonical ones."""
+    assert _conn is not None and _name_index is not None
+    entity_boost: dict[str, float] = {}
+    if name_boost > 0.0 and name_top_k > 0:
+        for vid, dist in _name_index.search(vec, k=name_top_k):
+            sc = 1.0 - dist
+            if sc < name_min_score:
+                continue
+            nid = store.get_name_id_by_vector_id(_conn, vid)
+            if nid is None:
+                continue
+            name_row = store.get_name_by_id(_conn, nid)
+            if name_row is None:
+                continue
+            eid = name_row["entity_id"]
+            if sc > entity_boost.get(eid, 0.0):
+                entity_boost[eid] = sc
+    return entity_boost
+
+
+def _score_candidates(
+    raw_hits: list[tuple[int, float]],
+    *,
+    required_entity_ids: set[str],
+    kind: str | None,
+    entity_boost: dict[str, float],
+    name_boost: float,
+    min_score: float,
+) -> list[tuple[str, float, float]]:
+    """Fold raw vector hits into deduped, filtered, boosted candidates.
+    Returns (statement_id, final_score, cosine) tuples sorted by final
+    score descending. Applies the mentions-subset, kind, and min_score
+    filters that only direct hits are subject to."""
+    assert _conn is not None
+    scored: list[tuple[str, float, float]] = []  # (statement_id, final, cosine)
+    seen: set[str] = set()
+    for vector_id, distance in raw_hits:
+        cosine = 1.0 - distance
+        statement_id = store.get_statement_id_by_vector_id(_conn, vector_id)
+        if statement_id is None or statement_id in seen:
+            continue
+        mention_entity_ids = {
+            m["entity_id"] for m in store.get_mentions(_conn, statement_id)
+        }
+        if required_entity_ids and not required_entity_ids.issubset(mention_entity_ids):
+            continue
+        if kind is not None:
+            row = store.get_statement(_conn, statement_id)
+            if row is None or row["kind"] != kind:
+                continue
+        boost = 0.0
+        for eid in mention_entity_ids:
+            if eid in entity_boost and entity_boost[eid] > boost:
+                boost = entity_boost[eid]
+        final = cosine + name_boost * boost
+        if final < min_score:
+            continue
+        seen.add(statement_id)
+        scored.append((statement_id, final, cosine))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return scored
+
+
+def _expand_graph(seen: set[str], depth: int, direction: str) -> list[dict[str, Any]]:
+    """BFS neighborhood expansion from the direct hits, up to `depth` hops.
+    Mutates `seen` as it walks so a node is hydrated at most once. Expanded
+    statements carry no `score` field."""
+    assert _conn is not None
+    follow_children = direction in ("both", "children")
+    follow_parents = direction in ("both", "parents")
+
+    expanded: list[dict[str, Any]] = []
+    frontier: set[str] = set(seen)
+    for _ in range(depth):
+        next_frontier: set[str] = set()
+        for bid in frontier:
+            if follow_children:
+                for to_id, _lt, _when in store.get_links(_conn, bid):
+                    if to_id not in seen:
+                        seen.add(to_id)
+                        next_frontier.add(to_id)
+            if follow_parents:
+                for from_id, _lt, _when in store.get_incoming_links(_conn, bid):
+                    if from_id not in seen:
+                        seen.add(from_id)
+                        next_frontier.add(from_id)
+        for bid in next_frontier:
+            expanded.append(
+                _hydrate_statement_full(bid, score=None, reverse_cap=_REVERSE_EDGE_CAP)
+            )
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    return expanded
+
+
 @tool
 def search_statements(
     query: str,
@@ -1225,26 +1368,7 @@ def search_statements(
     with trace_span("embed"):
         vec = embed.embed(query)
 
-    # Alias-aware recall: search the name index too. Top-K names above
-    # `name_min_score` are resolved to their entity_ids; each entity gets
-    # the max-scoring name. Statements mentioning a boosted entity get
-    # final_score = cosine + name_boost * entity_score, lifting them
-    # against alias-using queries without harming canonical ones.
-    entity_boost: dict[str, float] = {}
-    if name_boost > 0.0 and name_top_k > 0:
-        for vid, dist in _name_index.search(vec, k=name_top_k):
-            sc = 1.0 - dist
-            if sc < name_min_score:
-                continue
-            nid = store.get_name_id_by_vector_id(_conn, vid)
-            if nid is None:
-                continue
-            name_row = store.get_name_by_id(_conn, nid)
-            if name_row is None:
-                continue
-            eid = name_row["entity_id"]
-            if sc > entity_boost.get(eid, 0.0):
-                entity_boost[eid] = sc
+    entity_boost = _alias_entity_boost(vec, name_boost, name_top_k, name_min_score)
 
     # Widen the candidate set so boost-driven re-ranking has material
     # to lift. Without boost, we keep the historical narrow fetch.
@@ -1255,33 +1379,15 @@ def search_statements(
     with trace_span("vector_search"):
         raw_hits = _index.search(vec, k=fetch_k)
 
-    scored: list[tuple[str, float, float]] = []  # (statement_id, final, cosine)
-    seen: set[str] = set()
-    for vector_id, distance in raw_hits:
-        cosine = 1.0 - distance
-        statement_id = store.get_statement_id_by_vector_id(_conn, vector_id)
-        if statement_id is None or statement_id in seen:
-            continue
-        mention_entity_ids = {
-            m["entity_id"] for m in store.get_mentions(_conn, statement_id)
-        }
-        if required_entity_ids and not required_entity_ids.issubset(mention_entity_ids):
-            continue
-        if kind is not None:
-            row = store.get_statement(_conn, statement_id)
-            if row is None or row["kind"] != kind:
-                continue
-        boost = 0.0
-        for eid in mention_entity_ids:
-            if eid in entity_boost and entity_boost[eid] > boost:
-                boost = entity_boost[eid]
-        final = cosine + name_boost * boost
-        if final < min_score:
-            continue
-        seen.add(statement_id)
-        scored.append((statement_id, final, cosine))
+    scored = _score_candidates(
+        raw_hits,
+        required_entity_ids=required_entity_ids,
+        kind=kind,
+        entity_boost=entity_boost,
+        name_boost=name_boost,
+        min_score=min_score,
+    )
 
-    scored.sort(key=lambda x: x[1], reverse=True)
     direct: list[dict[str, Any]] = []
     for statement_id, final, _cos in scored[:limit]:
         direct.append(
@@ -1294,32 +1400,7 @@ def search_statements(
     if depth <= 0:
         return direct
 
-    follow_children = direction in ("both", "children")
-    follow_parents = direction in ("both", "parents")
-
-    expanded: list[dict[str, Any]] = []
-    frontier: set[str] = set(seen)
-    for _ in range(depth):
-        next_frontier: set[str] = set()
-        for bid in frontier:
-            if follow_children:
-                for to_id, _lt, _when in store.get_links(_conn, bid):
-                    if to_id not in seen:
-                        seen.add(to_id)
-                        next_frontier.add(to_id)
-            if follow_parents:
-                for from_id, _lt, _when in store.get_incoming_links(_conn, bid):
-                    if from_id not in seen:
-                        seen.add(from_id)
-                        next_frontier.add(from_id)
-        for bid in next_frontier:
-            expanded.append(
-                _hydrate_statement_full(bid, score=None, reverse_cap=_REVERSE_EDGE_CAP)
-            )
-        if not next_frontier:
-            break
-        frontier = next_frontier
-
+    expanded = _expand_graph(seen, depth, direction)
     return direct + expanded
 
 
@@ -1657,6 +1738,37 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     return {"entity_id": entity_id}
 
 
+def _validate_statement_refs(
+    id: str | None,
+    links: list[LinkSpec],
+    incoming_links: list[IncomingLinkSpec],
+) -> dict[str, sqlite3.Row]:
+    """Validate every referenced statement id BEFORE mutating, so a typo can't
+    half-apply. Outgoing `links` targets, `incoming_links` sources, and
+    every `statement_id` leaf inside any `when` tree are all checked here.
+    Returns the fetched rows keyed by id for downstream kind lookups."""
+    statement_rows: dict[str, sqlite3.Row] = {}
+
+    def _check_existing(ref: str, position: str) -> str:
+        row = store.get_statement(_conn, ref)
+        if row is None:
+            raise ValueError(f"{position}: statement {ref!r} does not exist")
+        statement_rows[ref] = row
+        return ref
+
+    if id is not None:
+        _check_existing(id, "id")
+    for i, spec in enumerate(links):
+        _check_existing(spec["to_id"], f"links[{i}].to_id")
+        if "when" in spec:
+            _resolve_when_tree(spec["when"], _check_existing, f"links[{i}].when")
+    for i, il in enumerate(incoming_links):
+        _check_existing(il["from_id"], f"incoming_links[{i}].from_id")
+        if "when" in il:
+            _resolve_when_tree(il["when"], _check_existing, f"incoming_links[{i}].when")
+    return statement_rows
+
+
 @tool
 def upsert_statement(
     kind: str,
@@ -1716,60 +1828,40 @@ def upsert_statement(
     """
     assert _conn is not None and _index is not None
 
-    violations = phrasing.check(text, kind=kind)
-    if violations and not allow_phrasing_violations:
-        return {"rejected": True, "violations": violations}
+    violations, reject = _phrasing_gate(text, kind, allow_phrasing_violations)
+    if reject is not None:
+        return reject
 
-    # Validate every referenced statement id BEFORE mutating, so a typo can't
-    # half-apply. Outgoing `links` targets, `incoming_links` sources, and
-    # every `statement_id` leaf inside any `when` tree are all checked here.
-    statement_rows: dict[str, sqlite3.Row] = {}
+    statement_rows = _validate_statement_refs(id, links, incoming_links)
 
-    def _check_existing(ref: str, position: str) -> str:
-        row = store.get_statement(_conn, ref)
-        if row is None:
-            raise ValueError(f"{position}: statement {ref!r} does not exist")
-        statement_rows[ref] = row
-        return ref
-
-    if id is not None:
-        _check_existing(id, "id")
-    for i, spec in enumerate(links):
-        _check_existing(spec["to_id"], f"links[{i}].to_id")
-        if "when" in spec:
-            _resolve_when_tree(spec["when"], _check_existing, f"links[{i}].when")
-    for i, il in enumerate(incoming_links):
-        _check_existing(il["from_id"], f"incoming_links[{i}].from_id")
-        if "when" in il:
-            _resolve_when_tree(il["when"], _check_existing, f"incoming_links[{i}].when")
-
-    flip_errors: list[str] = []
+    flip_edges: list[tuple[str, str, str, str, str, str]] = []
     for i, spec in enumerate(links):
         to_id = spec["to_id"]
         to_kind = _statement_kind(statement_rows, to_id, self_id=id, self_kind=kind)
-        err = _format_flip_error(
-            position=f"links[{i}]",
-            from_id=id or "<new statement>",
-            to_id=to_id,
-            link_type=spec["link_type"],
-            from_kind=kind,
-            to_kind=to_kind,
+        flip_edges.append(
+            (
+                f"links[{i}]",
+                id or "<new statement>",
+                to_id,
+                spec["link_type"],
+                kind,
+                to_kind,
+            )
         )
-        if err is not None:
-            flip_errors.append(err)
     for i, il in enumerate(incoming_links):
         from_id = il["from_id"]
         from_kind = _statement_kind(statement_rows, from_id, self_id=id, self_kind=kind)
-        err = _format_flip_error(
-            position=f"incoming_links[{i}]",
-            from_id=from_id,
-            to_id=id or "<new statement>",
-            link_type=il["link_type"],
-            from_kind=from_kind,
-            to_kind=kind,
+        flip_edges.append(
+            (
+                f"incoming_links[{i}]",
+                from_id,
+                id or "<new statement>",
+                il["link_type"],
+                from_kind,
+                kind,
+            )
         )
-        if err is not None:
-            flip_errors.append(err)
+    flip_errors = _collect_flip_errors(flip_edges)
     if flip_errors:
         raise ValueError("flipped link direction:\n" + "\n".join(flip_errors))
 
@@ -1810,6 +1902,264 @@ def upsert_statement(
     if violations:
         response["phrasing_violations"] = violations
     return response
+
+
+def _batch_phrasing_pass(
+    statements: list[BatchStatementSpec],
+) -> tuple[list[list[phrasing.Violation]], set[int]]:
+    """Phrasing check per batch item. Returns each item's violations plus the
+    set of indexes directly rejected (tripped the catalog without bypass)."""
+    item_violations: list[list[phrasing.Violation]] = []
+    direct_rejected: set[int] = set()
+    for i, spec in enumerate(statements):
+        viols, reject = _phrasing_gate(
+            spec["text"], spec["kind"], spec.get("allow_phrasing_violations", False)
+        )
+        item_violations.append(viols)
+        if reject is not None:
+            direct_rejected.add(i)
+    return item_violations, direct_rejected
+
+
+def _spec_at_refs(spec: BatchStatementSpec) -> list[int]:
+    """Every `@N` index a batch item references via its links,
+    incoming_links, or any `when` tree."""
+    refs: list[int] = []
+    for link in spec.get("links", []) or []:
+        ref = link.get("to_id")
+        if ref and ref.startswith("@"):
+            try:
+                refs.append(int(ref[1:]))
+            except ValueError:
+                pass
+        refs.extend(_at_refs_in_when(link.get("when")))
+    for il in spec.get("incoming_links", []) or []:
+        ref = il.get("from_id")
+        if ref and ref.startswith("@"):
+            try:
+                refs.append(int(ref[1:]))
+            except ValueError:
+                pass
+        refs.extend(_at_refs_in_when(il.get("when")))
+    return refs
+
+
+def _close_cascade(
+    statements: list[BatchStatementSpec],
+    rejected: set[int],
+    cascade_reasons: dict[int, list[int]],
+) -> None:
+    """Cascade rejection — transitive closure on @-refs. Any surviving item
+    that references a rejected sibling via @N joins the rejected set.
+    Iterates to a fixed point so a chain @0→@1→@2 of rejections cascades all
+    the way. Mutates `rejected` and `cascade_reasons` in place."""
+    changed = True
+    while changed:
+        changed = False
+        for i, spec in enumerate(statements):
+            if i in rejected:
+                continue
+            deps = sorted({r for r in _spec_at_refs(spec) if r in rejected})
+            if deps:
+                rejected.add(i)
+                cascade_reasons[i] = deps
+                changed = True
+
+
+def _resolve_batch_refs(
+    statements: list[BatchStatementSpec],
+    rejected: set[int],
+) -> tuple[
+    list[list[tuple[int | str, str, dict[str, Any] | None]]],
+    list[list[tuple[int | str, str, dict[str, Any] | None]]],
+    dict[str, sqlite3.Row],
+]:
+    """Validate every cross-reference for SURVIVING items only. Rejected
+    items aren't created, so their refs don't need checking.
+
+    Each resolved entry is (endpoint_ref, link_type, when_raw_tree).
+    `endpoint_ref` is int (sibling index) or str (existing id).
+    `when_raw_tree` is None or a tree whose leaves carry statement_ids
+    that are still in raw form ("@N" or existing ids); siblings get
+    remapped to real ids in Phase 5 once they're created. Also returns the
+    fetched rows of existing statements for downstream kind lookups."""
+    n = len(statements)
+    statement_rows: dict[str, sqlite3.Row] = {}
+
+    def _resolve_ref(ref: str, position: str) -> int | str:
+        if ref.startswith("@"):
+            try:
+                idx = int(ref[1:])
+            except ValueError:
+                raise ValueError(f"{position}: malformed batch ref {ref!r}")
+            if not (0 <= idx < n):
+                raise ValueError(
+                    f"{position}: batch index @{idx} out of range [0, {n})"
+                )
+            return idx
+        row = store.get_statement(_conn, ref)
+        if row is None:
+            raise ValueError(f"{position}: statement {ref!r} does not exist")
+        statement_rows[ref] = row
+        return ref
+
+    resolved_outgoing: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [
+        [] for _ in range(n)
+    ]
+    resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [
+        [] for _ in range(n)
+    ]
+    for i, spec in enumerate(statements):
+        if i in rejected:
+            continue
+        for j, link in enumerate(spec.get("links", []) or []):
+            target = _resolve_ref(link["to_id"], f"statements[{i}].links[{j}]")
+            when_raw = link.get("when")
+            if when_raw is not None:
+                # Validate shape + every leaf @N is in range / every existing id exists.
+                _resolve_when_tree(
+                    when_raw, _resolve_ref, f"statements[{i}].links[{j}].when"
+                )
+            resolved_outgoing[i].append((target, link["link_type"], when_raw))
+        for j, il in enumerate(spec.get("incoming_links", []) or []):
+            source = _resolve_ref(il["from_id"], f"statements[{i}].incoming_links[{j}]")
+            when_raw = il.get("when")
+            if when_raw is not None:
+                _resolve_when_tree(
+                    when_raw, _resolve_ref, f"statements[{i}].incoming_links[{j}].when"
+                )
+            resolved_incoming[i].append((source, il["link_type"], when_raw))
+    return resolved_outgoing, resolved_incoming, statement_rows
+
+
+def _collect_batch_flip_errors(
+    statements: list[BatchStatementSpec],
+    rejected: set[int],
+    resolved_outgoing: list[list[tuple[int | str, str, dict[str, Any] | None]]],
+    resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]],
+    statement_rows: dict[str, sqlite3.Row],
+    item_errors: list[list[str]],
+) -> None:
+    """Flip-direction check per surviving batch item. Appends each item's
+    error messages to `item_errors[i]` (per-item accumulation — batch items
+    reject individually rather than failing the whole call)."""
+
+    def _ref_kind(ref: int | str) -> str:
+        if isinstance(ref, int):
+            return statements[ref]["kind"]
+        return statement_rows[ref]["kind"]
+
+    def _ref_label(ref: int | str) -> str:
+        return f"@{ref}" if isinstance(ref, int) else ref
+
+    for i, spec in enumerate(statements):
+        if i in rejected:
+            continue
+        flip_edges: list[tuple[str, str, str, str, str, str]] = []
+        for j, (target, link_type, _when) in enumerate(resolved_outgoing[i]):
+            flip_edges.append(
+                (
+                    f"statements[{i}].links[{j}]",
+                    f"@{i}",
+                    _ref_label(target),
+                    link_type,
+                    spec["kind"],
+                    _ref_kind(target),
+                )
+            )
+        for j, (source, link_type, _when) in enumerate(resolved_incoming[i]):
+            flip_edges.append(
+                (
+                    f"statements[{i}].incoming_links[{j}]",
+                    _ref_label(source),
+                    f"@{i}",
+                    link_type,
+                    _ref_kind(source),
+                    spec["kind"],
+                )
+            )
+        item_errors[i].extend(_collect_flip_errors(flip_edges))
+
+
+def _materialize_batch_edges(
+    n: int,
+    rejected: set[int],
+    resolved_outgoing: list[list[tuple[int | str, str, dict[str, Any] | None]]],
+    resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]],
+    statement_ids: dict[int, str],
+) -> list[tuple[str, str, str, dict[str, Any] | None]]:
+    """Materialize the edges between surviving items. Cascade guarantees no
+    @-ref endpoint is in `rejected`, so every edge has a real id at both
+    ends — but the when-trees still carry "@N" leaves that need final
+    substitution to real ids."""
+
+    def _resolve_endpoint(ref: int | str) -> str:
+        return statement_ids[ref] if isinstance(ref, int) else ref
+
+    def _materialize_when(when: dict[str, Any] | None) -> dict[str, Any] | None:
+        if when is None:
+            return None
+        return when_expression.substitute_leaves(
+            when,
+            lambda leaf: statement_ids[int(leaf[1:])] if leaf.startswith("@") else leaf,
+        )
+
+    edges: list[tuple[str, str, str, dict[str, Any] | None]] = []
+    for i in range(n):
+        if i in rejected:
+            continue
+        for target, link_type, when in resolved_outgoing[i]:
+            edges.append(
+                (
+                    statement_ids[i],
+                    _resolve_endpoint(target),
+                    link_type,
+                    _materialize_when(when),
+                )
+            )
+        for source, link_type, when in resolved_incoming[i]:
+            edges.append(
+                (
+                    _resolve_endpoint(source),
+                    statement_ids[i],
+                    link_type,
+                    _materialize_when(when),
+                )
+            )
+    return edges
+
+
+def _assemble_batch_results(
+    n: int,
+    item_errors: list[list[str]],
+    item_violations: list[list[phrasing.Violation]],
+    direct_rejected: set[int],
+    rejected: set[int],
+    cascade_reasons: dict[int, list[int]],
+    statement_ids: dict[int, str],
+) -> list[dict[str, Any]]:
+    """Build per-item results, preserving rejection precedence: flip errors
+    beat direct (phrasing) rejection, which beats cascade rejection."""
+    results: list[dict[str, Any]] = []
+    for i in range(n):
+        if item_errors[i]:
+            results.append({"rejected": True, "errors": item_errors[i]})
+        elif i in direct_rejected:
+            results.append({"rejected": True, "violations": item_violations[i]})
+        elif i in rejected:
+            results.append(
+                {
+                    "rejected": True,
+                    "reason": "depends_on_rejected",
+                    "depends_on": cascade_reasons[i],
+                }
+            )
+        else:
+            entry: dict[str, Any] = {"statement_id": statement_ids[i]}
+            if item_violations[i]:
+                entry["phrasing_violations"] = item_violations[i]
+            results.append(entry)
+    return results
 
 
 @tool
@@ -1864,156 +2214,34 @@ def upsert_statements(
 
     # Phase 0: phrasing check per item. Items whose text trips the catalog
     # without bypass are marked directly rejected.
-    item_violations: list[list[phrasing.Violation]] = []
-    direct_rejected: set[int] = set()
+    item_violations, direct_rejected = _batch_phrasing_pass(statements)
     item_errors: list[list[str]] = [[] for _ in range(n)]
-    for i, spec in enumerate(statements):
-        viols = phrasing.check(spec["text"], kind=spec["kind"])
-        item_violations.append(viols)
-        if viols and not spec.get("allow_phrasing_violations", False):
-            direct_rejected.add(i)
 
-    # Phase 0b: cascade rejection — transitive closure on @-refs. Any
-    # surviving item that references a rejected sibling via @N joins the
-    # rejected set. Iterates to a fixed point so a chain @0→@1→@2 of
-    # rejections cascades all the way.
+    # Phase 0b: cascade rejection — transitive closure on @-refs.
     rejected: set[int] = set(direct_rejected)
     cascade_reasons: dict[int, list[int]] = {}
-
-    def _spec_at_refs(spec: BatchStatementSpec) -> list[int]:
-        refs: list[int] = []
-        for link in spec.get("links", []) or []:
-            ref = link.get("to_id")
-            if ref and ref.startswith("@"):
-                try:
-                    refs.append(int(ref[1:]))
-                except ValueError:
-                    pass
-            refs.extend(_at_refs_in_when(link.get("when")))
-        for il in spec.get("incoming_links", []) or []:
-            ref = il.get("from_id")
-            if ref and ref.startswith("@"):
-                try:
-                    refs.append(int(ref[1:]))
-                except ValueError:
-                    pass
-            refs.extend(_at_refs_in_when(il.get("when")))
-        return refs
-
-    changed = True
-    while changed:
-        changed = False
-        for i, spec in enumerate(statements):
-            if i in rejected:
-                continue
-            deps = sorted({r for r in _spec_at_refs(spec) if r in rejected})
-            if deps:
-                rejected.add(i)
-                cascade_reasons[i] = deps
-                changed = True
+    _close_cascade(statements, rejected, cascade_reasons)
 
     # Phase 1: validate every cross-reference for SURVIVING items only.
     # Rejected items aren't created, so their refs don't need checking.
-    statement_rows: dict[str, sqlite3.Row] = {}
+    resolved_outgoing, resolved_incoming, statement_rows = _resolve_batch_refs(
+        statements, rejected
+    )
 
-    def _resolve_ref(ref: str, position: str) -> int | str:
-        if ref.startswith("@"):
-            try:
-                idx = int(ref[1:])
-            except ValueError:
-                raise ValueError(f"{position}: malformed batch ref {ref!r}")
-            if not (0 <= idx < n):
-                raise ValueError(
-                    f"{position}: batch index @{idx} out of range [0, {n})"
-                )
-            return idx
-        row = store.get_statement(_conn, ref)
-        if row is None:
-            raise ValueError(f"{position}: statement {ref!r} does not exist")
-        statement_rows[ref] = row
-        return ref
-
-    def _ref_kind(ref: int | str) -> str:
-        if isinstance(ref, int):
-            return statements[ref]["kind"]
-        return statement_rows[ref]["kind"]
-
-    def _ref_label(ref: int | str) -> str:
-        return f"@{ref}" if isinstance(ref, int) else ref
-
-    # Each resolved entry is (endpoint_ref, link_type, when_raw_tree).
-    # `endpoint_ref` is int (sibling index) or str (existing id).
-    # `when_raw_tree` is None or a tree whose leaves carry statement_ids
-    # that are still in raw form ("@N" or existing ids); siblings get
-    # remapped to real ids in Phase 5 once they're created.
-    resolved_outgoing: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [
-        [] for _ in range(n)
-    ]
-    resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]] = [
-        [] for _ in range(n)
-    ]
-    for i, spec in enumerate(statements):
-        if i in rejected:
-            continue
-        for j, link in enumerate(spec.get("links", []) or []):
-            target = _resolve_ref(link["to_id"], f"statements[{i}].links[{j}]")
-            when_raw = link.get("when")
-            if when_raw is not None:
-                # Validate shape + every leaf @N is in range / every existing id exists.
-                _resolve_when_tree(
-                    when_raw, _resolve_ref, f"statements[{i}].links[{j}].when"
-                )
-            resolved_outgoing[i].append((target, link["link_type"], when_raw))
-        for j, il in enumerate(spec.get("incoming_links", []) or []):
-            source = _resolve_ref(il["from_id"], f"statements[{i}].incoming_links[{j}]")
-            when_raw = il.get("when")
-            if when_raw is not None:
-                _resolve_when_tree(
-                    when_raw, _resolve_ref, f"statements[{i}].incoming_links[{j}].when"
-                )
-            resolved_incoming[i].append((source, il["link_type"], when_raw))
-
-    for i, spec in enumerate(statements):
-        if i in rejected:
-            continue
-        for j, (target, link_type, _when) in enumerate(resolved_outgoing[i]):
-            err = _format_flip_error(
-                position=f"statements[{i}].links[{j}]",
-                from_id=f"@{i}",
-                to_id=_ref_label(target),
-                link_type=link_type,
-                from_kind=spec["kind"],
-                to_kind=_ref_kind(target),
-            )
-            if err is not None:
-                item_errors[i].append(err)
-        for j, (source, link_type, _when) in enumerate(resolved_incoming[i]):
-            err = _format_flip_error(
-                position=f"statements[{i}].incoming_links[{j}]",
-                from_id=_ref_label(source),
-                to_id=f"@{i}",
-                link_type=link_type,
-                from_kind=_ref_kind(source),
-                to_kind=spec["kind"],
-            )
-            if err is not None:
-                item_errors[i].append(err)
+    _collect_batch_flip_errors(
+        statements,
+        rejected,
+        resolved_outgoing,
+        resolved_incoming,
+        statement_rows,
+        item_errors,
+    )
 
     flip_rejected = {i for i, errors in enumerate(item_errors) if errors}
     if flip_rejected:
         direct_rejected.update(flip_rejected)
         rejected.update(flip_rejected)
-        changed = True
-        while changed:
-            changed = False
-            for i, spec in enumerate(statements):
-                if i in rejected:
-                    continue
-                deps = sorted({r for r in _spec_at_refs(spec) if r in rejected})
-                if deps:
-                    rejected.add(i)
-                    cascade_reasons[i] = deps
-                    changed = True
+        _close_cascade(statements, rejected, cascade_reasons)
 
     # Phase 3: embed surviving items only. Slow path runs first so an
     # Ollama failure aborts cleanly without leaving partial state.
@@ -2041,39 +2269,9 @@ def upsert_statements(
     # @-ref endpoint is in `rejected`, so every edge has a real id at both
     # ends — but the when-trees still carry "@N" leaves that need final
     # substitution to real ids.
-    def _resolve_endpoint(ref: int | str) -> str:
-        return statement_ids[ref] if isinstance(ref, int) else ref
-
-    def _materialize_when(when: dict[str, Any] | None) -> dict[str, Any] | None:
-        if when is None:
-            return None
-        return when_expression.substitute_leaves(
-            when,
-            lambda leaf: statement_ids[int(leaf[1:])] if leaf.startswith("@") else leaf,
-        )
-
-    edges: list[tuple[str, str, str, dict[str, Any] | None]] = []
-    for i in range(n):
-        if i in rejected:
-            continue
-        for target, link_type, when in resolved_outgoing[i]:
-            edges.append(
-                (
-                    statement_ids[i],
-                    _resolve_endpoint(target),
-                    link_type,
-                    _materialize_when(when),
-                )
-            )
-        for source, link_type, when in resolved_incoming[i]:
-            edges.append(
-                (
-                    _resolve_endpoint(source),
-                    statement_ids[i],
-                    link_type,
-                    _materialize_when(when),
-                )
-            )
+    edges = _materialize_batch_edges(
+        n, rejected, resolved_outgoing, resolved_incoming, statement_ids
+    )
     if edges:
         store.insert_links(_conn, edges)
 
@@ -2086,26 +2284,15 @@ def upsert_statements(
         if hits:
             near_dups[bid] = hits
 
-    # Build per-item results.
-    results: list[dict[str, Any]] = []
-    for i in range(n):
-        if item_errors[i]:
-            results.append({"rejected": True, "errors": item_errors[i]})
-        elif i in direct_rejected:
-            results.append({"rejected": True, "violations": item_violations[i]})
-        elif i in rejected:
-            results.append(
-                {
-                    "rejected": True,
-                    "reason": "depends_on_rejected",
-                    "depends_on": cascade_reasons[i],
-                }
-            )
-        else:
-            entry: dict[str, Any] = {"statement_id": statement_ids[i]}
-            if item_violations[i]:
-                entry["phrasing_violations"] = item_violations[i]
-            results.append(entry)
+    results = _assemble_batch_results(
+        n,
+        item_errors,
+        item_violations,
+        direct_rejected,
+        rejected,
+        cascade_reasons,
+        statement_ids,
+    )
 
     return {"results": results, "near_duplicates": near_dups}
 
@@ -2135,9 +2322,9 @@ def replace_text(
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
 
-    violations = phrasing.check(text, kind=row["kind"])
-    if violations and not allow_phrasing_violations:
-        return {"rejected": True, "violations": violations}
+    violations, reject = _phrasing_gate(text, row["kind"], allow_phrasing_violations)
+    if reject is not None:
+        return reject
 
     vec = embed.embed(text)
     store.update_statement_text(_conn, id, text)
@@ -2205,12 +2392,14 @@ def patch_statement(
     # Phrasing check + embedding only when text is being patched. The
     # check runs under the *effective* kind so a same-call kind+text
     # patch sees the new kind's catalog, not the old one.
-    violations: list[dict[str, Any]] = []
+    violations: list[phrasing.Violation] = []
     vec = None
     if text is not None:
-        violations = phrasing.check(text, kind=effective_kind)
-        if violations and not allow_phrasing_violations:
-            return {"rejected": True, "violations": violations}
+        violations, reject = _phrasing_gate(
+            text, effective_kind, allow_phrasing_violations
+        )
+        if reject is not None:
+            return reject
         vec = embed.embed(text)
 
     # Mutate field-by-field so omitted fields stay untouched.
@@ -2710,6 +2899,34 @@ def _split_edges(
     return stmt_edges, es_edges
 
 
+def _validate_edge_endpoints(links: list[EdgeSpec]) -> dict[str, sqlite3.Row]:
+    """Validate every referenced id exists across both kinds — statement and
+    entity endpoints plus every `statement_id` leaf inside any `when` tree.
+    Raises ValueError on any unknown id. Returns the fetched statement rows
+    keyed by id for downstream kind lookups."""
+    needed_statements: set[str] = set()
+    needed_entities: set[str] = set()
+    for link in links:
+        for endpoint in (link["from_id"], link["to_id"]):
+            if _id_kind(endpoint) == "statement":
+                needed_statements.add(endpoint)
+            else:
+                needed_entities.add(endpoint)
+        if "when" in link:
+            when_expression.validate(link["when"])
+            needed_statements.update(when_expression.leaves(link["when"]))
+    statement_rows: dict[str, sqlite3.Row] = {}
+    for sid in needed_statements:
+        row = store.get_statement(_conn, sid)
+        if row is None:
+            raise ValueError(f"statement {sid!r} does not exist")
+        statement_rows[sid] = row
+    for eid in needed_entities:
+        if store.get_entity_by_id(_conn, eid) is None:
+            raise ValueError(f"entity {eid!r} does not exist")
+    return statement_rows
+
+
 @tool
 def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     """Insert one or more typed edges. Endpoints may be statements
@@ -2743,29 +2960,9 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
 
     stmt_edges, es_edges = _split_edges(links)
 
-    # Validate every referenced id exists across both kinds.
-    needed_statements: set[str] = set()
-    needed_entities: set[str] = set()
-    for link in links:
-        for endpoint in (link["from_id"], link["to_id"]):
-            if _id_kind(endpoint) == "statement":
-                needed_statements.add(endpoint)
-            else:
-                needed_entities.add(endpoint)
-        if "when" in link:
-            when_expression.validate(link["when"])
-            needed_statements.update(when_expression.leaves(link["when"]))
-    statement_rows: dict[str, sqlite3.Row] = {}
-    for sid in needed_statements:
-        row = store.get_statement(_conn, sid)
-        if row is None:
-            raise ValueError(f"statement {sid!r} does not exist")
-        statement_rows[sid] = row
-    for eid in needed_entities:
-        if store.get_entity_by_id(_conn, eid) is None:
-            raise ValueError(f"entity {eid!r} does not exist")
+    statement_rows = _validate_edge_endpoints(links)
 
-    flip_errors: list[str] = []
+    flip_edges: list[tuple[str, str, str, str, str, str]] = []
     for i, link in enumerate(links):
         if (
             _id_kind(link["from_id"]) != "statement"
@@ -2774,16 +2971,17 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
             continue
         from_kind = statement_rows[link["from_id"]]["kind"]
         to_kind = statement_rows[link["to_id"]]["kind"]
-        err = _format_flip_error(
-            position=f"links[{i}]",
-            from_id=link["from_id"],
-            to_id=link["to_id"],
-            link_type=link["link_type"],
-            from_kind=from_kind,
-            to_kind=to_kind,
+        flip_edges.append(
+            (
+                f"links[{i}]",
+                link["from_id"],
+                link["to_id"],
+                link["link_type"],
+                from_kind,
+                to_kind,
+            )
         )
-        if err is not None:
-            flip_errors.append(err)
+    flip_errors = _collect_flip_errors(flip_edges)
     if flip_errors:
         raise ValueError("flipped link direction:\n" + "\n".join(flip_errors))
 

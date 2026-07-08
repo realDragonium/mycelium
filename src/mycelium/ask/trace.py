@@ -11,33 +11,12 @@ loop keeps the core testable with plain data.
 
 from __future__ import annotations
 
-import json
-from contextlib import contextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
+from .. import agentloop
+from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
 from ..tracing import SpanRecorder
-
-
-@dataclass
-class ToolCallRecord:
-    name: str
-    arguments: dict[str, Any]
-    result_size: int
-    ok: bool
-    counts_as_op: bool
-    error: str | None = None
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "arguments": self.arguments,
-            "result_size": self.result_size,
-            "ok": self.ok,
-            "counts_as_op": self.counts_as_op,
-            "error": self.error,
-        }
 
 
 @dataclass
@@ -67,10 +46,8 @@ class TraceBuilder:
     #: timing artifact, not part of the eval-harness trace contract.
     spans: SpanRecorder = field(default_factory=SpanRecorder)
 
-    @contextmanager
-    def span(self, name: str) -> Iterator[None]:
-        with self.spans.span(name):
-            yield
+    def span(self, name: str) -> Any:
+        return agentloop.span(self.spans, name)
 
     def record_tool_call(
         self,
@@ -82,37 +59,15 @@ class TraceBuilder:
         counts_as_op: bool,
         error: str | None = None,
     ) -> None:
-        if counts_as_op:
-            self.op_count += 1
-        self.tool_calls.append(
-            ToolCallRecord(
-                name=name,
-                arguments=dict(arguments),
-                result_size=_result_size(result),
-                ok=ok,
-                counts_as_op=counts_as_op,
-                error=error,
-            )
+        agentloop.record_tool_call(
+            self, name, arguments, result, ok=ok, counts_as_op=counts_as_op, error=error
         )
 
     def add_usage(self, usage: Any) -> None:
-        if usage is None:
-            return
-        self.tokens["input"] += int(getattr(usage, "input_tokens", 0) or 0)
-        self.tokens["output"] += int(getattr(usage, "output_tokens", 0) or 0)
-        self.tokens["cache_read"] += int(
-            getattr(usage, "cache_read_input_tokens", 0) or 0
-        )
-        self.tokens["cache_creation"] += int(
-            getattr(usage, "cache_creation_input_tokens", 0) or 0
-        )
+        agentloop.add_usage(self, usage)
 
     def cost_usd(self, input_per_mtok: float, output_per_mtok: float) -> float:
-        return round(
-            self.tokens["input"] / 1_000_000 * input_per_mtok
-            + self.tokens["output"] / 1_000_000 * output_per_mtok,
-            6,
-        )
+        return agentloop.cost_usd(self.tokens, input_per_mtok, output_per_mtok)
 
     def build(
         self,
@@ -153,33 +108,3 @@ class TraceBuilder:
             "degraded": self.degraded,
             "notes": self.notes,
         }
-
-
-def _result_size(result: Any) -> int:
-    """Cheap, robust size signal for a tool result (count of items, else chars)."""
-    if result is None:
-        return 0
-    if isinstance(result, list):
-        return len(result)
-    if isinstance(result, dict):
-        for key in ("statements", "entities", "results"):
-            v = result.get(key)
-            if isinstance(v, list):
-                return len(v)
-        return len(result)
-    try:
-        return len(str(result))
-    except Exception:  # noqa: BLE001
-        return 0
-
-
-def write_record(path: str | Path, record: dict) -> None:
-    """Append one trace record as a single JSONL line. Best-effort: a logging
-    failure must never mask the answer."""
-    try:
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except Exception:  # noqa: BLE001
-        pass

@@ -15,7 +15,7 @@ letting them be asserted.
 Matching rules
 --------------
 - **Tokenize on word boundaries, normalized.** Text and names are run through
-  the same normalizer (`phrasing._normalize_with_map`: casefold + NFKC +
+  the same normalizer (`phrasing.normalize_with_map`: casefold + NFKC +
   dash/quote/space folding) and split into maximal runs of letters/digits.
   Matching is therefore exact at the *token* level — "result" never matches
   inside "resultant", because those are different tokens. No stemming, no
@@ -55,7 +55,7 @@ from dataclasses import dataclass
 from typing import Callable, Iterable, Sequence
 
 from . import survey
-from .phrasing import _normalize_with_map
+from .phrasing import normalize_with_map
 
 # A token is a maximal run of letters or digits (Unicode-aware, underscore is a
 # separator). Punctuation and whitespace separate tokens, so apostrophes and
@@ -149,7 +149,7 @@ def _tokenize(text: str) -> list[_Token]:
     a match's reported offsets point into the caller's untouched text even
     though matching happens on the folded form.
     """
-    normalized, pos_map = _normalize_with_map(text)
+    normalized, pos_map = normalize_with_map(text)
     tokens: list[_Token] = []
     for m in _TOKEN_RE.finditer(normalized):
         n_start, n_end = m.start(), m.end()
@@ -162,7 +162,7 @@ def _tokenize(text: str) -> list[_Token]:
 def _name_tokens(text: str) -> tuple[str, ...]:
     """The normalized token sequence of a name. Empty if the name has no
     word characters (it can then never match)."""
-    normalized = _normalize_with_map(text)[0]
+    normalized = normalize_with_map(text)[0]
     return tuple(_TOKEN_RE.findall(normalized))
 
 
@@ -187,7 +187,7 @@ def is_suspect_name(text: str) -> bool:
     """True if `text` is too ambiguous to safely auto-link.
 
     A single-token name is suspect when its token is:
-      - a known function word (`survey._STOPWORDS`), or
+      - a known function word (`survey.STOPWORDS`), or
       - at most `SUSPECT_MAX_LEN` characters (short, common), or
       - an English verb/past-participle form (length >= 5, ends in "-ed").
 
@@ -210,7 +210,7 @@ def is_suspect_name(text: str) -> bool:
     if len(toks) != 1:
         return False
     tok = toks[0]
-    if tok in survey._STOPWORDS or len(tok) <= SUSPECT_MAX_LEN:
+    if tok in survey.STOPWORDS or len(tok) <= SUSPECT_MAX_LEN:
         return True
     return len(tok) >= 5 and tok.endswith("ed")
 

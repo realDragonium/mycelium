@@ -44,7 +44,8 @@ Role = Literal["asker", "reader", "drafter", "writer", "admin"]
 UserType = Literal["human", "service"]
 Scope = Literal["asker", "reader", "drafter", "writer", "admin"]
 
-# Ordering used to clamp a token's scope against its owner's role.
+# Ordering used both to clamp a token's scope against its owner's role
+# and to compare a principal's role against a tool's required role.
 # Lower-privilege scopes are always allowed; never widen. Drafter sits
 # between reader and writer: a drafter can call every write/delete/merge
 # tool, but the call body redirects to a draft instead of mutating the
@@ -137,14 +138,6 @@ current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _READ_PREFIXES = ("list_", "get_", "search_", "grep_", "discover_", "find_")
 _ADMIN_PREFIXES = ("delete_", "merge_")
 
-_ROLE_RANK_FULL: dict[str, int] = {
-    "asker": 0,
-    "reader": 1,
-    "drafter": 2,
-    "writer": 3,
-    "admin": 4,
-}
-
 
 def required_role_for(func_name: str) -> Role:
     if func_name.startswith(_ADMIN_PREFIXES):
@@ -161,14 +154,14 @@ def principal_satisfies(principal: "Principal", required: str) -> bool:
     # admin requirements. Reads still gate normally (drafter > reader).
     if principal.role == "drafter" and required in ("writer", "admin"):
         return True
-    return _ROLE_RANK_FULL[principal.role] >= _ROLE_RANK_FULL[required]
+    return _ROLE_RANK[principal.role] >= _ROLE_RANK[required]
 
 
 def is_valid_role(role: str) -> bool:
     """True when `role` is one of the recognized roles. Used to validate
     externally-supplied role names (e.g. the JIT default role from an env
     var) before trusting them to grant a privilege level."""
-    return role in _ROLE_RANK_FULL
+    return role in _ROLE_RANK
 
 
 def principal_has_real_role(principal: "Principal", required: str) -> bool:
@@ -179,7 +172,7 @@ def principal_has_real_role(principal: "Principal", required: str) -> bool:
     drafter through and break the replay path. Pure rank comparison —
     a drafter does not pass `required='writer'` here.
     """
-    return _ROLE_RANK_FULL[principal.role] >= _ROLE_RANK_FULL[required]
+    return _ROLE_RANK[principal.role] >= _ROLE_RANK[required]
 
 
 # --- toggle ---------------------------------------------------------------
