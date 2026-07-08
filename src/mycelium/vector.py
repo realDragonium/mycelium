@@ -120,9 +120,7 @@ class Index:
                 return None
             raise
 
-    def search(
-        self, vec: list[float], k: int
-    ) -> list[tuple[int, float]]:
+    def search(self, vec: list[float], k: int) -> list[tuple[int, float]]:
         assert self._index is not None
         if self._index.get_current_count() == 0:
             return []

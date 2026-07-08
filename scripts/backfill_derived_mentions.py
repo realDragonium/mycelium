@@ -47,8 +47,12 @@ def _resolve_data_dir(arg: str | None) -> Path:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--data-dir", default=None, help="substrate data dir (holds mycelium.db)")
-    ap.add_argument("--dry-run", action="store_true", help="report counts without writing")
+    ap.add_argument(
+        "--data-dir", default=None, help="substrate data dir (holds mycelium.db)"
+    )
+    ap.add_argument(
+        "--dry-run", action="store_true", help="report counts without writing"
+    )
     args = ap.parse_args()
 
     data_dir = _resolve_data_dir(args.data_dir)
@@ -57,7 +61,9 @@ def main() -> None:
         raise SystemExit(f"no substrate at {db_path}")
     history_path = data_dir / "mycelium-history.db"
 
-    conn = store.connect(db_path, history_path=history_path if history_path.exists() else None)
+    conn = store.connect(
+        db_path, history_path=history_path if history_path.exists() else None
+    )
     store.migrate(conn)
     store.set_actor("system:backfill")
 
@@ -72,8 +78,10 @@ def main() -> None:
             result = store.mentions.match_text(row["text"], index)
             mentions += len(result.mentions)
             suspects += len(result.suspects)
-        print(f"[dry-run] would materialize {mentions} mentions, "
-              f"{suspects} suspect occurrences across {len(statements)} statements")
+        print(
+            f"[dry-run] would materialize {mentions} mentions, "
+            f"{suspects} suspect occurrences across {len(statements)} statements"
+        )
         return
 
     # Wipe the old materialized state — the matcher is now authoritative.
@@ -84,7 +92,9 @@ def main() -> None:
 
     total_mentions = total_suspects = 0
     for i, row in enumerate(statements, 1):
-        result = store.derive_mentions(conn, row["id"], row["text"], index, commit=False)
+        result = store.derive_mentions(
+            conn, row["id"], row["text"], index, commit=False
+        )
         total_mentions += len(result.mentions)
         total_suspects += len(result.suspects)
         if i % CHUNK == 0:

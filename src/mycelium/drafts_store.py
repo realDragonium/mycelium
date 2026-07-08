@@ -132,9 +132,7 @@ def find_open_session_draft(
 
 
 def get_draft(conn: sqlite3.Connection, draft_id: str) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM drafts WHERE id = ?", (draft_id,)
-    ).fetchone()
+    return conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
 
 
 def add_op(

@@ -40,7 +40,9 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = REPO_ROOT / ".mycelium" / "mycelium.db"
-DEFAULT_OUTPUT = REPO_ROOT / "src" / "mycelium" / "ui" / "data" / "entity-positions.json"
+DEFAULT_OUTPUT = (
+    REPO_ROOT / "src" / "mycelium" / "ui" / "data" / "entity-positions.json"
+)
 
 
 def load_graph(db_path: Path) -> tuple[list[dict], list[tuple[int, int]]]:
@@ -55,8 +57,7 @@ def load_graph(db_path: Path) -> tuple[list[dict], list[tuple[int, int]]]:
 
     entity_rows = conn.execute("SELECT id FROM entities").fetchall()
     entities = [
-        {"id": r["id"], "name": primary_name.get(r["id"], r["id"])}
-        for r in entity_rows
+        {"id": r["id"], "name": primary_name.get(r["id"], r["id"])} for r in entity_rows
     ]
 
     id_to_idx = {e["id"]: i for i, e in enumerate(entities)}
@@ -215,6 +216,7 @@ def _all_pairs_shortest_paths(
                         q.append(v)
     else:
         import heapq
+
         for src in range(k):
             D[src, src] = 0.0
             heap: list[tuple[float, int]] = [(0.0, src)]
@@ -288,7 +290,7 @@ def stress_majorization(
         for _ in range(iters):
             # Per-node update: new_x_i = (Σ_j w_ij * (x_j + d_ij * (x_i - x_j) / |x_i - x_j|)) / Σ_j w_ij
             delta = X[:, None, :] - X[None, :, :]  # (k, k, 2)
-            dist = np.sqrt((delta ** 2).sum(axis=-1)) + 1e-9  # (k, k)
+            dist = np.sqrt((delta**2).sum(axis=-1)) + 1e-9  # (k, k)
             unit = delta / dist[..., None]  # (k, k, 2)
             # ideal[i, j, :] = x_j + d_ij * unit[i, j]
             ideal = X[None, :, :] + D[..., None] * unit
@@ -300,7 +302,7 @@ def stress_majorization(
 
         # Centre this component on origin, record its radius for packing.
         X -= X.mean(axis=0)
-        radius = float(np.sqrt((X ** 2).sum(axis=1)).max())
+        radius = float(np.sqrt((X**2).sum(axis=1)).max())
         comp_radii.append(radius)
         pos[idx] = X
 
@@ -356,7 +358,9 @@ def relax_overlaps(
     """
     n = pos.shape[0]
     mass = 1.0 + np.asarray(deg, dtype=np.float64)
-    share_i = mass[None, :] / (mass[:, None] + mass[None, :])  # share for row i from pair (i,j)
+    share_i = mass[None, :] / (
+        mass[:, None] + mass[None, :]
+    )  # share for row i from pair (i,j)
     for _ in range(iters):
         dx = pos[:, 0:1] - pos[:, 0:1].T
         dy = pos[:, 1:2] - pos[:, 1:2].T
@@ -407,7 +411,9 @@ def force_atlas_linlog(
     pos = rng.normal(0.0, 50.0, size=(n, 2)).astype(np.float64)
     mass = 1.0 + deg  # ForceAtlas2 convention
 
-    edge_arr = np.array(edges, dtype=np.int64) if edges else np.zeros((0, 2), dtype=np.int64)
+    edge_arr = (
+        np.array(edges, dtype=np.int64) if edges else np.zeros((0, 2), dtype=np.int64)
+    )
     src_idx = edge_arr[:, 0]
     dst_idx = edge_arr[:, 1]
 
@@ -474,7 +480,7 @@ def normalize_positions(pos: np.ndarray, target_radius: float = 2000.0) -> np.nd
     """Centre on origin and scale so the 95th-percentile radius equals
     ``target_radius``. Robust to a handful of far-flung outliers."""
     pos = pos - pos.mean(axis=0)
-    r = np.sqrt((pos ** 2).sum(axis=1))
+    r = np.sqrt((pos**2).sum(axis=1))
     p95 = np.percentile(r, 95)
     if p95 > 1e-6:
         pos *= target_radius / p95
@@ -485,28 +491,49 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", type=Path, default=DEFAULT_DB)
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    ap.add_argument("--algorithm", choices=["sm", "fa2"], default="sm",
-                    help="sm = stress majorization (default, best cluster shapes); "
-                         "fa2 = ForceAtlas2 LinLog (force-directed, circular envelope)")
-    ap.add_argument("--iters", type=int, default=None,
-                    help="iteration count (defaults: 300 for sm, 1200 for fa2)")
+    ap.add_argument(
+        "--algorithm",
+        choices=["sm", "fa2"],
+        default="sm",
+        help="sm = stress majorization (default, best cluster shapes); "
+        "fa2 = ForceAtlas2 LinLog (force-directed, circular envelope)",
+    )
+    ap.add_argument(
+        "--iters",
+        type=int,
+        default=None,
+        help="iteration count (defaults: 300 for sm, 1200 for fa2)",
+    )
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--scaling", type=float, default=30.0, help="fa2: repulsion strength")
+    ap.add_argument(
+        "--scaling", type=float, default=30.0, help="fa2: repulsion strength"
+    )
     ap.add_argument("--gravity", type=float, default=0.5, help="fa2 only")
-    ap.add_argument("--no-dissuade-hubs", action="store_true",
-                    help="fa2: disable the dissuade-hubs attraction mode")
+    ap.add_argument(
+        "--no-dissuade-hubs",
+        action="store_true",
+        help="fa2: disable the dissuade-hubs attraction mode",
+    )
     ap.add_argument("--target-radius", type=float, default=2500.0)
-    ap.add_argument("--hub-edge-scale", type=float, default=0.08,
-                    help="sm: edges incident to a degree-K node count as "
-                         "(1 + alpha * K) graph-hops instead of 1. Pushes "
-                         "hubs further from their satellites and (through "
-                         "shared neighbours) further from other hubs. "
-                         "Tunable: 0 disables (pure unweighted SM); 0.05 is "
-                         "modest; 0.15 is very pronounced.")
-    ap.add_argument("--min-dist", type=float, default=0.3,
-                    help="sm: tiny overlap-prevention min distance "
-                         "(graph-hop units). Mass-weighted so hubs don't "
-                         "move. Set 0 to disable.")
+    ap.add_argument(
+        "--hub-edge-scale",
+        type=float,
+        default=0.08,
+        help="sm: edges incident to a degree-K node count as "
+        "(1 + alpha * K) graph-hops instead of 1. Pushes "
+        "hubs further from their satellites and (through "
+        "shared neighbours) further from other hubs. "
+        "Tunable: 0 disables (pure unweighted SM); 0.05 is "
+        "modest; 0.15 is very pronounced.",
+    )
+    ap.add_argument(
+        "--min-dist",
+        type=float,
+        default=0.3,
+        help="sm: tiny overlap-prevention min distance "
+        "(graph-hop units). Mass-weighted so hubs don't "
+        "move. Set 0 to disable.",
+    )
     args = ap.parse_args()
 
     if not args.db.exists():
@@ -545,14 +572,16 @@ def main() -> None:
                     ew[i] = 1.0 + args.hub_edge_scale * max(deg[a], deg[b])
             edge_weight = ew
             n_pendant = int((ew == 1.0).sum())
-            print(f"running stress majorization for {iters} iterations "
-                  f"(hub_edge_scale={args.hub_edge_scale}, "
-                  f"{n_pendant}/{len(edges)} pendant edges) …")
+            print(
+                f"running stress majorization for {iters} iterations "
+                f"(hub_edge_scale={args.hub_edge_scale}, "
+                f"{n_pendant}/{len(edges)} pendant edges) …"
+            )
         else:
-            print(f"running stress majorization for {iters} iterations "
-                  f"(unweighted) …")
+            print(f"running stress majorization for {iters} iterations (unweighted) …")
         pos = stress_majorization(
-            n, edges,
+            n,
+            edges,
             iters=iters,
             seed=args.seed,
             edge_weight=edge_weight,

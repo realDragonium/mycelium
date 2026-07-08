@@ -11,7 +11,10 @@ def test_entity_and_name_roundtrip():
     conn = fresh_conn()
     eid = store.create_entity(conn, "User authentication surface")
     assert eid.startswith("ent_")
-    assert store.get_entity_by_id(conn, eid)["description"] == "User authentication surface"
+    assert (
+        store.get_entity_by_id(conn, eid)["description"]
+        == "User authentication surface"
+    )
 
     nid = store.create_name(conn, "Login", eid)
     assert nid.startswith("nam_")
@@ -46,7 +49,10 @@ def test_statement_roundtrip_with_mentions_and_links():
 
     store.replace_mentions(conn, b1, [n1, n2])
     rows = store.get_mentions(conn, b1)
-    assert {(r["name"], r["entity_id"]) for r in rows} == {("Login", e1), ("Session", e2)}
+    assert {(r["name"], r["entity_id"]) for r in rows} == {
+        ("Login", e1),
+        ("Session", e2),
+    }
 
     # replace narrows the mention set
     store.replace_mentions(conn, b1, [n1])
@@ -128,12 +134,15 @@ def test_reassign_and_set_name_entity():
 
     # FK enforcement: deleting an entity that still has names attached fails
     import sqlite3
+
     try:
         store.delete_entity(conn, dst)
     except sqlite3.IntegrityError:
         pass
     else:
-        raise AssertionError("expected FK violation deleting entity with attached names")
+        raise AssertionError(
+            "expected FK violation deleting entity with attached names"
+        )
 
     # Move the remaining name off, then delete cleanly
     store.set_name_entity(conn, n2, src)

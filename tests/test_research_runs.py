@@ -39,7 +39,9 @@ def test_status_derivation(tmp_path):
         conn, topic="running", source="manual", created_by="u1"
     )
     research_store.mark_started(conn, running)
-    draft = research_store.create_run(conn, topic="draft", source="manual", created_by="u1")
+    draft = research_store.create_run(
+        conn, topic="draft", source="manual", created_by="u1"
+    )
     research_store.mark_started(conn, draft)
     research_store.finish_run(conn, draft, outcome="draft_created", draft_id="drf_1")
     nothing = research_store.create_run(
@@ -47,7 +49,9 @@ def test_status_derivation(tmp_path):
     )
     research_store.mark_started(conn, nothing)
     research_store.finish_run(conn, nothing, outcome="nothing_found", error="no hits")
-    failed = research_store.create_run(conn, topic="failed", source="manual", created_by="u1")
+    failed = research_store.create_run(
+        conn, topic="failed", source="manual", created_by="u1"
+    )
     research_store.mark_started(conn, failed)
     research_store.finish_run(conn, failed, outcome="failed", error="boom")
     null_outcome = research_store.create_run(
@@ -61,13 +65,19 @@ def test_status_derivation(tmp_path):
 
     assert research_store.status_for(research_store.get_run(conn, queued)) == "queued"
     assert research_store.status_for(research_store.get_run(conn, running)) == "running"
-    assert research_store.status_for(research_store.get_run(conn, draft)) == "draft_created"
+    assert (
+        research_store.status_for(research_store.get_run(conn, draft))
+        == "draft_created"
+    )
     assert (
         research_store.status_for(research_store.get_run(conn, nothing))
         == "nothing_found"
     )
     assert research_store.status_for(research_store.get_run(conn, failed)) == "failed"
-    assert research_store.status_for(research_store.get_run(conn, null_outcome)) == "failed"
+    assert (
+        research_store.status_for(research_store.get_run(conn, null_outcome))
+        == "failed"
+    )
 
 
 def test_create_before_thread_and_finish_draft_created(tmp_path):
@@ -107,7 +117,10 @@ def test_nothing_found_reason_in_error_column(tmp_path):
         created_by=None,
         data_dir=tmp_path,
         conn=conn,
-        runner=lambda topic, *, source: {"outcome": "nothing_found", "reason": "no sources"},
+        runner=lambda topic, *, source: {
+            "outcome": "nothing_found",
+            "reason": "no sources",
+        },
     )
 
     research_runs.wait_all()
@@ -148,12 +161,25 @@ def test_capacity_refuses_when_at_max(tmp_path, monkeypatch):
         return {"outcome": "nothing_found", "reason": "done"}
 
     run1 = research_runs.start_run(
-        topic="one", source="manual", created_by=None, data_dir=tmp_path, conn=conn, runner=runner
+        topic="one",
+        source="manual",
+        created_by=None,
+        data_dir=tmp_path,
+        conn=conn,
+        runner=runner,
     )
     run2 = research_runs.start_run(
-        topic="two", source="manual", created_by=None, data_dir=tmp_path, conn=conn, runner=runner
+        topic="two",
+        source="manual",
+        created_by=None,
+        data_dir=tmp_path,
+        conn=conn,
+        runner=runner,
     )
-    assert {research_store.status_for(research_store.get_run(conn, run1)), research_store.status_for(research_store.get_run(conn, run2))} == {"running"}
+    assert {
+        research_store.status_for(research_store.get_run(conn, run1)),
+        research_store.status_for(research_store.get_run(conn, run2)),
+    } == {"running"}
 
     with pytest.raises(ValueError, match="max 2"):
         research_runs.start_run(
@@ -176,7 +202,9 @@ def test_capacity_refuses_when_at_max(tmp_path, monkeypatch):
         runner=lambda topic, *, source: {"outcome": "nothing_found", "reason": "done"},
     )
     research_runs.wait_all()
-    assert research_store.status_for(research_store.get_run(conn, run3)) == "nothing_found"
+    assert (
+        research_store.status_for(research_store.get_run(conn, run3)) == "nothing_found"
+    )
 
 
 def test_bound_is_db_derived(tmp_path, monkeypatch):
@@ -251,7 +279,9 @@ def test_mark_orphaned_flips_only_unfinished(tmp_path):
     )
     research_store.mark_started(conn, finished)
     research_store.finish_run(conn, finished, outcome="nothing_found", error="original")
-    queued = research_store.create_run(conn, topic="queued", source="manual", created_by=None)
+    queued = research_store.create_run(
+        conn, topic="queued", source="manual", created_by=None
+    )
 
     # Both the running row AND the stranded queued row are swept: at startup
     # no worker thread can exist, so any unfinished row is an orphan.
@@ -260,7 +290,10 @@ def test_mark_orphaned_flips_only_unfinished(tmp_path):
     unfinished_row = research_store.get_run(conn, unfinished)
     assert research_store.status_for(unfinished_row) == "failed"
     assert unfinished_row["error"] == "orphaned by restart"
-    assert research_store.status_for(research_store.get_run(conn, finished)) == "nothing_found"
+    assert (
+        research_store.status_for(research_store.get_run(conn, finished))
+        == "nothing_found"
+    )
     assert research_store.get_run(conn, finished)["error"] == "original"
     assert research_store.status_for(research_store.get_run(conn, queued)) == "failed"
 
@@ -294,8 +327,11 @@ def test_explicit_runner_beats_module_override(tmp_path):
 
     called.clear()
     run_id2 = research_runs.start_run(
-        topic="topic2", source="manual", created_by=None,
-        data_dir=tmp_path, conn=conn,
+        topic="topic2",
+        source="manual",
+        created_by=None,
+        data_dir=tmp_path,
+        conn=conn,
     )
     research_runs.wait_all()
     assert called == ["module"]

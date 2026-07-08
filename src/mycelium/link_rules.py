@@ -22,9 +22,8 @@ LINK_DIRECTION: dict[str, tuple[KindSet, KindSet]] = {
 
 def _satisfies(kinds: tuple[KindSet, KindSet], from_kind: str, to_kind: str) -> bool:
     source_kinds, target_kinds = kinds
-    return (
-        (source_kinds is None or from_kind in source_kinds)
-        and (target_kinds is None or to_kind in target_kinds)
+    return (source_kinds is None or from_kind in source_kinds) and (
+        target_kinds is None or to_kind in target_kinds
     )
 
 

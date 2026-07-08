@@ -143,9 +143,13 @@ def test_migrate_drops_role_check_and_preserves_rows(tmp_path):
     # Pre-existing rows are untouched.
     rows = conn.execute("SELECT id, role FROM users ORDER BY id").fetchall()
     assert [(r["id"], r["role"]) for r in rows] == [
-        ("u1", "admin"), ("u2", "writer"), ("u3", "analyst"),
+        ("u1", "admin"),
+        ("u2", "writer"),
+        ("u3", "analyst"),
     ]
-    tok = conn.execute("SELECT user_id, scope FROM mcp_tokens WHERE id = 't1'").fetchone()
+    tok = conn.execute(
+        "SELECT user_id, scope FROM mcp_tokens WHERE id = 't1'"
+    ).fetchone()
     assert tok["user_id"] == "u1" and tok["scope"] == "admin"
 
     # FKs survived the rebuild — invited_by still resolves.
@@ -155,9 +159,12 @@ def test_migrate_drops_role_check_and_preserves_rows(tmp_path):
     assert inv["role"] == "writer" and inv["name"] == "Alice"
 
     # Indexes restored.
-    idx = {r["name"] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mcp_tokens'"
-    ).fetchall()}
+    idx = {
+        r["name"]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='mcp_tokens'"
+        ).fetchall()
+    }
     assert "mcp_tokens_user" in idx and "mcp_tokens_hash" in idx
 
 

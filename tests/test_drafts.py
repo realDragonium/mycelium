@@ -39,8 +39,10 @@ def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
     monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
     _reset_server()
     from mycelium import embed
+
     monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
     from mycelium.http import app
+
     return TestClient(app)
 
 
@@ -62,7 +64,10 @@ def test_drafter_write_creates_session_draft_and_queues_op(tmp_path, monkeypatch
     client = _app(tmp_path, monkeypatch)
     with client:
         # No entities in substrate initially.
-        assert server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"] == 0
+        assert (
+            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            == 0
+        )
 
         tokens = _as_drafter()
         try:
@@ -71,7 +76,10 @@ def test_drafter_write_creates_session_draft_and_queues_op(tmp_path, monkeypatch
             _restore(tokens)
 
         # Substrate untouched.
-        assert server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"] == 0
+        assert (
+            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            == 0
+        )
         # Receipt shape.
         assert result["queued"] == "upsert_entity"
         assert "draft_id" in result and result["seq"] == 1
@@ -102,6 +110,7 @@ def test_explicit_draft_id_queues_op_for_any_writer(tmp_path, monkeypatch):
     with client:
         # Local-admin (synthetic admin) creates an open draft manually.
         from mycelium import drafts_store
+
         draft_id = drafts_store.create_draft(
             server._drafts_conn,
             created_by="someone-else",
@@ -112,7 +121,10 @@ def test_explicit_draft_id_queues_op_for_any_writer(tmp_path, monkeypatch):
         assert result["draft_id"] == draft_id
         assert result["queued"] == "upsert_entity"
         # Substrate still untouched.
-        assert server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"] == 0
+        assert (
+            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            == 0
+        )
 
 
 def test_submit_then_approve_replays_to_substrate(tmp_path, monkeypatch):
@@ -137,7 +149,9 @@ def test_submit_then_approve_replays_to_substrate(tmp_path, monkeypatch):
         assert body["applied"] == 2
 
         # Both entities now exist in the substrate.
-        rows = server._conn.execute("SELECT description FROM entities ORDER BY description").fetchall()
+        rows = server._conn.execute(
+            "SELECT description FROM entities ORDER BY description"
+        ).fetchall()
         assert [r["description"] for r in rows] == ["d1", "d2"]
 
 
@@ -154,7 +168,10 @@ def test_reject_leaves_substrate_untouched(tmp_path, monkeypatch):
         client.post(f"/api/drafts/{draft_id}/submit")
         rej = client.post(f"/api/drafts/{draft_id}/reject")
         assert rej.status_code == 200
-        assert server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"] == 0
+        assert (
+            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            == 0
+        )
 
         # Draft now in rejected state, no further approve possible.
         appr = client.post(f"/api/drafts/{draft_id}/approve")
@@ -193,6 +210,7 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
         finally:
             _restore(tokens)
         from mycelium import drafts_store
+
         row = drafts_store.find_open_session_draft(server._drafts_conn, "sess-E")
         draft_id = row["id"]
 
@@ -202,6 +220,7 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
 
         # Still in submitted (not approved) state — curator can edit & retry.
         from mycelium import drafts_store
+
         row = drafts_store.get_draft(server._drafts_conn, draft_id)
         assert drafts_store.status_for(row) == "submitted"
 
@@ -237,7 +256,10 @@ def test_list_tools_with_draft_id_return_queued_ops(tmp_path, monkeypatch):
         draft_id = r["draft_id"]
 
         # Substrate empty.
-        assert server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"] == 0
+        assert (
+            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            == 0
+        )
 
         # Without draft_id → substrate result (empty).
         assert server.list_entities() == {"entities": [], "total": 0}
@@ -277,10 +299,15 @@ def test_drafter_cannot_approve_their_own_draft(tmp_path, monkeypatch):
             # with a stub request that carries our drafter principal.
             from fastapi import HTTPException
             from mycelium.http import approve_draft
+
             class _Req:
                 class state:
-                    principal = auth.Principal(id="d3", name="D", role="drafter", type="human")
+                    principal = auth.Principal(
+                        id="d3", name="D", role="drafter", type="human"
+                    )
+
             import pytest
+
             with pytest.raises(HTTPException) as exc:
                 approve_draft(draft_id, _Req())
             assert exc.value.status_code == 403

@@ -191,7 +191,9 @@ def test_git_dir_is_refused_by_read_and_skipped_by_glob(tmp_path):
     from mycelium.research.workspace import WorkspaceError, WorkspaceReader
 
     (tmp_path / ".git").mkdir()
-    (tmp_path / ".git" / "config").write_text("url = https://x-access-token:SECRET@github.com/o/r")
+    (tmp_path / ".git" / "config").write_text(
+        "url = https://x-access-token:SECRET@github.com/o/r"
+    )
     (tmp_path / "app.py").write_text("print('hi')\n")
     ws = WorkspaceReader(tmp_path)
 

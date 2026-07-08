@@ -25,9 +25,9 @@ from pydantic import create_model
 _NON_READ_READER_TOOLS = frozenset(
     {
         "report_knowledge_gap",  # role=reader but WRITES a knowledge-gap record
-        "ask",                   # this tool itself — avoid recursion
-        "list_my_drafts",        # draft-session state, not the substrate
-        "get_draft",             # draft-session state, not the substrate
+        "ask",  # this tool itself — avoid recursion
+        "list_my_drafts",  # draft-session state, not the substrate
+        "get_draft",  # draft-session state, not the substrate
     }
 )
 

@@ -2,6 +2,7 @@
 updated_at; the module-level actor flows into created_by / updated_by; the
 ALTER-TABLE migration is idempotent against legacy DBs without the columns.
 """
+
 from __future__ import annotations
 
 import sqlite3
@@ -172,9 +173,7 @@ def test_migration_adds_columns_to_legacy_db():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # Old-shape entities table — no audit columns.
-    conn.execute(
-        "CREATE TABLE entities (id TEXT PRIMARY KEY, description TEXT)"
-    )
+    conn.execute("CREATE TABLE entities (id TEXT PRIMARY KEY, description TEXT)")
     conn.execute(
         "INSERT INTO entities (id, description) VALUES ('ent_legacy', 'old row')"
     )

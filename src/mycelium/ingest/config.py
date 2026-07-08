@@ -82,10 +82,13 @@ class IngestConfig:
             max_tokens=_i("MYCELIUM_INGEST_MAX_TOKENS", 8000),
             max_retries=_i("MYCELIUM_INGEST_MAX_RETRIES", 4),
             request_timeout_s=_f("MYCELIUM_INGEST_REQUEST_TIMEOUT_S", 90.0),
-            thinking=(os.environ.get("MYCELIUM_INGEST_THINKING", "on").lower() != "off"),
+            thinking=(
+                os.environ.get("MYCELIUM_INGEST_THINKING", "on").lower() != "off"
+            ),
             max_input_chars=_i("MYCELIUM_INGEST_MAX_INPUT_CHARS", 20000),
             doctrine_path=(
-                os.environ.get("MYCELIUM_INGEST_DOCTRINE_PATH") or _DEFAULT_DOCTRINE_PATH
+                os.environ.get("MYCELIUM_INGEST_DOCTRINE_PATH")
+                or _DEFAULT_DOCTRINE_PATH
             ),
             input_per_mtok=_f("MYCELIUM_INGEST_INPUT_PER_MTOK", 3.0),
             output_per_mtok=_f("MYCELIUM_INGEST_OUTPUT_PER_MTOK", 15.0),

@@ -89,7 +89,9 @@ def start_run(
             _threads.pop(run_id, None)
             try:
                 research_store.finish_run(
-                    conn, run_id, outcome="failed",
+                    conn,
+                    run_id,
+                    outcome="failed",
                     error=f"failed to start: {type(exc).__name__}: {exc}",
                 )
             except Exception:  # noqa: BLE001 — startup orphan sweep is the backstop

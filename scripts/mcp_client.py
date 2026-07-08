@@ -30,12 +30,8 @@ class MyceliumClient:
 
     # --- Reads ----------------------------------------------------------
 
-    def list_behaviors(
-        self, limit: int = 100, offset: int = 0
-    ) -> dict[str, Any]:
-        return self._post(
-            "/list-behaviors", {"limit": limit, "offset": offset}
-        )
+    def list_behaviors(self, limit: int = 100, offset: int = 0) -> dict[str, Any]:
+        return self._post("/list-behaviors", {"limit": limit, "offset": offset})
 
     def list_all_behaviors(self) -> list[dict[str, str]]:
         out: list[dict[str, str]] = []
@@ -65,12 +61,8 @@ class MyceliumClient:
             {"query": query, "limit": limit, "min_score": min_score},
         )
 
-    def grep_behaviors(
-        self, query: str, limit: int = 10
-    ) -> dict[str, Any]:
-        return self._post(
-            "/grep-behaviors", {"query": query, "limit": limit}
-        )
+    def grep_behaviors(self, query: str, limit: int = 10) -> dict[str, Any]:
+        return self._post("/grep-behaviors", {"query": query, "limit": limit})
 
     def list_link_types(self) -> list[str]:
         # No-arg tools are exposed as GET by the HTTP transport.
@@ -109,9 +101,7 @@ class MyceliumClient:
     def find_duplicates(
         self, threshold: float = 0.92, limit: int = 50
     ) -> list[dict[str, Any]]:
-        return self._post(
-            "/find-duplicates", {"threshold": threshold, "limit": limit}
-        )
+        return self._post("/find-duplicates", {"threshold": threshold, "limit": limit})
 
     # --- Writes ---------------------------------------------------------
 
@@ -173,9 +163,7 @@ class MyceliumClient:
         )
 
     def remove_mentions(self, id: str, mentions: list[str]) -> dict[str, Any]:
-        return self._post(
-            "/remove-mentions", {"id": id, "mentions": mentions}
-        )
+        return self._post("/remove-mentions", {"id": id, "mentions": mentions})
 
     def add_links(self, links: list[dict]) -> dict[str, Any]:
         return self._post("/add-links", {"links": links})
@@ -187,9 +175,7 @@ class MyceliumClient:
         return self._post("/delete-behavior", {"id": id})
 
     def upsert_entity(self, name: str, description: str) -> dict[str, Any]:
-        return self._post(
-            "/upsert-entity", {"name": name, "description": description}
-        )
+        return self._post("/upsert-entity", {"name": name, "description": description})
 
     def upsert_annotation(
         self,

@@ -23,10 +23,13 @@ def main() -> None:
 
     server.init(data_dir)
 
-    show("upsert_entity Login", server.upsert_entity(
-        name="Login",
-        description="User authentication surface",
-    ))
+    show(
+        "upsert_entity Login",
+        server.upsert_entity(
+            name="Login",
+            description="User authentication surface",
+        ),
+    )
 
     login_id = store.get_entity_by_name(server._conn, "Login")["id"]
 
@@ -46,10 +49,13 @@ def main() -> None:
 
     show("list_link_types", server.list_link_types())
 
-    show("upsert_name (alias)", server.upsert_name(
-        text="sign-in",
-        entity_id=login_id,
-    ))
+    show(
+        "upsert_name (alias)",
+        server.upsert_name(
+            text="sign-in",
+            entity_id=login_id,
+        ),
+    )
 
     # Update statement #1 to verify the in-place replace path.
     b1_updated = server.upsert_statement(
@@ -83,7 +89,9 @@ def main() -> None:
 
     # Verify upsert_statement with bad id raises.
     try:
-        server.upsert_statement(text="x", mentions=[], links=[], id="stm_does_not_exist")
+        server.upsert_statement(
+            text="x", mentions=[], links=[], id="stm_does_not_exist"
+        )
     except ValueError as e:
         print(f"upsert_statement unknown id correctly raised: {e}")
     else:
@@ -93,8 +101,10 @@ def main() -> None:
     db_path = data_dir / "mycelium.db"
     vec_path = data_dir / "mycelium.vec"
     assert db_path.exists() and vec_path.exists(), "data files missing"
-    print(f"\nartifacts: {db_path} ({db_path.stat().st_size}B), "
-          f"{vec_path} ({vec_path.stat().st_size}B)")
+    print(
+        f"\nartifacts: {db_path} ({db_path.stat().st_size}B), "
+        f"{vec_path} ({vec_path.stat().st_size}B)"
+    )
 
     # Reopen to verify persistence.
     server._conn = None

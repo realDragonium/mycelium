@@ -33,14 +33,20 @@ def _app(tmp_path, monkeypatch, *, auth_mode: str = "on"):
     monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
     _reset_server()
     from mycelium import embed
+
     monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
     from mycelium.http import app
+
     return TestClient(app)
 
 
 def _admin_bearer(conn) -> tuple[str, str]:
     uid = auth.create_user(
-        conn, name="Admin", role="admin", type="human", email="admin@example.com",
+        conn,
+        name="Admin",
+        role="admin",
+        type="human",
+        email="admin@example.com",
     )
     conn.commit()
     raw, _ = auth.issue_token(conn, user_id=uid, name="bootstrap", scope="admin")
@@ -50,9 +56,11 @@ def _admin_bearer(conn) -> tuple[str, str]:
 def _pkce_pair() -> tuple[str, str]:
     """Returns (code_verifier, code_challenge_S256)."""
     verifier = secrets.token_urlsafe(48)
-    challenge = base64.urlsafe_b64encode(
-        hashlib.sha256(verifier.encode("ascii")).digest()
-    ).rstrip(b"=").decode("ascii")
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+        .rstrip(b"=")
+        .decode("ascii")
+    )
     return verifier, challenge
 
 
@@ -89,7 +97,9 @@ def test_mcp_401_carries_www_authenticate(tmp_path, monkeypatch):
     the OAuth metadata — the discovery chain starts here."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        r = client.post(
+            "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"}
+        )
         assert r.status_code == 401
         www = r.headers.get("www-authenticate", "")
         assert "Bearer" in www
@@ -151,7 +161,9 @@ def test_logout_bounces_through_auth0_back_to_login(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_OIDC_ISSUER", "https://tenant.auth0.com")
     monkeypatch.setenv("MYCELIUM_OIDC_CLIENT_ID", "client-abc")
     with client:
-        r = client.get("/auth/logout", params={"next": "/ui/graph"}, follow_redirects=False)
+        r = client.get(
+            "/auth/logout", params={"next": "/ui/graph"}, follow_redirects=False
+        )
         assert r.status_code in (302, 307)  # RedirectResponse default is 307
         loc = r.headers["location"]
         assert loc.startswith("https://tenant.auth0.com/v2/logout?")
@@ -221,7 +233,9 @@ def test_register_requires_redirect_uri(tmp_path, monkeypatch):
 # --- authorize → token ---------------------------------------------------
 
 
-def _full_flow(client, *, admin_bearer: str, redirect_uri: str = "http://localhost:6274/cb"):
+def _full_flow(
+    client, *, admin_bearer: str, redirect_uri: str = "http://localhost:6274/cb"
+):
     """Drive the OAuth flow end-to-end as a logged-in admin. Returns
     the resulting access_token plus the client_id used."""
     # Register the client (anonymous).
@@ -271,6 +285,7 @@ def _full_flow(client, *, admin_bearer: str, redirect_uri: str = "http://localho
     assert loc.startswith(redirect_uri)
     # Pull the code out of the redirect URL.
     from urllib.parse import parse_qs, urlparse
+
     qs = parse_qs(urlparse(loc).query)
     code = qs["code"][0]
     assert qs["state"][0] == state
@@ -299,7 +314,9 @@ def test_full_oauth_flow(tmp_path, monkeypatch):
         assert body["token_type"] == "Bearer"
         assert body["access_token"].startswith("myc_")
         # The issued token works as a bearer.
-        r = client.get("/api/me", headers={"Authorization": f"Bearer {body['access_token']}"})
+        r = client.get(
+            "/api/me", headers={"Authorization": f"Bearer {body['access_token']}"}
+        )
         assert r.status_code == 200
         me = r.json()
         assert me["role"] == "admin"
@@ -336,7 +353,8 @@ def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
         # Drive the flow to a fresh code, then submit a verifier that
         # doesn't hash to the challenge we registered.
         _, client_id, _real_verifier, code = _full_flow(
-            client, admin_bearer=admin_bearer,
+            client,
+            admin_bearer=admin_bearer,
         )
         # The code was just consumed by _full_flow's own /token call.
         # That gives us the "code already used" path under test below;
@@ -374,6 +392,7 @@ def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
         )
         assert r.status_code == 302, r.text
         from urllib.parse import parse_qs, urlparse
+
         new_code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
 
         # Submit a fabricated verifier — must fail PKCE.

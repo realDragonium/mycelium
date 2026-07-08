@@ -311,8 +311,7 @@ def _migration_v5_derived_mentions(conn: sqlite3.Connection) -> None:
         "ON pending_mentions (statement_id)"
     )
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS pending_mentions_name "
-        "ON pending_mentions (name_id)"
+        "CREATE INDEX IF NOT EXISTS pending_mentions_name ON pending_mentions (name_id)"
     )
 
     # Backfill on upgrade: a legacy (pre-v5) DB carries hand-asserted
@@ -402,10 +401,13 @@ def _set_user_version(conn: sqlite3.Connection, version: int) -> None:
 
 
 def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    return conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        (table,),
-    ).fetchone() is not None
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _ensure_column(
@@ -440,6 +442,7 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
     past migrations are absent until the runner adds them; tables
     introduced by later migrations are present only on fresh DBs or on
     legacy DBs that have already been migrated past them)."""
+
     def _has(table: str, column: str) -> bool:
         return any(
             r["name"] == column
@@ -447,10 +450,13 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
         )
 
     def _has_table(table: str) -> bool:
-        return conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone() is not None
+        return (
+            conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone()
+            is not None
+        )
 
     return (
         _has("entities", "created_at")

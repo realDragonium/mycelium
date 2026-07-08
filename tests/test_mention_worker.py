@@ -10,7 +10,9 @@ from pathlib import Path
 
 from mycelium import mention_worker, store
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "backfill_derived_mentions.py"
+_SCRIPT = (
+    Path(__file__).resolve().parents[1] / "scripts" / "backfill_derived_mentions.py"
+)
 
 
 def _load_backfill_script():
@@ -74,7 +76,9 @@ def test_drain_chunking_processes_everything(tmp_path):
     conn = _fresh(tmp_path)
     e = store.create_entity(conn, None)
     store.create_name(conn, "dashboard", e)
-    sids = [store.create_statement(conn, "state", "the dashboard ticks") for _ in range(5)]
+    sids = [
+        store.create_statement(conn, "state", "the dashboard ticks") for _ in range(5)
+    ]
     store.enqueue_recompute_statements(conn, sids)
     # chunk=1 forces 5 separate transactions; all must still be processed.
     processed = mention_worker.drain(conn, chunk=1)

@@ -60,8 +60,7 @@ _EMIT_SCHEMA: dict[str, Any] = {
                         "type": "string",
                         "enum": _OP_KINDS,
                         "description": (
-                            "The substrate write-tool function name this op "
-                            "replays as."
+                            "The substrate write-tool function name this op replays as."
                         ),
                     },
                     "payload_json": {

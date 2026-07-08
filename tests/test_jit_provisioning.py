@@ -20,14 +20,18 @@ def _conn() -> sqlite3.Connection:
 
 
 def _role_of(conn: sqlite3.Connection, user_id: str) -> str:
-    return conn.execute(
-        "SELECT role FROM users WHERE id = ?", (user_id,)
-    ).fetchone()["role"]
+    return conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()[
+        "role"
+    ]
 
 
 def _find(conn, email="alice@example.com", subject="sub-1"):
     return oidc.find_or_create_user(
-        conn, issuer="https://issuer", subject=subject, email=email, name="Alice",
+        conn,
+        issuer="https://issuer",
+        subject=subject,
+        email=email,
+        name="Alice",
     )
 
 
@@ -111,7 +115,11 @@ def test_existing_user_unaffected_by_jit(monkeypatch):
     # Pre-existing admin with this email keeps their role on next login;
     # JIT only ever creates, never downgrades.
     existing = auth.create_user(
-        conn, name="Alice", role="admin", type="human", email="alice@example.com",
+        conn,
+        name="Alice",
+        role="admin",
+        type="human",
+        email="alice@example.com",
     )
     conn.commit()
     uid = _find(conn)

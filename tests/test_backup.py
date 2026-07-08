@@ -4,6 +4,7 @@ Builds a small substrate, exports it, restores into a fresh data dir,
 and verifies every row survives. Also covers the opt-out flags, the
 fresh-dir refusal, and the --force safety snapshot.
 """
+
 from __future__ import annotations
 
 import json
@@ -68,9 +69,7 @@ def _row_count(data_dir, table, *, history=False):
             data_dir / "mycelium.db",
             history_path=data_dir / "mycelium-history.db",
         )
-        n = conn.execute(
-            f"SELECT COUNT(*) AS n FROM history.{table}"
-        ).fetchone()["n"]
+        n = conn.execute(f"SELECT COUNT(*) AS n FROM history.{table}").fetchone()["n"]
     else:
         conn = store.connect(data_dir / "mycelium.db")
         n = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
@@ -141,9 +140,15 @@ def test_round_trip_preserves_relational_data(tmp_path):
 
     # Same row counts on every table the seed populated.
     for table in (
-        "entities", "names", "statements", "annotations",
-        "statement_mentions", "statement_links", "entity_links",
-        "statement_annotations", "entity_annotations",
+        "entities",
+        "names",
+        "statements",
+        "annotations",
+        "statement_mentions",
+        "statement_links",
+        "entity_links",
+        "statement_annotations",
+        "entity_annotations",
     ):
         assert _row_count(dst, table) == _row_count(src, table), table
 
@@ -171,8 +176,9 @@ def test_round_trip_preserves_history(tmp_path):
     dst = tmp_path / "dst"
     backup.import_substrate(archive, dst)
 
-    assert _row_count(dst, "history_events", history=True) == \
-        _row_count(src, "history_events", history=True)
+    assert _row_count(dst, "history_events", history=True) == _row_count(
+        src, "history_events", history=True
+    )
 
 
 def test_import_refuses_existing_data_dir(tmp_path):
@@ -205,9 +211,7 @@ def test_import_force_clobbers_with_safety_snapshot(tmp_path):
     backup.import_substrate(archive, dst)
 
     # Now mutate dst so the safety snapshot has different content from src.
-    conn = store.connect(
-        dst / "mycelium.db", history_path=dst / "mycelium-history.db"
-    )
+    conn = store.connect(dst / "mycelium.db", history_path=dst / "mycelium-history.db")
     store.set_actor("carol")
     store.create_statement(conn, "event", "extra row that only dst has")
     conn.close()
@@ -253,6 +257,7 @@ def test_import_rejects_wrong_schema_version(tmp_path):
 
     # Rewrite manifest to claim a future schema_version.
     import shutil
+
     tampered = tmp_path / "tampered.tar.gz"
     work = tmp_path / "work"
     work.mkdir()

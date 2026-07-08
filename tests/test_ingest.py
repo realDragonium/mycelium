@@ -175,7 +175,9 @@ def _op(op: str, payload: dict, rationale: str = "because", targets=None) -> dic
     }
 
 
-def _ledger_row(candidate, classification, matched=None, considered=None, note="") -> dict:
+def _ledger_row(
+    candidate, classification, matched=None, considered=None, note=""
+) -> dict:
     return {
         "candidate": candidate,
         "classification": classification,
@@ -206,8 +208,11 @@ def _good_new_op_emit():
         ],
         ledger=[
             _ledger_row(
-                "an invite is submitted", "new",
-                matched=["stm_99"], considered=["stm_99"], note="links to invite flow",
+                "an invite is submitted",
+                "new",
+                matched=["stm_99"],
+                considered=["stm_99"],
+                note="links to invite flow",
             )
         ],
     )
@@ -227,8 +232,11 @@ def _run(responses, results=None, emitter=None, **config_over):
     emitter = emitter or FakeEmitter()
     cfg = IngestConfig(thinking=True, trace_log_path=None, **config_over)
     result = run_ingest(
-        "An invite is submitted.", client=client, substrate=substrate,
-        emitter=emitter, config=cfg,
+        "An invite is submitted.",
+        client=client,
+        substrate=substrate,
+        emitter=emitter,
+        config=cfg,
     )
     return result, client, substrate, emitter
 
@@ -246,8 +254,15 @@ def test_build_tools_exposes_reads_plus_emit_only_no_write_tool():
     assert EMIT_TOOL in names
     assert {"discover_facts", "search_statements"} <= names
     # no substrate write tool ever appears
-    for w in ("upsert_statement", "add_links", "patch_statement", "merge_statements",
-              "submit_draft", "apply_draft", "report_knowledge_gap"):
+    for w in (
+        "upsert_statement",
+        "add_links",
+        "patch_statement",
+        "merge_statements",
+        "submit_draft",
+        "apply_draft",
+        "report_knowledge_gap",
+    ):
         assert w not in names
     emit = next(t for t in tools if t["name"] == EMIT_TOOL)
     assert emit["strict"] is True
@@ -258,15 +273,25 @@ def test_build_tools_exposes_reads_plus_emit_only_no_write_tool():
 
 
 def test_parse_emit_input_parses_payload_json_string():
-    data = _emit_input(ops=[_op("upsert_entity", {"name": "Acme", "description": "co"})])
+    data = _emit_input(
+        ops=[_op("upsert_entity", {"name": "Acme", "description": "co"})]
+    )
     ops, ledger, flagged, skipped = parse_emit_input(data)
     assert ops[0]["op"] == "upsert_entity"
     assert ops[0]["payload"] == {"name": "Acme", "description": "co"}
 
 
 def test_parse_emit_input_raises_on_unparseable_payload():
-    bad = _emit_input(ops=[{"op": "upsert_entity", "payload_json": "{not json",
-                            "rationale": "x", "targets_existing": []}])
+    bad = _emit_input(
+        ops=[
+            {
+                "op": "upsert_entity",
+                "payload_json": "{not json",
+                "rationale": "x",
+                "targets_existing": [],
+            }
+        ]
+    )
     try:
         parse_emit_input(bad)
         raise AssertionError("expected ValueError")
@@ -292,13 +317,21 @@ def test_well_formed_text_creates_draft_with_queued_op():
     assert len(result.ops) == 1
     assert result.ops[0].op == "upsert_statement"
     # the op was queued through the (only) write path: the emitter
-    assert emitter.queued == [("drf_1", "upsert_statement",
-                               {"kind": "event", "text": "an invite is submitted",
-                                "links": []})]
+    assert emitter.queued == [
+        (
+            "drf_1",
+            "upsert_statement",
+            {"kind": "event", "text": "an invite is submitted", "links": []},
+        )
+    ]
     assert result.trace["floor"]["satisfied"] is True
     # vocab was fetched deterministically first (3 calls), counts toward ops
     vocab_names = [c[0] for c in substrate.calls[:3]]
-    assert vocab_names == ["list_statement_kinds", "list_link_types", "list_entity_link_types"]
+    assert vocab_names == [
+        "list_statement_kinds",
+        "list_link_types",
+        "list_entity_link_types",
+    ]
 
 
 def test_floor_blocks_premature_emit_then_proceeds():
@@ -320,9 +353,12 @@ def test_floor_blocks_premature_emit_then_proceeds():
 def test_floor_blocks_new_ledger_row_missing_matched_against():
     """A NEW ledger row with no matched_against fails ledger validation."""
     incomplete = _emit_input(
-        ops=[_op("upsert_statement",
-                 {"kind": "event", "text": "an invite is submitted"})],
-        ledger=[_ledger_row("an invite is submitted", "new", matched=[], considered=[])],
+        ops=[
+            _op("upsert_statement", {"kind": "event", "text": "an invite is submitted"})
+        ],
+        ledger=[
+            _ledger_row("an invite is submitted", "new", matched=[], considered=[])
+        ],
     )
     good = _good_new_op_emit()
     responses = _reconcile_then_adjacency() + [
@@ -371,12 +407,16 @@ def test_empty_emit_returns_nothing_extractable():
 def test_unknown_op_kind_is_flagged_not_queued():
     emit = _emit_input(
         ops=[
-            _op("upsert_statement",
-                {"kind": "event", "text": "an invite is submitted"}),
+            _op(
+                "upsert_statement", {"kind": "event", "text": "an invite is submitted"}
+            ),
             _op("delete_everything", {"target": "all"}),  # not an OpKind
         ],
-        ledger=[_ledger_row("an invite is submitted", "new",
-                            matched=["stm_1"], considered=["stm_1"])],
+        ledger=[
+            _ledger_row(
+                "an invite is submitted", "new", matched=["stm_1"], considered=["stm_1"]
+            )
+        ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
@@ -394,7 +434,9 @@ def test_op_with_kind_not_in_valid_kinds_is_flagged():
     emitter = FakeEmitter(valid_kinds=_DEFAULT_KINDS - {"merge_statements"})
     emit = _emit_input(
         ops=[_op("merge_statements", {"from_id": "stm_1", "into_id": "stm_2"})],
-        ledger=[_ledger_row("merge", "refinement", matched=["stm_1"], considered=["stm_2"])],
+        ledger=[
+            _ledger_row("merge", "refinement", matched=["stm_1"], considered=["stm_2"])
+        ],
         flagged=["a real contradiction between stm_1 and stm_2"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
@@ -408,7 +450,9 @@ def test_op_with_kind_not_in_valid_kinds_is_flagged():
 def test_missing_required_key_is_flagged():
     emit = _emit_input(
         ops=[_op("replace_text", {"id": "stm_1"})],  # missing required "text"
-        ledger=[_ledger_row("reword", "refinement", matched=["stm_1"], considered=["stm_1"])],
+        ledger=[
+            _ledger_row("reword", "refinement", matched=["stm_1"], considered=["stm_1"])
+        ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, _e = _run(responses)
@@ -428,16 +472,30 @@ def test_phrasing_violation_sets_allow_flag_not_dropped(monkeypatch):
     import mycelium.phrasing as phrasing
 
     def fake_check(text, kind="event"):
-        return [{"category": "rule_shaped", "matched_text": "must", "position": 0,
-                 "rule": "no modal", "recommendation": "rephrase"}]
+        return [
+            {
+                "category": "rule_shaped",
+                "matched_text": "must",
+                "position": 0,
+                "rule": "no modal",
+                "recommendation": "rephrase",
+            }
+        ]
 
     monkeypatch.setattr(phrasing, "check", fake_check)
 
     emit = _emit_input(
-        ops=[_op("upsert_statement",
-                 {"kind": "event", "text": "the system must send an invite"})],
-        ledger=[_ledger_row("system sends invite", "new",
-                            matched=["stm_1"], considered=["stm_1"])],
+        ops=[
+            _op(
+                "upsert_statement",
+                {"kind": "event", "text": "the system must send an invite"},
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "system sends invite", "new", matched=["stm_1"], considered=["stm_1"]
+            )
+        ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
@@ -491,15 +549,27 @@ def test_api_error_degrades_to_forced_finalize():
     substrate = FakeSubstrate()
     emitter = FakeEmitter()
     cfg = IngestConfig(trace_log_path=None)
-    result = run_ingest("x", client=client, substrate=substrate, emitter=emitter, config=cfg)
+    result = run_ingest(
+        "x", client=client, substrate=substrate, emitter=emitter, config=cfg
+    )
     assert isinstance(result, DraftCreated)
     assert result.trace["forced_finalize"] == "api_error"
 
 
 def test_malformed_emit_reprompted_then_degrades():
-    bad = {"ops": [{"op": "upsert_entity", "payload_json": "{not json",
-                    "rationale": "x", "targets_existing": []}],
-           "ledger": [], "flagged": [], "skipped_duplicates": []}
+    bad = {
+        "ops": [
+            {
+                "op": "upsert_entity",
+                "payload_json": "{not json",
+                "rationale": "x",
+                "targets_existing": [],
+            }
+        ],
+        "ledger": [],
+        "flagged": [],
+        "skipped_duplicates": [],
+    }
     responses = _reconcile_then_adjacency() + [
         _message([_tool_use(EMIT_TOOL, bad)]),
         _message([_tool_use(EMIT_TOOL, bad)]),  # still bad after re-prompt
@@ -529,12 +599,15 @@ def test_no_terminal_tool_is_nudged_then_forced():
 def test_oversized_input_is_truncated_and_noted():
     big = "x" * 100
     client = FakeAnthropic(
-        _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
+        _reconcile_then_adjacency()
+        + [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
     )
     substrate = FakeSubstrate()
     emitter = FakeEmitter()
     cfg = IngestConfig(max_input_chars=10, trace_log_path=None)
-    result = run_ingest(big, client=client, substrate=substrate, emitter=emitter, config=cfg)
+    result = run_ingest(
+        big, client=client, substrate=substrate, emitter=emitter, config=cfg
+    )
     assert isinstance(result, DraftCreated)
     assert result.trace["input_chars"] == 10
     assert any("truncated" in n for n in result.trace["notes"])
@@ -547,10 +620,26 @@ def test_trace_record_is_complete_and_serialisable():
     result, _client, _sub, _e = _run(responses)
     trace = result.trace
     for key in (
-        "model", "outcome", "input_chars", "op_count", "op_cap", "wall_clock_s_limit",
-        "latency_ms", "model_turns", "tool_calls", "candidate_ledger", "proposed_ops",
-        "flagged", "skipped_duplicates", "gaps", "floor", "tokens", "cost_usd",
-        "forced_finalize", "degraded", "notes",
+        "model",
+        "outcome",
+        "input_chars",
+        "op_count",
+        "op_cap",
+        "wall_clock_s_limit",
+        "latency_ms",
+        "model_turns",
+        "tool_calls",
+        "candidate_ledger",
+        "proposed_ops",
+        "flagged",
+        "skipped_duplicates",
+        "gaps",
+        "floor",
+        "tokens",
+        "cost_usd",
+        "forced_finalize",
+        "degraded",
+        "notes",
     ):
         assert key in trace, f"trace missing {key}"
     assert trace["tool_calls"][0]["name"] == "list_statement_kinds"
@@ -563,13 +652,19 @@ def test_trace_record_is_complete_and_serialisable():
 def test_trace_written_to_jsonl_file(tmp_path):
     log = tmp_path / "ingest_trace.jsonl"
     client = FakeAnthropic(
-        _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
+        _reconcile_then_adjacency()
+        + [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
     )
     substrate = FakeSubstrate()
     emitter = FakeEmitter()
     cfg = IngestConfig(trace_log_path=str(log))
-    run_ingest("An invite is submitted.", client=client, substrate=substrate,
-               emitter=emitter, config=cfg)
+    run_ingest(
+        "An invite is submitted.",
+        client=client,
+        substrate=substrate,
+        emitter=emitter,
+        config=cfg,
+    )
     lines = log.read_text().strip().splitlines()
     assert len(lines) == 1
     record = json.loads(lines[0])
@@ -590,20 +685,26 @@ def test_substrate_read_failure_is_surfaced_not_fabricated():
     ]
     result, _client, _sub, _e = _run(responses, results=results)
     assert isinstance(result, DraftCreated)
-    failed = [tc for tc in result.trace["tool_calls"]
-              if tc["name"] == "search_statements"]
+    failed = [
+        tc for tc in result.trace["tool_calls"] if tc["name"] == "search_statements"
+    ]
     assert failed and failed[0]["ok"] is False and failed[0]["error"]
 
 
 def test_unprocessed_ledger_rows_become_gaps():
     emit = _emit_input(
-        ops=[_op("upsert_statement",
-                 {"kind": "event", "text": "an invite is submitted"})],
+        ops=[
+            _op("upsert_statement", {"kind": "event", "text": "an invite is submitted"})
+        ],
         ledger=[
-            _ledger_row("an invite is submitted", "new",
-                        matched=["stm_1"], considered=["stm_1"]),
-            _ledger_row("a notification is sent", "unprocessed",
-                        note="cap hit before reconciling"),
+            _ledger_row(
+                "an invite is submitted", "new", matched=["stm_1"], considered=["stm_1"]
+            ),
+            _ledger_row(
+                "a notification is sent",
+                "unprocessed",
+                note="cap hit before reconciling",
+            ),
         ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
@@ -629,19 +730,32 @@ def test_a_genuinely_new_text_creates_draft_with_entity_statement_and_links():
             ),
             _op(
                 "upsert_statement",
-                {"kind": "event", "text": "an invite is reopened", "mentions": [], "links": []},
+                {
+                    "kind": "event",
+                    "text": "an invite is reopened",
+                    "mentions": [],
+                    "links": [],
+                },
                 rationale="new event; discover_facts returned status=new",
             ),
             _op(
                 "add_links",
-                {"links": [{"from_id": "stm_new", "to_id": "stm_1", "link_type": "method"}]},
+                {
+                    "links": [
+                        {"from_id": "stm_new", "to_id": "stm_1", "link_type": "method"}
+                    ]
+                },
                 rationale="wire the new event beside the adjacent lifecycle statement",
                 targets=["stm_1"],
             ),
         ],
         ledger=[
-            _ledger_row("Reviewer entity", "new", matched=["ent_0"], note="no entity matched"),
-            _ledger_row("invite reopened", "new", matched=["stm_1"], considered=["stm_1"]),
+            _ledger_row(
+                "Reviewer entity", "new", matched=["ent_0"], note="no entity matched"
+            ),
+            _ledger_row(
+                "invite reopened", "new", matched=["stm_1"], considered=["stm_1"]
+            ),
         ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
@@ -658,10 +772,17 @@ def test_a_genuinely_new_text_creates_draft_with_entity_statement_and_links():
 # (b) restating existing knowledge -> dupes in skipped_duplicates, NOT re-added.
 def test_b_partial_duplicates_recorded_as_skipped_not_readded():
     emit = _emit_input(
-        ops=[_op("upsert_statement", {"kind": "event", "text": "an invite is reopened"})],
+        ops=[
+            _op("upsert_statement", {"kind": "event", "text": "an invite is reopened"})
+        ],
         ledger=[
             _ledger_row("an invite is submitted", "duplicate", matched=["stm_1"]),
-            _ledger_row("invite reopened", "new", matched=["stm_1"], note="no adjacent statement"),
+            _ledger_row(
+                "invite reopened",
+                "new",
+                matched=["stm_1"],
+                note="no adjacent statement",
+            ),
         ],
         skipped=["an invite is submitted :: stm_1"],
     )
@@ -705,8 +826,11 @@ def test_c_refinement_proposes_patch_with_old_to_new_in_rationale():
     assert op.op == "patch_statement"
     assert "OLD" in op.rationale and "NEW" in op.rationale
     assert op.payload.get("id") == "stm_1"
-    assert ("drf_1", "patch_statement",
-            {"id": "stm_1", "text": "an invite is reopened by a reviewer"}) in emitter.queued
+    assert (
+        "drf_1",
+        "patch_statement",
+        {"id": "stm_1", "text": "an invite is reopened by a reviewer"},
+    ) in emitter.queued
 
 
 # (d) contradiction -> appears in flagged, with NO resolution op proposed.
@@ -731,19 +855,32 @@ def test_d_contradiction_is_flagged_with_no_resolution_op():
 
     assert isinstance(result, DraftCreated)  # the flag itself is a reviewable artifact
     assert any("CONTRADICTION" in f for f in result.flagged)
-    assert result.ops == []          # no resolution op proposed
-    assert emitter.queued == []      # nothing queued for the contradiction
+    assert result.ops == []  # no resolution op proposed
+    assert emitter.queued == []  # nothing queued for the contradiction
 
 
 # (e) NO LIVE WRITE — read substrate never sees a write primitive; the only
 #     persistence is the emitter; the outcome is always draft/nothing.
 _WRITE_PRIMITIVES = frozenset(
     {
-        "upsert_statement", "upsert_statements", "upsert_entity", "add_links",
-        "add_entity_links", "add_mentions", "patch_statement", "replace_text",
-        "merge_statements", "move_name", "rename_name", "upsert_name",
-        "merge_entities", "delete_statement", "delete_entity", "submit_draft",
-        "apply_draft", "report_knowledge_gap",
+        "upsert_statement",
+        "upsert_statements",
+        "upsert_entity",
+        "add_links",
+        "add_entity_links",
+        "add_mentions",
+        "patch_statement",
+        "replace_text",
+        "merge_statements",
+        "move_name",
+        "rename_name",
+        "upsert_name",
+        "merge_entities",
+        "delete_statement",
+        "delete_entity",
+        "submit_draft",
+        "apply_draft",
+        "report_knowledge_gap",
     }
 )
 
@@ -752,10 +889,18 @@ def test_e_no_write_primitive_dispatched_through_substrate_only_emitter_persists
     emit = _emit_input(
         ops=[
             _op("upsert_statement", {"kind": "event", "text": "an invite is reopened"}),
-            _op("add_links", {"links": [{"from_id": "stm_a", "to_id": "stm_b",
-                                          "link_type": "method"}]}),
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        {"from_id": "stm_a", "to_id": "stm_b", "link_type": "method"}
+                    ]
+                },
+            ),
         ],
-        ledger=[_ledger_row("invite reopened", "new", matched=["stm_1"], note="no adjacent")],
+        ledger=[
+            _ledger_row("invite reopened", "new", matched=["stm_1"], note="no adjacent")
+        ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, substrate, emitter = _run(responses)
@@ -797,8 +942,8 @@ def test_e_loop_module_imports_no_write_tool():
     from mycelium.ingest import loop
 
     src = inspect.getsource(loop)
-    assert "from ..ask.substrate import" in src     # read seam
-    assert "from .draft import" in src               # the (only) write path
+    assert "from ..ask.substrate import" in src  # read seam
+    assert "from .draft import" in src  # the (only) write path
     assert "store.upsert_statement" not in src
     assert "submit_draft" not in src
     assert "apply_draft" not in src
@@ -824,11 +969,9 @@ def test_e_draft_emitter_is_the_only_write_path_and_uses_drafts_store():
     # `server._conn` to state it is never touched). The emitter must write to
     # the drafts DB connection, never the live substrate connection.
     tree = ast.parse(src)
-    attrs = {
-        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
-    }
-    assert "_drafts_conn" in attrs        # the drafts DB connection is used
-    assert "_conn" not in attrs           # the live substrate connection is not
+    attrs = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    assert "_drafts_conn" in attrs  # the drafts DB connection is used
+    assert "_conn" not in attrs  # the live substrate connection is not
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
     for w in ("upsert_statement", "add_links", "submit_draft", "apply_draft"):
         assert w not in attrs and w not in names
@@ -857,8 +1000,10 @@ def test_f_new_statement_links_to_preexisting_id_from_adjacency_search():
         ],
         ledger=[
             _ledger_row(
-                "invite reopened", "new",
-                matched=["stm_existing"], considered=["stm_existing"],
+                "invite reopened",
+                "new",
+                matched=["stm_existing"],
+                considered=["stm_existing"],
                 note="adjacent submit event surfaced by search_statements",
             )
         ],
@@ -900,9 +1045,16 @@ def test_g_doctrine_loaded_from_bundled_file_into_system_prompt():
         ledger=[_ledger_row("x", "duplicate", matched=["stm_1"])],
         skipped=["x :: stm_1"],
     )
-    client = FakeAnthropic(_reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])])
-    run_ingest("x", client=client, substrate=FakeSubstrate(), emitter=FakeEmitter(),
-               config=IngestConfig(trace_log_path=None))
+    client = FakeAnthropic(
+        _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+    )
+    run_ingest(
+        "x",
+        client=client,
+        substrate=FakeSubstrate(),
+        emitter=FakeEmitter(),
+        config=IngestConfig(trace_log_path=None),
+    )
     system_prompt = client.calls[0]["system"]
     assert marker in system_prompt  # the FILE content reached the model
 
@@ -919,20 +1071,29 @@ def test_g_doctrine_path_override_via_env(tmp_path, monkeypatch):
         ledger=[_ledger_row("x", "duplicate", matched=["stm_1"])],
         skipped=["x :: stm_1"],
     )
-    client = FakeAnthropic(_reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])])
-    run_ingest("x", client=client, substrate=FakeSubstrate(), emitter=FakeEmitter(), config=cfg)
+    client = FakeAnthropic(
+        _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+    )
+    run_ingest(
+        "x", client=client, substrate=FakeSubstrate(), emitter=FakeEmitter(), config=cfg
+    )
     assert "CUSTOM DOCTRINE MARKER 12345" in client.calls[0]["system"]
 
 
 def test_g_unreadable_doctrine_falls_back_to_base_prompt_with_note():
-    cfg = IngestConfig(doctrine_path="/nonexistent/path/doctrine.md", trace_log_path=None)
+    cfg = IngestConfig(
+        doctrine_path="/nonexistent/path/doctrine.md", trace_log_path=None
+    )
     emit = _emit_input(
         ledger=[_ledger_row("x", "duplicate", matched=["stm_1"])],
         skipped=["x :: stm_1"],
     )
-    client = FakeAnthropic(_reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])])
-    result = run_ingest("x", client=client, substrate=FakeSubstrate(), emitter=FakeEmitter(),
-                        config=cfg)
+    client = FakeAnthropic(
+        _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+    )
+    result = run_ingest(
+        "x", client=client, substrate=FakeSubstrate(), emitter=FakeEmitter(), config=cfg
+    )
     assert any("doctrine unreadable" in n for n in result.trace["notes"])
     # base protocol still present in the system prompt
     assert "reviewable DRAFT" in client.calls[0]["system"]
@@ -945,7 +1106,9 @@ def test_h_vocabulary_fetched_at_session_start():
     ]
     _result, _client, substrate, _emitter = _run(responses)
     assert [name for (name, _a) in substrate.calls[:3]] == [
-        "list_statement_kinds", "list_link_types", "list_entity_link_types",
+        "list_statement_kinds",
+        "list_link_types",
+        "list_entity_link_types",
     ]
 
 
@@ -953,10 +1116,19 @@ def test_h_vocabulary_fetched_at_session_start():
 #     draft (or NothingToIngest), never an exception.
 def test_i_tiny_op_cap_degrades_records_gap_and_still_emits_draft():
     emit = _emit_input(
-        ops=[_op("upsert_statement", {"kind": "event", "text": "an invite is reopened"})],
+        ops=[
+            _op("upsert_statement", {"kind": "event", "text": "an invite is reopened"})
+        ],
         ledger=[
-            _ledger_row("invite reopened", "new", matched=["stm_1"], note="reconciled before cap"),
-            _ledger_row("invite archived", "unprocessed", note="cap hit before reconcile"),
+            _ledger_row(
+                "invite reopened",
+                "new",
+                matched=["stm_1"],
+                note="reconciled before cap",
+            ),
+            _ledger_row(
+                "invite archived", "unprocessed", note="cap hit before reconcile"
+            ),
         ],
     )
     # op_cap=3: the 3 vocab fetches alone hit the cap, forcing finalize on the
@@ -970,7 +1142,9 @@ def test_i_tiny_op_cap_degrades_records_gap_and_still_emits_draft():
     assert any("invite archived" in g for g in result.trace["gaps"])
     forced_call = client.calls[-1]
     assert forced_call["tool_choice"] == {
-        "type": "tool", "name": EMIT_TOOL, "disable_parallel_tool_use": True,
+        "type": "tool",
+        "name": EMIT_TOOL,
+        "disable_parallel_tool_use": True,
     }
     assert "thinking" not in forced_call
 
@@ -1013,22 +1187,34 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
             _op(
                 "upsert_statement",
                 # id is explicitly null — must be dropped by add_op, not queued
-                {"kind": "event", "text": "an invite is submitted",
-                 "links": [], "id": None},
+                {
+                    "kind": "event",
+                    "text": "an invite is submitted",
+                    "links": [],
+                    "id": None,
+                },
                 targets=["stm_99"],
             )
         ],
         ledger=[
-            _ledger_row("an invite is submitted", "new",
-                        matched=["stm_99"], considered=["stm_99"], note="adjacent")
+            _ledger_row(
+                "an invite is submitted",
+                "new",
+                matched=["stm_99"],
+                considered=["stm_99"],
+                note="adjacent",
+            )
         ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     client = FakeAnthropic(responses)
     cfg = IngestConfig(thinking=True, trace_log_path=None)
     result = run_ingest(
-        "An invite is submitted.", client=client, substrate=FakeSubstrate(),
-        emitter=emitter, config=cfg,
+        "An invite is submitted.",
+        client=client,
+        substrate=FakeSubstrate(),
+        emitter=emitter,
+        config=cfg,
     )
 
     assert isinstance(result, DraftCreated)
@@ -1042,7 +1228,8 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
     queued = drafts_store.serialize_op(op_rows[0])
     assert queued["kind"] == "upsert_statement"
     assert queued["payload"] == {
-        "kind": "event", "text": "an invite is submitted",
+        "kind": "event",
+        "text": "an invite is submitted",
         "links": [],
     }
     assert "id" not in queued["payload"]  # None-valued key dropped
@@ -1087,9 +1274,12 @@ def test_t10_floor_stuck_forces_finalize_no_floorless_emit_accepted():
     # the floor was never satisfied (no reconcile/adjacency reads happened)
     assert result.trace["floor"]["satisfied"] is False
     # only vocab reads ran — no reconcile/adjacency read was ever dispatched
-    non_vocab = [c for c in substrate.calls
-                 if c[0] not in ("list_statement_kinds", "list_link_types",
-                                 "list_entity_link_types")]
+    non_vocab = [
+        c
+        for c in substrate.calls
+        if c[0]
+        not in ("list_statement_kinds", "list_link_types", "list_entity_link_types")
+    ]
     assert non_vocab == []
 
 
@@ -1103,10 +1293,25 @@ def test_t11_new_upsert_statement_normalizes_missing_links_and_drops_mentions():
     links=[] (the real tool requires it, no default). Any `mentions` the model
     proposes is dropped — mentions are derived from text, not asserted."""
     emit = _emit_input(
-        ops=[_op("upsert_statement",
-                 {"kind": "event", "text": "an invite is submitted", "mentions": ["ent_x"]})],
-        ledger=[_ledger_row("an invite is submitted", "new",
-                            matched=["stm_1"], considered=["stm_1"], note="adj")],
+        ops=[
+            _op(
+                "upsert_statement",
+                {
+                    "kind": "event",
+                    "text": "an invite is submitted",
+                    "mentions": ["ent_x"],
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "an invite is submitted",
+                "new",
+                matched=["stm_1"],
+                considered=["stm_1"],
+                note="adj",
+            )
+        ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
@@ -1129,8 +1334,9 @@ def test_t11_upsert_entity_missing_description_is_flagged_not_queued():
     result, _client, _sub, emitter = _run(responses)
     assert isinstance(result, DraftCreated)  # the model's flag keeps the draft
     assert result.ops == []  # the entity op was rejected
-    assert any("missing required key" in f and "upsert_entity" in f
-               for f in result.flagged)
+    assert any(
+        "missing required key" in f and "upsert_entity" in f for f in result.flagged
+    )
     assert emitter.queued == []
 
 
@@ -1138,11 +1344,21 @@ def test_t11_add_entity_links_with_wrong_edge_keys_is_flagged():
     """An add_entity_links op using add_links key names (from_id/to_id) is
     flagged, not queued — the real tool needs from_entity_id/to_entity_id."""
     emit = _emit_input(
-        ops=[_op("add_entity_links",
-                 {"links": [{"from_id": "ent_1", "to_id": "ent_2",
-                             "link_type": "owns"}]})],
-        ledger=[_ledger_row("entity link", "refinement",
-                            matched=["ent_1"], considered=["ent_2"])],
+        ops=[
+            _op(
+                "add_entity_links",
+                {
+                    "links": [
+                        {"from_id": "ent_1", "to_id": "ent_2", "link_type": "owns"}
+                    ]
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "entity link", "refinement", matched=["ent_1"], considered=["ent_2"]
+            )
+        ],
         flagged=["a real contradiction keeping the draft alive"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
@@ -1168,8 +1384,14 @@ def test_t11_partial_add_op_failure_still_returns_draft_with_real_id():
     emit = _emit_input(
         ops=[
             _op("upsert_statement", {"kind": "event", "text": "an invite is reopened"}),
-            _op("add_links", {"links": [{"from_id": "stm_a", "to_id": "stm_b",
-                                          "link_type": "method"}]}),
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        {"from_id": "stm_a", "to_id": "stm_b", "link_type": "method"}
+                    ]
+                },
+            ),
         ],
         ledger=[_ledger_row("invite reopened", "new", matched=["stm_1"], note="adj")],
     )
@@ -1198,11 +1420,21 @@ def test_t12_patch_statement_with_unexpected_links_key_is_flagged_not_queued():
     """patch_statement accepts {id, kind, text, mentions, ...} but NOT 'links';
     a bogus 'links' key would TypeError at replay -> flag-and-skip the whole op."""
     emit = _emit_input(
-        ops=[_op("patch_statement",
-                 {"id": "stm_1", "text": "an invite is reopened",
-                  "links": [{"to_id": "stm_2", "link_type": "method"}]})],
-        ledger=[_ledger_row("invite reopened", "refinement",
-                            matched=["stm_1"], considered=["stm_1"])],
+        ops=[
+            _op(
+                "patch_statement",
+                {
+                    "id": "stm_1",
+                    "text": "an invite is reopened",
+                    "links": [{"to_id": "stm_2", "link_type": "method"}],
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "invite reopened", "refinement", matched=["stm_1"], considered=["stm_1"]
+            )
+        ],
         flagged=["a real contradiction so the draft is still created"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
@@ -1210,18 +1442,29 @@ def test_t12_patch_statement_with_unexpected_links_key_is_flagged_not_queued():
     assert isinstance(result, DraftCreated)  # the model flag keeps the draft alive
     assert result.ops == []
     assert emitter.queued == []
-    assert any("patch_statement" in f and "unexpected key" in f and "links" in f
-               for f in result.flagged)
+    assert any(
+        "patch_statement" in f and "unexpected key" in f and "links" in f
+        for f in result.flagged
+    )
 
 
 def test_t12_merge_statements_with_unexpected_reason_key_is_flagged():
     """merge_statements accepts only {from_id, into_id}; an extra 'reason' key
     would TypeError at replay -> flagged, not queued."""
     emit = _emit_input(
-        ops=[_op("merge_statements",
-                 {"from_id": "stm_1", "into_id": "stm_2",
-                  "reason": "they are the same fact"})],
-        ledger=[_ledger_row("merge", "refinement", matched=["stm_1"], considered=["stm_2"])],
+        ops=[
+            _op(
+                "merge_statements",
+                {
+                    "from_id": "stm_1",
+                    "into_id": "stm_2",
+                    "reason": "they are the same fact",
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row("merge", "refinement", matched=["stm_1"], considered=["stm_2"])
+        ],
         flagged=["a real contradiction keeping the draft alive"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
@@ -1229,18 +1472,29 @@ def test_t12_merge_statements_with_unexpected_reason_key_is_flagged():
     assert isinstance(result, DraftCreated)
     assert result.ops == []
     assert emitter.queued == []
-    assert any("merge_statements" in f and "unexpected key" in f and "reason" in f
-               for f in result.flagged)
+    assert any(
+        "merge_statements" in f and "unexpected key" in f and "reason" in f
+        for f in result.flagged
+    )
 
 
 def test_t12_replace_text_with_unexpected_links_key_is_flagged():
     """replace_text accepts {id, text, allow_phrasing_violations}; an extra
     'links' key would TypeError at replay -> flagged, not queued."""
     emit = _emit_input(
-        ops=[_op("replace_text",
-                 {"id": "stm_1", "text": "an invite is reopened",
-                  "links": [{"to_id": "stm_2", "link_type": "method"}]})],
-        ledger=[_ledger_row("reword", "refinement", matched=["stm_1"], considered=["stm_1"])],
+        ops=[
+            _op(
+                "replace_text",
+                {
+                    "id": "stm_1",
+                    "text": "an invite is reopened",
+                    "links": [{"to_id": "stm_2", "link_type": "method"}],
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row("reword", "refinement", matched=["stm_1"], considered=["stm_1"])
+        ],
         flagged=["a real contradiction keeping the draft alive"],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
@@ -1248,8 +1502,10 @@ def test_t12_replace_text_with_unexpected_links_key_is_flagged():
     assert isinstance(result, DraftCreated)
     assert result.ops == []
     assert emitter.queued == []
-    assert any("replace_text" in f and "unexpected key" in f and "links" in f
-               for f in result.flagged)
+    assert any(
+        "replace_text" in f and "unexpected key" in f and "links" in f
+        for f in result.flagged
+    )
 
 
 def test_t12_upsert_entity_with_none_description_is_flagged_not_queued():
@@ -1266,8 +1522,9 @@ def test_t12_upsert_entity_with_none_description_is_flagged_not_queued():
     assert isinstance(result, DraftCreated)
     assert result.ops == []
     assert emitter.queued == []
-    assert any("missing required key" in f and "upsert_entity" in f
-               for f in result.flagged)
+    assert any(
+        "missing required key" in f and "upsert_entity" in f for f in result.flagged
+    )
 
 
 def test_t12_upsert_statement_with_none_kind_and_text_is_flagged():
@@ -1284,8 +1541,9 @@ def test_t12_upsert_statement_with_none_kind_and_text_is_flagged():
     assert isinstance(result, DraftCreated)
     assert result.ops == []
     assert emitter.queued == []
-    assert any("missing required key" in f and "upsert_statement" in f
-               for f in result.flagged)
+    assert any(
+        "missing required key" in f and "upsert_statement" in f for f in result.flagged
+    )
 
 
 def test_t12_legitimate_optional_keys_are_not_flagged():
@@ -1293,14 +1551,29 @@ def test_t12_legitimate_optional_keys_are_not_flagged():
     allow_phrasing_violations) must pass the unexpected-key filter — only keys
     the tool does NOT accept are rejected."""
     emit = _emit_input(
-        ops=[_op(
-            "upsert_statement",
-            {"kind": "event", "text": "an invite is submitted",
-             "mentions": [], "links": [],
-             "id": "stm_1", "incoming_links": [], "allow_phrasing_violations": True},
-        )],
-        ledger=[_ledger_row("an invite is submitted", "new",
-                            matched=["stm_1"], considered=["stm_1"], note="adj")],
+        ops=[
+            _op(
+                "upsert_statement",
+                {
+                    "kind": "event",
+                    "text": "an invite is submitted",
+                    "mentions": [],
+                    "links": [],
+                    "id": "stm_1",
+                    "incoming_links": [],
+                    "allow_phrasing_violations": True,
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "an invite is submitted",
+                "new",
+                matched=["stm_1"],
+                considered=["stm_1"],
+                note="adj",
+            )
+        ],
     )
     responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
     result, _client, _sub, emitter = _run(responses)
@@ -1320,15 +1593,42 @@ def test_t12_legitimate_optional_keys_are_not_flagged():
 #: per-run.
 _BIND_PROOF_CASES = {
     "upsert_statement": (
-        {"kind": "event", "text": "an invite is submitted", "mentions": [], "links": []},
-        [_ledger_row("an invite is submitted", "new",
-                     matched=["stm_1"], considered=["stm_1"], note="adj")],
+        {
+            "kind": "event",
+            "text": "an invite is submitted",
+            "mentions": [],
+            "links": [],
+        },
+        [
+            _ledger_row(
+                "an invite is submitted",
+                "new",
+                matched=["stm_1"],
+                considered=["stm_1"],
+                note="adj",
+            )
+        ],
     ),
     "upsert_statements": (
-        {"statements": [{"kind": "event", "text": "an invite is submitted",
-                         "mentions": [], "links": []}]},
-        [_ledger_row("an invite is submitted", "new",
-                     matched=["stm_1"], considered=["stm_1"], note="adj")],
+        {
+            "statements": [
+                {
+                    "kind": "event",
+                    "text": "an invite is submitted",
+                    "mentions": [],
+                    "links": [],
+                }
+            ]
+        },
+        [
+            _ledger_row(
+                "an invite is submitted",
+                "new",
+                matched=["stm_1"],
+                considered=["stm_1"],
+                note="adj",
+            )
+        ],
     ),
     "upsert_entity": (
         {"name": "Acme", "description": "a company"},
@@ -1339,19 +1639,36 @@ _BIND_PROOF_CASES = {
         [_ledger_row("link", "refinement", matched=["stm_1"], considered=["stm_2"])],
     ),
     "add_entity_links": (
-        {"links": [{"from_entity_id": "ent_1", "to_entity_id": "ent_2",
-                    "link_type": "owns"}]},
-        [_ledger_row("entity link", "refinement", matched=["ent_1"], considered=["ent_2"])],
+        {
+            "links": [
+                {
+                    "from_entity_id": "ent_1",
+                    "to_entity_id": "ent_2",
+                    "link_type": "owns",
+                }
+            ]
+        },
+        [
+            _ledger_row(
+                "entity link", "refinement", matched=["ent_1"], considered=["ent_2"]
+            )
+        ],
     ),
     "patch_statement": (
         {"id": "stm_1", "text": "an invite is reopened"},
-        [_ledger_row("invite reopened", "refinement",
-                     matched=["stm_1"], considered=["stm_1"])],
+        [
+            _ledger_row(
+                "invite reopened", "refinement", matched=["stm_1"], considered=["stm_1"]
+            )
+        ],
     ),
     "replace_text": (
         {"id": "stm_1", "text": "an invite is reopened"},
-        [_ledger_row("invite reopened", "refinement",
-                     matched=["stm_1"], considered=["stm_1"])],
+        [
+            _ledger_row(
+                "invite reopened", "refinement", matched=["stm_1"], considered=["stm_1"]
+            )
+        ],
     ),
     "merge_statements": (
         {"from_id": "stm_1", "into_id": "stm_2"},
@@ -1375,14 +1692,19 @@ def test_t12_every_validator_accepted_op_binds_against_real_signature():
         emit = _emit_input(
             ops=[_op(kind, payload)],
             ledger=ledger,
-            flagged=["a real contradiction so a draft is created even for non-"
-                     "statement ops"],
+            flagged=[
+                "a real contradiction so a draft is created even for non-statement ops"
+            ],
         )
-        responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+        responses = _reconcile_then_adjacency() + [
+            _message([_tool_use(EMIT_TOOL, emit)])
+        ]
         result, _client, _sub, emitter = _run(responses)
         assert isinstance(result, DraftCreated), f"{kind}: expected DraftCreated"
         queued = [(k, p) for (_d, k, p) in emitter.queued if k == kind]
-        assert len(queued) == 1, f"{kind}: expected exactly one queued op, got {emitter.queued}"
+        assert len(queued) == 1, (
+            f"{kind}: expected exactly one queued op, got {emitter.queued}"
+        )
         _k, queued_payload = queued[0]
         sig = server._ORIG_SIGNATURES.get(kind)
         assert sig is not None, f"{kind}: missing from _ORIG_SIGNATURES"

@@ -422,9 +422,7 @@ TOOLS: list[dict[str, Any]] = [
             "description": "Delete behavior→behavior typed edges. Same shape as add_links.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "links": {"type": "array", "items": {"type": "object"}}
-                },
+                "properties": {"links": {"type": "array", "items": {"type": "object"}}},
                 "required": ["links"],
             },
         },

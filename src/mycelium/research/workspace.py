@@ -200,9 +200,8 @@ class WorkspaceReader:
         total_lines = len(raw_lines)
         requested = raw_lines[offset : offset + limit]
         lines = [line[: self._max_line_chars] for line in requested]
-        truncated = (
-            offset + limit < total_lines
-            or any(len(line) > self._max_line_chars for line in requested)
+        truncated = offset + limit < total_lines or any(
+            len(line) > self._max_line_chars for line in requested
         )
         lines, size_truncated = self._cap_lines(lines)
         truncated = truncated or size_truncated

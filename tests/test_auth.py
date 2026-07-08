@@ -34,8 +34,10 @@ def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
     _reset_server()
     # Stub the embedder so server.init doesn't reach for Ollama.
     from mycelium import embed
+
     monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
     from mycelium.http import app
+
     return TestClient(app)
 
 
@@ -74,12 +76,18 @@ def test_auth_on_accepts_valid_bearer(tmp_path, monkeypatch):
         conn = server._auth_conn
         assert conn is not None
         user_id = auth.create_user(
-            conn, name="Test Writer", role="writer", type="human",
+            conn,
+            name="Test Writer",
+            role="writer",
+            type="human",
             email="writer@example.com",
         )
         conn.commit()
         raw, _ = auth.issue_token(
-            conn, user_id=user_id, name="laptop", scope="writer",
+            conn,
+            user_id=user_id,
+            name="laptop",
+            scope="writer",
         )
 
         r = client.post(
@@ -96,12 +104,18 @@ def test_revoked_token_rejected(tmp_path, monkeypatch):
         conn = server._auth_conn
         assert conn is not None
         user_id = auth.create_user(
-            conn, name="Soon Revoked", role="writer", type="human",
+            conn,
+            name="Soon Revoked",
+            role="writer",
+            type="human",
             email="revoke@example.com",
         )
         conn.commit()
         raw, token_id = auth.issue_token(
-            conn, user_id=user_id, name="ci-bot", scope="writer",
+            conn,
+            user_id=user_id,
+            name="ci-bot",
+            scope="writer",
         )
         auth.revoke_token(conn, token_id)
 
@@ -122,12 +136,18 @@ def test_scope_clamps_against_user_role(tmp_path, monkeypatch):
         conn = server._auth_conn
         assert conn is not None
         user_id = auth.create_user(
-            conn, name="Demoted", role="admin", type="human",
+            conn,
+            name="Demoted",
+            role="admin",
+            type="human",
             email="demote@example.com",
         )
         conn.commit()
         raw, _ = auth.issue_token(
-            conn, user_id=user_id, name="key", scope="admin",
+            conn,
+            user_id=user_id,
+            name="key",
+            scope="admin",
         )
         conn.execute("UPDATE users SET role = 'reader' WHERE id = ?", (user_id,))
         conn.commit()
@@ -210,7 +230,10 @@ def test_token_lifecycle_via_http(tmp_path, monkeypatch):
 def _admin_bearer(conn) -> str:
     """Helper: create an admin user + token and return the raw bearer."""
     uid = auth.create_user(
-        conn, name="Admin", role="admin", type="human",
+        conn,
+        name="Admin",
+        role="admin",
+        type="human",
         email="admin@example.com",
     )
     conn.commit()
@@ -223,13 +246,17 @@ def test_admin_endpoints_require_admin_role(tmp_path, monkeypatch):
     with client:
         conn = server._auth_conn
         uid = auth.create_user(
-            conn, name="Writer", role="writer", type="human",
+            conn,
+            name="Writer",
+            role="writer",
+            type="human",
             email="w@example.com",
         )
         conn.commit()
         raw, _ = auth.issue_token(conn, user_id=uid, name="key", scope="writer")
         r = client.get(
-            "/api/admin/users", headers={"Authorization": f"Bearer {raw}"},
+            "/api/admin/users",
+            headers={"Authorization": f"Bearer {raw}"},
         )
         assert r.status_code == 403
 
@@ -313,7 +340,11 @@ def test_reader_can_read_but_not_write(tmp_path, monkeypatch):
     with client:
         conn = server._auth_conn
         uid = auth.create_user(
-            conn, name="R", role="reader", type="human", email="r@x.com",
+            conn,
+            name="R",
+            role="reader",
+            type="human",
+            email="r@x.com",
         )
         conn.commit()
         raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="reader")
@@ -335,7 +366,11 @@ def test_writer_can_write_but_not_delete(tmp_path, monkeypatch):
     with client:
         conn = server._auth_conn
         uid = auth.create_user(
-            conn, name="W", role="writer", type="human", email="w@x.com",
+            conn,
+            name="W",
+            role="writer",
+            type="human",
+            email="w@x.com",
         )
         conn.commit()
         raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="writer")
@@ -372,6 +407,7 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="off")
     with client:
         from mycelium import server
+
         handler = server.mcp._mcp_server.request_handlers[mt.ListToolsRequest]
         req = mt.ListToolsRequest(method="tools/list")
 
@@ -440,13 +476,19 @@ def test_scope_capped_at_creation(tmp_path, monkeypatch):
     with client:
         conn = server._auth_conn
         user_id = auth.create_user(
-            conn, name="R", role="reader", type="human", email="r@example.com",
+            conn,
+            name="R",
+            role="reader",
+            type="human",
+            email="r@example.com",
         )
         conn.commit()
         # Use an admin-scope cookie-equivalent via direct token use:
         # mint an admin token directly so we can hit the HTTP endpoint
         # as this user.
-        raw, _ = auth.issue_token(conn, user_id=user_id, name="bootstrap", scope="reader")
+        raw, _ = auth.issue_token(
+            conn, user_id=user_id, name="bootstrap", scope="reader"
+        )
 
         r = client.post(
             "/api/me/tokens",
@@ -456,7 +498,8 @@ def test_scope_capped_at_creation(tmp_path, monkeypatch):
         assert r.status_code == 200
         # Server should have capped the scope down to the user's role.
         tokens = client.get(
-            "/api/me/tokens", headers={"Authorization": f"Bearer {raw}"},
+            "/api/me/tokens",
+            headers={"Authorization": f"Bearer {raw}"},
         ).json()["tokens"]
         names = {t["name"]: t["scope"] for t in tokens}
         assert names["tried-to-escalate"] == "reader"

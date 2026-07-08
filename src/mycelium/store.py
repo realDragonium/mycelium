@@ -106,6 +106,7 @@ def _record(
         ),
     )
 
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS entities (
     id          TEXT PRIMARY KEY,
@@ -785,8 +786,7 @@ _ENTITY_LINK_TYPE_SEED: dict[str, str] = {
         "Same top-down direction as statement links: parent is the source."
     ),
     "replaces": (
-        "Source entity supersedes target entity (e.g. one provider "
-        "replacing another)."
+        "Source entity supersedes target entity (e.g. one provider replacing another)."
     ),
     "sub-type": (
         "Source is a specialization of target. Reads 'source is a "
@@ -979,9 +979,7 @@ def upsert_entity_link_type_glossary(
     conn.commit()
 
 
-def delete_entity_link_type_glossary(
-    conn: sqlite3.Connection, link_type: str
-) -> None:
+def delete_entity_link_type_glossary(conn: sqlite3.Connection, link_type: str) -> None:
     conn.execute(
         "DELETE FROM entity_link_type_glossary WHERE link_type = ?",
         (link_type,),
@@ -1000,9 +998,7 @@ def count_statements_by_kind(conn: sqlite3.Connection, kind: str) -> int:
 # --- entities ---------------------------------------------------------------
 
 
-def create_entity(
-    conn: sqlite3.Connection, description: str | None
-) -> str:
+def create_entity(conn: sqlite3.Connection, description: str | None) -> str:
     entity_id = f"ent_{uuid.uuid4().hex}"
     conn.execute(
         "INSERT INTO entities (id, description, created_at, created_by) "
@@ -1010,7 +1006,10 @@ def create_entity(
         (entity_id, description, _now(), _actor),
     )
     _record(
-        conn, "create", "entity", entity_id,
+        conn,
+        "create",
+        "entity",
+        entity_id,
         after=_row_dict(get_entity_by_id(conn, entity_id)),
     )
     conn.commit()
@@ -1035,8 +1034,12 @@ def update_entity_description(
         (description, _now(), _actor, entity_id),
     )
     _record(
-        conn, "update", "entity", entity_id,
-        before=before, after=_row_dict(get_entity_by_id(conn, entity_id)),
+        conn,
+        "update",
+        "entity",
+        entity_id,
+        before=before,
+        after=_row_dict(get_entity_by_id(conn, entity_id)),
     )
     conn.commit()
 
@@ -1069,16 +1072,17 @@ def create_name(
         (name_id, text, entity_id, generated_from_name_id, _now(), _actor),
     )
     _record(
-        conn, "create", "name", name_id,
+        conn,
+        "create",
+        "name",
+        name_id,
         after=_row_dict(get_name_by_id(conn, name_id)),
     )
     conn.commit()
     return name_id
 
 
-def get_generated_children(
-    conn: sqlite3.Connection, name_id: str
-) -> list[sqlite3.Row]:
+def get_generated_children(conn: sqlite3.Connection, name_id: str) -> list[sqlite3.Row]:
     """Names auto-generated from `name_id` (its regular plural). Used to
     keep generated plurals in lockstep with their source on delete/rename/
     move."""
@@ -1106,9 +1110,7 @@ def get_name_by_id(conn: sqlite3.Connection, name_id: str) -> sqlite3.Row | None
     ).fetchone()
 
 
-def get_names_by_entity(
-    conn: sqlite3.Connection, entity_id: str
-) -> list[sqlite3.Row]:
+def get_names_by_entity(conn: sqlite3.Connection, entity_id: str) -> list[sqlite3.Row]:
     """All names attached to an entity, sorted by text alphabetically."""
     return conn.execute(
         "SELECT id, text FROM names WHERE entity_id = ? ORDER BY text",
@@ -1230,7 +1232,9 @@ def grep_statements(
     predicate, transform = _grep_match(case_sensitive)
     needle = transform(query)
     kind_extra = " AND kind = ?" if kind is not None and entity_id is None else ""
-    kind_extra_join = " AND b.kind = ?" if kind is not None and entity_id is not None else ""
+    kind_extra_join = (
+        " AND b.kind = ?" if kind is not None and entity_id is not None else ""
+    )
     if entity_id is None:
         args: list[Any] = [needle]
         if kind is not None:
@@ -1435,33 +1439,37 @@ def reassign_names(
     )
     for nid, before in befores.items():
         _record(
-            conn, "update", "name", nid,
-            before=before, after=_row_dict(get_name_by_id(conn, nid)),
+            conn,
+            "update",
+            "name",
+            nid,
+            before=before,
+            after=_row_dict(get_name_by_id(conn, nid)),
             context={"reason": "reassign_names", "from_entity_id": from_entity_id},
         )
     conn.commit()
     return cur.rowcount
 
 
-def set_name_entity(
-    conn: sqlite3.Connection, name_id: str, entity_id: str
-) -> None:
+def set_name_entity(conn: sqlite3.Connection, name_id: str, entity_id: str) -> None:
     before = _row_dict(get_name_by_id(conn, name_id))
     conn.execute(
         "UPDATE names SET entity_id = ?, updated_at = ?, updated_by = ? WHERE id = ?",
         (entity_id, _now(), _actor, name_id),
     )
     _record(
-        conn, "update", "name", name_id,
-        before=before, after=_row_dict(get_name_by_id(conn, name_id)),
+        conn,
+        "update",
+        "name",
+        name_id,
+        before=before,
+        after=_row_dict(get_name_by_id(conn, name_id)),
         context={"reason": "set_name_entity"},
     )
     conn.commit()
 
 
-def rename_name(
-    conn: sqlite3.Connection, name_id: str, new_text: str
-) -> None:
+def rename_name(conn: sqlite3.Connection, name_id: str, new_text: str) -> None:
     """Change a name's `text` in place without changing its id or its
     entity binding. Statements and annotations that mentioned this name
     keep pointing at the same name_id and start rendering under the new
@@ -1492,8 +1500,12 @@ def rename_name(
         (new_text, _now(), _actor, name_id),
     )
     _record(
-        conn, "update", "name", name_id,
-        before=before, after=_row_dict(get_name_by_id(conn, name_id)),
+        conn,
+        "update",
+        "name",
+        name_id,
+        before=before,
+        after=_row_dict(get_name_by_id(conn, name_id)),
         context={"reason": "rename_name"},
     )
     conn.commit()
@@ -1510,7 +1522,10 @@ def create_statement(conn: sqlite3.Connection, kind: str, text: str) -> str:
         (statement_id, kind, text, _now(), _actor),
     )
     _record(
-        conn, "create", "statement", statement_id,
+        conn,
+        "create",
+        "statement",
+        statement_id,
         after=_row_dict(get_statement(conn, statement_id)),
     )
     conn.commit()
@@ -1535,8 +1550,12 @@ def update_statement(
         (kind, text, _now(), _actor, statement_id),
     )
     _record(
-        conn, "update", "statement", statement_id,
-        before=before, after=_row_dict(get_statement(conn, statement_id)),
+        conn,
+        "update",
+        "statement",
+        statement_id,
+        before=before,
+        after=_row_dict(get_statement(conn, statement_id)),
     )
     conn.commit()
 
@@ -1551,8 +1570,12 @@ def update_statement_text(
         (text, _now(), _actor, statement_id),
     )
     _record(
-        conn, "update", "statement", statement_id,
-        before=before, after=_row_dict(get_statement(conn, statement_id)),
+        conn,
+        "update",
+        "statement",
+        statement_id,
+        before=before,
+        after=_row_dict(get_statement(conn, statement_id)),
     )
     conn.commit()
 
@@ -1570,8 +1593,12 @@ def update_statement_kind(
         (kind, _now(), _actor, statement_id),
     )
     _record(
-        conn, "update", "statement", statement_id,
-        before=before, after=_row_dict(get_statement(conn, statement_id)),
+        conn,
+        "update",
+        "statement",
+        statement_id,
+        before=before,
+        after=_row_dict(get_statement(conn, statement_id)),
     )
     conn.commit()
 
@@ -1586,9 +1613,7 @@ def next_vector_id(conn: sqlite3.Connection) -> int:
     return int(row["next"])
 
 
-def set_vector_id(
-    conn: sqlite3.Connection, statement_id: str, vector_id: int
-) -> None:
+def set_vector_id(conn: sqlite3.Connection, statement_id: str, vector_id: int) -> None:
     conn.execute(
         "INSERT INTO statement_vector_ids (statement_id, vector_id) VALUES (?, ?)",
         (statement_id, vector_id),
@@ -1624,9 +1649,7 @@ def next_name_vector_id(conn: sqlite3.Connection) -> int:
     return int(row["next"])
 
 
-def set_name_vector_id(
-    conn: sqlite3.Connection, name_id: str, vector_id: int
-) -> None:
+def set_name_vector_id(conn: sqlite3.Connection, name_id: str, vector_id: int) -> None:
     conn.execute(
         "INSERT INTO name_vector_ids (name_id, vector_id) VALUES (?, ?)",
         (name_id, vector_id),
@@ -1642,9 +1665,7 @@ def get_name_vector_id(conn: sqlite3.Connection, name_id: str) -> int | None:
     return int(row["vector_id"]) if row else None
 
 
-def get_name_id_by_vector_id(
-    conn: sqlite3.Connection, vector_id: int
-) -> str | None:
+def get_name_id_by_vector_id(conn: sqlite3.Connection, vector_id: int) -> str | None:
     row = conn.execute(
         "SELECT name_id FROM name_vector_ids WHERE vector_id = ?",
         (vector_id,),
@@ -1653,16 +1674,12 @@ def get_name_id_by_vector_id(
 
 
 def delete_name_vector_mapping(conn: sqlite3.Connection, name_id: str) -> None:
-    conn.execute(
-        "DELETE FROM name_vector_ids WHERE name_id = ?", (name_id,)
-    )
+    conn.execute("DELETE FROM name_vector_ids WHERE name_id = ?", (name_id,))
     conn.commit()
 
 
 def list_all_names(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return list(
-        conn.execute("SELECT id, text, entity_id FROM names").fetchall()
-    )
+    return list(conn.execute("SELECT id, text, entity_id FROM names").fetchall())
 
 
 # --- mentions ---------------------------------------------------------------
@@ -1681,9 +1698,7 @@ def replace_mentions(
     conn.commit()
 
 
-def get_mentions(
-    conn: sqlite3.Connection, statement_id: str
-) -> list[sqlite3.Row]:
+def get_mentions(conn: sqlite3.Connection, statement_id: str) -> list[sqlite3.Row]:
     """Returns rows with name_id, name (text), and entity_id."""
     return conn.execute(
         "SELECT n.id AS name_id, n.text AS name, n.entity_id "
@@ -1740,9 +1755,7 @@ def build_name_index(conn: sqlite3.Connection) -> dict[str, list[mentions.Indexe
     statement-write, per worker drain, or per backfill — never cached on
     the connection, so it always reflects the latest names."""
     rows = list_all_names(conn)
-    return mentions.build_index(
-        (r["id"], r["entity_id"], r["text"]) for r in rows
-    )
+    return mentions.build_index((r["id"], r["entity_id"], r["text"]) for r in rows)
 
 
 def _replace_mentions_nocommit(
@@ -1846,9 +1859,7 @@ def clear_derived_for_statement(
     removed = conn.execute(
         "DELETE FROM statement_mentions WHERE statement_id = ?", (statement_id,)
     ).rowcount
-    conn.execute(
-        "DELETE FROM pending_mentions WHERE statement_id = ?", (statement_id,)
-    )
+    conn.execute("DELETE FROM pending_mentions WHERE statement_id = ?", (statement_id,))
     conn.execute(
         "DELETE FROM mention_recompute_queue WHERE statement_id = ?", (statement_id,)
     )
@@ -1857,9 +1868,7 @@ def clear_derived_for_statement(
     return removed
 
 
-def statements_mentioning_name(
-    conn: sqlite3.Connection, name_id: str
-) -> list[str]:
+def statements_mentioning_name(conn: sqlite3.Connection, name_id: str) -> list[str]:
     """All statement ids that currently mention `name_id` (via the reverse
     index). Used to find recompute targets when a name's binding changes."""
     return [
@@ -1915,9 +1924,7 @@ def enqueue_recompute_scan(
         conn.commit()
 
 
-def claim_recompute_batch(
-    conn: sqlite3.Connection, limit: int
-) -> list[sqlite3.Row]:
+def claim_recompute_batch(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
     """Claim up to `limit` unclaimed queue rows (stamp claimed_at) and
     return them. Claiming and reading happen in one transaction so two
     workers (or a restart mid-drain) can't double-process — though there is
@@ -2031,7 +2038,9 @@ def approve_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:
         (row["statement_id"], row["name_id"]),
     )
     _record(
-        conn, "link", "statement_mention",
+        conn,
+        "link",
+        "statement_mention",
         f"{row['statement_id']}|{row['name_id']}",
         context={"reason": "approve_pending_mention", "pending_id": pending_id},
     )
@@ -2174,6 +2183,7 @@ def _hash_for(expr: dict[str, Any] | None) -> str:
     importing when_expression. Returns the canonical hash, or HASH_NONE
     for an unconditional link."""
     from . import when_expression as we
+
     return we.hash_canonical(expr)
 
 
@@ -2181,6 +2191,7 @@ def _canonical_for(expr: dict[str, Any] | None) -> dict[str, Any] | None:
     if expr is None:
         return None
     from . import when_expression as we
+
     return we.canonicalize(expr)
 
 
@@ -2208,7 +2219,10 @@ def _insert_one_link(
     if canonical is not None:
         _insert_when_tree(conn, link_id, canonical)
     _record(
-        conn, "link", "statement_link", str(link_id),
+        conn,
+        "link",
+        "statement_link",
+        str(link_id),
         after={
             "link_id": link_id,
             "from_id": from_id,
@@ -2235,7 +2249,10 @@ def _record_statement_link_delete(
         return
     tree = _load_when_tree(conn, link_id)
     _record(
-        conn, "unlink", "statement_link", str(link_id),
+        conn,
+        "unlink",
+        "statement_link",
+        str(link_id),
         before={
             "link_id": row["link_id"],
             "from_id": row["from_statement_id"],
@@ -2405,9 +2422,7 @@ def get_when_references(
 # --- links: merge support ---------------------------------------------------
 
 
-def merge_mentions_into(
-    conn: sqlite3.Connection, from_id: str, into_id: str
-) -> int:
+def merge_mentions_into(conn: sqlite3.Connection, from_id: str, into_id: str) -> int:
     """Move all mention rows from `from_id` onto `into_id`, deduped on
     name_id. Returns rows actually inserted (excluding dupes that were
     already on `into_id`). Removes `from_id`'s mention rows."""
@@ -2417,9 +2432,7 @@ def merge_mentions_into(
         (into_id, from_id),
     )
     inserted = cur.rowcount
-    conn.execute(
-        "DELETE FROM statement_mentions WHERE statement_id = ?", (from_id,)
-    )
+    conn.execute("DELETE FROM statement_mentions WHERE statement_id = ?", (from_id,))
     conn.commit()
     return inserted
 
@@ -2453,7 +2466,9 @@ def _move_link_endpoint(
     tree = _load_when_tree(conn, link_id)
     if rewrite_when_leaves is not None and tree is not None:
         old_id, replacement_id = rewrite_when_leaves
-        tree = we.substitute_leaves(tree, lambda x: replacement_id if x == old_id else x)
+        tree = we.substitute_leaves(
+            tree, lambda x: replacement_id if x == old_id else x
+        )
 
     canonical = _canonical_for(tree)
     new_hash = _hash_for(canonical)
@@ -2500,7 +2515,10 @@ def _move_link_endpoint(
         if canonical is not None:
             _insert_when_tree(conn, link_id, canonical)
     _record(
-        conn, "update", "statement_link", str(link_id),
+        conn,
+        "update",
+        "statement_link",
+        str(link_id),
         before=before_payload,
         after={
             "link_id": link_id,
@@ -2531,7 +2549,8 @@ def merge_outgoing_links_into(
             "SELECT 1 FROM statement_links WHERE link_id = ?", (r["link_id"],)
         ).fetchone()
         _move_link_endpoint(
-            conn, r["link_id"],
+            conn,
+            r["link_id"],
             new_from=into_id,
             rewrite_when_leaves=(from_id, into_id),
         )
@@ -2561,7 +2580,8 @@ def merge_incoming_links_into(
             "SELECT 1 FROM statement_links WHERE link_id = ?", (r["link_id"],)
         ).fetchone()
         _move_link_endpoint(
-            conn, r["link_id"],
+            conn,
+            r["link_id"],
             new_to=into_id,
             rewrite_when_leaves=(from_id, into_id),
         )
@@ -2652,7 +2672,7 @@ def insert_entity_links(
         return 0
     now, actor = _now(), _actor
     inserted = 0
-    for (f, t, lt) in edges:
+    for f, t, lt in edges:
         cur = conn.execute(
             "INSERT OR IGNORE INTO entity_links "
             "(from_entity_id, to_entity_id, link_type, created_at, created_by) "
@@ -2662,10 +2682,16 @@ def insert_entity_links(
         if cur.rowcount:
             inserted += 1
             _record(
-                conn, "link", "entity_link", f"{f}|{t}|{lt}",
+                conn,
+                "link",
+                "entity_link",
+                f"{f}|{t}|{lt}",
                 after={
-                    "from_entity_id": f, "to_entity_id": t, "link_type": lt,
-                    "created_at": now, "created_by": actor,
+                    "from_entity_id": f,
+                    "to_entity_id": t,
+                    "link_type": lt,
+                    "created_at": now,
+                    "created_by": actor,
                 },
             )
     conn.commit()
@@ -2680,7 +2706,7 @@ def delete_entity_links(
     if not edges:
         return 0
     removed = 0
-    for (f, t, lt) in edges:
+    for f, t, lt in edges:
         row = conn.execute(
             "SELECT from_entity_id, to_entity_id, link_type, created_at, created_by "
             "FROM entity_links "
@@ -2696,7 +2722,10 @@ def delete_entity_links(
         )
         removed += 1
         _record(
-            conn, "unlink", "entity_link", f"{f}|{t}|{lt}",
+            conn,
+            "unlink",
+            "entity_link",
+            f"{f}|{t}|{lt}",
             before=_row_dict(row),
         )
     conn.commit()
@@ -2764,7 +2793,10 @@ def _insert_one_entity_statement_link(
     if canonical is not None:
         _insert_when_tree(conn, link_id, canonical, link_kind="entity_statement")
     _record(
-        conn, "link", "entity_statement_link", str(link_id),
+        conn,
+        "link",
+        "entity_statement_link",
+        str(link_id),
         after={
             "link_id": link_id,
             "entity_id": entity_id,
@@ -2792,7 +2824,10 @@ def _record_entity_statement_link_delete(
         return
     tree = _load_when_tree(conn, link_id, link_kind="entity_statement")
     _record(
-        conn, "unlink", "entity_statement_link", str(link_id),
+        conn,
+        "unlink",
+        "entity_statement_link",
+        str(link_id),
         before={
             "link_id": row["link_id"],
             "entity_id": row["entity_id"],
@@ -2820,9 +2855,12 @@ def insert_entity_statement_links(
         return 0
     inserted = 0
     for entity_id, statement_id, direction, link_type, when in edges:
-        if _insert_one_entity_statement_link(
-            conn, entity_id, statement_id, direction, link_type, when
-        ) is not None:
+        if (
+            _insert_one_entity_statement_link(
+                conn, entity_id, statement_id, direction, link_type, when
+            )
+            is not None
+        ):
             inserted += 1
     conn.commit()
     return inserted
@@ -2982,9 +3020,7 @@ def rewrite_entity_statement_when_references(
     statement_links table."""
     from . import when_expression as we
 
-    link_ids = links_referencing_statement(
-        conn, from_id, link_kind="entity_statement"
-    )
+    link_ids = links_referencing_statement(conn, from_id, link_kind="entity_statement")
     for link_id in link_ids:
         row = conn.execute(
             "SELECT entity_id, statement_id, direction, link_type "
@@ -2996,9 +3032,7 @@ def rewrite_entity_statement_when_references(
         tree = _load_when_tree(conn, link_id, link_kind="entity_statement")
         if tree is None:
             continue
-        tree = we.substitute_leaves(
-            tree, lambda x: into_id if x == from_id else x
-        )
+        tree = we.substitute_leaves(tree, lambda x: into_id if x == from_id else x)
         canonical = _canonical_for(tree)
         new_hash = _hash_for(canonical)
 
@@ -3008,23 +3042,23 @@ def rewrite_entity_statement_when_references(
             "WHERE entity_id = ? AND statement_id = ? AND direction = ? "
             "AND link_type = ? AND when_hash = ? AND link_id != ?",
             (
-                row["entity_id"], row["statement_id"], row["direction"],
-                row["link_type"], new_hash, link_id,
+                row["entity_id"],
+                row["statement_id"],
+                row["direction"],
+                row["link_type"],
+                new_hash,
+                link_id,
             ),
         ).fetchone()
         if existing is not None:
-            _record_entity_statement_link_delete(
-                conn, link_id, reason="merge_absorbed"
-            )
+            _record_entity_statement_link_delete(conn, link_id, reason="merge_absorbed")
             conn.execute(
                 "DELETE FROM entity_statement_links WHERE link_id = ?",
                 (link_id,),
             )
             continue
 
-        before_tree = _load_when_tree(
-            conn, link_id, link_kind="entity_statement"
-        )
+        before_tree = _load_when_tree(conn, link_id, link_kind="entity_statement")
         before_payload = {
             "link_id": link_id,
             "entity_id": row["entity_id"],
@@ -3043,11 +3077,12 @@ def rewrite_entity_statement_when_references(
             (link_id,),
         )
         if canonical is not None:
-            _insert_when_tree(
-                conn, link_id, canonical, link_kind="entity_statement"
-            )
+            _insert_when_tree(conn, link_id, canonical, link_kind="entity_statement")
         _record(
-            conn, "update", "entity_statement_link", str(link_id),
+            conn,
+            "update",
+            "entity_statement_link",
+            str(link_id),
             before=before_payload,
             after={
                 "link_id": link_id,
@@ -3083,8 +3118,11 @@ def rewrite_entity_statement_endpoints(
             "WHERE entity_id = ? AND statement_id = ? AND direction = ? "
             "AND link_type = ? AND when_hash = ?",
             (
-                into_entity_id, r["statement_id"], r["direction"],
-                r["link_type"], r["when_hash"],
+                into_entity_id,
+                r["statement_id"],
+                r["direction"],
+                r["link_type"],
+                r["when_hash"],
             ),
         ).fetchone()
         if existing is not None:
@@ -3109,7 +3147,10 @@ def rewrite_entity_statement_endpoints(
             (into_entity_id, r["link_id"]),
         )
         _record(
-            conn, "update", "entity_statement_link", str(r["link_id"]),
+            conn,
+            "update",
+            "entity_statement_link",
+            str(r["link_id"]),
             before=before,
             after={**before, "entity_id": into_entity_id},
             context={"reason": "rewrite_entity_statement_endpoints"},
@@ -3127,9 +3168,7 @@ def list_entity_statement_link_types(conn: sqlite3.Connection) -> list[str]:
 # --- annotations ------------------------------------------------------------
 
 
-def create_annotation(
-    conn: sqlite3.Connection, kind: str, text: str
-) -> str:
+def create_annotation(conn: sqlite3.Connection, kind: str, text: str) -> str:
     annotation_id = f"ann_{uuid.uuid4().hex}"
     conn.execute(
         "INSERT INTO annotations (id, kind, text, created_at, created_by) "
@@ -3137,16 +3176,17 @@ def create_annotation(
         (annotation_id, kind, text, _now(), _actor),
     )
     _record(
-        conn, "create", "annotation", annotation_id,
+        conn,
+        "create",
+        "annotation",
+        annotation_id,
         after=_row_dict(get_annotation(conn, annotation_id)),
     )
     conn.commit()
     return annotation_id
 
 
-def get_annotation(
-    conn: sqlite3.Connection, annotation_id: str
-) -> sqlite3.Row | None:
+def get_annotation(conn: sqlite3.Connection, annotation_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT id, kind, text, created_at, updated_at, created_by, updated_by "
         "FROM annotations WHERE id = ?",
@@ -3164,8 +3204,12 @@ def update_annotation(
         (kind, text, _now(), _actor, annotation_id),
     )
     _record(
-        conn, "update", "annotation", annotation_id,
-        before=before, after=_row_dict(get_annotation(conn, annotation_id)),
+        conn,
+        "update",
+        "annotation",
+        annotation_id,
+        before=before,
+        after=_row_dict(get_annotation(conn, annotation_id)),
     )
     conn.commit()
 
@@ -3239,9 +3283,7 @@ def list_annotation_kinds(conn: sqlite3.Connection) -> list[str]:
     return [r["kind"] for r in rows]
 
 
-def delete_annotation_record(
-    conn: sqlite3.Connection, annotation_id: str
-) -> None:
+def delete_annotation_record(conn: sqlite3.Connection, annotation_id: str) -> None:
     """Delete annotation + its vector_id mapping. Caller must clear the
     join + mention rows first; FK enforcement otherwise rejects."""
     before = _row_dict(get_annotation(conn, annotation_id))
@@ -3300,12 +3342,12 @@ def get_annotation_id_by_vector_id(
 
 def _record_attach_pair(
     conn: sqlite3.Connection,
-    table: str,         # 'statement_annotations' or 'entity_annotations'
-    target_kind: str,   # 'statement_annotation' or 'entity_annotation'
-    parent_col: str,    # 'statement_id' or 'entity_id'
+    table: str,  # 'statement_annotations' or 'entity_annotations'
+    target_kind: str,  # 'statement_annotation' or 'entity_annotation'
+    parent_col: str,  # 'statement_id' or 'entity_id'
     parent_id: str,
     annotation_id: str,
-    op: str,            # 'attach' or 'detach'
+    op: str,  # 'attach' or 'detach'
     row_data: dict[str, Any] | None,
     reason: str | None = None,
 ) -> None:
@@ -3313,7 +3355,10 @@ def _record_attach_pair(
     if row_data is not None:
         payload.update(row_data)
     _record(
-        conn, op, target_kind, f"{parent_id}|{annotation_id}",
+        conn,
+        op,
+        target_kind,
+        f"{parent_id}|{annotation_id}",
         before=payload if op == "detach" else None,
         after=payload if op == "attach" else None,
         context={"reason": reason} if reason else None,
@@ -3329,7 +3374,7 @@ def attach_annotations_to_statements(
         return 0
     now, actor = _now(), _actor
     inserted = 0
-    for (s, a) in edges:
+    for s, a in edges:
         cur = conn.execute(
             "INSERT OR IGNORE INTO statement_annotations "
             "(statement_id, annotation_id, created_at, created_by) VALUES (?, ?, ?, ?)",
@@ -3338,8 +3383,13 @@ def attach_annotations_to_statements(
         if cur.rowcount:
             inserted += 1
             _record_attach_pair(
-                conn, "statement_annotations", "statement_annotation",
-                "statement_id", s, a, "attach",
+                conn,
+                "statement_annotations",
+                "statement_annotation",
+                "statement_id",
+                s,
+                a,
+                "attach",
                 {"created_at": now, "created_by": actor},
             )
     conn.commit()
@@ -3354,7 +3404,7 @@ def detach_annotations_from_statements(
     if not edges:
         return 0
     removed = 0
-    for (s, a) in edges:
+    for s, a in edges:
         row = conn.execute(
             "SELECT created_at, created_by FROM statement_annotations "
             "WHERE statement_id = ? AND annotation_id = ?",
@@ -3369,8 +3419,14 @@ def detach_annotations_from_statements(
         )
         removed += 1
         _record_attach_pair(
-            conn, "statement_annotations", "statement_annotation",
-            "statement_id", s, a, "detach", _row_dict(row),
+            conn,
+            "statement_annotations",
+            "statement_annotation",
+            "statement_id",
+            s,
+            a,
+            "detach",
+            _row_dict(row),
         )
     conn.commit()
     return removed
@@ -3391,9 +3447,15 @@ def replace_annotation_attachments(
     ).fetchall()
     for r in existing:
         _record_attach_pair(
-            conn, "statement_annotations", "statement_annotation",
-            "statement_id", r["statement_id"], annotation_id, "detach",
-            _row_dict(r), reason="replace_annotation_attachments",
+            conn,
+            "statement_annotations",
+            "statement_annotation",
+            "statement_id",
+            r["statement_id"],
+            annotation_id,
+            "detach",
+            _row_dict(r),
+            reason="replace_annotation_attachments",
         )
     conn.execute(
         "DELETE FROM statement_annotations WHERE annotation_id = ?",
@@ -3408,8 +3470,13 @@ def replace_annotation_attachments(
         )
         if cur.rowcount:
             _record_attach_pair(
-                conn, "statement_annotations", "statement_annotation",
-                "statement_id", bid, annotation_id, "attach",
+                conn,
+                "statement_annotations",
+                "statement_annotation",
+                "statement_id",
+                bid,
+                annotation_id,
+                "attach",
                 {"created_at": now, "created_by": actor},
                 reason="replace_annotation_attachments",
             )
@@ -3440,9 +3507,7 @@ def get_statements_for_annotation(
     ).fetchall()
 
 
-def clear_statement_annotations(
-    conn: sqlite3.Connection, statement_id: str
-) -> int:
+def clear_statement_annotations(conn: sqlite3.Connection, statement_id: str) -> int:
     """Drop every annotation attachment for this statement. Used by
     delete_statement. Annotations themselves survive — only the join is
     removed. Returns rows deleted."""
@@ -3453,9 +3518,15 @@ def clear_statement_annotations(
     ).fetchall()
     for r in existing:
         _record_attach_pair(
-            conn, "statement_annotations", "statement_annotation",
-            "statement_id", statement_id, r["annotation_id"], "detach",
-            _row_dict(r), reason="clear_statement_annotations",
+            conn,
+            "statement_annotations",
+            "statement_annotation",
+            "statement_id",
+            statement_id,
+            r["annotation_id"],
+            "detach",
+            _row_dict(r),
+            reason="clear_statement_annotations",
         )
     cur = conn.execute(
         "DELETE FROM statement_annotations WHERE statement_id = ?", (statement_id,)
@@ -3464,9 +3535,7 @@ def clear_statement_annotations(
     return cur.rowcount
 
 
-def clear_annotation_attachments(
-    conn: sqlite3.Connection, annotation_id: str
-) -> None:
+def clear_annotation_attachments(conn: sqlite3.Connection, annotation_id: str) -> None:
     """Drop every statement attachment for this annotation. Used by
     delete_annotation before dropping the annotation itself."""
     existing = conn.execute(
@@ -3476,9 +3545,15 @@ def clear_annotation_attachments(
     ).fetchall()
     for r in existing:
         _record_attach_pair(
-            conn, "statement_annotations", "statement_annotation",
-            "statement_id", r["statement_id"], annotation_id, "detach",
-            _row_dict(r), reason="clear_annotation_attachments",
+            conn,
+            "statement_annotations",
+            "statement_annotation",
+            "statement_id",
+            r["statement_id"],
+            annotation_id,
+            "detach",
+            _row_dict(r),
+            reason="clear_annotation_attachments",
         )
     conn.execute(
         "DELETE FROM statement_annotations WHERE annotation_id = ?",
@@ -3503,9 +3578,15 @@ def merge_statement_annotation_attachments(
     inserted = 0
     for r in sources:
         _record_attach_pair(
-            conn, "statement_annotations", "statement_annotation",
-            "statement_id", from_id, r["annotation_id"], "detach",
-            _row_dict(r), reason="merge_statements",
+            conn,
+            "statement_annotations",
+            "statement_annotation",
+            "statement_id",
+            from_id,
+            r["annotation_id"],
+            "detach",
+            _row_dict(r),
+            reason="merge_statements",
         )
         cur = conn.execute(
             "INSERT OR IGNORE INTO statement_annotations "
@@ -3516,14 +3597,17 @@ def merge_statement_annotation_attachments(
         if cur.rowcount:
             inserted += 1
             _record_attach_pair(
-                conn, "statement_annotations", "statement_annotation",
-                "statement_id", into_id, r["annotation_id"], "attach",
+                conn,
+                "statement_annotations",
+                "statement_annotation",
+                "statement_id",
+                into_id,
+                r["annotation_id"],
+                "attach",
                 {"created_at": r["created_at"], "created_by": r["created_by"]},
                 reason="merge_statements",
             )
-    conn.execute(
-        "DELETE FROM statement_annotations WHERE statement_id = ?", (from_id,)
-    )
+    conn.execute("DELETE FROM statement_annotations WHERE statement_id = ?", (from_id,))
     conn.commit()
     return inserted
 
@@ -3538,7 +3622,7 @@ def attach_annotations_to_entities(
         return 0
     now, actor = _now(), _actor
     inserted = 0
-    for (e, a) in edges:
+    for e, a in edges:
         cur = conn.execute(
             "INSERT OR IGNORE INTO entity_annotations "
             "(entity_id, annotation_id, created_at, created_by) VALUES (?, ?, ?, ?)",
@@ -3547,8 +3631,13 @@ def attach_annotations_to_entities(
         if cur.rowcount:
             inserted += 1
             _record_attach_pair(
-                conn, "entity_annotations", "entity_annotation",
-                "entity_id", e, a, "attach",
+                conn,
+                "entity_annotations",
+                "entity_annotation",
+                "entity_id",
+                e,
+                a,
+                "attach",
                 {"created_at": now, "created_by": actor},
             )
     conn.commit()
@@ -3561,7 +3650,7 @@ def detach_annotations_from_entities(
     if not edges:
         return 0
     removed = 0
-    for (e, a) in edges:
+    for e, a in edges:
         row = conn.execute(
             "SELECT created_at, created_by FROM entity_annotations "
             "WHERE entity_id = ? AND annotation_id = ?",
@@ -3570,14 +3659,19 @@ def detach_annotations_from_entities(
         if row is None:
             continue
         conn.execute(
-            "DELETE FROM entity_annotations "
-            "WHERE entity_id = ? AND annotation_id = ?",
+            "DELETE FROM entity_annotations WHERE entity_id = ? AND annotation_id = ?",
             (e, a),
         )
         removed += 1
         _record_attach_pair(
-            conn, "entity_annotations", "entity_annotation",
-            "entity_id", e, a, "detach", _row_dict(row),
+            conn,
+            "entity_annotations",
+            "entity_annotation",
+            "entity_id",
+            e,
+            a,
+            "detach",
+            _row_dict(row),
         )
     conn.commit()
     return removed
@@ -3595,9 +3689,15 @@ def replace_annotation_entity_attachments(
     ).fetchall()
     for r in existing:
         _record_attach_pair(
-            conn, "entity_annotations", "entity_annotation",
-            "entity_id", r["entity_id"], annotation_id, "detach",
-            _row_dict(r), reason="replace_annotation_entity_attachments",
+            conn,
+            "entity_annotations",
+            "entity_annotation",
+            "entity_id",
+            r["entity_id"],
+            annotation_id,
+            "detach",
+            _row_dict(r),
+            reason="replace_annotation_entity_attachments",
         )
     conn.execute(
         "DELETE FROM entity_annotations WHERE annotation_id = ?",
@@ -3612,8 +3712,13 @@ def replace_annotation_entity_attachments(
         )
         if cur.rowcount:
             _record_attach_pair(
-                conn, "entity_annotations", "entity_annotation",
-                "entity_id", eid, annotation_id, "attach",
+                conn,
+                "entity_annotations",
+                "entity_annotation",
+                "entity_id",
+                eid,
+                annotation_id,
+                "attach",
                 {"created_at": now, "created_by": actor},
                 reason="replace_annotation_entity_attachments",
             )
@@ -3650,9 +3755,7 @@ def get_entities_for_annotation(
     ).fetchall()
 
 
-def clear_entity_annotations(
-    conn: sqlite3.Connection, entity_id: str
-) -> int:
+def clear_entity_annotations(conn: sqlite3.Connection, entity_id: str) -> int:
     """Drop every annotation attachment for this entity. Used by
     merge_entities. Annotations themselves survive — only the join is
     removed."""
@@ -3663,9 +3766,15 @@ def clear_entity_annotations(
     ).fetchall()
     for r in existing:
         _record_attach_pair(
-            conn, "entity_annotations", "entity_annotation",
-            "entity_id", entity_id, r["annotation_id"], "detach",
-            _row_dict(r), reason="clear_entity_annotations",
+            conn,
+            "entity_annotations",
+            "entity_annotation",
+            "entity_id",
+            entity_id,
+            r["annotation_id"],
+            "detach",
+            _row_dict(r),
+            reason="clear_entity_annotations",
         )
     cur = conn.execute(
         "DELETE FROM entity_annotations WHERE entity_id = ?", (entity_id,)
@@ -3685,9 +3794,15 @@ def clear_annotation_entity_attachments(
     ).fetchall()
     for r in existing:
         _record_attach_pair(
-            conn, "entity_annotations", "entity_annotation",
-            "entity_id", r["entity_id"], annotation_id, "detach",
-            _row_dict(r), reason="clear_annotation_entity_attachments",
+            conn,
+            "entity_annotations",
+            "entity_annotation",
+            "entity_id",
+            r["entity_id"],
+            annotation_id,
+            "detach",
+            _row_dict(r),
+            reason="clear_annotation_entity_attachments",
         )
     conn.execute(
         "DELETE FROM entity_annotations WHERE annotation_id = ?",
@@ -3711,9 +3826,15 @@ def merge_entity_annotation_attachments(
     inserted = 0
     for r in sources:
         _record_attach_pair(
-            conn, "entity_annotations", "entity_annotation",
-            "entity_id", from_id, r["annotation_id"], "detach",
-            _row_dict(r), reason="merge_entities",
+            conn,
+            "entity_annotations",
+            "entity_annotation",
+            "entity_id",
+            from_id,
+            r["annotation_id"],
+            "detach",
+            _row_dict(r),
+            reason="merge_entities",
         )
         cur = conn.execute(
             "INSERT OR IGNORE INTO entity_annotations "
@@ -3724,14 +3845,17 @@ def merge_entity_annotation_attachments(
         if cur.rowcount:
             inserted += 1
             _record_attach_pair(
-                conn, "entity_annotations", "entity_annotation",
-                "entity_id", into_id, r["annotation_id"], "attach",
+                conn,
+                "entity_annotations",
+                "entity_annotation",
+                "entity_id",
+                into_id,
+                r["annotation_id"],
+                "attach",
                 {"created_at": r["created_at"], "created_by": r["created_by"]},
                 reason="merge_entities",
             )
-    conn.execute(
-        "DELETE FROM entity_annotations WHERE entity_id = ?", (from_id,)
-    )
+    conn.execute("DELETE FROM entity_annotations WHERE entity_id = ?", (from_id,))
     conn.commit()
     return inserted
 
@@ -3766,9 +3890,7 @@ def get_annotation_mentions(
     ).fetchall()
 
 
-def clear_annotation_mentions(
-    conn: sqlite3.Connection, annotation_id: str
-) -> None:
+def clear_annotation_mentions(conn: sqlite3.Connection, annotation_id: str) -> None:
     """Drop every mention this annotation had. Used by delete_annotation
     before dropping the annotation itself."""
     conn.execute(
@@ -3814,7 +3936,9 @@ def rewrite_entity_link_endpoints(
     ).fetchall()
     for r in outgoing:
         _record(
-            conn, "unlink", "entity_link",
+            conn,
+            "unlink",
+            "entity_link",
             f"{r['from_entity_id']}|{r['to_entity_id']}|{r['link_type']}",
             before=_row_dict(r),
             context={"reason": "merge_entities"},
@@ -3823,12 +3947,19 @@ def rewrite_entity_link_endpoints(
             "INSERT OR IGNORE INTO entity_links "
             "(from_entity_id, to_entity_id, link_type, created_at, created_by) "
             "VALUES (?, ?, ?, ?, ?)",
-            (into_entity_id, r["to_entity_id"], r["link_type"],
-             r["created_at"], r["created_by"]),
+            (
+                into_entity_id,
+                r["to_entity_id"],
+                r["link_type"],
+                r["created_at"],
+                r["created_by"],
+            ),
         )
         if cur.rowcount:
             _record(
-                conn, "link", "entity_link",
+                conn,
+                "link",
+                "entity_link",
                 f"{into_entity_id}|{r['to_entity_id']}|{r['link_type']}",
                 after={
                     "from_entity_id": into_entity_id,
@@ -3839,9 +3970,7 @@ def rewrite_entity_link_endpoints(
                 },
                 context={"reason": "merge_entities"},
             )
-    conn.execute(
-        "DELETE FROM entity_links WHERE from_entity_id = ?", (from_entity_id,)
-    )
+    conn.execute("DELETE FROM entity_links WHERE from_entity_id = ?", (from_entity_id,))
     # Incoming rewrites: source as `to`. Same dedupe-merged shape.
     incoming = conn.execute(
         "SELECT from_entity_id, to_entity_id, link_type, created_at, created_by "
@@ -3850,7 +3979,9 @@ def rewrite_entity_link_endpoints(
     ).fetchall()
     for r in incoming:
         _record(
-            conn, "unlink", "entity_link",
+            conn,
+            "unlink",
+            "entity_link",
             f"{r['from_entity_id']}|{r['to_entity_id']}|{r['link_type']}",
             before=_row_dict(r),
             context={"reason": "merge_entities"},
@@ -3859,12 +3990,19 @@ def rewrite_entity_link_endpoints(
             "INSERT OR IGNORE INTO entity_links "
             "(from_entity_id, to_entity_id, link_type, created_at, created_by) "
             "VALUES (?, ?, ?, ?, ?)",
-            (r["from_entity_id"], into_entity_id, r["link_type"],
-             r["created_at"], r["created_by"]),
+            (
+                r["from_entity_id"],
+                into_entity_id,
+                r["link_type"],
+                r["created_at"],
+                r["created_by"],
+            ),
         )
         if cur.rowcount:
             _record(
-                conn, "link", "entity_link",
+                conn,
+                "link",
+                "entity_link",
                 f"{r['from_entity_id']}|{into_entity_id}|{r['link_type']}",
                 after={
                     "from_entity_id": r["from_entity_id"],
@@ -3875,7 +4013,5 @@ def rewrite_entity_link_endpoints(
                 },
                 context={"reason": "merge_entities"},
             )
-    conn.execute(
-        "DELETE FROM entity_links WHERE to_entity_id = ?", (from_entity_id,)
-    )
+    conn.execute("DELETE FROM entity_links WHERE to_entity_id = ?", (from_entity_id,))
     conn.commit()

@@ -73,9 +73,7 @@ def find_candidates(
     import random
 
     rows = mcp.list_all_behaviors()
-    leaks = [
-        {"id": r["id"], "text": r["text"]} for r in rows if is_leaky(r["text"])
-    ]
+    leaks = [{"id": r["id"], "text": r["text"]} for r in rows if is_leaky(r["text"])]
     if sample and sample > 0 and len(leaks) > sample:
         leaks = random.sample(leaks, sample)
     return leaks

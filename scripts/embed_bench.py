@@ -154,16 +154,32 @@ def run() -> None:
         raw_alias_aug.append(a_aug)
 
         print(f"\n  stmt: {text}")
-        print(f"    canonical q: text={c_text:.3f}  aug={c_aug:.3f}  Δ={c_aug - c_text:+.3f}")
-        print(f"    alias q    : text={a_text:.3f}  aug={a_aug:.3f}  Δ={a_aug - a_text:+.3f}")
-        print(f"    control q  : text={x_text:.3f}  aug={x_aug:.3f}  Δ={x_aug - x_text:+.3f}")
+        print(
+            f"    canonical q: text={c_text:.3f}  aug={c_aug:.3f}  Δ={c_aug - c_text:+.3f}"
+        )
+        print(
+            f"    alias q    : text={a_text:.3f}  aug={a_aug:.3f}  Δ={a_aug - a_text:+.3f}"
+        )
+        print(
+            f"    control q  : text={x_text:.3f}  aug={x_aug:.3f}  Δ={x_aug - x_text:+.3f}"
+        )
 
     print("\n## summary")
-    print(f"  mean Δ canonical-query similarity (want ~0): {sum(deltas_canonical) / len(deltas_canonical):+.3f}")
-    print(f"  mean Δ alias-query    similarity (want +): {sum(deltas_alias) / len(deltas_alias):+.3f}")
-    print(f"  mean Δ control-query  similarity (want ~0): {sum(deltas_control) / len(deltas_control):+.3f}")
-    print(f"  mean alias-query similarity, plain  : {sum(raw_alias_plain) / len(raw_alias_plain):.3f}")
-    print(f"  mean alias-query similarity, augmented: {sum(raw_alias_aug) / len(raw_alias_aug):.3f}")
+    print(
+        f"  mean Δ canonical-query similarity (want ~0): {sum(deltas_canonical) / len(deltas_canonical):+.3f}"
+    )
+    print(
+        f"  mean Δ alias-query    similarity (want +): {sum(deltas_alias) / len(deltas_alias):+.3f}"
+    )
+    print(
+        f"  mean Δ control-query  similarity (want ~0): {sum(deltas_control) / len(deltas_control):+.3f}"
+    )
+    print(
+        f"  mean alias-query similarity, plain  : {sum(raw_alias_plain) / len(raw_alias_plain):.3f}"
+    )
+    print(
+        f"  mean alias-query similarity, augmented: {sum(raw_alias_aug) / len(raw_alias_aug):.3f}"
+    )
 
 
 if __name__ == "__main__":

@@ -128,18 +128,45 @@ def _execute(
         # Budget gates — forced finalize bypasses the floor and degrades.
         if trace.op_count >= config.op_cap:
             return _forced_finalize(
-                "op_cap", question, recon, collected_ids, client, config, tools,
-                messages, trace, start, ops_after_recon,
+                "op_cap",
+                question,
+                recon,
+                collected_ids,
+                client,
+                config,
+                tools,
+                messages,
+                trace,
+                start,
+                ops_after_recon,
             )
         if (time.monotonic() - start) > config.wall_clock_s:
             return _forced_finalize(
-                "wall_clock", question, recon, collected_ids, client, config, tools,
-                messages, trace, start, ops_after_recon,
+                "wall_clock",
+                question,
+                recon,
+                collected_ids,
+                client,
+                config,
+                tools,
+                messages,
+                trace,
+                start,
+                ops_after_recon,
             )
         if trace.model_turns >= max_turns:
             return _forced_finalize(
-                "turn_limit", question, recon, collected_ids, client, config, tools,
-                messages, trace, start, ops_after_recon,
+                "turn_limit",
+                question,
+                recon,
+                collected_ids,
+                client,
+                config,
+                tools,
+                messages,
+                trace,
+                start,
+                ops_after_recon,
             )
 
         try:
@@ -148,8 +175,17 @@ def _execute(
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             trace.notes.append(f"model error: {exc}")
             return _forced_finalize(
-                "api_error", question, recon, collected_ids, client, config, tools,
-                messages, trace, start, ops_after_recon,
+                "api_error",
+                question,
+                recon,
+                collected_ids,
+                client,
+                config,
+                tools,
+                messages,
+                trace,
+                start,
+                ops_after_recon,
             )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -163,8 +199,17 @@ def _execute(
                 messages.append({"role": "user", "content": prompts.NO_TERMINAL_NUDGE})
                 continue
             return _forced_finalize(
-                "no_terminal", question, recon, collected_ids, client, config, tools,
-                messages, trace, start, ops_after_recon,
+                "no_terminal",
+                question,
+                recon,
+                collected_ids,
+                client,
+                config,
+                tools,
+                messages,
+                trace,
+                start,
+                ops_after_recon,
             )
 
         # The model is calling a tool again — reset the no-terminal nudge so a
@@ -183,7 +228,12 @@ def _execute(
             if tu.name in TERMINAL_TOOLS:
                 continue
             if _dispatch_read(
-                tu.name, dict(tu.input or {}), tu.id, substrate, trace, read_results,
+                tu.name,
+                dict(tu.input or {}),
+                tu.id,
+                substrate,
+                trace,
+                read_results,
                 collected_ids,
             ):
                 ops_after_recon.append(tu.name)
@@ -222,10 +272,21 @@ def _execute(
                     "been gathered.",
                 )
                 return _forced_finalize(
-                    "clarify_stuck", question, recon, collected_ids, client, config,
-                    tools, messages, trace, start, ops_after_recon,
+                    "clarify_stuck",
+                    question,
+                    recon,
+                    collected_ids,
+                    client,
+                    config,
+                    tools,
+                    messages,
+                    trace,
+                    start,
+                    ops_after_recon,
                 )
-            return _finish_clarification(tool_input, trace, start, ops_after_recon, config)
+            return _finish_clarification(
+                tool_input, trace, start, ops_after_recon, config
+            )
 
         # ---- Terminal: submit_answer (gated by the floor) ----
         if name == SUBMIT_TOOL:
@@ -254,8 +315,17 @@ def _execute(
                     "what has been gathered.",
                 )
                 return _forced_finalize(
-                    "floor_stuck", question, recon, collected_ids, client, config,
-                    tools, messages, trace, start, ops_after_recon,
+                    "floor_stuck",
+                    question,
+                    recon,
+                    collected_ids,
+                    client,
+                    config,
+                    tools,
+                    messages,
+                    trace,
+                    start,
+                    ops_after_recon,
                 )
             try:
                 return _finish_answer(
@@ -270,7 +340,12 @@ def _execute(
                     continue
                 trace.notes.append(f"submit_answer malformed twice: {exc}")
                 return _fallback_answer(
-                    question, collected_ids, trace, start, ops_after_recon, config,
+                    question,
+                    collected_ids,
+                    trace,
+                    start,
+                    ops_after_recon,
+                    config,
                     gap="answer formatting failed — returned a low-confidence partial",
                 )
 
@@ -287,7 +362,9 @@ def _recon(
     try:
         with trace.span("recon"):
             recon = substrate.call("survey_statements", args)
-        trace.record_tool_call("survey_statements", args, recon, ok=True, counts_as_op=True)
+        trace.record_tool_call(
+            "survey_statements", args, recon, ok=True, counts_as_op=True
+        )
         return recon
     except SubstrateError as exc:
         trace.record_tool_call(
@@ -314,10 +391,12 @@ def _dispatch_read(
     wants all of one turn's tool_results in the single following user message —
     so the caller collects the blocks and appends them once."""
     if not _substrate_has(substrate, name):
-        trace.record_tool_call(name, arguments, None, ok=False, counts_as_op=True,
-                               error="unknown tool")
-        result_blocks.append(_tool_result_block(tool_use_id, f"unknown tool: {name}",
-                                                 is_error=True))
+        trace.record_tool_call(
+            name, arguments, None, ok=False, counts_as_op=True, error="unknown tool"
+        )
+        result_blocks.append(
+            _tool_result_block(tool_use_id, f"unknown tool: {name}", is_error=True)
+        )
         return False
     try:
         with trace.span(f"tool:{name}"):
@@ -330,11 +409,13 @@ def _dispatch_read(
         return True
     except SubstrateError as exc:
         # Absence/failure is reported, never fabricated into an empty success.
-        trace.record_tool_call(name, arguments, None, ok=False, counts_as_op=True,
-                               error=str(exc))
+        trace.record_tool_call(
+            name, arguments, None, ok=False, counts_as_op=True, error=str(exc)
+        )
         result_blocks.append(
-            _tool_result_block(tool_use_id, _serialize({"error": str(exc)}),
-                               is_error=True)
+            _tool_result_block(
+                tool_use_id, _serialize({"error": str(exc)}), is_error=True
+            )
         )
         return False
 
@@ -356,7 +437,9 @@ def _forced_finalize(
     a low-confidence partial. Never throws."""
     trace.forced_finalize = reason
     trace.degraded = True
-    messages.append({"role": "user", "content": prompts.forced_finalize_message(reason)})
+    messages.append(
+        {"role": "user", "content": prompts.forced_finalize_message(reason)}
+    )
     try:
         with trace.span("model_turn:forced"):
             resp = _model_turn(client, config, messages, tools, force=True)
@@ -365,14 +448,23 @@ def _forced_finalize(
         tool_use = _first_tool_use(resp)
         if tool_use is not None and tool_use.name == SUBMIT_TOOL:
             return _finish_answer(
-                dict(tool_use.input or {}), trace, start, ops_after_recon, config,
+                dict(tool_use.input or {}),
+                trace,
+                start,
+                ops_after_recon,
+                config,
                 degraded=True,
             )
         trace.notes.append("forced finalize: model did not emit submit_answer")
     except Exception as exc:  # noqa: BLE001
         trace.notes.append(f"forced finalize failed: {exc}")
     return _fallback_answer(
-        question, collected_ids, trace, start, ops_after_recon, config,
+        question,
+        collected_ids,
+        trace,
+        start,
+        ops_after_recon,
+        config,
         gap=f"forced finalize ({reason}) — core left unresolved",
     )
 
@@ -413,7 +505,9 @@ def _finish_clarification(
     ops_after_recon: list[str],
     config: AskConfig,
 ) -> NeedsClarification:
-    trace_dict = _build_trace(trace, "needs_clarification", start, ops_after_recon, config)
+    trace_dict = _build_trace(
+        trace, "needs_clarification", start, ops_after_recon, config
+    )
     return clarification_from_tool_input(tool_input, trace_dict)
 
 
@@ -612,7 +706,8 @@ def _strip_thinking(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         content = message.get("content")
         if isinstance(content, list):
             filtered = [
-                b for b in content
+                b
+                for b in content
                 if _block_type(b) not in ("thinking", "redacted_thinking")
             ]
             out.append({**message, "content": filtered or content})
@@ -638,7 +733,9 @@ def _tool_uses(resp: Any) -> list[Any]:
     ]
 
 
-def _tool_result_block(tool_use_id: str, content: str, *, is_error: bool) -> dict[str, Any]:
+def _tool_result_block(
+    tool_use_id: str, content: str, *, is_error: bool
+) -> dict[str, Any]:
     return {
         "type": "tool_result",
         "tool_use_id": tool_use_id,
@@ -654,7 +751,10 @@ def _append_tool_error(
     message. Reads are batched by the caller; terminals are handled one at a
     time, so a per-message append is correct here."""
     messages.append(
-        {"role": "user", "content": [_tool_result_block(tool_use_id, message, is_error=True)]}
+        {
+            "role": "user",
+            "content": [_tool_result_block(tool_use_id, message, is_error=True)],
+        }
     )
 
 

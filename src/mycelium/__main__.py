@@ -76,7 +76,9 @@ def _cmd_users_list(args: argparse.Namespace) -> None:
     if not rows:
         print("(no users)", file=sys.stderr)
         return
-    print(f"{'EMAIL':<40} {'ROLE':<8} {'TYPE':<8} {'STATUS':<10} {'NAME':<24} LAST LOGIN")
+    print(
+        f"{'EMAIL':<40} {'ROLE':<8} {'TYPE':<8} {'STATUS':<10} {'NAME':<24} LAST LOGIN"
+    )
     for r in rows:
         last = (r["last_login_at"] or "")[:10] or "—"
         email = r["email"] or "(none)"
@@ -113,7 +115,9 @@ def _cmd_users_set_role(args: argparse.Namespace) -> None:
             sys.exit(1)
 
     if row["role"] == args.role:
-        print(f"{args.email} already has role {args.role}; nothing to do", file=sys.stderr)
+        print(
+            f"{args.email} already has role {args.role}; nothing to do", file=sys.stderr
+        )
         return
 
     conn.execute("UPDATE users SET role = ? WHERE id = ?", (args.role, row["id"]))
@@ -158,7 +162,8 @@ def main() -> None:
         "--no-history", action="store_true", help="omit the audit log"
     )
     p_export.add_argument(
-        "--no-vectors", action="store_true",
+        "--no-vectors",
+        action="store_true",
         help="omit vector indexes (import will re-embed from text)",
     )
     p_export.set_defaults(func=_cmd_export)
@@ -166,7 +171,8 @@ def main() -> None:
     p_import = sub.add_parser("import", help="restore a snapshot")
     p_import.add_argument("archive", type=Path, help="input archive path")
     p_import.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="clobber an existing data dir (auto-snapshots first)",
     )
     p_import.set_defaults(func=_cmd_import)
@@ -177,9 +183,7 @@ def main() -> None:
     p_users_list = users_sub.add_parser("list", help="list all users")
     p_users_list.set_defaults(func=_cmd_users_list)
 
-    p_users_set = users_sub.add_parser(
-        "set-role", help="change a user's role by email"
-    )
+    p_users_set = users_sub.add_parser("set-role", help="change a user's role by email")
     p_users_set.add_argument("email", help="user's email address")
     p_users_set.add_argument(
         "role", choices=["reader", "writer", "admin"], help="new role"

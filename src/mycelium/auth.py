@@ -52,7 +52,13 @@ Scope = Literal["asker", "reader", "drafter", "writer", "admin"]
 # reach only the single tool that requires the `asker` role (`ask`) and
 # none of the broader read primitives — every higher role outranks it
 # and so keeps `ask` too.
-_ROLE_RANK: dict[str, int] = {"asker": 0, "reader": 1, "drafter": 2, "writer": 3, "admin": 4}
+_ROLE_RANK: dict[str, int] = {
+    "asker": 0,
+    "reader": 1,
+    "drafter": 2,
+    "writer": 3,
+    "admin": 4,
+}
 
 LOCAL_ADMIN_ID = "local-admin"
 TOKEN_PREFIX = "myc"
@@ -104,7 +110,8 @@ LOCAL_ADMIN = Principal(
 # ContextVar (not threadlocal) so async tasks under the same request
 # inherit the value automatically without manual plumbing.
 current_principal: contextvars.ContextVar[Principal | None] = contextvars.ContextVar(
-    "mycelium_current_principal", default=None,
+    "mycelium_current_principal",
+    default=None,
 )
 
 
@@ -115,7 +122,8 @@ current_principal: contextvars.ContextVar[Principal | None] = contextvars.Contex
 # non-MCP requests (e.g. /api/* calls from the UI) — those never need
 # session-scoped drafts.
 current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "mycelium_current_session_id", default=None,
+    "mycelium_current_session_id",
+    default=None,
 )
 
 
@@ -129,7 +137,13 @@ current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 _READ_PREFIXES = ("list_", "get_", "search_", "grep_", "discover_", "find_")
 _ADMIN_PREFIXES = ("delete_", "merge_")
 
-_ROLE_RANK_FULL: dict[str, int] = {"asker": 0, "reader": 1, "drafter": 2, "writer": 3, "admin": 4}
+_ROLE_RANK_FULL: dict[str, int] = {
+    "asker": 0,
+    "reader": 1,
+    "drafter": 2,
+    "writer": 3,
+    "admin": 4,
+}
 
 
 def required_role_for(func_name: str) -> Role:
@@ -316,8 +330,15 @@ def create_user(
         VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)
         """,
         (
-            user_id, type, email, name, role,
-            oidc_issuer, oidc_subject, _now(), created_by,
+            user_id,
+            type,
+            email,
+            name,
+            role,
+            oidc_issuer,
+            oidc_subject,
+            _now(),
+            created_by,
         ),
     )
     return user_id

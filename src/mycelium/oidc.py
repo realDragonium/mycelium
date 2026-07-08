@@ -87,6 +87,7 @@ def _client():
     global _oauth
     if _oauth is None:
         from authlib.integrations.starlette_client import OAuth
+
         oauth = OAuth()
         issuer = os.environ["MYCELIUM_OIDC_ISSUER"].rstrip("/")
         oauth.register(
@@ -169,9 +170,7 @@ def _consume_invite(conn: sqlite3.Connection, email: str) -> str | None:
     return row["role"]
 
 
-def _accept_invite(
-    conn: sqlite3.Connection, email: str, user_id: str
-) -> None:
+def _accept_invite(conn: sqlite3.Connection, email: str, user_id: str) -> None:
     conn.execute(
         "UPDATE invites SET accepted_at = ?, accepted_by = ? "
         "WHERE LOWER(email) = LOWER(?) AND accepted_at IS NULL "
@@ -248,9 +247,18 @@ def find_or_create_user(
         return row["id"]
 
     invited_role = _consume_invite(conn, email)
-    bootstrap_email = (os.environ.get("MYCELIUM_BOOTSTRAP_ADMIN_EMAIL") or "").lower().strip()
-    is_bootstrap = bool(bootstrap_email) and email == bootstrap_email and (
-        conn.execute("SELECT COUNT(*) AS n FROM users WHERE role = 'admin'").fetchone()["n"] == 0
+    bootstrap_email = (
+        (os.environ.get("MYCELIUM_BOOTSTRAP_ADMIN_EMAIL") or "").lower().strip()
+    )
+    is_bootstrap = (
+        bool(bootstrap_email)
+        and email == bootstrap_email
+        and (
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM users WHERE role = 'admin'"
+            ).fetchone()["n"]
+            == 0
+        )
     )
 
     # Just-in-time provisioning: a login with no invite and no bootstrap
@@ -278,8 +286,14 @@ def find_or_create_user(
         "(id, type, email, name, role, status, oidc_issuer, oidc_subject, created_at, last_login_at) "
         "VALUES (?, 'human', ?, ?, ?, 'active', ?, ?, ?, ?)",
         (
-            user_id, email, name or email, role,
-            issuer, subject, _now(), _now(),
+            user_id,
+            email,
+            name or email,
+            role,
+            issuer,
+            subject,
+            _now(),
+            _now(),
         ),
     )
     if invited_role is not None:
@@ -287,7 +301,8 @@ def find_or_create_user(
     if jit_role is not None:
         logging.getLogger("mycelium.oidc").info(
             "JIT-provisioned user email=%s role=%s (pre-registered domain)",
-            email, role,
+            email,
+            role,
         )
     conn.commit()
     return user_id
@@ -351,20 +366,30 @@ async def callback(request: Request):
     # invite list. Doesn't log the raw token (too sensitive); only the
     # provisioning-relevant claims.
     import logging
+
     logging.getLogger("mycelium.oidc").info(
         "OIDC callback: issuer=%s subject=%s email=%s name=%s claim_keys=%s",
-        issuer, subject, email, name, sorted(claims.keys()),
+        issuer,
+        subject,
+        email,
+        name,
+        sorted(claims.keys()),
     )
 
     if not subject:
         raise HTTPException(status_code=400, detail="OIDC response missing subject")
 
     from . import server
+
     conn = server._auth_conn
     if conn is None:
         raise HTTPException(status_code=500, detail="substrate not initialized")
     user_id = find_or_create_user(
-        conn, issuer=issuer, subject=subject, email=email, name=name,
+        conn,
+        issuer=issuer,
+        subject=subject,
+        email=email,
+        name=name,
     )
     if user_id is None:
         # Refuse to silently create unauthorized users — the user sees
@@ -421,9 +446,7 @@ async def logout(request: Request, next: str = "/ui/"):
     login_url = f"{base}/auth/login?{urlencode({'next': next})}"
     if issuer and client_id and auth.is_enabled():
         params = urlencode({"client_id": client_id, "returnTo": login_url})
-        return RedirectResponse(
-            url=f"{issuer.rstrip('/')}/v2/logout?{params}"
-        )
+        return RedirectResponse(url=f"{issuer.rstrip('/')}/v2/logout?{params}")
     # Auth off / OIDC not configured: nothing to clear upstream, just go
     # to login (which itself no-ops to the app when auth is disabled).
     return RedirectResponse(url=login_url)

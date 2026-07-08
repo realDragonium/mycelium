@@ -67,6 +67,7 @@ def _require_oauth_enabled() -> None:
     if not auth.is_enabled():
         raise HTTPException(status_code=404, detail="auth disabled")
 
+
 # Authorization codes are single-use and short-lived. The MCP spec
 # doesn't pin a number; 60 seconds is well above any reasonable
 # round-trip and well below what an attacker could replay if a code
@@ -95,6 +96,7 @@ def _base_url(request: Request) -> str:
 
 def _auth_conn(request: Request) -> sqlite3.Connection:
     from . import server
+
     conn = server._auth_conn
     if conn is None:
         raise HTTPException(status_code=500, detail="auth substrate not initialized")
@@ -109,7 +111,10 @@ def _pkce_verify(verifier: str, challenge: str, method: str) -> bool:
     if method == "plain":
         return verifier == challenge
     if method == "S256":
-        return _b64url_no_pad(hashlib.sha256(verifier.encode("ascii")).digest()) == challenge
+        return (
+            _b64url_no_pad(hashlib.sha256(verifier.encode("ascii")).digest())
+            == challenge
+        )
     return False
 
 
@@ -168,15 +173,26 @@ async def register_client(request: Request) -> JSONResponse:
     try:
         body = await request.json()
     except Exception:
-        raise HTTPException(status_code=400, detail="invalid_request: body must be JSON")
+        raise HTTPException(
+            status_code=400, detail="invalid_request: body must be JSON"
+        )
     if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="invalid_request: body must be a JSON object")
+        raise HTTPException(
+            status_code=400, detail="invalid_request: body must be a JSON object"
+        )
 
     redirect_uris = body.get("redirect_uris") or []
-    if not isinstance(redirect_uris, list) or not all(isinstance(u, str) for u in redirect_uris):
-        raise HTTPException(status_code=400, detail="invalid_redirect_uri: must be a JSON array of strings")
+    if not isinstance(redirect_uris, list) or not all(
+        isinstance(u, str) for u in redirect_uris
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_redirect_uri: must be a JSON array of strings",
+        )
     if not redirect_uris:
-        raise HTTPException(status_code=400, detail="invalid_redirect_uri: at least one URI required")
+        raise HTTPException(
+            status_code=400, detail="invalid_redirect_uri: at least one URI required"
+        )
 
     client_name = body.get("client_name") or "Unnamed MCP client"
     if not isinstance(client_name, str):
@@ -192,11 +208,17 @@ async def register_client(request: Request) -> JSONResponse:
     requested_grants = set(body.get("grant_types") or ["authorization_code"])
     supported_grants = ["authorization_code"]
     if "authorization_code" not in requested_grants:
-        raise HTTPException(status_code=400, detail="invalid_client_metadata: authorization_code grant must be requested")
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_client_metadata: authorization_code grant must be requested",
+        )
 
     requested_response = set(body.get("response_types") or ["code"])
     if "code" not in requested_response:
-        raise HTTPException(status_code=400, detail="invalid_client_metadata: response_type=code must be requested")
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_client_metadata: response_type=code must be requested",
+        )
 
     token_auth_method = body.get("token_endpoint_auth_method", "none")
     if token_auth_method not in ("none",):
@@ -304,9 +326,14 @@ async def authorize(
     if response_type != "code":
         raise HTTPException(status_code=400, detail="unsupported_response_type")
     if not code_challenge:
-        raise HTTPException(status_code=400, detail="invalid_request: code_challenge is required (PKCE)")
+        raise HTTPException(
+            status_code=400, detail="invalid_request: code_challenge is required (PKCE)"
+        )
     if code_challenge_method not in ("S256", "plain"):
-        raise HTTPException(status_code=400, detail="invalid_request: code_challenge_method must be S256 or plain")
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_request: code_challenge_method must be S256 or plain",
+        )
 
     conn = _auth_conn(request)
     client_row = conn.execute(
@@ -317,7 +344,10 @@ async def authorize(
         raise HTTPException(status_code=400, detail="invalid_client")
     allowed = json.loads(client_row["redirect_uris"])
     if redirect_uri not in allowed:
-        raise HTTPException(status_code=400, detail="invalid_request: redirect_uri not registered for this client")
+        raise HTTPException(
+            status_code=400,
+            detail="invalid_request: redirect_uri not registered for this client",
+        )
 
     # The user must be logged in to consent. If they aren't, route
     # them through Auth0 first; the session carries the post-login
@@ -361,10 +391,10 @@ async def authorize(
 def _html_escape(s: str) -> str:
     return (
         s.replace("&", "&amp;")
-         .replace("<", "&lt;")
-         .replace(">", "&gt;")
-         .replace('"', "&quot;")
-         .replace("'", "&#39;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
     )
 
 
@@ -396,9 +426,13 @@ async def authorize_decide(
     if client_row is None:
         raise HTTPException(status_code=400, detail="invalid_client")
     if redirect_uri not in json.loads(client_row["redirect_uris"]):
-        raise HTTPException(status_code=400, detail="invalid_request: redirect_uri not registered")
+        raise HTTPException(
+            status_code=400, detail="invalid_request: redirect_uri not registered"
+        )
     if code_challenge_method not in ("S256", "plain"):
-        raise HTTPException(status_code=400, detail="invalid_request: bad code_challenge_method")
+        raise HTTPException(
+            status_code=400, detail="invalid_request: bad code_challenge_method"
+        )
 
     if decision != "allow":
         return RedirectResponse(
@@ -416,9 +450,15 @@ async def authorize_decide(
         " code_challenge_method, scope, created_at, expires_at) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
-            code, client_id, principal.id, redirect_uri,
-            code_challenge, code_challenge_method,
-            scope, _now().isoformat(), expires_at.isoformat(),
+            code,
+            client_id,
+            principal.id,
+            redirect_uri,
+            code_challenge,
+            code_challenge_method,
+            scope,
+            _now().isoformat(),
+            expires_at.isoformat(),
         ),
     )
     conn.commit()
@@ -455,7 +495,9 @@ async def token_endpoint(
     tokens — same table, same lookup path, same revocation UI."""
     _require_oauth_enabled()
     if grant_type != "authorization_code":
-        return _oauth_error("unsupported_grant_type", "only authorization_code is supported")
+        return _oauth_error(
+            "unsupported_grant_type", "only authorization_code is supported"
+        )
 
     conn = _auth_conn(request)
     row = conn.execute(
@@ -476,7 +518,9 @@ async def token_endpoint(
         return _oauth_error("invalid_grant", "client_id mismatch")
     if row["redirect_uri"] != redirect_uri:
         return _oauth_error("invalid_grant", "redirect_uri mismatch")
-    if not _pkce_verify(code_verifier, row["code_challenge"], row["code_challenge_method"]):
+    if not _pkce_verify(
+        code_verifier, row["code_challenge"], row["code_challenge_method"]
+    ):
         return _oauth_error("invalid_grant", "PKCE verification failed")
 
     # Mark used BEFORE minting the token so a concurrent exchange
@@ -514,8 +558,16 @@ async def token_endpoint(
         "INSERT INTO mcp_tokens "
         "(id, user_id, name, prefix, hash, scope, created_at, client_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (str(uuid.uuid4()), user_row["id"], token_name, prefix, h,
-         scope_to_grant, _now().isoformat(), client_id),
+        (
+            str(uuid.uuid4()),
+            user_row["id"],
+            token_name,
+            prefix,
+            h,
+            scope_to_grant,
+            _now().isoformat(),
+            client_id,
+        ),
     )
     conn.execute(
         "UPDATE oauth_clients SET last_used_at = ? WHERE client_id = ?",

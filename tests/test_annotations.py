@@ -51,7 +51,10 @@ def _bid(client, text, mentions=None):
     return client.post(
         "/upsert-statement",
         json={
-            "kind": "event", "text": text, "mentions": mentions or [], "links": [],
+            "kind": "event",
+            "text": text,
+            "mentions": mentions or [],
+            "links": [],
             "allow_phrasing_violations": True,
         },
     ).json()["statement_id"]
@@ -172,7 +175,8 @@ def test_attach_requires_exactly_one_target(tmp_path, monkeypatch):
         b = _bid(client, "x")
         e = _eid(client, "X", "")
         ann = client.post(
-            "/upsert-annotation", json={"kind": "fact", "text": "t", "statement_ids": [b]}
+            "/upsert-annotation",
+            json={"kind": "fact", "text": "t", "statement_ids": [b]},
         ).json()["annotation_id"]
 
         # Both targets passed → 400
@@ -191,7 +195,8 @@ def test_attach_detach_are_idempotent(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
         b = _bid(client, "x")
         ann = client.post(
-            "/upsert-annotation", json={"kind": "fact", "text": "t", "statement_ids": []}
+            "/upsert-annotation",
+            json={"kind": "fact", "text": "t", "statement_ids": []},
         ).json()["annotation_id"]
 
         first = client.post(
@@ -252,11 +257,19 @@ def test_near_duplicates_warning(tmp_path, monkeypatch):
         b = _bid(client, "x")
         client.post(
             "/upsert-annotation",
-            json={"kind": "fact", "text": "exactly the same wording", "statement_ids": [b]},
+            json={
+                "kind": "fact",
+                "text": "exactly the same wording",
+                "statement_ids": [b],
+            },
         )
         r = client.post(
             "/upsert-annotation",
-            json={"kind": "fact", "text": "exactly the same wording", "statement_ids": [b]},
+            json={
+                "kind": "fact",
+                "text": "exactly the same wording",
+                "statement_ids": [b],
+            },
         ).json()
         # Same text → cosine = 1.0 with deterministic embedder; should appear
         # in near_duplicates of the second insert.
@@ -448,6 +461,7 @@ def test_annotation_kind_rejected_when_null(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, fake_embed_factory()):
         # Use the live connection to attempt a NULL-kind insert directly.
         from mycelium import server
+
         try:
             st.create_annotation(server._conn, None, "missing kind")  # type: ignore[arg-type]
         except sqlite3.IntegrityError as exc:

@@ -184,7 +184,9 @@ _DEFAULT_KINDS = {
 # --------------------------------------------------------------------------- #
 
 
-def _op(op: str, payload: dict, rationale: str = "per src/app.py", targets=None) -> dict:
+def _op(
+    op: str, payload: dict, rationale: str = "per src/app.py", targets=None
+) -> dict:
     return {
         "op": op,
         "payload_json": json.dumps(payload),
@@ -193,7 +195,9 @@ def _op(op: str, payload: dict, rationale: str = "per src/app.py", targets=None)
     }
 
 
-def _ledger_row(candidate, classification, matched=None, considered=None, note="") -> dict:
+def _ledger_row(
+    candidate, classification, matched=None, considered=None, note=""
+) -> dict:
     return {
         "candidate": candidate,
         "classification": classification,
@@ -223,8 +227,11 @@ def _good_new_op_emit():
         ],
         ledger=[
             _ledger_row(
-                "an invite is submitted", "new",
-                matched=["stm_99"], considered=["stm_99"], note="links to invite flow",
+                "an invite is submitted",
+                "new",
+                matched=["stm_99"],
+                considered=["stm_99"],
+                note="links to invite flow",
             )
         ],
     )
@@ -264,8 +271,11 @@ def _run(responses, results=None, ws_results=None, emitter=None, **config_over):
     result = run_research(
         "how invites work",
         Source(name="acme", owner="acme", repo="api"),
-        client=client, substrate=substrate, workspace=workspace,
-        emitter=emitter, config=cfg,
+        client=client,
+        substrate=substrate,
+        workspace=workspace,
+        emitter=emitter,
+        config=cfg,
     )
     return result, client, substrate, workspace, emitter
 
@@ -308,7 +318,7 @@ def test_happy_path_explore_reconcile_emit_creates_draft():
 
 
 def test_draft_title_names_source_and_topic():
-    result, *_ , emitter = _run(_full_run_turns())
+    result, *_, emitter = _run(_full_run_turns())
     assert emitter.created == ["research: acme: how invites work"]
 
 
@@ -337,8 +347,10 @@ def test_floor_blocks_emit_without_file_read():
         for m in call["messages"]
         if isinstance(m.get("content"), list)
         for b in m["content"]
-        if isinstance(b, dict) and b.get("type") == "tool_result"
-        and b.get("tool_use_id") == "early" and b.get("is_error")
+        if isinstance(b, dict)
+        and b.get("type") == "tool_result"
+        and b.get("tool_use_id") == "early"
+        and b.get("is_error")
     ]
     assert blocked and "floor" in blocked[0]["content"].lower()
     assert result.trace["degraded"] is False
@@ -350,7 +362,10 @@ def test_floor_blocks_emit_without_substrate_reconcile():
     premature = _message([_tool_use(EMIT_TOOL, _good_new_op_emit())])
     responses = [
         *_explore_turns(),
-        premature, premature, premature, premature,  # 3 blocks + the stuck one
+        premature,
+        premature,
+        premature,
+        premature,  # 3 blocks + the stuck one
         _message([_text("cannot")], stop="end_turn"),  # forced turn: no emit
     ]
     result, *_ = _run(responses)
@@ -374,7 +389,9 @@ def test_op_cap_forces_finalize_with_emit():
     assert result.trace["degraded"] is True
     forced = client.calls[0]
     assert forced["tool_choice"] == {
-        "type": "tool", "name": EMIT_TOOL, "disable_parallel_tool_use": True
+        "type": "tool",
+        "name": EMIT_TOOL,
+        "disable_parallel_tool_use": True,
     }
     assert "thinking" not in forced
 
@@ -404,9 +421,13 @@ def test_api_error_degrades_never_raises():
 
     client = ExplodingClient([])
     result = run_research(
-        "topic", Source(name="s", owner="o", repo="r"),
-        client=client, substrate=FakeSubstrate(), workspace=FakeWorkspace(),
-        emitter=FakeEmitter(), config=ResearchConfig(),
+        "topic",
+        Source(name="s", owner="o", repo="r"),
+        client=client,
+        substrate=FakeSubstrate(),
+        workspace=FakeWorkspace(),
+        emitter=FakeEmitter(),
+        config=ResearchConfig(),
     )
     assert isinstance(result, NothingFound)
     assert result.trace["forced_finalize"] == "api_error"
@@ -434,15 +455,19 @@ def test_workspace_error_is_error_tool_result_not_raised():
     responses = [
         _message([_tool_use("ws_read_file", {"path": "../etc/passwd"}, id="esc")]),
         _message([_text("blocked, giving up")], stop="end_turn"),
-        _message([_text("still nothing")], stop="end_turn"),   # after nudge
+        _message([_text("still nothing")], stop="end_turn"),  # after nudge
         _message([_text("forced: nothing")], stop="end_turn"),  # forced turn
     ]
     client = FakeAnthropic(responses)
     ws = FakeWorkspace({"ws_read_file": WorkspaceError("path outside workspace")})
     result = run_research(
-        "t", Source(name="s", owner="o", repo="r"),
-        client=client, substrate=FakeSubstrate(), workspace=ws,
-        emitter=FakeEmitter(), config=ResearchConfig(),
+        "t",
+        Source(name="s", owner="o", repo="r"),
+        client=client,
+        substrate=FakeSubstrate(),
+        workspace=ws,
+        emitter=FakeEmitter(),
+        config=ResearchConfig(),
     )
     errs = [
         b
@@ -450,7 +475,8 @@ def test_workspace_error_is_error_tool_result_not_raised():
         for m in call["messages"]
         if isinstance(m.get("content"), list)
         for b in m["content"]
-        if isinstance(b, dict) and b.get("type") == "tool_result"
+        if isinstance(b, dict)
+        and b.get("type") == "tool_result"
         and b.get("tool_use_id") == "esc"
     ]
     assert errs and errs[0]["is_error"]
@@ -475,7 +501,8 @@ def test_substrate_error_is_reported_not_fabricated():
         for m in call["messages"]
         if isinstance(m.get("content"), list)
         for b in m["content"]
-        if isinstance(b, dict) and b.get("type") == "tool_result"
+        if isinstance(b, dict)
+        and b.get("type") == "tool_result"
         and b.get("tool_use_id") == "df"
     ]
     assert errs and errs[0]["is_error"]
@@ -491,7 +518,10 @@ def test_correction_op_patch_statement_validated_and_queued():
         ops=[
             _op(
                 "patch_statement",
-                {"id": "stm_7", "text": "an invite is rejected when its signature is invalid"},
+                {
+                    "id": "stm_7",
+                    "text": "an invite is rejected when its signature is invalid",
+                },
                 rationale="old -> new per src/webhooks.py",
                 targets=["stm_7"],
             )
@@ -499,11 +529,13 @@ def test_correction_op_patch_statement_validated_and_queued():
         ledger=[
             _ledger_row(
                 "an invite is rejected when its signature is invalid",
-                "refinement", matched=["stm_7"], considered=["stm_7"],
+                "refinement",
+                matched=["stm_7"],
+                considered=["stm_7"],
             )
         ],
     )
-    result, *_ , emitter = _run(_full_run_turns(emit))
+    result, *_, emitter = _run(_full_run_turns(emit))
     assert isinstance(result, ResearchDraftCreated)
     assert [k for _, k, _ in emitter.queued] == ["patch_statement"]
 
@@ -523,7 +555,7 @@ def test_invalid_op_kind_flagged_not_queued():
             )
         ],
     )
-    result, *_ , emitter = _run(_full_run_turns(emit))
+    result, *_, emitter = _run(_full_run_turns(emit))
     assert isinstance(result, ResearchDraftCreated)
     assert [k for _, k, _ in emitter.queued] == ["upsert_statement"]
     assert any("drop_table" in f for f in result.flagged)
@@ -547,9 +579,12 @@ def test_all_duplicates_returns_nothing_found():
 def test_unknown_source_name_returns_nothing_found(monkeypatch):
     monkeypatch.delenv("MYCELIUM_SOURCES", raising=False)
     result = run_research(
-        "topic", "nope",
-        client=FakeAnthropic([]), substrate=FakeSubstrate(),
-        emitter=FakeEmitter(), config=ResearchConfig(),
+        "topic",
+        "nope",
+        client=FakeAnthropic([]),
+        substrate=FakeSubstrate(),
+        emitter=FakeEmitter(),
+        config=ResearchConfig(),
     )
     assert isinstance(result, NothingFound)
     assert "source error" in result.reason
@@ -567,9 +602,12 @@ def test_source_fetch_failure_returns_nothing_found(monkeypatch):
     monkeypatch.setattr(rloop.sources, "fetch", boom)
     client = FakeAnthropic([])
     result = run_research(
-        "topic", Source(name="s", owner="o", repo="r"),
-        client=client, substrate=FakeSubstrate(),
-        emitter=FakeEmitter(), config=ResearchConfig(),
+        "topic",
+        Source(name="s", owner="o", repo="r"),
+        client=client,
+        substrate=FakeSubstrate(),
+        emitter=FakeEmitter(),
+        config=ResearchConfig(),
     )
     assert isinstance(result, NothingFound)
     assert "source fetch failed" in result.reason
@@ -579,8 +617,10 @@ def test_source_fetch_failure_returns_nothing_found(monkeypatch):
 def test_no_source_and_no_workspace_returns_nothing_found():
     result = run_research(
         "topic",
-        client=FakeAnthropic([]), substrate=FakeSubstrate(),
-        emitter=FakeEmitter(), config=ResearchConfig(),
+        client=FakeAnthropic([]),
+        substrate=FakeSubstrate(),
+        emitter=FakeEmitter(),
+        config=ResearchConfig(),
     )
     assert isinstance(result, NothingFound)
     assert "no source" in result.reason
@@ -625,8 +665,8 @@ def test_loop_module_imports_no_write_tool():
     from mycelium.research import loop
 
     src = inspect.getsource(loop)
-    assert "from ..ask.substrate import" in src        # substrate read seam
-    assert "from ..ingest.draft import" in src         # the (only) write path
+    assert "from ..ask.substrate import" in src  # substrate read seam
+    assert "from ..ingest.draft import" in src  # the (only) write path
     assert "store.upsert_statement" not in src
     assert "submit_draft" not in src
     assert "apply_draft" not in src

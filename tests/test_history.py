@@ -6,6 +6,7 @@ existing in-memory test suite stays clean; (2) when attached, each kind of
 write produces the expected event(s); (3) the recording uses the same
 transaction as the main write (a rollback nukes both).
 """
+
 from __future__ import annotations
 
 import json
@@ -212,8 +213,7 @@ def test_replace_annotation_attachments_emits_detach_then_attach(tmp_path):
 
     events = _events(conn, target_kind="statement_annotation")
     ops_and_pairs = [
-        (e["op"], (e["before_json"] or e["after_json"])["statement_id"])
-        for e in events
+        (e["op"], (e["before_json"] or e["after_json"])["statement_id"]) for e in events
     ]
     assert ops_and_pairs == [
         ("attach", b1),

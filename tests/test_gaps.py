@@ -28,8 +28,10 @@ def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
     monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
     _reset_server()
     from mycelium import embed
+
     monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
     from mycelium.http import app
+
     return TestClient(app)
 
 
@@ -73,12 +75,16 @@ def test_resolve_and_dismiss(tmp_path, monkeypatch):
         a = server.report_knowledge_gap("To resolve")
         b = server.report_knowledge_gap("To dismiss")
 
-        r = client.patch(f"/api/knowledge-gaps/{a['gap_id']}", json={"action": "resolve"})
+        r = client.patch(
+            f"/api/knowledge-gaps/{a['gap_id']}", json={"action": "resolve"}
+        )
         assert r.status_code == 200
         assert r.json()["gap"]["status"] == "resolved"
         assert r.json()["gap"]["resolved_at"]
 
-        r = client.patch(f"/api/knowledge-gaps/{b['gap_id']}", json={"action": "dismiss"})
+        r = client.patch(
+            f"/api/knowledge-gaps/{b['gap_id']}", json={"action": "dismiss"}
+        )
         assert r.status_code == 200
         assert r.json()["gap"]["status"] == "dismissed"
         assert r.json()["gap"]["dismissed_at"]
@@ -99,7 +105,9 @@ def test_reopen_clears_terminal_timestamps(tmp_path, monkeypatch):
     with client:
         a = server.report_knowledge_gap("To bounce")
         client.patch(f"/api/knowledge-gaps/{a['gap_id']}", json={"action": "resolve"})
-        r = client.patch(f"/api/knowledge-gaps/{a['gap_id']}", json={"action": "reopen"})
+        r = client.patch(
+            f"/api/knowledge-gaps/{a['gap_id']}", json={"action": "reopen"}
+        )
         body = r.json()["gap"]
         assert body["status"] == "open"
         assert body["resolved_at"] is None
@@ -119,7 +127,9 @@ def test_invalid_action_rejected(tmp_path, monkeypatch):
 def test_unknown_gap_returns_404(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="off")
     with client:
-        r = client.patch("/api/knowledge-gaps/does-not-exist", json={"action": "resolve"})
+        r = client.patch(
+            "/api/knowledge-gaps/does-not-exist", json={"action": "resolve"}
+        )
         assert r.status_code == 404
 
 
@@ -127,5 +137,6 @@ def test_empty_text_rejected(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="off")
     with client:
         import pytest
+
         with pytest.raises(ValueError):
             server.report_knowledge_gap("   ")

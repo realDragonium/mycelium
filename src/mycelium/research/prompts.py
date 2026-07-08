@@ -164,9 +164,7 @@ You do not create the draft and you do not call any write tool. Your job is to \
 establish behaviour from the code, reconcile it honestly, and SHOW YOUR WORK."""
 
 
-_DOCTRINE_HEADER = (
-    "\n\n=== REASONING DOCTRINE (the normative guide; follow it) ===\n"
-)
+_DOCTRINE_HEADER = "\n\n=== REASONING DOCTRINE (the normative guide; follow it) ===\n"
 _DOCTRINE_FOOTER = "\n=== END DOCTRINE ===\n"
 
 

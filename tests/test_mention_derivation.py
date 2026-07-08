@@ -23,8 +23,13 @@ def srv(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", _embed)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     for attr in (
-        "_conn", "_index", "_index_path", "_ann_index", "_ann_index_path",
-        "_name_index", "_name_index_path",
+        "_conn",
+        "_index",
+        "_index_path",
+        "_ann_index",
+        "_ann_index_path",
+        "_name_index",
+        "_name_index_path",
     ):
         setattr(server, attr, None)
     server.init(tmp_path)  # worker disabled in tests (conftest); we drain by hand
@@ -44,9 +49,9 @@ def _pending(status: str = "open") -> list[str]:
 
 def test_mentions_derived_from_text(srv):
     srv.upsert_entity(name="candidate", description="a job candidate")
-    sid = srv.upsert_statement(kind="state", text="the candidate is screened", links=[])[
-        "statement_id"
-    ]
+    sid = srv.upsert_statement(
+        kind="state", text="the candidate is screened", links=[]
+    )["statement_id"]
     assert _mentions(sid) == ["candidate"]
 
 
@@ -62,9 +67,9 @@ def test_explicit_mention_tools_are_gone(srv):
 
 def test_unknown_words_create_nothing(srv):
     # Statements no longer auto-create entities; an unmentioned word links nothing.
-    sid = srv.upsert_statement(kind="state", text="something undefined happens", links=[])[
-        "statement_id"
-    ]
+    sid = srv.upsert_statement(
+        kind="state", text="something undefined happens", links=[]
+    )["statement_id"]
     assert _mentions(sid) == []
     assert store.list_entities(server._conn) == []
 
@@ -107,8 +112,8 @@ def test_approving_pending_creates_the_mention(srv):
 def test_approved_mention_survives_unrelated_recompute(srv):
     # An approval is asserted truth: a recompute triggered by an UNRELATED
     # name change must not silently destroy it.
-    srv.upsert_entity(name="flow", description="a flow")          # suspect
-    srv.upsert_entity(name="dashboard", description="distinct")   # distinctive
+    srv.upsert_entity(name="flow", description="a flow")  # suspect
+    srv.upsert_entity(name="dashboard", description="distinct")  # distinctive
     sid = srv.upsert_statement(
         kind="state", text="the flow drives the dashboard", links=[]
     )["statement_id"]
@@ -158,9 +163,12 @@ def test_plural_auto_generated_and_matches(srv):
 def test_plural_collision_is_skipped(srv):
     # "status" has no confident plural → no generated child, no crash.
     srv.upsert_entity(name="status", description="x")
-    assert store.get_generated_children(
-        server._conn, store.get_name_by_text(server._conn, "status")["id"]
-    ) == []
+    assert (
+        store.get_generated_children(
+            server._conn, store.get_name_by_text(server._conn, "status")["id"]
+        )
+        == []
+    )
 
 
 # ─── async recompute worker ────────────────────────────────────────────────
@@ -200,9 +208,9 @@ def test_merge_entities_recomputes(srv):
     s_r = srv.upsert_statement(kind="state", text="the recruiter approves", links=[])[
         "statement_id"
     ]
-    s_h = srv.upsert_statement(kind="state", text="the hiring manager approves", links=[])[
-        "statement_id"
-    ]
+    s_h = srv.upsert_statement(
+        kind="state", text="the hiring manager approves", links=[]
+    )["statement_id"]
     r_eid = store.get_name_by_text(server._conn, "recruiter")["entity_id"]
     h_eid = store.get_name_by_text(server._conn, "hiring manager")["entity_id"]
     srv.merge_entities(from_entity_id=r_eid, into_entity_id=h_eid)
@@ -213,11 +221,11 @@ def test_merge_entities_recomputes(srv):
 
 
 def test_delete_statement_clears_derived_rows(srv):
-    srv.upsert_entity(name="flow", description="x")       # suspect → pending
+    srv.upsert_entity(name="flow", description="x")  # suspect → pending
     srv.upsert_entity(name="dashboard", description="y")  # distinctive → mention
-    sid = srv.upsert_statement(kind="state", text="the dashboard and the flow", links=[])[
-        "statement_id"
-    ]
+    sid = srv.upsert_statement(
+        kind="state", text="the dashboard and the flow", links=[]
+    )["statement_id"]
     assert _mentions(sid) == ["dashboard"]
     assert _pending() == ["flow"]
     srv.delete_statement(id=sid)

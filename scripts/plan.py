@@ -45,6 +45,7 @@ class PlanRecorder:
         # Stable serialization for byte-equivalent comparison. dicts are
         # sorted; lists preserve order (since order matters for e.g. links).
         import json as _json
+
         return _json.dumps(args, sort_keys=True, default=str)
 
     def _record(
@@ -107,9 +108,7 @@ class PlanRecorder:
             return {
                 "id": id,
                 "description": a["args"].get("description", ""),
-                "names": [
-                    {"id": "pending", "text": a["args"].get("name", "")}
-                ],
+                "names": [{"id": "pending", "text": a["args"].get("name", "")}],
                 "links": [],
                 "incoming_links": [],
                 "annotations": [],
@@ -322,9 +321,7 @@ class PlanRecorder:
                 modified_ids.add(action["args"]["id"])
         conflict = deleted_ids & modified_ids
         for cid in conflict:
-            warnings.append(
-                f"behavior {cid} is both deleted AND modified in this plan"
-            )
+            warnings.append(f"behavior {cid} is both deleted AND modified in this plan")
 
         if self.dedup_skipped:
             warnings.append(

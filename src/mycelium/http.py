@@ -99,15 +99,17 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
 # background thread can't accidentally inherit a stale actor.
 
 _AUTH_EXEMPT_PREFIXES = (
-    "/auth/",      # login / callback / logout
+    "/auth/",  # login / callback / logout
     "/static/",
     "/favicon",
-    "/docs",       # FastAPI swagger
+    "/docs",  # FastAPI swagger
     "/openapi.json",
     "/redoc",
 )
 _AUTH_EXEMPT_PATHS = {
-    "/", "/connect", "/api/server-info",
+    "/",
+    "/connect",
+    "/api/server-info",
     # OAuth discovery + DCR + token exchange are unauthenticated by
     # design. /authorize is also exempt but redirects to /auth/login
     # internally when no session exists.
@@ -119,6 +121,7 @@ _AUTH_EXEMPT_PATHS = {
     "/authorize/decide",
 }
 
+
 def _session_secret() -> str:
     """Pull the session cookie signing key. With auth disabled we
     generate an ephemeral per-process key — sessions don't survive a
@@ -129,9 +132,7 @@ def _session_secret() -> str:
     if secret:
         return secret
     if auth.is_enabled():
-        raise RuntimeError(
-            "MYCELIUM_SESSION_SECRET must be set when MYCELIUM_AUTH=on"
-        )
+        raise RuntimeError("MYCELIUM_SESSION_SECRET must be set when MYCELIUM_AUTH=on")
     return secrets.token_urlsafe(32)
 
 
@@ -160,6 +161,7 @@ def _is_browser_navigation(request: Request) -> bool:
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         from urllib.parse import quote
+
         principal = self._resolve(request)
         if principal is None and auth.is_enabled() and not _is_exempt(request.url.path):
             if _is_browser_navigation(request):
@@ -281,9 +283,11 @@ def _enforce_role(request: Request, required: str) -> None:
     p = getattr(request.state, "principal", None)
     if p is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=401, detail="authentication required")
     if not auth.principal_satisfies(p, required):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=403,
             detail=f"this operation requires the {required} role",
@@ -339,9 +343,7 @@ def _make_streaming_post_handler(
 
         async def gen():
             while True:
-                done, _ = await asyncio.wait(
-                    {task}, timeout=_STREAM_HEARTBEAT_SECONDS
-                )
+                done, _ = await asyncio.wait({task}, timeout=_STREAM_HEARTBEAT_SECONDS)
                 if task in done:
                     break
                 yield b" "  # keepalive: ignored by JSON.parse on the client
@@ -423,8 +425,9 @@ def _register(func: Callable[..., Any]) -> None:
     # otherwise fall back to prefix-derivation. Keeps the REST mirror's
     # role gate aligned with the MCP `tools/list` filter — both look at
     # the same attribute.
-    required = getattr(func, "_mycelium_required_role", None) \
-        or auth.required_role_for(func.__name__)
+    required = getattr(func, "_mycelium_required_role", None) or auth.required_role_for(
+        func.__name__
+    )
 
     if not sig.parameters:
         app.get(path, name=func.__name__)(_make_get_handler(func, required))
@@ -484,12 +487,9 @@ def get_substrate_dump() -> dict[str, Any]:
     assert server._conn is not None
     conn = server._conn
 
-    name_rows = conn.execute(
-        "SELECT id, text, entity_id FROM names"
-    ).fetchall()
+    name_rows = conn.execute("SELECT id, text, entity_id FROM names").fetchall()
     names = [
-        {"id": r["id"], "text": r["text"], "entity": r["entity_id"]}
-        for r in name_rows
+        {"id": r["id"], "text": r["text"], "entity": r["entity_id"]} for r in name_rows
     ]
 
     primary_name: dict[str, str] = {}
@@ -528,6 +528,7 @@ def get_substrate_dump() -> dict[str, Any]:
     ]
 
     from . import store
+
     link_rows = conn.execute(
         "SELECT link_id, from_statement_id, to_statement_id, link_type, when_hash "
         "FROM statement_links"
@@ -557,9 +558,7 @@ def get_substrate_dump() -> dict[str, Any]:
         for r in entity_link_rows
     ]
 
-    annotation_rows = conn.execute(
-        "SELECT id, kind, text FROM annotations"
-    ).fetchall()
+    annotation_rows = conn.execute("SELECT id, kind, text FROM annotations").fetchall()
     ba_rows = conn.execute(
         "SELECT statement_id, annotation_id FROM statement_annotations"
     ).fetchall()
@@ -661,9 +660,15 @@ _ACTIVITY_UNION = """
 
 _ALLOWED_OPS = {"create", "update", "link", "attach"}
 _ALLOWED_KINDS = {
-    "entity", "statement", "name", "annotation",
-    "statement_link", "entity_link", "entity_statement_link",
-    "statement_annotation", "entity_annotation",
+    "entity",
+    "statement",
+    "name",
+    "annotation",
+    "statement_link",
+    "entity_link",
+    "entity_statement_link",
+    "statement_annotation",
+    "entity_annotation",
 }
 
 
@@ -721,9 +726,7 @@ def get_history(
 
     base = f"SELECT * FROM ({_ACTIVITY_UNION}){where_sql}"
 
-    total_row = conn.execute(
-        f"SELECT COUNT(*) AS n FROM ({base})", params
-    ).fetchone()
+    total_row = conn.execute(f"SELECT COUNT(*) AS n FROM ({base})", params).fetchone()
     total = int(total_row["n"]) if total_row else 0
 
     rows = conn.execute(
@@ -763,6 +766,7 @@ def _require_principal(request: Request) -> auth.Principal:
         # returns 401 itself. Defensive in case of future middleware
         # reordering.
         from fastapi import HTTPException
+
         raise HTTPException(status_code=401, detail="authentication required")
     return p
 
@@ -784,6 +788,7 @@ def _serialize_token_row(row) -> dict[str, Any]:
 # the report_knowledge_gap MCP tool). The reads/lists are useful to
 # every authenticated user; marking resolved/dismissed too. Admins can
 # hard-delete via direct DB if needed; the UI doesn't expose it.
+
 
 def _serialize_gap(row) -> dict[str, Any]:
     if row["resolved_at"]:
@@ -826,6 +831,7 @@ def list_knowledge_gaps(request: Request, status: str | None = None) -> dict[str
         where = "WHERE dismissed_at IS NOT NULL"
     elif status not in (None, "", "all"):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail="status must be one of: all, open, resolved, dismissed",
@@ -858,9 +864,11 @@ def update_knowledge_gap(
     ).fetchone()
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="gap not found")
 
     from datetime import datetime, timezone
+
     now = datetime.now(timezone.utc).isoformat()
 
     if body.action == "resolve":
@@ -883,8 +891,10 @@ def update_knowledge_gap(
         )
     else:
         from fastapi import HTTPException
+
         raise HTTPException(
-            status_code=400, detail="action must be one of: resolve, dismiss, reopen",
+            status_code=400,
+            detail="action must be one of: resolve, dismiss, reopen",
         )
     conn.commit()
 
@@ -902,6 +912,7 @@ def update_knowledge_gap(
 # approval. This is the review surface for derived mentions. It is HTTP-only
 # by design — never an MCP tool — so the substrate's write API gives no hint
 # that mentions are derived. Approving materializes the real mention.
+
 
 def _serialize_pending_mention(row) -> dict[str, Any]:
     if row["approved_at"]:
@@ -941,6 +952,7 @@ def list_pending_mentions(
     status = status or "open"
     if status not in ("open", "approved", "rejected", "all"):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail="status must be one of: open, approved, rejected, all",
@@ -970,17 +982,22 @@ def update_pending_mention(
         ok = store.reject_pending_mention(conn, pending_id)
     else:
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400, detail="action must be one of: approve, reject"
         )
     if not ok:
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=404, detail="pending mention not found or already resolved"
         )
     row = store.get_pending_mention(conn, pending_id)
-    return {"resolved": True, "id": pending_id,
-            "status": "approved" if row["approved_at"] else "rejected"}
+    return {
+        "resolved": True,
+        "id": pending_id,
+        "status": "approved" if row["approved_at"] else "rejected",
+    }
 
 
 @app.get("/api/entity-positions", include_in_schema=False)
@@ -996,9 +1013,12 @@ def get_entity_positions(request: Request) -> Any:
     """
     from fastapi.responses import FileResponse, JSONResponse as _JSON
     from . import layout_baker
+
     path = layout_baker.output_path()
     if path is None or not path.exists():
-        return _JSON(status_code=404, content={"detail": "entity positions not baked yet"})
+        return _JSON(
+            status_code=404, content={"detail": "entity positions not baked yet"}
+        )
     return FileResponse(path, media_type="application/json")
 
 
@@ -1056,6 +1076,7 @@ def list_traces(request: Request) -> Any:
 def get_trace(trace_id: str, request: Request) -> Any:
     """Render one trace's flamegraph — open this URL in a browser."""
     from fastapi.responses import HTMLResponse, JSONResponse as _JSON
+
     _enforce_role(request, "admin")
     if "/" in trace_id or "\\" in trace_id or ".." in trace_id:
         return _JSON(status_code=400, content={"detail": "bad trace id"})
@@ -1188,7 +1209,10 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
         owner_id = auth.LOCAL_ADMIN_ID
 
     raw, token_id = auth.issue_token(
-        conn, user_id=owner_id, name=body.name, scope=capped_scope,
+        conn,
+        user_id=owner_id,
+        name=body.name,
+        scope=capped_scope,
     )
     row = conn.execute(
         "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
@@ -1209,6 +1233,7 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
     ).fetchone()
     if row is None or row["user_id"] != owner_id:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="token not found")
     auth.revoke_token(conn, token_id)
     return {"ok": True}
@@ -1224,6 +1249,7 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
 
 def _serialize_draft(row, *, ops=None) -> dict[str, Any]:
     from . import drafts_store
+
     return drafts_store.serialize_draft(row, ops=ops)
 
 
@@ -1234,6 +1260,7 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
     """
     _require_principal(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     if status == "open":
@@ -1246,6 +1273,7 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
         where = ""
     else:
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail="status must be one of: all, open, submitted, approved, rejected, withdrawn",
@@ -1273,11 +1301,13 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
 def get_draft_detail(draft_id: str, request: Request) -> dict[str, Any]:
     _require_principal(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="draft not found")
     ops = drafts_store.list_ops(conn, draft_id)
     return {"draft": drafts_store.serialize_draft(row, ops=ops)}
@@ -1296,15 +1326,18 @@ def edit_draft_op(
     should approve-or-reject and have the drafter re-submit)."""
     _require_principal(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="draft not found")
     status = drafts_store.status_for(row)
     if status not in ("open", "submitted"):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail=f"cannot edit ops on a {status} draft",
@@ -1312,6 +1345,7 @@ def edit_draft_op(
     ok = drafts_store.update_op_payload(conn, draft_id, seq, body.payload)
     if not ok:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="op seq not found")
     return {"ok": True}
 
@@ -1320,15 +1354,18 @@ def edit_draft_op(
 def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str, Any]:
     _require_principal(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="draft not found")
     status = drafts_store.status_for(row)
     if status not in ("open", "submitted"):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail=f"cannot remove ops from a {status} draft",
@@ -1336,6 +1373,7 @@ def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str,
     ok = drafts_store.remove_op(conn, draft_id, seq)
     if not ok:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="op seq not found")
     return {"ok": True}
 
@@ -1349,14 +1387,17 @@ class DraftDecisionBody(BaseModel):
 def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
     _require_principal(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="draft not found")
     if drafts_store.status_for(row) != "open":
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail="only open drafts can be submitted",
@@ -1375,6 +1416,7 @@ def _enforce_curator(request: Request) -> auth.Principal:
     p = _require_principal(request)
     if not auth.principal_has_real_role(p, "writer"):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=403,
             detail="approving / rejecting a draft requires the writer or admin role",
@@ -1392,12 +1434,14 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
     """
     p = _enforce_curator(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     try:
         result = server.apply_draft(draft_id)
     except (ValueError, RuntimeError) as ex:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=400, detail=str(ex))
     drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
     return {"ok": True, **result}
@@ -1407,14 +1451,17 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
 def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _enforce_curator(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="draft not found")
     if drafts_store.status_for(row) not in ("open", "submitted"):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail="only open or submitted drafts can be rejected",
@@ -1427,14 +1474,17 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
 def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
     from . import drafts_store
+
     conn = server._drafts_conn
     assert conn is not None
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="draft not found")
     if drafts_store.status_for(row) not in ("open", "submitted"):
         from fastapi import HTTPException
+
         raise HTTPException(
             status_code=400,
             detail="only open or submitted drafts can be withdrawn",
@@ -1448,10 +1498,12 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
 # represent third-party agents; they can hold tokens but never log in
 # through OIDC.
 
+
 def _require_admin(request: Request) -> auth.Principal:
     p = _require_principal(request)
     if not p.is_admin:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=403, detail="admin role required")
     return p
 
@@ -1498,18 +1550,23 @@ def create_user(body: CreateUserBody, request: Request) -> dict[str, Any]:
     admin = _require_admin(request)
     if body.type == "human" and not body.email:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=400, detail="human users require an email")
     conn = server._auth_conn
     assert conn is not None
     user_id = auth.create_user(
         conn,
-        name=body.name, role=body.role, type=body.type,
-        email=body.email, created_by=admin.id,
+        name=body.name,
+        role=body.role,
+        type=body.type,
+        email=body.email,
+        created_by=admin.id,
     )
     conn.commit()
     row = conn.execute(
         "SELECT id, type, email, name, role, status, oidc_issuer, created_at, last_login_at "
-        "FROM users WHERE id = ?", (user_id,)
+        "FROM users WHERE id = ?",
+        (user_id,),
     ).fetchone()
     return {"user": _serialize_user_row(row)}
 
@@ -1528,6 +1585,7 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
     row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
     if row is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="user not found")
     # Guard against the only admin demoting themselves and locking the
     # surface — at least one active admin must remain.
@@ -1537,6 +1595,7 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
         ).fetchone()["n"]
         if n_admins <= 1:
             from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=400,
                 detail="cannot demote the last admin",
@@ -1546,6 +1605,7 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
     if body.status is not None:
         if body.status not in ("active", "suspended"):
             from fastapi import HTTPException
+
             raise HTTPException(status_code=400, detail="invalid status")
         conn.execute("UPDATE users SET status = ? WHERE id = ?", (body.status, user_id))
     if body.name is not None:
@@ -1553,7 +1613,8 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
     conn.commit()
     row = conn.execute(
         "SELECT id, type, email, name, role, status, oidc_issuer, created_at, last_login_at "
-        "FROM users WHERE id = ?", (user_id,)
+        "FROM users WHERE id = ?",
+        (user_id,),
     ).fetchone()
     return {"user": _serialize_user_row(row)}
 
@@ -1586,13 +1647,19 @@ def mint_token_for_user(
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    user = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
+    user = conn.execute(
+        "SELECT id, role FROM users WHERE id = ?", (user_id,)
+    ).fetchone()
     if user is None:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="user not found")
     capped = auth._clamp_scope(body.scope, user["role"])
     raw, token_id = auth.issue_token(
-        conn, user_id=user_id, name=body.name, scope=capped,
+        conn,
+        user_id=user_id,
+        name=body.name,
+        scope=capped,
     )
     row = conn.execute(
         "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
@@ -1649,7 +1716,14 @@ def create_invite(body: CreateInviteBody, request: Request) -> dict[str, Any]:
     conn.execute(
         "INSERT INTO invites (id, email, role, token, invited_by, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (invite_id, body.email.strip().lower(), body.role, token, admin.id, auth._now()),
+        (
+            invite_id,
+            body.email.strip().lower(),
+            body.role,
+            token,
+            admin.id,
+            auth._now(),
+        ),
     )
     conn.commit()
     row = conn.execute(
@@ -1664,7 +1738,9 @@ def revoke_invite(invite_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    conn.execute("DELETE FROM invites WHERE id = ? AND accepted_at IS NULL", (invite_id,))
+    conn.execute(
+        "DELETE FROM invites WHERE id = ? AND accepted_at IS NULL", (invite_id,)
+    )
     conn.commit()
     return {"ok": True}
 
@@ -1693,6 +1769,7 @@ def _connect_page() -> Any:
     handoff, an admin's email) don't pay for the graph viz they're
     not about to use."""
     from fastapi.responses import HTMLResponse
+
     return HTMLResponse(content=connect_page.CONNECT_HTML)
 
 
@@ -1715,7 +1792,9 @@ app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 # /api/drafts, …) via its own api.js bridge. Gated by the same AuthMiddleware
 # as /ui — /cockpit is not in the auth-exempt list.
 _COCKPIT_DIR = Path(__file__).resolve().parent / "cockpit"
-app.mount("/cockpit", StaticFiles(directory=str(_COCKPIT_DIR), html=True), name="cockpit")
+app.mount(
+    "/cockpit", StaticFiles(directory=str(_COCKPIT_DIR), html=True), name="cockpit"
+)
 
 
 # Serve the bundles at the bare /ui and /cockpit paths too. Starlette would

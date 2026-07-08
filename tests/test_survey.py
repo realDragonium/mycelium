@@ -50,7 +50,9 @@ def concept_embed(text: str) -> list[float]:
 
 
 def test_decompose_splits_on_conjunctions_preserving_verbs():
-    subs = survey.decompose("how does the flow rank candidates and how are permissions assigned")
+    subs = survey.decompose(
+        "how does the flow rank candidates and how are permissions assigned"
+    )
     assert subs == ["how does the flow rank candidates", "how are permissions assigned"]
     # verbs survive the split (matters for an action-phrased substrate)
     assert any("rank" in s for s in subs)
@@ -58,7 +60,11 @@ def test_decompose_splits_on_conjunctions_preserving_verbs():
 
 
 def test_decompose_splits_on_punctuation_and_slash_and_or():
-    assert survey.decompose("ranking; filtering, ordering?") == ["ranking", "filtering", "ordering"]
+    assert survey.decompose("ranking; filtering, ordering?") == [
+        "ranking",
+        "filtering",
+        "ordering",
+    ]
     assert survey.decompose("rank and/or filter") == ["rank", "filter"]
     assert survey.decompose("recruiter vs reviewer") == ["recruiter", "reviewer"]
 
@@ -106,14 +112,14 @@ def test_dedup_subqueries_keeps_distinct_angles():
 
 def test_rank_statements_count_then_cosine_then_id():
     union = {
-        "stm_single_hi": (1, 0.99),   # high score, but only one sub-query
-        "stm_multi": (2, 0.50),       # two sub-queries → ranks first
+        "stm_single_hi": (1, 0.99),  # high score, but only one sub-query
+        "stm_multi": (2, 0.50),  # two sub-queries → ranks first
         "stm_b": (1, 0.80),
-        "stm_a": (1, 0.80),           # tie with stm_b on (count, cosine) → id breaks it
+        "stm_a": (1, 0.80),  # tie with stm_b on (count, cosine) → id breaks it
     }
     ranked = survey.rank_statements(union)
-    assert ranked[0] == ("stm_multi", 0.50)            # count dominates
-    assert ranked[1] == ("stm_single_hi", 0.99)        # then cosine
+    assert ranked[0] == ("stm_multi", 0.50)  # count dominates
+    assert ranked[1] == ("stm_single_hi", 0.99)  # then cosine
     assert [sid for sid, _ in ranked[2:]] == ["stm_a", "stm_b"]  # id asc tiebreak
 
 
@@ -156,7 +162,7 @@ def test_survey_finds_what_search_misses(tmp_path, monkeypatch):
     """Criterion 1: on a multi-part query, survey surfaces statements the
     whole-query search misses."""
     with _client(tmp_path, monkeypatch):
-        rank_id = _add("the flow ranks the candidates")          # axis: rank
+        rank_id = _add("the flow ranks the candidates")  # axis: rank
         perm_id = _add("the system assigns permission to reviewers")  # axis: permission
 
         query = "how does the flow rank and how is permission assigned"
@@ -181,17 +187,29 @@ def test_shape_parity_with_search_statements(tmp_path, monkeypatch):
     search_statements returns — a consumer cannot tell decomposition
     happened."""
     expected_keys = {
-        "id", "kind", "text", "created_at", "updated_at",
-        "created_by", "updated_by", "mentions", "links", "score",
+        "id",
+        "kind",
+        "text",
+        "created_at",
+        "updated_at",
+        "created_by",
+        "updated_by",
+        "mentions",
+        "links",
+        "score",
         # search/survey hits are now fully hydrated, same as get_statements:
-        "incoming_links", "when_references",
+        "incoming_links",
+        "when_references",
     }
     with _client(tmp_path, monkeypatch):
         rank_id = _add("the flow ranks the candidates")
 
-        survey_hit = next(h for h in server.survey_statements("rank", k=5) if h["id"] == rank_id)
+        survey_hit = next(
+            h for h in server.survey_statements("rank", k=5) if h["id"] == rank_id
+        )
         search_hit = next(
-            h for h in server.search_statements("rank", limit=5, name_boost=0.0)
+            h
+            for h in server.search_statements("rank", limit=5, name_boost=0.0)
             if h["id"] == rank_id
         )
 
@@ -218,7 +236,8 @@ def test_search_hits_fully_hydrated_with_capped_reverse_edges(tmp_path, monkeypa
             )
 
         hit = next(
-            h for h in server.search_statements("rank", limit=50, name_boost=0.0)
+            h
+            for h in server.search_statements("rank", limit=50, name_boost=0.0)
             if h["id"] == target
         )
         assert "incoming_links" in hit and "when_references" in hit
@@ -235,10 +254,10 @@ def test_multi_surfaced_statement_ranks_above_single_and_dedupes(tmp_path, monke
     """Criterion 3: a statement surfaced by several sub-queries ranks above
     one surfaced by a single sub-query, and appears exactly once."""
     with _client(tmp_path, monkeypatch):
-        rank_id = _add("the flow ranks the candidates")               # rank
+        rank_id = _add("the flow ranks the candidates")  # rank
         perm_id = _add("the system assigns permission to reviewers")  # permission
-        both_id = _add("the flow ranks and applies permission")       # rank + permission
-        _add("a recruiter reviews the application")                   # distractor (recruiter)
+        both_id = _add("the flow ranks and applies permission")  # rank + permission
+        _add("a recruiter reviews the application")  # distractor (recruiter)
 
         # k=2: each sub-query's top-2 is [its own statement, the blended one].
         hits = server.survey_statements("rank and permission", k=2)
@@ -307,6 +326,7 @@ def test_whole_query_fallback_when_decomposition_is_dry(tmp_path, monkeypatch):
 def test_total_embed_outage_raises(tmp_path, monkeypatch):
     """Persistent embed failure on the fallback path is a real outage, not
     dry decomposition — it surfaces rather than masquerading as 'no hits'."""
+
     def boom(text):
         raise RuntimeError("ollama down")
 
@@ -427,6 +447,7 @@ def test_dedup_subqueries_threshold_value_and_direction():
     """The 0.95 default must actually be 0.95: a 0.96-similar pair collapses,
     a 0.94-similar pair is kept. Pins both the constant and the comparison
     direction (a regression to 0.80 or 0.99 would fail)."""
+
     def unit_at(cos_target):
         theta = math.acos(cos_target)
         return [math.cos(theta), math.sin(theta)]
@@ -441,13 +462,13 @@ def test_duplicate_vids_in_one_subquery_do_not_inflate_count(tmp_path, monkeypat
     statement via two vector_ids must not out-rank a statement genuinely
     surfaced by two distinct sub-queries."""
     with _client(tmp_path, monkeypatch):
-        dup_id = _add("the flow ranks the candidates")          # rank axis
+        dup_id = _add("the flow ranks the candidates")  # rank axis
         multi_id = _add("a recruiter reviews the application")  # recruiter axis
 
         def search(vec, k):
             if vec[0] == 1.0:  # the "rank" sub-query — same statement, two vids
-                return [(101, 0.0), (102, 0.05)]   # cosines 1.0 and 0.95
-            return [(200, 0.1)]                    # everything else → multi_id
+                return [(101, 0.0), (102, 0.05)]  # cosines 1.0 and 0.95
+            return [(200, 0.1)]  # everything else → multi_id
 
         vid_map = {101: dup_id, 102: dup_id, 200: multi_id}
         monkeypatch.setattr(server._index, "search", search)
