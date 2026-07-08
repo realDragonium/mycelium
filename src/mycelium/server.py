@@ -350,7 +350,6 @@ _LIST_TOOL_KINDS: dict[str, tuple[str, ...]] = {
     "list_link_types": ("upsert_link_type",),
     "list_entity_link_types": ("upsert_entity_link_type",),
     "list_statement_kinds": ("upsert_statement_kind",),
-    "list_annotations": ("upsert_annotation",),
 }
 
 #: Cached unmodified signatures of mutation tools, so the wrapper can
@@ -603,8 +602,6 @@ _auth_conn: sqlite3.Connection | None = None
 _drafts_conn: sqlite3.Connection | None = None
 _index: vector.Index | None = None
 _index_path: Path | None = None
-_ann_index: vector.Index | None = None
-_ann_index_path: Path | None = None
 _name_index: vector.Index | None = None
 _name_index_path: Path | None = None
 #: Data dir the substrate was opened from — used to site per-feature artifacts
@@ -613,8 +610,8 @@ _data_dir: Path | None = None
 
 
 def init(data_dir: Path) -> None:
-    """Open the substrate + auth DBs and load (or create) the three
-    vector indexes (statements, annotations, entity names).
+    """Open the substrate + auth DBs and load (or create) the two
+    vector indexes (statements, entity names).
 
     Auth lives in its own SQLite file (`mycelium-auth.db`) so the
     substrate file can be replaced without disturbing identity or
@@ -622,7 +619,7 @@ def init(data_dir: Path) -> None:
     session and bearer token keeps working.
     """
     global _conn, _auth_conn, _drafts_conn, _index, _index_path
-    global _ann_index, _ann_index_path, _name_index, _name_index_path, _data_dir
+    global _name_index, _name_index_path, _data_dir
 
     from . import auth_store, drafts_store, research_store
 
@@ -654,13 +651,6 @@ def init(data_dir: Path) -> None:
         _index.load(_index_path)
     else:
         _index.init_empty()
-
-    _ann_index_path = data_dir / "mycelium-annotations.vec"
-    _ann_index = vector.Index()
-    if _ann_index_path.exists():
-        _ann_index.load(_ann_index_path)
-    else:
-        _ann_index.init_empty()
 
     _name_index_path = data_dir / "mycelium-names.vec"
     _name_index = vector.Index()
@@ -699,11 +689,6 @@ def _backfill_name_index() -> None:
 def _persist_index() -> None:
     assert _index is not None and _index_path is not None
     _index.save(_index_path)
-
-
-def _persist_ann_index() -> None:
-    assert _ann_index is not None and _ann_index_path is not None
-    _ann_index.save(_ann_index_path)
 
 
 def _persist_name_index() -> None:
@@ -748,33 +733,6 @@ def _drop_name_from_index(name_id: str) -> None:
         _persist_name_index()
 
 
-def _resolve_or_create_names(name_texts: list[str], strict: bool = False) -> list[str]:
-    """Resolve name texts to name_ids, auto-creating a fresh entity + name
-    for unknown text (or raising when `strict`).
-
-    Used ONLY by `upsert_annotation`: annotation→entity mentions remain
-    author-asserted (out of scope for derived statement mentions), so they
-    keep the original resolve-or-create behavior. Statement mentions are
-    derived from text and never flow through here."""
-    assert _conn is not None
-    name_ids: list[str] = []
-    for text in name_texts:
-        existing = store.get_name_by_text(_conn, text)
-        if existing is not None:
-            name_ids.append(existing["id"])
-            continue
-        if strict:
-            raise ValueError(
-                f"name {text!r} does not exist; pass strict_mentions=False "
-                "to auto-create or upsert_entity / upsert_name first"
-            )
-        new_entity_id = store.create_entity(_conn, None)
-        new_name_id = _create_name_with_plural(text, new_entity_id)
-        name_ids.append(new_name_id)
-        layout_baker.schedule_rebake()
-    return name_ids
-
-
 def _derive_statement_mentions(statement_id: str, text: str) -> None:
     """Synchronously derive and store one statement's mentions from its
     text (auto-links + suspect review rows). Called on the hot path
@@ -816,7 +774,7 @@ def _generate_plural(source_name_id: str, text: str, entity_id: str) -> None:
 
 def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
     """Delete a name and any generated plurals it spawned: clear their
-    mention / pending / annotation-mention rows, drop their vectors, delete
+    mention / pending rows, drop their vectors, delete
     the rows. Children are deleted before the parent (the
     `generated_from_name_id` self-reference is RESTRICT). Returns
     `(mentions_removed, affected_statement_ids)` — the statements that
@@ -834,7 +792,6 @@ def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
             "DELETE FROM statement_mentions WHERE name_id = ?", (nid,)
         ).rowcount
         _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (nid,))
-        _conn.execute("DELETE FROM annotation_mentions WHERE name_id = ?", (nid,))
         _drop_name_from_index(nid)
         _conn.execute("DELETE FROM names WHERE id = ?", (nid,))
     _conn.commit()
@@ -853,9 +810,6 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
             "DELETE FROM statement_mentions WHERE name_id = ?", (child["id"],)
         )
         _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (child["id"],))
-        _conn.execute(
-            "DELETE FROM annotation_mentions WHERE name_id = ?", (child["id"],)
-        )
         _drop_name_from_index(child["id"])
         _conn.execute("DELETE FROM names WHERE id = ?", (child["id"],))
     _conn.commit()
@@ -2477,7 +2431,6 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
     # Mixed entity↔statement edges anchored on the source entity move
     # onto the target; UNIQUE collisions drop the rewriting row.
     store.rewrite_entity_statement_endpoints(_conn, from_entity_id, into_entity_id)
-    store.merge_entity_annotation_attachments(_conn, from_entity_id, into_entity_id)
     store.delete_entity(_conn, from_entity_id)
     affected: list[str] = []
     for nid in moved_name_ids:
@@ -2621,7 +2574,6 @@ def delete_entity(id: str) -> dict[str, Any]:
             "DELETE FROM statement_mentions WHERE name_id = ?", (nid,)
         ).rowcount
         _conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (nid,))
-        _conn.execute("DELETE FROM annotation_mentions WHERE name_id = ?", (nid,))
         _drop_name_from_index(nid)
     if name_ids:
         # Break generated-plural self-references within this entity before
@@ -2645,7 +2597,6 @@ def delete_entity(id: str) -> dict[str, Any]:
     entity_statement_links_removed = _conn.execute(
         "DELETE FROM entity_statement_links WHERE entity_id = ?", (id,)
     ).rowcount
-    store.clear_entity_annotations(_conn, id)
     store.delete_entity(_conn, id)
     store.enqueue_recompute_statements(_conn, affected)
     layout_baker.schedule_rebake()
@@ -2745,7 +2696,6 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
         "DELETE FROM entity_statement_links WHERE statement_id = ?",
         (from_id,),
     )
-    store.merge_statement_annotation_attachments(_conn, from_id, into_id)
 
     vector_id = store.get_vector_id(_conn, from_id)
     if vector_id is not None:
@@ -2835,7 +2785,6 @@ def delete_statement(id: str) -> dict[str, Any]:
             "DELETE FROM entity_statement_links WHERE link_id = ?", (lid,)
         ).rowcount
     mentions_removed = store.clear_derived_for_statement(_conn, id, commit=False)
-    store.clear_statement_annotations(_conn, id)
     _conn.commit()
 
     vector_id = store.get_vector_id(_conn, id)
@@ -3699,334 +3648,6 @@ def delete_entity_link_type(link_type: str) -> dict[str, str]:
     return {"link_type": link_type}
 
 
-def _annotation_near_duplicates(
-    vec: list[float],
-    *,
-    exclude_id: str | None = None,
-    threshold: float = NEAR_DUPLICATE_THRESHOLD,
-    k: int = 5,
-) -> list[dict[str, Any]]:
-    """Same shape as `_near_duplicates` but against the annotations index."""
-    assert _ann_index is not None and _conn is not None
-    hits = _ann_index.search(vec, k=k + (1 if exclude_id else 0))
-    out: list[dict[str, Any]] = []
-    for vid, distance in hits:
-        aid = store.get_annotation_id_by_vector_id(_conn, vid)
-        if aid is None or aid == exclude_id:
-            continue
-        score = 1.0 - distance
-        if score < threshold:
-            continue
-        row = store.get_annotation(_conn, aid)
-        if row is None:
-            continue
-        out.append(
-            {
-                "id": aid,
-                "kind": row["kind"],
-                "text": _snippet(row["text"]),
-                "score": score,
-            }
-        )
-        if len(out) >= k:
-            break
-    return out
-
-
-def _hydrate_annotation(
-    annotation_id: str, score: float | None = None
-) -> dict[str, Any]:
-    """Full hydrated annotation: id, kind, text, mentions, attached
-    statements AND entities (an annotation can attach to either layer)."""
-    assert _conn is not None
-    row = store.get_annotation(_conn, annotation_id)
-    assert row is not None
-    mentions = [
-        {"name_id": m["name_id"], "name": m["name"], "entity_id": m["entity_id"]}
-        for m in store.get_annotation_mentions(_conn, annotation_id)
-    ]
-    statements = [
-        {"id": b["id"], "text": _snippet(b["text"])}
-        for b in store.get_statements_for_annotation(_conn, annotation_id)
-    ]
-    entities = [
-        {"id": e["id"], "name": e["primary_name"] or e["id"]}
-        for e in store.get_entities_for_annotation(_conn, annotation_id)
-    ]
-    out: dict[str, Any] = {
-        "id": row["id"],
-        "kind": row["kind"],
-        "text": row["text"],
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-        "created_by": row["created_by"],
-        "updated_by": row["updated_by"],
-        "mentions": mentions,
-        "statements": statements,
-        "entities": entities,
-    }
-    if score is not None:
-        out["score"] = score
-    return out
-
-
-def upsert_annotation(
-    kind: str,
-    text: str,
-    statement_ids: list[str] = [],
-    entity_ids: list[str] = [],
-    mentions: list[str] = [],
-    id: str | None = None,
-    strict_mentions: bool = False,
-) -> dict[str, Any]:
-    """Update an existing annotation — a typed, embedded proposition
-    attached to one or more statements and/or entities. Creating new
-    annotations via this tool is disabled: `id` is required, and calls
-    without it raise. Existing annotations can still have their kind,
-    text, mentions, and attachment sets reconciled.
-
-    `kind` is the deliberate first-class discriminator for annotations,
-    parallel to statement.kind but discriminating by *purpose of note*
-    rather than shape of claim. Required on every call; the substrate
-    rejects null but does NOT lock the vocabulary — kinds grow as
-    needed, same posture as statement kinds and link types. Starting
-    vocabulary:
-      - `definition` — what something is (concept, term, role).
-      - `default`    — the implicit value or behavior when nothing
-                       overrides.
-      - `example`    — a concrete instance illustrating a statement
-                       or entity.
-      - `note`       — design rationale, caveat, or other context
-                       that doesn't fit a more specific kind.
-    Add new leaves freely (`permission`, `invariant`, `property`,
-    `compliance`, `rationale`, etc.) as the substrate's vocabulary
-    grows. `list_annotation_kinds()` enumerates what's currently in
-    use. No grammatical rules apply per kind — annotations
-    discriminate by purpose, not phrasing.
-
-    `statement_ids` and `entity_ids` are the FULL sets of statements and
-    entities this annotation attaches to. Use statement attachment for
-    facts about specific events ("only recruiters can create invites"
-    attaches to the create-invite statement); use entity attachment for
-    facts about an entity itself irrespective of any single event
-    ("the Recruiter role is provisioned by HR" attaches to the
-    Recruiter entity). Both are independent — an annotation may attach
-    to both layers, either, or neither (orphan).
-
-    On update (with `id`), each attachment set is reconciled wholesale
-    — anything missing from the new list is detached. Annotations
-    survive deletion of any record they were attached to; orphans are
-    only removed by explicit `delete_annotation`, never as a
-    side-effect.
-
-    `mentions` works like statement mentions — name texts that
-    auto-resolve to entities, with `strict_mentions=True` flipping
-    auto-create off in favor of an error on unknown names. (Mentions
-    record what the annotation REFERENCES; entity_ids record which
-    entities the annotation IS ABOUT.)
-
-    Returns `{annotation_id, near_duplicates}`.
-    """
-    assert _conn is not None and _ann_index is not None
-
-    for bid in statement_ids:
-        if store.get_statement(_conn, bid) is None:
-            raise ValueError(f"statement {bid!r} does not exist")
-    for eid in entity_ids:
-        if store.get_entity_by_id(_conn, eid) is None:
-            raise ValueError(f"entity {eid!r} does not exist")
-
-    vec = embed.embed(text)
-    name_ids = _resolve_or_create_names(mentions, strict=strict_mentions)
-
-    if id is None:
-        raise ValueError(
-            "creating new annotations is disabled; pass an existing `id` to update"
-        )
-    if store.get_annotation(_conn, id) is None:
-        raise ValueError(f"annotation {id!r} does not exist")
-    store.update_annotation(_conn, id, kind, text)
-    vector_id = store.get_annotation_vector_id(_conn, id)
-    assert vector_id is not None
-    _ann_index.replace(vector_id, vec)
-    store.replace_annotation_mentions(_conn, id, name_ids)
-    store.replace_annotation_attachments(_conn, id, statement_ids)
-    store.replace_annotation_entity_attachments(_conn, id, entity_ids)
-    annotation_id = id
-
-    _persist_ann_index()
-    return {
-        "annotation_id": annotation_id,
-        "near_duplicates": _annotation_near_duplicates(vec, exclude_id=annotation_id),
-    }
-
-
-def attach_annotation(
-    annotation_id: str,
-    statement_id: str | None = None,
-    entity_id: str | None = None,
-) -> dict[str, Any]:
-    """Attach an existing annotation to one more statement or entity.
-
-    Pass exactly one of `statement_id` / `entity_id`. Idempotent — an
-    existing attachment is silently skipped, so a second call with the
-    same args is a no-op (`attached: 0`). Validates that both records
-    exist before mutating.
-    """
-    assert _conn is not None
-    if (statement_id is None) == (entity_id is None):
-        raise ValueError("pass exactly one of statement_id / entity_id")
-    if store.get_annotation(_conn, annotation_id) is None:
-        raise ValueError(f"annotation {annotation_id!r} does not exist")
-    if statement_id is not None:
-        if store.get_statement(_conn, statement_id) is None:
-            raise ValueError(f"statement {statement_id!r} does not exist")
-        inserted = store.attach_annotations_to_statements(
-            _conn, [(statement_id, annotation_id)]
-        )
-    else:
-        assert entity_id is not None
-        if store.get_entity_by_id(_conn, entity_id) is None:
-            raise ValueError(f"entity {entity_id!r} does not exist")
-        inserted = store.attach_annotations_to_entities(
-            _conn, [(entity_id, annotation_id)]
-        )
-    return {"annotation_id": annotation_id, "attached": inserted}
-
-
-def detach_annotation(
-    annotation_id: str,
-    statement_id: str | None = None,
-    entity_id: str | None = None,
-) -> dict[str, Any]:
-    """Detach an annotation from one statement or entity. Pass exactly
-    one of `statement_id` / `entity_id`. The annotation itself is NOT
-    deleted — it survives as an orphan if this was its last attachment.
-    Use `delete_annotation` for permanent removal.
-
-    Idempotent — a missing attachment is silently skipped.
-    """
-    assert _conn is not None
-    if (statement_id is None) == (entity_id is None):
-        raise ValueError("pass exactly one of statement_id / entity_id")
-    if statement_id is not None:
-        removed = store.detach_annotations_from_statements(
-            _conn, [(statement_id, annotation_id)]
-        )
-    else:
-        assert entity_id is not None
-        removed = store.detach_annotations_from_entities(
-            _conn, [(entity_id, annotation_id)]
-        )
-    return {"annotation_id": annotation_id, "detached": removed}
-
-
-def get_annotation(id: str) -> dict[str, Any]:
-    """Fetch one annotation by id, hydrated with mentions and the
-    statements it's attached to.
-
-    Returns `{id, kind, text, mentions, statements}` where `mentions`
-    is `[{name_id, name, entity_id}]` and `statements` is `[{id, text}]`
-    with `text` truncated to a snippet. Use `get_statements(ids)` for the
-    full record of any attached statement.
-
-    Raises ValueError if `id` does not exist.
-    """
-    assert _conn is not None
-    if store.get_annotation(_conn, id) is None:
-        raise ValueError(f"annotation {id!r} does not exist")
-    return _hydrate_annotation(id)
-
-
-def list_annotations(
-    statement_id: str | None = None,
-    entity_id: str | None = None,
-    kind: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
-) -> dict[str, Any]:
-    """Page through annotations in insertion order.
-
-    Three filters, combinable with AND:
-      `entity_id`    — annotations attached directly to that entity.
-                       Use this to enumerate everything attached to an
-                       entity — `get_entity(id)` returns the same set
-                       inline, but this form paginates and combines
-                       with `kind`.
-      `statement_id` — annotations attached to that statement.
-      `kind`         — annotations of that kind.
-
-    Returns `{total, annotations: [{id, kind, text}]}`. `total`
-    reflects the same filter applied to the full table.
-    """
-    assert _conn is not None
-    rows = store.list_annotations(
-        _conn,
-        statement_id=statement_id,
-        entity_id=entity_id,
-        kind=kind,
-        limit=limit,
-        offset=offset,
-    )
-    return {
-        "total": store.count_annotations(
-            _conn, statement_id=statement_id, entity_id=entity_id, kind=kind
-        ),
-        "annotations": [
-            {"id": r["id"], "kind": r["kind"], "text": r["text"]} for r in rows
-        ],
-    }
-
-
-def delete_annotation(id: str) -> dict[str, Any]:
-    """Permanently delete an annotation.
-
-    Cascade statement: `mentions` of this annotation are removed, every
-    `statement_annotations` and `entity_annotations` row pointing at it
-    is removed, the vector slot is marked deleted in hnswlib, and the
-    record + vector_id mapping are dropped. Statements and entities that
-    were attached are unaffected — only the join is severed.
-
-    Returns `{deleted: True, statement_attachments_removed,
-    entity_attachments_removed, mentions_removed}`. Permanent.
-    Raises ValueError on unknown id.
-    """
-    assert _conn is not None and _ann_index is not None
-
-    if store.get_annotation(_conn, id) is None:
-        raise ValueError(f"annotation {id!r} does not exist")
-
-    statement_attachments_removed = _conn.execute(
-        "SELECT COUNT(*) AS n FROM statement_annotations WHERE annotation_id = ?",
-        (id,),
-    ).fetchone()["n"]
-    entity_attachments_removed = _conn.execute(
-        "SELECT COUNT(*) AS n FROM entity_annotations WHERE annotation_id = ?",
-        (id,),
-    ).fetchone()["n"]
-    mentions_removed = _conn.execute(
-        "SELECT COUNT(*) AS n FROM annotation_mentions WHERE annotation_id = ?",
-        (id,),
-    ).fetchone()["n"]
-
-    store.clear_annotation_attachments(_conn, id)
-    store.clear_annotation_entity_attachments(_conn, id)
-    store.clear_annotation_mentions(_conn, id)
-
-    vector_id = store.get_annotation_vector_id(_conn, id)
-    if vector_id is not None:
-        _ann_index.delete(vector_id)
-    store.delete_annotation_record(_conn, id)
-    _persist_ann_index()
-
-    return {
-        "deleted": True,
-        "statement_attachments_removed": statement_attachments_removed,
-        "entity_attachments_removed": entity_attachments_removed,
-        "mentions_removed": mentions_removed,
-    }
-
-
 @tool
 def grep_statements(
     query: str,
@@ -4167,20 +3788,6 @@ def grep_statements(
             for s in sliced
         ],
     }
-
-
-def list_annotation_kinds() -> list[str]:
-    """Distinct `kind` values currently materialised on at least one
-    `annotations` row, sorted alphabetically.
-
-    Snapshot of what's IN USE, not the substrate's allowed vocabulary —
-    the vocabulary is open. Common conventions: `permission`,
-    `invariant`, `property`, `compliance`, `fact`, `rationale`,
-    `example`. Pick the leaf that best describes the annotation's role;
-    invent new kinds when none fit.
-    """
-    assert _conn is not None
-    return store.list_annotation_kinds(_conn)
 
 
 @tool(role="reader")

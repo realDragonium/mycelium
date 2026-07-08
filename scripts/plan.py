@@ -3,10 +3,9 @@
 The agent has the full MCP write surface but does not write directly.
 Each write call is recorded as an `Action` in the per-suspect plan and
 returns a synthesized success response. Creates (`upsert_behavior` with
-no id, `upsert_entity`, `upsert_annotation`) get a synthetic id like
-`pending_beh_3` that the agent can reference in subsequent calls
-(linking to a freshly-proposed behavior, annotating a freshly-proposed
-entity, etc.).
+no id, `upsert_entity`) get a synthetic id like `pending_beh_3` that the
+agent can reference in subsequent calls (linking to a freshly-proposed
+behavior or entity, etc.).
 
 When the operator approves the plan, `flush()` replays each action
 against the real MCP in order, building up a synthetic→real id map as
@@ -30,7 +29,7 @@ class PlanRecorder:
     def __init__(self, mcp: MyceliumClient):
         self.mcp = mcp
         self.actions: list[dict[str, Any]] = []
-        self._counters: dict[str, int] = {"beh": 0, "ent": 0, "ann": 0}
+        self._counters: dict[str, int] = {"beh": 0, "ent": 0}
         self.dedup_skipped: int = 0  # Count of suppressed duplicate writes,
         # surfaced as a warning to the operator if non-zero. Indicates the
         # agent emitted the same write twice — usually a sign the agent is
@@ -96,7 +95,6 @@ class PlanRecorder:
                 ],
                 "links": a["args"].get("links", []) or [],
                 "incoming_links": [],
-                "annotations": [],
             }
         return self.mcp.get_behavior(id)
 
@@ -111,8 +109,6 @@ class PlanRecorder:
                 "names": [{"id": "pending", "text": a["args"].get("name", "")}],
                 "links": [],
                 "incoming_links": [],
-                "annotations": [],
-                "mentioning_annotations": [],
             }
         return self.mcp.get_entity(id)
 
@@ -127,12 +123,6 @@ class PlanRecorder:
 
     def list_entities(self, **kw):
         return self.mcp.list_entities(**kw)
-
-    def list_annotations(self, **kw):
-        return self.mcp.list_annotations(**kw)
-
-    def get_annotation(self, id: str):
-        return self.mcp.get_annotation(id)
 
     def find_duplicates(self, **kw):
         return self.mcp.find_duplicates(**kw)
@@ -224,48 +214,6 @@ class PlanRecorder:
         )
         return {"entity_id": syn}
 
-    def upsert_annotation(
-        self,
-        kind: str,
-        text: str,
-        behavior_ids: list[str] | None = None,
-        entity_ids: list[str] | None = None,
-        mentions: list[str] | None = None,
-        id: str | None = None,
-        strict_mentions: bool = False,
-    ) -> dict[str, Any]:
-        args = {
-            "kind": kind,
-            "text": text,
-            "behavior_ids": behavior_ids or [],
-            "entity_ids": entity_ids or [],
-            "mentions": mentions or [],
-            "strict_mentions": strict_mentions,
-        }
-        if id is not None:
-            args["id"] = id
-            self._record("upsert_annotation", args)
-            return {"annotation_id": id, "near_duplicates": []}
-        syn = self._next("ann")
-        self._record("upsert_annotation", args, synthetic=syn)
-        return {"annotation_id": syn, "near_duplicates": []}
-
-    def attach_annotation(
-        self,
-        annotation_id: str,
-        behavior_id: str | None = None,
-        entity_id: str | None = None,
-    ) -> dict[str, Any]:
-        self._record(
-            "attach_annotation",
-            {
-                "annotation_id": annotation_id,
-                "behavior_id": behavior_id,
-                "entity_id": entity_id,
-            },
-        )
-        return {"annotation_id": annotation_id, "attached": 1}
-
     # --- Validation ---------------------------------------------------
 
     def validate(self) -> list[str]:
@@ -343,9 +291,8 @@ class PlanRecorder:
             args = self._substitute(action["args"], id_map)
             method = getattr(self.mcp, action["name"])
             try:
-                # Drop None values so methods with defaulted-None params don't
-                # see explicit Nones (e.g. attach_annotation's behavior/entity
-                # exclusivity check).
+                # Drop None values so methods with defaulted-None params
+                # don't see explicit Nones.
                 clean = {k: v for k, v in args.items() if v is not None}
                 result = method(**clean)
             except Exception as e:
@@ -356,11 +303,7 @@ class PlanRecorder:
             results.append({"action": action["name"], "result": result})
             syn = action.get("synthetic")
             if syn is not None and isinstance(result, dict):
-                real = (
-                    result.get("behavior_id")
-                    or result.get("entity_id")
-                    or result.get("annotation_id")
-                )
+                real = result.get("behavior_id") or result.get("entity_id")
                 if real:
                     id_map[syn] = real
         return results

@@ -103,21 +103,6 @@ def test_name_rename_bumps_updated():
     assert row["updated_at"] > row["created_at"]
 
 
-def test_annotation_audit_lifecycle():
-    conn = fresh_conn()
-    store.set_actor("alice")
-    aid = store.create_annotation(conn, "note", "draft")
-    row = store.get_annotation(conn, aid)
-    assert row["created_by"] == "alice"
-
-    time.sleep(0.002)
-    store.set_actor("bob")
-    store.update_annotation(conn, aid, "note", "revised")
-    row = store.get_annotation(conn, aid)
-    assert row["created_by"] == "alice"
-    assert row["updated_by"] == "bob"
-
-
 def test_statement_link_stamps_creation():
     conn = fresh_conn()
     store.set_actor("alice")
@@ -150,22 +135,6 @@ def test_entity_link_stamps_creation():
     assert row["created_by"] == "alice"
 
 
-def test_annotation_attachment_stamps_creation():
-    conn = fresh_conn()
-    store.set_actor("alice")
-    bid = store.create_statement(conn, "event", "A")
-    aid = store.create_annotation(conn, "note", "x")
-    store.attach_annotations_to_statements(conn, [(bid, aid)])
-
-    row = conn.execute(
-        "SELECT created_at, created_by FROM statement_annotations "
-        "WHERE statement_id = ? AND annotation_id = ?",
-        (bid, aid),
-    ).fetchone()
-    assert _iso_ish(row["created_at"])
-    assert row["created_by"] == "alice"
-
-
 def test_migration_adds_columns_to_legacy_db():
     """Simulate a pre-audit DB by creating bare tables, then re-migrate.
     All audit columns must appear, idempotently."""
@@ -176,6 +145,22 @@ def test_migration_adds_columns_to_legacy_db():
     conn.execute("CREATE TABLE entities (id TEXT PRIMARY KEY, description TEXT)")
     conn.execute(
         "INSERT INTO entities (id, description) VALUES ('ent_legacy', 'old row')"
+    )
+    # Real legacy DBs carry the (since removed) annotation tables, and the
+    # byte-frozen v1 migration probes them via _ensure_column — the fixture
+    # must create them for v1 to run. SCHEMA no longer does.
+    conn.execute(
+        "CREATE TABLE annotations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL)"
+    )
+    conn.execute(
+        "CREATE TABLE statement_annotations ("
+        "statement_id TEXT NOT NULL, annotation_id TEXT NOT NULL, "
+        "PRIMARY KEY (statement_id, annotation_id))"
+    )
+    conn.execute(
+        "CREATE TABLE entity_annotations ("
+        "entity_id TEXT NOT NULL, annotation_id TEXT NOT NULL, "
+        "PRIMARY KEY (entity_id, annotation_id))"
     )
     conn.commit()
 

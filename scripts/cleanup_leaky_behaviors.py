@@ -5,8 +5,8 @@ Walks the substrate, flags behaviors whose text leaks implementation
 detail (service/exception class names, internal verbs, SQL fragments),
 and hands each suspect to a local Ollama model. The agent has the full
 read+write MCP surface and may compose any cleanup it deems necessary —
-rewrite, mention/link delta, split into atomic behaviors, annotation
-extraction, delete, merge — by calling write tools whose effects are
+rewrite, mention/link delta, split into atomic behaviors, delete,
+merge — by calling write tools whose effects are
 queued as a plan. The operator reviews the planned actions per suspect
 and approves, skips, or types feedback to revise.
 
@@ -100,14 +100,6 @@ def _format_action(idx: int, action: dict[str, Any]) -> str:
         body_lines.append(
             f"     name: {args.get('name')}  desc: {_short(args.get('description', ''), 60)}"
         )
-    elif name == "upsert_annotation":
-        body_lines.append(
-            f"     kind: {args.get('kind')}  text: {_short(args.get('text', ''), 80)}"
-        )
-        if args.get("behavior_ids"):
-            body_lines.append(f"     attached behaviors: {args['behavior_ids']}")
-        if args.get("entity_ids"):
-            body_lines.append(f"     attached entities: {args['entity_ids']}")
     else:
         body_lines.append(f"     args: {_short(args, 100)}")
     return "\n".join([head, *body_lines])

@@ -151,16 +151,7 @@ Pydantic schema is derived from the function signature.
 | `list_entity_link_types()` | `GET /list-entity-link-types` | Snapshot of `link_type` values currently materialised on at least one `entity_links` row. Separate vocabulary from behavior-link types. |
 | `find_duplicates(threshold=0.92, limit=50)` | `POST /find-duplicates` | Audit the substrate for near-duplicate behavior pairs by walking every behavior's vector and reporting pairs whose cosine similarity is at or above `threshold`. Sorted descending, capped at `limit`. Default 0.92 surfaces high-confidence duplicates; drop to 0.85 for "related, possibly worth linking instead". Each pair: `{a_id, a_text, b_id, b_text, score}`. |
 | `grep_behaviors(query, case_sensitive=False, entity_id?, name?, limit=50, offset=0)` | `POST /grep-behaviors` | Literal substring search over behavior `text`. Complements `search_behaviors` (vector) with deterministic case-insensitive substring matching for exact phrases, identifiers, or quoted strings. Glob/regex characters in `query` are matched literally. Optional entity filter via `entity_id` or `name`. Returns `{total, behaviors: [{id, text}]}`. |
-| `grep_annotations(query, case_sensitive=False, behavior_id?, entity_id?, kind?, limit=50, offset=0)` | `POST /grep-annotations` | Literal substring search over annotation `text`. Filters compose: `behavior_id`/`entity_id` (annotations attached to that record), `kind`. Returns `{total, annotations: [{id, kind, text}]}`. |
 | `discover_facts(texts, exists_threshold=0.85, near_threshold=0.6, matches_per_text=5)` | `POST /discover-facts` | Bulk pre-write classifier: for each candidate text, embeds it, queries the index, and returns `{text, status, matches}` where `status` is `"exists"` (top match ≥ `exists_threshold`), `"near"` (≥ `near_threshold`), or `"new"`. Compresses the per-fact discovery loop into a single call. Match `text` is truncated to a 100-char snippet. |
-| `upsert_annotation(kind, text, behavior_ids?, entity_ids?, mentions?, id?, strict_mentions?)` | `POST /upsert-annotation` | Create or update an annotation — a typed proposition (permission/invariant/property/rationale/example/...) attached to one or more behaviors and/or entities. `kind` vocabulary is open and flat. `behavior_ids` and `entity_ids` are wholesale-replaced on update. Annotations have their own embedding (separate `mycelium-annotations.vec` index) and survive deletion of any record they were attached to. Returns `{annotation_id, near_duplicates}` against the annotations index. |
-| `attach_annotation(annotation_id, behavior_id?, entity_id?)` | `POST /attach-annotation` | Attach an existing annotation to one more behavior OR entity. Pass exactly one. Idempotent. |
-| `detach_annotation(annotation_id, behavior_id?, entity_id?)` | `POST /detach-annotation` | Detach an annotation from one record. The annotation itself survives — only the join is severed. Use `delete_annotation` for permanent removal. Idempotent. |
-| `get_annotation(id)` | `POST /get-annotation` | Fetch one annotation hydrated with mentions, attached behaviors, attached entities. |
-| `list_annotations(behavior_id?, entity_id?, kind?, limit=50, offset=0)` | `POST /list-annotations` | Page through annotations. Filters: `behavior_id`/`entity_id` (attached records), `kind`. Filters compose with AND. |
-| `search_annotations(query, limit=10, min_score=-1.0, kind?, mentions=[])` | `POST /search-annotations` | Vector search the annotations index. `kind` filter restricts to one annotation kind; `mentions` filter applies AND-semantics across named entities (same as `search_behaviors`). |
-| `delete_annotation(id)` | `POST /delete-annotation` | Permanently delete one annotation. Cascade-clears every behavior/entity attachment and mention; vector slot freed. Returns counts. |
-| `list_annotation_kinds()` | `GET /list-annotation-kinds` | Snapshot of `kind` values in use, sorted alphabetically. Vocabulary is open. |
 
 ### HTTP-only endpoints (not exposed via MCP)
 
@@ -190,19 +181,12 @@ behavior_links(from_behavior_id, to_behavior_id, link_type, when_behavior_id?)
                                                           -- unique key is (from, to, type, COALESCE(when, ''))
 entity_links(from_entity_id, to_entity_id, link_type)     -- structural entity↔entity edges
                                                           -- (parent/subsidiary, kind-of, etc.)
-annotations(id, kind, text)                               -- typed propositions attached
-                                                          -- to behaviors and/or entities
-behavior_annotations(behavior_id, annotation_id)          -- M:N attachment to behaviors
-entity_annotations(entity_id, annotation_id)              -- M:N attachment to entities
-annotation_mentions(annotation_id, name_id)               -- mentions follow names, like behaviors
 ```
 
-Annotations carry the same `(text, embedding, mentions)` shape as a
-behavior but represent propositions that *hold* (permissions, invariants,
-properties, rationale, examples) rather than events that *fire*. They
-multi-attach: one rule that governs many behaviors is authored once.
-Their vector index is a separate file (`mycelium-annotations.vec`) so
-`search_behaviors` and `search_annotations` query independent lanes.
+Propositions that *hold* (permissions, invariants, properties) rather
+than events that *fire* are modeled as ordinary records with a rule- or
+property-flavored `kind`, linked to what they govern. (A separate
+annotation subsystem once covered this; it was deprecated and removed.)
 
 ## Manual smoke test
 

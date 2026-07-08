@@ -184,45 +184,7 @@ def test_link_and_unlink_events(tmp_path):
     assert link_events[1]["before_json"]["link_type"] == "triggers"
 
 
-# --- attachments -----------------------------------------------------------
-
-
-def test_attach_and_detach_events(tmp_path):
-    conn = fresh_with_history(tmp_path)
-    store.set_actor("alice")
-    bid = store.create_statement(conn, "event", "A")
-    aid = store.create_annotation(conn, "note", "n")
-    store.attach_annotations_to_statements(conn, [(bid, aid)])
-    store.detach_annotations_from_statements(conn, [(bid, aid)])
-
-    events = _events(conn, target_kind="statement_annotation")
-    assert [e["op"] for e in events] == ["attach", "detach"]
-    assert events[0]["after_json"]["annotation_id"] == aid
-    assert events[1]["before_json"]["statement_id"] == bid
-
-
-def test_replace_annotation_attachments_emits_detach_then_attach(tmp_path):
-    conn = fresh_with_history(tmp_path)
-    store.set_actor("alice")
-    b1 = store.create_statement(conn, "event", "A")
-    b2 = store.create_statement(conn, "event", "B")
-    aid = store.create_annotation(conn, "note", "n")
-    store.attach_annotations_to_statements(conn, [(b1, aid)])
-    # Now replace [b1] with [b2]: should see detach b1, attach b2.
-    store.replace_annotation_attachments(conn, aid, [b2])
-
-    events = _events(conn, target_kind="statement_annotation")
-    ops_and_pairs = [
-        (e["op"], (e["before_json"] or e["after_json"])["statement_id"]) for e in events
-    ]
-    assert ops_and_pairs == [
-        ("attach", b1),
-        ("detach", b1),
-        ("attach", b2),
-    ]
-
-
-# --- entity links / entity annotations ------------------------------------
+# --- entity links -----------------------------------------------------------
 
 
 def test_entity_link_events(tmp_path):

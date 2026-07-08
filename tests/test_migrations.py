@@ -51,6 +51,10 @@ def test_legacy_db_runs_v1():
         "id TEXT PRIMARY KEY, text TEXT NOT NULL UNIQUE, "
         "entity_id TEXT NOT NULL REFERENCES entities(id))"
     )
+    # The annotation tables below mirror the real pre-audit shape: legacy
+    # DBs carry them (the subsystem has since been removed from live code),
+    # and the byte-frozen v1 migration probes them via _ensure_column, so
+    # the fixture must keep them for v1 to run.
     conn.execute(
         "CREATE TABLE annotations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, text TEXT NOT NULL)"
     )

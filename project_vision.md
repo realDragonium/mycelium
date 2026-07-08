@@ -53,7 +53,7 @@ The asymmetry is intentional: writes are careful, reads are fast.
 
 ## Data model
 
-The substrate has three record kinds — **Entity**, **Statement**, **Annotation** — plus **Name** for aliases. Links are typed where useful and untyped where they only need to express association.
+The substrate has three record kinds — **Entity**, **Statement**, **Annotation** (since removed — deprecated) — plus **Name** for aliases. Links are typed where useful and untyped where they only need to express association.
 
 **Records**
 
@@ -62,7 +62,7 @@ The substrate has three record kinds — **Entity**, **Statement**, **Annotation
   - **`event`** — instantaneous occurrence. *"A step gets completed."* Composes via outgoing `triggers` (other events), `produces` (states it brings into being), `ends` (states it terminates).
   - **`state`** — condition that holds over a duration. *"Participant status is Shared."* Composes via `enables` (capabilities), `requires` (other states).
   - **`capability`** — modal claim about what is possible. *"Company user can view full report."* Composes via `requires` (gating states), `varies-by` (states that change its content), `part` (sub-capabilities).
-- **Annotation** — text + `kind` discriminator + attachments to one or more statements or entities + mentions of entities. Descriptive metadata that doesn't fit the truth-claim shape of statements: definitions, defaults, calculation rules, examples, notes. Starting `kind` vocabulary: `definition`, `default`, `example`, `note`. Vocabulary grows as needed.
+- **Annotation** (removed — deprecated) — text + `kind` discriminator + attachments to one or more statements or entities + mentions of entities. Descriptive metadata that doesn't fit the truth-claim shape of statements: definitions, defaults, calculation rules, examples, notes. Starting `kind` vocabulary: `definition`, `default`, `example`, `note`. Vocabulary grows as needed.
 - **Name** — text + the entity it names. For aliases and varied phrasings; gets its own embedding so AI consumers can find entities through any term.
 
 Both Statement and Annotation use a `kind` discriminator, but they discriminate on different axes: `Statement.kind` is about *shape of claim* (when is this true?), `Annotation.kind` is about *purpose of note* (why is this here?). Same plumbing, different axis.
