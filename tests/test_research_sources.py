@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import json as _json
 import subprocess
 from pathlib import Path
 
 import pytest
+import pytest as _pytest
 
 from mycelium.research.sources import (
     Source,
@@ -246,10 +248,6 @@ def test_fetch_timeout_does_not_chain_token_bearing_exception(monkeypatch):
 # --------------------------------------------------------------------------- #
 # Input validation (arg-injection / PAT-exfiltration hardening)
 # --------------------------------------------------------------------------- #
-
-import json as _json
-
-import pytest as _pytest
 
 
 @_pytest.mark.parametrize(

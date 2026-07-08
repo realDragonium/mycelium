@@ -32,7 +32,6 @@ from . import (
     plurals,
     store,
     survey,
-    tracing,
     vector,
     when_expression,
 )
@@ -2689,19 +2688,23 @@ def _split_edges(
     `add_entity_links`) and on unknown id prefixes."""
     stmt_edges: list[tuple[str, str, str, dict[str, Any] | None]] = []
     es_edges: list[tuple[str, str, str, str, dict[str, Any] | None]] = []
-    for l in links:
-        fk = _id_kind(l["from_id"])
-        tk = _id_kind(l["to_id"])
-        when = l.get("when")
+    for link in links:
+        fk = _id_kind(link["from_id"])
+        tk = _id_kind(link["to_id"])
+        when = link.get("when")
         if fk == "statement" and tk == "statement":
-            stmt_edges.append((l["from_id"], l["to_id"], l["link_type"], when))
+            stmt_edges.append((link["from_id"], link["to_id"], link["link_type"], when))
         elif fk == "entity" and tk == "statement":
-            es_edges.append((l["from_id"], l["to_id"], "es", l["link_type"], when))
+            es_edges.append(
+                (link["from_id"], link["to_id"], "es", link["link_type"], when)
+            )
         elif fk == "statement" and tk == "entity":
-            es_edges.append((l["to_id"], l["from_id"], "se", l["link_type"], when))
+            es_edges.append(
+                (link["to_id"], link["from_id"], "se", link["link_type"], when)
+            )
         else:  # entity → entity
             raise ValueError(
-                f"entity↔entity edge {l['from_id']!r} → {l['to_id']!r} is not "
+                f"entity↔entity edge {link['from_id']!r} → {link['to_id']!r} is not "
                 "supported by add_links/remove_links; use add_entity_links instead"
             )
     return stmt_edges, es_edges
@@ -2743,15 +2746,15 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     # Validate every referenced id exists across both kinds.
     needed_statements: set[str] = set()
     needed_entities: set[str] = set()
-    for l in links:
-        for endpoint in (l["from_id"], l["to_id"]):
+    for link in links:
+        for endpoint in (link["from_id"], link["to_id"]):
             if _id_kind(endpoint) == "statement":
                 needed_statements.add(endpoint)
             else:
                 needed_entities.add(endpoint)
-        if "when" in l:
-            when_expression.validate(l["when"])
-            needed_statements.update(when_expression.leaves(l["when"]))
+        if "when" in link:
+            when_expression.validate(link["when"])
+            needed_statements.update(when_expression.leaves(link["when"]))
     statement_rows: dict[str, sqlite3.Row] = {}
     for sid in needed_statements:
         row = store.get_statement(_conn, sid)
@@ -2763,16 +2766,19 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
             raise ValueError(f"entity {eid!r} does not exist")
 
     flip_errors: list[str] = []
-    for i, l in enumerate(links):
-        if _id_kind(l["from_id"]) != "statement" or _id_kind(l["to_id"]) != "statement":
+    for i, link in enumerate(links):
+        if (
+            _id_kind(link["from_id"]) != "statement"
+            or _id_kind(link["to_id"]) != "statement"
+        ):
             continue
-        from_kind = statement_rows[l["from_id"]]["kind"]
-        to_kind = statement_rows[l["to_id"]]["kind"]
+        from_kind = statement_rows[link["from_id"]]["kind"]
+        to_kind = statement_rows[link["to_id"]]["kind"]
         err = _format_flip_error(
             position=f"links[{i}]",
-            from_id=l["from_id"],
-            to_id=l["to_id"],
-            link_type=l["link_type"],
+            from_id=link["from_id"],
+            to_id=link["to_id"],
+            link_type=link["link_type"],
             from_kind=from_kind,
             to_kind=to_kind,
         )
@@ -3289,7 +3295,10 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     for eid in needed:
         if store.get_entity_by_id(_conn, eid) is None:
             raise ValueError(f"entity {eid!r} does not exist")
-    edges = [(l["from_entity_id"], l["to_entity_id"], l["link_type"]) for l in links]
+    edges = [
+        (link["from_entity_id"], link["to_entity_id"], link["link_type"])
+        for link in links
+    ]
     inserted = store.insert_entity_links(_conn, edges)
     if inserted:
         layout_baker.schedule_rebake()
@@ -3310,7 +3319,10 @@ def remove_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     assert _conn is not None
     if not links:
         return {"removed": 0}
-    edges = [(l["from_entity_id"], l["to_entity_id"], l["link_type"]) for l in links]
+    edges = [
+        (link["from_entity_id"], link["to_entity_id"], link["link_type"])
+        for link in links
+    ]
     removed = store.delete_entity_links(_conn, edges)
     if removed:
         layout_baker.schedule_rebake()
@@ -3885,7 +3897,6 @@ def grep_statements(
         limit=10_000 if (match_aliased_mentions and entity_id is None) else limit,
         offset=0 if (match_aliased_mentions and entity_id is None) else offset,
     )
-    text_ids = {r["id"]: r for r in text_rows}
 
     if not match_aliased_mentions or entity_id is not None:
         total = store.count_grep_statements(

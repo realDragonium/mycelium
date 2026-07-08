@@ -8,8 +8,6 @@ invite-only default are the high-value cases.
 
 import sqlite3
 
-import pytest
-
 from mycelium import auth, auth_store, oidc
 
 

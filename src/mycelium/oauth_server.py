@@ -356,7 +356,6 @@ async def authorize(
         # The authorize URL with its full query string IS the post-login
         # next URL. We can't put it in the session because the user
         # might have multiple tabs; instead, encode it directly.
-        full_url = str(request.url)
         # /auth/login reads ?next= from query, not session — adjust
         # the existing login route to honor it if needed.
         return RedirectResponse(

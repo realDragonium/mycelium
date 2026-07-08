@@ -13,7 +13,6 @@ import types
 import pytest
 
 from mycelium.ask import Answered, AskConfig, NeedsClarification, run_ask
-from mycelium.ask.schema import Answered as AnsweredModel
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 
 # --------------------------------------------------------------------------- #
@@ -634,7 +633,9 @@ def test_substrate_retries_once_then_raises():
     flaky.__name__ = "search_flaky"
     flaky._mycelium_required_role = "reader"
 
-    always_fail = lambda **kw: (_ for _ in ()).throw(RuntimeError("down"))
+    def always_fail(**kw):
+        return (_ for _ in ()).throw(RuntimeError("down"))
+
     always_fail.__name__ = "search_dead"
     always_fail._mycelium_required_role = "reader"
 

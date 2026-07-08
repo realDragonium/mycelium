@@ -20,7 +20,6 @@ from mycelium.ingest import (
     DraftCreated,
     IngestConfig,
     NothingToIngest,
-    ProposedOp,
     run_ingest,
 )
 from mycelium.ingest.tools import EMIT_TOOL, build_tools, parse_emit_input

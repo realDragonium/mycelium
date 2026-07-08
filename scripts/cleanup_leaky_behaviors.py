@@ -244,7 +244,7 @@ def main() -> None:
 
             if status == "needs-input":
                 question = decision.get("question", "(no question)")
-                print(f"\n  Model needs clarification:")
+                print("\n  Model needs clarification:")
                 print(f"  Q: {question}")
                 answer = input("  Your answer (blank to skip suspect): ").strip()
                 if not answer:
@@ -281,7 +281,7 @@ def main() -> None:
                 # execute (e.g. "Deleted X" without calling
                 # delete_behavior). Send it back with a corrective
                 # prompt instead of silently skipping.
-                print(f"  → agent reported done but recorded no actions.")
+                print("  → agent reported done but recorded no actions.")
                 print(f"     summary: {summary}")
                 logger.log("done_with_empty_plan", behavior_id=bid, summary=summary)
                 revisions += 1

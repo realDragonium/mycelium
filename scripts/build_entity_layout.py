@@ -319,7 +319,7 @@ def stress_majorization(
         angle = i * golden
         centres.append((cursor_r * np.cos(angle), cursor_r * np.sin(angle)))
 
-    for members, (cx, cy) in zip(comps, centres):
+    for members, (cx, cy) in zip(comps, centres, strict=False):
         idx = np.array(members, dtype=np.int64)
         pos[idx, 0] += cx
         pos[idx, 1] += cy
@@ -355,7 +355,6 @@ def relax_overlaps(
     fine because the pair has a small deficit by definition (the SM
     already placed unrelated leaves apart).
     """
-    n = pos.shape[0]
     mass = 1.0 + np.asarray(deg, dtype=np.float64)
     share_i = mass[None, :] / (
         mass[:, None] + mass[None, :]
@@ -419,7 +418,7 @@ def force_atlas_linlog(
     speed = 1.0
     speed_eff_max = 10.0
 
-    for it in range(iters):
+    for _it in range(iters):
         # ---- Repulsion (all-pairs, vectorised). O(N²).
         dx = pos[:, 0:1] - pos[:, 0:1].T
         dy = pos[:, 1:2] - pos[:, 1:2].T

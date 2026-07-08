@@ -21,7 +21,11 @@ status is derived from which timestamp is set:
 
 from __future__ import annotations
 
+import json as _json
 import sqlite3
+import uuid as _uuid
+from datetime import datetime as _dt
+from datetime import timezone as _tz
 from pathlib import Path
 
 DRAFTS_SCHEMA = """
@@ -89,11 +93,6 @@ def status_for(row: sqlite3.Row | dict) -> str:
 
 
 # --- helpers used by the @tool redirect path + HTTP API ------------------
-
-import json as _json
-import uuid as _uuid
-from datetime import datetime as _dt
-from datetime import timezone as _tz
 
 
 def _now() -> str:

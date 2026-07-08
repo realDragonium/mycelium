@@ -25,7 +25,8 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import create_model
+from pydantic import BaseModel, create_model
+from pydantic import Field as PydField
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -753,9 +754,6 @@ def get_history(
 # is off. The synthetic principal is allowed to mint tokens too — handy
 # in single-user local mode for bootstrapping an MCP client without ever
 # enabling auth.
-
-from pydantic import BaseModel  # noqa: E402  (after route registration block)
-from pydantic import Field as PydField
 
 
 def _require_principal(request: Request) -> auth.Principal:
@@ -1581,7 +1579,7 @@ class UpdateUserBody(BaseModel):
 
 @app.patch("/api/admin/users/{user_id}")
 def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[str, Any]:
-    admin = _require_admin(request)
+    _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
     row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()

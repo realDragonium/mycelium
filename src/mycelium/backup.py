@@ -30,7 +30,7 @@ import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, TextIO
+from typing import Any, TextIO
 
 from . import migrations, store
 

@@ -137,4 +137,10 @@ class Index:
                 k -= 1
         else:
             return []
-        return list(zip((int(x) for x in labels[0]), (float(x) for x in distances[0])))
+        return list(
+            zip(
+                (int(x) for x in labels[0]),
+                (float(x) for x in distances[0]),
+                strict=False,
+            )
+        )

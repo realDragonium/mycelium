@@ -16,8 +16,6 @@ from __future__ import annotations
 import json
 import types
 
-import pytest
-
 from mycelium.ask.substrate import SubstrateError, ToolSpec
 from mycelium.ingest.tools import EMIT_TOOL
 from mycelium.research import NothingFound, ResearchConfig, ResearchDraftCreated

@@ -428,7 +428,9 @@ def test_add_and_remove_links_bulk(tmp_path, monkeypatch):
         hits = client.post(
             "/search-statements", json={"query": "node a", "min_score": 0.99}
         ).json()
-        outgoing = sorted((l["to_id"], l["link_type"]) for l in hits[0]["links"])
+        outgoing = sorted(
+            (link["to_id"], link["link_type"]) for link in hits[0]["links"]
+        )
         assert outgoing == sorted([(b, "part"), (c, "triggers")])
 
         # remove_links: delete one edge, others stay
@@ -498,7 +500,7 @@ def test_upsert_statement_with_incoming_links(tmp_path, monkeypatch):
                 },
             ).json()
             parent = next(h for h in hits if h["id"] == parent_id)
-            assert any(l["to_id"] == child for l in parent["links"])
+            assert any(link["to_id"] == child for link in parent["links"])
 
         # Calling again with the same incoming_links is idempotent — no extra edges
         client.post(
@@ -527,11 +529,12 @@ def test_upsert_statement_with_incoming_links(tmp_path, monkeypatch):
         p1_hit = next(h for h in hits if h["id"] == p1)
         p2_hit = next(h for h in hits if h["id"] == p2)
         assert any(
-            l["to_id"] == child and l["link_type"] == "part" for l in p1_hit["links"]
+            link["to_id"] == child and link["link_type"] == "part"
+            for link in p1_hit["links"]
         )
         assert any(
-            l["to_id"] == child and l["link_type"] == "triggers"
-            for l in p2_hit["links"]
+            link["to_id"] == child and link["link_type"] == "triggers"
+            for link in p2_hit["links"]
         )
 
         # Validation: unknown from_id → 400, no mutation
@@ -668,7 +671,7 @@ def test_entity_links_lifecycle(tmp_path, monkeypatch):
 
         # get_entity surfaces both directions
         parent_body = client.post("/get-entity", json={"id": parent}).json()
-        assert sorted(l["to_entity_id"] for l in parent_body["links"]) == sorted(
+        assert sorted(link["to_entity_id"] for link in parent_body["links"]) == sorted(
             [sub_a, sub_b]
         )
         sub_a_body = client.post("/get-entity", json={"id": sub_a}).json()
@@ -725,7 +728,7 @@ def test_entity_links_lifecycle(tmp_path, monkeypatch):
         ).json()
         assert r == {"removed": 1}
         parent_body = client.post("/get-entity", json={"id": parent}).json()
-        assert [l["to_entity_id"] for l in parent_body["links"]] == [sub_b]
+        assert [link["to_entity_id"] for link in parent_body["links"]] == [sub_b]
 
 
 def test_merge_entities_rewrites_entity_links(tmp_path, monkeypatch):
@@ -783,7 +786,8 @@ def test_merge_entities_rewrites_entity_links(tmp_path, monkeypatch):
 
         b_body = client.post("/get-entity", json={"id": b}).json()
         incoming_pairs = sorted(
-            (l["from_entity_id"], l["link_type"]) for l in b_body["incoming_links"]
+            (link["from_entity_id"], link["link_type"])
+            for link in b_body["incoming_links"]
         )
         assert incoming_pairs == sorted([(parent, "contains"), (sibling, "partner-of")])
 
@@ -1076,7 +1080,7 @@ def test_search_mentions_filter(tmp_path, monkeypatch):
             "/upsert-statement",
             json={"kind": "event", "text": "the dashboard opens via sso", "links": []},
         ).json()["statement_id"]
-        b_neither = client.post(
+        client.post(
             "/upsert-statement",
             json={"kind": "event", "text": "unrelated topic", "links": []},
         ).json()["statement_id"]
@@ -1310,13 +1314,13 @@ def test_merge_statements_unions_links_and_drops_self_loops(tmp_path, monkeypatc
         assert {m["name"] for m in body["mentions"]} == {"dashboard"}
 
         # B's outgoing: shared_child (part), a_only_child (part). The "triggers" self-loop is gone.
-        out = sorted((l["to_id"], l["link_type"]) for l in body["links"])
+        out = sorted((link["to_id"], link["link_type"]) for link in body["links"])
         assert out == sorted([(shared_child, "part"), (a_only_child, "part")])
-        assert not any(l["to_id"] == b for l in body["links"])  # no self-loops
+        assert not any(link["to_id"] == b for link in body["links"])  # no self-loops
 
         # B's incoming: parent_of_a (part), parent_of_b (part)
         incoming = sorted(
-            (l["from_id"], l["link_type"]) for l in body["incoming_links"]
+            (link["from_id"], link["link_type"]) for link in body["incoming_links"]
         )
         assert incoming == sorted([(parent_of_a, "part"), (parent_of_b, "part")])
 
@@ -1737,8 +1741,8 @@ def test_when_expression_threads_through_link_lifecycle(tmp_path, monkeypatch):
         # get_statement surfaces both edges, when only on the conditional one
         body = client.post("/get-statements", json={"ids": [a]}).json()["statements"][0]
         assert len(body["links"]) == 2
-        conditional = next(l for l in body["links"] if "when" in l)
-        unconditional = next(l for l in body["links"] if "when" not in l)
+        conditional = next(link for link in body["links"] if "when" in link)
+        unconditional = next(link for link in body["links"] if "when" not in link)
         assert conditional["when"] == {"statement_id": c}
         assert conditional["link_type"] == "triggers"
         assert unconditional["link_type"] == "triggers"
@@ -1874,7 +1878,7 @@ def test_upsert_statements_batch_with_when_sibling_ref(tmp_path, monkeypatch):
         a, b, c = ids
 
         # Add the conditional edge using sibling indices on both endpoints AND when.
-        r2 = client.post(
+        client.post(
             "/upsert-statements",
             json={
                 "statements": [
@@ -1904,7 +1908,9 @@ def test_upsert_statements_batch_with_when_sibling_ref(tmp_path, monkeypatch):
             },
         )
         body = client.post("/get-statements", json={"ids": [a]}).json()["statements"][0]
-        triggers_link = next(l for l in body["links"] if l["link_type"] == "triggers")
+        triggers_link = next(
+            link for link in body["links"] if link["link_type"] == "triggers"
+        )
         assert triggers_link["when"] == {"statement_id": c}
 
 
@@ -2048,7 +2054,7 @@ def test_upsert_statements_batch_with_sibling_refs(tmp_path, monkeypatch):
         body = client.post("/get-statements", json={"ids": [umbrella]}).json()[
             "statements"
         ][0]
-        outgoing = sorted((l["to_id"], l["link_type"]) for l in body["links"])
+        outgoing = sorted((link["to_id"], link["link_type"]) for link in body["links"])
         assert outgoing == sorted(
             [(c1, "contains"), (c2, "contains"), (c3, "contains")]
         )
