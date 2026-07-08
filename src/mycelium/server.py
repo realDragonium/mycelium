@@ -27,6 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from . import embed, layout_baker, link_rules, phrasing, plurals, store, survey, tracing, vector, when_expression
 from .tracing import trace_span
 
+logger = logging.getLogger(__name__)
 
 # --- Profiling ---------------------------------------------------------------
 # Toggled with `MYCELIUM_PROFILE=1` (off by default). When on, every tool
@@ -580,7 +581,7 @@ def init(data_dir: Path) -> None:
     global _conn, _auth_conn, _drafts_conn, _index, _index_path
     global _ann_index, _ann_index_path, _name_index, _name_index_path, _data_dir
 
-    from . import auth_store, drafts_store
+    from . import auth_store, drafts_store, research_store
 
     _data_dir = data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -597,6 +598,12 @@ def init(data_dir: Path) -> None:
 
     _drafts_conn = drafts_store.connect(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_conn)
+    research_store.migrate(_drafts_conn)
+    orphaned = research_store.mark_orphaned(_drafts_conn)
+    if orphaned:
+        logger.warning(
+            "marked %d research run(s) failed: orphaned by restart", orphaned
+        )
 
     _index_path = data_dir / "mycelium.vec"
     _index = vector.Index()
@@ -1427,6 +1434,117 @@ def ingest(text: str) -> dict[str, Any]:
     if config.trace_log_path is None and _data_dir is not None:
         config = replace(config, trace_log_path=str(_data_dir / "ingest_trace.jsonl"))
     return run_ingest(text, config=config).model_dump()
+
+
+def _resolve_research_source(name: str | None) -> str:
+    from .research import sources as research_sources
+
+    try:
+        configured = research_sources.load_sources()
+    except research_sources.SourceError as exc:
+        raise ValueError(str(exc)) from exc
+
+    if name is not None:
+        if name not in configured:
+            raise ValueError(f"unknown source '{name}'; configured: {sorted(configured)}")
+        return name
+
+    if not configured:
+        raise ValueError("no research sources configured (set MYCELIUM_SOURCES)")
+    if len(configured) == 1:
+        return next(iter(configured))
+    raise ValueError(
+        "source must be specified when multiple research sources are configured: "
+        f"{sorted(configured)}"
+    )
+
+
+@tool(role="drafter")
+def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
+    """Start a background research run: explore a configured source codebase
+    on `topic` and, if anything substantiated is found, emit a reviewable
+    DRAFT (never a live write).
+
+    Returns immediately with the serialized run row (its `status` will be
+    "running"); poll `get_research_run(run_id)` for the outcome. `source` may
+    be omitted when exactly one source is configured. Raises when the
+    active-run cap is reached (MYCELIUM_RESEARCH_MAX_ACTIVE, default 2), when
+    `source` is unknown, or when it is omitted with several sources
+    configured. Returns {run row: id, topic, source, created_at, created_by,
+    started_at, finished_at, outcome, draft_id, error, trace_ref, status}."""
+    assert _drafts_conn is not None and _data_dir is not None
+    from . import auth as _auth, research_runs, research_store
+
+    source_name = _resolve_research_source(source)
+    principal = _auth.current_principal.get()
+    created_by = principal.id if principal is not None else None
+    run_id = research_runs.start_run(
+        topic=topic,
+        source=source_name,
+        created_by=created_by,
+        data_dir=_data_dir,
+        conn=_drafts_conn,
+    )
+    row = research_store.get_run(_drafts_conn, run_id)
+    assert row is not None
+    return research_store.serialize_run(row)
+
+
+@tool
+def list_research_runs() -> dict[str, Any]:
+    """List research runs, newest first, each with a derived `status`
+    (queued/running/draft_created/nothing_found/failed).
+
+    Returns {"runs": [run rows]}."""
+    assert _drafts_conn is not None
+    from . import research_store
+
+    return {
+        "runs": [
+            research_store.serialize_run(row)
+            for row in research_store.list_runs(_drafts_conn)
+        ]
+    }
+
+
+@tool
+def get_research_run(run_id: str) -> dict[str, Any]:
+    """Fetch one research run by id, including outcome, draft_id (when a
+    draft was created), error, and trace_ref.
+
+    Returns the serialized run row. Raises for an unknown run_id."""
+    assert _drafts_conn is not None
+    from . import research_store
+
+    row = research_store.get_run(_drafts_conn, run_id)
+    if row is None:
+        raise ValueError(f"research run not found: {run_id}")
+    return research_store.serialize_run(row)
+
+
+@tool
+def list_research_sources() -> dict[str, Any]:
+    """List the configured research sources a run can target (names and repo
+    coordinates only - never credentials).
+
+    Returns {"sources": [{name, owner, repo, ref}]}."""
+    from .research import sources
+
+    try:
+        configured = sources.load_sources()
+    except sources.SourceError as exc:
+        raise ValueError(str(exc)) from exc
+    return {
+        "sources": [
+            {
+                "name": source.name,
+                "owner": source.owner,
+                "repo": source.repo,
+                "ref": source.ref,
+            }
+            for source in configured.values()
+        ]
+    }
 
 
 @tool

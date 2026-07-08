@@ -16,6 +16,10 @@
 //   POST /grep-statements               — literal Find (no score; alias-aware)
 //   POST /ask                           — agentic answer (answered | needs_clarification)
 //   POST /ingest                        — raw text → draft (writer role; long-running)
+//   POST /start-research                — research topic → async draft run
+//   GET  /list-research-runs            — newest-first research run list
+//   POST /get-research-run              — one research run by id
+//   GET  /list-research-sources         — configured research sources
 //   GET/POST/PATCH/DELETE /api/drafts/* — draft spine
 //   GET  /api/knowledge-gaps            — reported gaps (Coverage)
 
@@ -299,6 +303,12 @@
     // returns { outcome:'draft_created', draft_id, ops, flagged, ... } or
     // { outcome:'nothing_to_ingest', reason }. Caller routes to the draft.
     ingest: (text) => post('/ingest', { text }),
+    research: {
+      start: (topic, source) => post('/start-research', source ? { topic, source } : { topic }),
+      list: () => get('/list-research-runs').then(r => (r && r.runs) || []),
+      get: (id) => post('/get-research-run', { run_id: id }),
+      sources: () => get('/list-research-sources').then(r => (r && r.sources) || []),
+    },
     // Raw draft REST — drafts.jsx owns the op-shape adaptation/rendering.
     drafts: {
       list: (status) => get('/api/drafts?status=' + encodeURIComponent(status || 'all')),
