@@ -167,20 +167,46 @@ _SUBMIT_DESC_QUICK = (
     "skip it). Still fill every required field honestly."
 )
 
+#: Quick-mode text for the `adjacency_note` *field*. The floor version (baked
+#: into `_SUBMIT_SCHEMA`) says the loop won't let you conclude without it — false
+#: in quick mode, and left uncorrected it would push the model to re-search
+#: anyway, defeating the point. So the field description is depth-aware too.
+_ADJACENCY_DESC_QUICK = (
+    "What a concept-seeded re-search surfaced (statements with no edge pointing "
+    "at them, reachable via mentions / shared entity / embedding proximity) — or "
+    "'nothing new'. OPTIONAL in quick mode: if you skipped the re-search, put "
+    "'skipped — quick mode' here. Still a required field, so never leave it empty."
+)
+
+
+def _submit_schema(*, enforce_floor: bool) -> dict[str, Any]:
+    """The `submit_answer` input schema, adjacency_note description tuned to the
+    depth. Floor-on returns the module constant unchanged (so `standard` is
+    byte-for-byte identical); floor-off swaps only that one field's description."""
+    if enforce_floor:
+        return _SUBMIT_SCHEMA
+    props = dict(_SUBMIT_SCHEMA["properties"])
+    props["adjacency_note"] = {
+        **props["adjacency_note"],
+        "description": _ADJACENCY_DESC_QUICK,
+    }
+    return {**_SUBMIT_SCHEMA, "properties": props}
+
 
 def terminal_tool_defs(*, enforce_floor: bool = True) -> list[dict]:
     """The two terminal tools. `strict` guarantees schema-valid inputs.
 
-    `enforce_floor` only tunes the `submit_answer` *description* (the structural
-    gate lives in the loop): off, it drops the adjacency demand so a quick-mode
-    model isn't told to do work the loop won't require.
+    `enforce_floor` tunes the `submit_answer` description AND its adjacency_note
+    field text (the structural gate itself lives in the loop): off, both drop the
+    adjacency demand so a quick-mode model isn't told to do work the loop won't
+    require.
     """
     return [
         {
             "name": SUBMIT_TOOL,
             "description": _SUBMIT_DESC_FLOOR if enforce_floor else _SUBMIT_DESC_QUICK,
             "strict": True,
-            "input_schema": _SUBMIT_SCHEMA,
+            "input_schema": _submit_schema(enforce_floor=enforce_floor),
         },
         {
             "name": CLARIFY_TOOL,

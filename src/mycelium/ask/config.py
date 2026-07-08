@@ -117,12 +117,6 @@ class AskConfig:
         )
 
 
-#: The caller-facing depth enum. `standard` is the current, thorough behaviour;
-#: `quick` is the latency-boxed fast path (floor off, tighter caps). Kept as a
-#: pair so the `ask` MCP tool exposes a simple two-value choice.
-DEPTHS = ("standard", "quick")
-
-
 def for_depth(config: AskConfig, depth: str) -> AskConfig:
     """Return `config` adjusted for the requested `depth`. Pure.
 

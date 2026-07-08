@@ -265,6 +265,29 @@ def test_quick_depth_accepts_first_submit_without_the_floor():
     assert ("search_statements", {"query": "retry"}) not in substrate.calls
 
 
+def test_quick_depth_tool_defs_drop_the_adjacency_requirement():
+    """The submit tool the model sees in quick mode must not claim the adjacency
+    re-search is required/gating — otherwise the model does the expensive work
+    anyway and the latency win evaporates. Floor-on text is left untouched."""
+    from mycelium.ask.tools import terminal_tool_defs
+
+    floor = next(t for t in terminal_tool_defs(enforce_floor=True) if t["name"] == "submit_answer")
+    quick = next(t for t in terminal_tool_defs(enforce_floor=False) if t["name"] == "submit_answer")
+
+    # floor-on: unchanged — still demands the re-search in both the tool
+    # description and the adjacency_note field.
+    assert "adjacency re-search" in floor["description"]
+    assert "loop will" in floor["input_schema"]["properties"]["adjacency_note"]["description"]
+
+    # quick: neither the description nor the field claims it's required/gating.
+    quick_note = quick["input_schema"]["properties"]["adjacency_note"]["description"]
+    assert "no adjacency re-search is required in quick mode" in quick["description"]
+    assert "OPTIONAL in quick mode" in quick_note
+    assert "loop will" not in quick_note
+    # still a required schema field in both modes (model must fill it)
+    assert "adjacency_note" in quick["input_schema"]["required"]
+
+
 def test_quick_depth_config_drops_floor_and_tightens_caps():
     """`for_depth(cfg, 'quick')` turns the floor off and lowers the caps to
     ceilings; `standard` is a no-op."""

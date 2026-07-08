@@ -120,12 +120,14 @@ def format_recon(recon: Any) -> str:
 #: "re-search for adjacency before you conclude" instruction so the model stops
 #: as soon as it can answer, instead of dutifully doing the thorough dance.
 QUICK_CLOSING = (
-    "QUICK MODE — a latency-boxed caller needs a fast, direct answer. Orient on "
-    "recon, do at most one or two targeted retrievals to confirm the key facts, "
-    "then submit_answer. SKIP the concept-seeded adjacency re-search unless recon "
-    "left the core genuinely unresolved; if you skip it, put 'skipped — quick "
-    "mode' in adjacency_note. Stay honest: mark real gaps and do not round up "
-    "confidence."
+    "QUICK MODE — a latency-boxed caller needs a fast, direct answer. For THIS "
+    "call this instruction overrides the anti-premature-closure protocol above: "
+    "the concept-seeded adjacency re-search is NOT required and the loop will not "
+    "block your answer for it. Orient on recon, do at most one or two targeted "
+    "retrievals to confirm the key facts, then submit_answer. Skip the adjacency "
+    "re-search unless recon left the core genuinely unresolved; if you skip it, "
+    "put 'skipped — quick mode' in adjacency_note. Stay honest: mark real gaps "
+    "and do not round up confidence."
 )
 
 #: Standard closing directive (floor on): push the thorough retrieve + re-search.
