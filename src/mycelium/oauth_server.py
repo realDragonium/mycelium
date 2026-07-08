@@ -54,7 +54,7 @@ from urllib.parse import quote, urlencode
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import auth
+from . import auth, store
 
 router = APIRouter(tags=["oauth"])
 
@@ -229,12 +229,13 @@ async def register_client(request: Request) -> JSONResponse:
 
     client_id = f"mcp_{secrets.token_urlsafe(16)}"
     conn = _auth_conn(request)
-    conn.execute(
-        "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at) "
-        "VALUES (?, ?, ?, ?)",
-        (client_id, client_name, json.dumps(redirect_uris), _now().isoformat()),
-    )
-    conn.commit()
+    with store.transaction(conn):
+        conn.execute(
+            "INSERT INTO oauth_clients "
+            "(client_id, client_name, redirect_uris, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (client_id, client_name, json.dumps(redirect_uris), _now().isoformat()),
+        )
     return JSONResponse(
         status_code=201,
         content={
@@ -442,24 +443,24 @@ async def authorize_decide(
     # CODE_TTL_SECONDS or restart the flow.
     code = secrets.token_urlsafe(32)
     expires_at = _now() + timedelta(seconds=CODE_TTL_SECONDS)
-    conn.execute(
-        "INSERT INTO oauth_codes "
-        "(code, client_id, user_id, redirect_uri, code_challenge, "
-        " code_challenge_method, scope, created_at, expires_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            code,
-            client_id,
-            principal.id,
-            redirect_uri,
-            code_challenge,
-            code_challenge_method,
-            scope,
-            _now().isoformat(),
-            expires_at.isoformat(),
-        ),
-    )
-    conn.commit()
+    with store.transaction(conn):
+        conn.execute(
+            "INSERT INTO oauth_codes "
+            "(code, client_id, user_id, redirect_uri, code_challenge, "
+            " code_challenge_method, scope, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                code,
+                client_id,
+                principal.id,
+                redirect_uri,
+                code_challenge,
+                code_challenge_method,
+                scope,
+                _now().isoformat(),
+                expires_at.isoformat(),
+            ),
+        )
     return RedirectResponse(
         url=_with_query(redirect_uri, {"code": code, "state": state}),
         status_code=302,
@@ -523,55 +524,56 @@ async def token_endpoint(
 
     # Mark used BEFORE minting the token so a concurrent exchange
     # can't double-redeem (SQLite under default isolation serializes
-    # writes, but we want correctness if that ever changes).
-    conn.execute(
-        "UPDATE oauth_codes SET used_at = ? WHERE code = ? AND used_at IS NULL",
-        (_now().isoformat(), code),
-    )
+    # writes, but we want correctness if that ever changes). One
+    # transaction owns the whole exchange: the used_at mark is durable
+    # whether we go on to mint or bail out on an inactive user.
+    with store.transaction(conn):
+        conn.execute(
+            "UPDATE oauth_codes SET used_at = ? WHERE code = ? AND used_at IS NULL",
+            (_now().isoformat(), code),
+        )
 
-    # Look up the user's current role so we can scope the token. The
-    # MCP spec doesn't define standard scopes for tools, so we just
-    # mirror the user's full role into the token — same convention as
-    # manually-minted "default scope" tokens.
-    user_row = conn.execute(
-        "SELECT id, role, status FROM users WHERE id = ?",
-        (row["user_id"],),
-    ).fetchone()
-    if user_row is None or user_row["status"] != "active":
-        conn.commit()
-        return _oauth_error("invalid_grant", "user no longer active")
+        # Look up the user's current role so we can scope the token. The
+        # MCP spec doesn't define standard scopes for tools, so we just
+        # mirror the user's full role into the token — same convention as
+        # manually-minted "default scope" tokens.
+        user_row = conn.execute(
+            "SELECT id, role, status FROM users WHERE id = ?",
+            (row["user_id"],),
+        ).fetchone()
+        if user_row is None or user_row["status"] != "active":
+            return _oauth_error("invalid_grant", "user no longer active")
 
-    scope_to_grant: auth.Scope = user_row["role"]  # type: ignore[assignment]
-    raw, prefix, h = auth.generate_token()
-    client_row = conn.execute(
-        "SELECT client_name FROM oauth_clients WHERE client_id = ?",
-        (client_id,),
-    ).fetchone()
-    token_name = (
-        f"OAuth: {client_row['client_name']}"
-        if client_row and client_row["client_name"]
-        else "OAuth client"
-    )
-    conn.execute(
-        "INSERT INTO mcp_tokens "
-        "(id, user_id, name, prefix, hash, scope, created_at, client_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            str(uuid.uuid4()),
-            user_row["id"],
-            token_name,
-            prefix,
-            h,
-            scope_to_grant,
-            _now().isoformat(),
-            client_id,
-        ),
-    )
-    conn.execute(
-        "UPDATE oauth_clients SET last_used_at = ? WHERE client_id = ?",
-        (_now().isoformat(), client_id),
-    )
-    conn.commit()
+        scope_to_grant: auth.Scope = user_row["role"]  # type: ignore[assignment]
+        raw, prefix, h = auth.generate_token()
+        client_row = conn.execute(
+            "SELECT client_name FROM oauth_clients WHERE client_id = ?",
+            (client_id,),
+        ).fetchone()
+        token_name = (
+            f"OAuth: {client_row['client_name']}"
+            if client_row and client_row["client_name"]
+            else "OAuth client"
+        )
+        conn.execute(
+            "INSERT INTO mcp_tokens "
+            "(id, user_id, name, prefix, hash, scope, created_at, client_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                user_row["id"],
+                token_name,
+                prefix,
+                h,
+                scope_to_grant,
+                _now().isoformat(),
+                client_id,
+            ),
+        )
+        conn.execute(
+            "UPDATE oauth_clients SET last_used_at = ? WHERE client_id = ?",
+            (_now().isoformat(), client_id),
+        )
 
     return JSONResponse(
         content={

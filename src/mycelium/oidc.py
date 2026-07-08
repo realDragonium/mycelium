@@ -189,18 +189,19 @@ async def callback(request: Request):
     if not subject:
         raise HTTPException(status_code=400, detail="OIDC response missing subject")
 
-    from . import server
+    from . import server, store
 
     conn = server._auth_conn
     if conn is None:
         raise HTTPException(status_code=500, detail="substrate not initialized")
-    user_id = auth.find_or_create_user(
-        conn,
-        issuer=issuer,
-        subject=subject,
-        email=email,
-        name=name,
-    )
+    with store.transaction(conn):
+        user_id = auth.find_or_create_user(
+            conn,
+            issuer=issuer,
+            subject=subject,
+            email=email,
+            name=name,
+        )
     if user_id is None:
         # Refuse to silently create unauthorized users — the user sees
         # a clear "not invited" message rather than a half-broken

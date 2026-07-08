@@ -444,11 +444,12 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
         row = drafts_store.find_open_session_draft(_drafts_conn, session_id)
         if row is not None:
             return row["id"]
-        return drafts_store.create_draft(
-            _drafts_conn,
-            created_by=principal.id,
-            session_id=session_id,
-        )
+        with store.transaction(_drafts_conn):
+            return drafts_store.create_draft(
+                _drafts_conn,
+                created_by=principal.id,
+                session_id=session_id,
+            )
 
     return None
 
@@ -487,13 +488,14 @@ def _queue_draft_op(
     # Drop None defaults so the stored payload only carries the args the
     # caller actually supplied — replay re-applies defaults at apply time.
     clean = {k: v for k, v in payload.items() if v is not None}
-    seq = drafts_store.add_op(
-        _drafts_conn,
-        draft_id=draft_id,
-        kind=kind,
-        payload=clean,
-        created_by=actor,
-    )
+    with store.transaction(_drafts_conn):
+        seq = drafts_store.add_op(
+            _drafts_conn,
+            draft_id=draft_id,
+            kind=kind,
+            payload=clean,
+            created_by=actor,
+        )
     return {"draft_id": draft_id, "seq": seq, "queued": kind}
 
 
@@ -791,7 +793,6 @@ def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
         mentions_removed += store.delete_name_mentions(_conn, nid)
         _drop_name_from_index(nid)
         store.delete_name(_conn, nid)
-    _conn.commit()
     return mentions_removed, affected
 
 
@@ -806,7 +807,6 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
         store.delete_name_mentions(_conn, child["id"])
         _drop_name_from_index(child["id"])
         store.delete_name(_conn, child["id"])
-    _conn.commit()
     src = store.get_name_by_id(_conn, source_name_id)
     if src is not None:
         _generate_plural(source_name_id, new_text, src["entity_id"])
@@ -1677,11 +1677,12 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     """
     assert _conn is not None
     existing = store.get_name_by_text(_conn, name)
-    if existing is not None:
-        store.update_entity_description(_conn, existing["entity_id"], description)
-        return {"entity_id": existing["entity_id"]}
-    entity_id = store.create_entity(_conn, description)
-    _create_name_with_plural(name, entity_id)
+    with store.transaction(_conn):
+        if existing is not None:
+            store.update_entity_description(_conn, existing["entity_id"], description)
+            return {"entity_id": existing["entity_id"]}
+        entity_id = store.create_entity(_conn, description)
+        _create_name_with_plural(name, entity_id)
     layout_baker.schedule_rebake()
     return {"entity_id": entity_id}
 
@@ -1818,29 +1819,30 @@ def upsert_statement(
         (item["to_id"], item["link_type"], item.get("when")) for item in links
     ]
 
-    if id is not None:
-        store.update_statement(_conn, id, kind, text)
-        vector_id = store.get_vector_id(_conn, id)
-        assert vector_id is not None
-        _index.replace(vector_id, vec)
-        store.replace_links(_conn, id, link_pairs)
-        statement_id = id
-    else:
-        statement_id = store.create_statement(_conn, kind, text)
-        vector_id = store.next_vector_id(_conn)
-        store.set_vector_id(_conn, statement_id, vector_id)
-        _index.add(vector_id, vec)
-        store.replace_links(_conn, statement_id, link_pairs)
+    with store.transaction(_conn):
+        if id is not None:
+            store.update_statement(_conn, id, kind, text)
+            vector_id = store.get_vector_id(_conn, id)
+            assert vector_id is not None
+            _index.replace(vector_id, vec)
+            store.replace_links(_conn, id, link_pairs)
+            statement_id = id
+        else:
+            statement_id = store.create_statement(_conn, kind, text)
+            vector_id = store.next_vector_id(_conn)
+            store.set_vector_id(_conn, statement_id, vector_id)
+            _index.add(vector_id, vec)
+            store.replace_links(_conn, statement_id, link_pairs)
 
-    # Mentions are derived from the text, not asserted by the caller.
-    _derive_statement_mentions(statement_id, text)
+        # Mentions are derived from the text, not asserted by the caller.
+        _derive_statement_mentions(statement_id, text)
 
-    if incoming_links:
-        edges = [
-            (il["from_id"], statement_id, il["link_type"], il.get("when"))
-            for il in incoming_links
-        ]
-        store.insert_links(_conn, edges)
+        if incoming_links:
+            edges = [
+                (il["from_id"], statement_id, il["link_type"], il.get("when"))
+                for il in incoming_links
+            ]
+            store.insert_links(_conn, edges)
 
     _persist_index()
     response: dict[str, Any] = {
@@ -2203,25 +2205,26 @@ def upsert_statements(
     # don't create names), so build it once.
     name_index = store.build_name_index(_conn)
     statement_ids: dict[int, str] = {}
-    for i, spec in enumerate(statements):
-        if i in rejected:
-            continue
-        bid = store.create_statement(_conn, spec["kind"], spec["text"])
-        vid = store.next_vector_id(_conn)
-        store.set_vector_id(_conn, bid, vid)
-        _index.add(vid, vecs[i])
-        store.derive_mentions(_conn, bid, spec["text"], name_index)
-        statement_ids[i] = bid
+    with store.transaction(_conn):
+        for i, spec in enumerate(statements):
+            if i in rejected:
+                continue
+            bid = store.create_statement(_conn, spec["kind"], spec["text"])
+            vid = store.next_vector_id(_conn)
+            store.set_vector_id(_conn, bid, vid)
+            _index.add(vid, vecs[i])
+            store.derive_mentions(_conn, bid, spec["text"], name_index)
+            statement_ids[i] = bid
 
-    # Phase 5: insert edges between surviving items. Cascade guarantees no
-    # @-ref endpoint is in `rejected`, so every edge has a real id at both
-    # ends — but the when-trees still carry "@N" leaves that need final
-    # substitution to real ids.
-    edges = _materialize_batch_edges(
-        n, rejected, resolved_outgoing, resolved_incoming, statement_ids
-    )
-    if edges:
-        store.insert_links(_conn, edges)
+        # Phase 5: insert edges between surviving items. Cascade guarantees no
+        # @-ref endpoint is in `rejected`, so every edge has a real id at both
+        # ends — but the when-trees still carry "@N" leaves that need final
+        # substitution to real ids.
+        edges = _materialize_batch_edges(
+            n, rejected, resolved_outgoing, resolved_incoming, statement_ids
+        )
+        if edges:
+            store.insert_links(_conn, edges)
 
     _persist_index()
 
@@ -2275,13 +2278,14 @@ def replace_text(
         return reject
 
     vec = embed.embed(text)
-    store.update_statement_text(_conn, id, text)
-    vector_id = store.get_vector_id(_conn, id)
-    assert vector_id is not None
-    _index.replace(vector_id, vec)
-    _persist_index()
-    # Text changed → re-derive mentions.
-    _derive_statement_mentions(id, text)
+    with store.transaction(_conn):
+        store.update_statement_text(_conn, id, text)
+        vector_id = store.get_vector_id(_conn, id)
+        assert vector_id is not None
+        _index.replace(vector_id, vec)
+        _persist_index()
+        # Text changed → re-derive mentions.
+        _derive_statement_mentions(id, text)
     response: dict[str, Any] = {"statement_id": id}
     if violations:
         response["phrasing_violations"] = violations
@@ -2351,23 +2355,24 @@ def patch_statement(
         vec = embed.embed(text)
 
     # Mutate field-by-field so omitted fields stay untouched.
-    if text is not None and kind is not None:
-        store.update_statement(_conn, id, kind, text)
-    elif text is not None:
-        store.update_statement_text(_conn, id, text)
-    elif kind is not None:
-        store.update_statement_kind(_conn, id, kind)
+    with store.transaction(_conn):
+        if text is not None and kind is not None:
+            store.update_statement(_conn, id, kind, text)
+        elif text is not None:
+            store.update_statement_text(_conn, id, text)
+        elif kind is not None:
+            store.update_statement_kind(_conn, id, kind)
 
-    if vec is not None:
-        vector_id = store.get_vector_id(_conn, id)
-        assert vector_id is not None
-        _index.replace(vector_id, vec)
-        _persist_index()
+        if vec is not None:
+            vector_id = store.get_vector_id(_conn, id)
+            assert vector_id is not None
+            _index.replace(vector_id, vec)
+            _persist_index()
 
-    # Re-derive mentions only when the text changed (kind-only patches
-    # don't affect what entities the text mentions).
-    if text is not None:
-        _derive_statement_mentions(id, text)
+        # Re-derive mentions only when the text changed (kind-only patches
+        # don't affect what entities the text mentions).
+        if text is not None:
+            _derive_statement_mentions(id, text)
 
     response: dict[str, Any] = {"statement_id": id}
     if violations:
@@ -2396,7 +2401,8 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
             f"name {text!r} already belongs to entity {existing['entity_id']!r}; "
             "use move_name or merge_entities"
         )
-    name_id = _create_name_with_plural(text, entity_id)
+    with store.transaction(_conn):
+        name_id = _create_name_with_plural(text, entity_id)
     return {"name_id": name_id}
 
 
@@ -2414,22 +2420,25 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
         raise ValueError(f"entity {into_entity_id!r} does not exist")
     # Names move from source to target, so the entity-grouping of every
     # statement mentioning them changes — recompute those statements.
-    moved_name_ids = [r["id"] for r in store.get_names_by_entity(_conn, from_entity_id)]
-    moved = store.reassign_names(_conn, from_entity_id, into_entity_id)
-    # Rewrite any entity_links referencing the source — outgoing rows
-    # become outgoing on the target, incoming rows become incoming on
-    # the target, and self-loops the merge would create are dropped.
-    # Required before deleting the source: FK enforcement otherwise
-    # blocks the delete.
-    store.rewrite_entity_link_endpoints(_conn, from_entity_id, into_entity_id)
-    # Mixed entity↔statement edges anchored on the source entity move
-    # onto the target; UNIQUE collisions drop the rewriting row.
-    store.rewrite_entity_statement_endpoints(_conn, from_entity_id, into_entity_id)
-    store.delete_entity(_conn, from_entity_id)
-    affected: list[str] = []
-    for nid in moved_name_ids:
-        affected.extend(store.statements_mentioning_name(_conn, nid))
-    store.enqueue_recompute_statements(_conn, affected)
+    with store.transaction(_conn):
+        moved_name_ids = [
+            r["id"] for r in store.get_names_by_entity(_conn, from_entity_id)
+        ]
+        moved = store.reassign_names(_conn, from_entity_id, into_entity_id)
+        # Rewrite any entity_links referencing the source — outgoing rows
+        # become outgoing on the target, incoming rows become incoming on
+        # the target, and self-loops the merge would create are dropped.
+        # Required before deleting the source: FK enforcement otherwise
+        # blocks the delete.
+        store.rewrite_entity_link_endpoints(_conn, from_entity_id, into_entity_id)
+        # Mixed entity↔statement edges anchored on the source entity move
+        # onto the target; UNIQUE collisions drop the rewriting row.
+        store.rewrite_entity_statement_endpoints(_conn, from_entity_id, into_entity_id)
+        store.delete_entity(_conn, from_entity_id)
+        affected: list[str] = []
+        for nid in moved_name_ids:
+            affected.extend(store.statements_mentioning_name(_conn, nid))
+        store.enqueue_recompute_statements(_conn, affected)
     return {
         "into_entity_id": into_entity_id,
         "names_moved": moved,
@@ -2460,13 +2469,14 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
     # statement mentioning it (or its generated plurals) may change —
     # recompute them. Generated children follow the name onto the new
     # entity so the plural stays attached to the same concept.
-    children = store.get_generated_children(_conn, name_id)
-    store.set_name_entity(_conn, name_id, to_entity_id)
-    affected = list(store.statements_mentioning_name(_conn, name_id))
-    for child in children:
-        store.set_name_entity(_conn, child["id"], to_entity_id)
-        affected.extend(store.statements_mentioning_name(_conn, child["id"]))
-    store.enqueue_recompute_statements(_conn, affected)
+    with store.transaction(_conn):
+        children = store.get_generated_children(_conn, name_id)
+        store.set_name_entity(_conn, name_id, to_entity_id)
+        affected = list(store.statements_mentioning_name(_conn, name_id))
+        for child in children:
+            store.set_name_entity(_conn, child["id"], to_entity_id)
+            affected.extend(store.statements_mentioning_name(_conn, child["id"]))
+        store.enqueue_recompute_statements(_conn, affected)
     return {"name_id": name_id, "entity_id": to_entity_id}
 
 
@@ -2494,12 +2504,13 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     # still contains the OLD label, which is no longer a name) — recompute
     # them. Regenerate the name's plural from the new text. Scan for the new
     # text so statements containing it pick up the mention.
-    affected = list(store.statements_mentioning_name(_conn, name_id))
-    store.rename_name(_conn, name_id, new_text)
-    _reindex_name(name_id, new_text)
-    affected.extend(_regenerate_plurals(name_id, new_text))
-    store.enqueue_recompute_statements(_conn, affected)
-    store.enqueue_recompute_scan(_conn, new_text)
+    with store.transaction(_conn):
+        affected = list(store.statements_mentioning_name(_conn, name_id))
+        store.rename_name(_conn, name_id, new_text)
+        _reindex_name(name_id, new_text)
+        affected.extend(_regenerate_plurals(name_id, new_text))
+        store.enqueue_recompute_statements(_conn, affected)
+        store.enqueue_recompute_scan(_conn, new_text)
     return {"name_id": name_id, "text": new_text}
 
 
@@ -2526,8 +2537,9 @@ def delete_name(name_id: str) -> dict[str, Any]:
     # Cascade through the name and any generated plurals, then recompute the
     # statements that mentioned them — a removed name may have been the
     # representative for an entity another of whose names still matches.
-    mentions_removed, affected = _delete_name_cascade(name_id)
-    store.enqueue_recompute_statements(_conn, affected)
+    with store.transaction(_conn):
+        mentions_removed, affected = _delete_name_cascade(name_id)
+        store.enqueue_recompute_statements(_conn, affected)
     return {
         "deleted": True,
         "mentions_removed": mentions_removed,
@@ -2556,30 +2568,31 @@ def delete_entity(id: str) -> dict[str, Any]:
     if store.get_entity_by_id(_conn, id) is None:
         raise ValueError(f"entity {id!r} does not exist")
 
-    name_rows = store.get_names_by_entity(_conn, id)
-    name_ids = [r["id"] for r in name_rows]
-    affected: list[str] = []
-    mentions_removed = 0
-    for nid in name_ids:
-        # Statements that mentioned this entity may now match a name they
-        # were shadowing (e.g. "data" surfacing once "data science" is gone).
-        affected.extend(store.statements_mentioning_name(_conn, nid))
-        mentions_removed += store.delete_name_mentions(_conn, nid)
-        _drop_name_from_index(nid)
-    # Break generated-plural self-references within this entity before the
-    # bulk delete (generated_from_name_id REFERENCES names(id)).
-    store.delete_names_clearing_generated_refs(_conn, name_ids)
-    outgoing_entity_links_removed, incoming_entity_links_removed = (
-        store.delete_entity_links_touching(_conn, id)
-    )
-    # Mixed entity↔statement edges touching this entity must also go;
-    # the cascade trigger on entity_statement_links cleans up their
-    # when_nodes rows.
-    entity_statement_links_removed = store.delete_entity_statement_links_for_entity(
-        _conn, id
-    )
-    store.delete_entity(_conn, id)
-    store.enqueue_recompute_statements(_conn, affected)
+    with store.transaction(_conn):
+        name_rows = store.get_names_by_entity(_conn, id)
+        name_ids = [r["id"] for r in name_rows]
+        affected: list[str] = []
+        mentions_removed = 0
+        for nid in name_ids:
+            # Statements that mentioned this entity may now match a name they
+            # were shadowing (e.g. "data" surfacing once "data science" is gone).
+            affected.extend(store.statements_mentioning_name(_conn, nid))
+            mentions_removed += store.delete_name_mentions(_conn, nid)
+            _drop_name_from_index(nid)
+        # Break generated-plural self-references within this entity before the
+        # bulk delete (generated_from_name_id REFERENCES names(id)).
+        store.delete_names_clearing_generated_refs(_conn, name_ids)
+        outgoing_entity_links_removed, incoming_entity_links_removed = (
+            store.delete_entity_links_touching(_conn, id)
+        )
+        # Mixed entity↔statement edges touching this entity must also go;
+        # the cascade trigger on entity_statement_links cleans up their
+        # when_nodes rows.
+        entity_statement_links_removed = store.delete_entity_statement_links_for_entity(
+            _conn, id
+        )
+        store.delete_entity(_conn, id)
+        store.enqueue_recompute_statements(_conn, affected)
     layout_baker.schedule_rebake()
     return {
         "deleted": True,
@@ -2653,25 +2666,26 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     # unchanged) and the source's derived rows are cleared so the source
     # can be deleted under FK enforcement. Nothing is moved.
     mentions_moved = 0
-    store.clear_derived_for_statement(_conn, from_id)
-    outgoing_moved = store.merge_outgoing_links_into(_conn, from_id, into_id)
-    incoming_moved = store.merge_incoming_links_into(_conn, from_id, into_id)
-    # Any remaining links that referenced the source as a `when` condition
-    # need their reference rewritten to the target before deleting the
-    # source, otherwise FK enforcement blocks the delete. Both link kinds
-    # are handled — statement_links and entity_statement_links.
-    store.rewrite_when_references(_conn, from_id, into_id)
-    store.rewrite_entity_statement_when_references(_conn, from_id, into_id)
-    # Entity↔statement edges whose endpoint is the source statement need to
-    # move onto the target — UPDATE in place with collision detection, then
-    # drop any rows a UNIQUE collision left pointing at the source so it can
-    # be deleted.
-    store.move_entity_statement_endpoints(_conn, from_id, into_id)
+    with store.transaction(_conn):
+        store.clear_derived_for_statement(_conn, from_id)
+        outgoing_moved = store.merge_outgoing_links_into(_conn, from_id, into_id)
+        incoming_moved = store.merge_incoming_links_into(_conn, from_id, into_id)
+        # Any remaining links that referenced the source as a `when` condition
+        # need their reference rewritten to the target before deleting the
+        # source, otherwise FK enforcement blocks the delete. Both link kinds
+        # are handled — statement_links and entity_statement_links.
+        store.rewrite_when_references(_conn, from_id, into_id)
+        store.rewrite_entity_statement_when_references(_conn, from_id, into_id)
+        # Entity↔statement edges whose endpoint is the source statement need to
+        # move onto the target — UPDATE in place with collision detection, then
+        # drop any rows a UNIQUE collision left pointing at the source so it can
+        # be deleted.
+        store.move_entity_statement_endpoints(_conn, from_id, into_id)
 
-    vector_id = store.get_vector_id(_conn, from_id)
-    if vector_id is not None:
-        _index.delete(vector_id)
-    store.delete_statement(_conn, from_id)
+        vector_id = store.get_vector_id(_conn, from_id)
+        if vector_id is not None:
+            _index.delete(vector_id)
+        store.delete_statement(_conn, from_id)
     _persist_index()
 
     return {
@@ -2727,19 +2741,19 @@ def delete_statement(id: str) -> dict[str, Any]:
     # and incoming statement_links, any statement_links / entity_statement_links
     # whose when-tree references it, and entity↔statement edges with it as an
     # endpoint (see the helper for the exact ordering and counting rules).
-    (
-        outgoing_removed,
-        incoming_removed,
-        when_removed,
-        entity_statement_links_removed,
-    ) = store.delete_links_touching_statement(_conn, id)
-    mentions_removed = store.clear_derived_for_statement(_conn, id, commit=False)
-    _conn.commit()
+    with store.transaction(_conn):
+        (
+            outgoing_removed,
+            incoming_removed,
+            when_removed,
+            entity_statement_links_removed,
+        ) = store.delete_links_touching_statement(_conn, id)
+        mentions_removed = store.clear_derived_for_statement(_conn, id)
 
-    vector_id = store.get_vector_id(_conn, id)
-    if vector_id is not None:
-        _index.delete(vector_id)
-    store.delete_statement(_conn, id)
+        vector_id = store.get_vector_id(_conn, id)
+        if vector_id is not None:
+            _index.delete(vector_id)
+        store.delete_statement(_conn, id)
     _persist_index()
 
     return {
@@ -2884,10 +2898,11 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
         raise ValueError("flipped link direction:\n" + "\n".join(flip_errors))
 
     inserted = 0
-    if stmt_edges:
-        inserted += store.insert_links(_conn, stmt_edges)
-    if es_edges:
-        inserted += store.insert_entity_statement_links(_conn, es_edges)
+    with store.transaction(_conn):
+        if stmt_edges:
+            inserted += store.insert_links(_conn, stmt_edges)
+        if es_edges:
+            inserted += store.insert_entity_statement_links(_conn, es_edges)
     if es_edges:
         layout_baker.schedule_rebake()
     return {"inserted": inserted}
@@ -2915,10 +2930,11 @@ def remove_links(links: list[EdgeSpec]) -> dict[str, int]:
     stmt_edges, es_edges = _split_edges(links)
 
     removed = 0
-    if stmt_edges:
-        removed += store.delete_links(_conn, stmt_edges)
-    if es_edges:
-        removed += store.delete_entity_statement_links(_conn, es_edges)
+    with store.transaction(_conn):
+        if stmt_edges:
+            removed += store.delete_links(_conn, stmt_edges)
+        if es_edges:
+            removed += store.delete_entity_statement_links(_conn, es_edges)
     if es_edges:
         layout_baker.schedule_rebake()
     return {"removed": removed}
@@ -3394,7 +3410,8 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
         (link["from_entity_id"], link["to_entity_id"], link["link_type"])
         for link in links
     ]
-    inserted = store.insert_entity_links(_conn, edges)
+    with store.transaction(_conn):
+        inserted = store.insert_entity_links(_conn, edges)
     if inserted:
         layout_baker.schedule_rebake()
     return {"inserted": inserted}
@@ -3418,7 +3435,8 @@ def remove_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
         (link["from_entity_id"], link["to_entity_id"], link["link_type"])
         for link in links
     ]
-    removed = store.delete_entity_links(_conn, edges)
+    with store.transaction(_conn):
+        removed = store.delete_entity_links(_conn, edges)
     if removed:
         layout_baker.schedule_rebake()
     return {"removed": removed}
@@ -3510,7 +3528,8 @@ def upsert_statement_kind(
         raise ValueError("kind cannot be empty")
     if not description or not description.strip():
         raise ValueError("description cannot be empty")
-    store.upsert_statement_kind_glossary(_conn, kind, description, when_to_use)
+    with store.transaction(_conn):
+        store.upsert_statement_kind_glossary(_conn, kind, description, when_to_use)
     return {"kind": kind}
 
 
@@ -3526,7 +3545,8 @@ def delete_statement_kind(kind: str) -> dict[str, str]:
     Returns `{kind}`.
     """
     assert _conn is not None
-    store.delete_statement_kind_glossary(_conn, kind)
+    with store.transaction(_conn):
+        store.delete_statement_kind_glossary(_conn, kind)
     return {"kind": kind}
 
 
@@ -3545,7 +3565,8 @@ def upsert_link_type(link_type: str, description: str) -> dict[str, str]:
         raise ValueError("link_type cannot be empty")
     if not description or not description.strip():
         raise ValueError("description cannot be empty")
-    store.upsert_statement_link_type_glossary(_conn, link_type, description)
+    with store.transaction(_conn):
+        store.upsert_statement_link_type_glossary(_conn, link_type, description)
     return {"link_type": link_type}
 
 
@@ -3560,7 +3581,8 @@ def delete_link_type(link_type: str) -> dict[str, str]:
     Returns `{link_type}`.
     """
     assert _conn is not None
-    store.delete_statement_link_type_glossary(_conn, link_type)
+    with store.transaction(_conn):
+        store.delete_statement_link_type_glossary(_conn, link_type)
     return {"link_type": link_type}
 
 
@@ -3578,7 +3600,8 @@ def upsert_entity_link_type(link_type: str, description: str) -> dict[str, str]:
         raise ValueError("link_type cannot be empty")
     if not description or not description.strip():
         raise ValueError("description cannot be empty")
-    store.upsert_entity_link_type_glossary(_conn, link_type, description)
+    with store.transaction(_conn):
+        store.upsert_entity_link_type_glossary(_conn, link_type, description)
     return {"link_type": link_type}
 
 
@@ -3592,7 +3615,8 @@ def delete_entity_link_type(link_type: str) -> dict[str, str]:
     Returns `{link_type}`.
     """
     assert _conn is not None
-    store.delete_entity_link_type_glossary(_conn, link_type)
+    with store.transaction(_conn):
+        store.delete_entity_link_type_glossary(_conn, link_type)
     return {"link_type": link_type}
 
 
@@ -3759,7 +3783,8 @@ def report_knowledge_gap(text: str) -> dict[str, Any]:
     if not text:
         raise ValueError("text is required")
 
-    gap_id = store.create_knowledge_gap(_conn, text)
+    with store.transaction(_conn):
+        gap_id = store.create_knowledge_gap(_conn, text)
     return {"gap_id": gap_id}
 
 
@@ -3808,7 +3833,8 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
                 f"only open drafts can be submitted"
             )
 
-    drafts_store.set_submitted(_drafts_conn, draft_id)
+    with store.transaction(_drafts_conn):
+        drafts_store.set_submitted(_drafts_conn, draft_id)
     ops = drafts_store.list_ops(_drafts_conn, draft_id)
     return {"draft_id": draft_id, "op_count": len(ops)}
 
@@ -3868,7 +3894,8 @@ def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
             f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
             f"can't modify ops on a non-open draft"
         )
-    removed = drafts_store.remove_op(_drafts_conn, draft_id, seq)
+    with store.transaction(_drafts_conn):
+        removed = drafts_store.remove_op(_drafts_conn, draft_id, seq)
     if not removed:
         raise ValueError(f"no op with seq {seq} in draft '{draft_id}'")
     return {"draft_id": draft_id, "seq": seq, "removed": True}
@@ -3889,7 +3916,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    assert _drafts_conn is not None
+    assert _drafts_conn is not None and _conn is not None
     row = drafts_store.get_draft(_drafts_conn, draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
@@ -3905,31 +3932,38 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     import json as _j
 
-    for op in ops:
-        kind = op["kind"]
-        wrapper = tools_by_name.get(kind)
-        payload = _j.loads(op["payload_json"])
-        if wrapper is None:
-            # The tool was removed since this op was queued — notably
-            # `add_mentions` / `remove_mentions`, now that mentions are
-            # derived. Such an op is obsolete; skip it rather than fail the
-            # whole draft.
-            results.append({"seq": op["seq"], "kind": kind, "skipped": "obsolete_tool"})
-            continue
-        # Drop payload keys the tool no longer accepts (e.g. a stale
-        # `mentions` / `strict_mentions` on a queued upsert_statement) so an
-        # old draft replays cleanly instead of raising on an unexpected kwarg.
-        sig = _ORIG_SIGNATURES.get(kind)
-        if sig is not None:
-            for key in [k for k in payload if k not in sig.parameters]:
-                payload.pop(key)
-        try:
-            result = wrapper(**payload)
-        except Exception as ex:
-            raise RuntimeError(
-                f"op seq={op['seq']} ({kind}) failed during replay: {ex}"
-            ) from ex
-        results.append({"seq": op["seq"], "kind": kind, "result": result})
+    # All-or-nothing replay: one transaction owns every op's substrate
+    # writes. Each replayed tool opens its own `transaction(_conn)`, which
+    # joins this outer one (reentrant), so a single op raising rolls the
+    # whole draft back.
+    with store.transaction(_conn):
+        for op in ops:
+            kind = op["kind"]
+            wrapper = tools_by_name.get(kind)
+            payload = _j.loads(op["payload_json"])
+            if wrapper is None:
+                # The tool was removed since this op was queued — notably
+                # `add_mentions` / `remove_mentions`, now that mentions are
+                # derived. Such an op is obsolete; skip it rather than fail the
+                # whole draft.
+                results.append(
+                    {"seq": op["seq"], "kind": kind, "skipped": "obsolete_tool"}
+                )
+                continue
+            # Drop payload keys the tool no longer accepts (e.g. a stale
+            # `mentions` / `strict_mentions` on a queued upsert_statement) so an
+            # old draft replays cleanly instead of raising on an unexpected kwarg.
+            sig = _ORIG_SIGNATURES.get(kind)
+            if sig is not None:
+                for key in [k for k in payload if k not in sig.parameters]:
+                    payload.pop(key)
+            try:
+                result = wrapper(**payload)
+            except Exception as ex:
+                raise RuntimeError(
+                    f"op seq={op['seq']} ({kind}) failed during replay: {ex}"
+                ) from ex
+            results.append({"seq": op["seq"], "kind": kind, "result": result})
     return {"applied": len(results), "results": results}
 
 

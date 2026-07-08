@@ -85,22 +85,21 @@ def main() -> None:
         return
 
     # Wipe the old materialized state — the matcher is now authoritative.
-    conn.execute("DELETE FROM statement_mentions")
-    conn.execute("DELETE FROM pending_mentions")
-    conn.execute("DELETE FROM mention_recompute_queue")
-    conn.commit()
+    with store.transaction(conn):
+        conn.execute("DELETE FROM statement_mentions")
+        conn.execute("DELETE FROM pending_mentions")
+        conn.execute("DELETE FROM mention_recompute_queue")
 
     total_mentions = total_suspects = 0
-    for i, row in enumerate(statements, 1):
-        result = store.derive_mentions(
-            conn, row["id"], row["text"], index, commit=False
-        )
-        total_mentions += len(result.mentions)
-        total_suspects += len(result.suspects)
-        if i % CHUNK == 0:
-            conn.commit()
-            print(f"  ...{i}/{len(statements)}")
-    conn.commit()
+    for start in range(0, len(statements), CHUNK):
+        chunk = statements[start : start + CHUNK]
+        with store.transaction(conn):
+            for row in chunk:
+                result = store.derive_mentions(conn, row["id"], row["text"], index)
+                total_mentions += len(result.mentions)
+                total_suspects += len(result.suspects)
+        done = min(start + CHUNK, len(statements))
+        print(f"  ...{done}/{len(statements)}")
 
     print(
         f"done: {total_mentions} mentions materialized, "

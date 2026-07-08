@@ -112,7 +112,6 @@ def create_draft(
         "VALUES (?, ?, ?, ?, ?)",
         (draft_id, title, _now(), created_by, session_id),
     )
-    conn.commit()
     return draft_id
 
 
@@ -198,7 +197,6 @@ def add_op(
         "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (op_id, draft_id, seq, kind, _json.dumps(payload), _now(), created_by),
     )
-    conn.commit()
     return seq
 
 
@@ -216,7 +214,6 @@ def remove_op(conn: sqlite3.Connection, draft_id: str, seq: int) -> bool:
         "DELETE FROM draft_ops WHERE draft_id = ? AND seq = ?",
         (draft_id, seq),
     )
-    conn.commit()
     return cur.rowcount > 0
 
 
@@ -227,7 +224,6 @@ def update_op_payload(
         "UPDATE draft_ops SET payload_json = ? WHERE draft_id = ? AND seq = ?",
         (_json.dumps(payload), draft_id, seq),
     )
-    conn.commit()
     return cur.rowcount > 0
 
 
@@ -236,7 +232,6 @@ def set_submitted(conn: sqlite3.Connection, draft_id: str) -> None:
         "UPDATE drafts SET submitted_at = ? WHERE id = ? AND submitted_at IS NULL",
         (_now(), draft_id),
     )
-    conn.commit()
 
 
 def set_decision(
@@ -249,7 +244,6 @@ def set_decision(
         "WHERE id = ? AND decided_at IS NULL",
         (_now(), by, decision, draft_id),
     )
-    conn.commit()
 
 
 def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -> dict:

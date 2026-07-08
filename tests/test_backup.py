@@ -33,21 +33,22 @@ def _seed_substrate(data_dir):
     store.migrate(conn)
     store.set_actor("alice")
 
-    e1 = store.create_entity(conn, "Auth surface")
-    e2 = store.create_entity(conn, None)
-    n1 = store.create_name(conn, "Login", e1)
-    n2 = store.create_name(conn, "Session", e2)
+    with store.transaction(conn):
+        e1 = store.create_entity(conn, "Auth surface")
+        e2 = store.create_entity(conn, None)
+        n1 = store.create_name(conn, "Login", e1)
+        n2 = store.create_name(conn, "Session", e2)
 
-    b1 = store.create_statement(conn, "event", "user logs in")
-    b2 = store.create_statement(conn, "event", "server issues a session token")
-    store.replace_mentions(conn, b1, [n1])
-    store.replace_mentions(conn, b2, [n2])
-    store.insert_links(conn, [(b1, b2, "triggers", None)])
-    store.insert_entity_links(conn, [(e1, e2, "contains")])
+        b1 = store.create_statement(conn, "event", "user logs in")
+        b2 = store.create_statement(conn, "event", "server issues a session token")
+        store.replace_mentions(conn, b1, [n1])
+        store.replace_mentions(conn, b2, [n2])
+        store.insert_links(conn, [(b1, b2, "triggers", None)])
+        store.insert_entity_links(conn, [(e1, e2, "contains")])
 
-    # Edit to ensure updated_at is set, generating an additional history event.
-    store.set_actor("bob")
-    store.update_statement_text(conn, b1, "user authenticates")
+        # Edit to set updated_at, generating an additional history event.
+        store.set_actor("bob")
+        store.update_statement_text(conn, b1, "user authenticates")
 
     conn.close()
     return {
