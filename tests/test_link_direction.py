@@ -365,3 +365,44 @@ def test_list_link_types_includes_teaches_direction(tmp_path, monkeypatch):
         rows = client.post("/list-link-types", json={}).json()
         teaches = next(row for row in rows if row["link_type"] == "teaches")
         assert teaches["direction"]["source_kinds"] == ["procedure"]
+
+
+def test_plan_batch_decides_flip_and_cascade_without_writing(monkeypatch):
+    """`_plan_batch` is pure planning: it computes the flip/cascade decision
+    from the input and read-only lookups, no embedding or write transaction.
+    A `capability --teaches--> procedure` edge flips (procedure teaches
+    capability), so item 0 is rejected; item 2 references @0 and cascades."""
+    from mycelium import store
+
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    monkeypatch.setattr(server, "_conn", conn)
+
+    plan = server._plan_batch(
+        [
+            {
+                "kind": "capability",
+                "text": "the user can configure notifications",
+                "links": [{"to_id": "@1", "link_type": "teaches"}],
+                "allow_phrasing_violations": True,
+            },
+            {
+                "kind": "procedure",
+                "text": "configure notifications",
+                "links": [],
+                "allow_phrasing_violations": True,
+            },
+            {
+                "kind": "event",
+                "text": "notification settings are reviewed",
+                "links": [{"to_id": "@0", "link_type": "contains"}],
+                "allow_phrasing_violations": True,
+            },
+        ]
+    )
+
+    assert plan.item_errors[0] and "swap" in plan.item_errors[0][0]
+    assert plan.rejected == {0, 2}
+    assert 0 in plan.direct_rejected  # flip promotes to a direct rejection
+    assert 1 not in plan.rejected  # the procedure survives
+    assert plan.cascade_reasons[2] == [0]

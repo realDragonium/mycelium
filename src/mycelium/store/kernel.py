@@ -18,9 +18,10 @@ import sqlite3
 import threading
 from collections import defaultdict
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
+
+from .. import timestamps
 
 # --- audit context ----------------------------------------------------------
 #
@@ -99,9 +100,11 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 
 
 def _now() -> str:
-    """ISO-8601 UTC timestamp with millisecond precision and trailing Z."""
-    t = datetime.now(timezone.utc)
-    return f"{t.strftime('%Y-%m-%dT%H:%M:%S')}.{t.microsecond // 1000:03d}Z"
+    """ISO-8601 UTC timestamp with millisecond precision and trailing Z.
+
+    Thin alias for the canonical `timestamps.now()`; kept so substrate
+    modules can keep calling the package-local `_now`."""
+    return timestamps.now()
 
 
 # --- history recording ------------------------------------------------------

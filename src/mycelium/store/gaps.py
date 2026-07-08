@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from datetime import datetime, timezone
 
-from .kernel import get_actor
+from .kernel import _now, get_actor
 
 # --- knowledge gaps ---------------------------------------------------------
 
 
 def create_knowledge_gap(conn: sqlite3.Connection, text: str) -> str:
     """Insert an open knowledge-gap report and return its id. Timestamped
-    with a UTC offset (`datetime.now(timezone.utc).isoformat()`, the format
-    the reporting tool has always stored) and stamped with the current actor
-    as `created_by`."""
+    with the canonical internal format (`timestamps.now()`, millisecond-Z, the
+    same one statements use) and stamped with the current actor as
+    `created_by`."""
     gap_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = _now()
     conn.execute(
         "INSERT INTO knowledge_gaps (id, text, created_at, created_by) "
         "VALUES (?, ?, ?, ?)",
@@ -60,8 +59,8 @@ def set_knowledge_gap_status(
 ) -> sqlite3.Row:
     """Apply `resolve` / `dismiss` / `reopen` to a gap and return the updated
     row. Resolving clears any dismissal and vice versa; reopening clears both.
-    Terminal timestamps use the same UTC-offset format as `created_at`."""
-    now = datetime.now(timezone.utc).isoformat()
+    Terminal timestamps use the same canonical format as `created_at`."""
+    now = _now()
     if action == "resolve":
         conn.execute(
             "UPDATE knowledge_gaps SET resolved_at = ?, resolved_by = ?, "
