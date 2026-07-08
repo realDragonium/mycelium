@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import sqlite3
 import uuid as _uuid
-from datetime import datetime as _dt
-from datetime import timezone as _tz
 from pathlib import Path
+
+from . import timestamps
 
 RESEARCH_RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS research_runs (
@@ -64,7 +64,7 @@ def status_for(row: sqlite3.Row | dict) -> str:
 
 
 def _now() -> str:
-    return _dt.now(_tz.utc).isoformat()
+    return timestamps.now()
 
 
 def create_run(

@@ -24,9 +24,9 @@ from __future__ import annotations
 import json as _json
 import sqlite3
 import uuid as _uuid
-from datetime import datetime as _dt
-from datetime import timezone as _tz
 from pathlib import Path
+
+from . import timestamps
 
 DRAFTS_SCHEMA = """
 -- A drafter's pending change set. One open draft per MCP session;
@@ -96,7 +96,7 @@ def status_for(row: sqlite3.Row | dict) -> str:
 
 
 def _now() -> str:
-    return _dt.now(_tz.utc).isoformat()
+    return timestamps.now()
 
 
 def create_draft(
