@@ -1,6 +1,6 @@
 """Just-in-time provisioning: pre-registered email domains.
 
-These exercise `oidc.find_or_create_user` directly against an in-memory
+These exercise `auth.find_or_create_user` directly against an in-memory
 auth DB so we can assert provisioning decisions without standing up the
 full OIDC dance. The precedence rules (invite > bootstrap > JIT) and the
 invite-only default are the high-value cases.
@@ -8,7 +8,7 @@ invite-only default are the high-value cases.
 
 import sqlite3
 
-from mycelium import auth, auth_store, oidc
+from mycelium import auth, auth_store
 
 
 def _conn() -> sqlite3.Connection:
@@ -24,7 +24,7 @@ def _role_of(conn: sqlite3.Connection, user_id: str) -> str:
 
 
 def _find(conn, email="alice@example.com", subject="sub-1"):
-    return oidc.find_or_create_user(
+    return auth.find_or_create_user(
         conn,
         issuer="https://issuer",
         subject=subject,
@@ -93,7 +93,7 @@ def test_invite_takes_precedence_over_jit(monkeypatch):
     conn.execute(
         "INSERT INTO invites (id, email, role, token, created_at) "
         "VALUES ('inv-1', 'alice@example.com', 'writer', 'tok-1', ?)",
-        (oidc._now(),),
+        (auth._now(),),
     )
     conn.commit()
     uid = _find(conn)
