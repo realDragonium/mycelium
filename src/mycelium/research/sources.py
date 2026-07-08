@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -34,6 +35,25 @@ from typing import Iterator, Mapping
 
 class SourceError(RuntimeError):
     """Raised for config or fetch failures. Messages are ALWAYS pre-scrubbed."""
+
+
+# Source fields land verbatim in the clone URL / `--branch` value. Validating
+# them (fail-closed) keeps a crafted MYCELIUM_SOURCES from smuggling git
+# options (a leading '-'), redirecting the PAT to another host (a stray '@' or
+# '/' in `host`), or escaping the workspace (a '..' in `repo`). This makes the
+# arg-injection safety explicit rather than relying on URL construction.
+_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?$")
+
+
+def _validate(name: str, field: str, value: str, pattern: re.Pattern[str]) -> str:
+    if not pattern.match(value) or ".." in value:
+        raise SourceError(
+            f"source {name!r} has an invalid {field!r} value "
+            "(must match the repo's own naming, no leading '-', '..', or URL characters)"
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -72,13 +92,14 @@ def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
         if not repo:
             raise SourceError(f"source {name!r} is missing required field 'repo'")
 
+        ref = _optional_str(entry.get("ref"))
         sources[str(name)] = Source(
             name=str(name),
-            owner=str(owner),
-            repo=str(repo),
-            ref=_optional_str(entry.get("ref")),
+            owner=_validate(str(name), "owner", str(owner), _OWNER_REPO_RE),
+            repo=_validate(str(name), "repo", str(repo), _OWNER_REPO_RE),
+            ref=_validate(str(name), "ref", ref, _REF_RE) if ref else None,
             token_env=_optional_str(entry.get("token_env")),
-            host=str(entry.get("host") or "github.com"),
+            host=_validate(str(name), "host", str(entry.get("host") or "github.com"), _HOST_RE),
         )
     return sources
 
@@ -142,8 +163,17 @@ def fetch(source: Source, env: Mapping[str, str] | None = None) -> Iterator[Path
         raise SourceError(_scrub(message, [token or ""]))
 
     # Git persists the token-bearing remote URL in .git/config; deleting .git
-    # ensures the yielded workspace no longer contains clone credentials.
-    shutil.rmtree(dest / ".git", ignore_errors=True)
+    # ensures the yielded workspace no longer contains clone credentials. Fail
+    # CLOSED: if removal did not fully succeed, refuse to yield a workspace that
+    # may still hold the PAT (the model could read .git/config as ordinary
+    # content). The message names no path detail beyond ".git".
+    git_dir = dest / ".git"
+    shutil.rmtree(git_dir, ignore_errors=True)
+    if git_dir.exists():
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise SourceError(
+            "refusing to expose workspace: could not remove .git after clone"
+        )
 
     try:
         yield dest

@@ -239,3 +239,78 @@ def test_fetch_timeout_does_not_chain_token_bearing_exception(monkeypatch):
             pass  # pragma: no cover
     assert "s3cr3t-token" not in str(exc_info.value)
     assert exc_info.value.__cause__ is None
+
+
+# --------------------------------------------------------------------------- #
+# Input validation (arg-injection / PAT-exfiltration hardening)
+# --------------------------------------------------------------------------- #
+
+import json as _json
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize(
+    "entry",
+    [
+        {"owner": "-oops", "repo": "r"},          # leading '-' → git option
+        {"owner": "o", "repo": "../evil"},         # path escape in repo
+        {"owner": "o", "repo": "r", "ref": "--upload-pack=x"},  # option-shaped ref
+        {"owner": "o", "repo": "r", "host": "evil.com/@github.com"},  # PAT redirect
+        {"owner": "o", "repo": "r", "host": "attacker@evil"},          # userinfo
+        {"owner": "o/../x", "repo": "r"},          # slash in owner
+    ],
+)
+def test_load_sources_rejects_injection_shaped_fields(monkeypatch, entry):
+    from mycelium.research.sources import SourceError, load_sources
+
+    monkeypatch.setenv("MYCELIUM_SOURCES", _json.dumps({"s": entry}))
+    with _pytest.raises(SourceError):
+        load_sources()
+
+
+def test_load_sources_accepts_normal_and_enterprise_hosts(monkeypatch):
+    from mycelium.research.sources import load_sources
+
+    monkeypatch.setenv(
+        "MYCELIUM_SOURCES",
+        _json.dumps({
+            "a": {"owner": "acme", "repo": "api", "ref": "release/1.2", "host": "github.com"},
+            "b": {"owner": "acme", "repo": "web.app", "host": "ghe.corp.example:8443"},
+        }),
+    )
+    srcs = load_sources()
+    assert srcs["a"].ref == "release/1.2"
+    assert srcs["b"].host == "ghe.corp.example:8443"
+
+
+def test_fetch_fails_closed_when_git_dir_survives(monkeypatch, tmp_path):
+    """If .git can't be removed after clone, fetch refuses to yield the
+    workspace (the PAT could still be in .git/config)."""
+    import subprocess as sp
+
+    from mycelium.research.sources import Source, SourceError, fetch
+
+    def fake_run(cmd, **kwargs):
+        dest = Path(cmd[-1])
+        (dest / ".git").mkdir(parents=True)
+        (dest / ".git" / "config").write_text("url = https://x-access-token:tok@github.com/o/r")
+        (dest / "README.md").write_text("hi")
+        return sp.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    # make .git removal a no-op so the dir "survives"
+    import mycelium.research.sources as srcmod
+    real_rmtree = srcmod.shutil.rmtree
+
+    def fake_rmtree(path, *a, **k):
+        if str(path).endswith(".git"):
+            return  # simulate failed removal
+        return real_rmtree(path, *a, **k)
+
+    monkeypatch.setattr(srcmod.shutil, "rmtree", fake_rmtree)
+    src = Source(name="s", owner="o", repo="r")
+    with _pytest.raises(SourceError) as exc:
+        with fetch(src):
+            pass
+    assert ".git" in str(exc.value)
+    assert "tok" not in str(exc.value)

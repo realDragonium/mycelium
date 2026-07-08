@@ -50,7 +50,6 @@ from ..ingest.loop import (
     _coverage_unmet,
     _fetch_vocab,
     _first_tool_use,
-    _floor_detail,
     _floor_state,
     _ledger_empty_or_all_duplicate,
     _ledger_unmet,

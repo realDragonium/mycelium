@@ -10,6 +10,11 @@ from typing import Any
 from ..ask.substrate import ToolSpec
 
 
+#: Path component that marks VCS internals — never enumerated or read (it can
+#: hold clone credentials; `sources.fetch` strips it, this is defense in depth).
+_VCS_DIR = ".git"
+
+
 class WorkspaceError(RuntimeError):
     """Raised for any refused workspace read (bad path, binary, bad pattern).
     The loop renders it as an error tool_result; it never aborts the run."""
@@ -27,6 +32,8 @@ class WorkspaceReader:
         max_read_lines: int = 500,
         max_file_bytes: int = 2_000_000,
         max_result_chars: int = 20_000,
+        max_search_chars: int = 8_192,
+        max_grep_scan_bytes: int = 64_000_000,
     ) -> None:
         self._root = Path(root).resolve(strict=True)
         self._max_files = max_files
@@ -36,6 +43,10 @@ class WorkspaceReader:
         self._max_read_lines = max_read_lines
         self._max_file_bytes = max_file_bytes
         self._max_result_chars = max_result_chars
+        #: Per-line window the grep regex sees (ReDoS blast-radius bound).
+        self._max_search_chars = max_search_chars
+        #: Total bytes a single ws_grep may scan before it stops (work bound).
+        self._max_grep_scan_bytes = max_grep_scan_bytes
         self._specs = [
             ToolSpec(
                 name="ws_list_files",
@@ -135,6 +146,7 @@ class WorkspaceReader:
         matches: list[dict[str, Any]] = []
         truncated = False
         size = 0  # running serialized size — O(1) per match, not a re-dump
+        scanned_bytes = 0  # total bytes fed to the regex this call (R-2 bound)
 
         for rel in self._iter_glob(glob):
             path = self._root / rel
@@ -142,7 +154,13 @@ class WorkspaceReader:
                 continue
             with path.open("r", encoding="utf-8", errors="replace") as handle:
                 for line_number, line in enumerate(handle, start=1):
-                    if regex.search(line):
+                    # Bound the input the regex sees per line: a model-supplied
+                    # pattern over an attacker-controlled newline-free file
+                    # could otherwise backtrack on a multi-MB "line" (ReDoS) and
+                    # hang this worker thread past the wall clock. Truncating the
+                    # search window caps the blast radius; long lines still match
+                    # on their head.
+                    if regex.search(line[: self._max_search_chars]):
                         text = line.rstrip("\r\n")[: self._max_line_chars]
                         match = {"path": rel, "line": line_number, "text": text}
                         matches.append(match)
@@ -153,6 +171,13 @@ class WorkspaceReader:
                         ):
                             truncated = True
                             return {"matches": matches, "truncated": truncated}
+            scanned_bytes += path.stat().st_size
+            if scanned_bytes > self._max_grep_scan_bytes:
+                # Total work bounded, not just output: stop before a pathological
+                # glob reads the whole tree uninterrupted (the wall clock only
+                # fires between turns, never inside this call).
+                truncated = True
+                return {"matches": matches, "truncated": truncated}
 
         return {"matches": matches, "truncated": truncated}
 
@@ -201,6 +226,11 @@ class WorkspaceReader:
             or ".." in posix.parts
         ):
             raise WorkspaceError(f"path outside workspace: {rel}")
+        if _VCS_DIR in posix.parts:
+            # Defense in depth: `sources.fetch` strips `.git` (which holds the
+            # clone credential) and fails closed if it can't — but the reader
+            # also refuses VCS internals so a stray `.git` can never be read.
+            raise WorkspaceError(f"refused: VCS metadata is not readable: {rel}")
 
         path = (self._root / rel).resolve()
         if not path.is_relative_to(self._root):
@@ -227,9 +257,12 @@ class WorkspaceReader:
             if not resolved.is_relative_to(self._root) or not resolved.is_file():
                 continue
             try:
-                rels.append(candidate.relative_to(self._root).as_posix())
+                rel = candidate.relative_to(self._root).as_posix()
             except ValueError:
                 continue
+            if _VCS_DIR in PurePosixPath(rel).parts:
+                continue  # never enumerate VCS internals (see _resolve)
+            rels.append(rel)
         return sorted(rels)
 
     def _skip_search_file(self, path: Path) -> bool:

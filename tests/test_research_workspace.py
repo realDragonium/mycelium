@@ -183,3 +183,47 @@ def test_call_wraps_unexpected_errors_as_workspace_error(tmp_path):
     # a glob pathlib itself rejects must not escape either
     with pytest.raises(WorkspaceError):
         ws.call("ws_list_files", {"glob": "/absolute/**"})
+
+
+def test_git_dir_is_refused_by_read_and_skipped_by_glob(tmp_path):
+    """VCS internals are never enumerated or readable (defense in depth for the
+    clone-credential path), even if a .git survived into the workspace."""
+    from mycelium.research.workspace import WorkspaceError, WorkspaceReader
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("url = https://x-access-token:SECRET@github.com/o/r")
+    (tmp_path / "app.py").write_text("print('hi')\n")
+    ws = WorkspaceReader(tmp_path)
+
+    listing = ws.call("ws_list_files", {"glob": "**/*"})
+    assert not any(".git" in f for f in listing["files"])
+    assert "app.py" in listing["files"]
+
+    grep = ws.call("ws_grep", {"pattern": "SECRET"})
+    assert grep["matches"] == []  # never reads .git/config
+
+    with pytest.raises(WorkspaceError):
+        ws.call("ws_read_file", {"path": ".git/config"})
+
+
+def test_grep_bounds_regex_input_per_line(tmp_path):
+    """A newline-free multi-KB line only feeds a bounded window to the regex."""
+    from mycelium.research.workspace import WorkspaceReader
+
+    long_line = "a" * 100_000 + "NEEDLE"
+    (tmp_path / "big.txt").write_text(long_line)
+    ws = WorkspaceReader(tmp_path, max_search_chars=50, max_file_bytes=10_000_000)
+    # NEEDLE is past the 50-char search window → not matched (bounded input)
+    assert ws.call("ws_grep", {"pattern": "NEEDLE"})["matches"] == []
+    # but a pattern within the window matches
+    assert ws.call("ws_grep", {"pattern": "a{10}"})["matches"]
+
+
+def test_grep_stops_at_scan_byte_budget(tmp_path):
+    from mycelium.research.workspace import WorkspaceReader
+
+    for i in range(6):
+        (tmp_path / f"f{i}.txt").write_text("x" * 1000 + "\n")
+    ws = WorkspaceReader(tmp_path, max_grep_scan_bytes=2500)
+    out = ws.call("ws_grep", {"pattern": "zzz"})  # no matches, but scans files
+    assert out["truncated"] is True

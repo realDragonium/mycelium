@@ -66,6 +66,12 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL + a busy timeout so the drafts DB tolerates a background writer: a
+    # research run finalizes its row and queues its draft ops from a worker
+    # thread while HTTP threads read/write the same file. Mirrors store.py,
+    # which set this for the mention-recompute worker. (No-op on :memory:.)
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
