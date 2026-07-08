@@ -1,6 +1,9 @@
 """SQLite persistence for entities, names, statements, mentions, and links.
 
-Single-writer. No concurrency safety. The substrate trusts the writer.
+Writes are serialized per connection through `transaction()` — the process
+shares one connection per database across request threads, and the unit of
+work that handles an external request owns the transaction (helpers never
+commit; see the transaction-ownership section below).
 
 Names are first-class: every entity reference flows through a name, and
 statement_mentions records which name a statement used (not just which
@@ -12,11 +15,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Iterator
 
 from . import mentions
 
@@ -40,6 +45,60 @@ def set_actor(actor: str | None) -> None:
 
 def get_actor() -> str | None:
     return _actor
+
+
+# --- transaction ownership ---------------------------------------------------
+#
+# One rule everywhere: helpers never commit — the code handling an external
+# unit of work (an MCP tool call, an HTTP request, a worker drain pass) owns
+# the transaction and wraps it in `transaction(conn)`. That makes each unit
+# of work atomic (a failure rolls the whole thing back instead of leaving a
+# half-applied cascade on the connection), and it makes commit timing visible
+# at the call site instead of buried per-helper.
+#
+# The context manager also serializes writers: the process shares one
+# connection per database across FastAPI's request threadpool, so two
+# concurrent requests could otherwise interleave statements inside each
+# other's transactions. Each connection gets one reentrant lock; nested
+# `transaction()` blocks on the same connection join the outer transaction
+# (only the outermost block commits or rolls back).
+
+# Keyed by id(conn) — sqlite3.Connection is not weak-referenceable. Entries
+# are never removed: a process holds a handful of long-lived connections, an
+# RLock is tiny, and a recycled id would only ever find an unlocked lock and
+# a zero depth (transaction() always restores both on exit).
+_txn_locks: dict[int, threading.RLock] = {}
+_txn_depth: dict[int, int] = {}
+_txn_registry_lock = threading.Lock()
+
+
+def _txn_lock(conn: sqlite3.Connection) -> threading.RLock:
+    with _txn_registry_lock:
+        return _txn_locks.setdefault(id(conn), threading.RLock())
+
+
+@contextmanager
+def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+    """Own the write transaction for one unit of work.
+
+    Acquires the connection's write lock, yields, and commits on success
+    or rolls back on exception. Reentrant on the same connection: an inner
+    block joins the outer transaction and the outermost block decides.
+    """
+    with _txn_lock(conn):
+        depth = _txn_depth.get(id(conn), 0)
+        _txn_depth[id(conn)] = depth + 1
+        try:
+            yield conn
+        except BaseException:
+            if depth == 0:
+                conn.rollback()
+            raise
+        else:
+            if depth == 0:
+                conn.commit()
+        finally:
+            _txn_depth[id(conn)] = depth
 
 
 def _now() -> str:
