@@ -70,7 +70,7 @@ async function _editOp(draftId, seq, payload) {
 //
 // Reuses the main GraphView by feeding it a scoped substrate-shape
 // dataset. The shape is the same as what `/api/data` returns
-// (entities, statements, names, links, entity_links, annotations);
+// (entities, statements, names, links, entity_links);
 // `buildIndex` produces a matching index. GraphView's render code +
 // interactions (pan, zoom, drag, highlight, sidepanel) all work
 // unchanged — no parallel viewer to keep in lockstep.
@@ -203,7 +203,7 @@ function _buildScopedSubstrate(ops, full) {
     ...synthEntLinks,
   ];
 
-  return { entities, statements, names, links, entity_links, annotations: [] };
+  return { entities, statements, names, links, entity_links };
 }
 
 

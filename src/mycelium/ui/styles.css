@@ -29,12 +29,10 @@
   --k-entity: #0e7490;     /* teal */
   --k-statement: #7c3aed;   /* violet */
   --k-name: #b45309;       /* amber */
-  --k-annotation: #047857; /* emerald */
 
   --k-entity-bg: #ecfeff;
   --k-statement-bg: #f5f3ff;
   --k-name-bg: #fffbeb;
-  --k-annotation-bg: #ecfdf5;
 
   --sans: 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -90,12 +88,10 @@
   --k-entity: #7aa8ff;
   --k-statement: #b6f25c;
   --k-name: #f5a14a;
-  --k-annotation: #5eead4;
 
   --k-entity-bg: rgba(122, 168, 255, 0.10);
   --k-statement-bg: rgba(182, 242, 92, 0.10);
   --k-name-bg: rgba(245, 161, 74, 0.10);
-  --k-annotation-bg: rgba(94, 234, 212, 0.10);
 
   --shadow-md: 0 1px 2px rgba(0,0,0,0.4), 0 4px 12px -4px rgba(0,0,0,0.5);
 }
@@ -526,11 +522,9 @@ footer.footer .ftr-inner {
 .kind.k-entity { color: var(--k-entity); border-color: color-mix(in oklab, var(--k-entity) 35%, var(--rule)); background: var(--k-entity-bg); }
 .kind.k-statement { color: var(--k-statement); border-color: color-mix(in oklab, var(--k-statement) 35%, var(--rule)); background: var(--k-statement-bg); }
 .kind.k-name { color: var(--k-name); border-color: color-mix(in oklab, var(--k-name) 35%, var(--rule)); background: var(--k-name-bg); }
-.kind.k-annotation { color: var(--k-annotation); border-color: color-mix(in oklab, var(--k-annotation) 35%, var(--rule)); background: var(--k-annotation-bg); }
 .kind.k-entity .dot { background: var(--k-entity); border-radius: 0; transform: rotate(45deg); }
 .kind.k-statement .dot { background: var(--k-statement); border-radius: 50%; }
 .kind.k-name .dot { background: var(--k-name); }
-.kind.k-annotation .dot { background: var(--k-annotation); border-radius: 1px; }
 
 /* ---------- Claim-kind tag (event / state / capability) ----------
  *
@@ -2630,36 +2624,6 @@ mark { background: var(--selection); color: var(--ink); padding: 0; border-radiu
   font-family: var(--sans) !important;
 }
 
-/* ---------- Annotation rows ---------- */
-.ann-row {
-  padding: 10px 12px;
-  border: 1px solid var(--rule);
-  border-radius: var(--r-md);
-  background: var(--bg-1);
-  margin-bottom: 6px;
-}
-.ann-row:hover { border-color: var(--accent); }
-.ann-row-text {
-  font-size: var(--fs-md);
-  line-height: 1.5;
-  color: var(--ink);
-}
-.ann-row-meta {
-  margin-top: 6px;
-  display: flex;
-  gap: 14px;
-  font-family: var(--mono);
-  font-size: 10.5px;
-  color: var(--ink-4);
-}
-.ann-row-meta .ann-shared { color: var(--ink-3); }
-.ann-row-meta .ann-mentions a {
-  color: var(--ink-3);
-  text-decoration: none;
-  border-bottom: 1px dotted currentColor;
-}
-.ann-row-meta .ann-mentions a:hover { color: var(--accent); }
-
 /* ---------- Conditional-edge indicators ----------
  *
  * Edges with a `when` clause need to be visually distinct from
@@ -3012,9 +2976,8 @@ mark { background: var(--selection); color: var(--ink); padding: 0; border-radiu
 }
 .ctx-node-statement rect { stroke: color-mix(in oklab, #6366f1 60%, var(--ink-5)); }
 .ctx-node-entity rect { stroke: color-mix(in oklab, #10b981 60%, var(--ink-5)); }
-.ctx-node-annotation polygon { stroke: color-mix(in oklab, #f59e0b 60%, var(--ink-5)); }
 
-.ctx-node-anchor rect, .ctx-node-anchor polygon {
+.ctx-node-anchor rect {
   fill: color-mix(in oklab, var(--accent) 12%, var(--bg-1));
   stroke: var(--accent);
   stroke-width: 1.5;

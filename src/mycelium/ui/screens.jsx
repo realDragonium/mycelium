@@ -128,7 +128,7 @@ function SearchResults({ query }) {
     /></main>;
   }
 
-  const counts = { all: all.length, entity: 0, statement: 0, name: 0, annotation: 0 };
+  const counts = { all: all.length, entity: 0, statement: 0, name: 0 };
   all.forEach(r => { counts[r.kind]++; });
   const filtered = filter === 'all' ? all : all.filter(r => r.kind === filter);
 
@@ -147,7 +147,7 @@ function SearchResults({ query }) {
           <span className="qct">{all.length} match{all.length===1?'':'es'}</span>
         </h1>
         <div className="results-tabs">
-          {['all', 'entity', 'statement', 'annotation', 'name'].map(k => (
+          {['all', 'entity', 'statement', 'name'].map(k => (
             <button key={k} className={filter === k ? 'is-active' : ''} onClick={() => setFilter(k)}>
               {k}<span className="ct">{counts[k]}</span>
             </button>
@@ -190,26 +190,6 @@ function ResultRow({ result, query, idx: rowIdx }) {
         <span className="res-title">{highlight(r.title, query)}</span>
         <span className="res-snippet">{highlight(r.text, query)}</span>
         <span className="res-meta">{(window.MYCELIUM_INDEX.outgoing[r.id]||[]).length}↗ {(window.MYCELIUM_INDEX.incoming[r.id]||[]).length}↙</span>
-      </div>
-    );
-  }
-  if (result.kind === 'annotation') {
-    // Click navigates to the first statement or entity it's attached to,
-    // since annotations don't have their own detail page yet.
-    const target = (r.statements || [])[0]
-      ? { view: 'statement', id: r.statements[0] }
-      : (r.entities || [])[0]
-      ? { view: 'entity', id: r.entities[0] }
-      : null;
-    const attachCount = (r.statements || []).length + (r.entities || []).length;
-    return (
-      <div className="result-row" onClick={() => target && router.go(target)} style={!target ? {opacity:0.6} : null}>
-        <span className="res-num">{String(rowIdx).padStart(2,'0')}</span>
-        <KindTag kind="annotation" />
-        <span className="res-id">{r.id}</span>
-        <span className="res-title">{highlight(r.kind, query)}</span>
-        <span className="res-snippet">{highlight(r.text, query)}</span>
-        <span className="res-meta">{attachCount > 0 ? `→ ${attachCount}` : 'orphan'}</span>
       </div>
     );
   }
@@ -468,13 +448,6 @@ function StatementDetail({ id }) {
           </div>
         )}
 
-        <AnnotationList
-          title="annotations"
-          sub="// typed propositions attached to this statement"
-          annotations={idx.annotationsByStatement[id] || []}
-          self={{ kind: 'statement', id }}
-          style={{marginTop:18}}
-        />
       </section>
 
       {/* connections panel — unified, type-filtered */}
@@ -1403,9 +1376,6 @@ function EntityDetail({ id }) {
     .map(l => ({ ...l, target: idx.byId[l.from] }))
     .filter(x => x.target);
   const totalEntityLinks = entityOutgoing.length + entityIncoming.length;
-  const directAnnotations = idx.annotationsByEntity[e.id] || [];
-  const mentioningAnnotations = (idx.annotationsMentioningEntity[e.id] || [])
-    .filter(a => !directAnnotations.some(d => d.id === a.id));
 
   return (
     <div className="detail">
@@ -1429,9 +1399,6 @@ function EntityDetail({ id }) {
               <span><b>{aliases.length}</b> aliases</span>
               <span><b>{mentioned.length}</b>↙ mentions</span>
               {totalEntityLinks > 0 && <span><b>{totalEntityLinks}</b> entity links</span>}
-              {(directAnnotations.length + mentioningAnnotations.length) > 0 && (
-                <span><b>{directAnnotations.length + mentioningAnnotations.length}</b> annotations</span>
-              )}
             </span>
           </div>
           <h1 className="entity-name">{e.name}</h1>
@@ -1443,24 +1410,6 @@ function EntityDetail({ id }) {
             </div>
           )}
         </header>
-
-        <AnnotationList
-          title="annotations"
-          sub="// typed propositions attached directly to this entity"
-          annotations={directAnnotations}
-          self={{ kind: 'entity', id: e.id }}
-          style={{marginTop:24}}
-        />
-
-        {mentioningAnnotations.length > 0 && (
-          <AnnotationList
-            title="mentioning annotations"
-            sub="// annotations that reference this entity but are attached elsewhere"
-            annotations={mentioningAnnotations}
-            self={{ kind: 'entity', id: e.id }}
-            style={{marginTop:24}}
-          />
-        )}
 
         {totalEntityLinks > 0 && (
           <section style={{marginTop:24}}>
