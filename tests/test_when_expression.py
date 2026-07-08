@@ -2,7 +2,6 @@ import pytest
 
 from mycelium import when_expression as we
 
-
 # ─── shape predicates ───────────────────────────────────────────────────────
 
 

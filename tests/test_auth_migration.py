@@ -12,7 +12,6 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-
 # The pre-drafter schema, transcribed verbatim from the prior auth_store.py.
 # We seed a DB with this and then run migrate() to assert the rebuild flips
 # the CHECK constraints without losing rows.

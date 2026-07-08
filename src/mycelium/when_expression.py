@@ -41,7 +41,6 @@ import hashlib
 import json
 from typing import Any, Callable
 
-
 HASH_NONE = "NONE"
 
 

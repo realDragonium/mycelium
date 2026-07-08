@@ -14,7 +14,6 @@ the route hands it back with `text/html`.
 
 from __future__ import annotations
 
-
 CONNECT_HTML = """<!doctype html>
 <html lang="en">
 <head>

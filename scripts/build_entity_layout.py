@@ -37,7 +37,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = REPO_ROOT / ".mycelium" / "mycelium.db"
 DEFAULT_OUTPUT = (

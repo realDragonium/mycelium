@@ -21,7 +21,6 @@ from typing import Any
 
 import ollama
 
-
 SYSTEM_PROMPT = """You are a knowledge-base editor for Mycelium, an AI-native KB. Your job is to make the KB correctly describe the product from an *outside, user-facing* perspective — what the system does, not how it does it. You are NOT cleaning up a single behavior. You are using one suspect behavior as a starting point to find and fix gaps in the KB as a whole.
 
 The suspect you are given leaks implementation detail — internal function names (`_is_auth0_id_known`), service classes (`ParseDataService`), exception types (`InvalidEmailException`), SQL fragments. That leak almost always means the behavior is also at the wrong level of abstraction: it describes an internal mechanism instead of a user-facing capability.

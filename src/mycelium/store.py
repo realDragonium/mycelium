@@ -20,7 +20,6 @@ from typing import Any, Callable, Iterable
 
 from . import mentions
 
-
 # --- audit context ----------------------------------------------------------
 #
 # Every write stamps `created_at` / `updated_at` (ISO-8601 UTC) and, when an

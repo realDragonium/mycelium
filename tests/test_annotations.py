@@ -456,6 +456,7 @@ def test_starting_vocabulary_round_trips(tmp_path, monkeypatch):
 def test_annotation_kind_rejected_when_null(tmp_path, monkeypatch):
     """Substrate enforces NOT NULL on annotation kind."""
     import sqlite3
+
     from mycelium import store as st
 
     with _client(tmp_path, monkeypatch, fake_embed_factory()):

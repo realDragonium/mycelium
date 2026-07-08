@@ -398,6 +398,7 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
     both the stdio and HTTP transports.
     """
     import asyncio
+
     import mcp.types as mt
 
     # The filter is driven by the principal in the contextvar, not by

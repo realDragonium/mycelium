@@ -9,7 +9,6 @@ from typing import Any
 
 from ..ask.substrate import ToolSpec
 
-
 #: Path component that marks VCS internals — never enumerated or read (it can
 #: hold clone credentials; `sources.fetch` strips it, this is defense in depth).
 _VCS_DIR = ".git"

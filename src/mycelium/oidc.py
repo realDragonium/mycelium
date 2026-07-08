@@ -63,7 +63,6 @@ from fastapi.responses import RedirectResponse
 
 from . import auth
 
-
 SESSION_COOKIE = "myc_session"
 _oauth: Any | None = None  # lazy: only constructed when OIDC is enabled
 

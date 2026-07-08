@@ -21,7 +21,6 @@ from typing import Any
 
 from mcp_client import MyceliumClient
 
-
 _SUFFIX_RE = re.compile(
     r"\b[A-Z][a-zA-Z]*(?:Service|Manager|Repository|Provider|Factory|Handler|Processor|Helper|Validator|Serializer|Deserializer|Controller|Resolver)\b"
 )

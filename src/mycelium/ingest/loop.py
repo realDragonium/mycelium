@@ -28,6 +28,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .. import tracing
+
+# Reuse ask's read seam wholesale — do NOT duplicate it.
+from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
 from .config import IngestConfig
 from .draft import DraftEmitter, InProcessDraftEmitter
@@ -41,10 +45,6 @@ from .schema import (
 )
 from .tools import EMIT_TOOL, build_tools, parse_emit_input
 from .trace import TraceBuilder
-from .. import tracing
-
-# Reuse ask's read seam wholesale — do NOT duplicate it.
-from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 
 #: Reconcile reads — at least one must have happened before emit is accepted.
 _RECONCILE_TOOLS = frozenset(

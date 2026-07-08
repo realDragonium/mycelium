@@ -28,7 +28,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = REPO_ROOT / ".mycelium" / "mycelium.db"
 DEFAULT_POSITIONS = (

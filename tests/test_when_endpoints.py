@@ -14,7 +14,8 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, server, when_expression as we
+from mycelium import embed, server
+from mycelium import when_expression as we
 
 
 def deterministic_embed(text: str) -> list[float]:

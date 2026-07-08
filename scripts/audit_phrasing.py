@@ -28,7 +28,6 @@ from pathlib import Path
 
 from mycelium import phrasing, store
 
-
 # Sort order for the `category` column. Cheaper / more mechanical fixes
 # come first so a reviewer working top-to-bottom hits the easy wins
 # before the interpretive ones. Unknown categories sort to the end.

@@ -14,7 +14,6 @@ import pytest
 
 from mycelium import backup, store
 
-
 # Build the substrate via the same store helpers normal writes go
 # through, so audit columns and history events populate naturally.
 

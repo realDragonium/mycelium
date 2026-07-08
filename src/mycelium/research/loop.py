@@ -30,12 +30,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import prompts, sources
-from .config import ResearchConfig
-from .schema import NothingFound, ProposedOp, ResearchDraftCreated, ResearchResult
-from .sources import Source, SourceError
-from .workspace import WorkspaceError, WorkspaceReader
 from .. import tracing
+from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 
 # Reuse ingest's harness machinery wholesale — do NOT duplicate it. The loop
 # below imports only read/validate/assemble helpers; no write tool exists in
@@ -62,7 +58,11 @@ from ..ingest.loop import (
 )
 from ..ingest.tools import EMIT_TOOL, build_tools, parse_emit_input
 from ..ingest.trace import TraceBuilder
-from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
+from . import prompts, sources
+from .config import ResearchConfig
+from .schema import NothingFound, ProposedOp, ResearchDraftCreated, ResearchResult
+from .sources import Source, SourceError
+from .workspace import WorkspaceError, WorkspaceReader
 
 #: Exploration floor: this many successful workspace reads, at least one of
 #: which actually read a file (listing/grepping without reading is not

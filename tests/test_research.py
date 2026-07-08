@@ -18,13 +18,12 @@ import types
 
 import pytest
 
+from mycelium.ask.substrate import SubstrateError, ToolSpec
+from mycelium.ingest.tools import EMIT_TOOL
 from mycelium.research import NothingFound, ResearchConfig, ResearchDraftCreated
 from mycelium.research.loop import run_research
 from mycelium.research.sources import Source, SourceError
 from mycelium.research.workspace import WorkspaceError
-from mycelium.ingest.tools import EMIT_TOOL
-from mycelium.ask.substrate import SubstrateError, ToolSpec
-
 
 # --------------------------------------------------------------------------- #
 # Fakes (mirror test_ingest.py)
@@ -592,6 +591,7 @@ def test_unknown_source_name_returns_nothing_found(monkeypatch):
 
 def test_source_fetch_failure_returns_nothing_found(monkeypatch):
     from contextlib import contextmanager
+
     from mycelium.research import loop as rloop
 
     @contextmanager

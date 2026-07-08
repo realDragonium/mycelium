@@ -417,7 +417,8 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
          session-scoped open draft. Requires a session id.
       3. Anything else — return None.
     """
-    from . import auth as _auth, drafts_store
+    from . import auth as _auth
+    from . import drafts_store
 
     if draft_id is not None:
         assert _drafts_conn is not None
@@ -1563,7 +1564,8 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
     configured. Returns {run row: id, topic, source, created_at, created_by,
     started_at, finished_at, outcome, draft_id, error, trace_ref, status}."""
     assert _drafts_conn is not None and _data_dir is not None
-    from . import auth as _auth, research_runs, research_store
+    from . import auth as _auth
+    from . import research_runs, research_store
 
     source_name = _resolve_research_source(source)
     principal = _auth.current_principal.get()
@@ -4029,7 +4031,8 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
 
     Returns the submitted draft's id and final op count.
     """
-    from . import auth as _auth, drafts_store
+    from . import auth as _auth
+    from . import drafts_store
 
     assert _drafts_conn is not None
     principal = _auth.current_principal.get()
@@ -4064,7 +4067,8 @@ def list_my_drafts() -> list[dict[str, Any]]:
     Useful for an agent to inspect what it queued in earlier sessions
     or check on the review state of submitted work.
     """
-    from . import auth as _auth, drafts_store
+    from . import auth as _auth
+    from . import drafts_store
 
     assert _drafts_conn is not None
     principal = _auth.current_principal.get()

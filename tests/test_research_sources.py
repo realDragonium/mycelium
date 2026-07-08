@@ -248,6 +248,7 @@ def test_fetch_timeout_does_not_chain_token_bearing_exception(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 import json as _json
+
 import pytest as _pytest
 
 

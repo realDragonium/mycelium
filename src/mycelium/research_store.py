@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import sqlite3
 import uuid as _uuid
-from datetime import datetime as _dt, timezone as _tz
+from datetime import datetime as _dt
+from datetime import timezone as _tz
 from pathlib import Path
-
 
 RESEARCH_RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS research_runs (

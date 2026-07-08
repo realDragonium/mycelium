@@ -16,7 +16,6 @@ from mycelium.ask import Answered, AskConfig, NeedsClarification, run_ask
 from mycelium.ask.schema import Answered as AnsweredModel
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 
-
 # --------------------------------------------------------------------------- #
 # Fakes
 # --------------------------------------------------------------------------- #

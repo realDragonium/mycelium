@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import types
 
+from mycelium.ask.substrate import SubstrateError, ToolSpec
 from mycelium.ingest import (
     DraftCreated,
     IngestConfig,
@@ -23,8 +24,6 @@ from mycelium.ingest import (
     run_ingest,
 )
 from mycelium.ingest.tools import EMIT_TOOL, build_tools, parse_emit_input
-from mycelium.ask.substrate import SubstrateError, ToolSpec
-
 
 # --------------------------------------------------------------------------- #
 # Fakes

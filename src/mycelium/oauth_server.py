@@ -56,7 +56,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from . import auth
 
-
 router = APIRouter(tags=["oauth"])
 
 

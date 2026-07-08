@@ -13,13 +13,12 @@ import asyncio
 import inspect
 import json
 import os
+import secrets
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
-
-import secrets
-import uuid
 
 import uvicorn
 from dotenv import load_dotenv
@@ -31,7 +30,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import auth, connect_page, oauth_server, oidc, server, store, tracing
-
 
 # Build FastMCP's streamable-HTTP sub-app once at import time. The
 # sub-app owns a session manager that can only be started once per
@@ -756,7 +754,8 @@ def get_history(
 # in single-user local mode for bootstrapping an MCP client without ever
 # enabling auth.
 
-from pydantic import BaseModel, Field as PydField  # noqa: E402  (after route registration block)
+from pydantic import BaseModel  # noqa: E402  (after route registration block)
+from pydantic import Field as PydField
 
 
 def _require_principal(request: Request) -> auth.Principal:
@@ -1011,7 +1010,9 @@ def get_entity_positions(request: Request) -> Any:
     instead of a static /ui/data/ path; the URL is stable even if
     we change where the file lives on disk.
     """
-    from fastapi.responses import FileResponse, JSONResponse as _JSON
+    from fastapi.responses import FileResponse
+    from fastapi.responses import JSONResponse as _JSON
+
     from . import layout_baker
 
     path = layout_baker.output_path()
@@ -1075,7 +1076,8 @@ def list_traces(request: Request) -> Any:
 @app.get("/api/traces/{trace_id}")
 def get_trace(trace_id: str, request: Request) -> Any:
     """Render one trace's flamegraph — open this URL in a browser."""
-    from fastapi.responses import HTMLResponse, JSONResponse as _JSON
+    from fastapi.responses import HTMLResponse
+    from fastapi.responses import JSONResponse as _JSON
 
     _enforce_role(request, "admin")
     if "/" in trace_id or "\\" in trace_id or ".." in trace_id:
