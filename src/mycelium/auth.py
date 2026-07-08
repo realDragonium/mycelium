@@ -263,7 +263,6 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
         "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
         (datetime.now(timezone.utc).isoformat(), row["token_id"]),
     )
-    conn.commit()
     return Principal(
         id=row["user_id"],
         name=row["name"],
@@ -312,9 +311,7 @@ def create_user(
     oidc_subject: str | None = None,
     created_by: str | None = None,
 ) -> str:
-    """Insert a `users` row and return its id. Caller is responsible
-    for committing — kept transaction-neutral so callers can batch
-    user creation with related writes (e.g. consuming an invite)."""
+    """Insert a `users` row and return its id."""
     user_id = str(uuid.uuid4())
     conn.execute(
         """
@@ -364,7 +361,6 @@ def issue_token(
         """,
         (token_id, user_id, name, prefix, h, scope, _now()),
     )
-    conn.commit()
     return raw, token_id
 
 
@@ -374,7 +370,6 @@ def revoke_token(conn: sqlite3.Connection, token_id: str) -> None:
         "UPDATE mcp_tokens SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?",
         (_now(), token_id),
     )
-    conn.commit()
 
 
 # --- HTTP admin surface: user / token / invite queries --------------------
@@ -384,8 +379,7 @@ def revoke_token(conn: sqlite3.Connection, token_id: str) -> None:
 # guard) lives here. Reads return raw `sqlite3.Row`s so the HTTP layer keeps
 # its own presentation shaping. Not-found conditions raise `LookupError`
 # (endpoints map that to 404); rule violations raise `ValueError` (mapped to
-# 400 by the app-wide handler). Write helpers follow the same commit
-# discipline as `create_user` / `issue_token` above — noted per helper.
+# 400 by the app-wide handler).
 
 
 def owner_id_for(principal: Principal) -> str:
@@ -418,7 +412,7 @@ def get_token(conn: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
 def _ensure_local_admin_row(conn: sqlite3.Connection) -> str:
     """Lazily materialize a real `users` row for the synthetic local-admin so
     it can own tokens, and return its id (`LOCAL_ADMIN_ID`). The row stays
-    invisible until auth is switched on. Commits on first creation."""
+    invisible until auth is switched on."""
     existing = conn.execute(
         "SELECT id FROM users WHERE id = ?", (LOCAL_ADMIN_ID,)
     ).fetchone()
@@ -428,7 +422,6 @@ def _ensure_local_admin_row(conn: sqlite3.Connection) -> str:
             "VALUES (?, 'human', 'Local admin', 'admin', 'active', ?)",
             (LOCAL_ADMIN_ID, _now()),
         )
-        conn.commit()
     return LOCAL_ADMIN_ID
 
 
@@ -441,8 +434,7 @@ def mint_own_token(
 ) -> tuple[str, sqlite3.Row]:
     """Mint a token owned by the calling principal, capping `scope` at the
     principal's current role. Returns `(raw_token, token_row)` — the raw
-    secret to show once plus the persisted row for serialization. Commits
-    (via `_ensure_local_admin_row` / `issue_token`)."""
+    secret to show once plus the persisted row for serialization."""
     capped = _clamp_scope(scope, principal.role)
     owner_id = _ensure_local_admin_row(conn) if principal.synthetic else principal.id
     raw, token_id = issue_token(conn, user_id=owner_id, name=name, scope=capped)
@@ -454,7 +446,7 @@ def mint_own_token(
 def revoke_own_token(conn: sqlite3.Connection, *, token_id: str, owner_id: str) -> None:
     """Revoke a token the caller owns. Raises `LookupError` when the token is
     unknown *or* owned by someone else — the endpoint maps both to 404 so a
-    caller can't probe other users' token ids. Commits (via `revoke_token`)."""
+    caller can't probe other users' token ids."""
     row = conn.execute(
         "SELECT id, user_id FROM mcp_tokens WHERE id = ?", (token_id,)
     ).fetchone()
@@ -468,7 +460,7 @@ def mint_token_for_user(
 ) -> tuple[str, sqlite3.Row]:
     """Admin path: mint a token for any user, capping `scope` at that user's
     role. Raises `LookupError` (→ 404) when the user is unknown. Returns
-    `(raw_token, token_row)`. Commits (via `issue_token`)."""
+    `(raw_token, token_row)`."""
     user = get_user(conn, user_id)
     if user is None:
         raise LookupError("user not found")
@@ -511,9 +503,7 @@ def update_user(
     - **last-admin guard**: demoting the sole remaining active admin off the
       admin role is refused with `ValueError("cannot demote the last admin")`
       (→ 400), so the surface can't lock itself out;
-    - an out-of-range `status` → `ValueError("invalid status")` (→ 400).
-
-    Commits once all requested updates are applied."""
+    - an out-of-range `status` → `ValueError("invalid status")` (→ 400)."""
     row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
     if row is None:
         raise LookupError("user not found")
@@ -533,7 +523,6 @@ def update_user(
         conn.execute("UPDATE users SET status = ? WHERE id = ?", (status, user_id))
     if name is not None:
         conn.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
-    conn.commit()
     updated = get_user(conn, user_id)
     assert updated is not None
     return updated
@@ -552,7 +541,7 @@ def create_invite(
 ) -> sqlite3.Row:
     """Create an invite binding a normalized email to a role and return its
     row. The email is stripped and lowercased; the opaque token is generated
-    here. Commits."""
+    here."""
     invite_id = str(uuid.uuid4())
     token = secrets.token_urlsafe(24)
     conn.execute(
@@ -560,7 +549,6 @@ def create_invite(
         "VALUES (?, ?, ?, ?, ?, ?)",
         (invite_id, email.strip().lower(), role, token, invited_by, _now()),
     )
-    conn.commit()
     row = conn.execute(
         "SELECT id, email, role, token, created_at, expires_at FROM invites WHERE id = ?",
         (invite_id,),
@@ -571,11 +559,10 @@ def create_invite(
 
 def revoke_invite(conn: sqlite3.Connection, invite_id: str) -> None:
     """Delete a pending invite. No-op when the invite is already accepted or
-    absent (matches the endpoint's idempotent DELETE). Commits."""
+    absent (matches the endpoint's idempotent DELETE)."""
     conn.execute(
         "DELETE FROM invites WHERE id = ? AND accepted_at IS NULL", (invite_id,)
     )
-    conn.commit()
 
 
 # --- OIDC user provisioning -------------------------------------------------
@@ -613,7 +600,7 @@ def _jit_default_role() -> Role | None:
 def _consume_invite(conn: sqlite3.Connection, email: str) -> str | None:
     """Find an active (unaccepted, unexpired) invite for `email` and
     mark it consumed. Returns the granted role or None if no invite
-    matched. Caller is expected to commit after consuming."""
+    matched."""
     row = conn.execute(
         "SELECT id, role FROM invites "
         "WHERE LOWER(email) = LOWER(?) AND accepted_at IS NULL "
@@ -680,7 +667,6 @@ def find_or_create_user(
             "UPDATE users SET last_login_at = ? WHERE id = ?",
             (_now(), row["id"]),
         )
-        conn.commit()
         return row["id"]
 
     row = conn.execute(
@@ -699,7 +685,6 @@ def find_or_create_user(
             "WHERE id = ?",
             (issuer, subject, _now(), row["id"]),
         )
-        conn.commit()
         return row["id"]
 
     invited_role = _consume_invite(conn, email)
@@ -760,5 +745,4 @@ def find_or_create_user(
             email,
             role,
         )
-    conn.commit()
     return user_id

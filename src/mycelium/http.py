@@ -234,7 +234,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return None
         raw = auth.parse_bearer(request.headers.get("authorization"))
         if raw is not None:
-            principal = auth.resolve_token(conn, raw)
+            # resolve_token bumps last_used_at; own that write here since
+            # the auth layer is the unit of work for the token lookup.
+            with store.transaction(conn):
+                principal = auth.resolve_token(conn, raw)
             if principal is not None:
                 return principal
         # Starlette session is exposed as a dict on `request.session`
@@ -660,7 +663,8 @@ def update_knowledge_gap(
             status_code=400,
             detail="action must be one of: resolve, dismiss, reopen",
         )
-    updated = store.set_knowledge_gap_status(conn, gap_id, body.action, p.id)
+    with store.transaction(conn):
+        updated = store.set_knowledge_gap_status(conn, gap_id, body.action, p.id)
     return {"gap": _serialize_gap(updated)}
 
 
@@ -734,16 +738,17 @@ def update_pending_mention(
     _require_principal(request)
     conn = server._conn
     assert conn is not None
-    if body.action == "approve":
-        ok = store.approve_pending_mention(conn, pending_id)
-    elif body.action == "reject":
-        ok = store.reject_pending_mention(conn, pending_id)
-    else:
+    if body.action not in ("approve", "reject"):
         from fastapi import HTTPException
 
         raise HTTPException(
             status_code=400, detail="action must be one of: approve, reject"
         )
+    with store.transaction(conn):
+        if body.action == "approve":
+            ok = store.approve_pending_mention(conn, pending_id)
+        else:
+            ok = store.reject_pending_mention(conn, pending_id)
     if not ok:
         from fastapi import HTTPException
 
@@ -941,7 +946,10 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
     conn = server._auth_conn
     assert conn is not None
-    raw, row = auth.mint_own_token(conn, principal=p, name=body.name, scope=body.scope)
+    with store.transaction(conn):
+        raw, row = auth.mint_own_token(
+            conn, principal=p, name=body.name, scope=body.scope
+        )
     return {"token": raw, **_serialize_token_row(row)}
 
 
@@ -951,7 +959,10 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
     conn = server._auth_conn
     assert conn is not None
     try:
-        auth.revoke_own_token(conn, token_id=token_id, owner_id=auth.owner_id_for(p))
+        with store.transaction(conn):
+            auth.revoke_own_token(
+                conn, token_id=token_id, owner_id=auth.owner_id_for(p)
+            )
     except LookupError as ex:
         from fastapi import HTTPException
 
@@ -1046,7 +1057,8 @@ def edit_draft_op(
             status_code=400,
             detail=f"cannot edit ops on a {status} draft",
         )
-    ok = drafts_store.update_op_payload(conn, draft_id, seq, body.payload)
+    with store.transaction(conn):
+        ok = drafts_store.update_op_payload(conn, draft_id, seq, body.payload)
     if not ok:
         from fastapi import HTTPException
 
@@ -1074,7 +1086,8 @@ def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str,
             status_code=400,
             detail=f"cannot remove ops from a {status} draft",
         )
-    ok = drafts_store.remove_op(conn, draft_id, seq)
+    with store.transaction(conn):
+        ok = drafts_store.remove_op(conn, draft_id, seq)
     if not ok:
         from fastapi import HTTPException
 
@@ -1106,7 +1119,8 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
             status_code=400,
             detail="only open drafts can be submitted",
         )
-    drafts_store.set_submitted(conn, draft_id)
+    with store.transaction(conn):
+        drafts_store.set_submitted(conn, draft_id)
     return {"ok": True}
 
 
@@ -1147,7 +1161,8 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=400, detail=str(ex))
-    drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
+    with store.transaction(conn):
+        drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
     return {"ok": True, **result}
 
 
@@ -1170,7 +1185,8 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
             status_code=400,
             detail="only open or submitted drafts can be rejected",
         )
-    drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
+    with store.transaction(conn):
+        drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
     return {"ok": True}
 
 
@@ -1193,7 +1209,8 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
             status_code=400,
             detail="only open or submitted drafts can be withdrawn",
         )
-    drafts_store.set_decision(conn, draft_id, decision="withdrawn", by=p.id)
+    with store.transaction(conn):
+        drafts_store.set_decision(conn, draft_id, decision="withdrawn", by=p.id)
     return {"ok": True}
 
 
@@ -1255,15 +1272,15 @@ def create_user(body: CreateUserBody, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="human users require an email")
     conn = server._auth_conn
     assert conn is not None
-    user_id = auth.create_user(
-        conn,
-        name=body.name,
-        role=body.role,
-        type=body.type,
-        email=body.email,
-        created_by=admin.id,
-    )
-    conn.commit()
+    with store.transaction(conn):
+        user_id = auth.create_user(
+            conn,
+            name=body.name,
+            role=body.role,
+            type=body.type,
+            email=body.email,
+            created_by=admin.id,
+        )
     row = auth.get_user(conn, user_id)
     return {"user": _serialize_user_row(row)}
 
@@ -1280,13 +1297,14 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
     conn = server._auth_conn
     assert conn is not None
     try:
-        row = auth.update_user(
-            conn,
-            user_id,
-            role=body.role,
-            status=body.status,
-            name=body.name,
-        )
+        with store.transaction(conn):
+            row = auth.update_user(
+                conn,
+                user_id,
+                role=body.role,
+                status=body.status,
+                name=body.name,
+            )
     except LookupError as ex:
         from fastapi import HTTPException
 
@@ -1319,9 +1337,10 @@ def mint_token_for_user(
     conn = server._auth_conn
     assert conn is not None
     try:
-        raw, row = auth.mint_token_for_user(
-            conn, user_id=user_id, name=body.name, scope=body.scope
-        )
+        with store.transaction(conn):
+            raw, row = auth.mint_token_for_user(
+                conn, user_id=user_id, name=body.name, scope=body.scope
+            )
     except LookupError as ex:
         from fastapi import HTTPException
 
@@ -1334,7 +1353,8 @@ def revoke_token_admin(token_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    auth.revoke_token(conn, token_id)
+    with store.transaction(conn):
+        auth.revoke_token(conn, token_id)
     return {"ok": True}
 
 
@@ -1368,9 +1388,10 @@ def create_invite(body: CreateInviteBody, request: Request) -> dict[str, Any]:
     admin = _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    row = auth.create_invite(
-        conn, email=body.email, role=body.role, invited_by=admin.id
-    )
+    with store.transaction(conn):
+        row = auth.create_invite(
+            conn, email=body.email, role=body.role, invited_by=admin.id
+        )
     return _serialize_invite_row(row, request=request)
 
 
@@ -1379,7 +1400,8 @@ def revoke_invite(invite_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
     conn = server._auth_conn
     assert conn is not None
-    auth.revoke_invite(conn, invite_id)
+    with store.transaction(conn):
+        auth.revoke_invite(conn, invite_id)
     return {"ok": True}
 
 

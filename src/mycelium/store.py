@@ -883,12 +883,10 @@ def upsert_statement_kind_glossary(
             "WHERE kind = ?",
             (description, when_to_use, now, _actor, kind),
         )
-    conn.commit()
 
 
 def delete_statement_kind_glossary(conn: sqlite3.Connection, kind: str) -> None:
     conn.execute("DELETE FROM statement_kind_glossary WHERE kind = ?", (kind,))
-    conn.commit()
 
 
 def list_statement_link_type_glossary(
@@ -929,7 +927,6 @@ def upsert_statement_link_type_glossary(
             "WHERE link_type = ?",
             (description, now, _actor, link_type),
         )
-    conn.commit()
 
 
 def delete_statement_link_type_glossary(
@@ -939,7 +936,6 @@ def delete_statement_link_type_glossary(
         "DELETE FROM statement_link_type_glossary WHERE link_type = ?",
         (link_type,),
     )
-    conn.commit()
 
 
 def list_entity_link_type_glossary(
@@ -980,7 +976,6 @@ def upsert_entity_link_type_glossary(
             "WHERE link_type = ?",
             (description, now, _actor, link_type),
         )
-    conn.commit()
 
 
 def delete_entity_link_type_glossary(conn: sqlite3.Connection, link_type: str) -> None:
@@ -988,7 +983,6 @@ def delete_entity_link_type_glossary(conn: sqlite3.Connection, link_type: str) -
         "DELETE FROM entity_link_type_glossary WHERE link_type = ?",
         (link_type,),
     )
-    conn.commit()
 
 
 def count_statements_by_kind(conn: sqlite3.Connection, kind: str) -> int:
@@ -1016,7 +1010,6 @@ def create_entity(conn: sqlite3.Connection, description: str | None) -> str:
         entity_id,
         after=_row_dict(get_entity_by_id(conn, entity_id)),
     )
-    conn.commit()
     return entity_id
 
 
@@ -1045,7 +1038,6 @@ def update_entity_description(
         before=before,
         after=_row_dict(get_entity_by_id(conn, entity_id)),
     )
-    conn.commit()
 
 
 def delete_entity(conn: sqlite3.Connection, entity_id: str) -> None:
@@ -1054,7 +1046,6 @@ def delete_entity(conn: sqlite3.Connection, entity_id: str) -> None:
     conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
     if before is not None:
         _record(conn, "delete", "entity", entity_id, before=before)
-    conn.commit()
 
 
 # --- names ------------------------------------------------------------------
@@ -1082,7 +1073,6 @@ def create_name(
         name_id,
         after=_row_dict(get_name_by_id(conn, name_id)),
     )
-    conn.commit()
     return name_id
 
 
@@ -1125,8 +1115,7 @@ def get_names_by_entity(conn: sqlite3.Connection, entity_id: str) -> list[sqlite
 def delete_name_mentions(conn: sqlite3.Connection, name_id: str) -> int:
     """Remove a name's derived mention rows — its `statement_mentions`
     (count returned) and its `pending_mentions` review-queue rows — so the
-    name can be deleted under FK enforcement. No commit; the caller owns the
-    surrounding transaction."""
+    name can be deleted under FK enforcement."""
     removed = conn.execute(
         "DELETE FROM statement_mentions WHERE name_id = ?", (name_id,)
     ).rowcount
@@ -1137,7 +1126,7 @@ def delete_name_mentions(conn: sqlite3.Connection, name_id: str) -> int:
 def delete_name(conn: sqlite3.Connection, name_id: str) -> None:
     """Delete a single name row. The caller must have cleared its derived
     mention rows (`delete_name_mentions`) and any generated-plural
-    self-reference pointing at it first. No commit."""
+    self-reference pointing at it first."""
     conn.execute("DELETE FROM names WHERE id = ?", (name_id,))
 
 
@@ -1146,7 +1135,7 @@ def delete_names_clearing_generated_refs(
 ) -> None:
     """Delete a batch of names that may reference each other as generated
     plurals: NULL out `generated_from_name_id` across the whole set first
-    (the self-reference is a RESTRICT FK), then drop the rows. No commit."""
+    (the self-reference is a RESTRICT FK), then drop the rows."""
     if not name_ids:
         return
     conn.executemany(
@@ -1421,7 +1410,6 @@ def reassign_names(
             after=_row_dict(get_name_by_id(conn, nid)),
             context={"reason": "reassign_names", "from_entity_id": from_entity_id},
         )
-    conn.commit()
     return cur.rowcount
 
 
@@ -1440,7 +1428,6 @@ def set_name_entity(conn: sqlite3.Connection, name_id: str, entity_id: str) -> N
         after=_row_dict(get_name_by_id(conn, name_id)),
         context={"reason": "set_name_entity"},
     )
-    conn.commit()
 
 
 def rename_name(conn: sqlite3.Connection, name_id: str, new_text: str) -> None:
@@ -1482,7 +1469,6 @@ def rename_name(conn: sqlite3.Connection, name_id: str, new_text: str) -> None:
         after=_row_dict(get_name_by_id(conn, name_id)),
         context={"reason": "rename_name"},
     )
-    conn.commit()
 
 
 # --- statements --------------------------------------------------------------
@@ -1502,7 +1488,6 @@ def create_statement(conn: sqlite3.Connection, kind: str, text: str) -> str:
         statement_id,
         after=_row_dict(get_statement(conn, statement_id)),
     )
-    conn.commit()
     return statement_id
 
 
@@ -1531,7 +1516,6 @@ def update_statement(
         before=before,
         after=_row_dict(get_statement(conn, statement_id)),
     )
-    conn.commit()
 
 
 def update_statement_text(
@@ -1551,7 +1535,6 @@ def update_statement_text(
         before=before,
         after=_row_dict(get_statement(conn, statement_id)),
     )
-    conn.commit()
 
 
 def update_statement_kind(
@@ -1574,7 +1557,6 @@ def update_statement_kind(
         before=before,
         after=_row_dict(get_statement(conn, statement_id)),
     )
-    conn.commit()
 
 
 # --- vector id mapping ------------------------------------------------------
@@ -1592,7 +1574,6 @@ def set_vector_id(conn: sqlite3.Connection, statement_id: str, vector_id: int) -
         "INSERT INTO statement_vector_ids (statement_id, vector_id) VALUES (?, ?)",
         (statement_id, vector_id),
     )
-    conn.commit()
 
 
 def get_vector_id(conn: sqlite3.Connection, statement_id: str) -> int | None:
@@ -1628,7 +1609,6 @@ def set_name_vector_id(conn: sqlite3.Connection, name_id: str, vector_id: int) -
         "INSERT INTO name_vector_ids (name_id, vector_id) VALUES (?, ?)",
         (name_id, vector_id),
     )
-    conn.commit()
 
 
 def get_name_vector_id(conn: sqlite3.Connection, name_id: str) -> int | None:
@@ -1649,7 +1629,6 @@ def get_name_id_by_vector_id(conn: sqlite3.Connection, vector_id: int) -> str | 
 
 def delete_name_vector_mapping(conn: sqlite3.Connection, name_id: str) -> None:
     conn.execute("DELETE FROM name_vector_ids WHERE name_id = ?", (name_id,))
-    conn.commit()
 
 
 def list_all_names(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -1669,7 +1648,6 @@ def replace_mentions(
         "INSERT OR IGNORE INTO statement_mentions (statement_id, name_id) VALUES (?, ?)",
         [(statement_id, nid) for nid in name_ids],
     )
-    conn.commit()
 
 
 def get_mentions(conn: sqlite3.Connection, statement_id: str) -> list[sqlite3.Row]:
@@ -1694,7 +1672,6 @@ def add_mentions(
         "INSERT OR IGNORE INTO statement_mentions (statement_id, name_id) VALUES (?, ?)",
         [(statement_id, nid) for nid in name_ids],
     )
-    conn.commit()
     return cur.rowcount
 
 
@@ -1711,7 +1688,6 @@ def remove_mentions(
         f"WHERE statement_id = ? AND name_id IN ({placeholders})",
         [statement_id, *name_ids],
     )
-    conn.commit()
     return cur.rowcount
 
 
@@ -1732,21 +1708,7 @@ def build_name_index(conn: sqlite3.Connection) -> dict[str, list[mentions.Indexe
     return mentions.build_index((r["id"], r["entity_id"], r["text"]) for r in rows)
 
 
-def _replace_mentions_nocommit(
-    conn: sqlite3.Connection, statement_id: str, name_ids: list[str]
-) -> None:
-    conn.execute(
-        "DELETE FROM statement_mentions WHERE statement_id = ?", (statement_id,)
-    )
-    if name_ids:
-        conn.executemany(
-            "INSERT OR IGNORE INTO statement_mentions (statement_id, name_id) "
-            "VALUES (?, ?)",
-            [(statement_id, nid) for nid in name_ids],
-        )
-
-
-def _sync_pending_nocommit(
+def _sync_pending(
     conn: sqlite3.Connection,
     statement_id: str,
     suspect_name_ids: list[str],
@@ -1788,8 +1750,6 @@ def derive_mentions(
     statement_id: str,
     text: str,
     index: dict[str, list[mentions.IndexedName]],
-    *,
-    commit: bool = True,
 ) -> mentions.MatchResult:
     """Run the matcher over `text` and materialize the result.
 
@@ -1799,11 +1759,7 @@ def derive_mentions(
     its materialized mention is re-asserted — so an unrelated recompute (a
     name change elsewhere, a typo fix) never silently destroys a human's
     review work. Open and rejected suspects carry no memory and are re-queued
-    fresh (the 'keep it dumb' rule). Returns the raw `MatchResult`.
-
-    `commit=False` lets the recompute worker batch many statements into one
-    transaction and commit per chunk (cooperative chunking under the single
-    SQLite writer)."""
+    fresh (the 'keep it dumb' rule). Returns the raw `MatchResult`."""
     result = mentions.match_text(text, index)
     auto_ids = [m.name_id for m in result.mentions]
     suspect_ids = [s.name_id for s in result.suspects]
@@ -1816,16 +1772,12 @@ def derive_mentions(
         ).fetchall()
     }
     keep_approved = [nid for nid in suspect_ids if nid in approved]
-    _replace_mentions_nocommit(conn, statement_id, auto_ids + keep_approved)
-    _sync_pending_nocommit(conn, statement_id, suspect_ids, keep_approved)
-    if commit:
-        conn.commit()
+    replace_mentions(conn, statement_id, auto_ids + keep_approved)
+    _sync_pending(conn, statement_id, suspect_ids, keep_approved)
     return result
 
 
-def clear_derived_for_statement(
-    conn: sqlite3.Connection, statement_id: str, *, commit: bool = True
-) -> int:
+def clear_derived_for_statement(conn: sqlite3.Connection, statement_id: str) -> int:
     """Remove a statement's derived rows so the statement can be deleted:
     its `statement_mentions`, its `pending_mentions`, and any queued
     recompute jobs (all FK statements(id) under RESTRICT). Returns the
@@ -1837,8 +1789,6 @@ def clear_derived_for_statement(
     conn.execute(
         "DELETE FROM mention_recompute_queue WHERE statement_id = ?", (statement_id,)
     )
-    if commit:
-        conn.commit()
     return removed
 
 
@@ -1868,7 +1818,7 @@ def all_statements_with_text(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 
 
 def enqueue_recompute_statements(
-    conn: sqlite3.Connection, statement_ids: Iterable[str], *, commit: bool = True
+    conn: sqlite3.Connection, statement_ids: Iterable[str]
 ) -> None:
     """Mark statements dirty: their derivable mentions may have changed
     because a name they reference moved, was deleted, or its representative
@@ -1880,13 +1830,9 @@ def enqueue_recompute_statements(
             "VALUES (?, ?)",
             rows,
         )
-    if commit:
-        conn.commit()
 
 
-def enqueue_recompute_scan(
-    conn: sqlite3.Connection, scan_text: str, *, commit: bool = True
-) -> None:
+def enqueue_recompute_scan(conn: sqlite3.Connection, scan_text: str) -> None:
     """Mark that a new/renamed name text became matchable; the worker scans
     statement text for this token-sequence and recomputes every statement
     that now contains it."""
@@ -1894,8 +1840,6 @@ def enqueue_recompute_scan(
         "INSERT INTO mention_recompute_queue (scan_text, enqueued_at) VALUES (?, ?)",
         (scan_text, _now()),
     )
-    if commit:
-        conn.commit()
 
 
 def claim_recompute_batch(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
@@ -1914,21 +1858,16 @@ def claim_recompute_batch(conn: sqlite3.Connection, limit: int) -> list[sqlite3.
             "UPDATE mention_recompute_queue SET claimed_at = ? WHERE id = ?",
             [(now, r["id"]) for r in rows],
         )
-        conn.commit()
     return rows
 
 
-def delete_recompute_rows(
-    conn: sqlite3.Connection, ids: Iterable[int], *, commit: bool = True
-) -> None:
+def delete_recompute_rows(conn: sqlite3.Connection, ids: Iterable[int]) -> None:
     ids = list(ids)
     if ids:
         conn.executemany(
             "DELETE FROM mention_recompute_queue WHERE id = ?",
             [(i,) for i in ids],
         )
-    if commit:
-        conn.commit()
 
 
 def reset_claimed_recompute(conn: sqlite3.Connection) -> None:
@@ -1938,7 +1877,6 @@ def reset_claimed_recompute(conn: sqlite3.Connection) -> None:
     conn.execute(
         "UPDATE mention_recompute_queue SET claimed_at = NULL WHERE claimed_at IS NOT NULL"
     )
-    conn.commit()
 
 
 def count_open_recompute(conn: sqlite3.Connection) -> int:
@@ -2018,7 +1956,6 @@ def approve_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:
         f"{row['statement_id']}|{row['name_id']}",
         context={"reason": "approve_pending_mention", "pending_id": pending_id},
     )
-    conn.commit()
     return True
 
 
@@ -2032,7 +1969,6 @@ def reject_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:
         "UPDATE pending_mentions SET rejected_at = ?, rejected_by = ? WHERE id = ?",
         (_now(), _actor, pending_id),
     )
-    conn.commit()
     return True
 
 
@@ -2259,7 +2195,6 @@ def replace_links(
     )
     for to_id, link_type, when in links:
         _insert_one_link(conn, statement_id, to_id, link_type, when)
-    conn.commit()
 
 
 def insert_links(
@@ -2275,7 +2210,6 @@ def insert_links(
     for from_id, to_id, link_type, when in edges:
         if _insert_one_link(conn, from_id, to_id, link_type, when) is not None:
             inserted += 1
-    conn.commit()
     return inserted
 
 
@@ -2306,7 +2240,6 @@ def delete_links(
             (from_id, to_id, link_type, when_hash),
         )
         removed += cur.rowcount
-    conn.commit()
     return removed
 
 
@@ -2407,7 +2340,6 @@ def merge_mentions_into(conn: sqlite3.Connection, from_id: str, into_id: str) ->
     )
     inserted = cur.rowcount
     conn.execute("DELETE FROM statement_mentions WHERE statement_id = ?", (from_id,))
-    conn.commit()
     return inserted
 
 
@@ -2533,7 +2465,6 @@ def merge_outgoing_links_into(
         ).fetchone()
         if before and after:
             moved += 1
-    conn.commit()
     return moved
 
 
@@ -2564,7 +2495,6 @@ def merge_incoming_links_into(
         ).fetchone()
         if before and after:
             moved += 1
-    conn.commit()
     return moved
 
 
@@ -2581,7 +2511,6 @@ def rewrite_when_references(
     link_ids = links_referencing_statement(conn, from_id)
     for lid in link_ids:
         _move_link_endpoint(conn, lid, rewrite_when_leaves=(from_id, into_id))
-    conn.commit()
     return len(link_ids)
 
 
@@ -2598,7 +2527,7 @@ def delete_links_touching_statement(
     `entity_statement_links` — are then dropped by link_id (their `when_nodes`
     rows cascade via trigger), and entity↔statement edges with the statement
     as an endpoint go too. `entity_statement_removed` sums the endpoint and
-    when-tree removals. No commit; the caller owns the transaction."""
+    when-tree removals."""
     outgoing_removed = conn.execute(
         "DELETE FROM statement_links WHERE from_statement_id = ?", (statement_id,)
     ).rowcount
@@ -2633,7 +2562,6 @@ def delete_statement(conn: sqlite3.Connection, statement_id: str) -> None:
     conn.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
     if before is not None:
         _record(conn, "delete", "statement", statement_id, before=before)
-    conn.commit()
 
 
 def list_link_types(conn: sqlite3.Connection) -> list[str]:
@@ -2705,7 +2633,6 @@ def insert_entity_links(
                     "created_by": actor,
                 },
             )
-    conn.commit()
     return inserted
 
 
@@ -2739,7 +2666,6 @@ def delete_entity_links(
             f"{f}|{t}|{lt}",
             before=_row_dict(row),
         )
-    conn.commit()
     return removed
 
 
@@ -2873,7 +2799,6 @@ def insert_entity_statement_links(
             is not None
         ):
             inserted += 1
-    conn.commit()
     return inserted
 
 
@@ -2905,7 +2830,6 @@ def delete_entity_statement_links(
             (entity_id, statement_id, direction, link_type, when_hash),
         )
         removed += cur.rowcount
-    conn.commit()
     return removed
 
 
@@ -2914,7 +2838,7 @@ def delete_entity_statement_links_for_entity(
 ) -> int:
     """Remove every entity↔statement edge anchored on `entity_id`, returning
     the row count. The cascade trigger on `entity_statement_links` cleans up
-    their `when_nodes` rows. No commit."""
+    their `when_nodes` rows."""
     return conn.execute(
         "DELETE FROM entity_statement_links WHERE entity_id = ?", (entity_id,)
     ).rowcount
@@ -2927,7 +2851,7 @@ def move_entity_statement_endpoints(
     `into_statement_id`. `UPDATE OR IGNORE` moves each edge unless it would
     collide with an existing one under the UNIQUE constraint; rows left on the
     source by a collision are then deleted so the source statement can be
-    removed. No commit."""
+    removed."""
     conn.execute(
         "UPDATE OR IGNORE entity_statement_links SET statement_id = ? "
         "WHERE statement_id = ?",
@@ -3135,7 +3059,6 @@ def rewrite_entity_statement_when_references(
             },
             context={"reason": "rewrite_when_references"},
         )
-    conn.commit()
     return len(link_ids)
 
 
@@ -3196,7 +3119,6 @@ def rewrite_entity_statement_endpoints(
             after={**before, "entity_id": into_entity_id},
             context={"reason": "rewrite_entity_statement_endpoints"},
         )
-    conn.commit()
 
 
 def list_entity_statement_link_types(conn: sqlite3.Connection) -> list[str]:
@@ -3210,7 +3132,7 @@ def delete_entity_links_touching(
     conn: sqlite3.Connection, entity_id: str
 ) -> tuple[int, int]:
     """Remove every `entity_links` row from or to `entity_id`, returning
-    `(outgoing_removed, incoming_removed)`. No commit."""
+    `(outgoing_removed, incoming_removed)`."""
     outgoing_removed = conn.execute(
         "DELETE FROM entity_links WHERE from_entity_id = ?", (entity_id,)
     ).rowcount
@@ -3318,7 +3240,6 @@ def rewrite_entity_link_endpoints(
                 context={"reason": "merge_entities"},
             )
     conn.execute("DELETE FROM entity_links WHERE to_entity_id = ?", (from_entity_id,))
-    conn.commit()
 
 
 # --- knowledge gaps ---------------------------------------------------------
@@ -3328,7 +3249,7 @@ def create_knowledge_gap(conn: sqlite3.Connection, text: str) -> str:
     """Insert an open knowledge-gap report and return its id. Timestamped
     with a UTC offset (`datetime.now(timezone.utc).isoformat()`, the format
     the reporting tool has always stored) and stamped with the current actor
-    as `created_by`. Commits."""
+    as `created_by`."""
     gap_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
@@ -3336,7 +3257,6 @@ def create_knowledge_gap(conn: sqlite3.Connection, text: str) -> str:
         "VALUES (?, ?, ?, ?)",
         (gap_id, text, now, get_actor()),
     )
-    conn.commit()
     return gap_id
 
 
@@ -3374,8 +3294,7 @@ def set_knowledge_gap_status(
 ) -> sqlite3.Row:
     """Apply `resolve` / `dismiss` / `reopen` to a gap and return the updated
     row. Resolving clears any dismissal and vice versa; reopening clears both.
-    Terminal timestamps use the same UTC-offset format as `created_at`.
-    Commits."""
+    Terminal timestamps use the same UTC-offset format as `created_at`."""
     now = datetime.now(timezone.utc).isoformat()
     if action == "resolve":
         conn.execute(
@@ -3397,7 +3316,6 @@ def set_knowledge_gap_status(
         )
     else:
         raise ValueError("action must be one of: resolve, dismiss, reopen")
-    conn.commit()
     return get_knowledge_gap(conn, gap_id)
 
 

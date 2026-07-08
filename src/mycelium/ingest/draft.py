@@ -23,7 +23,7 @@ from __future__ import annotations
 import importlib
 from typing import Any, Protocol
 
-from .. import drafts_store
+from .. import drafts_store, store
 
 
 class DraftEmitter(Protocol):
@@ -74,19 +74,23 @@ class InProcessDraftEmitter:
         return set(sigs[kind].parameters)
 
     def create(self, *, title: str | None = None) -> str:
-        return drafts_store.create_draft(
-            self._server._drafts_conn,
-            created_by=None,
-            session_id=None,
-            title=title,
-        )
+        conn = self._server._drafts_conn
+        with store.transaction(conn):
+            return drafts_store.create_draft(
+                conn,
+                created_by=None,
+                session_id=None,
+                title=title,
+            )
 
     def add_op(self, draft_id: str, kind: str, payload: dict) -> int:
         clean = {k: v for k, v in payload.items() if v is not None}
-        return drafts_store.add_op(
-            self._server._drafts_conn,
-            draft_id=draft_id,
-            kind=kind,
-            payload=clean,
-            created_by=None,
-        )
+        conn = self._server._drafts_conn
+        with store.transaction(conn):
+            return drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind=kind,
+                payload=clean,
+                created_by=None,
+            )

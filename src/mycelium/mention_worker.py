@@ -13,10 +13,11 @@ The core (`drain`) is a synchronous function of a connection, so tests call
 it directly and deterministically. `start` wraps it in a daemon thread with
 a periodic wake-up; `wake` nudges it after an enqueue; `stop` joins it.
 
-Durability: claiming a batch stamps `claimed_at` and commits before
-processing, so a crash mid-drain strands at most one chunk as claimed-
-but-undeleted. `store.reset_claimed_recompute` (run on start) un-claims
-those so they are retried — at-least-once, and recompute is idempotent.
+Durability: each chunk — claim, recompute, delete — is one
+`store.transaction(conn)`, so a crash mid-chunk rolls the whole chunk back
+and its claimed rows revert to unclaimed for retry. `store.reset_claimed_
+recompute` (run on start) additionally un-claims anything an older build may
+have stranded — at-least-once, and recompute is idempotent.
 """
 
 from __future__ import annotations
@@ -46,42 +47,43 @@ def drain(conn, *, chunk: int = CHUNK) -> int:
     Each chunk: claim up to `chunk` rows, build the name index once, gather
     the statements to recompute (direct `statement_id` jobs plus, for
     `scan_text` jobs, every statement whose text now contains that name),
-    re-derive each, delete the claimed rows, commit. Idempotent and safe to
-    call repeatedly."""
+    re-derive each, delete the claimed rows — all in one `transaction`.
+    Idempotent and safe to call repeatedly."""
     total = 0
     while True:
-        rows = store.claim_recompute_batch(conn, chunk)
-        if not rows:
-            return total
+        with store.transaction(conn):
+            rows = store.claim_recompute_batch(conn, chunk)
+            if not rows:
+                return total
 
-        index = store.build_name_index(conn)
-        stmt_ids: set[str] = set()
-        scan_texts: list[str] = []
-        for r in rows:
-            if r["statement_id"] is not None:
-                stmt_ids.add(r["statement_id"])
-            elif r["scan_text"] is not None:
-                scan_texts.append(r["scan_text"])
+            index = store.build_name_index(conn)
+            stmt_ids: set[str] = set()
+            scan_texts: list[str] = []
+            for r in rows:
+                if r["statement_id"] is not None:
+                    stmt_ids.add(r["statement_id"])
+                elif r["scan_text"] is not None:
+                    scan_texts.append(r["scan_text"])
 
-        # Scan jobs: a new/renamed name became matchable — find statements
-        # whose text contains it. One pass over the corpus per chunk,
-        # coalesced across all scan texts in the chunk.
-        if scan_texts:
-            for row in store.all_statements_with_text(conn):
-                if any(
-                    mentions.text_contains_name(row["text"], st) for st in scan_texts
-                ):
-                    stmt_ids.add(row["id"])
+            # Scan jobs: a new/renamed name became matchable — find statements
+            # whose text contains it. One pass over the corpus per chunk,
+            # coalesced across all scan texts in the chunk.
+            if scan_texts:
+                for row in store.all_statements_with_text(conn):
+                    if any(
+                        mentions.text_contains_name(row["text"], st)
+                        for st in scan_texts
+                    ):
+                        stmt_ids.add(row["id"])
 
-        for sid in stmt_ids:
-            srow = store.get_statement(conn, sid)
-            if srow is None:
-                continue  # deleted between enqueue and drain
-            store.derive_mentions(conn, sid, srow["text"], index, commit=False)
-            total += 1
+            for sid in stmt_ids:
+                srow = store.get_statement(conn, sid)
+                if srow is None:
+                    continue  # deleted between enqueue and drain
+                store.derive_mentions(conn, sid, srow["text"], index)
+                total += 1
 
-        store.delete_recompute_rows(conn, [r["id"] for r in rows], commit=False)
-        conn.commit()
+            store.delete_recompute_rows(conn, [r["id"] for r in rows])
 
 
 def wake() -> None:

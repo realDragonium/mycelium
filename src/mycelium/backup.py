@@ -276,11 +276,11 @@ def import_substrate(
         )
         conn = store.connect(db_path, history_path=history_db_path)
         try:
-            store.migrate(conn)
-            _load_data_jsonl(conn, staging / "data.jsonl")
-            if history_db_path is not None and (staging / "history.jsonl").exists():
-                _load_history_jsonl(conn, staging / "history.jsonl")
-            conn.commit()
+            store.migrate(conn)  # DDL + seed; owns its own commit
+            with store.transaction(conn):
+                _load_data_jsonl(conn, staging / "data.jsonl")
+                if history_db_path is not None and (staging / "history.jsonl").exists():
+                    _load_history_jsonl(conn, staging / "history.jsonl")
         finally:
             conn.close()
 
