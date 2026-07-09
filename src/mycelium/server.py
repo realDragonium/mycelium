@@ -686,7 +686,7 @@ def init(data_dir: Path) -> None:
 
 
 def _backfill_name_index() -> None:
-    assert _db() is not None and _name_index is not None
+    assert _name_index is not None
     for row in store.list_all_names(_db()):
         if store.get_name_vector_id(_db(), row["id"]) is not None:
             continue
@@ -709,7 +709,7 @@ def _persist_name_index() -> None:
 def _index_name(name_id: str, text: str) -> None:
     """Embed `text` and register the vector under `name_id`. Used on
     name creation."""
-    assert _db() is not None and _name_index is not None
+    assert _name_index is not None
     vid = store.next_name_vector_id(_db())
     vec = embed.embed(text)
     _name_index.add(vid, vec)
@@ -719,7 +719,7 @@ def _index_name(name_id: str, text: str) -> None:
 
 def _reindex_name(name_id: str, new_text: str) -> None:
     """Replace the vector for an existing indexed name (rename)."""
-    assert _db() is not None and _name_index is not None
+    assert _name_index is not None
     vid = store.get_name_vector_id(_db(), name_id)
     vec = embed.embed(new_text)
     if vid is None:
@@ -735,7 +735,7 @@ def _reindex_name(name_id: str, new_text: str) -> None:
 
 def _drop_name_from_index(name_id: str) -> None:
     """Remove a name's vector. Idempotent."""
-    assert _db() is not None and _name_index is not None
+    assert _name_index is not None
     vid = store.get_name_vector_id(_db(), name_id)
     if vid is not None:
         _name_index.delete(vid)
@@ -748,7 +748,6 @@ def _derive_statement_mentions(statement_id: str, text: str) -> None:
     text (auto-links + suspect review rows). Called on the hot path
     whenever a statement's text is created or changed, so its mentions are
     always consistent with its text the moment the write returns."""
-    assert _db() is not None
     store.derive_mentions(_db(), statement_id, text, store.build_name_index(_db()))
 
 
@@ -758,7 +757,6 @@ def _create_name_with_plural(text: str, entity_id: str) -> str:
     decision — also create its regular plural as a generated child (unless
     there's no confident plural or the text is already taken). Returns the
     primary name_id."""
-    assert _db() is not None
     name_id = store.create_name(_db(), text, entity_id)
     _index_name(name_id, text)
     store.enqueue_recompute_scan(_db(), text)
@@ -771,7 +769,6 @@ def _generate_plural(source_name_id: str, text: str, entity_id: str) -> None:
     `source_name_id`. No-op when there is no confident regular plural, or
     when the plural text is already taken (global UNIQUE — never steal
     another entity's name)."""
-    assert _db() is not None
     plural = plurals.regular_plural(text)
     if plural is None or store.get_name_by_text(_db(), plural) is not None:
         return
@@ -791,7 +788,7 @@ def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
     mentioned a removed name must be recomputed, since the removed name may
     have been the representative for an entity another of whose names still
     matches."""
-    assert _db() is not None and _name_index is not None
+    assert _name_index is not None
     children = store.get_generated_children(_db(), name_id)
     ids = [c["id"] for c in children] + [name_id]
     affected: list[str] = []
@@ -808,7 +805,7 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
     """A renamed name's old generated plurals are stale — delete them and
     generate a fresh plural from `new_text`. Returns statement ids affected
     by the removed children, for recompute."""
-    assert _db() is not None and _name_index is not None
+    assert _name_index is not None
     affected: list[str] = []
     for child in store.get_generated_children(_db(), source_name_id):
         affected.extend(store.statements_mentioning_name(_db(), child["id"]))
@@ -823,7 +820,6 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
 
 def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
     """Resolve a list of name texts to entity_ids. Raises on any unknown."""
-    assert _db() is not None
     entity_ids: set[str] = set()
     for text in name_texts:
         row = store.get_name_by_text(_db(), text)
@@ -861,7 +857,7 @@ def _near_duplicates(
     dropped (used to skip the upsert's own freshly-inserted vector).
     `text` is truncated to a snippet to keep batch responses lean.
     """
-    assert _index is not None and _db() is not None
+    assert _index is not None
     # +1 to allow excluding the self-hit without dropping under k results.
     hits = _index.search(vec, k=k + (1 if exclude_id else 0))
     out: list[dict[str, Any]] = []
@@ -1025,7 +1021,6 @@ def _resolve_when_tree(
 
 
 def _hydrate_statement(statement_id: str, score: float | None) -> dict[str, Any]:
-    assert _db() is not None
     row = store.get_statement(_db(), statement_id)
     assert row is not None
     mentions = [
@@ -1081,7 +1076,6 @@ def _hydrate_statement_full(
     no longer needs a follow-up `get_statements` on the same id just to learn
     what points at it. `reverse_cap` bounds each reverse-edge list (the wide
     search/survey surfaces pass it; `get_statements` passes None)."""
-    assert _db() is not None
     out = _hydrate_statement(statement_id, score=score)
 
     incoming = [
@@ -1147,7 +1141,7 @@ def _alias_entity_boost(
     the max-scoring name. Statements mentioning a boosted entity get
     final_score = cosine + name_boost * entity_score, lifting them
     against alias-using queries without harming canonical ones."""
-    assert _db() is not None and _name_index is not None
+    assert _name_index is not None
     entity_boost: dict[str, float] = {}
     if name_boost > 0.0 and name_top_k > 0:
         for vid, dist in _name_index.search(vec, k=name_top_k):
@@ -1179,7 +1173,6 @@ def _score_candidates(
     Returns (statement_id, final_score, cosine) tuples sorted by final
     score descending. Applies the mentions-subset, kind, and min_score
     filters that only direct hits are subject to."""
-    assert _db() is not None
     scored: list[tuple[str, float, float]] = []  # (statement_id, final, cosine)
     seen: set[str] = set()
     for vector_id, distance in raw_hits:
@@ -1214,7 +1207,6 @@ def _expand_graph(seen: set[str], depth: int, direction: str) -> list[dict[str, 
     """BFS neighborhood expansion from the direct hits, up to `depth` hops.
     Mutates `seen` as it walks so a node is hydrated at most once. Expanded
     statements carry no `score` field."""
-    assert _db() is not None
     follow_children = direction in ("both", "children")
     follow_parents = direction in ("both", "parents")
 
@@ -1317,7 +1309,7 @@ def search_statements(
                          canonical queries unaffected when no name is
                          clearly relevant.
     """
-    assert _index is not None and _db() is not None and _name_index is not None
+    assert _index is not None and _name_index is not None
 
     required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
 
@@ -1419,7 +1411,7 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
     Relevance and sufficiency judgements belong to the consumer. Output is
     deterministic given a fixed index and embedder.
     """
-    assert _index is not None and _db() is not None
+    assert _index is not None
 
     if not query.strip():
         return []
@@ -1683,7 +1675,6 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     and returns its id. Otherwise creates a new entity AND a name pointing
     at it.
     """
-    assert _db() is not None
     existing = store.get_name_by_text(_db(), name)
     with store.transaction(_db()):
         if existing is not None:
@@ -1783,7 +1774,7 @@ def upsert_statement(
     anyway — the success response then carries the same violations under
     a `phrasing_violations` key as a warning.
     """
-    assert _db() is not None and _index is not None
+    assert _index is not None
 
     violations, reject = _phrasing_gate(text, kind, allow_phrasing_violations)
     if reject is not None:
@@ -2236,7 +2227,7 @@ def upsert_statements(
         }
         ```
     """
-    assert _db() is not None and _index is not None
+    assert _index is not None
 
     n = len(statements)
     if n == 0:
@@ -2324,7 +2315,7 @@ def replace_text(
     anyway and surfaces the violations as a `phrasing_violations`
     warning on the success response.
     """
-    assert _db() is not None and _index is not None
+    assert _index is not None
     row = store.get_statement(_db(), id)
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
@@ -2387,7 +2378,7 @@ def patch_statement(
 
     Raises ValueError if `id` does not exist.
     """
-    assert _db() is not None and _index is not None
+    assert _index is not None
     row = store.get_statement(_db(), id)
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
@@ -2446,7 +2437,6 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
     `entity_id` is unknown, or if the text is already taken by a different
     entity (use `move_name` or `merge_entities` to resolve those cases).
     """
-    assert _db() is not None
     if store.get_entity_by_id(_db(), entity_id) is None:
         raise ValueError(f"entity {entity_id!r} does not exist")
     existing = store.get_name_by_text(_db(), text)
@@ -2467,7 +2457,6 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
     """Move every name from `from_entity_id` to `into_entity_id` and delete
     the source entity. Statements that mentioned the moved names continue
     to point at the same names (now under the new entity)."""
-    assert _db() is not None
     if from_entity_id == into_entity_id:
         return {"into_entity_id": into_entity_id, "names_moved": 0}
     if store.get_entity_by_id(_db(), from_entity_id) is None:
@@ -2516,7 +2505,6 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
 
     Raises ValueError if `name_id` or `to_entity_id` does not exist.
     """
-    assert _db() is not None
     if store.get_name_by_id(_db(), name_id) is None:
         raise ValueError(f"name {name_id!r} does not exist")
     if store.get_entity_by_id(_db(), to_entity_id) is None:
@@ -2555,7 +2543,6 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     already used by a different name (resolve with `merge_entities` or
     `move_name` first).
     """
-    assert _db() is not None
     # Statements mentioning this name may now match differently (their text
     # still contains the OLD label, which is no longer a name) — recompute
     # them. Regenerate the name's plural from the new text. Scan for the new
@@ -2587,7 +2574,6 @@ def delete_name(name_id: str) -> dict[str, Any]:
     Returns `{deleted, mentions_removed}`.
     Raises ValueError on unknown id.
     """
-    assert _db() is not None
     if store.get_name_by_id(_db(), name_id) is None:
         raise ValueError(f"name {name_id!r} does not exist")
     # Cascade through the name and any generated plurals, then recompute the
@@ -2620,7 +2606,6 @@ def delete_entity(id: str) -> dict[str, Any]:
     Returns counts of cascaded rows so the caller can sanity-check the
     blast radius. Permanent. Raises ValueError on unknown id.
     """
-    assert _db() is not None
     if store.get_entity_by_id(_db(), id) is None:
         raise ValueError(f"entity {id!r} does not exist")
 
@@ -2703,7 +2688,7 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     No-op when `from_id == into_id`. Raises
     ValueError if either id does not exist.
     """
-    assert _db() is not None and _index is not None
+    assert _index is not None
 
     if from_id == into_id:
         return {
@@ -2787,7 +2772,7 @@ def delete_statement(id: str) -> dict[str, Any]:
 
     Permanent. Raises ValueError on unknown id.
     """
-    assert _db() is not None and _index is not None
+    assert _index is not None
 
     if store.get_statement(_db(), id) is None:
         raise ValueError(f"statement {id!r} does not exist")
@@ -2922,7 +2907,6 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     relationships between existing nodes. To add a single edge, pass a
     one-element list.
     """
-    assert _db() is not None
     if not links:
         return {"inserted": 0}
 
@@ -2979,7 +2963,6 @@ def remove_links(links: list[EdgeSpec]) -> dict[str, int]:
     endpoints exist; deleting an edge that references a non-existent
     node is just a no-op.
     """
-    assert _db() is not None
     if not links:
         return {"removed": 0}
 
@@ -3041,7 +3024,6 @@ def get_statements(ids: list[str]) -> dict[str, Any]:
     Raises ValueError if `ids` is empty or if any id does not exist (no
     partial results — fix the input and retry).
     """
-    assert _db() is not None
     if not ids:
         raise ValueError("ids must be a non-empty list")
     missing = [i for i in ids if store.get_statement(_db(), i) is None]
@@ -3076,7 +3058,6 @@ def get_entity(id: str) -> dict[str, Any]:
 
     Raises ValueError if `id` does not exist.
     """
-    assert _db() is not None
     row = store.get_entity_by_id(_db(), id)
     if row is None:
         raise ValueError(f"entity {id!r} does not exist")
@@ -3130,7 +3111,6 @@ def list_entities(
     entity_id as a fallback if it has no names. To enumerate all aliases
     of one entity, use `get_entity(id)`.
     """
-    assert _db() is not None
     rows = store.list_entities(_db(), prefix=prefix or None, limit=limit, offset=offset)
     return {
         "total": store.count_entities(_db()),
@@ -3170,7 +3150,6 @@ def list_statements(
     no mentions or links to keep the response light. To inspect a
     single statement's full structure use `get_statements([id])`.
     """
-    assert _db() is not None
     if entity_id is not None and name is not None:
         raise ValueError("pass at most one of entity_id / name, not both")
     if name is not None:
@@ -3214,7 +3193,7 @@ def find_duplicates(
     `merge_statements(from, into)` to consolidate, or `replace_text` /
     `add_links` if the duplication is structural rather than textual.
     """
-    assert _db() is not None and _index is not None
+    assert _index is not None
 
     seen_pairs: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
@@ -3310,7 +3289,7 @@ def discover_facts(
     Cheap-ish: one embed + one vector search per input text. No SQL
     writes.
     """
-    assert _index is not None and _db() is not None
+    assert _index is not None
 
     if exists_threshold < near_threshold:
         raise ValueError(
@@ -3396,7 +3375,6 @@ def list_link_types() -> list[dict[str, Any]]:
     To follow what a `when` leaf refers to, call `get_statements([id])` on
     the leaf's `statement_id` — same pattern as chasing a link target.
     """
-    assert _db() is not None
     counts = store.count_statement_links_by_type(_db())
     glossary = {
         r["link_type"]: r["description"]
@@ -3448,7 +3426,6 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     if any reference is unknown the call raises ValueError and inserts
     nothing.
     """
-    assert _db() is not None
     if not links:
         return {"inserted": 0}
     needed: set[str] = set()
@@ -3484,7 +3461,6 @@ def remove_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     exist; deleting an edge that references a non-existent entity simply
     removes nothing.
     """
-    assert _db() is not None
     if not links:
         return {"removed": 0}
     edges = [
@@ -3517,7 +3493,6 @@ def list_statement_kinds() -> list[dict[str, Any]]:
     prescriptive how-to and diagnostic content). Vocabulary is open
     — new kinds run the event phrasing catalog as a baseline.
     """
-    assert _db() is not None
     glossary_rows = store.list_statement_kind_glossary(_db())
     glossary = {
         r["kind"]: (r["description"], r["when_to_use"] or "") for r in glossary_rows
@@ -3545,7 +3520,6 @@ def list_entity_link_types() -> list[dict[str, Any]]:
     website or `upsert_entity_link_type`). `usage_count` is the number
     of entity_links rows currently carrying this type.
     """
-    assert _db() is not None
     counts = store.count_entity_links_by_type(_db())
     glossary = {
         r["link_type"]: r["description"]
@@ -3579,7 +3553,6 @@ def upsert_statement_kind(
 
     Returns `{kind}` on success.
     """
-    assert _db() is not None
     if not kind or not kind.strip():
         raise ValueError("kind cannot be empty")
     if not description or not description.strip():
@@ -3600,7 +3573,6 @@ def delete_statement_kind(kind: str) -> dict[str, str]:
 
     Returns `{kind}`.
     """
-    assert _db() is not None
     with store.transaction(_db()):
         store.delete_statement_kind_glossary(_db(), kind)
     return {"kind": kind}
@@ -3616,7 +3588,6 @@ def upsert_link_type(link_type: str, description: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _db() is not None
     if not link_type or not link_type.strip():
         raise ValueError("link_type cannot be empty")
     if not description or not description.strip():
@@ -3636,7 +3607,6 @@ def delete_link_type(link_type: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _db() is not None
     with store.transaction(_db()):
         store.delete_statement_link_type_glossary(_db(), link_type)
     return {"link_type": link_type}
@@ -3651,7 +3621,6 @@ def upsert_entity_link_type(link_type: str, description: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _db() is not None
     if not link_type or not link_type.strip():
         raise ValueError("link_type cannot be empty")
     if not description or not description.strip():
@@ -3670,7 +3639,6 @@ def delete_entity_link_type(link_type: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _db() is not None
     with store.transaction(_db()):
         store.delete_entity_link_type_glossary(_db(), link_type)
     return {"link_type": link_type}
@@ -3720,7 +3688,6 @@ def grep_statements(
     kind, text, matched_via}]}`. Use `get_statements(ids)` for full
     mentions and links.
     """
-    assert _db() is not None
     if not query:
         raise ValueError("query must be a non-empty string")
     if entity_id is not None and name is not None:
@@ -3834,7 +3801,6 @@ def report_knowledge_gap(text: str) -> dict[str, Any]:
 
     Returns the assigned `gap_id`.
     """
-    assert _db() is not None
     text = text.strip()
     if not text:
         raise ValueError("text is required")
@@ -3972,7 +3938,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    assert _drafts_conn is not None and _db() is not None
+    assert _drafts_conn is not None
     row = drafts_store.get_draft(_drafts_conn, draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
