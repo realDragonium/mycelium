@@ -286,21 +286,21 @@ def seed_glossaries(conn: sqlite3.Connection) -> None:
             "INSERT OR IGNORE INTO statement_kind_glossary "
             "(kind, description, when_to_use, created_at, created_by) "
             "VALUES (?, ?, ?, ?, ?)",
-            (kind, description, when_to_use, now, kernel._actor),
+            (kind, description, when_to_use, now, kernel.get_actor()),
         )
     for link_type, description in _STATEMENT_LINK_TYPE_SEED.items():
         conn.execute(
             "INSERT OR IGNORE INTO statement_link_type_glossary "
             "(link_type, description, created_at, created_by) "
             "VALUES (?, ?, ?, ?)",
-            (link_type, description, now, kernel._actor),
+            (link_type, description, now, kernel.get_actor()),
         )
     for link_type, description in _ENTITY_LINK_TYPE_SEED.items():
         conn.execute(
             "INSERT OR IGNORE INTO entity_link_type_glossary "
             "(link_type, description, created_at, created_by) "
             "VALUES (?, ?, ?, ?)",
-            (link_type, description, now, kernel._actor),
+            (link_type, description, now, kernel.get_actor()),
         )
 
 
@@ -337,14 +337,14 @@ def upsert_statement_kind_glossary(
             "INSERT INTO statement_kind_glossary "
             "(kind, description, when_to_use, created_at, created_by) "
             "VALUES (?, ?, ?, ?, ?)",
-            (kind, description, when_to_use, now, kernel._actor),
+            (kind, description, when_to_use, now, kernel.get_actor()),
         )
     else:
         conn.execute(
             "UPDATE statement_kind_glossary "
             "SET description = ?, when_to_use = ?, updated_at = ?, updated_by = ? "
             "WHERE kind = ?",
-            (description, when_to_use, now, kernel._actor, kind),
+            (description, when_to_use, now, kernel.get_actor(), kind),
         )
 
 
@@ -381,14 +381,14 @@ def upsert_statement_link_type_glossary(
             "INSERT INTO statement_link_type_glossary "
             "(link_type, description, created_at, created_by) "
             "VALUES (?, ?, ?, ?)",
-            (link_type, description, now, kernel._actor),
+            (link_type, description, now, kernel.get_actor()),
         )
     else:
         conn.execute(
             "UPDATE statement_link_type_glossary "
             "SET description = ?, updated_at = ?, updated_by = ? "
             "WHERE link_type = ?",
-            (description, now, kernel._actor, link_type),
+            (description, now, kernel.get_actor(), link_type),
         )
 
 
@@ -430,14 +430,14 @@ def upsert_entity_link_type_glossary(
             "INSERT INTO entity_link_type_glossary "
             "(link_type, description, created_at, created_by) "
             "VALUES (?, ?, ?, ?)",
-            (link_type, description, now, kernel._actor),
+            (link_type, description, now, kernel.get_actor()),
         )
     else:
         conn.execute(
             "UPDATE entity_link_type_glossary "
             "SET description = ?, updated_at = ?, updated_by = ? "
             "WHERE link_type = ?",
-            (description, now, kernel._actor, link_type),
+            (description, now, kernel.get_actor(), link_type),
         )
 
 

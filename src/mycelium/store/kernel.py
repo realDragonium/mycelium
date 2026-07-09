@@ -1,9 +1,10 @@
 """SQLite persistence for entities, names, statements, mentions, and links.
 
-Writes are serialized per connection through `transaction()` — the process
-shares one connection per database across request threads, and the unit of
-work that handles an external request owns the transaction (helpers never
-commit; see the transaction-ownership section below).
+Each thread gets its own substrate connection (see the connection provider),
+so a reader never sees another request's uncommitted writes. Writers are
+serialized process-wide through `transaction()`, and the unit of work that
+handles an external request owns the transaction (helpers never commit; see
+the transaction-ownership section below).
 
 Names are first-class: every entity reference flows through a name, and
 statement_mentions records which name a statement used (not just which
@@ -18,6 +19,7 @@ import sqlite3
 import threading
 from collections import defaultdict
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -26,23 +28,25 @@ from .. import timestamps
 # --- audit context ----------------------------------------------------------
 #
 # Every write stamps `created_at` / `updated_at` (ISO-8601 UTC) and, when an
-# actor is set, `created_by` / `updated_by`. The substrate is single-writer,
-# so a module-level current actor is sufficient — when auth lands, the
-# server sets this from the connection's principal at the start of each
-# call and clears it at the end. Until then it stays None and the *_by
-# columns remain NULL.
+# actor is set, `created_by` / `updated_by`. The server sets this from the
+# request's principal at the start of each call and clears it at the end;
+# until an actor is set it stays None and the *_by columns remain NULL.
+#
+# It is a ContextVar, not a module global: concurrent requests each carry
+# their own principal, and the value is copied into the threadpool task that
+# runs a sync handler (the same mechanism `auth.current_principal` relies on),
+# so a write always stamps the actor of the request that issued it.
 
-_actor: str | None = None
+_actor: ContextVar[str | None] = ContextVar("substrate_actor", default=None)
 
 
 def set_actor(actor: str | None) -> None:
-    """Set the current actor for subsequent writes. None clears it."""
-    global _actor
-    _actor = actor
+    """Set the current actor for subsequent writes on this context. None clears it."""
+    _actor.set(actor)
 
 
 def get_actor() -> str | None:
-    return _actor
+    return _actor.get()
 
 
 # --- transaction ownership ---------------------------------------------------
@@ -54,36 +58,32 @@ def get_actor() -> str | None:
 # half-applied cascade on the connection), and it makes commit timing visible
 # at the call site instead of buried per-helper.
 #
-# The context manager also serializes writers: the process shares one
-# connection per database across FastAPI's request threadpool, so two
-# concurrent requests could otherwise interleave statements inside each
-# other's transactions. Each connection gets one reentrant lock; nested
-# `transaction()` blocks on the same connection join the outer transaction
-# (only the outermost block commits or rolls back).
-
-# Keyed by id(conn) — sqlite3.Connection is not weak-referenceable. Entries
-# are never removed: a process holds a handful of long-lived connections, an
-# RLock is tiny, and a recycled id would only ever find an unlocked lock and
-# a zero depth (transaction() always restores both on exit).
-_txn_locks: dict[int, threading.RLock] = {}
+# The context manager also serializes writers process-wide. Each thread now
+# holds its OWN substrate connection (see the connection provider below), so a
+# reader never sees another request's uncommitted rows — but concurrent
+# writers must still not interleave at the SQLite level. One process-wide
+# reentrant lock gives that: every write unit of work acquires it, so writers
+# queue in Python (they never race down to a SQLITE_BUSY), while reads take no
+# lock at all. Reentrant so a nested `transaction()` on the same thread joins
+# the outer one; only the outermost block commits or rolls back.
+#
+# Depth is keyed by id(conn). Because the write lock serializes writers, only
+# one thread ever mutates the map at a time, and a thread only nests on its
+# own connection. Entries are never removed: a recycled id would only ever
+# find a zero depth (transaction() always restores it on exit).
+_write_lock = threading.RLock()
 _txn_depth: dict[int, int] = {}
-_txn_registry_lock = threading.Lock()
-
-
-def _txn_lock(conn: sqlite3.Connection) -> threading.RLock:
-    with _txn_registry_lock:
-        return _txn_locks.setdefault(id(conn), threading.RLock())
 
 
 @contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """Own the write transaction for one unit of work.
 
-    Acquires the connection's write lock, yields, and commits on success
-    or rolls back on exception. Reentrant on the same connection: an inner
-    block joins the outer transaction and the outermost block decides.
+    Acquires the process-wide write lock, yields, and commits on success or
+    rolls back on exception. Reentrant: an inner block on the same thread
+    joins the outer transaction and the outermost block decides.
     """
-    with _txn_lock(conn):
+    with _write_lock:
         depth = _txn_depth.get(id(conn), 0)
         _txn_depth[id(conn)] = depth + 1
         try:
@@ -154,7 +154,7 @@ def _record(
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             _now(),
-            _actor,
+            _actor.get(),
             op,
             target_kind,
             target_id,
@@ -491,6 +491,89 @@ def connect(
     conn.execute("PRAGMA journal_mode = WAL")
     if history_path is not None:
         conn.execute("ATTACH DATABASE ? AS history", (str(history_path),))
+    return conn
+
+
+# --- substrate connection provider ------------------------------------------
+#
+# The server no longer shares one substrate connection across the request
+# threadpool. Instead each thread gets its OWN connection to the substrate
+# file, opened lazily and reused for the thread's life. On WAL every
+# connection reads a consistent last-committed snapshot, so a reader on one
+# thread never observes another request's in-flight (uncommitted) writes.
+#
+# `configure_substrate()` records the db/history paths and bumps an epoch.
+# A thread caches (epoch, conn); when the epoch moves (a reconfigure — e.g.
+# a test pointing at a fresh temp DB) the thread lazily closes its stale
+# connection and reopens against the new config, without any other thread
+# having to reach in. `use_substrate_connection()` pins an explicit
+# connection on the current thread (for :memory: DBs and unit tests, whose
+# single connection cannot be reopened per thread).
+
+_substrate_config: tuple[str, str | None, int] | None = None
+_substrate_epoch = 0
+_substrate_config_lock = threading.Lock()
+_substrate_tls = threading.local()
+
+
+def configure_substrate(
+    db_path: Path | str, history_path: Path | str | None = None
+) -> None:
+    """Point the provider at a substrate file. Threads (re)open lazily."""
+    global _substrate_config, _substrate_epoch
+    with _substrate_config_lock:
+        _substrate_epoch += 1
+        _substrate_config = (
+            str(db_path),
+            str(history_path) if history_path is not None else None,
+            _substrate_epoch,
+        )
+
+
+def use_substrate_connection(conn: sqlite3.Connection) -> None:
+    """Pin `conn` as this thread's substrate connection, overriding the
+    configured path. For :memory: DBs and unit tests."""
+    _substrate_tls.override = conn
+
+
+def reset_substrate() -> None:
+    """Forget the configured path and this thread's cached/override
+    connection. Used between tests for isolation."""
+    global _substrate_config
+    with _substrate_config_lock:
+        _substrate_config = None
+    _substrate_tls.override = None
+    _substrate_tls.entry = None
+
+
+def substrate_connection() -> sqlite3.Connection:
+    """The calling thread's substrate connection.
+
+    An explicit override wins; otherwise the thread's cached connection is
+    returned when its epoch matches the current config, and reopened when it
+    doesn't. Raises if nothing is configured and no override is pinned.
+    """
+    override = getattr(_substrate_tls, "override", None)
+    if override is not None:
+        return override
+    cfg = _substrate_config
+    if cfg is None:
+        raise RuntimeError(
+            "substrate connection not configured; call configure_substrate() "
+            "or use_substrate_connection()"
+        )
+    db_path, history_path, epoch = cfg
+    entry = getattr(_substrate_tls, "entry", None)
+    if entry is not None and entry[0] == epoch:
+        return entry[1]
+    if entry is not None:
+        # Stale connection from a previous config — drop it before reopening.
+        try:
+            entry[1].close()
+        except sqlite3.Error:
+            pass
+    conn = connect(db_path, history_path=history_path)
+    _substrate_tls.entry = (epoch, conn)
     return conn
 
 

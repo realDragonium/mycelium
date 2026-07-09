@@ -599,7 +599,6 @@ class BatchStatementSpec(TypedDict):
     allow_phrasing_violations: NotRequired[bool]
 
 
-_conn: sqlite3.Connection | None = None
 _auth_conn: sqlite3.Connection | None = None
 _drafts_conn: sqlite3.Connection | None = None
 _index: vector.Index | None = None
@@ -611,6 +610,15 @@ _name_index_path: Path | None = None
 _data_dir: Path | None = None
 
 
+def _db() -> sqlite3.Connection:
+    """This thread's substrate connection (see `store.substrate_connection`).
+
+    Each request thread reads/writes its own connection, so a reader never
+    sees another in-flight request's uncommitted rows; writers still serialize
+    through `store.transaction()`."""
+    return store.substrate_connection()
+
+
 def init(data_dir: Path) -> None:
     """Open the substrate + auth DBs and load (or create) the two
     vector indexes (statements, entity names).
@@ -620,19 +628,19 @@ def init(data_dir: Path) -> None:
     tokens — drop `mycelium.db` and restart, every existing user
     session and bearer token keeps working.
     """
-    global _conn, _auth_conn, _drafts_conn, _index, _index_path
+    global _auth_conn, _drafts_conn, _index, _index_path
     global _name_index, _name_index_path, _data_dir
 
     from . import auth_store, drafts_store, research_store
 
     _data_dir = data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
-    _conn = store.connect(
+    store.configure_substrate(
         data_dir / "mycelium.db",
         history_path=data_dir / "mycelium-history.db",
     )
     layout_baker.configure(data_dir / "mycelium.db")
-    store.migrate(_conn)
+    store.migrate(_db())
     layout_baker.ensure_initial()
 
     _auth_conn = auth_store.connect(data_dir / "mycelium-auth.db")
@@ -678,14 +686,14 @@ def init(data_dir: Path) -> None:
 
 
 def _backfill_name_index() -> None:
-    assert _conn is not None and _name_index is not None
-    for row in store.list_all_names(_conn):
-        if store.get_name_vector_id(_conn, row["id"]) is not None:
+    assert _db() is not None and _name_index is not None
+    for row in store.list_all_names(_db()):
+        if store.get_name_vector_id(_db(), row["id"]) is not None:
             continue
-        vid = store.next_name_vector_id(_conn)
+        vid = store.next_name_vector_id(_db())
         vec = embed.embed(row["text"])
         _name_index.add(vid, vec)
-        store.set_name_vector_id(_conn, row["id"], vid)
+        store.set_name_vector_id(_db(), row["id"], vid)
 
 
 def _persist_index() -> None:
@@ -701,25 +709,25 @@ def _persist_name_index() -> None:
 def _index_name(name_id: str, text: str) -> None:
     """Embed `text` and register the vector under `name_id`. Used on
     name creation."""
-    assert _conn is not None and _name_index is not None
-    vid = store.next_name_vector_id(_conn)
+    assert _db() is not None and _name_index is not None
+    vid = store.next_name_vector_id(_db())
     vec = embed.embed(text)
     _name_index.add(vid, vec)
-    store.set_name_vector_id(_conn, name_id, vid)
+    store.set_name_vector_id(_db(), name_id, vid)
     _persist_name_index()
 
 
 def _reindex_name(name_id: str, new_text: str) -> None:
     """Replace the vector for an existing indexed name (rename)."""
-    assert _conn is not None and _name_index is not None
-    vid = store.get_name_vector_id(_conn, name_id)
+    assert _db() is not None and _name_index is not None
+    vid = store.get_name_vector_id(_db(), name_id)
     vec = embed.embed(new_text)
     if vid is None:
         # Name exists in SQL but never got an index entry (e.g. created
         # before this feature existed and backfill missed it). Add fresh.
-        vid = store.next_name_vector_id(_conn)
+        vid = store.next_name_vector_id(_db())
         _name_index.add(vid, vec)
-        store.set_name_vector_id(_conn, name_id, vid)
+        store.set_name_vector_id(_db(), name_id, vid)
     else:
         _name_index.replace(vid, vec)
     _persist_name_index()
@@ -727,11 +735,11 @@ def _reindex_name(name_id: str, new_text: str) -> None:
 
 def _drop_name_from_index(name_id: str) -> None:
     """Remove a name's vector. Idempotent."""
-    assert _conn is not None and _name_index is not None
-    vid = store.get_name_vector_id(_conn, name_id)
+    assert _db() is not None and _name_index is not None
+    vid = store.get_name_vector_id(_db(), name_id)
     if vid is not None:
         _name_index.delete(vid)
-        store.delete_name_vector_mapping(_conn, name_id)
+        store.delete_name_vector_mapping(_db(), name_id)
         _persist_name_index()
 
 
@@ -740,8 +748,8 @@ def _derive_statement_mentions(statement_id: str, text: str) -> None:
     text (auto-links + suspect review rows). Called on the hot path
     whenever a statement's text is created or changed, so its mentions are
     always consistent with its text the moment the write returns."""
-    assert _conn is not None
-    store.derive_mentions(_conn, statement_id, text, store.build_name_index(_conn))
+    assert _db() is not None
+    store.derive_mentions(_db(), statement_id, text, store.build_name_index(_db()))
 
 
 def _create_name_with_plural(text: str, entity_id: str) -> str:
@@ -750,10 +758,10 @@ def _create_name_with_plural(text: str, entity_id: str) -> str:
     decision — also create its regular plural as a generated child (unless
     there's no confident plural or the text is already taken). Returns the
     primary name_id."""
-    assert _conn is not None
-    name_id = store.create_name(_conn, text, entity_id)
+    assert _db() is not None
+    name_id = store.create_name(_db(), text, entity_id)
     _index_name(name_id, text)
-    store.enqueue_recompute_scan(_conn, text)
+    store.enqueue_recompute_scan(_db(), text)
     _generate_plural(name_id, text, entity_id)
     return name_id
 
@@ -763,15 +771,15 @@ def _generate_plural(source_name_id: str, text: str, entity_id: str) -> None:
     `source_name_id`. No-op when there is no confident regular plural, or
     when the plural text is already taken (global UNIQUE — never steal
     another entity's name)."""
-    assert _conn is not None
+    assert _db() is not None
     plural = plurals.regular_plural(text)
-    if plural is None or store.get_name_by_text(_conn, plural) is not None:
+    if plural is None or store.get_name_by_text(_db(), plural) is not None:
         return
     child_id = store.create_name(
-        _conn, plural, entity_id, generated_from_name_id=source_name_id
+        _db(), plural, entity_id, generated_from_name_id=source_name_id
     )
     _index_name(child_id, plural)
-    store.enqueue_recompute_scan(_conn, plural)
+    store.enqueue_recompute_scan(_db(), plural)
 
 
 def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
@@ -783,16 +791,16 @@ def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
     mentioned a removed name must be recomputed, since the removed name may
     have been the representative for an entity another of whose names still
     matches."""
-    assert _conn is not None and _name_index is not None
-    children = store.get_generated_children(_conn, name_id)
+    assert _db() is not None and _name_index is not None
+    children = store.get_generated_children(_db(), name_id)
     ids = [c["id"] for c in children] + [name_id]
     affected: list[str] = []
     mentions_removed = 0
     for nid in ids:
-        affected.extend(store.statements_mentioning_name(_conn, nid))
-        mentions_removed += store.delete_name_mentions(_conn, nid)
+        affected.extend(store.statements_mentioning_name(_db(), nid))
+        mentions_removed += store.delete_name_mentions(_db(), nid)
         _drop_name_from_index(nid)
-        store.delete_name(_conn, nid)
+        store.delete_name(_db(), nid)
     return mentions_removed, affected
 
 
@@ -800,14 +808,14 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
     """A renamed name's old generated plurals are stale — delete them and
     generate a fresh plural from `new_text`. Returns statement ids affected
     by the removed children, for recompute."""
-    assert _conn is not None and _name_index is not None
+    assert _db() is not None and _name_index is not None
     affected: list[str] = []
-    for child in store.get_generated_children(_conn, source_name_id):
-        affected.extend(store.statements_mentioning_name(_conn, child["id"]))
-        store.delete_name_mentions(_conn, child["id"])
+    for child in store.get_generated_children(_db(), source_name_id):
+        affected.extend(store.statements_mentioning_name(_db(), child["id"]))
+        store.delete_name_mentions(_db(), child["id"])
         _drop_name_from_index(child["id"])
-        store.delete_name(_conn, child["id"])
-    src = store.get_name_by_id(_conn, source_name_id)
+        store.delete_name(_db(), child["id"])
+    src = store.get_name_by_id(_db(), source_name_id)
     if src is not None:
         _generate_plural(source_name_id, new_text, src["entity_id"])
     return affected
@@ -815,10 +823,10 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
 
 def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
     """Resolve a list of name texts to entity_ids. Raises on any unknown."""
-    assert _conn is not None
+    assert _db() is not None
     entity_ids: set[str] = set()
     for text in name_texts:
-        row = store.get_name_by_text(_conn, text)
+        row = store.get_name_by_text(_db(), text)
         if row is None:
             raise ValueError(f"name {text!r} does not exist")
         entity_ids.add(row["entity_id"])
@@ -853,18 +861,18 @@ def _near_duplicates(
     dropped (used to skip the upsert's own freshly-inserted vector).
     `text` is truncated to a snippet to keep batch responses lean.
     """
-    assert _index is not None and _conn is not None
+    assert _index is not None and _db() is not None
     # +1 to allow excluding the self-hit without dropping under k results.
     hits = _index.search(vec, k=k + (1 if exclude_id else 0))
     out: list[dict[str, Any]] = []
     for vid, distance in hits:
-        bid = store.get_statement_id_by_vector_id(_conn, vid)
+        bid = store.get_statement_id_by_vector_id(_db(), vid)
         if bid is None or bid == exclude_id:
             continue
         score = 1.0 - distance
         if score < threshold:
             continue
-        row = store.get_statement(_conn, bid)
+        row = store.get_statement(_db(), bid)
         if row is None:
             continue
         out.append({"id": bid, "text": _snippet(row["text"]), "score": score})
@@ -1017,21 +1025,21 @@ def _resolve_when_tree(
 
 
 def _hydrate_statement(statement_id: str, score: float | None) -> dict[str, Any]:
-    assert _conn is not None
-    row = store.get_statement(_conn, statement_id)
+    assert _db() is not None
+    row = store.get_statement(_db(), statement_id)
     assert row is not None
     mentions = [
         {"name_id": m["name_id"], "name": m["name"], "entity_id": m["entity_id"]}
-        for m in store.get_mentions(_conn, statement_id)
+        for m in store.get_mentions(_db(), statement_id)
     ]
     links = [
         _link_dict(to_id=to_id, link_type=lt, when=when)
-        for to_id, lt, when in store.get_links(_conn, statement_id)
+        for to_id, lt, when in store.get_links(_db(), statement_id)
     ]
     # Mix in entity-endpoint edges where the statement is the source
     # (direction='se'). Externally indistinguishable from statement→statement
     # edges — caller reads the id prefix on `to_id` to know the kind.
-    es_outgoing, _ = store.get_entity_statement_links_for_statement(_conn, statement_id)
+    es_outgoing, _ = store.get_entity_statement_links_for_statement(_db(), statement_id)
     links.extend(
         _link_dict(to_id=ent_id, link_type=lt, when=when)
         for ent_id, lt, when in es_outgoing
@@ -1073,15 +1081,15 @@ def _hydrate_statement_full(
     no longer needs a follow-up `get_statements` on the same id just to learn
     what points at it. `reverse_cap` bounds each reverse-edge list (the wide
     search/survey surfaces pass it; `get_statements` passes None)."""
-    assert _conn is not None
+    assert _db() is not None
     out = _hydrate_statement(statement_id, score=score)
 
     incoming = [
         _link_dict(from_id=from_id, link_type=lt, when=when)
-        for from_id, lt, when in store.get_incoming_links(_conn, statement_id)
+        for from_id, lt, when in store.get_incoming_links(_db(), statement_id)
     ]
     # Entity→statement edges pointing at this statement (direction='es').
-    _, es_incoming = store.get_entity_statement_links_for_statement(_conn, statement_id)
+    _, es_incoming = store.get_entity_statement_links_for_statement(_db(), statement_id)
     incoming.extend(
         _link_dict(from_id=ent_id, link_type=lt, when=when)
         for ent_id, lt, when in es_incoming
@@ -1090,7 +1098,7 @@ def _hydrate_statement_full(
     when_refs: list[dict[str, Any]] = [
         {"from_id": from_id, "to_id": to_id, "link_type": lt, "when": when_tree}
         for from_id, to_id, lt, when_tree in store.get_when_references(
-            _conn, statement_id
+            _db(), statement_id
         )
     ]
     # Entity↔statement edges that condition on this statement.
@@ -1100,7 +1108,7 @@ def _hydrate_statement_full(
         direction,
         lt,
         when_tree,
-    ) in store.get_entity_statement_when_references(_conn, statement_id):
+    ) in store.get_entity_statement_when_references(_db(), statement_id):
         if direction == "es":
             when_refs.append(
                 {
@@ -1139,17 +1147,17 @@ def _alias_entity_boost(
     the max-scoring name. Statements mentioning a boosted entity get
     final_score = cosine + name_boost * entity_score, lifting them
     against alias-using queries without harming canonical ones."""
-    assert _conn is not None and _name_index is not None
+    assert _db() is not None and _name_index is not None
     entity_boost: dict[str, float] = {}
     if name_boost > 0.0 and name_top_k > 0:
         for vid, dist in _name_index.search(vec, k=name_top_k):
             sc = 1.0 - dist
             if sc < name_min_score:
                 continue
-            nid = store.get_name_id_by_vector_id(_conn, vid)
+            nid = store.get_name_id_by_vector_id(_db(), vid)
             if nid is None:
                 continue
-            name_row = store.get_name_by_id(_conn, nid)
+            name_row = store.get_name_by_id(_db(), nid)
             if name_row is None:
                 continue
             eid = name_row["entity_id"]
@@ -1171,21 +1179,21 @@ def _score_candidates(
     Returns (statement_id, final_score, cosine) tuples sorted by final
     score descending. Applies the mentions-subset, kind, and min_score
     filters that only direct hits are subject to."""
-    assert _conn is not None
+    assert _db() is not None
     scored: list[tuple[str, float, float]] = []  # (statement_id, final, cosine)
     seen: set[str] = set()
     for vector_id, distance in raw_hits:
         cosine = 1.0 - distance
-        statement_id = store.get_statement_id_by_vector_id(_conn, vector_id)
+        statement_id = store.get_statement_id_by_vector_id(_db(), vector_id)
         if statement_id is None or statement_id in seen:
             continue
         mention_entity_ids = {
-            m["entity_id"] for m in store.get_mentions(_conn, statement_id)
+            m["entity_id"] for m in store.get_mentions(_db(), statement_id)
         }
         if required_entity_ids and not required_entity_ids.issubset(mention_entity_ids):
             continue
         if kind is not None:
-            row = store.get_statement(_conn, statement_id)
+            row = store.get_statement(_db(), statement_id)
             if row is None or row["kind"] != kind:
                 continue
         boost = 0.0
@@ -1206,7 +1214,7 @@ def _expand_graph(seen: set[str], depth: int, direction: str) -> list[dict[str, 
     """BFS neighborhood expansion from the direct hits, up to `depth` hops.
     Mutates `seen` as it walks so a node is hydrated at most once. Expanded
     statements carry no `score` field."""
-    assert _conn is not None
+    assert _db() is not None
     follow_children = direction in ("both", "children")
     follow_parents = direction in ("both", "parents")
 
@@ -1216,12 +1224,12 @@ def _expand_graph(seen: set[str], depth: int, direction: str) -> list[dict[str, 
         next_frontier: set[str] = set()
         for bid in frontier:
             if follow_children:
-                for to_id, _lt, _when in store.get_links(_conn, bid):
+                for to_id, _lt, _when in store.get_links(_db(), bid):
                     if to_id not in seen:
                         seen.add(to_id)
                         next_frontier.add(to_id)
             if follow_parents:
-                for from_id, _lt, _when in store.get_incoming_links(_conn, bid):
+                for from_id, _lt, _when in store.get_incoming_links(_db(), bid):
                     if from_id not in seen:
                         seen.add(from_id)
                         next_frontier.add(from_id)
@@ -1309,7 +1317,7 @@ def search_statements(
                          canonical queries unaffected when no name is
                          clearly relevant.
     """
-    assert _index is not None and _conn is not None and _name_index is not None
+    assert _index is not None and _db() is not None and _name_index is not None
 
     required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
 
@@ -1411,7 +1419,7 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
     Relevance and sufficiency judgements belong to the consumer. Output is
     deterministic given a fixed index and embedder.
     """
-    assert _index is not None and _conn is not None
+    assert _index is not None and _db() is not None
 
     if not query.strip():
         return []
@@ -1449,7 +1457,7 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
     for sub, vec in embedded:
         surfaced: set[str] = set()
         for vector_id, distance in _search_index_with_retry(vec, k):
-            statement_id = store.get_statement_id_by_vector_id(_conn, vector_id)
+            statement_id = store.get_statement_id_by_vector_id(_db(), vector_id)
             # Skip vid→sid drift, and count each statement at most once per
             # sub-query so duplicate vectors can't inflate the count-rank.
             if statement_id is None or statement_id in surfaced:
@@ -1675,13 +1683,13 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     and returns its id. Otherwise creates a new entity AND a name pointing
     at it.
     """
-    assert _conn is not None
-    existing = store.get_name_by_text(_conn, name)
-    with store.transaction(_conn):
+    assert _db() is not None
+    existing = store.get_name_by_text(_db(), name)
+    with store.transaction(_db()):
         if existing is not None:
-            store.update_entity_description(_conn, existing["entity_id"], description)
+            store.update_entity_description(_db(), existing["entity_id"], description)
             return {"entity_id": existing["entity_id"]}
-        entity_id = store.create_entity(_conn, description)
+        entity_id = store.create_entity(_db(), description)
         _create_name_with_plural(name, entity_id)
     layout_baker.schedule_rebake()
     return {"entity_id": entity_id}
@@ -1699,7 +1707,7 @@ def _validate_statement_refs(
     statement_rows: dict[str, sqlite3.Row] = {}
 
     def _check_existing(ref: str, position: str) -> str:
-        row = store.get_statement(_conn, ref)
+        row = store.get_statement(_db(), ref)
         if row is None:
             raise ValueError(f"{position}: statement {ref!r} does not exist")
         statement_rows[ref] = row
@@ -1775,7 +1783,7 @@ def upsert_statement(
     anyway — the success response then carries the same violations under
     a `phrasing_violations` key as a warning.
     """
-    assert _conn is not None and _index is not None
+    assert _db() is not None and _index is not None
 
     violations, reject = _phrasing_gate(text, kind, allow_phrasing_violations)
     if reject is not None:
@@ -1819,20 +1827,20 @@ def upsert_statement(
         (item["to_id"], item["link_type"], item.get("when")) for item in links
     ]
 
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         if id is not None:
-            store.update_statement(_conn, id, kind, text)
-            vector_id = store.get_vector_id(_conn, id)
+            store.update_statement(_db(), id, kind, text)
+            vector_id = store.get_vector_id(_db(), id)
             assert vector_id is not None
             _index.replace(vector_id, vec)
-            store.replace_links(_conn, id, link_pairs)
+            store.replace_links(_db(), id, link_pairs)
             statement_id = id
         else:
-            statement_id = store.create_statement(_conn, kind, text)
-            vector_id = store.next_vector_id(_conn)
-            store.set_vector_id(_conn, statement_id, vector_id)
+            statement_id = store.create_statement(_db(), kind, text)
+            vector_id = store.next_vector_id(_db())
+            store.set_vector_id(_db(), statement_id, vector_id)
             _index.add(vector_id, vec)
-            store.replace_links(_conn, statement_id, link_pairs)
+            store.replace_links(_db(), statement_id, link_pairs)
 
         # Mentions are derived from the text, not asserted by the caller.
         _derive_statement_mentions(statement_id, text)
@@ -1842,7 +1850,7 @@ def upsert_statement(
                 (il["from_id"], statement_id, il["link_type"], il.get("when"))
                 for il in incoming_links
             ]
-            store.insert_links(_conn, edges)
+            store.insert_links(_db(), edges)
 
     _persist_index()
     response: dict[str, Any] = {
@@ -1947,7 +1955,7 @@ def _resolve_batch_refs(
                     f"{position}: batch index @{idx} out of range [0, {n})"
                 )
             return idx
-        row = store.get_statement(_conn, ref)
+        row = store.get_statement(_db(), ref)
         if row is None:
             raise ValueError(f"{position}: statement {ref!r} does not exist")
         statement_rows[ref] = row
@@ -2228,7 +2236,7 @@ def upsert_statements(
         }
         ```
     """
-    assert _conn is not None and _index is not None
+    assert _db() is not None and _index is not None
 
     n = len(statements)
     if n == 0:
@@ -2247,17 +2255,17 @@ def upsert_statements(
     # Phase 2: create surviving statements with their derived mentions, no
     # links yet. The name index is stable across the batch (statements
     # don't create names), so build it once.
-    name_index = store.build_name_index(_conn)
+    name_index = store.build_name_index(_db())
     statement_ids: dict[int, str] = {}
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         for i, spec in enumerate(statements):
             if i in plan.rejected:
                 continue
-            bid = store.create_statement(_conn, spec["kind"], spec["text"])
-            vid = store.next_vector_id(_conn)
-            store.set_vector_id(_conn, bid, vid)
+            bid = store.create_statement(_db(), spec["kind"], spec["text"])
+            vid = store.next_vector_id(_db())
+            store.set_vector_id(_db(), bid, vid)
             _index.add(vid, vecs[i])
-            store.derive_mentions(_conn, bid, spec["text"], name_index)
+            store.derive_mentions(_db(), bid, spec["text"], name_index)
             statement_ids[i] = bid
 
         # Phase 3: insert edges between surviving items. Cascade guarantees no
@@ -2272,7 +2280,7 @@ def upsert_statements(
             statement_ids,
         )
         if edges:
-            store.insert_links(_conn, edges)
+            store.insert_links(_db(), edges)
 
     _persist_index()
 
@@ -2316,8 +2324,8 @@ def replace_text(
     anyway and surfaces the violations as a `phrasing_violations`
     warning on the success response.
     """
-    assert _conn is not None and _index is not None
-    row = store.get_statement(_conn, id)
+    assert _db() is not None and _index is not None
+    row = store.get_statement(_db(), id)
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
 
@@ -2326,9 +2334,9 @@ def replace_text(
         return reject
 
     vec = embed.embed(text)
-    with store.transaction(_conn):
-        store.update_statement_text(_conn, id, text)
-        vector_id = store.get_vector_id(_conn, id)
+    with store.transaction(_db()):
+        store.update_statement_text(_db(), id, text)
+        vector_id = store.get_vector_id(_db(), id)
         assert vector_id is not None
         _index.replace(vector_id, vec)
         _persist_index()
@@ -2379,8 +2387,8 @@ def patch_statement(
 
     Raises ValueError if `id` does not exist.
     """
-    assert _conn is not None and _index is not None
-    row = store.get_statement(_conn, id)
+    assert _db() is not None and _index is not None
+    row = store.get_statement(_db(), id)
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
 
@@ -2403,16 +2411,16 @@ def patch_statement(
         vec = embed.embed(text)
 
     # Mutate field-by-field so omitted fields stay untouched.
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         if text is not None and kind is not None:
-            store.update_statement(_conn, id, kind, text)
+            store.update_statement(_db(), id, kind, text)
         elif text is not None:
-            store.update_statement_text(_conn, id, text)
+            store.update_statement_text(_db(), id, text)
         elif kind is not None:
-            store.update_statement_kind(_conn, id, kind)
+            store.update_statement_kind(_db(), id, kind)
 
         if vec is not None:
-            vector_id = store.get_vector_id(_conn, id)
+            vector_id = store.get_vector_id(_db(), id)
             assert vector_id is not None
             _index.replace(vector_id, vec)
             _persist_index()
@@ -2438,10 +2446,10 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
     `entity_id` is unknown, or if the text is already taken by a different
     entity (use `move_name` or `merge_entities` to resolve those cases).
     """
-    assert _conn is not None
-    if store.get_entity_by_id(_conn, entity_id) is None:
+    assert _db() is not None
+    if store.get_entity_by_id(_db(), entity_id) is None:
         raise ValueError(f"entity {entity_id!r} does not exist")
-    existing = store.get_name_by_text(_conn, text)
+    existing = store.get_name_by_text(_db(), text)
     if existing is not None:
         if existing["entity_id"] == entity_id:
             return {"name_id": existing["id"]}
@@ -2449,7 +2457,7 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
             f"name {text!r} already belongs to entity {existing['entity_id']!r}; "
             "use move_name or merge_entities"
         )
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         name_id = _create_name_with_plural(text, entity_id)
     return {"name_id": name_id}
 
@@ -2459,34 +2467,34 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
     """Move every name from `from_entity_id` to `into_entity_id` and delete
     the source entity. Statements that mentioned the moved names continue
     to point at the same names (now under the new entity)."""
-    assert _conn is not None
+    assert _db() is not None
     if from_entity_id == into_entity_id:
         return {"into_entity_id": into_entity_id, "names_moved": 0}
-    if store.get_entity_by_id(_conn, from_entity_id) is None:
+    if store.get_entity_by_id(_db(), from_entity_id) is None:
         raise ValueError(f"entity {from_entity_id!r} does not exist")
-    if store.get_entity_by_id(_conn, into_entity_id) is None:
+    if store.get_entity_by_id(_db(), into_entity_id) is None:
         raise ValueError(f"entity {into_entity_id!r} does not exist")
     # Names move from source to target, so the entity-grouping of every
     # statement mentioning them changes — recompute those statements.
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         moved_name_ids = [
-            r["id"] for r in store.get_names_by_entity(_conn, from_entity_id)
+            r["id"] for r in store.get_names_by_entity(_db(), from_entity_id)
         ]
-        moved = store.reassign_names(_conn, from_entity_id, into_entity_id)
+        moved = store.reassign_names(_db(), from_entity_id, into_entity_id)
         # Rewrite any entity_links referencing the source — outgoing rows
         # become outgoing on the target, incoming rows become incoming on
         # the target, and self-loops the merge would create are dropped.
         # Required before deleting the source: FK enforcement otherwise
         # blocks the delete.
-        store.rewrite_entity_link_endpoints(_conn, from_entity_id, into_entity_id)
+        store.rewrite_entity_link_endpoints(_db(), from_entity_id, into_entity_id)
         # Mixed entity↔statement edges anchored on the source entity move
         # onto the target; UNIQUE collisions drop the rewriting row.
-        store.rewrite_entity_statement_endpoints(_conn, from_entity_id, into_entity_id)
-        store.delete_entity(_conn, from_entity_id)
+        store.rewrite_entity_statement_endpoints(_db(), from_entity_id, into_entity_id)
+        store.delete_entity(_db(), from_entity_id)
         affected: list[str] = []
         for nid in moved_name_ids:
-            affected.extend(store.statements_mentioning_name(_conn, nid))
-        store.enqueue_recompute_statements(_conn, affected)
+            affected.extend(store.statements_mentioning_name(_db(), nid))
+        store.enqueue_recompute_statements(_db(), affected)
     return {
         "into_entity_id": into_entity_id,
         "names_moved": moved,
@@ -2508,23 +2516,23 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
 
     Raises ValueError if `name_id` or `to_entity_id` does not exist.
     """
-    assert _conn is not None
-    if store.get_name_by_id(_conn, name_id) is None:
+    assert _db() is not None
+    if store.get_name_by_id(_db(), name_id) is None:
         raise ValueError(f"name {name_id!r} does not exist")
-    if store.get_entity_by_id(_conn, to_entity_id) is None:
+    if store.get_entity_by_id(_db(), to_entity_id) is None:
         raise ValueError(f"entity {to_entity_id!r} does not exist")
     # The name's entity binding changes, so the entity-grouping of every
     # statement mentioning it (or its generated plurals) may change —
     # recompute them. Generated children follow the name onto the new
     # entity so the plural stays attached to the same concept.
-    with store.transaction(_conn):
-        children = store.get_generated_children(_conn, name_id)
-        store.set_name_entity(_conn, name_id, to_entity_id)
-        affected = list(store.statements_mentioning_name(_conn, name_id))
+    with store.transaction(_db()):
+        children = store.get_generated_children(_db(), name_id)
+        store.set_name_entity(_db(), name_id, to_entity_id)
+        affected = list(store.statements_mentioning_name(_db(), name_id))
         for child in children:
-            store.set_name_entity(_conn, child["id"], to_entity_id)
-            affected.extend(store.statements_mentioning_name(_conn, child["id"]))
-        store.enqueue_recompute_statements(_conn, affected)
+            store.set_name_entity(_db(), child["id"], to_entity_id)
+            affected.extend(store.statements_mentioning_name(_db(), child["id"]))
+        store.enqueue_recompute_statements(_db(), affected)
     return {"name_id": name_id, "entity_id": to_entity_id}
 
 
@@ -2547,18 +2555,18 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     already used by a different name (resolve with `merge_entities` or
     `move_name` first).
     """
-    assert _conn is not None
+    assert _db() is not None
     # Statements mentioning this name may now match differently (their text
     # still contains the OLD label, which is no longer a name) — recompute
     # them. Regenerate the name's plural from the new text. Scan for the new
     # text so statements containing it pick up the mention.
-    with store.transaction(_conn):
-        affected = list(store.statements_mentioning_name(_conn, name_id))
-        store.rename_name(_conn, name_id, new_text)
+    with store.transaction(_db()):
+        affected = list(store.statements_mentioning_name(_db(), name_id))
+        store.rename_name(_db(), name_id, new_text)
         _reindex_name(name_id, new_text)
         affected.extend(_regenerate_plurals(name_id, new_text))
-        store.enqueue_recompute_statements(_conn, affected)
-        store.enqueue_recompute_scan(_conn, new_text)
+        store.enqueue_recompute_statements(_db(), affected)
+        store.enqueue_recompute_scan(_db(), new_text)
     return {"name_id": name_id, "text": new_text}
 
 
@@ -2579,15 +2587,15 @@ def delete_name(name_id: str) -> dict[str, Any]:
     Returns `{deleted, mentions_removed}`.
     Raises ValueError on unknown id.
     """
-    assert _conn is not None
-    if store.get_name_by_id(_conn, name_id) is None:
+    assert _db() is not None
+    if store.get_name_by_id(_db(), name_id) is None:
         raise ValueError(f"name {name_id!r} does not exist")
     # Cascade through the name and any generated plurals, then recompute the
     # statements that mentioned them — a removed name may have been the
     # representative for an entity another of whose names still matches.
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         mentions_removed, affected = _delete_name_cascade(name_id)
-        store.enqueue_recompute_statements(_conn, affected)
+        store.enqueue_recompute_statements(_db(), affected)
     return {
         "deleted": True,
         "mentions_removed": mentions_removed,
@@ -2612,35 +2620,35 @@ def delete_entity(id: str) -> dict[str, Any]:
     Returns counts of cascaded rows so the caller can sanity-check the
     blast radius. Permanent. Raises ValueError on unknown id.
     """
-    assert _conn is not None
-    if store.get_entity_by_id(_conn, id) is None:
+    assert _db() is not None
+    if store.get_entity_by_id(_db(), id) is None:
         raise ValueError(f"entity {id!r} does not exist")
 
-    with store.transaction(_conn):
-        name_rows = store.get_names_by_entity(_conn, id)
+    with store.transaction(_db()):
+        name_rows = store.get_names_by_entity(_db(), id)
         name_ids = [r["id"] for r in name_rows]
         affected: list[str] = []
         mentions_removed = 0
         for nid in name_ids:
             # Statements that mentioned this entity may now match a name they
             # were shadowing (e.g. "data" surfacing once "data science" is gone).
-            affected.extend(store.statements_mentioning_name(_conn, nid))
-            mentions_removed += store.delete_name_mentions(_conn, nid)
+            affected.extend(store.statements_mentioning_name(_db(), nid))
+            mentions_removed += store.delete_name_mentions(_db(), nid)
             _drop_name_from_index(nid)
         # Break generated-plural self-references within this entity before the
         # bulk delete (generated_from_name_id REFERENCES names(id)).
-        store.delete_names_clearing_generated_refs(_conn, name_ids)
+        store.delete_names_clearing_generated_refs(_db(), name_ids)
         outgoing_entity_links_removed, incoming_entity_links_removed = (
-            store.delete_entity_links_touching(_conn, id)
+            store.delete_entity_links_touching(_db(), id)
         )
         # Mixed entity↔statement edges touching this entity must also go;
         # the cascade trigger on entity_statement_links cleans up their
         # when_nodes rows.
         entity_statement_links_removed = store.delete_entity_statement_links_for_entity(
-            _conn, id
+            _db(), id
         )
-        store.delete_entity(_conn, id)
-        store.enqueue_recompute_statements(_conn, affected)
+        store.delete_entity(_db(), id)
+        store.enqueue_recompute_statements(_db(), affected)
     layout_baker.schedule_rebake()
     return {
         "deleted": True,
@@ -2695,7 +2703,7 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     No-op when `from_id == into_id`. Raises
     ValueError if either id does not exist.
     """
-    assert _conn is not None and _index is not None
+    assert _db() is not None and _index is not None
 
     if from_id == into_id:
         return {
@@ -2705,35 +2713,35 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
             "incoming_links_moved": 0,
         }
 
-    if store.get_statement(_conn, from_id) is None:
+    if store.get_statement(_db(), from_id) is None:
         raise ValueError(f"statement {from_id!r} does not exist")
-    if store.get_statement(_conn, into_id) is None:
+    if store.get_statement(_db(), into_id) is None:
         raise ValueError(f"statement {into_id!r} does not exist")
 
     # Mentions are derived from text: the target keeps its own (text
     # unchanged) and the source's derived rows are cleared so the source
     # can be deleted under FK enforcement. Nothing is moved.
     mentions_moved = 0
-    with store.transaction(_conn):
-        store.clear_derived_for_statement(_conn, from_id)
-        outgoing_moved = store.merge_outgoing_links_into(_conn, from_id, into_id)
-        incoming_moved = store.merge_incoming_links_into(_conn, from_id, into_id)
+    with store.transaction(_db()):
+        store.clear_derived_for_statement(_db(), from_id)
+        outgoing_moved = store.merge_outgoing_links_into(_db(), from_id, into_id)
+        incoming_moved = store.merge_incoming_links_into(_db(), from_id, into_id)
         # Any remaining links that referenced the source as a `when` condition
         # need their reference rewritten to the target before deleting the
         # source, otherwise FK enforcement blocks the delete. Both link kinds
         # are handled — statement_links and entity_statement_links.
-        store.rewrite_when_references(_conn, from_id, into_id)
-        store.rewrite_entity_statement_when_references(_conn, from_id, into_id)
+        store.rewrite_when_references(_db(), from_id, into_id)
+        store.rewrite_entity_statement_when_references(_db(), from_id, into_id)
         # Entity↔statement edges whose endpoint is the source statement need to
         # move onto the target — UPDATE in place with collision detection, then
         # drop any rows a UNIQUE collision left pointing at the source so it can
         # be deleted.
-        store.move_entity_statement_endpoints(_conn, from_id, into_id)
+        store.move_entity_statement_endpoints(_db(), from_id, into_id)
 
-        vector_id = store.get_vector_id(_conn, from_id)
+        vector_id = store.get_vector_id(_db(), from_id)
         if vector_id is not None:
             _index.delete(vector_id)
-        store.delete_statement(_conn, from_id)
+        store.delete_statement(_db(), from_id)
     _persist_index()
 
     return {
@@ -2779,9 +2787,9 @@ def delete_statement(id: str) -> dict[str, Any]:
 
     Permanent. Raises ValueError on unknown id.
     """
-    assert _conn is not None and _index is not None
+    assert _db() is not None and _index is not None
 
-    if store.get_statement(_conn, id) is None:
+    if store.get_statement(_db(), id) is None:
         raise ValueError(f"statement {id!r} does not exist")
 
     # Order matters under FK enforcement: drop everything that points AT this
@@ -2789,19 +2797,19 @@ def delete_statement(id: str) -> dict[str, Any]:
     # and incoming statement_links, any statement_links / entity_statement_links
     # whose when-tree references it, and entity↔statement edges with it as an
     # endpoint (see the helper for the exact ordering and counting rules).
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         (
             outgoing_removed,
             incoming_removed,
             when_removed,
             entity_statement_links_removed,
-        ) = store.delete_links_touching_statement(_conn, id)
-        mentions_removed = store.clear_derived_for_statement(_conn, id)
+        ) = store.delete_links_touching_statement(_db(), id)
+        mentions_removed = store.clear_derived_for_statement(_db(), id)
 
-        vector_id = store.get_vector_id(_conn, id)
+        vector_id = store.get_vector_id(_db(), id)
         if vector_id is not None:
             _index.delete(vector_id)
-        store.delete_statement(_conn, id)
+        store.delete_statement(_db(), id)
     _persist_index()
 
     return {
@@ -2877,12 +2885,12 @@ def _validate_edge_endpoints(links: list[EdgeSpec]) -> dict[str, sqlite3.Row]:
             needed_statements.update(when_expression.leaves(link["when"]))
     statement_rows: dict[str, sqlite3.Row] = {}
     for sid in needed_statements:
-        row = store.get_statement(_conn, sid)
+        row = store.get_statement(_db(), sid)
         if row is None:
             raise ValueError(f"statement {sid!r} does not exist")
         statement_rows[sid] = row
     for eid in needed_entities:
-        if store.get_entity_by_id(_conn, eid) is None:
+        if store.get_entity_by_id(_db(), eid) is None:
             raise ValueError(f"entity {eid!r} does not exist")
     return statement_rows
 
@@ -2914,7 +2922,7 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     relationships between existing nodes. To add a single edge, pass a
     one-element list.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not links:
         return {"inserted": 0}
 
@@ -2946,11 +2954,11 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
         raise ValueError("flipped link direction:\n" + "\n".join(flip_errors))
 
     inserted = 0
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         if stmt_edges:
-            inserted += store.insert_links(_conn, stmt_edges)
+            inserted += store.insert_links(_db(), stmt_edges)
         if es_edges:
-            inserted += store.insert_entity_statement_links(_conn, es_edges)
+            inserted += store.insert_entity_statement_links(_db(), es_edges)
     if es_edges:
         layout_baker.schedule_rebake()
     return {"inserted": inserted}
@@ -2971,18 +2979,18 @@ def remove_links(links: list[EdgeSpec]) -> dict[str, int]:
     endpoints exist; deleting an edge that references a non-existent
     node is just a no-op.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not links:
         return {"removed": 0}
 
     stmt_edges, es_edges = _split_edges(links)
 
     removed = 0
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         if stmt_edges:
-            removed += store.delete_links(_conn, stmt_edges)
+            removed += store.delete_links(_db(), stmt_edges)
         if es_edges:
-            removed += store.delete_entity_statement_links(_conn, es_edges)
+            removed += store.delete_entity_statement_links(_db(), es_edges)
     if es_edges:
         layout_baker.schedule_rebake()
     return {"removed": removed}
@@ -3033,10 +3041,10 @@ def get_statements(ids: list[str]) -> dict[str, Any]:
     Raises ValueError if `ids` is empty or if any id does not exist (no
     partial results — fix the input and retry).
     """
-    assert _conn is not None
+    assert _db() is not None
     if not ids:
         raise ValueError("ids must be a non-empty list")
-    missing = [i for i in ids if store.get_statement(_conn, i) is None]
+    missing = [i for i in ids if store.get_statement(_db(), i) is None]
     if missing:
         raise ValueError(f"statement(s) not found: {missing!r}")
     # Uncapped reverse edges: get_statements is an explicit, targeted fetch, so
@@ -3068,13 +3076,13 @@ def get_entity(id: str) -> dict[str, Any]:
 
     Raises ValueError if `id` does not exist.
     """
-    assert _conn is not None
-    row = store.get_entity_by_id(_conn, id)
+    assert _db() is not None
+    row = store.get_entity_by_id(_db(), id)
     if row is None:
         raise ValueError(f"entity {id!r} does not exist")
-    outgoing = store.get_entity_links_outgoing(_conn, id)
-    incoming = store.get_entity_links_incoming(_conn, id)
-    es_outgoing, es_incoming = store.get_entity_statement_links_for_entity(_conn, id)
+    outgoing = store.get_entity_links_outgoing(_db(), id)
+    incoming = store.get_entity_links_incoming(_db(), id)
+    es_outgoing, es_incoming = store.get_entity_statement_links_for_entity(_db(), id)
     return {
         "id": row["id"],
         "description": row["description"] or "",
@@ -3084,7 +3092,7 @@ def get_entity(id: str) -> dict[str, Any]:
         "updated_by": row["updated_by"],
         "names": [
             {"id": n["id"], "text": n["text"]}
-            for n in store.get_names_by_entity(_conn, id)
+            for n in store.get_names_by_entity(_db(), id)
         ],
         "links": [{"to_entity_id": to_id, "link_type": lt} for (to_id, lt) in outgoing],
         "incoming_links": [
@@ -3122,10 +3130,10 @@ def list_entities(
     entity_id as a fallback if it has no names. To enumerate all aliases
     of one entity, use `get_entity(id)`.
     """
-    assert _conn is not None
-    rows = store.list_entities(_conn, prefix=prefix or None, limit=limit, offset=offset)
+    assert _db() is not None
+    rows = store.list_entities(_db(), prefix=prefix or None, limit=limit, offset=offset)
     return {
-        "total": store.count_entities(_conn),
+        "total": store.count_entities(_db()),
         "entities": [
             {
                 "id": r["id"],
@@ -3162,21 +3170,21 @@ def list_statements(
     no mentions or links to keep the response light. To inspect a
     single statement's full structure use `get_statements([id])`.
     """
-    assert _conn is not None
+    assert _db() is not None
     if entity_id is not None and name is not None:
         raise ValueError("pass at most one of entity_id / name, not both")
     if name is not None:
-        row = store.get_name_by_text(_conn, name)
+        row = store.get_name_by_text(_db(), name)
         if row is None:
             raise ValueError(f"name not found: {name!r}")
         entity_id = row["entity_id"]
-    if entity_id is not None and store.get_entity_by_id(_conn, entity_id) is None:
+    if entity_id is not None and store.get_entity_by_id(_db(), entity_id) is None:
         raise ValueError(f"entity not found: {entity_id!r}")
     rows = store.list_statements(
-        _conn, limit=limit, offset=offset, entity_id=entity_id, kind=kind
+        _db(), limit=limit, offset=offset, entity_id=entity_id, kind=kind
     )
     return {
-        "total": store.count_statements(_conn, entity_id=entity_id, kind=kind),
+        "total": store.count_statements(_db(), entity_id=entity_id, kind=kind),
         "statements": [
             {"id": r["id"], "kind": r["kind"], "text": r["text"]} for r in rows
         ],
@@ -3206,13 +3214,13 @@ def find_duplicates(
     `merge_statements(from, into)` to consolidate, or `replace_text` /
     `add_links` if the duplication is structural rather than textual.
     """
-    assert _conn is not None and _index is not None
+    assert _db() is not None and _index is not None
 
     seen_pairs: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
 
-    for bid in store.all_statement_ids(_conn):
-        vid = store.get_vector_id(_conn, bid)
+    for bid in store.all_statement_ids(_db()):
+        vid = store.get_vector_id(_db(), bid)
         if vid is None:
             continue
         vec = _index.get_vector(vid)
@@ -3230,15 +3238,15 @@ def find_duplicates(
             score = 1.0 - distance
             if score < threshold:
                 continue
-            other_bid = store.get_statement_id_by_vector_id(_conn, other_vid)
+            other_bid = store.get_statement_id_by_vector_id(_db(), other_vid)
             if other_bid is None:
                 continue
             key = (bid, other_bid) if bid < other_bid else (other_bid, bid)
             if key in seen_pairs:
                 continue
             seen_pairs.add(key)
-            a_row = store.get_statement(_conn, key[0])
-            b_row = store.get_statement(_conn, key[1])
+            a_row = store.get_statement(_db(), key[0])
+            b_row = store.get_statement(_db(), key[1])
             if a_row is None or b_row is None:
                 continue
             pairs.append(
@@ -3302,7 +3310,7 @@ def discover_facts(
     Cheap-ish: one embed + one vector search per input text. No SQL
     writes.
     """
-    assert _index is not None and _conn is not None
+    assert _index is not None and _db() is not None
 
     if exists_threshold < near_threshold:
         raise ValueError(
@@ -3320,10 +3328,10 @@ def discover_facts(
             score = 1.0 - distance
             if score < near_threshold:
                 continue
-            bid = store.get_statement_id_by_vector_id(_conn, vid)
+            bid = store.get_statement_id_by_vector_id(_db(), vid)
             if bid is None:
                 continue
-            row = store.get_statement(_conn, bid)
+            row = store.get_statement(_db(), bid)
             if row is None:
                 continue
             matches.append({"id": bid, "text": _snippet(row["text"]), "score": score})
@@ -3388,11 +3396,11 @@ def list_link_types() -> list[dict[str, Any]]:
     To follow what a `when` leaf refers to, call `get_statements([id])` on
     the leaf's `statement_id` — same pattern as chasing a link target.
     """
-    assert _conn is not None
-    counts = store.count_statement_links_by_type(_conn)
+    assert _db() is not None
+    counts = store.count_statement_links_by_type(_db())
     glossary = {
         r["link_type"]: r["description"]
-        for r in store.list_statement_link_type_glossary(_conn)
+        for r in store.list_statement_link_type_glossary(_db())
     }
     all_types = sorted(set(counts) | set(glossary))
     rows: list[dict[str, Any]] = []
@@ -3440,7 +3448,7 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     if any reference is unknown the call raises ValueError and inserts
     nothing.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not links:
         return {"inserted": 0}
     needed: set[str] = set()
@@ -3452,14 +3460,14 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
         needed.add(link["from_entity_id"])
         needed.add(link["to_entity_id"])
     for eid in needed:
-        if store.get_entity_by_id(_conn, eid) is None:
+        if store.get_entity_by_id(_db(), eid) is None:
             raise ValueError(f"entity {eid!r} does not exist")
     edges = [
         (link["from_entity_id"], link["to_entity_id"], link["link_type"])
         for link in links
     ]
-    with store.transaction(_conn):
-        inserted = store.insert_entity_links(_conn, edges)
+    with store.transaction(_db()):
+        inserted = store.insert_entity_links(_db(), edges)
     if inserted:
         layout_baker.schedule_rebake()
     return {"inserted": inserted}
@@ -3476,15 +3484,15 @@ def remove_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     exist; deleting an edge that references a non-existent entity simply
     removes nothing.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not links:
         return {"removed": 0}
     edges = [
         (link["from_entity_id"], link["to_entity_id"], link["link_type"])
         for link in links
     ]
-    with store.transaction(_conn):
-        removed = store.delete_entity_links(_conn, edges)
+    with store.transaction(_db()):
+        removed = store.delete_entity_links(_db(), edges)
     if removed:
         layout_baker.schedule_rebake()
     return {"removed": removed}
@@ -3509,12 +3517,12 @@ def list_statement_kinds() -> list[dict[str, Any]]:
     prescriptive how-to and diagnostic content). Vocabulary is open
     — new kinds run the event phrasing catalog as a baseline.
     """
-    assert _conn is not None
-    glossary_rows = store.list_statement_kind_glossary(_conn)
+    assert _db() is not None
+    glossary_rows = store.list_statement_kind_glossary(_db())
     glossary = {
         r["kind"]: (r["description"], r["when_to_use"] or "") for r in glossary_rows
     }
-    counts = store.count_statements_by_kind_all(_conn)
+    counts = store.count_statements_by_kind_all(_db())
     all_kinds = sorted(set(counts) | set(glossary))
     return [
         {
@@ -3537,11 +3545,11 @@ def list_entity_link_types() -> list[dict[str, Any]]:
     website or `upsert_entity_link_type`). `usage_count` is the number
     of entity_links rows currently carrying this type.
     """
-    assert _conn is not None
-    counts = store.count_entity_links_by_type(_conn)
+    assert _db() is not None
+    counts = store.count_entity_links_by_type(_db())
     glossary = {
         r["link_type"]: r["description"]
-        for r in store.list_entity_link_type_glossary(_conn)
+        for r in store.list_entity_link_type_glossary(_db())
     }
     all_types = sorted(set(counts) | set(glossary))
     return [
@@ -3571,13 +3579,13 @@ def upsert_statement_kind(
 
     Returns `{kind}` on success.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not kind or not kind.strip():
         raise ValueError("kind cannot be empty")
     if not description or not description.strip():
         raise ValueError("description cannot be empty")
-    with store.transaction(_conn):
-        store.upsert_statement_kind_glossary(_conn, kind, description, when_to_use)
+    with store.transaction(_db()):
+        store.upsert_statement_kind_glossary(_db(), kind, description, when_to_use)
     return {"kind": kind}
 
 
@@ -3592,9 +3600,9 @@ def delete_statement_kind(kind: str) -> dict[str, str]:
 
     Returns `{kind}`.
     """
-    assert _conn is not None
-    with store.transaction(_conn):
-        store.delete_statement_kind_glossary(_conn, kind)
+    assert _db() is not None
+    with store.transaction(_db()):
+        store.delete_statement_kind_glossary(_db(), kind)
     return {"kind": kind}
 
 
@@ -3608,13 +3616,13 @@ def upsert_link_type(link_type: str, description: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not link_type or not link_type.strip():
         raise ValueError("link_type cannot be empty")
     if not description or not description.strip():
         raise ValueError("description cannot be empty")
-    with store.transaction(_conn):
-        store.upsert_statement_link_type_glossary(_conn, link_type, description)
+    with store.transaction(_db()):
+        store.upsert_statement_link_type_glossary(_db(), link_type, description)
     return {"link_type": link_type}
 
 
@@ -3628,9 +3636,9 @@ def delete_link_type(link_type: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _conn is not None
-    with store.transaction(_conn):
-        store.delete_statement_link_type_glossary(_conn, link_type)
+    assert _db() is not None
+    with store.transaction(_db()):
+        store.delete_statement_link_type_glossary(_db(), link_type)
     return {"link_type": link_type}
 
 
@@ -3643,13 +3651,13 @@ def upsert_entity_link_type(link_type: str, description: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not link_type or not link_type.strip():
         raise ValueError("link_type cannot be empty")
     if not description or not description.strip():
         raise ValueError("description cannot be empty")
-    with store.transaction(_conn):
-        store.upsert_entity_link_type_glossary(_conn, link_type, description)
+    with store.transaction(_db()):
+        store.upsert_entity_link_type_glossary(_db(), link_type, description)
     return {"link_type": link_type}
 
 
@@ -3662,9 +3670,9 @@ def delete_entity_link_type(link_type: str) -> dict[str, str]:
 
     Returns `{link_type}`.
     """
-    assert _conn is not None
-    with store.transaction(_conn):
-        store.delete_entity_link_type_glossary(_conn, link_type)
+    assert _db() is not None
+    with store.transaction(_db()):
+        store.delete_entity_link_type_glossary(_db(), link_type)
     return {"link_type": link_type}
 
 
@@ -3712,23 +3720,23 @@ def grep_statements(
     kind, text, matched_via}]}`. Use `get_statements(ids)` for full
     mentions and links.
     """
-    assert _conn is not None
+    assert _db() is not None
     if not query:
         raise ValueError("query must be a non-empty string")
     if entity_id is not None and name is not None:
         raise ValueError("pass at most one of entity_id / name, not both")
     if name is not None:
-        row = store.get_name_by_text(_conn, name)
+        row = store.get_name_by_text(_db(), name)
         if row is None:
             raise ValueError(f"name not found: {name!r}")
         entity_id = row["entity_id"]
-    if entity_id is not None and store.get_entity_by_id(_conn, entity_id) is None:
+    if entity_id is not None and store.get_entity_by_id(_db(), entity_id) is None:
         raise ValueError(f"entity not found: {entity_id!r}")
 
     # Text-match path — the historical behavior. When entity_id is set,
     # this is the only path; explicit filters suppress alias expansion.
     text_rows = store.grep_statements(
-        _conn,
+        _db(),
         query,
         case_sensitive=case_sensitive,
         entity_id=entity_id,
@@ -3739,7 +3747,7 @@ def grep_statements(
 
     if not match_aliased_mentions or entity_id is not None:
         total = store.count_grep_statements(
-            _conn,
+            _db(),
             query,
             case_sensitive=case_sensitive,
             entity_id=entity_id,
@@ -3759,7 +3767,7 @@ def grep_statements(
         }
 
     mention_rows = store.grep_statements_via_mentions(
-        _conn, query, case_sensitive=case_sensitive, kind=kind
+        _db(), query, case_sensitive=case_sensitive, kind=kind
     )
     mention_ids = {r["id"]: r for r in mention_rows}
 
@@ -3826,13 +3834,13 @@ def report_knowledge_gap(text: str) -> dict[str, Any]:
 
     Returns the assigned `gap_id`.
     """
-    assert _conn is not None
+    assert _db() is not None
     text = text.strip()
     if not text:
         raise ValueError("text is required")
 
-    with store.transaction(_conn):
-        gap_id = store.create_knowledge_gap(_conn, text)
+    with store.transaction(_db()):
+        gap_id = store.create_knowledge_gap(_db(), text)
     return {"gap_id": gap_id}
 
 
@@ -3964,7 +3972,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    assert _drafts_conn is not None and _conn is not None
+    assert _drafts_conn is not None and _db() is not None
     row = drafts_store.get_draft(_drafts_conn, draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
@@ -3981,10 +3989,10 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     import json as _j
 
     # All-or-nothing replay: one transaction owns every op's substrate
-    # writes. Each replayed tool opens its own `transaction(_conn)`, which
+    # writes. Each replayed tool opens its own `transaction(_db())`, which
     # joins this outer one (reentrant), so a single op raising rolls the
     # whole draft back.
-    with store.transaction(_conn):
+    with store.transaction(_db()):
         for op in ops:
             kind = op["kind"]
             wrapper = tools_by_name.get(kind)

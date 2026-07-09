@@ -64,12 +64,16 @@ from .glossary import (
 from .kernel import (
     HISTORY_SCHEMA,
     SCHEMA,
+    configure_substrate,
     connect,
     get_actor,
     has_history,
     migrate,
+    reset_substrate,
     set_actor,
+    substrate_connection,
     transaction,
+    use_substrate_connection,
 )
 from .links import (
     count_entity_links_by_type,
@@ -166,6 +170,7 @@ __all__ = [
     "build_name_index",
     "claim_recompute_batch",
     "clear_derived_for_statement",
+    "configure_substrate",
     "connect",
     "count_entities",
     "count_entity_links_by_type",
@@ -257,6 +262,7 @@ __all__ = [
     "replace_links",
     "replace_mentions",
     "reset_claimed_recompute",
+    "reset_substrate",
     "rewrite_entity_link_endpoints",
     "rewrite_entity_statement_endpoints",
     "rewrite_entity_statement_when_references",
@@ -268,6 +274,7 @@ __all__ = [
     "set_name_vector_id",
     "set_vector_id",
     "statements_mentioning_name",
+    "substrate_connection",
     "substrate_dump",
     "transaction",
     "update_entity_description",
@@ -277,4 +284,5 @@ __all__ = [
     "upsert_entity_link_type_glossary",
     "upsert_statement_kind_glossary",
     "upsert_statement_link_type_glossary",
+    "use_substrate_connection",
 ]

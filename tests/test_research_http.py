@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, embed, research_runs, research_store, server
+from mycelium import auth, embed, research_runs, research_store, server, store
 
 
 def fake_embed_factory():
@@ -28,7 +28,7 @@ def deterministic_embed(text: str) -> list[float]:
 def _client(tmp_path, monkeypatch, embedder):
     monkeypatch.setattr(embed, "embed", embedder)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
-    server._conn = None
+    store.reset_substrate()
     server._auth_conn = None
     server._drafts_conn = None
     server._index = None

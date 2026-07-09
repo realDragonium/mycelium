@@ -12,11 +12,11 @@ import secrets
 
 from fastapi.testclient import TestClient
 
-from mycelium import auth, server
+from mycelium import auth, server, store
 
 
 def _reset_server() -> None:
-    server._conn = None
+    store.reset_substrate()
     server._auth_conn = None
     server._index = None
     server._index_path = None

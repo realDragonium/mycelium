@@ -5,7 +5,7 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, server
+from mycelium import embed, server, store
 from mycelium.link_rules import flip_error
 
 
@@ -17,7 +17,7 @@ def _embed(text: str) -> list[float]:
 def _client(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", _embed)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
-    server._conn = None
+    store.reset_substrate()
     server._index = None
     server._index_path = None
     server._ann_index = None
@@ -367,39 +367,39 @@ def test_list_link_types_includes_teaches_direction(tmp_path, monkeypatch):
         assert teaches["direction"]["source_kinds"] == ["procedure"]
 
 
-def test_plan_batch_decides_flip_and_cascade_without_writing(monkeypatch):
+def test_plan_batch_decides_flip_and_cascade_without_writing():
     """`_plan_batch` is pure planning: it computes the flip/cascade decision
     from the input and read-only lookups, no embedding or write transaction.
     A `capability --teaches--> procedure` edge flips (procedure teaches
     capability), so item 0 is rejected; item 2 references @0 and cascades."""
-    from mycelium import store
-
     conn = store.connect(":memory:")
     store.migrate(conn)
-    monkeypatch.setattr(server, "_conn", conn)
-
-    plan = server._plan_batch(
-        [
-            {
-                "kind": "capability",
-                "text": "the user can configure notifications",
-                "links": [{"to_id": "@1", "link_type": "teaches"}],
-                "allow_phrasing_violations": True,
-            },
-            {
-                "kind": "procedure",
-                "text": "configure notifications",
-                "links": [],
-                "allow_phrasing_violations": True,
-            },
-            {
-                "kind": "event",
-                "text": "notification settings are reviewed",
-                "links": [{"to_id": "@0", "link_type": "contains"}],
-                "allow_phrasing_violations": True,
-            },
-        ]
-    )
+    store.use_substrate_connection(conn)
+    try:
+        plan = server._plan_batch(
+            [
+                {
+                    "kind": "capability",
+                    "text": "the user can configure notifications",
+                    "links": [{"to_id": "@1", "link_type": "teaches"}],
+                    "allow_phrasing_violations": True,
+                },
+                {
+                    "kind": "procedure",
+                    "text": "configure notifications",
+                    "links": [],
+                    "allow_phrasing_violations": True,
+                },
+                {
+                    "kind": "event",
+                    "text": "notification settings are reviewed",
+                    "links": [{"to_id": "@0", "link_type": "contains"}],
+                    "allow_phrasing_violations": True,
+                },
+            ]
+        )
+    finally:
+        store.reset_substrate()
 
     assert plan.item_errors[0] and "swap" in plan.item_errors[0][0]
     assert plan.rejected == {0, 2}

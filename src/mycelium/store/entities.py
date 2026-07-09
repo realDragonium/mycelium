@@ -16,7 +16,7 @@ def create_entity(conn: sqlite3.Connection, description: str | None) -> str:
     conn.execute(
         "INSERT INTO entities (id, description, created_at, created_by) "
         "VALUES (?, ?, ?, ?)",
-        (entity_id, description, _now(), kernel._actor),
+        (entity_id, description, _now(), kernel.get_actor()),
     )
     _record(
         conn,
@@ -43,7 +43,7 @@ def update_entity_description(
     conn.execute(
         "UPDATE entities SET description = ?, updated_at = ?, updated_by = ? "
         "WHERE id = ?",
-        (description, _now(), kernel._actor, entity_id),
+        (description, _now(), kernel.get_actor(), entity_id),
     )
     _record(
         conn,

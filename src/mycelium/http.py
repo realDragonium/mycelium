@@ -477,8 +477,7 @@ def get_substrate_dump() -> dict[str, Any]:
 
     See `store.substrate_dump` for the returned shape.
     """
-    assert server._conn is not None
-    return store.substrate_dump(server._conn)
+    return store.substrate_dump(store.substrate_connection())
 
 
 _ALLOWED_OPS = {"create", "update", "link", "attach"}
@@ -521,8 +520,6 @@ def get_history(
       - target_kind: comma-separated subset of the target kinds
       - q: case-insensitive substring match on target_id
     """
-    assert server._conn is not None
-
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
 
@@ -531,7 +528,7 @@ def get_history(
     query = (q or "").strip()
 
     rows, total = store.activity_feed(
-        server._conn,
+        store.substrate_connection(),
         limit=limit,
         offset=offset,
         ops=ops,
@@ -623,7 +620,7 @@ def list_knowledge_gaps(request: Request, status: str | None = None) -> dict[str
     timestamp is set.
     """
     _require_principal(request)
-    conn = server._conn
+    conn = store.substrate_connection()
     assert conn is not None
     status = status or "all"
     if status not in ("all", "open", "resolved", "dismissed"):
@@ -650,7 +647,7 @@ def update_knowledge_gap(
     gap_id: str, body: GapUpdateBody, request: Request
 ) -> dict[str, Any]:
     p = _require_principal(request)
-    conn = server._conn
+    conn = store.substrate_connection()
     assert conn is not None
     if store.get_knowledge_gap(conn, gap_id) is None:
         from fastapi import HTTPException
@@ -709,7 +706,7 @@ def list_pending_mentions(
     judge whether this occurrence is a real reference to the entity.
     """
     _require_principal(request)
-    conn = server._conn
+    conn = store.substrate_connection()
     assert conn is not None
     status = status or "open"
     if status not in ("open", "approved", "rejected", "all"):
@@ -736,7 +733,7 @@ def update_pending_mention(
     suspect occurrence. The principal is stamped as approved_by/rejected_by
     via the per-request actor."""
     _require_principal(request)
-    conn = server._conn
+    conn = store.substrate_connection()
     assert conn is not None
     if body.action not in ("approve", "reject"):
         from fastapi import HTTPException

@@ -26,7 +26,7 @@ def insert_entity_links(
     the PK) are silently skipped."""
     if not edges:
         return 0
-    now, actor = _now(), kernel._actor
+    now, actor = _now(), kernel.get_actor()
     inserted = 0
     for f, t, lt in edges:
         cur = conn.execute(
@@ -146,7 +146,7 @@ def _insert_one_entity_statement_link(
             link_type,
             when_hash,
             _now(),
-            kernel._actor,
+            kernel.get_actor(),
         ),
     )
     if not cur.rowcount:

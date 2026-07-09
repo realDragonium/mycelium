@@ -25,7 +25,7 @@ def create_name(
     conn.execute(
         "INSERT INTO names (id, text, entity_id, generated_from_name_id, created_at, created_by) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (name_id, text, entity_id, generated_from_name_id, _now(), kernel._actor),
+        (name_id, text, entity_id, generated_from_name_id, _now(), kernel.get_actor()),
     )
     _record(
         conn,
@@ -359,7 +359,7 @@ def reassign_names(
     cur = conn.execute(
         "UPDATE names SET entity_id = ?, updated_at = ?, updated_by = ? "
         "WHERE entity_id = ?",
-        (to_entity_id, _now(), kernel._actor, from_entity_id),
+        (to_entity_id, _now(), kernel.get_actor(), from_entity_id),
     )
     for nid, before in befores.items():
         _record(
@@ -378,7 +378,7 @@ def set_name_entity(conn: sqlite3.Connection, name_id: str, entity_id: str) -> N
     before = _row_dict(get_name_by_id(conn, name_id))
     conn.execute(
         "UPDATE names SET entity_id = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-        (entity_id, _now(), kernel._actor, name_id),
+        (entity_id, _now(), kernel.get_actor(), name_id),
     )
     _record(
         conn,
@@ -419,7 +419,7 @@ def rename_name(conn: sqlite3.Connection, name_id: str, new_text: str) -> None:
     before = _row_dict(get_name_by_id(conn, name_id))
     conn.execute(
         "UPDATE names SET text = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-        (new_text, _now(), kernel._actor, name_id),
+        (new_text, _now(), kernel.get_actor(), name_id),
     )
     _record(
         conn,

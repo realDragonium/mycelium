@@ -320,7 +320,7 @@ def approve_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:
         return False
     conn.execute(
         "UPDATE pending_mentions SET approved_at = ?, approved_by = ? WHERE id = ?",
-        (_now(), kernel._actor, pending_id),
+        (_now(), kernel.get_actor(), pending_id),
     )
     conn.execute(
         "INSERT OR IGNORE INTO statement_mentions (statement_id, name_id) VALUES (?, ?)",
@@ -344,7 +344,7 @@ def reject_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:
         return False
     conn.execute(
         "UPDATE pending_mentions SET rejected_at = ?, rejected_by = ? WHERE id = ?",
-        (_now(), kernel._actor, pending_id),
+        (_now(), kernel.get_actor(), pending_id),
     )
     return True
 
