@@ -621,7 +621,6 @@ def list_knowledge_gaps(request: Request, status: str | None = None) -> dict[str
     """
     _require_principal(request)
     conn = store.substrate_connection()
-    assert conn is not None
     status = status or "all"
     if status not in ("all", "open", "resolved", "dismissed"):
         from fastapi import HTTPException
@@ -648,7 +647,6 @@ def update_knowledge_gap(
 ) -> dict[str, Any]:
     p = _require_principal(request)
     conn = store.substrate_connection()
-    assert conn is not None
     if store.get_knowledge_gap(conn, gap_id) is None:
         from fastapi import HTTPException
 
@@ -707,7 +705,6 @@ def list_pending_mentions(
     """
     _require_principal(request)
     conn = store.substrate_connection()
-    assert conn is not None
     status = status or "open"
     if status not in ("open", "approved", "rejected", "all"):
         from fastapi import HTTPException
@@ -734,7 +731,6 @@ def update_pending_mention(
     via the per-request actor."""
     _require_principal(request)
     conn = store.substrate_connection()
-    assert conn is not None
     if body.action not in ("approve", "reject"):
         from fastapi import HTTPException
 
