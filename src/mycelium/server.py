@@ -709,20 +709,25 @@ def init(data_dir: Path) -> None:
             "marked %d research run(s) failed: orphaned by restart", orphaned
         )
 
+    # The .vec files are re-derivable from the substrate, so backup.sh omits
+    # them while keeping the *_vector_ids mappings in the DB. When a .vec is
+    # missing (a fresh checkout, or a restore of such a backup) rebuild the
+    # index by re-embedding, or search would silently return nothing against a
+    # populated substrate.
     index_path = data_dir / "mycelium.vec"
-    index = (
-        vector.Index.load(index_path) if index_path.exists() else vector.Index.empty()
-    )
+    if index_path.exists():
+        index = vector.Index.load(index_path)
+    else:
+        index = vector.Index.empty()
+        _rebuild_statement_index(index)
+        index.save(index_path)
 
     name_index_path = data_dir / "mycelium-names.vec"
     if name_index_path.exists():
         name_index = vector.Index.load(name_index_path)
     else:
         name_index = vector.Index.empty()
-        # Backfill: if the DB has names but no on-disk name index
-        # (first run after this feature lands, or a fresh restore),
-        # embed every existing name so the index isn't silently empty.
-        _backfill_name_index(name_index)
+        _rebuild_name_index(name_index)
         name_index.save(name_index_path)
 
     _ctx = AppContext(
@@ -745,17 +750,33 @@ def init(data_dir: Path) -> None:
         mention_worker.start(data_dir)
 
 
-def _backfill_name_index(name_index: vector.Index) -> None:
-    """Embed every unindexed name into `name_index`. Called during `init`
-    before the context is assembled, so it takes the index explicitly
+def _rebuild_name_index(name_index: vector.Index) -> None:
+    """Populate an empty name index by embedding every name in the DB.
+
+    Reuses each name's existing `name_vector_ids` mapping when present — a
+    restore drops the .vec but keeps the mapping, so re-adding under the same
+    id keeps the index consistent with rows that reference it — and allocates
+    (and persists) a fresh id only for names that have none. Called during
+    `init` before the context is assembled, so it takes the index explicitly
     rather than through `_name_idx()`."""
     for row in store.list_all_names(_db()):
-        if store.get_name_vector_id(_db(), row["id"]) is not None:
-            continue
-        vid = store.next_name_vector_id(_db())
-        vec = embed.embed(row["text"])
-        name_index.add(vid, vec)
-        store.set_name_vector_id(_db(), row["id"], vid)
+        existing = store.get_name_vector_id(_db(), row["id"])
+        vid = existing if existing is not None else store.next_name_vector_id(_db())
+        name_index.add(vid, embed.embed(row["text"]))
+        if existing is None:
+            store.set_name_vector_id(_db(), row["id"], vid)
+
+
+def _rebuild_statement_index(index: vector.Index) -> None:
+    """Populate an empty statement index by embedding every statement in the
+    DB — the statement analogue of `_rebuild_name_index` (see it for the
+    reuse-existing-id rationale)."""
+    for row in store.all_statements_with_text(_db()):
+        existing = store.get_vector_id(_db(), row["id"])
+        vid = existing if existing is not None else store.next_vector_id(_db())
+        index.add(vid, embed.embed(row["text"]))
+        if existing is None:
+            store.set_vector_id(_db(), row["id"], vid)
 
 
 def _persist_index() -> None:

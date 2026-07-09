@@ -22,16 +22,7 @@ def _embed(text: str) -> list[float]:
 def srv(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", _embed)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
-    for attr in (
-        "_conn",
-        "_index",
-        "_index_path",
-        "_ann_index",
-        "_ann_index_path",
-        "_name_index",
-        "_name_index_path",
-    ):
-        setattr(server, attr, None)
+    server._ctx = None
     server.init(tmp_path)  # worker disabled in tests (conftest); we drain by hand
     return server
 
