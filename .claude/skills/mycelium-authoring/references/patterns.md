@@ -12,17 +12,17 @@ Get the shape wrong and `upsert_statement` rejects it; the rejection message poi
 
 These produce a **valid graph that is wrong**. No rejection fires; the error is silent. This is where the reference earns its place.
 
-- **Base + specifics** — an abstract base statement plus the specific-threshold/case children it `contains`. One coarse statement (*"a match level is assigned from the score"*) passes validation and silently drops the thresholds — the exact under-decomposition this skill exists to prevent. Author the base **and** each case.
+- **Base + specifics** — an abstract base statement plus the specific-threshold/case children it `contains`. One coarse statement (*"a near-duplicate verdict is assigned from the similarity score"*) passes validation and silently drops the thresholds — the exact under-decomposition this skill exists to prevent. Author the base **and** each case.
 
 - **Same surface, distinct code paths** — two paths that look like one event but differ in guards are **separate statements**. Merging them and attaching the guards to one record passes validation but mis-scopes every guard. Test: can path A be guarded while B isn't, for the same user? → separate.
   ```
-  [event] "Results are copied directly from the source participant"      ← no guards
-  [event] "Results are copied from prior participation by the same user"
-      restricted by "Result reuse is disabled for the company"
-      restricted by "The part is a Checklist type"
+  [event] "Statements are retrieved by vector similarity"      ← no guards
+  [event] "Statements are retrieved by exact identifier match"
+      restricted by "Semantic ranking is disabled for the request"
+      restricted by "The query is a bare identifier"
   ```
 
-- **Convergent branches keep distinct conditions** — two branches reaching the same target keep their separate `when`s. Fusing them into one OR-condition because the target matches makes *"which flows reach this because the first step is a Checklist?"* unanswerable.
+- **Convergent branches keep distinct conditions** — two branches reaching the same target keep their separate `when`s. Fusing them into one OR-condition because the target matches makes *"which retrievals reach this because the query was a bare identifier?"* unanswerable.
 
 - **Config + effect** — a configured value (`state`) must link to the `event` it changes. The knob alone is an orphan no consumer can interpret. Not rejected — just useless in isolation.
 
@@ -34,4 +34,4 @@ These produce a **valid graph that is wrong**. No rejection fires; the error is 
 
 - **≥0.92, same claim** → `merge_statements` immediately.
 - **0.85–0.92, related** → link, don't leave isolated.
-- **~0.99, mirror pair** (Low/Medium/High, above/below) → expected; keep both.
+- **~0.99, mirror pair** (`reader`/`writer`/`admin`, above/below) → expected; keep both.

@@ -122,7 +122,7 @@ def test_can_variants_are_clean():
     # no underlying statement for a permission/prohibition rule to link
     # to. Treated as ordinary phrasing.
     for text in (
-        "multiple assessment steps can be added to a single selection flow",
+        "multiple links can be added to a single statement",
         "user cannot delete their own posts",
         "guest can't access settings",
         "system can not write to readonly storage",

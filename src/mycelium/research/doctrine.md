@@ -202,7 +202,7 @@ Phrase to pass the per-kind validator:
 - **rule** — equals / is one of / is bounded constructions; obligation modals
   (must / should) describe rules, not events.
 - **property** — a value slot where the question is *what value*, not *does it
-  hold* ("match score", "vacancy id").
+  hold* ("similarity score", "server host").
 
 Statement text carries **no trailing punctuation**. Avoid compound clauses,
 hedges ("usually", "often"), universal quantifiers ("every", "all", "each" — yes,

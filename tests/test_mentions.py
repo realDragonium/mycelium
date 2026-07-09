@@ -22,8 +22,8 @@ def _entities(items) -> set[str]:
 
 
 def test_single_token_match():
-    index = build_index([("n1", "e1", "Candidate")])
-    result = match_text("The candidate applied today", index)
+    index = build_index([("n1", "e1", "Reviewer")])
+    result = match_text("The reviewer applied today", index)
     assert _ids(result.mentions) == {"n1"}
     assert result.suspects == []
 
@@ -37,15 +37,15 @@ def test_substring_does_not_match():
 
 
 def test_multiword_name_matches_consecutive_run_only():
-    index = build_index([("n1", "e1", "assessment part")], suspect=lambda _t: False)
-    assert _ids(match_text("the assessment part is scored", index).mentions) == {"n1"}
+    index = build_index([("n1", "e1", "service account")], suspect=lambda _t: False)
+    assert _ids(match_text("the service account is created", index).mentions) == {"n1"}
     # Non-consecutive tokens do not match.
-    assert match_text("the assessment of the part", index).mentions == []
+    assert match_text("the account of the service", index).mentions == []
 
 
 def test_case_and_unicode_normalization():
-    index = build_index([("n1", "e1", "Candidate")])
-    assert _ids(match_text("CANDIDATE", index).mentions) == {"n1"}
+    index = build_index([("n1", "e1", "Embedder")])
+    assert _ids(match_text("EMBEDDER", index).mentions) == {"n1"}
     # Curly apostrophe / fancy dash fold the same on both sides.
     index2 = build_index([("n2", "e2", "drag-and-drop")], suspect=lambda _t: False)
     assert _ids(match_text("uses drag—and—drop here", index2).mentions) == {"n2"}
@@ -54,17 +54,17 @@ def test_case_and_unicode_normalization():
 # ─── maximal munch / overlap resolution ──────────────────────────────────────
 
 
-def test_assessment_part_result_overlap():
+def test_service_account_token_overlap():
     # The named case: the 3-token span suppresses both shorter spans within it.
     index = build_index(
         [
-            ("long", "e_long", "assessment part result"),
-            ("mid", "e_mid", "assessment part"),
-            ("short", "e_short", "result"),
+            ("long", "e_long", "service account token"),
+            ("mid", "e_mid", "service account"),
+            ("short", "e_short", "token"),
         ],
         suspect=lambda _t: False,  # isolate overlap logic from suspect logic
     )
-    result = match_text("the assessment part result was recorded", index)
+    result = match_text("the service account token was issued", index)
     assert _ids(result.mentions) == {"long"}
     assert _entities(result.mentions) == {"e_long"}
 
@@ -122,10 +122,10 @@ def test_prefix_name_of_different_entity_is_shadowed():
 def test_dedup_to_entity_two_names_one_mention():
     # Two distinct names of the SAME entity both hit → exactly one mention.
     index = build_index(
-        [("n1", "e1", "candidate"), ("n2", "e1", "applicant")],
+        [("n1", "e1", "reviewer"), ("n2", "e1", "approver")],
         suspect=lambda _t: False,
     )
-    result = match_text("the candidate is also called an applicant", index)
+    result = match_text("the reviewer is also called an approver", index)
     assert _entities(result.mentions) == {"e1"}
     assert len(result.mentions) == 1
 
@@ -133,15 +133,15 @@ def test_dedup_to_entity_two_names_one_mention():
 def test_plural_stored_as_separate_name():
     # Plurals are separate name rows; the matcher stays pure exact-match.
     index = build_index(
-        [("sing", "e1", "candidate"), ("plur", "e1", "candidates")],
+        [("sing", "e1", "reviewer"), ("plur", "e1", "reviewers")],
         suspect=lambda _t: False,
     )
     # Plural form alone links the entity.
-    r1 = match_text("five candidates applied", index)
+    r1 = match_text("five reviewers applied", index)
     assert _entities(r1.mentions) == {"e1"}
     assert len(r1.mentions) == 1
     # Singular and plural together still collapse to one mention for the entity.
-    r2 = match_text("a candidate among the candidates", index)
+    r2 = match_text("a reviewer among the reviewers", index)
     assert _entities(r2.mentions) == {"e1"}
     assert len(r2.mentions) == 1
 
@@ -153,8 +153,8 @@ def test_is_suspect_name_predicate():
     assert is_suspect_name("flow") is True  # short single token
     assert is_suspect_name("result") is True  # 6 chars, at threshold
     assert is_suspect_name("the") is True  # stopword
-    assert is_suspect_name("candidate") is False  # long single token
-    assert is_suspect_name("assessment part") is False  # multi-token
+    assert is_suspect_name("embedder") is False  # long single token
+    assert is_suspect_name("service account") is False  # multi-token
     assert is_suspect_name("android") is False  # 7 chars, over threshold
 
 
@@ -166,10 +166,10 @@ def test_is_suspect_name_flags_verb_participles():
     assert is_suspect_name("declined") is True
     assert is_suspect_name("accepted") is True
     # Long nouns that don't end in -ed stay distinctive.
-    assert is_suspect_name("participant") is False
+    assert is_suspect_name("connection") is False
     assert is_suspect_name("indicator") is False
     # The -ed test is single-token only; a multi-word name stays distinctive.
-    assert is_suspect_name("assessment completed") is False
+    assert is_suspect_name("service account created") is False
 
 
 def test_suspect_alone_is_queued_not_linked():
@@ -187,11 +187,11 @@ def test_suspect_within_claimed_span_is_dropped_not_queued():
     # so it is consumed and neither linked nor queued.
     index = build_index(
         [
-            ("long", "e_long", "assessment part result"),  # distinctive (multi-token)
-            ("susp", "e_susp", "result"),  # suspect (short single token)
+            ("long", "e_long", "service account token"),  # distinctive (multi-token)
+            ("susp", "e_susp", "token"),  # suspect (short single token)
         ]
     )
-    result = match_text("the assessment part result here", index)
+    result = match_text("the service account token here", index)
     assert _ids(result.mentions) == {"long"}
     assert result.suspects == []  # suspect "result" was suppressed, not queued
 
@@ -201,11 +201,11 @@ def test_distinctive_hit_suppresses_entity_suspect_queue():
     # positions → auto-linked once, suspect occurrence NOT queued.
     index = build_index(
         [
-            ("dist", "e1", "candidate pipeline"),  # distinctive
+            ("dist", "e1", "reviewer pipeline"),  # distinctive
             ("susp", "e1", "flow"),  # suspect, same entity
         ]
     )
-    result = match_text("the candidate pipeline drives the flow", index)
+    result = match_text("the reviewer pipeline drives the flow", index)
     assert _entities(result.mentions) == {"e1"}
     assert len(result.mentions) == 1
     assert result.suspects == []
@@ -259,19 +259,19 @@ def test_distinct_suspect_names_each_queued_once():
 
 
 def test_match_offsets_point_into_original_text():
-    text = "the Candidate applied"
-    index = build_index([("n1", "e1", "candidate")])
+    text = "the Reviewer applied"
+    index = build_index([("n1", "e1", "reviewer")])
     m = match_text(text, index).mentions[0]
-    assert text[m.start : m.end] == "Candidate"  # original casing preserved
+    assert text[m.start : m.end] == "Reviewer"  # original casing preserved
 
 
 def test_empty_and_no_match():
-    index = build_index([("n1", "e1", "candidate")])
+    index = build_index([("n1", "e1", "reviewer")])
     assert match_text("", index) == mentions.MatchResult(mentions=[], suspects=[])
     assert match_text("nothing relevant here", index).mentions == []
 
 
 def test_name_with_no_word_chars_is_skipped():
-    index = build_index([("n1", "e1", "!!!"), ("n2", "e2", "candidate")])
+    index = build_index([("n1", "e1", "!!!"), ("n2", "e2", "reviewer")])
     assert "n1" not in {ix.name_id for bucket in index.values() for ix in bucket}
-    assert _ids(match_text("the candidate", index).mentions) == {"n2"}
+    assert _ids(match_text("the reviewer", index).mentions) == {"n2"}

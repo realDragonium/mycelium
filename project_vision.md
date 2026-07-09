@@ -61,7 +61,7 @@ The substrate has three record kinds — **Entity**, **Statement**, **Annotation
 - **Statement** — text + `kind` discriminator + outgoing typed links to other statements + mentions of entities. The unit that carries truth-claims about the system. The `kind` field is one of:
   - **`event`** — instantaneous occurrence. *"A step gets completed."* Composes via outgoing `triggers` (other events), `produces` (states it brings into being), `ends` (states it terminates).
   - **`state`** — condition that holds over a duration. *"Participant status is Shared."* Composes via `enables` (capabilities), `requires` (other states).
-  - **`capability`** — modal claim about what is possible. *"Company user can view full report."* Composes via `requires` (gating states), `varies-by` (states that change its content), `part` (sub-capabilities).
+  - **`capability`** — modal claim about what is possible. *"A reader can view the full statement detail."* Composes via `requires` (gating states), `varies-by` (states that change its content), `part` (sub-capabilities).
 - **Annotation** (removed — deprecated) — text + `kind` discriminator + attachments to one or more statements or entities + mentions of entities. Descriptive metadata that doesn't fit the truth-claim shape of statements: definitions, defaults, calculation rules, examples, notes. Starting `kind` vocabulary: `definition`, `default`, `example`, `note`. Vocabulary grows as needed.
 - **Name** — text + the entity it names. For aliases and varied phrasings; gets its own embedding so AI consumers can find entities through any term.
 
@@ -77,14 +77,14 @@ Kinds are discriminator fields, not separate tables. Trivial to add a new kind t
 
 - **Annotation → Statement | Entity**, *attached*. The parent the annotation is about. An annotation can be attached to multiple parents.
 - **Statement | Annotation → Entity**, untyped, called `mentions`. Just association — references to entities from inside the body text. Both records use the same mechanism.
-- **Entity → Entity**, *typed*. Structural relationships between entities ("checklist step is part of selection flow"). Open vocabulary like statement-link types.
+- **Entity → Entity**, *typed*. Structural relationships between entities ("a name is part of an entity"). Open vocabulary like statement-link types.
 - **Name → Entity**, called `names`.
 
 **Why this shape**
 
 - Statements are n-ary by nature (one fact can mention 3+ entities), which the property-graph "edges are binary" model can't represent without duplication. Making the statement its own record solves it.
 - Splitting statements by kind matches their semantic differences: events are instantaneous and trigger things, states persist and enable things, capabilities are modal and conditional. Conflating them into one bucket forces awkward phrasing ("X happens" for things that don't happen) and weakens the meaning of edge types.
-- Annotations exist because not all knowledge fits the truth-claim shape. Definitions, defaults, calculation rules, examples — these describe *how something is defined or behaves*, not *what is true at a moment*. Forcing them into Statement form produces vacuous capabilities ("the system can calculate match score") or passive-voice states. Better to give descriptive metadata its own record kind and keep statements pure claims.
+- Annotations exist because not all knowledge fits the truth-claim shape. Definitions, defaults, calculation rules, examples — these describe *how something is defined or behaves*, not *what is true at a moment*. Forcing them into Statement form produces vacuous capabilities ("the system can compute a similarity score") or passive-voice states. Better to give descriptive metadata its own record kind and keep statements pure claims.
 - When-conditions on edges express conditional facts directly, rather than forcing them into multiple parallel edges or into extra statements. The condition is metadata about the link, not a separate truth-claim.
 - Entity → Entity edges keep structural relationships about referents directly addressable. Statements describe what the system *does*; entity-edges describe what the system *is composed of*. Both are useful traversal primitives.
 - Cross-kind links are first-class and structurally trivial — same edge mechanism regardless of kinds. The kinds give validation and consumer queries something to grip without adding plumbing.

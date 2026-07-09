@@ -45,65 +45,65 @@ def cos(a: list[float], b: list[float]) -> float:
 
 paraphrase_pairs = [
     (
-        "A rejection is scheduled for the participant",
-        "The candidate's rejection is queued for delivery",
+        "A re-embedding is scheduled for the statement",
+        "The record's re-embedding is queued for processing",
     ),
     (
-        "The selection flow is resolved for the invite",
-        "The flow associated with the invite is determined",
+        "The link type is resolved for the edge",
+        "The type associated with the edge is determined",
     ),
     (
-        "A participant is assigned to the next step",
-        "The candidate progresses to the following step",
+        "A statement is appended to the next position in a chain",
+        "The record advances to the following position",
     ),
     (
-        "The count of expected answers can gate flow advancement",
-        "A pass threshold on correct answers blocks progression",
+        "The count of incoming links can gate a statement merge",
+        "A threshold on incoming edges blocks a merge",
     ),
     (
-        "A scheduled rejection is abandoned",
-        "The queued rejection is canceled",
+        "A scheduled re-embedding is abandoned",
+        "The queued re-embedding is canceled",
     ),
 ]
 
 
 # ---------------------------------------------------------------------------
-# Alias-augmentation — Selection Flow entity has aliases
-# {selection-tree, flow, tree}. Real statement texts use "selection flow"
-# or "flow". Queries phrased with "tree" should still hit.
+# Alias-augmentation — Statement entity has aliases {record, node, claim}.
+# Real statement texts use "statement" or "record". Queries phrased with
+# "node" should still hit.
 # ---------------------------------------------------------------------------
 
 ENTITY_ALIASES = {
-    "Selection Flow": ["selection-tree", "flow", "tree"],
+    "Statement": ["record", "node", "claim"],
 }
 
 alias_cases = [
     {
-        "statement": "The selection flow is resolved for the invite",
-        "aliases": ENTITY_ALIASES["Selection Flow"],
-        "canonical_query": "how is the selection flow chosen for an invite",
-        "alias_query": "how is the tree chosen for an invite",
-        "control_query": "default rejection delay duration",
+        "statement": "The statement is resolved for the query",
+        "aliases": ENTITY_ALIASES["Statement"],
+        "canonical_query": "how is the statement chosen for a query",
+        "alias_query": "how is the node chosen for a query",
+        "control_query": "default embedding batch size",
     },
     {
-        "statement": "A participant is assigned to the starting steps of a selection flow",
-        "aliases": ENTITY_ALIASES["Selection Flow"],
-        "canonical_query": "where does a participant enter the selection flow",
-        "alias_query": "where does a participant enter the tree",
-        "control_query": "checklist conversation summary message",
+        "statement": "A statement is linked to the starting node of a chain",
+        "aliases": ENTITY_ALIASES["Statement"],
+        "canonical_query": "where does a statement enter the chain",
+        "alias_query": "where does a node enter the chain",
+        "control_query": "vector index rebuild schedule",
     },
     {
-        "statement": "The company default selection flow is applied",
-        "aliases": ENTITY_ALIASES["Selection Flow"],
-        "canonical_query": "company default selection flow fallback",
-        "alias_query": "company default tree fallback",
-        "control_query": "rejection template configuration",
+        "statement": "The server default statement kind is applied",
+        "aliases": ENTITY_ALIASES["Statement"],
+        "canonical_query": "server default statement kind fallback",
+        "alias_query": "server default node kind fallback",
+        "control_query": "OIDC token refresh interval",
     },
     {
-        "statement": "No job profile on the selection flow",
-        "aliases": ENTITY_ALIASES["Selection Flow"],
-        "canonical_query": "selection flow without a job profile",
-        "alias_query": "tree without a job profile",
+        "statement": "No embedding on the statement",
+        "aliases": ENTITY_ALIASES["Statement"],
+        "canonical_query": "statement without an embedding",
+        "alias_query": "node without an embedding",
         "control_query": "OAuth callback signing key",
     },
 ]

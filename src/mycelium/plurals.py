@@ -2,8 +2,8 @@
 
 Per the operator's decision, a regular plural is auto-generated and
 stored as a separate name row when a name is created, so the exact-match
-mention matcher (`mycelium.mentions`) catches both "candidate" and
-"candidates" without any match-time stemming. Irregular plurals
+mention matcher (`mycelium.mentions`) catches both "statement" and
+"statements" without any match-time stemming. Irregular plurals
 ("person"→"people", "datum"→"data") are NOT guessed here — they are
 added by hand as ordinary aliases.
 
@@ -37,14 +37,14 @@ def _pluralize_word(word: str) -> str | None:
         return word + "es"
     if lower.endswith("y") and len(word) >= 2 and lower[-2] not in "aeiou":
         return word[:-1] + "ies"  # company → companies (consonant + y)
-    return word + "s"  # candidate → candidates, day → days, API → APIs
+    return word + "s"  # statement → statements, day → days, API → APIs
 
 
 def regular_plural(name: str) -> str | None:
     """The regular plural of `name`, or `None` when no confident regular
     form exists (already plural, ends in a non-letter, empty). Pluralizes
-    the last word so multi-word names ("assessment part") inflect their
-    head noun ("assessment parts")."""
+    the last word so multi-word names ("link type") inflect their
+    head noun ("link types")."""
     stripped = name.strip()
     if not stripped:
         return None

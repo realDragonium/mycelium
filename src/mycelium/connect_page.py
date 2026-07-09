@@ -308,7 +308,7 @@ CONNECT_HTML = """<!doctype html>
     </details>
     <details>
       <summary>Service account token isn't working</summary>
-      <p>Bearer header missing, token revoked, or service account suspended. <code>curl -i -X POST https://mycelium.devgo.dev/mcp -H "Authorization: Bearer myc_…" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}'</code> should return 200. 401 = token wrong or revoked.</p>
+      <p>Bearer header missing, token revoked, or service account suspended. <code>curl -i -X POST https://your-host/mcp -H "Authorization: Bearer myc_…" -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}'</code> should return 200. 401 = token wrong or revoked.</p>
     </details>
     <details>
       <summary>Changes I make via MCP don't show in the UI</summary>

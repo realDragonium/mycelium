@@ -27,7 +27,7 @@ _STATEMENT_KIND_SEED: dict[str, tuple[str, str]] = {
         "A genuinely persisting, observable condition of a named "
         "entity — enum values, configuration flags, or conditions at a "
         "decision point.",
-        "Enum/status values ('Sent' on Participant Status), config "
+        "Enum/status values ('Applied' on Draft Status), config "
         "flags ('Auto result sharing enabled' on Company), or "
         "observable missing-input conditions ('No name on the invite' "
         "on Invite). Often referenced as `when` leaves on conditional "
@@ -47,16 +47,16 @@ _STATEMENT_KIND_SEED: dict[str, tuple[str, str]] = {
         "A deterministic, non-contingent claim — formula, default, "
         "enumeration, or bound that holds the same way across all "
         "instances and moments.",
-        "Definitional or computational claims ('match level is one "
-        "of: Low, Medium, High, Extra High'; 'match score equals "
-        "construct points plus intelligence contribution minus red "
-        "flag penalties'). Apply the contingency test: if the same "
+        "Definitional or computational claims ('statement kind is one "
+        "of: event, state, capability, rule, property'; 'rank score "
+        "equals similarity contribution plus recency boost minus "
+        "staleness penalty'). Apply the contingency test: if the same "
         "claim could be otherwise for a specific entity or at a "
         "specific time, it is a `state`, not a `rule`.",
     ),
     "property": (
         "A slot on an entity that holds a value — short noun-phrase "
-        "label, not a sentence. 'Email', 'Vacancy ID', 'Match score'.",
+        "label, not a sentence. 'Email', 'Server host', 'Similarity score'.",
         "When the meaningful question is *what value* rather than "
         "*does this hold*. User-supplied configuration values, "
         "user-supplied event inputs, or derived/computed values. "
@@ -64,8 +64,8 @@ _STATEMENT_KIND_SEED: dict[str, tuple[str, str]] = {
         "instead of packing inputs into event text.",
     ),
     "procedure": (
-        "The named root of a how-to guide. 'How to configure Recruitee "
-        "automation for a vacancy.' Composes `action`s, `property` "
+        "The named root of a how-to guide. 'How to connect an MCP "
+        "client to a Mycelium server.' Composes `action`s, `property` "
         "inputs, and optional `check`s into a runnable script.",
         "Authoring prescriptive content: a guide the user (or an "
         "agent) executes to accomplish something. Anchors to a "
@@ -178,7 +178,7 @@ _STATEMENT_LINK_TYPE_SEED: dict[str, str] = {
     ),
     "cases": (
         "Enumerated branches over a named, finite value set only "
-        "(match levels, construct types, etc.). Each edge points to one "
+        "(statement kinds, link types, etc.). Each edge points to one "
         "branch. Do NOT use for continuous predicates — use a "
         "`when`-condition on a `composes` edge instead."
     ),

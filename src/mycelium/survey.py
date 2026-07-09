@@ -10,7 +10,7 @@ is testable with plain lists and dicts — no server, no Ollama, no hnswlib.
 Decomposition is the one empirically-tuned knob (see `Decomposer`). The v1
 default is a verb-preserving clause split; it only catches parts that are
 lexically present in the query — a part expressed by a concept absent from
-the words (e.g. "stop a candidate seeing results" → *permissions*, with no
+the words (e.g. "stop a reader seeing drafts" → *permissions*, with no
 "permissions" token) will not surface here. That is expected: this is a
 breadth primitive, not an intent interpreter.
 """

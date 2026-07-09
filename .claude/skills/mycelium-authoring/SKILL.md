@@ -29,7 +29,7 @@ The dominant failure mode is **under-decomposition**: collapsing a sequence of d
 
 ### 1a. Linear sequences still decompose
 
-A flow with no branching is still multiple statements. *"The candidate is routed to Auth0 signup"* and *"an Auth0 signup callback is received"* are two distinct actions in sequence — two statements joined by an ordering link, **not** one merged "signup happens" event. The get-or-create, the channel pick, the route, the callback — each is a node even when nothing forks around it.
+A flow with no branching is still multiple statements. *"The user is redirected to the OIDC provider"* and *"an OIDC callback is received"* are two distinct actions in sequence — two statements joined by an ordering link, **not** one merged "login happens" event. The get-or-create, the provider redirect, the callback — each is a node even when nothing forks around it.
 
 This inverts the instinct to summarise. When a method runs A then B then C and each is a recognisable product action, that is **three** statements in order, not one.
 
@@ -87,15 +87,15 @@ Drafting paragraph-by-paragraph produces rework — shared targets, branches, an
 A statement records what the *product* does or is true of — not how code implements it. Two layers belong in the substrate:
 
 - **Externally-observable claims** — anything a user, API caller, or integration sees. Includes the integration surface: emitted/accepted webhooks, rejection of a bad webhook, OAuth callbacks, signed-URL redirects, IP allowlists. The test isn't *"is this fancy UX?"* — it's *"does an external observer see this happen, succeed, or fail?"*
-- **Product-internal claims** — named pieces of the product's own process or shape that exist regardless of implementation (*"the extraction agent runs"*, *"a participant record holds a name and email"*).
+- **Product-internal claims** — named pieces of the product's own process or shape that exist regardless of implementation (*"the extraction agent runs"*, *"a user record holds a name and email"*).
 
-**The refactor test:** imagine the codebase rewritten in another language. *"Embeddings are generated"* survives → write it. *"The `OllamaEmbedder` is constructed"* vanishes → skip it. Strip `*Service`/`*Manager`/`*Handler`/`*Error`, function names, table/column names from text and `mentions`. **Preserve named domain entities verbatim** — roles (`TSL Admin`), plan tiers, third-party products (`Auth0`, `Stripe`) — anything that appears in product docs, contracts, UI, or business rules.
+**The refactor test:** imagine the codebase rewritten in another language. *"Embeddings are generated"* survives → write it. *"The `OllamaEmbedder` is constructed"* vanishes → skip it. Strip `*Service`/`*Manager`/`*Handler`/`*Error`, function names, table/column names from text and `mentions`. **Preserve named domain entities verbatim** — roles (`admin`, `reader`), third-party services (`Auth0`, `Ollama`) — anything that appears in product docs, contracts, UI, or business rules.
 
 | Code mechanic (don't) | Product claim (do) |
 |---|---|
 | *"`validateInvite()` rejects emails missing `@`"* | *"An invite is rejected when the email is malformed"* (event) |
-| *"The `participants` table has columns id, name, status"* | *"A participant record holds a name, an email, and a status"* (state) |
-| *"`WebhookController` calls `verifyHmac()`"* | *"An incoming webhook is rejected when its HMAC signature is invalid"* (event) |
+| *"The `users` table has columns id, name, status"* | *"A user record holds a name, an email, and a status"* (state) |
+| *"`OIDCCallback` calls `verify_state()`"* | *"An OIDC callback is rejected when its state parameter doesn't match"* (event) |
 
 ---
 
@@ -118,7 +118,7 @@ When decomposing one of these would burn time for little graph value, **write th
 
 ### 4a. Valid state
 
-Genuinely persisting, observable conditions of a named entity: **enum/status values** (`Sent`, `Shared`), **config flags** (`Auto result sharing enabled`), **observable conditions at a decision point** (`No name on the invite`). **Not** states: derived/computed conditions (model the event that produces them instead), internal mechanism steps (have the upstream event `establishes` the state directly — §5), single-use gating conditions (consider a `when` expression over existing states instead of a new record).
+Genuinely persisting, observable conditions of a named entity: **enum/status values** (`Draft`, `Applied`), **config flags** (`JIT provisioning enabled`), **observable conditions at a decision point** (`No email on the invite`). **Not** states: derived/computed conditions (model the event that produces them instead), internal mechanism steps (have the upstream event `establishes` the state directly — §5), single-use gating conditions (consider a `when` expression over existing states instead of a new record).
 
 ### 4b. Cross-kind redundancy
 
@@ -126,7 +126,7 @@ Changing a statement's `kind` does not create new information. Before writing, a
 
 ### 4c. Valid property
 
-A *value slot* where the meaningful question is *what value*, not *does this hold*. Valid: user-supplied config/inputs (*"Email"*, *"Vacancy ID"*), derived values (*"Match score"*, authored with `valued-by → rule` and no input source). **Not** properties: binary conditions (those are `state`), enum *cases* (one property; legal values come from a `rule` via `valued-by`), the computation itself (that's the `rule`). Anchor a property to its entity by listing the entity in `mentions` — there is no `belongs-to` link. The full inputs-as-properties pattern is in `references/patterns.md`.
+A *value slot* where the meaningful question is *what value*, not *does this hold*. Valid: user-supplied config/inputs (*"Email"*, *"Server host"*), derived values (*"Similarity score"*, authored with `valued-by → rule` and no input source). **Not** properties: binary conditions (those are `state`), enum *cases* (one property; legal values come from a `rule` via `valued-by`), the computation itself (that's the `rule`). Anchor a property to its entity by listing the entity in `mentions` — there is no `belongs-to` link. The full inputs-as-properties pattern is in `references/patterns.md`.
 
 ---
 
@@ -169,13 +169,13 @@ Links are **top-down**. Read every edge as **"this record —[type]→ target"**
 
 ### `triggers` vs `contains` — the most-conflated pair
 
-The cheap test: would the target still make sense as a standalone statement — own children, own downstream — if you deleted the parent? **Yes → `triggers`** (separate downstream process). **No → `contains`** (sub-step inherent to the parent). A notification queued after invite creation is `triggers`; default-flow application *within* invite creation is `contains`.
+The cheap test: would the target still make sense as a standalone statement — own children, own downstream — if you deleted the parent? **Yes → `triggers`** (separate downstream process). **No → `contains`** (sub-step inherent to the parent). A welcome email queued after invite creation is `triggers`; the role assignment *within* invite creation is `contains`.
 
 ### Conditions on edges — `when`
 
 An edge holds unconditionally by default. When it only fires under a precondition, **reify the precondition as its own statement** (usually `state`) and attach it as a `when` expression on the link — **never bake a condition into statement text** (§5). The expression is a small AND/OR/NOT tree over statement-id leaves; **read the full grammar from `list_link_types()`** (it has gained operators — do not assume from memory what it supports).
 
-**Conjunctive conditions never collapse into one compound state.** *"First step is a Checklist"* AND *"channel is WhatsApp"* are two separate states ANDed in the `when`, not one fused state — otherwise *"which flows are Checklist-first?"* becomes unanswerable. Model a shared condition once and reference it from every edge that needs it.
+**Conjunctive conditions never collapse into one compound state.** *"The user's role is `reader`"* AND *"the requested tool performs a write"* are two separate states ANDed in the `when`, not one fused state — otherwise *"which tools are blocked for readers?"* becomes unanswerable. Model a shared condition once and reference it from every edge that needs it.
 
 ### Which tool, and isolation
 
@@ -211,7 +211,7 @@ These are combinations of the rules above, not special primitives. Recognising t
 - **Mark uncertainty inline.** `> 💡 likely correct: [inference + source]` / `> ⚠️ needs verification: [what's unclear]`. Anything unmarked is a claim you can defend.
 - **Discover before writing — the substrate does not dedup.** Bulk: `discover_facts(texts=[…])` (`exists ≥0.85` → don't duplicate; `near 0.6–0.85` → link instead). Single: `search_statements(query, min_score=0.7)` for the claim *and* for each entity you'll mention; `grep_statements` for exact identifiers. **Pre-create entities** with a one-line description via `upsert_entity` before mentioning them — auto-create on first mention leaves an empty, undiscoverable description.
 - **Audit links after each chunk.** Walk the new ids, inspect `links` and `incoming_links`, wire orphans in or reconsider them. Orphans cluster when the writer focused on text and forgot direction; catching them at chunk boundaries is far cheaper than ten chunks later. **Also walk the chain:** from the chunk's entry point, can you traverse through the new statements to a terminal, or did everything attach to one hub? A flat fan that passes the orphan check still fails §1d.
-- **Batch (`upsert_statements`).** Define dependencies (conditions, sub-statements) at **lower** indices than the parents that reference them via `@N`, so rejections cascade upward predictably. Cascade rejection is automatic and transitive. **Mirror pairs** (Low/Medium/High, above/below) score ~0.99 against each other — that's expected; do **not** merge them. Merge only exact-same-claim duplicates.
+- **Batch (`upsert_statements`).** Define dependencies (conditions, sub-statements) at **lower** indices than the parents that reference them via `@N`, so rejections cascade upward predictably. Cascade rejection is automatic and transitive. **Mirror pairs** (`reader`/`writer`/`admin`, above/below) score ~0.99 against each other — that's expected; do **not** merge them. Merge only exact-same-claim duplicates.
 
 ---
 

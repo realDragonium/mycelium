@@ -6,13 +6,13 @@ Read this when authoring deterministic computation, defaults, bounds, or enumera
 
 | Claim | Kind | Why |
 |---|---|---|
-| "Intelligence contribution is bounded between -20 and +20" | rule | Definitional — always true |
-| "This participant's match level is High" | state | Could be Low for another participant |
-| "Default match direction is higher-is-better" | rule | The default itself is fixed |
-| "Construct X on job profile Y has match direction lower-is-better" | state | Per-instance override |
-| "Match level is one of: Low, Medium, High, Extra High" | rule | Defines the value space |
-| "Construct weight is a number between 0 and 100" | rule | Value-space rule |
-| "Construct X on job profile Y has weight 35" | state | Current value for this instance |
+| "Cosine similarity is bounded between -1 and 1" | rule | Definitional — always true |
+| "This user's role is `admin`" | state | Could be `reader` for another user |
+| "Default result ordering is similarity-descending" | rule | The default itself is fixed |
+| "Statement S is pinned above the similarity ordering" | state | Per-instance override |
+| "Statement kind is one of: event, state, capability, rule, property" | rule | Defines the value space |
+| "Kind boost is a number between 0 and 100" | rule | Value-space rule |
+| "Statement S has kind boost 35" | state | Current value for this instance |
 
 The contingency test: **configured/input values** → current value is a `state`, the value space/default/computation is a `rule`. **Derived values** → current value is a `state` (or `property`) `valued-by` the `rule` that computes it.
 
@@ -20,7 +20,7 @@ The contingency test: **configured/input values** → current value is a `state`
 
 - **Calculation** — a formula. Decomposes via `composes` into sub-formulas.
 - **Default** — the value chosen when nothing overrides.
-- **Enumeration** — the possible values for an attribute (*"Match level is one of: Low, Medium, High, Extra High"*).
+- **Enumeration** — the possible values for an attribute (*"Statement kind is one of: event, state, capability, rule, property"*).
 - **Option semantics** — what each enum branch means computationally. Links to its parent via `cases`.
 
 ## Phrasing tells
@@ -36,8 +36,8 @@ Rule phrasing is independent of the event/state/capability catalogs — copular 
 
 ## `cases` vs. `when`-on-`composes` — not interchangeable
 
-- **`cases`** — only for enumeration over a **named, finite value set** (match levels, construct types). Each `cases` edge points to one branch; the branches are option-semantics rules.
-- **`when` on a `composes` edge** — for **continuous predicates or conditional applicability**. Edge cases are parallel `composes` children of the same parent carrying **mutually exclusive** `when`-conditions (e.g. `total_category_weight > 0` vs. `= 0`).
+- **`cases`** — only for enumeration over a **named, finite value set** (statement kinds, link types). Each `cases` edge points to one branch; the branches are option-semantics rules.
+- **`when` on a `composes` edge** — for **continuous predicates or conditional applicability**. Edge cases are parallel `composes` children of the same parent carrying **mutually exclusive** `when`-conditions (e.g. `total_kind_weight > 0` vs. `= 0`).
 
 There is no `sibling`/`parallel` link type — edge cases are just parallel `composes` edges with exclusive `when`s. (Confirm exact link-type availability and direction with `list_link_types()`.)
 
@@ -54,22 +54,22 @@ Only when **other rules traverse it via `cases`** — `cases` requires statement
 ## Worked example (sketch)
 
 ```
-[capability] "A match score can be computed for a participant and a job profile"
+[capability] "A rank score can be computed for a query and a statement"
    governed-by → [R0]
 
-[R0] "Match score equals construct points plus intelligence contribution minus red flag penalties"
-   composes → [R1 construct points]   composes → [R2 intelligence bound]   composes → [R3 red flag penalty]
+[R0] "Rank score equals similarity contribution plus recency boost minus staleness penalty"
+   composes → [R1 similarity contribution]   composes → [R2 recency bound]   composes → [R3 staleness penalty]
 
-[R1] "Construct points equals category allocation times weight share times level percentage"
-   composes (when total_category_weight > 0) → [R1a weight share formula]
-   composes (when total_category_weight = 0) → [Rule: all category points are zero]
-   composes → [R1b level percentage]
+[R1] "Similarity contribution equals cosine similarity times kind weight share"
+   composes (when total_kind_weight > 0) → [R1a kind weight share formula]
+   composes (when total_kind_weight = 0) → [Rule: kind contribution is zero]
+   composes → [R1b kind weight]
 
-[R1b] "Level percentage is determined by construct type and match level"
-   cases → [competency level percentages]   cases → [value/culture level percentages]
-       cases → [competency Extra High is 100%] … etc.
+[R1b] "Kind weight is determined by statement kind"
+   cases → [descriptive kind weights]   cases → [prescriptive kind weights]
+       cases → [capability weight is 1.0] … etc.
 
-[R2] "Intelligence contribution is bounded between -20 and +20"
+[R2] "Recency boost is bounded between 0 and 20"
 ```
 
 A consumer enters at the capability and follows `governed-by → composes → cases` to assemble the full computation. Decompose into atomic rules over monolithic statements — compound sentences with multiple subjects or qualifying clauses almost always conceal multiple rules.

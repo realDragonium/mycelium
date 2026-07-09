@@ -1345,9 +1345,9 @@ def search_statements(
     Scoring is cosine similarity + an alias-aware boost: the query is
     also searched against the entity-name index, and statements that
     mention entities whose names score high pick up additional weight.
-    This means a query phrased with an alias ("tree", "node") still
-    surfaces statements that only contain the canonical name
-    ("selection flow", "step") in their text. Set `name_boost=0` to
+    This means a query phrased with an alias ("bot", "machine user")
+    still surfaces statements that only contain the canonical name
+    ("service account", "token") in their text. Set `name_boost=0` to
     fall back to pure cosine ranking.
 
     Each hit is FULLY HYDRATED — the same shape `get_statements` returns:
@@ -2616,8 +2616,8 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
 def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     """Change a name's text in place — same name_id, same entity, new label.
 
-    Use when an entity has been renamed in the product (e.g. "Recruiter"
-    → "Hiring Manager") and you want every statement that mentions this
+    Use when an entity has been renamed in the product (e.g. "Vector Index"
+    → "ANN Index") and you want every statement that mentions this
     entity to render under the new label without losing mention links.
     `statement_mentions` is keyed on name_id, so it keeps pointing at the
     same name and immediately starts showing the new text.
@@ -3748,9 +3748,9 @@ def grep_statements(
 
     By default also returns statements that mention an entity whose
     *name* contains the query as a literal substring — so grepping
-    `"tree"` surfaces statements about the Selection Flow entity
-    (which carries `tree` as an alias) even when the statement text
-    says only `"selection flow"`. This mirrors the alias awareness in
+    `"bot"` surfaces statements about the Service Account entity
+    (which carries `bot` as an alias) even when the statement text
+    says only `"service account"`. This mirrors the alias awareness in
     `search_statements`. Each result carries `matched_via`:
 
       `"text"`    — statement text contains the query.

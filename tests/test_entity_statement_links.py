@@ -58,8 +58,8 @@ def test_entity_to_statement_link_round_trips(tmp_path, monkeypatch):
     """An entity→statement edge goes in through `add_links` and surfaces
     in `get_entity.statement_links` and `get_statements.incoming_links`."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
-        s = _stmt(client, "the recruiter submits an invite")
+        e = _entity(client, "Reviewer")
+        s = _stmt(client, "the reviewer submits an invite")
         r = client.post(
             "/add-links",
             json={"links": [{"from_id": e, "to_id": s, "link_type": "performs"}]},
@@ -134,9 +134,9 @@ def test_entity_statement_link_with_when_round_trips(tmp_path, monkeypatch):
     """The same `when` grammar that statement_links use is available on
     entity↔statement edges; the tree round-trips through hydration."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
+        e = _entity(client, "Reviewer")
         s = _stmt(client, "an invite is sent")
-        cond = _stmt(client, "the recruiter is signed in")
+        cond = _stmt(client, "the reviewer is signed in")
 
         client.post(
             "/add-links",
@@ -161,9 +161,9 @@ def test_when_references_includes_entity_statement_edges(tmp_path, monkeypatch):
     """A condition state on an entity↔statement edge surfaces in
     `get_statements.when_references` alongside statement-link refs."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
-        s = _stmt(client, "the recruiter submits an invite")
-        cond = _stmt(client, "the recruiter is signed in")
+        e = _entity(client, "Reviewer")
+        s = _stmt(client, "the reviewer submits an invite")
+        cond = _stmt(client, "the reviewer is signed in")
 
         client.post(
             "/add-links",
@@ -198,7 +198,7 @@ def test_remove_links_idempotent_across_kinds(tmp_path, monkeypatch):
     """remove_links on a mixed-endpoint edge is idempotent — the second
     call with the same payload removes zero rows."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
+        e = _entity(client, "Reviewer")
         s = _stmt(client, "invite is sent")
         client.post(
             "/add-links",
@@ -225,9 +225,9 @@ def test_delete_statement_cascades_entity_statement_links(tmp_path, monkeypatch)
     """When a statement is deleted, its mixed-endpoint edges go away —
     both endpoint-of and condition-leaf-of relationships."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
+        e = _entity(client, "Reviewer")
         s = _stmt(client, "invite is sent")
-        cond = _stmt(client, "recruiter is signed in")
+        cond = _stmt(client, "reviewer is signed in")
 
         client.post(
             "/add-links",
@@ -257,9 +257,9 @@ def test_delete_statement_used_as_when_leaf_drops_entity_statement_link(
     entity↔statement edge removes the edge — same cascade as
     statement_links."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
+        e = _entity(client, "Reviewer")
         s = _stmt(client, "invite is sent")
-        cond = _stmt(client, "recruiter is signed in")
+        cond = _stmt(client, "reviewer is signed in")
 
         client.post(
             "/add-links",
@@ -284,7 +284,7 @@ def test_delete_entity_cascades_entity_statement_links(tmp_path, monkeypatch):
     """Deleting an entity removes every entity↔statement edge anchored
     on it — both directions."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
+        e = _entity(client, "Reviewer")
         s1, s2 = _stmt(client, "alpha"), _stmt(client, "beta")
 
         client.post(
@@ -343,9 +343,9 @@ def test_merge_statements_rewrites_entity_statement_link_endpoint(
     """Merging a source statement into a target moves any mixed-endpoint
     edges that pointed at the source onto the target."""
     with _client(tmp_path, monkeypatch) as client:
-        e = _entity(client, "Recruiter")
+        e = _entity(client, "Reviewer")
         s_source = _stmt(client, "draft of the invite event")
-        s_target = _stmt(client, "the recruiter submits an invite")
+        s_target = _stmt(client, "the reviewer submits an invite")
 
         client.post(
             "/add-links",

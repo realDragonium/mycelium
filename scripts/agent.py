@@ -92,15 +92,15 @@ Do NOT ask just because a term is unfamiliar (NOA, KYC, etc.). First try to deri
 Worked example end-to-end. Suspect: *"AlreadyFilledInError is encountered during NOA results storage."*
 
   Step 1 — Identify:
-    Q1: yes — submitting test results when prior results exist for a participant is rejected; the submitter sees the rejection.
-    Q2: *"Submitting test results is rejected when results have already been recorded for the same participant."*
+    Q1: yes — submitting draft text when prior draft text exists for a service account is rejected; the submitter sees the rejection.
+    Q2: *"Submitting draft text is rejected when draft text has already been recorded for the same service account."*
 
   Step 2 — Locate:
-    `search_behaviors("submit test results")` surfaces an existing behavior *"A participant submits their test results"* (id `beh_AAA`). The suspect's underlying fact is NOT there yet — it's a *constraint* on that submission.
+    `search_behaviors("submit draft text")` surfaces an existing behavior *"A service account submits draft text"* (id `beh_AAA`). The suspect's underlying fact is NOT there yet — it's a *constraint* on that submission.
     Outcome: B — partially captured, the fact is missing as a constraint.
 
   Step 3 — Shape and place:
-    "cannot resubmit when results already exist" reads as a *constraint*, not an event. The right shape: a sibling behavior *"Test result resubmission is rejected"* with a `replaces` link to `beh_AAA` carrying a `when` clause referencing a behavior *"Results already recorded for this participant"* (which may need to be authored as a pending behavior in the same plan).
+    "cannot resubmit when draft text already exists" reads as a *constraint*, not an event. The right shape: a sibling behavior *"Draft resubmission is rejected"* with a `replaces` link to `beh_AAA` carrying a `when` clause referencing a behavior *"Draft text is already recorded for this service account"* (which may need to be authored as a pending behavior in the same plan).
 
   Step 4 — Retire:
     `delete_behavior(suspect_id)` — the suspect carries nothing worth migrating; the new behavior + link fully captures the fact.
@@ -125,7 +125,7 @@ Shape:
   - AND:   {"op": "and", "of": [<expr>, <expr>, ...]}
   - OR:    {"op": "or",  "of": [<expr>, <expr>, ...]}
 
-Concrete example. Given behaviors A "test result can be submitted", B "test result cannot be submitted", and C "results already exist for this participant", you would express "B replaces A when C holds" as:
+Concrete example. Given behaviors A "draft text can be submitted", B "draft text cannot be submitted", and C "draft text already exists for this service account", you would express "B replaces A when C holds" as:
 
   add_links(links=[{
     "from_behavior_id": "<id of B>",
@@ -162,23 +162,23 @@ For rule-shaped facts you would otherwise have written as a behavior, rephrase t
 
 If you have written rule-shaped text and the operator's feedback was specifically that they want it preserved verbatim, you can pass `allow_phrasing_violations: true` on the upsert — but the default should always be to rephrase as an observable event.
   - Strip pure implementation: class names (`*Guard`, `*Service`, `*Manager`, `*Validator`, `*Repository`), exception types (`*Error`, `*Exception`), private/internal function names, table or column names.
-  - PRESERVE named domain entities even when they look like code constants. Roles (`TSL Admin`, `TSL_SALES_FORM`, `Recruiter`), permission flags, named feature/plan tiers, configured constants the business actually refers to, third-party product names (`Auth0`, `Stripe`) — keep these verbatim. They are the product's vocabulary, not implementation. The rule of thumb: if the name appears in product documentation, contracts, customer-facing UI, business rules, or operations runbooks, it's a domain entity even if it also exists as a code constant.
+  - PRESERVE named domain entities even when they look like code constants. Roles (`admin`, `reader`), permission flags, named feature/plan tiers, configured constants the business actually refers to, third-party service names (`Auth0`, `Ollama`) — keep these verbatim. They are the product's vocabulary, not implementation. The rule of thumb: if the name appears in product documentation, contracts, customer-facing UI, business rules, or operations runbooks, it's a domain entity even if it also exists as a code constant.
 
 Mentions (the behavior's `mentions` list) work the same way. Mentions are the stable domain entities the behavior touches — keep role names, permission flags, named features, third-party product names. Strip class names, exception types, internal function names, table names. Do NOT remove a mention just because it has uppercase letters or underscores; check whether it names a thing in the product.
 
 Worked example for both. Suspect text:
-  "CompanyAuthorizationGuard.authorized_to_access_company_data() grants access when the user is a TSL Admin or has the TSL_SALES_FORM role; otherwise raises AuthorizationError."
+  "WorkspaceAuthorizationGuard.authorized_to_access_workspace_data() grants access when the user is an admin or has the reader role; otherwise raises AuthorizationError."
 
   Right rewrite:
-    text:    "Access to company data is granted when the user is a TSL Admin or has the TSL_SALES_FORM role and the company is not restricted; otherwise access is denied."
-    keep mentions: TSL Admin, TSL_SALES_FORM (these are the actual roles)
-    strip mentions: CompanyAuthorizationGuard, AuthorizationError (class + exception)
+    text:    "Access to workspace data is granted when the user is an admin or has the reader role and the workspace is not restricted; otherwise access is denied."
+    keep mentions: admin, reader (these are the actual roles)
+    strip mentions: WorkspaceAuthorizationGuard, AuthorizationError (class + exception)
 
   Wrong rewrite:
-    text:    "...the user is an administrator or has sales access..."
+    text:    "...the user has elevated access..."
     (loses the specific role names — those are the product's vocabulary)
-    removed mentions: TSL Admin, TSL_SALES_FORM
-    added mentions: administrator, sales access (invents generic synonyms)
+    removed mentions: admin, reader
+    added mentions: elevated access (invents a generic synonym)
 
 Behavior link types are open vocabulary; common ones: `part`, `triggers`, `enables`, `requires`, `varies-by`, `restricts`, `replaces`, `configures`. Use `list_link_types` to see what's already in use.
 

@@ -246,21 +246,21 @@ def test_search_mentions_shape(tmp_path, monkeypatch):
         dashboard_id = client.post(
             "/upsert-entity", json={"name": "dashboard", "description": "the dashboard"}
         ).json()["entity_id"]
-        recruiter_id = client.post(
-            "/upsert-entity", json={"name": "recruiter", "description": "the recruiter"}
+        reviewer_id = client.post(
+            "/upsert-entity", json={"name": "reviewer", "description": "the reviewer"}
         ).json()["entity_id"]
         # Text mentions both distinctive names → two derived mentions.
         client.post(
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "the recruiter opens the dashboard",
+                "text": "the reviewer opens the dashboard",
                 "links": [],
             },
         )
         hits = client.post(
             "/search-statements",
-            json={"query": "the recruiter opens the dashboard", "min_score": 0.99},
+            json={"query": "the reviewer opens the dashboard", "min_score": 0.99},
         ).json()
         assert len(hits) == 1
         mentions = hits[0]["mentions"]
@@ -271,8 +271,8 @@ def test_search_mentions_shape(tmp_path, monkeypatch):
             assert m["entity_id"].startswith("ent_")
         dashboard_mention = next(m for m in mentions if m["name"] == "dashboard")
         assert dashboard_mention["entity_id"] == dashboard_id
-        recruiter_mention = next(m for m in mentions if m["name"] == "recruiter")
-        assert recruiter_mention["entity_id"] == recruiter_id
+        reviewer_mention = next(m for m in mentions if m["name"] == "reviewer")
+        assert reviewer_mention["entity_id"] == reviewer_id
 
 
 def test_upsert_name_idempotent_then_conflict(tmp_path, monkeypatch):
@@ -2133,31 +2133,31 @@ def test_move_name_splits_into_new_entity(tmp_path, monkeypatch):
         login_id = client.post(
             "/upsert-entity", json={"name": "Login", "description": "the login page"}
         ).json()["entity_id"]
-        candidate_name_id = client.post(
-            "/upsert-name", json={"text": "candidate", "entity_id": login_id}
+        reviewer_name_id = client.post(
+            "/upsert-name", json={"text": "reviewer", "entity_id": login_id}
         ).json()["name_id"]
         client.post(
             "/upsert-statement",
-            json={"kind": "event", "text": "the candidate proceeds", "links": []},
+            json={"kind": "event", "text": "the reviewer proceeds", "links": []},
         )
 
-        # split: new entity for the actor, then move "candidate" onto it
+        # split: new entity for the actor, then move "reviewer" onto it
         action_id = client.post(
             "/upsert-entity",
-            json={"name": "Applicant", "description": "the person applying"},
+            json={"name": "Reviewer", "description": "the reviewer"},
         ).json()["entity_id"]
         r = client.post(
-            "/move-name", json={"name_id": candidate_name_id, "to_entity_id": action_id}
+            "/move-name", json={"name_id": reviewer_name_id, "to_entity_id": action_id}
         )
         assert r.status_code == 200
-        assert r.json() == {"name_id": candidate_name_id, "entity_id": action_id}
+        assert r.json() == {"name_id": reviewer_name_id, "entity_id": action_id}
 
-        # statement now resolves "candidate" to the new entity, original Login is untouched
+        # statement now resolves "reviewer" to the new entity, original Login is untouched
         hits = client.post(
             "/search-statements",
-            json={"query": "the candidate proceeds", "min_score": 0.99},
+            json={"query": "the reviewer proceeds", "min_score": 0.99},
         ).json()
-        mention = next(m for m in hits[0]["mentions"] if m["name"] == "candidate")
+        mention = next(m for m in hits[0]["mentions"] if m["name"] == "reviewer")
         assert mention["entity_id"] == action_id
         assert mention["entity_id"] != login_id
 
@@ -2171,7 +2171,7 @@ def test_move_name_splits_into_new_entity(tmp_path, monkeypatch):
         assert (
             client.post(
                 "/move-name",
-                json={"name_id": candidate_name_id, "to_entity_id": "ent_missing"},
+                json={"name_id": reviewer_name_id, "to_entity_id": "ent_missing"},
             ).status_code
             == 400
         )
@@ -2415,35 +2415,35 @@ def test_rename_name_updates_alias_index(tmp_path, monkeypatch):
         eid = client.post(
             "/upsert-entity",
             json={
-                "name": "Recruiter",
+                "name": "Embedder",
                 "description": "",
             },
         ).json()["entity_id"]
         # A second, distinctive alias we'll rename. The query before/after
         # only matches the renamed text — the statement keeps its mention
-        # via the primary "Recruiter" name (present in the text).
+        # via the primary "Embedder" name (present in the text).
         rename_name_id = client.post(
             "/upsert-name",
             json={
-                "text": "headhunter",
+                "text": "vectorizer",
                 "entity_id": eid,
             },
         ).json()["name_id"]
-        # statement mentions the entity via "Recruiter" in its text.
+        # statement mentions the entity via "Embedder" in its text.
         sid = client.post(
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "the Recruiter takes action on the role",
+                "text": "the Embedder takes action on the role",
                 "links": [],
             },
         ).json()["statement_id"]
 
-        # Before rename: "Hiring Manager" doesn't match the name index.
+        # Before rename: "Encoder" doesn't match the name index.
         before = client.post(
             "/search-statements",
             json={
-                "query": "Hiring Manager",
+                "query": "Encoder",
                 "limit": 5,
             },
         ).json()
@@ -2453,15 +2453,15 @@ def test_rename_name_updates_alias_index(tmp_path, monkeypatch):
             "/rename-name",
             json={
                 "name_id": rename_name_id,
-                "new_text": "Hiring Manager",
+                "new_text": "Encoder",
             },
         )
 
-        # After rename: "Hiring Manager" matches the renamed name and lifts the score.
+        # After rename: "Encoder" matches the renamed name and lifts the score.
         after = client.post(
             "/search-statements",
             json={
-                "query": "Hiring Manager",
+                "query": "Encoder",
                 "limit": 5,
             },
         ).json()
@@ -2505,7 +2505,7 @@ def test_get_statement_returns_when_references(tmp_path, monkeypatch):
             "/upsert-statement",
             json={
                 "kind": "state",
-                "text": "completed step is a checklist",
+                "text": "the draft is already applied",
                 "mentions": [],
                 "links": [],
             },
@@ -2563,21 +2563,21 @@ def test_grep_statements_alias_aware(tmp_path, monkeypatch):
         eid = client.post(
             "/upsert-entity",
             json={
-                "name": "Selection Flow",
+                "name": "Link Type",
                 "description": "",
             },
         ).json()["entity_id"]
-        # Distinctive alias that CONTAINS the query substring "tree".
-        client.post("/upsert-name", json={"text": "treeview", "entity_id": eid})
+        # Distinctive alias that CONTAINS the query substring "node".
+        client.post("/upsert-name", json={"text": "nodemap", "entity_id": eid})
 
-        # Two statements: one mentions Selection Flow (text contains the
-        # multi-word name) but doesn't contain "tree"; one mentions nothing
-        # but text literally contains "tree".
+        # Two statements: one mentions Link Type (text contains the
+        # multi-word name) but doesn't contain "node"; one mentions nothing
+        # but text literally contains "node".
         via_mention = client.post(
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "the selection flow is resolved for the invite",
+                "text": "the link type is resolved for the edge",
                 "links": [],
             },
         ).json()["statement_id"]
@@ -2585,13 +2585,13 @@ def test_grep_statements_alias_aware(tmp_path, monkeypatch):
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "a tree config is loaded",
+                "text": "a node config is loaded",
                 "links": [],
             },
         ).json()["statement_id"]
 
         # Default (alias-aware): both surface.
-        r = client.post("/grep-statements", json={"query": "tree"}).json()
+        r = client.post("/grep-statements", json={"query": "node"}).json()
         rows = {s["id"]: s for s in r["statements"]}
         assert via_text in rows
         assert via_mention in rows
@@ -2602,7 +2602,7 @@ def test_grep_statements_alias_aware(tmp_path, monkeypatch):
         r = client.post(
             "/grep-statements",
             json={
-                "query": "tree",
+                "query": "node",
                 "match_aliased_mentions": False,
             },
         ).json()
@@ -2616,15 +2616,15 @@ def test_grep_statements_alias_aware(tmp_path, monkeypatch):
         r = client.post(
             "/grep-statements",
             json={
-                "query": "tree",
+                "query": "node",
                 "entity_id": eid,
             },
         ).json()
         rows = {s["id"]: s for s in r["statements"]}
-        # via_mention mentions Selection Flow but doesn't contain "tree"
+        # via_mention mentions Link Type but doesn't contain "node"
         # in text → excluded under entity_id+text-only path.
         assert via_mention not in rows
-        # via_text doesn't mention Selection Flow → excluded by entity filter.
+        # via_text doesn't mention Link Type → excluded by entity filter.
         assert via_text not in rows
 
 
@@ -2635,25 +2635,25 @@ def test_grep_statements_matched_via_both(tmp_path, monkeypatch):
         eid = client.post(
             "/upsert-entity",
             json={
-                "name": "Selection Flow",
+                "name": "Link Type",
                 "description": "",
             },
         ).json()["entity_id"]
-        # Distinctive alias containing the query substring "tree".
-        client.post("/upsert-name", json={"text": "treeview", "entity_id": eid})
+        # Distinctive alias containing the query substring "node".
+        client.post("/upsert-name", json={"text": "nodemap", "entity_id": eid})
 
         # Text contains the multi-word name (→ derived mention to the entity)
-        # AND literally contains the substring "tree".
+        # AND literally contains the substring "node".
         sid = client.post(
             "/upsert-statement",
             json={
                 "kind": "event",
-                "text": "the selection flow renders a tree of options",
+                "text": "the link type maps a node onto an edge",
                 "links": [],
             },
         ).json()["statement_id"]
 
-        r = client.post("/grep-statements", json={"query": "tree"}).json()
+        r = client.post("/grep-statements", json={"query": "node"}).json()
         rows = {s["id"]: s for s in r["statements"]}
         assert rows[sid]["matched_via"] == "both"
 

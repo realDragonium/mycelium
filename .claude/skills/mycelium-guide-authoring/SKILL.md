@@ -1,6 +1,6 @@
 ---
 name: mycelium-guide-authoring
-description: How to write **prescriptive** content into the mycelium substrate — UI procedures (how to configure X, how to set up Y) and diagnostic content (what could be wrong, how to verify, how to resolve). Self-contained for the prescriptive layer. Covers the four prescriptive kinds (`procedure`, `action`, `check`, `cause`), the procedure-as-root pattern (named guide root anchored to a `capability` via `teaches`, composing `property` inputs via `requires` / `accepts` and `action` chains via `contains` / `next`), anchoring action/check/cause to the descriptive layer via `performs` / `verifies` / `violates`, lookup procedures hanging off properties via `obtained-by`, sequencing with `next` / `on-success` / `on-failure`, within-layer links (`confirms` / `refutes` / `resolves`), procedure-to-procedure gating via `when` on a descriptive state, conditional edges via `when`, the procedure shape (linear with branches), the diagnostic shape (cause-driven, branching), phrasing conventions for objective step text, the rule that "Identify X" / "Decide Y" / "Determine Z" are property tells not actions, common patterns (login troubleshooting, ATS integration setup), the prescriptive↔descriptive boundary, plus the shared workflow conventions (tell-before-doing, discovery, batching with `@N` ordering, handling near-duplicates). Use whenever authoring how-to or troubleshooting content, or when calling mycelium write tools (`upsert_statement`, `upsert_statements`, `add_links`, etc.) for prescriptive content (`kind` set to `procedure`, `action`, `check`, or `cause`). For **descriptive** content (event/state/capability/rule/property), use `mycelium-authoring` instead — do not load both.
+description: How to write **prescriptive** content into the mycelium substrate — UI procedures (how to configure X, how to set up Y) and diagnostic content (what could be wrong, how to verify, how to resolve). Self-contained for the prescriptive layer. Covers the four prescriptive kinds (`procedure`, `action`, `check`, `cause`), the procedure-as-root pattern (named guide root anchored to a `capability` via `teaches`, composing `property` inputs via `requires` / `accepts` and `action` chains via `contains` / `next`), anchoring action/check/cause to the descriptive layer via `performs` / `verifies` / `violates`, lookup procedures hanging off properties via `obtained-by`, sequencing with `next` / `on-success` / `on-failure`, within-layer links (`confirms` / `refutes` / `resolves`), procedure-to-procedure gating via `when` on a descriptive state, conditional edges via `when`, the procedure shape (linear with branches), the diagnostic shape (cause-driven, branching), phrasing conventions for objective step text, the rule that "Identify X" / "Decide Y" / "Determine Z" are property tells not actions, common patterns (login troubleshooting, MCP connection setup), the prescriptive↔descriptive boundary, plus the shared workflow conventions (tell-before-doing, discovery, batching with `@N` ordering, handling near-duplicates). Use whenever authoring how-to or troubleshooting content, or when calling mycelium write tools (`upsert_statement`, `upsert_statements`, `add_links`, etc.) for prescriptive content (`kind` set to `procedure`, `action`, `check`, or `cause`). For **descriptive** content (event/state/capability/rule/property), use `mycelium-authoring` instead — do not load both.
 ---
 
 # Mycelium Guide Authoring
@@ -14,7 +14,7 @@ The prescriptive layer is only useful when anchored to the descriptive layer. A 
 
 Four prescriptive kinds:
 
-- **`procedure`** — the named root of a how-to guide. *"How to configure Recruitee automation for a vacancy."* Anchors via `teaches` to a `capability`. Composes its body via `contains` / `next` (to `action`s), `requires` / `accepts` (to `property`s the user supplies), and terminates in a final action (send/submit/save) or a `check` that confirms success.
+- **`procedure`** — the named root of a how-to guide. *"How to connect an MCP client to a Mycelium server."* Anchors via `teaches` to a `capability`. Composes its body via `contains` / `next` (to `action`s), `requires` / `accepts` (to `property`s the user supplies), and terminates in a final action (send/submit/save) or a `check` that confirms success.
 - **`action`** — a step the user performs. *"Click the Save button."* Anchors via `performs` to an `event` statement (the thing that actually happens in the system when the user does this).
 - **`check`** — a verification step for a diagnostic agent. *"Verify the user's authentication provider matches the login method attempted."* Anchors via `verifies` to a `state` statement (the condition being inspected).
 - **`cause`** — a named failure mode worth investigating. *"User is attempting password login on a social-only account."* Optionally anchors via `violates` to a `state` (when the failure mode is "a required state isn't met"). Free-standing when the failure is environmental, historical, referential, or compound.
@@ -48,14 +48,14 @@ A named root (`procedure`) composing user-supplied inputs (`property`) and a cha
 
 Sketch:
 
-- **Procedure root** — one `procedure` statement names what the user accomplishes (*"How to configure Recruitee automation for a vacancy"*). Anchors to the `capability` it teaches via `teaches`. Every guide has exactly one root.
-- **Properties** — the configurable values the user supplies. Each is one `property` record on the descriptive side (`belongs-to` its entity, `valued-by` its value-space rule when applicable). The procedure links to them via `requires` (mandatory) or `accepts` (optional). When a property has a non-trivial lookup ("open the job posting and click Copy ID"), that lookup is itself an `action` or sub-`procedure`, hung off the property via `obtained-by`.
+- **Procedure root** — one `procedure` statement names what the user accomplishes (*"How to connect an MCP client to a Mycelium server"*). Anchors to the `capability` it teaches via `teaches`. Every guide has exactly one root.
+- **Properties** — the configurable values the user supplies. Each is one `property` record on the descriptive side (`belongs-to` its entity, `valued-by` its value-space rule when applicable). The procedure links to them via `requires` (mandatory) or `accepts` (optional). When a property has a non-trivial lookup ("open Settings → Users & invites and create a service account"), that lookup is itself an `action` or sub-`procedure`, hung off the property via `obtained-by`.
 - **Entry point** — what state must the user be in to start? (Logged in as an admin, on a specific settings page, with a prerequisite procedure already completed.) Each prerequisite is a `state` reference (descriptive layer), attached via `when` on the first action's incoming edge if it's a hard gate. **Procedure-to-procedure ordering:** if Guide 1 must complete before Guide 2 can start, gate Guide 2's first action via `when` on the descriptive state Guide 1 establishes. There is no procedure→procedure link type — the existing `when` machinery covers it.
 - **Linear actions** — the happy-path UI sequence. Each is one `action` statement; the procedure `contains` them (or chains them via `next`). Only real UI interactions belong here: clicks, navigations, entries, copies, sends.
 - **Branches** — when a step has variants. Reify the condition as a state, branch with `on-success` / `on-failure`, or with two `next` edges each carrying a mutually exclusive `when`.
 - **Terminal step** — the procedure ends with a final action (send/submit/save) or a `check` confirming success. The terminal *state* (what's true after completion) is descriptive — `establishes`-ed by the final action's event.
 
-**Mental verbs are property tells, not actions.** When you find yourself writing an action like *"Identify the stage name"*, *"Decide which workflow to use"*, *"Determine the rejection reason"* — stop. These aren't UI interactions; they describe the user *choosing a value*. The value is a `property` the procedure `requires` or `accepts`. If finding the value involves real UI steps, those go on the property as `obtained-by → action` (or a sub-`procedure`); if the user just types it in, no `obtained-by` is needed.
+**Mental verbs are property tells, not actions.** When you find yourself writing an action like *"Identify the role to grant"*, *"Decide which server to connect to"*, *"Determine the service account name"* — stop. These aren't UI interactions; they describe the user *choosing a value*. The value is a `property` the procedure `requires` or `accepts`. If finding the value involves real UI steps, those go on the property as `obtained-by → action` (or a sub-`procedure`); if the user just types it in, no `obtained-by` is needed.
 
 ### Diagnostic shape (troubleshooting)
 
@@ -105,18 +105,18 @@ Routing test — ask which question the statement answers:
 
 A `procedure` is the *guide as a whole*. An `action` is a single UI interaction inside it. Every how-to guide has one procedure record at its root; the action chain sits underneath via `contains` or `next`.
 
-A guide *without* a procedure root — just a chain of isolated actions — is wrong shape. The procedure is what consumers query for (*"do we document how to set up Recruitee?"*); without it, the guide is unfindable except by walking actions.
+A guide *without* a procedure root — just a chain of isolated actions — is wrong shape. The procedure is what consumers query for (*"do we document how to connect over MCP?"*); without it, the guide is unfindable except by walking actions.
 
 ### Action vs property — the "Identify / Decide / Determine" tell
 
 If your action text uses a mental verb (*Identify*, *Decide*, *Determine*, *Choose*, *Pick*, *Find*, *Look up*) and the object is a value the user will then plug into a later real action, it is not an action. It is a `property` the procedure consumes. The real UI interactions (open this page, copy this ID, paste it into that field) are the actions.
 
-- ✗ *"Identify the Recruitee workflow stage name"* — that's a property, *"Knockout failed stage"*.
-- ✗ *"Decide which Selection Lab flow to use"* — property, *"Selection Lab flow name"*.
-- ✓ *"Open the job posting in Recruitee and click Copy ID"* — real action; can be `obtained-by` for the *"Vacancy ID"* property.
-- ✓ *"Send the configured values to integrations@example.com"* — real action; terminal step of the procedure.
+- ✗ *"Identify the service account's role"* — that's a property, *"Role to grant"*.
+- ✗ *"Decide which server to connect to"* — property, *"Server base URL"*.
+- ✓ *"Open Settings → Users & invites and create a service account"* — real action; can be `obtained-by` for the *"Service account token"* property.
+- ✓ *"Paste the base URL and token into the MCP client configuration"* — real action; terminal step of the procedure.
 
-The exception is genuine inspection without a value being plugged later — e.g. *"Look up the participant record in the database"* in a diagnostic context, where the lookup is the verification itself. That's a `check`, not an action and not a property.
+The exception is genuine inspection without a value being plugged later — e.g. *"Look up the user record in the database"* in a diagnostic context, where the lookup is the verification itself. That's a `check`, not an action and not a property.
 
 ### Action vs check
 
@@ -173,11 +173,11 @@ Read the link as *"this prescriptive record — [type] → that descriptive reco
 [cause]   "Email format is invalid"
    violates → [state]  "Email is valid format"
 
-[procedure]  "How to configure Recruitee automation for a vacancy"
-   teaches  → [capability]  "Recruitee automation can be configured for a vacancy"
-   requires → [property]    "Vacancy ID"
-                obtained-by → [action] "Open the job posting in Recruitee and click Copy ID"
-   accepts  → [property]    "Knockout failed stage"
+[procedure]  "How to connect an MCP client to a Mycelium server"
+   teaches  → [capability]  "An MCP client can be connected to a Mycelium server"
+   requires → [property]    "Service account token"
+                obtained-by → [action] "Open Settings → Users & invites and create a service account"
+   accepts  → [property]    "Client display name"
 ```
 
 ### Anchors are optional, not required
@@ -326,12 +326,12 @@ The substrate does not currently hard-reject prescriptive phrasing — the conve
 
 A procedure names the user's goal as a guide title. Lead with *"How to"* followed by an imperative verb describing what the user accomplishes.
 
-- ✓ *"How to configure Recruitee automation for a vacancy"*
-- ✓ *"How to onboard a company to the platform"*
-- ✓ *"How to invite a single participant to a selection flow"*
-- ✗ *"Configuring Recruitee automation"* — gerund, ambiguous between description and instruction; consumers searching for guides expect *"How to"*.
-- ✗ *"The user configures Recruitee automation"* — third-person narration; that's the descriptive event/capability, not the guide.
-- ✗ *"How to configure Recruitee and set up workflows"* — two procedures; split (or this is one procedure whose capability covers both, in which case rename to express the unified goal).
+- ✓ *"How to connect an MCP client to a Mycelium server"*
+- ✓ *"How to configure JIT provisioning for an email domain"*
+- ✓ *"How to invite a single user to a Mycelium server"*
+- ✗ *"Connecting an MCP client"* — gerund, ambiguous between description and instruction; consumers searching for guides expect *"How to"*.
+- ✗ *"The user connects an MCP client"* — third-person narration; that's the descriptive event/capability, not the guide.
+- ✗ *"How to connect an MCP client and invite users"* — two procedures; split (or this is one procedure whose capability covers both, in which case rename to express the unified goal).
 
 The procedure text is the goal, not the steps. Steps live in `action` records the procedure contains.
 
@@ -352,7 +352,7 @@ Lead with *Verify*, *Confirm*, *Check*, *Inspect*, *Look up*. The subject of the
 
 - ✓ *"Verify the user's auth_provider field matches the attempted login method"*
 - ✓ *"Confirm the integration status reads Connected"*
-- ✓ *"Look up the participant record in the database"*
+- ✓ *"Look up the user record in the database"*
 - ✗ *"The email should be valid"* — declarative, not directive; this is the underlying state
 - ✗ *"Make sure everything looks right"* — vague; specify what to inspect
 - ✗ *"Ask the user to verify their email"* — that's an action (the agent's action is asking; the user does the verifying)
@@ -380,18 +380,18 @@ Conditions go on edges as `when`, not in statement text. The rule applies to all
 
 A check or cause that refers to whether something is "set up" should describe the relationship and its state, not the existence of a record. *"X exists in Y"* is CRUD framing — it talks about a row in a table when the meaningful question is what relationship that row represents and what state it's in.
 
-- ✗ *"Verify the company exists in Selection Lab"*
-- ✓ *"Verify the company has an active account with Selection Lab"*
+- ✗ *"Verify the user exists on the server"*
+- ✓ *"Verify the user has an active account on the server"*
 
 - ✗ *"Confirm the integration record is present"*
 - ✓ *"Confirm the integration is connected"*
 
 For causes, the bare-negation form hides the failure mode:
 
-- ✗ *"The company doesn't exist in Selection Lab"*
-- ✓ *"The company's Selection Lab account has been deactivated"* — or — *"The company has never been onboarded to Selection Lab"*
+- ✗ *"The user doesn't exist on the server"*
+- ✓ *"The user's account has been suspended"* — or — *"The user has never been invited to the server"*
 
-*"Doesn't exist"* collapses *"never onboarded"* and *"was active, got deactivated"* into one statement. They're different failures with different resolutions.
+*"Doesn't exist"* collapses *"never invited"* and *"was active, got suspended"* into one statement. They're different failures with different resolutions.
 
 **When the technical term is correct, keep it.** This rule is about CRUD framing specifically, not about scrubbing technical vocabulary. *"Verify the JWT signature is valid"*, *"Confirm the webhook payload includes the X-Signature header"*, *"The OAuth refresh token has expired"* — these are precise and stay as-is. The test isn't *"does this sound business-y"*; it's *"am I talking about a record's existence when I should be talking about a relationship's state?"*
 
@@ -411,57 +411,57 @@ Compound clauses destroy the substrate's ability to link related knowledge. Spli
 When a guide is mostly about *gathering values and submitting them* (an admin filling out a configuration form, an integration setup), the dominant shape is the procedure root composing properties:
 
 ```
-[procedure]  "How to configure Recruitee automation for a vacancy"
-   teaches  → [capability]  "Recruitee automation can be configured for a vacancy"
+[procedure]  "How to connect an MCP client to a Mycelium server"
+   teaches  → [capability]  "An MCP client can be connected to a Mycelium server"
 
-   requires → [property]    "Vacancy ID"
-                belongs-to  → [entity] Recruitee Vacancy Configuration
-                obtained-by → [action] "Open the job posting in Recruitee and click Copy ID"
+   requires → [property]    "Server base URL"
+                belongs-to  → [entity] MCP Connection
+                obtained-by → [action] "Open the server's Connect page and copy the base URL"
 
-   requires → [property]    "Selection Lab flow name"
-                belongs-to  → [entity] Recruitee Vacancy Configuration
-                valued-by   → [rule] "Selection Lab flow name is one of the company's active flow names"
+   requires → [property]    "Service account token"
+                belongs-to  → [entity] MCP Connection
+                obtained-by → [action] "Open Settings → Users & invites and create a service account"
 
-   accepts  → [property]    "Knockout failed stage"
-                belongs-to  → [entity] Recruitee Vacancy Configuration
-                valued-by   → [rule] "Knockout failed stage is one of the Recruitee workflow stages"
+   accepts  → [property]    "Role to grant the service account"
+                belongs-to  → [entity] MCP Connection
+                valued-by   → [rule] "Role to grant is one of reader, writer, admin"
 
-   accepts  → [property]    "Rejection reason for failed checklist completion"
-                belongs-to  → [entity] Recruitee Vacancy Configuration
+   accepts  → [property]    "Client display name"
+                belongs-to  → [entity] MCP Connection
 
-   contains → [action]      "Send the configured values to integrations@example.com"
-                performs → [event] "A Recruitee vacancy configuration request is submitted"
+   contains → [action]      "Paste the base URL and token into the MCP client configuration"
+                performs → [event] "An MCP initialize request is submitted"
 ```
 
 Notes on this shape:
 
-- **The procedure is the entry point.** Consumers search *"how to configure Recruitee"* and land on the procedure record. From there, `requires` / `accepts` enumerate what they need to gather; `contains` enumerates the UI steps.
-- **Properties are shared, not duplicated.** *"Vacancy ID"* is one record. A second procedure (a diagnostic, a different setup flow) can `requires` the same property without re-authoring it.
-- **`obtained-by` is sparse on purpose.** Most properties have no lookup — the user just types in a flow name. Only attach `obtained-by` when there's a real lookup with its own UI steps.
+- **The procedure is the entry point.** Consumers search *"how to connect over MCP"* and land on the procedure record. From there, `requires` / `accepts` enumerate what they need to gather; `contains` enumerates the UI steps.
+- **Properties are shared, not duplicated.** *"Server base URL"* is one record. A second procedure (a diagnostic, a different setup flow) can `requires` the same property without re-authoring it.
+- **`obtained-by` is sparse on purpose.** Most properties have no lookup — the user just types in a display name. Only attach `obtained-by` when there's a real lookup with its own UI steps.
 - **Action chains stay short.** If the procedure is mostly *gather values, send them*, the action layer contains the *send*. Pre-send "actions" like *"Identify the stage"* are property tells (§3), not actions.
 
 ### UI walkthrough with sequential clicks
 
-When a guide is mostly *clicks in sequence* (set up an ATS integration through the product's own UI), the action chain dominates and properties may be minimal:
+When a guide is mostly *clicks in sequence* (create a service account through the product's own UI), the action chain dominates and properties may be minimal:
 
 ```
-[action]   "Navigate to Settings → Integrations"
-   next → [action]   "Click Add new integration"
-            next → [action]   "Select the ATS provider from the dropdown"
-                     next → [action]   "Enter the API base URL"
-                              next → [action]   "Enter the API token in the Token field"
-                                       next → [check]   "Verify the connection-test result is Success"
-                                                on-success → [action]   "Click Save and exit"
-                                                on-failure → [cause]   "API token is invalid or expired"
+[action]   "Navigate to Settings → Users & invites"
+   next → [action]   "Click New service account"
+            next → [action]   "Enter a name for the service account"
+                     next → [action]   "Select a role from the dropdown"
+                              next → [action]   "Click Create and copy the generated token"
+                                       next → [check]   "Verify a test MCP call with the token returns 200"
+                                                on-success → [action]   "Store the token in the client configuration"
+                                                on-failure → [cause]   "The service account was created without the required role"
                                                               ↑ resolves
-                                                              [action]   "Regenerate the token in the ATS and re-enter"
+                                                              [action]   "Edit the service account's role and retry"
 ```
 
 Notes on this pattern:
 
-- **The procedure terminates in a check, not a save.** The step that confirms the procedure worked is itself a check — the user (or the diagnostic agent watching) verifies that the system reports success. The save action only runs on the success branch.
-- **Failure branches transition into diagnostic shape.** *"Connection test failed"* fans out into causes — bad token, wrong base URL, network issue — each with its own resolving action. The procedure and the diagnostic share statements; the same `cause` can be reached either way.
-- **Pre-conditions live on the first action's incoming edge.** *"User is logged in as an admin"* and *"Integration feature is enabled for this company"* are descriptive states attached as `when` on the entry edge, not extra action steps.
+- **The procedure terminates in a check, not a save.** The step that confirms the procedure worked is itself a check — the user (or the diagnostic agent watching) verifies that the system reports success. The final store action only runs on the success branch.
+- **Failure branches transition into diagnostic shape.** *"The test call failed"* fans out into causes — missing role, revoked token, wrong base URL — each with its own resolving action. The procedure and the diagnostic share statements; the same `cause` can be reached either way.
+- **Pre-conditions live on the first action's incoming edge.** *"User is logged in as an admin"* and *"The server has authentication enabled"* are descriptive states attached as `when` on the entry edge, not extra action steps.
 
 ## 9. The diagnostic shape — worked pattern
 

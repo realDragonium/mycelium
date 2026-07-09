@@ -21,9 +21,9 @@ from mycelium.plurals import regular_plural
         ("class", "classes"),  # ss → es
         ("company", "companies"),  # consonant + y → ies
         ("policy", "policies"),
-        ("assessment part", "assessment parts"),  # multi-word: head noun
+        ("link type", "link types"),  # multi-word: head noun
         ("data point", "data points"),
-        ("Candidate", "Candidates"),  # casing of stem preserved
+        ("Statement", "Statements"),  # casing of stem preserved
         ("API", "APIs"),  # acronym
     ],
 )

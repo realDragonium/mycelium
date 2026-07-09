@@ -123,7 +123,7 @@ This ordering is what prevents the star. Mapping shared targets, branches, sub-s
 
 ## Draft file format
 
-Write to `context/mycelium-drafts/<slug>.md`. Use kebab-case based on the domain: `recruitee-flow-config.md`, `teamtailor-webhook-flow.md`.
+Write to `context/mycelium-drafts/<slug>.md`. Use kebab-case based on the domain: `mcp-connection-setup.md`, `oidc-login-flow.md`.
 
 Use this exact structure:
 
@@ -182,7 +182,7 @@ Edges FROM an existing statement TO a new statement.
 
 | From ID | From text (truncated to ~60 chars) | Link type | To (ref) |
 |---------|------------------------------------|-----------|----------|
-| stm_cc52… | "A Recruitee webhook signature is verified…" | requires | S4 |
+| stm_cc52… | "An OIDC callback state is verified…" | requires | S4 |
 
 [Omit section if none.]
 
@@ -209,8 +209,8 @@ Entity-level schema: which `property` records an entity `requires` / `accepts`, 
 
 | From entity | Link type | To (ref / id) |
 |-------------|-----------|---------------|
-| Participant Invite | requires | S1 · "Email" |
-| Participant Invite | accepts | S4 · "Invite flow" |
+| User Invite | requires | S1 · "Email" |
+| User Invite | accepts | S4 · "Default role" |
 
 [Omit section if none.]
 
@@ -303,7 +303,7 @@ Run through this checklist mentally. If any item fails, fix the draft content fi
 
 Then run the checklist:
 
-0. **Flow contamination check.** For every proposed link between two statements, ask: can both endpoints be reached from the same entry point in the same execution path? If statement A is in the magic-link flow and statement B is in the TSL token flow, a link between them is contamination unless they share a genuine common sub-step (confirmed in code). Flag any link whose endpoints live in mutually exclusive code branches. A contaminated link is worse than a missing link — it misstates causal reality.
+0. **Flow contamination check.** For every proposed link between two statements, ask: can both endpoints be reached from the same entry point in the same execution path? If statement A is in the magic-link flow and statement B is in the service-account token flow, a link between them is contamination unless they share a genuine common sub-step (confirmed in code). Flag any link whose endpoints live in mutually exclusive code branches. A contaminated link is worse than a missing link — it misstates causal reality.
 
 0a. **Capability-hub gate (blocking).** No `configures` or `governed-by` edge may terminate on a `capability` node — see authoring §6 for the rule and its two honest exits (name the stage it targets, or scope the mechanism out explicitly). This fails the draft; it is the hard enforcement of the "Stars / opaque hubs" smell above. Walk every `configures`/`governed-by` edge in the diagram and confirm each lands on a rule/stage, not a *"X can be …"* hub.
 
@@ -344,9 +344,9 @@ JOB 1 — Disprove. Find evidence that the claims below are WRONG or inaccurate.
 
 JOB 2 — Find what's missing. Independent of the claims, walk the code in this territory and report every behaviour the draft does NOT mention: alternative branches, guard clauses, early returns, validation/rejection paths, fallbacks/silent drops, and async handlers (webhook callbacks, delivery-failure handlers, retry exhaustion). For each, give the file path, line number, and a one-line description of the unmodelled path.
 
-JOB 3 — Entity scope precision. For every statement that mentions a specific user-type entity (Participant, Company User, User, Candidate, etc.), verify in the code whether that entity type is accurate:
-- Does the code at this point operate on a Participant record specifically (participant_repo.get / participant.uid), or on a User record (user_repo.get / user.uid), or on a Company User record?
-- Could this code path be reached by a different user type than the statement implies? (e.g., a Company User accessing via a participant invite link, or a User whose type is not yet determined.)
+JOB 3 — Entity scope precision. For every statement that mentions a specific actor entity (User, Service Account, etc.), verify in the code whether that entity type is accurate:
+- Does the code at this point operate on a User record specifically (user_repo.get / user.uid), or on a Service Account authenticated by a bearer token (service_account.token)?
+- Could this code path be reached by a different actor than the statement implies? (e.g., a service account calling /mcp with a bearer token vs. an interactive user authenticated via OIDC, or a user whose role is not yet resolved.)
 - Is the entity in the `Mentions` column the actual database-level record the code operates on, or is it a higher/lower level of abstraction?
 Report any mismatch between the stated entity type and what the code actually handles, with file path and line number. If the entity is correct, say so explicitly for each.
 

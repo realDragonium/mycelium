@@ -261,8 +261,8 @@ def grep_statements_via_mentions(
     `grep_statements`.
 
     The query is matched against every name of every mentioned entity,
-    so a statement mentioning "Selection Flow" surfaces when the query
-    is "tree" if that entity carries "tree" as an alias.
+    so a statement mentioning "Service Account" surfaces when the query
+    is "bot" if that entity carries "bot" as an alias.
 
     A statement matching via multiple aliases / entities shows up once
     (DISTINCT on statement id). Ordered by insertion (rowid)."""

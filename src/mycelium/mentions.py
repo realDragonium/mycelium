@@ -25,10 +25,10 @@ Matching rules
 - **Maximal munch resolves overlaps.** Across every candidate match, the
   longest token span wins; leftmost breaks a length tie; the tokens it covers
   are consumed; any shorter match overlapping a consumed span is dropped. So
-  in "assessment part result", a name "assessment part result" suppresses both
-  "assessment part" and "result" within that span. Two names that cover the
+  in "service account token", a name "service account token" suppresses both
+  "service account" and "token" within that span. Two names that cover the
   *exact same* span (different entities whose names fold together — e.g.
-  "Result" and "result") are co-mentions, not competitors: both survive, and
+  "Token" and "token") are co-mentions, not competitors: both survive, and
   dedup-to-entity keeps them distinct.
 - **Dedup to entity.** One mention per entity, however many of its names hit.
 - **Suspect names are held, not linked.** Short/common names (see
@@ -195,7 +195,7 @@ def is_suspect_name(text: str) -> bool:
     enough to trust.
 
     The "-ed" clause is length-independent and catches verb-form names that
-    match the *verb*, not the entity: a hiring-status enum named "Rejected"
+    match the *verb*, not the entity: a status enum named "Rejected"
     matches "a webhook is rejected" / "the request was declined" all over a
     corpus. A semantic audit found such aliases ~96% wrong, so each occurrence
     is routed to human review instead of auto-linked. It is a deliberate

@@ -26,7 +26,7 @@ from mycelium import auth_store, drafts_store, embed, phrasing, server, store, s
 
 # --- concept-based fake embedder --------------------------------------------
 
-_CONCEPTS = {"rank": 0, "filter": 1, "permission": 2, "recruiter": 3}
+_CONCEPTS = {"rank": 0, "filter": 1, "permission": 2, "embed": 3}
 _NEUTRAL_AXIS = 700  # for text carrying no concept keyword
 
 
@@ -51,9 +51,9 @@ def concept_embed(text: str) -> list[float]:
 
 def test_decompose_splits_on_conjunctions_preserving_verbs():
     subs = survey.decompose(
-        "how does the flow rank candidates and how are permissions assigned"
+        "how does the flow rank statements and how are permissions assigned"
     )
-    assert subs == ["how does the flow rank candidates", "how are permissions assigned"]
+    assert subs == ["how does the flow rank statements", "how are permissions assigned"]
     # verbs survive the split (matters for an action-phrased substrate)
     assert any("rank" in s for s in subs)
     assert any("assigned" in s for s in subs)
@@ -66,7 +66,7 @@ def test_decompose_splits_on_punctuation_and_slash_and_or():
         "ordering",
     ]
     assert survey.decompose("rank and/or filter") == ["rank", "filter"]
-    assert survey.decompose("recruiter vs reviewer") == ["recruiter", "reviewer"]
+    assert survey.decompose("reader vs writer") == ["reader", "writer"]
 
 
 def test_decompose_does_not_split_inside_words():
@@ -75,7 +75,7 @@ def test_decompose_does_not_split_inside_words():
 
 
 def test_decompose_single_part_returns_whole_query():
-    assert survey.decompose("candidate selection flow") == ["candidate selection flow"]
+    assert survey.decompose("nearest neighbor search") == ["nearest neighbor search"]
 
 
 def test_usable_drops_stopword_only_and_single_char():
@@ -157,7 +157,7 @@ def test_survey_finds_what_search_misses(tmp_path, monkeypatch):
     """Criterion 1: on a multi-part query, survey surfaces statements the
     whole-query search misses."""
     with _client(tmp_path, monkeypatch):
-        rank_id = _add("the flow ranks the candidates")  # axis: rank
+        rank_id = _add("the flow ranks the statements")  # axis: rank
         perm_id = _add("the system assigns permission to reviewers")  # axis: permission
 
         query = "how does the flow rank and how is permission assigned"
@@ -197,7 +197,7 @@ def test_shape_parity_with_search_statements(tmp_path, monkeypatch):
         "when_references",
     }
     with _client(tmp_path, monkeypatch):
-        rank_id = _add("the flow ranks the candidates")
+        rank_id = _add("the flow ranks the statements")
 
         survey_hit = next(
             h for h in server.survey_statements("rank", k=5) if h["id"] == rank_id
@@ -221,7 +221,7 @@ def test_search_hits_fully_hydrated_with_capped_reverse_edges(tmp_path, monkeypa
     from mycelium.server import _REVERSE_EDGE_CAP
 
     with _client(tmp_path, monkeypatch):
-        target = _add("the flow ranks the candidates")
+        target = _add("the flow ranks the statements")
         n = _REVERSE_EDGE_CAP + 5
         for i in range(n):  # a hub: many statements point AT the target
             server.upsert_statement(
@@ -249,10 +249,10 @@ def test_multi_surfaced_statement_ranks_above_single_and_dedupes(tmp_path, monke
     """Criterion 3: a statement surfaced by several sub-queries ranks above
     one surfaced by a single sub-query, and appears exactly once."""
     with _client(tmp_path, monkeypatch):
-        rank_id = _add("the flow ranks the candidates")  # rank
+        rank_id = _add("the flow ranks the statements")  # rank
         perm_id = _add("the system assigns permission to reviewers")  # permission
         both_id = _add("the flow ranks and applies permission")  # rank + permission
-        _add("a recruiter reviews the application")  # distractor (recruiter)
+        _add("the embedder processes the batch")  # distractor (embed)
 
         # k=2: each sub-query's top-2 is [its own statement, the blended one].
         hits = server.survey_statements("rank and permission", k=2)
@@ -266,7 +266,7 @@ def test_multi_surfaced_statement_ranks_above_single_and_dedupes(tmp_path, monke
 def test_subquery_vector_dedup_collapses_identical_angles(tmp_path, monkeypatch):
     """Near-identical sub-query vectors are searched once, not twice."""
     with _client(tmp_path, monkeypatch):
-        _add("the flow ranks the candidates")
+        _add("the flow ranks the statements")
 
         calls = {"n": 0}
         original = server._idx().search
@@ -291,7 +291,7 @@ def test_empty_query_returns_empty_without_embedding(tmp_path, monkeypatch):
         return concept_embed(text)
 
     with _client(tmp_path, monkeypatch, embedder=counting_embed):
-        _add("the flow ranks the candidates")
+        _add("the flow ranks the statements")
         calls["n"] = 0  # reset after the upsert's embed
         assert server.survey_statements("   ", k=5) == []
         assert calls["n"] == 0
@@ -307,7 +307,7 @@ def test_whole_query_fallback_when_decomposition_is_dry(tmp_path, monkeypatch):
         return concept_embed(text)
 
     with _client(tmp_path, monkeypatch, embedder=recording_embed):
-        _add("the flow ranks the candidates")
+        _add("the flow ranks the statements")
         _add("the system assigns permission to reviewers")
         seen.clear()
 
@@ -344,7 +344,7 @@ def test_partial_subquery_failure_degrades_gracefully(tmp_path, monkeypatch):
         return concept_embed(text)
 
     with _client(tmp_path, monkeypatch, embedder=flaky):
-        rank_id = _add("the flow ranks the candidates")
+        rank_id = _add("the flow ranks the statements")
         _add("the system assigns permission to reviewers")
         seen.clear()
 
@@ -362,7 +362,7 @@ def test_partial_subquery_failure_degrades_gracefully(tmp_path, monkeypatch):
 def test_output_is_deterministic(tmp_path, monkeypatch):
     """Criterion: identical input yields identical output (ids, scores, order)."""
     with _client(tmp_path, monkeypatch):
-        _add("the flow ranks the candidates")
+        _add("the flow ranks the statements")
         _add("the system assigns permission to reviewers")
         _add("the flow ranks and applies permission")
 
@@ -393,13 +393,13 @@ def test_embed_retry_recovers_after_one_failure(tmp_path, monkeypatch):
         return concept_embed(text)
 
     with _client(tmp_path, monkeypatch, embedder=flaky_once):
-        rank_id = _add("the flow ranks the candidates")
-        _add("a recruiter reviews the application")
-        _add("the recruiter approves the application")
+        rank_id = _add("the flow ranks the statements")
+        _add("the embedder processes the batch")
+        _add("the embedder skips the batch")
 
-        # k=1 so the "recruiter" sub-query cannot surface the rank statement;
+        # k=1 so the "embed" sub-query cannot surface the rank statement;
         # rank_id can only appear via the "rank" sub-query recovering on retry.
-        hits = server.survey_statements("rank and recruiter", k=1)
+        hits = server.survey_statements("rank and embed", k=1)
         assert state["rank_calls"] == 2  # failed once, retried, succeeded
         assert rank_id in {h["id"] for h in hits}
 
@@ -407,7 +407,7 @@ def test_embed_retry_recovers_after_one_failure(tmp_path, monkeypatch):
 def test_index_search_retry_recovers_after_one_failure(tmp_path, monkeypatch):
     """Production requirement: retry once on a transient index failure."""
     with _client(tmp_path, monkeypatch):
-        rank_id = _add("the flow ranks the candidates")
+        rank_id = _add("the flow ranks the statements")
         original = server._idx().search
         state = {"n": 0}
 
@@ -427,7 +427,7 @@ def test_index_search_persistent_failure_yields_empty_not_error(tmp_path, monkey
     """A sub-query whose index search keeps failing contributes nothing — it
     is not an error and must not raise."""
     with _client(tmp_path, monkeypatch):
-        _add("the flow ranks the candidates")
+        _add("the flow ranks the statements")
 
         def always_raise(vec, k):
             raise RuntimeError("index down")
@@ -457,8 +457,8 @@ def test_duplicate_vids_in_one_subquery_do_not_inflate_count(tmp_path, monkeypat
     statement via two vector_ids must not out-rank a statement genuinely
     surfaced by two distinct sub-queries."""
     with _client(tmp_path, monkeypatch):
-        dup_id = _add("the flow ranks the candidates")  # rank axis
-        multi_id = _add("a recruiter reviews the application")  # recruiter axis
+        dup_id = _add("the index ranks the statements")  # rank axis
+        multi_id = _add("the reader opens the record")  # reader axis
 
         def search(vec, k):
             if vec[0] == 1.0:  # the "rank" sub-query — same statement, two vids
@@ -471,9 +471,9 @@ def test_duplicate_vids_in_one_subquery_do_not_inflate_count(tmp_path, monkeypat
             store, "get_statement_id_by_vector_id", lambda conn, vid: vid_map.get(vid)
         )
 
-        # "rank" surfaces dup_id (twice, but counts once); "recruiter" and
-        # "reviewer" each surface multi_id → multi_id count 2 > dup_id count 1,
+        # "rank" surfaces dup_id (twice, but counts once); "permission" and
+        # "embed" each surface multi_id → multi_id count 2 > dup_id count 1,
         # so multi_id ranks first despite dup_id's higher cosine.
-        hits = server.survey_statements("rank and recruiter and reviewer", k=5)
+        hits = server.survey_statements("rank and permission and embed", k=5)
         ids = [h["id"] for h in hits]
         assert ids.index(multi_id) < ids.index(dup_id)

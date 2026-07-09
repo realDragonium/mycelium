@@ -44,11 +44,11 @@ def _pending(status: str = "open") -> list[str]:
 
 
 def test_mentions_derived_from_text(srv):
-    srv.upsert_entity(name="candidate", description="a job candidate")
-    sid = srv.upsert_statement(
-        kind="state", text="the candidate is screened", links=[]
-    )["statement_id"]
-    assert _mentions(sid) == ["candidate"]
+    srv.upsert_entity(name="reviewer", description="a reviewer")
+    sid = srv.upsert_statement(kind="state", text="the reviewer is screened", links=[])[
+        "statement_id"
+    ]
+    assert _mentions(sid) == ["reviewer"]
 
 
 def test_explicit_mention_tools_are_gone(srv):
@@ -145,15 +145,15 @@ def test_approved_mention_dropped_when_text_no_longer_matches(srv):
 
 
 def test_plural_auto_generated_and_matches(srv):
-    srv.upsert_entity(name="candidate", description="x")
-    plural = store.get_name_by_text(store.substrate_connection(), "candidates")
+    srv.upsert_entity(name="reviewer", description="x")
+    plural = store.get_name_by_text(store.substrate_connection(), "reviewers")
     assert plural is not None and plural["generated_from_name_id"] is not None
-    sid = srv.upsert_statement(kind="event", text="five candidates applied", links=[])[
+    sid = srv.upsert_statement(kind="event", text="five reviewers arrived", links=[])[
         "statement_id"
     ]
     # Matched via the generated plural; deduped to one mention for the entity.
     rows = store.get_mentions(store.substrate_connection(), sid)
-    assert [r["name"] for r in rows] == ["candidates"]
+    assert [r["name"] for r in rows] == ["reviewers"]
 
 
 def test_plural_collision_is_skipped(srv):
@@ -200,18 +200,18 @@ def test_delete_name_recomputes_shadowed_entity(srv):
 
 
 def test_merge_entities_recomputes(srv):
-    srv.upsert_entity(name="recruiter", description="x")
-    srv.upsert_entity(name="hiring manager", description="y")
-    s_r = srv.upsert_statement(kind="state", text="the recruiter approves", links=[])[
+    srv.upsert_entity(name="embedder", description="x")
+    srv.upsert_entity(name="vectorizer", description="y")
+    s_r = srv.upsert_statement(kind="state", text="the embedder runs", links=[])[
         "statement_id"
     ]
     s_h = srv.upsert_statement(
-        kind="state", text="the hiring manager approves", links=[]
+        kind="state", text="the vectorizer runs", links=[]
     )["statement_id"]
-    r_eid = store.get_name_by_text(store.substrate_connection(), "recruiter")[
+    r_eid = store.get_name_by_text(store.substrate_connection(), "embedder")[
         "entity_id"
     ]
-    h_eid = store.get_name_by_text(store.substrate_connection(), "hiring manager")[
+    h_eid = store.get_name_by_text(store.substrate_connection(), "vectorizer")[
         "entity_id"
     ]
     srv.merge_entities(from_entity_id=r_eid, into_entity_id=h_eid)

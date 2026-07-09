@@ -40,15 +40,15 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
     server._ctx = None
     server.init(tmp_path)
 
-    server.upsert_entity(name="candidate", description="a job candidate")
-    stmt_text = "the candidate is screened"
+    server.upsert_entity(name="reviewer", description="a reviewer")
+    stmt_text = "the reviewer is screened"
     sid = server.upsert_statement(kind="state", text=stmt_text, links=[])[
         "statement_id"
     ]
 
     conn = store.substrate_connection()
     stmt_vid = store.get_vector_id(conn, sid)
-    name_row = next(r for r in store.list_all_names(conn) if r["text"] == "candidate")
+    name_row = next(r for r in store.list_all_names(conn) if r["text"] == "reviewer")
     name_vid = store.get_name_vector_id(conn, name_row["id"])
     assert stmt_vid is not None and name_vid is not None
 
@@ -63,7 +63,7 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
     assert sid in {h["id"] for h in hits}
 
     # Name index rebuilt: querying the name text returns its mapping.
-    name_hits = server._name_idx().search(_embed("candidate"), k=1)
+    name_hits = server._name_idx().search(_embed("reviewer"), k=1)
     assert name_hits, "name index is empty after restore"
     found_vid = name_hits[0][0]
     assert (
