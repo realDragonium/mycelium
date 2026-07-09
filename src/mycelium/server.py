@@ -26,7 +26,6 @@ from mcp.server.fastmcp import FastMCP
 
 from . import (
     embed,
-    layout_baker,
     link_rules,
     phrasing,
     plurals,
@@ -35,6 +34,8 @@ from . import (
     vector,
     when_expression,
 )
+from .app_context import AppContext
+from .layout_baker import LayoutBaker
 from .require import require
 from .tracing import trace_span
 
@@ -596,13 +597,17 @@ class BatchStatementSpec(TypedDict):
     allow_phrasing_violations: NotRequired[bool]
 
 
-_index: vector.Index | None = None
-_index_path: Path | None = None
-_name_index: vector.Index | None = None
-_name_index_path: Path | None = None
-#: Data dir the substrate was opened from — used to site per-feature artifacts
-#: (e.g. the `ask` eval-harness trace log) alongside the substrate files.
-_data_dir: Path | None = None
+#: The live application context — vector indexes, data dir, layout baker.
+#: Built whole by `init`; every accessor below reads through it.
+_ctx: AppContext | None = None
+
+
+def _context() -> AppContext:
+    """This process's application context. Built by `init`; raises if
+    reached before the server is initialized."""
+    if _ctx is None:
+        raise RuntimeError("server not initialized (call init)")
+    return _ctx
 
 
 def _db() -> sqlite3.Connection:
@@ -637,31 +642,29 @@ def _drafts_db() -> sqlite3.Connection:
 def _idx() -> vector.Index:
     """The statement vector index. Loaded by `init`; raises if reached
     before the server is initialized."""
-    if _index is None:
-        raise RuntimeError("statement vector index not initialized (call init)")
-    return _index
+    return _context().index
 
 
 def _idx_path() -> Path:
     """On-disk path the statement index persists to (set by `init`)."""
-    if _index_path is None:
-        raise RuntimeError("statement vector index path not initialized (call init)")
-    return _index_path
+    return _context().index_path
 
 
 def _name_idx() -> vector.Index:
     """The entity-name vector index. Loaded by `init`; raises if reached
     before the server is initialized."""
-    if _name_index is None:
-        raise RuntimeError("name vector index not initialized (call init)")
-    return _name_index
+    return _context().name_index
 
 
 def _name_idx_path() -> Path:
     """On-disk path the name index persists to (set by `init`)."""
-    if _name_index_path is None:
-        raise RuntimeError("name vector index path not initialized (call init)")
-    return _name_index_path
+    return _context().name_index_path
+
+
+def _baker() -> LayoutBaker:
+    """The entity-layout baker for this substrate. Built by `init`; raises
+    if reached before the server is initialized."""
+    return _context().layout_baker
 
 
 def init(data_dir: Path) -> None:
@@ -673,20 +676,23 @@ def init(data_dir: Path) -> None:
     tokens — drop `mycelium.db` and restart, every existing user
     session and bearer token keeps working.
     """
-    global _index, _index_path
-    global _name_index, _name_index_path, _data_dir
+    global _ctx
+    # Invalidate before reconfiguring: if init is re-entered and fails partway
+    # (store providers already repointed at the new data dir), leave the
+    # process cleanly uninitialized rather than serving the old context's
+    # indexes against the new substrate.
+    _ctx = None
 
     from . import auth_store, drafts_store, research_store
 
-    _data_dir = data_dir
     data_dir.mkdir(parents=True, exist_ok=True)
     store.configure_substrate(
         data_dir / "mycelium.db",
         history_path=data_dir / "mycelium-history.db",
     )
-    layout_baker.configure(data_dir / "mycelium.db")
+    baker = LayoutBaker(data_dir / "mycelium.db")
     store.migrate(_db())
-    layout_baker.ensure_initial()
+    baker.ensure_initial()
 
     # Point each provider at its file and run the one-time migration on this
     # thread's connection; every other thread reopens lazily against the same
@@ -703,21 +709,30 @@ def init(data_dir: Path) -> None:
             "marked %d research run(s) failed: orphaned by restart", orphaned
         )
 
-    _index_path = data_dir / "mycelium.vec"
-    _index = (
-        vector.Index.load(_index_path) if _index_path.exists() else vector.Index.empty()
+    index_path = data_dir / "mycelium.vec"
+    index = (
+        vector.Index.load(index_path) if index_path.exists() else vector.Index.empty()
     )
 
-    _name_index_path = data_dir / "mycelium-names.vec"
-    if _name_index_path.exists():
-        _name_index = vector.Index.load(_name_index_path)
+    name_index_path = data_dir / "mycelium-names.vec"
+    if name_index_path.exists():
+        name_index = vector.Index.load(name_index_path)
     else:
-        _name_index = vector.Index.empty()
+        name_index = vector.Index.empty()
         # Backfill: if the DB has names but no on-disk name index
         # (first run after this feature lands, or a fresh restore),
         # embed every existing name so the index isn't silently empty.
-        _backfill_name_index()
-        _persist_name_index()
+        _backfill_name_index(name_index)
+        name_index.save(name_index_path)
+
+    _ctx = AppContext(
+        data_dir=data_dir,
+        index=index,
+        index_path=index_path,
+        name_index=name_index,
+        name_index_path=name_index_path,
+        layout_baker=baker,
+    )
 
     # Start the async mention-recompute worker on its own thread+connection
     # (transport-agnostic: both stdio and HTTP funnel through init). Guarded
@@ -730,13 +745,16 @@ def init(data_dir: Path) -> None:
         mention_worker.start(data_dir)
 
 
-def _backfill_name_index() -> None:
+def _backfill_name_index(name_index: vector.Index) -> None:
+    """Embed every unindexed name into `name_index`. Called during `init`
+    before the context is assembled, so it takes the index explicitly
+    rather than through `_name_idx()`."""
     for row in store.list_all_names(_db()):
         if store.get_name_vector_id(_db(), row["id"]) is not None:
             continue
         vid = store.next_name_vector_id(_db())
         vec = embed.embed(row["text"])
-        _name_idx().add(vid, vec)
+        name_index.add(vid, vec)
         store.set_name_vector_id(_db(), row["id"], vid)
 
 
@@ -1547,8 +1565,10 @@ def ask(
     from .ask.config import for_depth
 
     config = for_depth(AskConfig.from_env(), depth)
-    if config.trace_log_path is None and _data_dir is not None:
-        config = replace(config, trace_log_path=str(_data_dir / "ask_trace.jsonl"))
+    if config.trace_log_path is None:
+        config = replace(
+            config, trace_log_path=str(_context().data_dir / "ask_trace.jsonl")
+        )
     return run_ask(question, config=config).model_dump()
 
 
@@ -1579,8 +1599,10 @@ def ingest(text: str) -> dict[str, Any]:
     from .ingest import IngestConfig, run_ingest
 
     config = IngestConfig.from_env()
-    if config.trace_log_path is None and _data_dir is not None:
-        config = replace(config, trace_log_path=str(_data_dir / "ingest_trace.jsonl"))
+    if config.trace_log_path is None:
+        config = replace(
+            config, trace_log_path=str(_context().data_dir / "ingest_trace.jsonl")
+        )
     return run_ingest(text, config=config).model_dump()
 
 
@@ -1622,7 +1644,6 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
     `source` is unknown, or when it is omitted with several sources
     configured. Returns {run row: id, topic, source, created_at, created_by,
     started_at, finished_at, outcome, draft_id, error, trace_ref, status}."""
-    assert _data_dir is not None
     from . import auth as _auth
     from . import research_runs, research_store
 
@@ -1633,7 +1654,7 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
         topic=topic,
         source=source_name,
         created_by=created_by,
-        data_dir=_data_dir,
+        data_dir=_context().data_dir,
         conn=_drafts_db(),
     )
     row = require(
@@ -1712,7 +1733,7 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
             return {"entity_id": existing["entity_id"]}
         entity_id = store.create_entity(_db(), description)
         _create_name_with_plural(name, entity_id)
-    layout_baker.schedule_rebake()
+    _baker().schedule_rebake()
     return {"entity_id": entity_id}
 
 
@@ -2665,7 +2686,7 @@ def delete_entity(id: str) -> dict[str, Any]:
         )
         store.delete_entity(_db(), id)
         store.enqueue_recompute_statements(_db(), affected)
-    layout_baker.schedule_rebake()
+    _baker().schedule_rebake()
     return {
         "deleted": True,
         "names_removed": len(name_ids),
@@ -2973,7 +2994,7 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
         if es_edges:
             inserted += store.insert_entity_statement_links(_db(), es_edges)
     if es_edges:
-        layout_baker.schedule_rebake()
+        _baker().schedule_rebake()
     return {"inserted": inserted}
 
 
@@ -3004,7 +3025,7 @@ def remove_links(links: list[EdgeSpec]) -> dict[str, int]:
         if es_edges:
             removed += store.delete_entity_statement_links(_db(), es_edges)
     if es_edges:
-        layout_baker.schedule_rebake()
+        _baker().schedule_rebake()
     return {"removed": removed}
 
 
@@ -3473,7 +3494,7 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     with store.transaction(_db()):
         inserted = store.insert_entity_links(_db(), edges)
     if inserted:
-        layout_baker.schedule_rebake()
+        _baker().schedule_rebake()
     return {"inserted": inserted}
 
 
@@ -3497,7 +3518,7 @@ def remove_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     with store.transaction(_db()):
         removed = store.delete_entity_links(_db(), edges)
     if removed:
-        layout_baker.schedule_rebake()
+        _baker().schedule_rebake()
     return {"removed": removed}
 
 

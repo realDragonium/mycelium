@@ -26,10 +26,7 @@ def _client(tmp_path, monkeypatch, embedder):
     monkeypatch.setattr(embed, "embed", embedder)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
-    server._index = None
-    server._index_path = None
-    server._name_index = None
-    server._name_index_path = None
+    server._ctx = None
     from mycelium.http import app
 
     return TestClient(app)

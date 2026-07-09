@@ -772,10 +772,8 @@ def get_entity_positions(request: Request) -> Any:
     from fastapi.responses import FileResponse
     from fastapi.responses import JSONResponse as _JSON
 
-    from . import layout_baker
-
-    path = layout_baker.output_path()
-    if path is None or not path.exists():
+    path = server._baker().output_path()
+    if not path.exists():
         return _JSON(
             status_code=404, content={"detail": "entity positions not baked yet"}
         )
