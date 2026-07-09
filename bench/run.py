@@ -83,8 +83,7 @@ def build_synthetic(size: int, data_dir: Path, ollama: bool) -> Substrate:
 
     # Reset module-level singletons so init can rebuild from this data dir.
     server._conn = None
-    server._index = None
-    server._index_path = None
+    server._ctx = None
     server.init(data_dir)
 
     sub = Substrate()
@@ -126,8 +125,7 @@ def attach_existing(data_dir: Path, ollama: bool) -> Substrate:
     if not ollama:
         embed.embed = deterministic_embed  # type: ignore[assignment]
     server._conn = None
-    server._index = None
-    server._index_path = None
+    server._ctx = None
     server.init(data_dir)
 
     assert server._conn is not None

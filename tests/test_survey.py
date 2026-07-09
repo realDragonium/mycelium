@@ -130,12 +130,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._index = None
-    server._index_path = None
-    server._ann_index = None
-    server._ann_index_path = None
-    server._name_index = None
-    server._name_index_path = None
+    server._ctx = None
 
 
 def _client(tmp_path, monkeypatch, embedder=concept_embed) -> TestClient:
@@ -274,13 +269,13 @@ def test_subquery_vector_dedup_collapses_identical_angles(tmp_path, monkeypatch)
         _add("the flow ranks the candidates")
 
         calls = {"n": 0}
-        original = server._index.search
+        original = server._idx().search
 
         def counting_search(vec, k):
             calls["n"] += 1
             return original(vec, k)
 
-        monkeypatch.setattr(server._index, "search", counting_search)
+        monkeypatch.setattr(server._idx(), "search", counting_search)
 
         # "rank" and "ranking" both embed to the rank axis → one vector.
         server.survey_statements("rank and ranking", k=5)
@@ -413,7 +408,7 @@ def test_index_search_retry_recovers_after_one_failure(tmp_path, monkeypatch):
     """Production requirement: retry once on a transient index failure."""
     with _client(tmp_path, monkeypatch):
         rank_id = _add("the flow ranks the candidates")
-        original = server._index.search
+        original = server._idx().search
         state = {"n": 0}
 
         def flaky_search(vec, k):
@@ -422,7 +417,7 @@ def test_index_search_retry_recovers_after_one_failure(tmp_path, monkeypatch):
                 raise RuntimeError("transient index")
             return original(vec, k)
 
-        monkeypatch.setattr(server._index, "search", flaky_search)
+        monkeypatch.setattr(server._idx(), "search", flaky_search)
         hits = server.survey_statements("rank", k=5)
         assert state["n"] == 2  # failed once, retried, succeeded
         assert rank_id in {h["id"] for h in hits}
@@ -437,7 +432,7 @@ def test_index_search_persistent_failure_yields_empty_not_error(tmp_path, monkey
         def always_raise(vec, k):
             raise RuntimeError("index down")
 
-        monkeypatch.setattr(server._index, "search", always_raise)
+        monkeypatch.setattr(server._idx(), "search", always_raise)
         # Every sub-query's search fails twice → empty union → empty result,
         # without raising.
         assert server.survey_statements("rank and permission", k=5) == []
@@ -471,7 +466,7 @@ def test_duplicate_vids_in_one_subquery_do_not_inflate_count(tmp_path, monkeypat
             return [(200, 0.1)]  # everything else → multi_id
 
         vid_map = {101: dup_id, 102: dup_id, 200: multi_id}
-        monkeypatch.setattr(server._index, "search", search)
+        monkeypatch.setattr(server._idx(), "search", search)
         monkeypatch.setattr(
             store, "get_statement_id_by_vector_id", lambda conn, vid: vid_map.get(vid)
         )

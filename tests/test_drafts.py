@@ -25,12 +25,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._index = None
-    server._index_path = None
-    server._ann_index = None
-    server._ann_index_path = None
-    server._name_index = None
-    server._name_index_path = None
+    server._ctx = None
 
 
 def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):

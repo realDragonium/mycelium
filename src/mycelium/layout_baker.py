@@ -30,11 +30,10 @@ log = logging.getLogger(__name__)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = _REPO_ROOT / "scripts" / "build_entity_layout.py"
 
-_lock = threading.Lock()
-_timer: threading.Timer | None = None
-_process: subprocess.Popen[bytes] | None = None
-_db_path: Path | None = None
-_output_path: Path | None = None
+# Wait this long after the last schedule_rebake() call before firing.
+# Tuned to absorb the burst of writes from a single upsert_statements
+# batch (typically completes well under 1s for normal workloads).
+DEBOUNCE_SECONDS = 5.0
 
 
 def _bake_argv(db_path: Path, output_path: Path) -> list[str]:
@@ -52,96 +51,86 @@ def _bake_argv(db_path: Path, output_path: Path) -> list[str]:
     ]
 
 
-def output_path() -> Path | None:
-    """The path the baker writes positions to. Lives next to the DB
-    (i.e. in the data dir, not the source tree) so deploys can't wipe
-    it and the systemd hardening's ProtectSystem=strict permits the
-    write. Returns None when configure() hasn't been called yet."""
-    return _output_path
+class LayoutBaker:
+    """Owns the debounce timer and subprocess handle for one substrate's
+    entity-layout bakes. Built by ``server.init`` against the substrate DB
+    and held on the ``AppContext``; ``server`` and ``http`` reach it through
+    that owner rather than a module singleton.
 
-
-# Wait this long after the last schedule_rebake() call before firing.
-# Tuned to absorb the burst of writes from a single upsert_statements
-# batch (typically completes well under 1s for normal workloads).
-DEBOUNCE_SECONDS = 5.0
-
-
-def configure(db_path: Path) -> None:
-    """Tell the baker which DB to bake from. Called once by ``server.init``.
-
-    The positions file lives next to the DB so the bake artifact is
-    co-located with the data it describes — a fresh data dir starts
-    with no positions and gets one baked on first run; a backup
-    snapshot of the data dir captures both the substrate and its
-    layout.
+    The positions file lives next to the DB (i.e. in the data dir, not the
+    source tree) so the bake artifact is co-located with the data it
+    describes — a fresh data dir starts with no positions and gets one baked
+    on first run; a backup snapshot of the data dir captures both the
+    substrate and its layout. Co-location also keeps the write inside the
+    systemd hardening's ProtectSystem=strict boundary.
     """
-    global _db_path, _output_path
-    _db_path = db_path
-    _output_path = db_path.parent / "entity-positions.json"
 
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+        self._output_path = db_path.parent / "entity-positions.json"
+        self._lock = threading.Lock()
+        self._timer: threading.Timer | None = None
+        self._process: subprocess.Popen[bytes] | None = None
 
-def ensure_initial() -> None:
-    """Run a synchronous initial bake if the positions file is missing.
+    def output_path(self) -> Path:
+        """The path the baker writes positions to."""
+        return self._output_path
 
-    The positions file is gitignored — fresh checkouts will not have it.
-    Without it the entity graph renders with degenerate positions, so we
-    bake once on startup (blocks for a few seconds on the first run only;
-    subsequent starts skip this entirely).
-    """
-    if _db_path is None or _output_path is None or not _SCRIPT.exists():
-        return
-    if _output_path.exists():
-        return
-    log.info("entity-positions.json missing; running initial bake (db=%s)", _db_path)
-    _output_path.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(
-        _bake_argv(_db_path, _output_path),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
-        cwd=str(_REPO_ROOT),
-    )
-    if result.returncode != 0:
-        log.warning(
-            "initial layout bake failed (rc=%s): %s",
-            result.returncode,
-            result.stderr.decode("utf-8", errors="replace").strip(),
+    def ensure_initial(self) -> None:
+        """Run a synchronous initial bake if the positions file is missing.
+
+        The positions file is gitignored — fresh checkouts will not have it.
+        Without it the entity graph renders with degenerate positions, so we
+        bake once on startup (blocks for a few seconds on the first run only;
+        subsequent starts skip this entirely).
+        """
+        if not _SCRIPT.exists():
+            return
+        if self._output_path.exists():
+            return
+        log.info(
+            "entity-positions.json missing; running initial bake (db=%s)",
+            self._db_path,
         )
-
-
-def schedule_rebake() -> None:
-    """Schedule a layout rebake. Safe to call from any thread. Rapid
-    successive calls collapse to a single rebake after the debounce
-    window elapses with no further calls."""
-    global _timer
-    if _db_path is None:
-        # configure() was never called — running in a test or other
-        # mode where rebakes are unwanted. Silent no-op.
-        return
-    if not _SCRIPT.exists():
-        log.warning("layout baker script not found at %s", _SCRIPT)
-        return
-    with _lock:
-        if _timer is not None:
-            _timer.cancel()
-        _timer = threading.Timer(DEBOUNCE_SECONDS, _fire)
-        _timer.daemon = True
-        _timer.start()
-
-
-def _fire() -> None:
-    """Spawn the rebake subprocess. Skipped if a previous rebake is
-    still running — the next schedule_rebake() call will catch it."""
-    global _process
-    with _lock:
-        if _process is not None and _process.poll() is None:
-            log.info("previous rebake still running; skipping this trigger")
-            return
-        if _db_path is None or _output_path is None:
-            return
-        log.info("triggering layout rebake (db=%s)", _db_path)
-        _process = subprocess.Popen(
-            _bake_argv(_db_path, _output_path),
+        self._output_path.parent.mkdir(parents=True, exist_ok=True)
+        result = subprocess.run(
+            _bake_argv(self._db_path, self._output_path),
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             cwd=str(_REPO_ROOT),
         )
+        if result.returncode != 0:
+            log.warning(
+                "initial layout bake failed (rc=%s): %s",
+                result.returncode,
+                result.stderr.decode("utf-8", errors="replace").strip(),
+            )
+
+    def schedule_rebake(self) -> None:
+        """Schedule a layout rebake. Safe to call from any thread. Rapid
+        successive calls collapse to a single rebake after the debounce
+        window elapses with no further calls."""
+        if not _SCRIPT.exists():
+            log.warning("layout baker script not found at %s", _SCRIPT)
+            return
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+            self._timer = threading.Timer(DEBOUNCE_SECONDS, self._fire)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _fire(self) -> None:
+        """Spawn the rebake subprocess. Skipped if a previous rebake is
+        still running — the next schedule_rebake() call will catch it."""
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                log.info("previous rebake still running; skipping this trigger")
+                return
+            log.info("triggering layout rebake (db=%s)", self._db_path)
+            self._process = subprocess.Popen(
+                _bake_argv(self._db_path, self._output_path),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=str(_REPO_ROOT),
+            )

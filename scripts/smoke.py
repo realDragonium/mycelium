@@ -108,8 +108,7 @@ def main() -> None:
 
     # Reopen to verify persistence.
     server._conn = None
-    server._index = None
-    server._index_path = None
+    server._ctx = None
     server.init(data_dir)
     hits2 = server.search_statements(query="signing in to an account", limit=5)
     show("search after reopen", hits2)
