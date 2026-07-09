@@ -191,9 +191,10 @@ async def callback(request: Request):
 
     from . import server, store
 
-    conn = server._auth_conn
-    if conn is None:
-        raise HTTPException(status_code=500, detail="substrate not initialized")
+    try:
+        conn = server._auth_db()
+    except RuntimeError:
+        raise HTTPException(status_code=500, detail="auth store not initialized")
     with store.transaction(conn):
         user_id = auth.find_or_create_user(
             conn,

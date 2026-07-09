@@ -18,13 +18,13 @@ needed — that's the same path the streamable-HTTP transport uses.
 
 from fastapi.testclient import TestClient
 
-from mycelium import auth, server, store
+from mycelium import auth, auth_store, drafts_store, server, store
 
 
 def _reset_server() -> None:
     store.reset_substrate()
-    server._auth_conn = None
-    server._drafts_conn = None
+    auth_store.reset()
+    drafts_store.reset()
     server._index = None
     server._index_path = None
     server._ann_index = None
@@ -89,9 +89,9 @@ def test_drafter_write_creates_session_draft_and_queues_op(tmp_path, monkeypatch
         assert "draft_id" in result and result["seq"] == 1
 
         # One draft, one op.
-        drafts = server._drafts_conn.execute("SELECT * FROM drafts").fetchall()
+        drafts = server._drafts_db().execute("SELECT * FROM drafts").fetchall()
         assert len(drafts) == 1
-        ops = server._drafts_conn.execute("SELECT * FROM draft_ops").fetchall()
+        ops = server._drafts_db().execute("SELECT * FROM draft_ops").fetchall()
         assert len(ops) == 1
         assert ops[0]["kind"] == "upsert_entity"
 
@@ -116,7 +116,7 @@ def test_explicit_draft_id_queues_op_for_any_writer(tmp_path, monkeypatch):
         from mycelium import drafts_store
 
         draft_id = drafts_store.create_draft(
-            server._drafts_conn,
+            server._drafts_db(),
             created_by="someone-else",
             session_id=None,
         )
@@ -201,9 +201,13 @@ def test_discard_draft_op_drops_a_queued_op(tmp_path, monkeypatch):
 
         # Drop the second op.
         server.discard_draft_op(draft_id=draft_id, seq=2)
-        ops = server._drafts_conn.execute(
-            "SELECT seq FROM draft_ops WHERE draft_id = ? ORDER BY seq", (draft_id,)
-        ).fetchall()
+        ops = (
+            server._drafts_db()
+            .execute(
+                "SELECT seq FROM draft_ops WHERE draft_id = ? ORDER BY seq", (draft_id,)
+            )
+            .fetchall()
+        )
         assert [o["seq"] for o in ops] == [1]
 
 
@@ -221,7 +225,7 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
             _restore(tokens)
         from mycelium import drafts_store
 
-        row = drafts_store.find_open_session_draft(server._drafts_conn, "sess-E")
+        row = drafts_store.find_open_session_draft(server._drafts_db(), "sess-E")
         draft_id = row["id"]
 
         client.post(f"/api/drafts/{draft_id}/submit")
@@ -231,7 +235,7 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
         # Still in submitted (not approved) state — curator can edit & retry.
         from mycelium import drafts_store
 
-        row = drafts_store.get_draft(server._drafts_conn, draft_id)
+        row = drafts_store.get_draft(server._drafts_db(), draft_id)
         assert drafts_store.status_for(row) == "submitted"
 
 
@@ -345,7 +349,9 @@ def test_drafter_without_session_id_falls_back_to_actor_scope(tmp_path, monkeypa
         # Both calls landed in the same auto-draft, no error.
         assert r1["draft_id"] == r2["draft_id"]
         # session_id is the actor fallback marker.
-        row = server._drafts_conn.execute(
-            "SELECT session_id FROM drafts WHERE id = ?", (r1["draft_id"],)
-        ).fetchone()
+        row = (
+            server._drafts_db()
+            .execute("SELECT session_id FROM drafts WHERE id = ?", (r1["draft_id"],))
+            .fetchone()
+        )
         assert row["session_id"] == "actor:d2"

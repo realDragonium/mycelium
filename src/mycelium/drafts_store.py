@@ -27,6 +27,7 @@ import uuid as _uuid
 from pathlib import Path
 
 from . import timestamps
+from .connections import ConnectionProvider
 
 DRAFTS_SCHEMA = """
 -- A drafter's pending change set. One open draft per MCP session;
@@ -76,6 +77,38 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+
+# --- per-thread connection provider -----------------------------------------
+#
+# Each thread (a request thread, or a background research-run worker) holds its
+# OWN drafts connection, opened lazily against the configured path (see
+# `ConnectionProvider`). WAL gives every reader a committed snapshot, so the
+# worker finalizing a run and an HTTP thread reading drafts never contend on
+# one connection object. `server.init()` calls `configure()` once; unit tests
+# pin a single :memory: connection with `use_connection()`.
+
+_provider: ConnectionProvider[str] = ConnectionProvider("drafts", connect)
+
+
+def configure(db_path: Path | str) -> None:
+    """Point the provider at the drafts DB file. Threads (re)open lazily."""
+    _provider.configure(str(db_path))
+
+
+def connection() -> sqlite3.Connection:
+    """The calling thread's drafts connection."""
+    return _provider.connection()
+
+
+def use_connection(conn: sqlite3.Connection) -> None:
+    """Pin `conn` as this thread's drafts connection (for :memory: / unit tests)."""
+    _provider.use(conn)
+
+
+def reset() -> None:
+    """Forget the configured path and this thread's connection (test isolation)."""
+    _provider.reset()
 
 
 def migrate(conn: sqlite3.Connection) -> None:

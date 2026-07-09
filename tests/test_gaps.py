@@ -8,12 +8,12 @@ the terminal state. Also confirms a reader can call the report tool
 
 from fastapi.testclient import TestClient
 
-from mycelium import auth, server, store
+from mycelium import auth, auth_store, server, store
 
 
 def _reset_server() -> None:
     store.reset_substrate()
-    server._auth_conn = None
+    auth_store.reset()
     server._index = None
     server._index_path = None
     server._ann_index = None

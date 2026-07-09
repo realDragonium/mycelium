@@ -22,7 +22,7 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import embed, phrasing, server, store, survey
+from mycelium import auth_store, drafts_store, embed, phrasing, server, store, survey
 
 # --- concept-based fake embedder --------------------------------------------
 
@@ -128,8 +128,8 @@ def test_rank_statements_count_then_cosine_then_id():
 
 def _reset_server() -> None:
     store.reset_substrate()
-    server._auth_conn = None
-    server._drafts_conn = None
+    auth_store.reset()
+    drafts_store.reset()
     server._index = None
     server._index_path = None
     server._ann_index = None

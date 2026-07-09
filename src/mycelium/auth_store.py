@@ -22,6 +22,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from .connections import ConnectionProvider
+
 AUTH_SCHEMA = """
 -- Identities. Humans authenticate via OIDC (oidc_issuer + oidc_subject
 -- populated); service accounts represent third-party agents and have
@@ -125,7 +127,44 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL + a busy timeout so each request thread can hold its OWN connection:
+    # a token/user write committed on one thread is visible to a read on
+    # another (WAL readers see the last committed snapshot), and a concurrent
+    # writer waits rather than erroring with SQLITE_BUSY. Mirrors store.connect
+    # and drafts_store.connect. No-op on :memory: (unit tests pin one conn).
+    conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+
+# --- per-thread connection provider -----------------------------------------
+#
+# Each request thread holds its OWN auth connection, opened lazily against the
+# configured path and reused for the thread's life (see `ConnectionProvider`).
+# `server.init()` calls `configure()` once; unit tests pin a single :memory:
+# connection with `use_connection()`.
+
+_provider: ConnectionProvider[str] = ConnectionProvider("auth", connect)
+
+
+def configure(db_path: Path | str) -> None:
+    """Point the provider at the auth DB file. Threads (re)open lazily."""
+    _provider.configure(str(db_path))
+
+
+def connection() -> sqlite3.Connection:
+    """The calling thread's auth connection."""
+    return _provider.connection()
+
+
+def use_connection(conn: sqlite3.Connection) -> None:
+    """Pin `conn` as this thread's auth connection (for :memory: / unit tests)."""
+    _provider.use(conn)
+
+
+def reset() -> None:
+    """Forget the configured path and this thread's connection (test isolation)."""
+    _provider.reset()
 
 
 def migrate(conn: sqlite3.Connection) -> None:

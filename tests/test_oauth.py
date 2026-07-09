@@ -12,12 +12,12 @@ import secrets
 
 from fastapi.testclient import TestClient
 
-from mycelium import auth, server, store
+from mycelium import auth, auth_store, server, store
 
 
 def _reset_server() -> None:
     store.reset_substrate()
-    server._auth_conn = None
+    auth_store.reset()
     server._index = None
     server._index_path = None
     server._ann_index = None
@@ -41,15 +41,15 @@ def _app(tmp_path, monkeypatch, *, auth_mode: str = "on"):
 
 
 def _admin_bearer(conn) -> tuple[str, str]:
-    uid = auth.create_user(
-        conn,
-        name="Admin",
-        role="admin",
-        type="human",
-        email="admin@example.com",
-    )
-    conn.commit()
-    raw, _ = auth.issue_token(conn, user_id=uid, name="bootstrap", scope="admin")
+    with store.transaction(conn):
+        uid = auth.create_user(
+            conn,
+            name="Admin",
+            role="admin",
+            type="human",
+            email="admin@example.com",
+        )
+        raw, _ = auth.issue_token(conn, user_id=uid, name="bootstrap", scope="admin")
     return raw, uid
 
 
@@ -309,7 +309,7 @@ def _full_flow(
 def test_full_oauth_flow(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_conn)
+        admin_bearer, _ = _admin_bearer(server._auth_db())
         body, _, _, _ = _full_flow(client, admin_bearer=admin_bearer)
         assert body["token_type"] == "Bearer"
         assert body["access_token"].startswith("myc_")
@@ -349,7 +349,7 @@ def test_authorize_redirects_to_login_when_unauthenticated(tmp_path, monkeypatch
 def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_conn)
+        admin_bearer, _ = _admin_bearer(server._auth_db())
         # Drive the flow to a fresh code, then submit a verifier that
         # doesn't hash to the challenge we registered.
         _, client_id, _real_verifier, code = _full_flow(
@@ -413,7 +413,7 @@ def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
 def test_token_rejects_code_reuse(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_conn)
+        admin_bearer, _ = _admin_bearer(server._auth_db())
         body, client_id, verifier, code = _full_flow(client, admin_bearer=admin_bearer)
         # Replay the same exchange.
         r = client.post(
@@ -435,7 +435,7 @@ def test_denial_redirects_with_error(tmp_path, monkeypatch):
     receives ?error=access_denied (not an HTTP 4xx)."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_conn)
+        admin_bearer, _ = _admin_bearer(server._auth_db())
         reg = client.post(
             "/register",
             json={"client_name": "X", "redirect_uris": ["http://localhost/cb"]},

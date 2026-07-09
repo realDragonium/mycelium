@@ -96,10 +96,10 @@ def _base_url(request: Request) -> str:
 def _auth_conn(request: Request) -> sqlite3.Connection:
     from . import server
 
-    conn = server._auth_conn
-    if conn is None:
+    try:
+        return server._auth_db()
+    except RuntimeError:
         raise HTTPException(status_code=500, detail="auth substrate not initialized")
-    return conn
 
 
 def _b64url_no_pad(data: bytes) -> str:

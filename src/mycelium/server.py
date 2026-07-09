@@ -420,8 +420,7 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
     from . import drafts_store
 
     if draft_id is not None:
-        assert _drafts_conn is not None
-        row = drafts_store.get_draft(_drafts_conn, draft_id)
+        row = drafts_store.get_draft(_drafts_db(), draft_id)
         if row is None:
             raise ValueError(f"draft_id '{draft_id}' not found")
         if drafts_store.status_for(row) != "open":
@@ -432,7 +431,6 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
         return draft_id
 
     if principal is not None and principal.role == "drafter":
-        assert _drafts_conn is not None
         # Prefer the MCP session id when the client propagates it
         # (one auto-draft per active conversation). Many clients don't
         # echo `Mcp-Session-Id` back on tool calls, and reverse proxies
@@ -442,12 +440,12 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
         # clients; they must submit it before another auto-draft opens.
         # Explicit `draft_id` always wins over auto-targeting.
         session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
-        row = drafts_store.find_open_session_draft(_drafts_conn, session_id)
+        row = drafts_store.find_open_session_draft(_drafts_db(), session_id)
         if row is not None:
             return row["id"]
-        with store.transaction(_drafts_conn):
+        with store.transaction(_drafts_db()):
             return drafts_store.create_draft(
-                _drafts_conn,
+                _drafts_db(),
                 created_by=principal.id,
                 session_id=session_id,
             )
@@ -461,11 +459,10 @@ def _list_from_draft(draft_id: str, kinds: tuple[str, ...]) -> list[dict[str, An
     items back to specific ops. Raises if the draft id doesn't resolve."""
     from . import drafts_store
 
-    assert _drafts_conn is not None
-    row = drafts_store.get_draft(_drafts_conn, draft_id)
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
         raise ValueError(f"draft_id '{draft_id}' not found")
-    ops = drafts_store.list_ops(_drafts_conn, draft_id)
+    ops = drafts_store.list_ops(_drafts_db(), draft_id)
     out: list[dict[str, Any]] = []
     for op in ops:
         if op["kind"] not in kinds:
@@ -484,14 +481,13 @@ def _queue_draft_op(
     agent sees what happened instead of a normal substrate response."""
     from . import drafts_store
 
-    assert _drafts_conn is not None
     actor = principal.id if principal is not None else None
     # Drop None defaults so the stored payload only carries the args the
     # caller actually supplied — replay re-applies defaults at apply time.
     clean = {k: v for k, v in payload.items() if v is not None}
-    with store.transaction(_drafts_conn):
+    with store.transaction(_drafts_db()):
         seq = drafts_store.add_op(
-            _drafts_conn,
+            _drafts_db(),
             draft_id=draft_id,
             kind=kind,
             payload=clean,
@@ -600,8 +596,6 @@ class BatchStatementSpec(TypedDict):
     allow_phrasing_violations: NotRequired[bool]
 
 
-_auth_conn: sqlite3.Connection | None = None
-_drafts_conn: sqlite3.Connection | None = None
 _index: vector.Index | None = None
 _index_path: Path | None = None
 _name_index: vector.Index | None = None
@@ -618,6 +612,26 @@ def _db() -> sqlite3.Connection:
     sees another in-flight request's uncommitted rows; writers serialize
     through `store.transaction()`."""
     return store.substrate_connection()
+
+
+def _auth_db() -> sqlite3.Connection:
+    """This thread's auth connection (see `auth_store.connection`).
+
+    Configured by `init`; each thread reopens lazily against the auth file.
+    Raises if reached before the server is initialized."""
+    from . import auth_store
+
+    return auth_store.connection()
+
+
+def _drafts_db() -> sqlite3.Connection:
+    """This thread's drafts connection (see `drafts_store.connection`).
+
+    Configured by `init`; each thread reopens lazily against the drafts file.
+    Raises if reached before the server is initialized."""
+    from . import drafts_store
+
+    return drafts_store.connection()
 
 
 def _idx() -> vector.Index:
@@ -659,7 +673,7 @@ def init(data_dir: Path) -> None:
     tokens — drop `mycelium.db` and restart, every existing user
     session and bearer token keeps working.
     """
-    global _auth_conn, _drafts_conn, _index, _index_path
+    global _index, _index_path
     global _name_index, _name_index_path, _data_dir
 
     from . import auth_store, drafts_store, research_store
@@ -674,13 +688,16 @@ def init(data_dir: Path) -> None:
     store.migrate(_db())
     layout_baker.ensure_initial()
 
-    _auth_conn = auth_store.connect(data_dir / "mycelium-auth.db")
-    auth_store.migrate(_auth_conn)
+    # Point each provider at its file and run the one-time migration on this
+    # thread's connection; every other thread reopens lazily against the same
+    # file (see the provider in each store module).
+    auth_store.configure(data_dir / "mycelium-auth.db")
+    auth_store.migrate(_auth_db())
 
-    _drafts_conn = drafts_store.connect(data_dir / "mycelium-drafts.db")
-    drafts_store.migrate(_drafts_conn)
-    research_store.migrate(_drafts_conn)
-    orphaned = research_store.mark_orphaned(_drafts_conn)
+    drafts_store.configure(data_dir / "mycelium-drafts.db")
+    drafts_store.migrate(_drafts_db())
+    research_store.migrate(_drafts_db())
+    orphaned = research_store.mark_orphaned(_drafts_db())
     if orphaned:
         logger.warning(
             "marked %d research run(s) failed: orphaned by restart", orphaned
@@ -1605,7 +1622,7 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
     `source` is unknown, or when it is omitted with several sources
     configured. Returns {run row: id, topic, source, created_at, created_by,
     started_at, finished_at, outcome, draft_id, error, trace_ref, status}."""
-    assert _drafts_conn is not None and _data_dir is not None
+    assert _data_dir is not None
     from . import auth as _auth
     from . import research_runs, research_store
 
@@ -1617,10 +1634,10 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
         source=source_name,
         created_by=created_by,
         data_dir=_data_dir,
-        conn=_drafts_conn,
+        conn=_drafts_db(),
     )
     row = require(
-        research_store.get_run(_drafts_conn, run_id), "research run just created"
+        research_store.get_run(_drafts_db(), run_id), "research run just created"
     )
     return research_store.serialize_run(row)
 
@@ -1631,13 +1648,12 @@ def list_research_runs() -> dict[str, Any]:
     (queued/running/draft_created/nothing_found/failed).
 
     Returns {"runs": [run rows]}."""
-    assert _drafts_conn is not None
     from . import research_store
 
     return {
         "runs": [
             research_store.serialize_run(row)
-            for row in research_store.list_runs(_drafts_conn)
+            for row in research_store.list_runs(_drafts_db())
         ]
     }
 
@@ -1648,10 +1664,9 @@ def get_research_run(run_id: str) -> dict[str, Any]:
     draft was created), error, and trace_ref.
 
     Returns the serialized run row. Raises for an unknown run_id."""
-    assert _drafts_conn is not None
     from . import research_store
 
-    row = research_store.get_run(_drafts_conn, run_id)
+    row = research_store.get_run(_drafts_db(), run_id)
     if row is None:
         raise ValueError(f"research run not found: {run_id}")
     return research_store.serialize_run(row)
@@ -3846,19 +3861,18 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
     from . import auth as _auth
     from . import drafts_store
 
-    assert _drafts_conn is not None
     principal = _auth.current_principal.get()
 
     if draft_id is None:
         if principal is None:
             raise ValueError("no draft_id given and no caller identity")
         session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
-        row = drafts_store.find_open_session_draft(_drafts_conn, session_id)
+        row = drafts_store.find_open_session_draft(_drafts_db(), session_id)
         if row is None:
             raise ValueError("no open draft to submit for this caller")
         draft_id = row["id"]
     else:
-        row = drafts_store.get_draft(_drafts_conn, draft_id)
+        row = drafts_store.get_draft(_drafts_db(), draft_id)
         if row is None:
             raise ValueError(f"draft '{draft_id}' not found")
         if drafts_store.status_for(row) != "open":
@@ -3867,9 +3881,9 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
                 f"only open drafts can be submitted"
             )
 
-    with store.transaction(_drafts_conn):
-        drafts_store.set_submitted(_drafts_conn, draft_id)
-    ops = drafts_store.list_ops(_drafts_conn, draft_id)
+    with store.transaction(_drafts_db()):
+        drafts_store.set_submitted(_drafts_db(), draft_id)
+    ops = drafts_store.list_ops(_drafts_db(), draft_id)
     return {"draft_id": draft_id, "op_count": len(ops)}
 
 
@@ -3883,10 +3897,9 @@ def list_my_drafts() -> list[dict[str, Any]]:
     from . import auth as _auth
     from . import drafts_store
 
-    assert _drafts_conn is not None
     principal = _auth.current_principal.get()
     creator = principal.id if principal is not None else None
-    rows = drafts_store.list_drafts_by_creator(_drafts_conn, creator)
+    rows = drafts_store.list_drafts_by_creator(_drafts_db(), creator)
     return [drafts_store.serialize_draft(r) for r in rows]
 
 
@@ -3900,11 +3913,10 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    assert _drafts_conn is not None
-    row = drafts_store.get_draft(_drafts_conn, draft_id)
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
-    ops = drafts_store.list_ops(_drafts_conn, draft_id)
+    ops = drafts_store.list_ops(_drafts_db(), draft_id)
     return drafts_store.serialize_draft(row, ops=ops)
 
 
@@ -3919,8 +3931,7 @@ def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    assert _drafts_conn is not None
-    row = drafts_store.get_draft(_drafts_conn, draft_id)
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
     if drafts_store.status_for(row) != "open":
@@ -3928,8 +3939,8 @@ def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
             f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
             f"can't modify ops on a non-open draft"
         )
-    with store.transaction(_drafts_conn):
-        removed = drafts_store.remove_op(_drafts_conn, draft_id, seq)
+    with store.transaction(_drafts_db()):
+        removed = drafts_store.remove_op(_drafts_db(), draft_id, seq)
     if not removed:
         raise ValueError(f"no op with seq {seq} in draft '{draft_id}'")
     return {"draft_id": draft_id, "seq": seq, "removed": True}
@@ -3950,8 +3961,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    assert _drafts_conn is not None
-    row = drafts_store.get_draft(_drafts_conn, draft_id)
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
     status = drafts_store.status_for(row)
@@ -3961,7 +3971,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
             f"drafts can be approved"
         )
 
-    ops = drafts_store.list_ops(_drafts_conn, draft_id)
+    ops = drafts_store.list_ops(_drafts_db(), draft_id)
     tools_by_name = {w.__name__: w for w in TOOLS}
     results: list[dict[str, Any]] = []
     import json as _j
