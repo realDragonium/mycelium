@@ -205,9 +205,9 @@ def test_merge_entities_recomputes(srv):
     s_r = srv.upsert_statement(kind="state", text="the embedder runs", links=[])[
         "statement_id"
     ]
-    s_h = srv.upsert_statement(
-        kind="state", text="the vectorizer runs", links=[]
-    )["statement_id"]
+    s_h = srv.upsert_statement(kind="state", text="the vectorizer runs", links=[])[
+        "statement_id"
+    ]
     r_eid = store.get_name_by_text(store.substrate_connection(), "embedder")[
         "entity_id"
     ]
