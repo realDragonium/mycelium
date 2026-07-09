@@ -48,7 +48,7 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
 
     conn = store.substrate_connection()
     stmt_vid = store.get_vector_id(conn, sid)
-    name_row = store.list_all_names(conn)[0]
+    name_row = next(r for r in store.list_all_names(conn) if r["text"] == "candidate")
     name_vid = store.get_name_vector_id(conn, name_row["id"])
     assert stmt_vid is not None and name_vid is not None
 
