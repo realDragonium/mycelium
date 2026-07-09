@@ -37,11 +37,16 @@ def srv(tmp_path, monkeypatch):
 
 
 def _mentions(sid: str) -> list[str]:
-    return sorted(r["name"] for r in store.get_mentions(server._conn, sid))
+    return sorted(
+        r["name"] for r in store.get_mentions(store.substrate_connection(), sid)
+    )
 
 
 def _pending(status: str = "open") -> list[str]:
-    return sorted(p["name"] for p in store.list_pending_mentions(server._conn, status))
+    return sorted(
+        p["name"]
+        for p in store.list_pending_mentions(store.substrate_connection(), status)
+    )
 
 
 # ─── sync derivation ──────────────────────────────────────────────────────
@@ -71,7 +76,7 @@ def test_unknown_words_create_nothing(srv):
         kind="state", text="something undefined happens", links=[]
     )["statement_id"]
     assert _mentions(sid) == []
-    assert store.list_entities(server._conn) == []
+    assert store.list_entities(store.substrate_connection()) == []
 
 
 def test_editing_text_rederives(srv):
@@ -102,8 +107,8 @@ def test_approving_pending_creates_the_mention(srv):
     sid = srv.upsert_statement(kind="state", text="the flow halts", links=[])[
         "statement_id"
     ]
-    pid = store.list_pending_mentions(server._conn)[0]["id"]
-    assert store.approve_pending_mention(server._conn, pid) is True
+    pid = store.list_pending_mentions(store.substrate_connection())[0]["id"]
+    assert store.approve_pending_mention(store.substrate_connection(), pid) is True
     assert _mentions(sid) == ["flow"]
     assert _pending("open") == []
     assert _pending("approved") == ["flow"]
@@ -118,12 +123,12 @@ def test_approved_mention_survives_unrelated_recompute(srv):
         kind="state", text="the flow drives the dashboard", links=[]
     )["statement_id"]
     assert _mentions(sid) == ["dashboard"]
-    pid = store.list_pending_mentions(server._conn)[0]["id"]
-    store.approve_pending_mention(server._conn, pid)
+    pid = store.list_pending_mentions(store.substrate_connection())[0]["id"]
+    store.approve_pending_mention(store.substrate_connection(), pid)
     assert _mentions(sid) == ["dashboard", "flow"]
     # Unrelated name change anywhere → this statement gets recomputed.
     srv.upsert_entity(name="invoice", description="elsewhere")
-    mention_worker.drain(server._conn)
+    mention_worker.drain(store.substrate_connection())
     # The human-approved "flow" mention persists; nothing silently dropped.
     assert _mentions(sid) == ["dashboard", "flow"]
     assert _pending("approved") == ["flow"]
@@ -137,12 +142,12 @@ def test_approved_mention_dropped_when_text_no_longer_matches(srv):
     sid = srv.upsert_statement(kind="state", text="the flow halts", links=[])[
         "statement_id"
     ]
-    pid = store.list_pending_mentions(server._conn)[0]["id"]
-    store.approve_pending_mention(server._conn, pid)
+    pid = store.list_pending_mentions(store.substrate_connection())[0]["id"]
+    store.approve_pending_mention(store.substrate_connection(), pid)
     assert _mentions(sid) == ["flow"]
     srv.replace_text(id=sid, text="the system halts")  # "flow" gone from text
     assert _mentions(sid) == []
-    assert store.count_pending_mentions(server._conn, "all") == 0
+    assert store.count_pending_mentions(store.substrate_connection(), "all") == 0
 
 
 # ─── auto-plurals ──────────────────────────────────────────────────────────
@@ -150,13 +155,13 @@ def test_approved_mention_dropped_when_text_no_longer_matches(srv):
 
 def test_plural_auto_generated_and_matches(srv):
     srv.upsert_entity(name="candidate", description="x")
-    plural = store.get_name_by_text(server._conn, "candidates")
+    plural = store.get_name_by_text(store.substrate_connection(), "candidates")
     assert plural is not None and plural["generated_from_name_id"] is not None
     sid = srv.upsert_statement(kind="event", text="five candidates applied", links=[])[
         "statement_id"
     ]
     # Matched via the generated plural; deduped to one mention for the entity.
-    rows = store.get_mentions(server._conn, sid)
+    rows = store.get_mentions(store.substrate_connection(), sid)
     assert [r["name"] for r in rows] == ["candidates"]
 
 
@@ -165,7 +170,8 @@ def test_plural_collision_is_skipped(srv):
     srv.upsert_entity(name="status", description="x")
     assert (
         store.get_generated_children(
-            server._conn, store.get_name_by_text(server._conn, "status")["id"]
+            store.substrate_connection(),
+            store.get_name_by_text(store.substrate_connection(), "status")["id"],
         )
         == []
     )
@@ -180,10 +186,10 @@ def test_new_name_recomputes_existing_statement(srv):
     ]
     assert _mentions(sid) == []  # no such entity yet
     srv.upsert_entity(name="dashboard", description="x")  # enqueues a scan
-    assert store.count_open_recompute(server._conn) > 0
-    mention_worker.drain(server._conn)
+    assert store.count_open_recompute(store.substrate_connection()) > 0
+    mention_worker.drain(store.substrate_connection())
     assert _mentions(sid) == ["dashboard"]
-    assert store.count_open_recompute(server._conn) == 0
+    assert store.count_open_recompute(store.substrate_connection()) == 0
 
 
 def test_delete_name_recomputes_shadowed_entity(srv):
@@ -196,9 +202,9 @@ def test_delete_name_recomputes_shadowed_entity(srv):
         kind="state", text="the machine learning pipeline ships", links=[]
     )["statement_id"]
     assert _mentions(sid) == ["machine learning"]
-    ml = store.get_name_by_text(server._conn, "machine learning")["id"]
+    ml = store.get_name_by_text(store.substrate_connection(), "machine learning")["id"]
     srv.delete_name(name_id=ml)
-    mention_worker.drain(server._conn)
+    mention_worker.drain(store.substrate_connection())
     assert _mentions(sid) == ["learning"]
 
 
@@ -211,13 +217,21 @@ def test_merge_entities_recomputes(srv):
     s_h = srv.upsert_statement(
         kind="state", text="the hiring manager approves", links=[]
     )["statement_id"]
-    r_eid = store.get_name_by_text(server._conn, "recruiter")["entity_id"]
-    h_eid = store.get_name_by_text(server._conn, "hiring manager")["entity_id"]
+    r_eid = store.get_name_by_text(store.substrate_connection(), "recruiter")[
+        "entity_id"
+    ]
+    h_eid = store.get_name_by_text(store.substrate_connection(), "hiring manager")[
+        "entity_id"
+    ]
     srv.merge_entities(from_entity_id=r_eid, into_entity_id=h_eid)
-    mention_worker.drain(server._conn)
+    mention_worker.drain(store.substrate_connection())
     # Both statements now resolve their mention to the surviving entity.
-    assert store.get_mentions(server._conn, s_r)[0]["entity_id"] == h_eid
-    assert store.get_mentions(server._conn, s_h)[0]["entity_id"] == h_eid
+    assert (
+        store.get_mentions(store.substrate_connection(), s_r)[0]["entity_id"] == h_eid
+    )
+    assert (
+        store.get_mentions(store.substrate_connection(), s_h)[0]["entity_id"] == h_eid
+    )
 
 
 def test_delete_statement_clears_derived_rows(srv):
@@ -229,5 +243,5 @@ def test_delete_statement_clears_derived_rows(srv):
     assert _mentions(sid) == ["dashboard"]
     assert _pending() == ["flow"]
     srv.delete_statement(id=sid)
-    assert store.get_mentions(server._conn, sid) == []
-    assert store.count_pending_mentions(server._conn) == 0
+    assert store.get_mentions(store.substrate_connection(), sid) == []
+    assert store.count_pending_mentions(store.substrate_connection()) == 0

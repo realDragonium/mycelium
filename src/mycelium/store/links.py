@@ -51,7 +51,7 @@ def _insert_one_link(
         "INSERT OR IGNORE INTO statement_links "
         "(from_statement_id, to_statement_id, link_type, when_hash, created_at, created_by) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (from_id, to_id, link_type, when_hash, _now(), kernel._actor),
+        (from_id, to_id, link_type, when_hash, _now(), kernel.get_actor()),
     )
     if not cur.rowcount:
         return None

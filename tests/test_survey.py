@@ -127,7 +127,7 @@ def test_rank_statements_count_then_cosine_then_id():
 
 
 def _reset_server() -> None:
-    server._conn = None
+    store.reset_substrate()
     server._auth_conn = None
     server._drafts_conn = None
     server._index = None

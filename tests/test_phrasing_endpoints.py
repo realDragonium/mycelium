@@ -6,7 +6,7 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, server
+from mycelium import embed, server, store
 
 
 def deterministic_embed(text: str) -> list[float]:
@@ -18,7 +18,7 @@ def deterministic_embed(text: str) -> list[float]:
 def _client(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", deterministic_embed)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
-    server._conn = None
+    store.reset_substrate()
     server._index = None
     server._index_path = None
     server._ann_index = None

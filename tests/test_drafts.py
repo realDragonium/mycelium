@@ -18,11 +18,11 @@ needed — that's the same path the streamable-HTTP transport uses.
 
 from fastapi.testclient import TestClient
 
-from mycelium import auth, server
+from mycelium import auth, server, store
 
 
 def _reset_server() -> None:
-    server._conn = None
+    store.reset_substrate()
     server._auth_conn = None
     server._drafts_conn = None
     server._index = None
@@ -65,7 +65,9 @@ def test_drafter_write_creates_session_draft_and_queues_op(tmp_path, monkeypatch
     with client:
         # No entities in substrate initially.
         assert (
-            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM entities")
+            .fetchone()["n"]
             == 0
         )
 
@@ -77,7 +79,9 @@ def test_drafter_write_creates_session_draft_and_queues_op(tmp_path, monkeypatch
 
         # Substrate untouched.
         assert (
-            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM entities")
+            .fetchone()["n"]
             == 0
         )
         # Receipt shape.
@@ -122,7 +126,9 @@ def test_explicit_draft_id_queues_op_for_any_writer(tmp_path, monkeypatch):
         assert result["queued"] == "upsert_entity"
         # Substrate still untouched.
         assert (
-            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM entities")
+            .fetchone()["n"]
             == 0
         )
 
@@ -149,9 +155,11 @@ def test_submit_then_approve_replays_to_substrate(tmp_path, monkeypatch):
         assert body["applied"] == 2
 
         # Both entities now exist in the substrate.
-        rows = server._conn.execute(
-            "SELECT description FROM entities ORDER BY description"
-        ).fetchall()
+        rows = (
+            store.substrate_connection()
+            .execute("SELECT description FROM entities ORDER BY description")
+            .fetchall()
+        )
         assert [r["description"] for r in rows] == ["d1", "d2"]
 
 
@@ -169,7 +177,9 @@ def test_reject_leaves_substrate_untouched(tmp_path, monkeypatch):
         rej = client.post(f"/api/drafts/{draft_id}/reject")
         assert rej.status_code == 200
         assert (
-            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM entities")
+            .fetchone()["n"]
             == 0
         )
 
@@ -257,7 +267,9 @@ def test_list_tools_with_draft_id_return_queued_ops(tmp_path, monkeypatch):
 
         # Substrate empty.
         assert (
-            server._conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM entities")
+            .fetchone()["n"]
             == 0
         )
 

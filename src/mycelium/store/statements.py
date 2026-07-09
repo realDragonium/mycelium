@@ -16,7 +16,7 @@ def create_statement(conn: sqlite3.Connection, kind: str, text: str) -> str:
     conn.execute(
         "INSERT INTO statements (id, kind, text, created_at, created_by) "
         "VALUES (?, ?, ?, ?, ?)",
-        (statement_id, kind, text, _now(), kernel._actor),
+        (statement_id, kind, text, _now(), kernel.get_actor()),
     )
     _record(
         conn,
@@ -43,7 +43,7 @@ def update_statement(
     conn.execute(
         "UPDATE statements SET kind = ?, text = ?, updated_at = ?, updated_by = ? "
         "WHERE id = ?",
-        (kind, text, _now(), kernel._actor, statement_id),
+        (kind, text, _now(), kernel.get_actor(), statement_id),
     )
     _record(
         conn,
@@ -62,7 +62,7 @@ def update_statement_text(
     before = _row_dict(get_statement(conn, statement_id))
     conn.execute(
         "UPDATE statements SET text = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-        (text, _now(), kernel._actor, statement_id),
+        (text, _now(), kernel.get_actor(), statement_id),
     )
     _record(
         conn,
@@ -84,7 +84,7 @@ def update_statement_kind(
     before = _row_dict(get_statement(conn, statement_id))
     conn.execute(
         "UPDATE statements SET kind = ?, updated_at = ?, updated_by = ? WHERE id = ?",
-        (kind, _now(), kernel._actor, statement_id),
+        (kind, _now(), kernel.get_actor(), statement_id),
     )
     _record(
         conn,

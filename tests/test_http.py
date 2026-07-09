@@ -3,7 +3,7 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, mention_worker, server
+from mycelium import embed, mention_worker, server, store
 
 
 def fake_embed_factory():
@@ -25,7 +25,7 @@ def deterministic_embed(text: str) -> list[float]:
 def _client(tmp_path, monkeypatch, embedder):
     monkeypatch.setattr(embed, "embed", embedder)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
-    server._conn = None
+    store.reset_substrate()
     server._index = None
     server._index_path = None
     server._name_index = None
@@ -2212,7 +2212,7 @@ def test_delete_name_drops_alias_and_its_mentions(tmp_path, monkeypatch):
         # The deleted alias was the mention's representative; delete_name
         # queued a recompute so the surviving alias takes over. Drain the
         # (suite-disabled) worker synchronously.
-        mention_worker.drain(server._conn)
+        mention_worker.drain(store.substrate_connection())
         body = client.post("/get-statements", json={"ids": [stm_id]}).json()[
             "statements"
         ][0]
