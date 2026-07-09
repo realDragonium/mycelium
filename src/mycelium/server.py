@@ -614,7 +614,7 @@ def _db() -> sqlite3.Connection:
     """This thread's substrate connection (see `store.substrate_connection`).
 
     Each request thread reads/writes its own connection, so a reader never
-    sees another in-flight request's uncommitted rows; writers still serialize
+    sees another in-flight request's uncommitted rows; writers serialize
     through `store.transaction()`."""
     return store.substrate_connection()
 

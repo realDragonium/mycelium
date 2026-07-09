@@ -32,10 +32,10 @@ from .. import timestamps
 # request's principal at the start of each call and clears it at the end;
 # until an actor is set it stays None and the *_by columns remain NULL.
 #
-# It is a ContextVar, not a module global: concurrent requests each carry
-# their own principal, and the value is copied into the threadpool task that
-# runs a sync handler (the same mechanism `auth.current_principal` relies on),
-# so a write always stamps the actor of the request that issued it.
+# A ContextVar keeps this per-request: concurrent requests each carry their own
+# principal, and the value is copied into the threadpool task that runs a sync
+# handler (the same mechanism `auth.current_principal` relies on), so a write
+# always stamps the actor of the request that issued it.
 
 _actor: ContextVar[str | None] = ContextVar("substrate_actor", default=None)
 
@@ -58,14 +58,14 @@ def get_actor() -> str | None:
 # half-applied cascade on the connection), and it makes commit timing visible
 # at the call site instead of buried per-helper.
 #
-# The context manager also serializes writers process-wide. Each thread now
-# holds its OWN substrate connection (see the connection provider below), so a
-# reader never sees another request's uncommitted rows — but concurrent
-# writers must still not interleave at the SQLite level. One process-wide
-# reentrant lock gives that: every write unit of work acquires it, so writers
-# queue in Python (they never race down to a SQLITE_BUSY), while reads take no
-# lock at all. Reentrant so a nested `transaction()` on the same thread joins
-# the outer one; only the outermost block commits or rolls back.
+# The context manager also serializes writers process-wide. Each thread holds
+# its OWN substrate connection (see the connection provider below), so a reader
+# never sees another request's uncommitted rows — but concurrent writers must
+# still not interleave at the SQLite level. One process-wide reentrant lock
+# gives that: every write unit of work acquires it, so writers queue in Python
+# (they never race down to a SQLITE_BUSY), while reads take no lock at all.
+# Reentrant so a nested `transaction()` on the same thread joins the outer one;
+# only the outermost block commits or rolls back.
 #
 # Depth is keyed by id(conn). Because the write lock serializes writers, only
 # one thread ever mutates the map at a time, and a thread only nests on its
@@ -102,8 +102,8 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
 def _now() -> str:
     """ISO-8601 UTC timestamp with millisecond precision and trailing Z.
 
-    Thin alias for the canonical `timestamps.now()`; kept so substrate
-    modules can keep calling the package-local `_now`."""
+    Alias for the canonical `timestamps.now()` that substrate modules call
+    as the package-local `_now`."""
     return timestamps.now()
 
 
@@ -496,11 +496,10 @@ def connect(
 
 # --- substrate connection provider ------------------------------------------
 #
-# The server no longer shares one substrate connection across the request
-# threadpool. Instead each thread gets its OWN connection to the substrate
-# file, opened lazily and reused for the thread's life. On WAL every
-# connection reads a consistent last-committed snapshot, so a reader on one
-# thread never observes another request's in-flight (uncommitted) writes.
+# Each thread gets its OWN connection to the substrate file, opened lazily and
+# reused for the thread's life. On WAL every connection reads a consistent
+# last-committed snapshot, so a reader on one thread never observes another
+# request's in-flight (uncommitted) writes.
 #
 # `configure_substrate()` records the db/history paths and bumps an epoch.
 # A thread caches (epoch, conn); when the epoch moves (a reconfigure — e.g.

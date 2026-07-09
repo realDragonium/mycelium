@@ -1,9 +1,8 @@
 """Per-thread substrate connections isolate uncommitted writes.
 
-Before this, the process shared one substrate connection across the request
-threadpool, so a read on one thread could observe another thread's in-flight
-(uncommitted) rows. Now each thread gets its own connection; a reader sees only
-committed state. Writers still serialize process-wide through `transaction()`.
+A reader on one thread sees only committed state, never another thread's
+in-flight (uncommitted) rows, because each thread holds its own connection.
+Writers serialize process-wide through `transaction()`.
 """
 
 from __future__ import annotations
