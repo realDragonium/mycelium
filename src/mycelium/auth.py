@@ -41,6 +41,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 
+from .require import require
+
 Role = Literal["asker", "reader", "drafter", "writer", "admin"]
 UserType = Literal["human", "service"]
 Scope = Literal["asker", "reader", "drafter", "writer", "admin"]
@@ -438,8 +440,7 @@ def mint_own_token(
     capped = _clamp_scope(scope, principal.role)
     owner_id = _ensure_local_admin_row(conn) if principal.synthetic else principal.id
     raw, token_id = issue_token(conn, user_id=owner_id, name=name, scope=capped)
-    row = get_token(conn, token_id)
-    assert row is not None  # just inserted
+    row = require(get_token(conn, token_id), "token just issued")
     return raw, row
 
 
@@ -466,8 +467,7 @@ def mint_token_for_user(
         raise LookupError("user not found")
     capped = _clamp_scope(scope, user["role"])
     raw, token_id = issue_token(conn, user_id=user_id, name=name, scope=capped)
-    row = get_token(conn, token_id)
-    assert row is not None
+    row = require(get_token(conn, token_id), "token just issued")
     return raw, row
 
 
@@ -523,9 +523,7 @@ def update_user(
         conn.execute("UPDATE users SET status = ? WHERE id = ?", (status, user_id))
     if name is not None:
         conn.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
-    updated = get_user(conn, user_id)
-    assert updated is not None
-    return updated
+    return require(get_user(conn, user_id), "user just updated")
 
 
 def list_invites(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -553,8 +551,7 @@ def create_invite(
         "SELECT id, email, role, token, created_at, expires_at FROM invites WHERE id = ?",
         (invite_id,),
     ).fetchone()
-    assert row is not None
-    return row
+    return require(row, "invite just created")
 
 
 def revoke_invite(conn: sqlite3.Connection, invite_id: str) -> None:

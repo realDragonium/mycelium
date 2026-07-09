@@ -18,10 +18,11 @@ EF_SEARCH = 50
 
 
 class Index:
-    def __init__(self) -> None:
-        self._index: hnswlib.Index | None = None
+    def __init__(self, index: hnswlib.Index) -> None:
+        self._index = index
 
-    def init_empty(self) -> None:
+    @classmethod
+    def empty(cls) -> Index:
         idx = hnswlib.Index(space="cosine", dim=DIM)
         idx.init_index(
             max_elements=INITIAL_CAPACITY,
@@ -30,20 +31,19 @@ class Index:
             allow_replace_deleted=True,
         )
         idx.set_ef(EF_SEARCH)
-        self._index = idx
+        return cls(idx)
 
-    def load(self, path: Path) -> None:
+    @classmethod
+    def load(cls, path: Path) -> Index:
         idx = hnswlib.Index(space="cosine", dim=DIM)
         idx.load_index(str(path), allow_replace_deleted=True)
         idx.set_ef(EF_SEARCH)
-        self._index = idx
+        return cls(idx)
 
     def save(self, path: Path) -> None:
-        assert self._index is not None
         self._index.save_index(str(path))
 
     def _ensure_capacity(self, want: int) -> None:
-        assert self._index is not None
         cap = self._index.get_max_elements()
         if want >= cap:
             self._index.resize_index(max(cap * 2, want + 1))
@@ -57,7 +57,6 @@ class Index:
         # deleted; without replace_deleted it raises "Can't use addPoint to
         # update deleted elements" mid-upsert, leaving the SQLite row written
         # but the vector missing.
-        assert self._index is not None
         self._ensure_capacity(self._index.get_current_count() + 1)
         arr = np.asarray(vec, dtype=np.float32).reshape(1, DIM)
         self._index.add_items(
@@ -66,7 +65,6 @@ class Index:
 
     def replace(self, vector_id: int, vec: list[float]) -> None:
         """Replace the vector at `vector_id` with `vec`."""
-        assert self._index is not None
         self._index.mark_deleted(vector_id)
         arr = np.asarray(vec, dtype=np.float32).reshape(1, DIM)
         self._index.add_items(
@@ -87,7 +85,6 @@ class Index:
         leaves an orphaned SQL row when the vector op raises before
         the row is dropped).
         """
-        assert self._index is not None
         try:
             self._index.mark_deleted(vector_id)
         except RuntimeError as exc:
@@ -112,7 +109,6 @@ class Index:
         being the canonical one — must skip these stranded ids
         rather than crash the whole pass on the first one.
         """
-        assert self._index is not None
         try:
             return self._index.get_items([vector_id])[0]
         except RuntimeError as exc:
@@ -121,7 +117,6 @@ class Index:
             raise
 
     def search(self, vec: list[float], k: int) -> list[tuple[int, float]]:
-        assert self._index is not None
         if self._index.get_current_count() == 0:
             return []
         k = min(k, self._index.get_current_count())

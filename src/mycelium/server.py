@@ -35,6 +35,7 @@ from . import (
     vector,
     when_expression,
 )
+from .require import require
 from .tracing import trace_span
 
 logger = logging.getLogger(__name__)
@@ -686,18 +687,15 @@ def init(data_dir: Path) -> None:
         )
 
     _index_path = data_dir / "mycelium.vec"
-    _index = vector.Index()
-    if _index_path.exists():
-        _index.load(_index_path)
-    else:
-        _index.init_empty()
+    _index = (
+        vector.Index.load(_index_path) if _index_path.exists() else vector.Index.empty()
+    )
 
     _name_index_path = data_dir / "mycelium-names.vec"
-    _name_index = vector.Index()
     if _name_index_path.exists():
-        _name_index.load(_name_index_path)
+        _name_index = vector.Index.load(_name_index_path)
     else:
-        _name_index.init_empty()
+        _name_index = vector.Index.empty()
         # Backfill: if the DB has names but no on-disk name index
         # (first run after this feature lands, or a fresh restore),
         # embed every existing name so the index isn't silently empty.
@@ -926,12 +924,12 @@ def _statement_kind(
     statement_rows: dict[str, sqlite3.Row],
     statement_id: str,
     *,
-    self_id: str | None = None,
-    self_kind: str | None = None,
+    self_ref: tuple[str, str] | None = None,
 ) -> str:
-    if self_id is not None and statement_id == self_id:
-        assert self_kind is not None
-        return self_kind
+    # `self_ref` is the (id, kind) of a statement being upserted in this same
+    # request — it isn't in `statement_rows` yet, so resolve it directly.
+    if self_ref is not None and statement_id == self_ref[0]:
+        return self_ref[1]
     return statement_rows[statement_id]["kind"]
 
 
@@ -1042,8 +1040,7 @@ def _resolve_when_tree(
 
 
 def _hydrate_statement(statement_id: str, score: float | None) -> dict[str, Any]:
-    row = store.get_statement(_db(), statement_id)
-    assert row is not None
+    row = require(store.get_statement(_db(), statement_id), "statement to hydrate")
     mentions = [
         {"name_id": m["name_id"], "name": m["name"], "entity_id": m["entity_id"]}
         for m in store.get_mentions(_db(), statement_id)
@@ -1622,8 +1619,9 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
         data_dir=_data_dir,
         conn=_drafts_conn,
     )
-    row = research_store.get_run(_drafts_conn, run_id)
-    assert row is not None
+    row = require(
+        research_store.get_run(_drafts_conn, run_id), "research run just created"
+    )
     return research_store.serialize_run(row)
 
 
@@ -1801,7 +1799,9 @@ def upsert_statement(
     flip_edges: list[tuple[str, str, str, str, str, str]] = []
     for i, spec in enumerate(links):
         to_id = spec["to_id"]
-        to_kind = _statement_kind(statement_rows, to_id, self_id=id, self_kind=kind)
+        to_kind = _statement_kind(
+            statement_rows, to_id, self_ref=(id, kind) if id is not None else None
+        )
         flip_edges.append(
             (
                 f"links[{i}]",
@@ -1814,7 +1814,9 @@ def upsert_statement(
         )
     for i, il in enumerate(incoming_links):
         from_id = il["from_id"]
-        from_kind = _statement_kind(statement_rows, from_id, self_id=id, self_kind=kind)
+        from_kind = _statement_kind(
+            statement_rows, from_id, self_ref=(id, kind) if id is not None else None
+        )
         flip_edges.append(
             (
                 f"incoming_links[{i}]",
@@ -1837,8 +1839,9 @@ def upsert_statement(
     with store.transaction(_db()):
         if id is not None:
             store.update_statement(_db(), id, kind, text)
-            vector_id = store.get_vector_id(_db(), id)
-            assert vector_id is not None
+            vector_id = require(
+                store.get_vector_id(_db(), id), "vector_id for statement"
+            )
             _idx().replace(vector_id, vec)
             store.replace_links(_db(), id, link_pairs)
             statement_id = id
@@ -2341,8 +2344,7 @@ def replace_text(
     vec = embed.embed(text)
     with store.transaction(_db()):
         store.update_statement_text(_db(), id, text)
-        vector_id = store.get_vector_id(_db(), id)
-        assert vector_id is not None
+        vector_id = require(store.get_vector_id(_db(), id), "vector_id for statement")
         _idx().replace(vector_id, vec)
         _persist_index()
         # Text changed → re-derive mentions.
@@ -2424,8 +2426,9 @@ def patch_statement(
             store.update_statement_kind(_db(), id, kind)
 
         if vec is not None:
-            vector_id = store.get_vector_id(_db(), id)
-            assert vector_id is not None
+            vector_id = require(
+                store.get_vector_id(_db(), id), "vector_id for statement"
+            )
             _idx().replace(vector_id, vec)
             _persist_index()
 
