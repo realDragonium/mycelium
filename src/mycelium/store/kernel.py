@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .. import timestamps
+from ..connections import ConnectionProvider
 
 # --- audit context ----------------------------------------------------------
 #
@@ -496,84 +497,47 @@ def connect(
 
 # --- substrate connection provider ------------------------------------------
 #
-# Each thread gets its OWN connection to the substrate file, opened lazily and
-# reused for the thread's life. On WAL every connection reads a consistent
+# Each thread gets its OWN connection to the substrate file (see
+# `ConnectionProvider`). On WAL every connection reads a consistent
 # last-committed snapshot, so a reader on one thread never observes another
 # request's in-flight (uncommitted) writes.
 #
-# `configure_substrate()` records the db/history paths and bumps an epoch.
-# A thread caches (epoch, conn); when the epoch moves (a reconfigure — e.g.
-# a test pointing at a fresh temp DB) the thread lazily closes its stale
-# connection and reopens against the new config, without any other thread
-# having to reach in. `use_substrate_connection()` pins an explicit
-# connection on the current thread (for :memory: DBs and unit tests, whose
-# single connection cannot be reopened per thread).
+# The generic provider owns the thread-local bookkeeping; the substrate's only
+# DB-specific piece is that it attaches a `history` DB, so its config is a
+# (db_path, history_path) pair. The module-level wrappers below keep the
+# substrate-named API (`configure_substrate`, `substrate_connection`, …) that
+# call sites and tests already use.
 
-_substrate_config: tuple[str, str | None, int] | None = None
-_substrate_epoch = 0
-_substrate_config_lock = threading.Lock()
-_substrate_tls = threading.local()
+_substrate = ConnectionProvider[tuple[str, str | None]](
+    "substrate",
+    lambda cfg: connect(cfg[0], history_path=cfg[1]),
+)
 
 
 def configure_substrate(
     db_path: Path | str, history_path: Path | str | None = None
 ) -> None:
     """Point the provider at a substrate file. Threads (re)open lazily."""
-    global _substrate_config, _substrate_epoch
-    with _substrate_config_lock:
-        _substrate_epoch += 1
-        _substrate_config = (
-            str(db_path),
-            str(history_path) if history_path is not None else None,
-            _substrate_epoch,
-        )
+    _substrate.configure(
+        (str(db_path), str(history_path) if history_path is not None else None)
+    )
 
 
 def use_substrate_connection(conn: sqlite3.Connection) -> None:
     """Pin `conn` as this thread's substrate connection, overriding the
     configured path. For :memory: DBs and unit tests."""
-    _substrate_tls.override = conn
+    _substrate.use(conn)
 
 
 def reset_substrate() -> None:
     """Forget the configured path and this thread's cached/override
     connection. Used between tests for isolation."""
-    global _substrate_config
-    with _substrate_config_lock:
-        _substrate_config = None
-    _substrate_tls.override = None
-    _substrate_tls.entry = None
+    _substrate.reset()
 
 
 def substrate_connection() -> sqlite3.Connection:
-    """The calling thread's substrate connection.
-
-    An explicit override wins; otherwise the thread's cached connection is
-    returned when its epoch matches the current config, and reopened when it
-    doesn't. Raises if nothing is configured and no override is pinned.
-    """
-    override = getattr(_substrate_tls, "override", None)
-    if override is not None:
-        return override
-    cfg = _substrate_config
-    if cfg is None:
-        raise RuntimeError(
-            "substrate connection not configured; call configure_substrate() "
-            "or use_substrate_connection()"
-        )
-    db_path, history_path, epoch = cfg
-    entry = getattr(_substrate_tls, "entry", None)
-    if entry is not None and entry[0] == epoch:
-        return entry[1]
-    if entry is not None:
-        # Stale connection from a previous config — drop it before reopening.
-        try:
-            entry[1].close()
-        except sqlite3.Error:
-            pass
-    conn = connect(db_path, history_path=history_path)
-    _substrate_tls.entry = (epoch, conn)
-    return conn
+    """The calling thread's substrate connection."""
+    return _substrate.connection()
 
 
 def has_history(conn: sqlite3.Connection) -> bool:
