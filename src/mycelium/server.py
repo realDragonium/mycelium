@@ -619,6 +619,36 @@ def _db() -> sqlite3.Connection:
     return store.substrate_connection()
 
 
+def _idx() -> vector.Index:
+    """The statement vector index. Loaded by `init`; raises if reached
+    before the server is initialized."""
+    if _index is None:
+        raise RuntimeError("statement vector index not initialized (call init)")
+    return _index
+
+
+def _idx_path() -> Path:
+    """On-disk path the statement index persists to (set by `init`)."""
+    if _index_path is None:
+        raise RuntimeError("statement vector index path not initialized (call init)")
+    return _index_path
+
+
+def _name_idx() -> vector.Index:
+    """The entity-name vector index. Loaded by `init`; raises if reached
+    before the server is initialized."""
+    if _name_index is None:
+        raise RuntimeError("name vector index not initialized (call init)")
+    return _name_index
+
+
+def _name_idx_path() -> Path:
+    """On-disk path the name index persists to (set by `init`)."""
+    if _name_index_path is None:
+        raise RuntimeError("name vector index path not initialized (call init)")
+    return _name_index_path
+
+
 def init(data_dir: Path) -> None:
     """Open the substrate + auth DBs and load (or create) the two
     vector indexes (statements, entity names).
@@ -686,59 +716,53 @@ def init(data_dir: Path) -> None:
 
 
 def _backfill_name_index() -> None:
-    assert _name_index is not None
     for row in store.list_all_names(_db()):
         if store.get_name_vector_id(_db(), row["id"]) is not None:
             continue
         vid = store.next_name_vector_id(_db())
         vec = embed.embed(row["text"])
-        _name_index.add(vid, vec)
+        _name_idx().add(vid, vec)
         store.set_name_vector_id(_db(), row["id"], vid)
 
 
 def _persist_index() -> None:
-    assert _index is not None and _index_path is not None
-    _index.save(_index_path)
+    _idx().save(_idx_path())
 
 
 def _persist_name_index() -> None:
-    assert _name_index is not None and _name_index_path is not None
-    _name_index.save(_name_index_path)
+    _name_idx().save(_name_idx_path())
 
 
 def _index_name(name_id: str, text: str) -> None:
     """Embed `text` and register the vector under `name_id`. Used on
     name creation."""
-    assert _name_index is not None
     vid = store.next_name_vector_id(_db())
     vec = embed.embed(text)
-    _name_index.add(vid, vec)
+    _name_idx().add(vid, vec)
     store.set_name_vector_id(_db(), name_id, vid)
     _persist_name_index()
 
 
 def _reindex_name(name_id: str, new_text: str) -> None:
     """Replace the vector for an existing indexed name (rename)."""
-    assert _name_index is not None
     vid = store.get_name_vector_id(_db(), name_id)
     vec = embed.embed(new_text)
     if vid is None:
         # Name exists in SQL but never got an index entry (e.g. created
         # before this feature existed and backfill missed it). Add fresh.
         vid = store.next_name_vector_id(_db())
-        _name_index.add(vid, vec)
+        _name_idx().add(vid, vec)
         store.set_name_vector_id(_db(), name_id, vid)
     else:
-        _name_index.replace(vid, vec)
+        _name_idx().replace(vid, vec)
     _persist_name_index()
 
 
 def _drop_name_from_index(name_id: str) -> None:
     """Remove a name's vector. Idempotent."""
-    assert _name_index is not None
     vid = store.get_name_vector_id(_db(), name_id)
     if vid is not None:
-        _name_index.delete(vid)
+        _name_idx().delete(vid)
         store.delete_name_vector_mapping(_db(), name_id)
         _persist_name_index()
 
@@ -788,7 +812,6 @@ def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
     mentioned a removed name must be recomputed, since the removed name may
     have been the representative for an entity another of whose names still
     matches."""
-    assert _name_index is not None
     children = store.get_generated_children(_db(), name_id)
     ids = [c["id"] for c in children] + [name_id]
     affected: list[str] = []
@@ -805,7 +828,6 @@ def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
     """A renamed name's old generated plurals are stale — delete them and
     generate a fresh plural from `new_text`. Returns statement ids affected
     by the removed children, for recompute."""
-    assert _name_index is not None
     affected: list[str] = []
     for child in store.get_generated_children(_db(), source_name_id):
         affected.extend(store.statements_mentioning_name(_db(), child["id"]))
@@ -857,9 +879,8 @@ def _near_duplicates(
     dropped (used to skip the upsert's own freshly-inserted vector).
     `text` is truncated to a snippet to keep batch responses lean.
     """
-    assert _index is not None
     # +1 to allow excluding the self-hit without dropping under k results.
-    hits = _index.search(vec, k=k + (1 if exclude_id else 0))
+    hits = _idx().search(vec, k=k + (1 if exclude_id else 0))
     out: list[dict[str, Any]] = []
     for vid, distance in hits:
         bid = store.get_statement_id_by_vector_id(_db(), vid)
@@ -1141,10 +1162,9 @@ def _alias_entity_boost(
     the max-scoring name. Statements mentioning a boosted entity get
     final_score = cosine + name_boost * entity_score, lifting them
     against alias-using queries without harming canonical ones."""
-    assert _name_index is not None
     entity_boost: dict[str, float] = {}
     if name_boost > 0.0 and name_top_k > 0:
-        for vid, dist in _name_index.search(vec, k=name_top_k):
+        for vid, dist in _name_idx().search(vec, k=name_top_k):
             sc = 1.0 - dist
             if sc < name_min_score:
                 continue
@@ -1309,7 +1329,6 @@ def search_statements(
                          canonical queries unaffected when no name is
                          clearly relevant.
     """
-    assert _index is not None and _name_index is not None
 
     required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
 
@@ -1325,7 +1344,7 @@ def search_statements(
     else:
         fetch_k = limit
     with trace_span("vector_search"):
-        raw_hits = _index.search(vec, k=fetch_k)
+        raw_hits = _idx().search(vec, k=fetch_k)
 
     scored = _score_candidates(
         raw_hits,
@@ -1369,13 +1388,12 @@ def _search_index_with_retry(vec: list[float], k: int) -> list[tuple[int, float]
     """Search the statement index, retrying once on a transient failure.
     Returns an empty list if both attempts fail — an empty result for one
     sub-query is valid (it contributes nothing), not an error."""
-    assert _index is not None
     with trace_span("vector_search"):
         try:
-            return _index.search(vec, k)
+            return _idx().search(vec, k)
         except Exception:  # noqa: BLE001 — transient index failure; retry once
             try:
-                return _index.search(vec, k)
+                return _idx().search(vec, k)
             except Exception:  # noqa: BLE001
                 return []
 
@@ -1411,7 +1429,6 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
     Relevance and sufficiency judgements belong to the consumer. Output is
     deterministic given a fixed index and embedder.
     """
-    assert _index is not None
 
     if not query.strip():
         return []
@@ -1774,7 +1791,6 @@ def upsert_statement(
     anyway — the success response then carries the same violations under
     a `phrasing_violations` key as a warning.
     """
-    assert _index is not None
 
     violations, reject = _phrasing_gate(text, kind, allow_phrasing_violations)
     if reject is not None:
@@ -1823,14 +1839,14 @@ def upsert_statement(
             store.update_statement(_db(), id, kind, text)
             vector_id = store.get_vector_id(_db(), id)
             assert vector_id is not None
-            _index.replace(vector_id, vec)
+            _idx().replace(vector_id, vec)
             store.replace_links(_db(), id, link_pairs)
             statement_id = id
         else:
             statement_id = store.create_statement(_db(), kind, text)
             vector_id = store.next_vector_id(_db())
             store.set_vector_id(_db(), statement_id, vector_id)
-            _index.add(vector_id, vec)
+            _idx().add(vector_id, vec)
             store.replace_links(_db(), statement_id, link_pairs)
 
         # Mentions are derived from the text, not asserted by the caller.
@@ -2227,7 +2243,6 @@ def upsert_statements(
         }
         ```
     """
-    assert _index is not None
 
     n = len(statements)
     if n == 0:
@@ -2255,7 +2270,7 @@ def upsert_statements(
             bid = store.create_statement(_db(), spec["kind"], spec["text"])
             vid = store.next_vector_id(_db())
             store.set_vector_id(_db(), bid, vid)
-            _index.add(vid, vecs[i])
+            _idx().add(vid, vecs[i])
             store.derive_mentions(_db(), bid, spec["text"], name_index)
             statement_ids[i] = bid
 
@@ -2315,7 +2330,6 @@ def replace_text(
     anyway and surfaces the violations as a `phrasing_violations`
     warning on the success response.
     """
-    assert _index is not None
     row = store.get_statement(_db(), id)
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
@@ -2329,7 +2343,7 @@ def replace_text(
         store.update_statement_text(_db(), id, text)
         vector_id = store.get_vector_id(_db(), id)
         assert vector_id is not None
-        _index.replace(vector_id, vec)
+        _idx().replace(vector_id, vec)
         _persist_index()
         # Text changed → re-derive mentions.
         _derive_statement_mentions(id, text)
@@ -2378,7 +2392,6 @@ def patch_statement(
 
     Raises ValueError if `id` does not exist.
     """
-    assert _index is not None
     row = store.get_statement(_db(), id)
     if row is None:
         raise ValueError(f"statement {id!r} does not exist")
@@ -2413,7 +2426,7 @@ def patch_statement(
         if vec is not None:
             vector_id = store.get_vector_id(_db(), id)
             assert vector_id is not None
-            _index.replace(vector_id, vec)
+            _idx().replace(vector_id, vec)
             _persist_index()
 
         # Re-derive mentions only when the text changed (kind-only patches
@@ -2688,7 +2701,6 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     No-op when `from_id == into_id`. Raises
     ValueError if either id does not exist.
     """
-    assert _index is not None
 
     if from_id == into_id:
         return {
@@ -2725,7 +2737,7 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
 
         vector_id = store.get_vector_id(_db(), from_id)
         if vector_id is not None:
-            _index.delete(vector_id)
+            _idx().delete(vector_id)
         store.delete_statement(_db(), from_id)
     _persist_index()
 
@@ -2772,7 +2784,6 @@ def delete_statement(id: str) -> dict[str, Any]:
 
     Permanent. Raises ValueError on unknown id.
     """
-    assert _index is not None
 
     if store.get_statement(_db(), id) is None:
         raise ValueError(f"statement {id!r} does not exist")
@@ -2793,7 +2804,7 @@ def delete_statement(id: str) -> dict[str, Any]:
 
         vector_id = store.get_vector_id(_db(), id)
         if vector_id is not None:
-            _index.delete(vector_id)
+            _idx().delete(vector_id)
         store.delete_statement(_db(), id)
     _persist_index()
 
@@ -3193,7 +3204,6 @@ def find_duplicates(
     `merge_statements(from, into)` to consolidate, or `replace_text` /
     `add_links` if the duplication is structural rather than textual.
     """
-    assert _index is not None
 
     seen_pairs: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
@@ -3202,7 +3212,7 @@ def find_duplicates(
         vid = store.get_vector_id(_db(), bid)
         if vid is None:
             continue
-        vec = _index.get_vector(vid)
+        vec = _idx().get_vector(vid)
         if vec is None:
             # Slot is stranded — SQLite mapping points at an id the
             # hnsw file doesn't have. Skip rather than crash the audit.
@@ -3210,7 +3220,7 @@ def find_duplicates(
         # k=20 is a balance between catching all candidates and per-call
         # cost. At MVP scales this comfortably covers any cluster of
         # near-duplicates.
-        hits = _index.search(vec, k=20)
+        hits = _idx().search(vec, k=20)
         for other_vid, distance in hits:
             if other_vid == vid:
                 continue
@@ -3289,7 +3299,6 @@ def discover_facts(
     Cheap-ish: one embed + one vector search per input text. No SQL
     writes.
     """
-    assert _index is not None
 
     if exists_threshold < near_threshold:
         raise ValueError(
@@ -3300,7 +3309,7 @@ def discover_facts(
     out: list[dict[str, Any]] = []
     for text in texts:
         vec = embed.embed(text)
-        hits = _index.search(vec, k=matches_per_text)
+        hits = _idx().search(vec, k=matches_per_text)
 
         matches: list[dict[str, Any]] = []
         for vid, distance in hits:

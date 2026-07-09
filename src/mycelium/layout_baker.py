@@ -136,7 +136,8 @@ def _fire() -> None:
         if _process is not None and _process.poll() is None:
             log.info("previous rebake still running; skipping this trigger")
             return
-        assert _db_path is not None and _output_path is not None
+        if _db_path is None or _output_path is None:
+            return
         log.info("triggering layout rebake (db=%s)", _db_path)
         _process = subprocess.Popen(
             _bake_argv(_db_path, _output_path),
