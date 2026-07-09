@@ -682,7 +682,7 @@ def test_research_package_never_touches_server_conn():
         tree = ast.parse(inspect.getsource(mod))
         attrs = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
         assert "_conn" not in attrs
-        assert "_drafts_conn" not in attrs  # even the drafts conn only via emitter
+        assert "_drafts_db" not in attrs  # even the drafts conn only via emitter
 
 
 def test_real_server_inner_tool_set_excludes_writes():

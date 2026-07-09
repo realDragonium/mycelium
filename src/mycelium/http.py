@@ -227,10 +227,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _resolve(request: Request) -> auth.Principal | None:
-        conn = server._auth_conn
-        if conn is None:
+        try:
+            conn = server._auth_db()
+        except RuntimeError:
             # Lifespan hasn't run (e.g. ASGI tests hitting the app
-            # without the context manager). Treat as no credentials.
+            # without the context manager), so the auth store isn't
+            # configured yet. Treat as no credentials.
             return None
         raw = auth.parse_bearer(request.headers.get("authorization"))
         if raw is not None:
@@ -916,8 +918,7 @@ def list_my_tokens(request: Request) -> dict[str, Any]:
     list (UI greys them out) so a user can see what was revoked and
     when — useful when the same label was reused later."""
     p = _require_principal(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     rows = auth.list_tokens(conn, auth.owner_id_for(p))
     return {"tokens": [_serialize_token_row(r) for r in rows]}
 
@@ -937,8 +938,7 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
     it immediately; it cannot be retrieved later.
     """
     p = _require_principal(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     with store.transaction(conn):
         raw, row = auth.mint_own_token(
             conn, principal=p, name=body.name, scope=body.scope
@@ -949,8 +949,7 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
 @app.delete("/api/me/tokens/{token_id}")
 def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     try:
         with store.transaction(conn):
             auth.revoke_own_token(
@@ -985,8 +984,7 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
     _require_principal(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     status = status or "all"
     if status not in ("all", "open", "submitted", "approved", "rejected", "withdrawn"):
         from fastapi import HTTPException
@@ -1010,8 +1008,7 @@ def get_draft_detail(draft_id: str, request: Request) -> dict[str, Any]:
     _require_principal(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
@@ -1035,8 +1032,7 @@ def edit_draft_op(
     _require_principal(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
@@ -1064,8 +1060,7 @@ def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str,
     _require_principal(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
@@ -1098,8 +1093,7 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
     _require_principal(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
@@ -1146,8 +1140,7 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _enforce_curator(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     try:
         result = server.apply_draft(draft_id)
     except (ValueError, RuntimeError) as ex:
@@ -1164,8 +1157,7 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _enforce_curator(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
@@ -1188,8 +1180,7 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
     from . import drafts_store
 
-    conn = server._drafts_conn
-    assert conn is not None
+    conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
@@ -1239,8 +1230,7 @@ def _serialize_user_row(row) -> dict[str, Any]:
 @app.get("/api/admin/users")
 def list_users(request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     rows = auth.list_users(conn)
     return {"users": [_serialize_user_row(r) for r in rows]}
 
@@ -1263,8 +1253,7 @@ def create_user(body: CreateUserBody, request: Request) -> dict[str, Any]:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=400, detail="human users require an email")
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     with store.transaction(conn):
         user_id = auth.create_user(
             conn,
@@ -1287,8 +1276,7 @@ class UpdateUserBody(BaseModel):
 @app.patch("/api/admin/users/{user_id}")
 def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     try:
         with store.transaction(conn):
             row = auth.update_user(
@@ -1308,8 +1296,7 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
 @app.get("/api/admin/users/{user_id}/tokens")
 def list_user_tokens(user_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     rows = auth.list_tokens(conn, user_id)
     return {"tokens": [_serialize_token_row(r) for r in rows]}
 
@@ -1327,8 +1314,7 @@ def mint_token_for_user(
     create the initial token for a freshly-created service account.
     The scope is still capped by the target user's role."""
     _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     try:
         with store.transaction(conn):
             raw, row = auth.mint_token_for_user(
@@ -1344,8 +1330,7 @@ def mint_token_for_user(
 @app.delete("/api/admin/tokens/{token_id}")
 def revoke_token_admin(token_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     with store.transaction(conn):
         auth.revoke_token(conn, token_id)
     return {"ok": True}
@@ -1365,8 +1350,7 @@ def _serialize_invite_row(row, *, request: Request) -> dict[str, Any]:
 @app.get("/api/admin/invites")
 def list_invites(request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     rows = auth.list_invites(conn)
     return {"invites": [_serialize_invite_row(r, request=request) for r in rows]}
 
@@ -1379,8 +1363,7 @@ class CreateInviteBody(BaseModel):
 @app.post("/api/admin/invites")
 def create_invite(body: CreateInviteBody, request: Request) -> dict[str, Any]:
     admin = _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     with store.transaction(conn):
         row = auth.create_invite(
             conn, email=body.email, role=body.role, invited_by=admin.id
@@ -1391,8 +1374,7 @@ def create_invite(body: CreateInviteBody, request: Request) -> dict[str, Any]:
 @app.delete("/api/admin/invites/{invite_id}")
 def revoke_invite(invite_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_conn
-    assert conn is not None
+    conn = server._auth_db()
     with store.transaction(conn):
         auth.revoke_invite(conn, invite_id)
     return {"ok": True}

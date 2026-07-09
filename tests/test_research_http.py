@@ -6,7 +6,16 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, embed, research_runs, research_store, server, store
+from mycelium import (
+    auth,
+    auth_store,
+    drafts_store,
+    embed,
+    research_runs,
+    research_store,
+    server,
+    store,
+)
 
 
 def fake_embed_factory():
@@ -29,8 +38,8 @@ def _client(tmp_path, monkeypatch, embedder):
     monkeypatch.setattr(embed, "embed", embedder)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
-    server._auth_conn = None
-    server._drafts_conn = None
+    auth_store.reset()
+    drafts_store.reset()
     server._index = None
     server._index_path = None
     server._ann_index = None
@@ -227,16 +236,17 @@ def test_role_gates(tmp_path, monkeypatch):
     token = auth.current_principal.set(
         auth.Principal(id="d", name="Drafter", role="drafter", type="human")
     )
-    server._drafts_conn = research_store.connect(":memory:")
-    research_store.migrate(server._drafts_conn)
+    drafts_conn = research_store.connect(":memory:")
+    research_store.migrate(drafts_conn)
+    drafts_store.use_connection(drafts_conn)
     server._data_dir = tmp_path
     try:
         with pytest.raises(ValueError, match="no research sources configured"):
             server.start_research("t")
     finally:
         auth.current_principal.reset(token)
-        server._drafts_conn.close()
-        server._drafts_conn = None
+        drafts_conn.close()
+        drafts_store.reset()
         server._data_dir = None
 
 

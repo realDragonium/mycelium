@@ -2,14 +2,15 @@
 
 A reader on one thread sees only committed state, never another thread's
 in-flight (uncommitted) rows, because each thread holds its own connection.
-Writers serialize process-wide through `transaction()`.
+Writers serialize process-wide through `transaction()`. The same property
+holds for the auth DB now that it, too, is per-thread on WAL.
 """
 
 from __future__ import annotations
 
 import threading
 
-from mycelium import store
+from mycelium import auth, auth_store, store
 
 
 def test_uncommitted_write_is_invisible_to_another_thread(tmp_path):
@@ -57,6 +58,60 @@ def test_uncommitted_write_is_invisible_to_another_thread(tmp_path):
     assert store.count_statements(store.substrate_connection()) == 1
 
     store.reset_substrate()
+
+
+def test_auth_write_is_isolated_then_visible_across_threads(tmp_path):
+    """The auth DB is per-thread on WAL too: a writer's uncommitted user row is
+    invisible to another thread, and its committed row is visible on a fresh
+    read — the property that lets each request thread hold its own auth conn."""
+    auth_store.reset()
+    auth_store.configure(tmp_path / "auth.db")
+    auth_store.migrate(auth_store.connection())  # main thread creates schema
+
+    in_txn = threading.Event()
+    may_commit = threading.Event()
+    seen: dict[str, int] = {}
+    errors: list[BaseException] = []
+
+    def writer():
+        try:
+            conn = auth_store.connection()
+            with store.transaction(conn):
+                auth.create_user(
+                    conn,
+                    name="Probe",
+                    role="writer",
+                    type="human",
+                    email="p@example.com",
+                )
+                # Written but NOT committed. Let the reader look now.
+                in_txn.set()
+                may_commit.wait(3)
+            # transaction() commits here on block exit.
+        except BaseException as exc:  # pragma: no cover - surfaced via errors
+            errors.append(exc)
+            in_txn.set()
+
+    def reader():
+        try:
+            in_txn.wait(3)
+            # The reader's OWN auth connection must not see the uncommitted row.
+            seen["mid"] = len(auth.list_users(auth_store.connection()))
+        finally:
+            may_commit.set()
+
+    tw, tr = threading.Thread(target=writer), threading.Thread(target=reader)
+    tw.start()
+    tr.start()
+    tw.join(5)
+    tr.join(5)
+
+    assert not errors, errors
+    assert seen["mid"] == 0  # uncommitted write was invisible cross-thread
+    # After the writer committed, a fresh read sees the row.
+    assert len(auth.list_users(auth_store.connection())) == 1
+
+    auth_store.reset()
 
 
 def test_actor_is_isolated_per_context():

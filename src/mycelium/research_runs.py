@@ -111,15 +111,15 @@ def _default_runner(data_dir: str) -> Callable[..., Any]:
     - The trace JSONL is defaulted under the data dir (mirroring the `ingest`
       tool's wiring) so `trace_ref` points at a file that actually gets
       written; an env-configured path wins.
-    - The draft emitter gets its OWN drafts-DB connection instead of the
-      process-shared `server._drafts_conn`, so a long run's draft write never
-      contends with HTTP-thread commits on the same connection object.
+    - The draft emitter writes through `server._drafts_db()`, which hands this
+      worker thread its OWN drafts connection (per-thread provider), so a long
+      run's draft write never contends with HTTP-thread commits on a shared
+      connection object.
     """
     import dataclasses
-    import types
 
     def run(topic: str, *, source: str | None = None) -> Any:
-        from . import drafts_store, server
+        from . import server
         from .ingest.draft import InProcessDraftEmitter
         from .research import run_research
         from .research.config import ResearchConfig
@@ -129,18 +129,9 @@ def _default_runner(data_dir: str) -> Callable[..., Any]:
             config = dataclasses.replace(
                 config, trace_log_path=_trace_log_path(data_dir)
             )
-        conn = drafts_store.connect(Path(data_dir) / "mycelium-drafts.db")
-        shim = types.SimpleNamespace(
-            _drafts_conn=conn,
-            TOOLS=getattr(server, "TOOLS", []),
-            _ORIG_SIGNATURES=getattr(server, "_ORIG_SIGNATURES", None),
+        return run_research(
+            topic, source, config=config, emitter=InProcessDraftEmitter(server)
         )
-        try:
-            return run_research(
-                topic, source, config=config, emitter=InProcessDraftEmitter(shim)
-            )
-        finally:
-            conn.close()
 
     return run
 

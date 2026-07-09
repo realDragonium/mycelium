@@ -968,7 +968,7 @@ def test_e_draft_emitter_is_the_only_write_path_and_uses_drafts_store():
     # the drafts DB connection, never the live substrate connection.
     tree = ast.parse(src)
     attrs = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-    assert "_drafts_conn" in attrs  # the drafts DB connection is used
+    assert "_drafts_db" in attrs  # the drafts DB connection is reached via the accessor
     assert "_conn" not in attrs  # the live substrate connection is not
     names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
     for w in ("upsert_statement", "add_links", "submit_draft", "apply_draft"):
@@ -1156,8 +1156,8 @@ def test_i_tiny_op_cap_degrades_records_gap_and_still_emits_draft():
 
 def _real_emitter_against_memory_db():
     """A real InProcessDraftEmitter wired to a stub server_module that exposes a
-    live in-memory `_drafts_conn` and a `TOOLS` list whose function names cover
-    the op kinds."""
+    live in-memory drafts connection via `_drafts_db()` and a `TOOLS` list whose
+    function names cover the op kinds."""
     from mycelium import drafts_store
     from mycelium.ingest.draft import InProcessDraftEmitter
 
@@ -1170,7 +1170,7 @@ def _real_emitter_against_memory_db():
         return f
 
     tools = [_named(n) for n in sorted(_DEFAULT_KINDS)]
-    server_module = types.SimpleNamespace(_drafts_conn=conn, TOOLS=tools)
+    server_module = types.SimpleNamespace(_drafts_db=lambda: conn, TOOLS=tools)
     return InProcessDraftEmitter(server_module=server_module), conn, drafts_store
 
 

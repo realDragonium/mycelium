@@ -7,12 +7,12 @@ underpin both.
 
 from fastapi.testclient import TestClient
 
-from mycelium import auth, server, store
+from mycelium import auth, auth_store, server, store
 
 
 def _reset_server() -> None:
     store.reset_substrate()
-    server._auth_conn = None
+    auth_store.reset()
     server._index = None
     server._index_path = None
     server._ann_index = None
@@ -73,7 +73,7 @@ def test_auth_on_accepts_valid_bearer(tmp_path, monkeypatch):
     with client:
         # Mint a user + token directly against the substrate; Phase 4
         # will provide an admin UI to do this through HTTP.
-        conn = server._auth_conn
+        conn = server._auth_db()
         assert conn is not None
         user_id = auth.create_user(
             conn,
@@ -89,6 +89,7 @@ def test_auth_on_accepts_valid_bearer(tmp_path, monkeypatch):
             name="laptop",
             scope="writer",
         )
+        conn.commit()
 
         r = client.post(
             "/upsert-entity",
@@ -101,7 +102,7 @@ def test_auth_on_accepts_valid_bearer(tmp_path, monkeypatch):
 def test_revoked_token_rejected(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         assert conn is not None
         user_id = auth.create_user(
             conn,
@@ -118,6 +119,7 @@ def test_revoked_token_rejected(tmp_path, monkeypatch):
             scope="writer",
         )
         auth.revoke_token(conn, token_id)
+        conn.commit()
 
         r = client.post(
             "/upsert-entity",
@@ -133,7 +135,7 @@ def test_scope_clamps_against_user_role(tmp_path, monkeypatch):
     effective principal must be `reader` — proving the live clamp."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         assert conn is not None
         user_id = auth.create_user(
             conn,
@@ -214,8 +216,12 @@ def test_token_lifecycle_via_http(tmp_path, monkeypatch):
         # the toggle mid-test by clearing the env and reusing the same
         # data dir. We can't easily restart the app here; instead, prove
         # the bearer path resolves the token directly.
-        conn = server._auth_conn
-        principal = auth.resolve_token(conn, raw)
+        conn = server._auth_db()
+        # resolve_token bumps last_used_at; own that write in a transaction
+        # (as the middleware does) so this thread's connection commits and
+        # releases the lock before the delete request writes on another.
+        with store.transaction(conn):
+            principal = auth.resolve_token(conn, raw)
         assert principal is not None
         assert principal.role == "writer"
 
@@ -228,23 +234,26 @@ def test_token_lifecycle_via_http(tmp_path, monkeypatch):
 
 
 def _admin_bearer(conn) -> str:
-    """Helper: create an admin user + token and return the raw bearer."""
-    uid = auth.create_user(
-        conn,
-        name="Admin",
-        role="admin",
-        type="human",
-        email="admin@example.com",
-    )
-    conn.commit()
-    raw, _ = auth.issue_token(conn, user_id=uid, name="bootstrap", scope="admin")
+    """Helper: create an admin user + token and return the raw bearer.
+
+    Wrapped in one `store.transaction` so both writes commit before the
+    request thread (its own auth connection) tries to resolve the bearer."""
+    with store.transaction(conn):
+        uid = auth.create_user(
+            conn,
+            name="Admin",
+            role="admin",
+            type="human",
+            email="admin@example.com",
+        )
+        raw, _ = auth.issue_token(conn, user_id=uid, name="bootstrap", scope="admin")
     return raw
 
 
 def test_admin_endpoints_require_admin_role(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         uid = auth.create_user(
             conn,
             name="Writer",
@@ -254,6 +263,7 @@ def test_admin_endpoints_require_admin_role(tmp_path, monkeypatch):
         )
         conn.commit()
         raw, _ = auth.issue_token(conn, user_id=uid, name="key", scope="writer")
+        conn.commit()
         r = client.get(
             "/api/admin/users",
             headers={"Authorization": f"Bearer {raw}"},
@@ -264,7 +274,7 @@ def test_admin_endpoints_require_admin_role(tmp_path, monkeypatch):
 def test_admin_creates_service_account_and_mints_token(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         admin = _admin_bearer(conn)
         h = {"Authorization": f"Bearer {admin}"}
 
@@ -296,7 +306,7 @@ def test_admin_creates_service_account_and_mints_token(tmp_path, monkeypatch):
 def test_invite_flow_creates_link(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         admin = _admin_bearer(conn)
         h = {"Authorization": f"Bearer {admin}"}
 
@@ -317,7 +327,7 @@ def test_invite_flow_creates_link(tmp_path, monkeypatch):
 def test_cannot_demote_last_admin(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         admin_raw = _admin_bearer(conn)
         h = {"Authorization": f"Bearer {admin_raw}"}
         admin_id = conn.execute(
@@ -338,7 +348,7 @@ def test_cannot_demote_last_admin(tmp_path, monkeypatch):
 def test_reader_can_read_but_not_write(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         uid = auth.create_user(
             conn,
             name="R",
@@ -348,6 +358,7 @@ def test_reader_can_read_but_not_write(tmp_path, monkeypatch):
         )
         conn.commit()
         raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="reader")
+        conn.commit()
         h = {"Authorization": f"Bearer {raw}"}
 
         # list_* is read → allowed
@@ -364,7 +375,7 @@ def test_reader_can_read_but_not_write(tmp_path, monkeypatch):
 def test_writer_can_write_but_not_delete(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         uid = auth.create_user(
             conn,
             name="W",
@@ -374,6 +385,7 @@ def test_writer_can_write_but_not_delete(tmp_path, monkeypatch):
         )
         conn.commit()
         raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="writer")
+        conn.commit()
         h = {"Authorization": f"Bearer {raw}"}
 
         r = client.post(
@@ -453,7 +465,7 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
 def test_admin_can_delete(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         raw = _admin_bearer(conn)
         h = {"Authorization": f"Bearer {raw}"}
         eid = client.post(
@@ -475,7 +487,7 @@ def test_scope_capped_at_creation(tmp_path, monkeypatch):
     live-clamp at resolve time."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_conn
+        conn = server._auth_db()
         user_id = auth.create_user(
             conn,
             name="R",
@@ -490,6 +502,7 @@ def test_scope_capped_at_creation(tmp_path, monkeypatch):
         raw, _ = auth.issue_token(
             conn, user_id=user_id, name="bootstrap", scope="reader"
         )
+        conn.commit()
 
         r = client.post(
             "/api/me/tokens",

@@ -8,8 +8,8 @@ drafts DB. It imports **no** substrate write tool and **never** touches
 
 That is the structural guarantee: the inner model is handed read tools plus one
 terminal `emit_draft` tool and never sees a write tool; the only write path in
-the whole package is `drafts_store.create_draft` / `add_op` against
-`server._drafts_conn`, reached only through here.
+the whole package is `drafts_store.create_draft` / `add_op` against this
+thread's drafts connection (`server._drafts_db()`), reached only through here.
 
 A draft op's `kind` is the substrate write-tool function name; its payload is
 that tool's kwargs with None-valued keys dropped. The kind is validated against
@@ -43,8 +43,8 @@ class InProcessDraftEmitter:
     """Creates a draft and queues ops in the live drafts DB, in-process.
 
     `server_module` is injectable so tests can supply a stub; in production it
-    is `mycelium.server` (its globals must be `init()`-ialised, so
-    `_drafts_conn` is a live connection).
+    is `mycelium.server` (it must be `init()`-ialised, so `_drafts_db()`
+    returns this thread's live drafts connection).
     """
 
     def __init__(self, server_module: Any | None = None) -> None:
@@ -74,7 +74,7 @@ class InProcessDraftEmitter:
         return set(sigs[kind].parameters)
 
     def create(self, *, title: str | None = None) -> str:
-        conn = self._server._drafts_conn
+        conn = self._server._drafts_db()
         with store.transaction(conn):
             return drafts_store.create_draft(
                 conn,
@@ -85,7 +85,7 @@ class InProcessDraftEmitter:
 
     def add_op(self, draft_id: str, kind: str, payload: dict) -> int:
         clean = {k: v for k, v in payload.items() if v is not None}
-        conn = self._server._drafts_conn
+        conn = self._server._drafts_db()
         with store.transaction(conn):
             return drafts_store.add_op(
                 conn,
