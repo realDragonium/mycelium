@@ -677,6 +677,11 @@ def init(data_dir: Path) -> None:
     session and bearer token keeps working.
     """
     global _ctx
+    # Invalidate before reconfiguring: if init is re-entered and fails partway
+    # (store providers already repointed at the new data dir), leave the
+    # process cleanly uninitialized rather than serving the old context's
+    # indexes against the new substrate.
+    _ctx = None
 
     from . import auth_store, drafts_store, research_store
 
