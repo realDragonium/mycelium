@@ -709,20 +709,39 @@ def init(data_dir: Path) -> None:
             "marked %d research run(s) failed: orphaned by restart", orphaned
         )
 
+    # The .vec files are re-derivable from the substrate, so backup.sh omits
+    # them while keeping the *_vector_ids mappings in the DB. When a .vec is
+    # missing (a fresh checkout, or a restore of such a backup) rebuild the
+    # index by re-embedding, or search would silently return nothing against a
+    # populated substrate.
     index_path = data_dir / "mycelium.vec"
-    index = (
-        vector.Index.load(index_path) if index_path.exists() else vector.Index.empty()
-    )
+    if index_path.exists():
+        index = vector.Index.load(index_path)
+    else:
+        index = vector.Index.empty()
+        _rebuild_vector_index(
+            index,
+            store.all_statements_with_text(_db()),
+            store.get_vector_id,
+            store.next_vector_id,
+            store.set_vector_id,
+            label="statement",
+        )
+        index.save(index_path)
 
     name_index_path = data_dir / "mycelium-names.vec"
     if name_index_path.exists():
         name_index = vector.Index.load(name_index_path)
     else:
         name_index = vector.Index.empty()
-        # Backfill: if the DB has names but no on-disk name index
-        # (first run after this feature lands, or a fresh restore),
-        # embed every existing name so the index isn't silently empty.
-        _backfill_name_index(name_index)
+        _rebuild_vector_index(
+            name_index,
+            store.list_all_names(_db()),
+            store.get_name_vector_id,
+            store.next_name_vector_id,
+            store.set_name_vector_id,
+            label="name",
+        )
         name_index.save(name_index_path)
 
     _ctx = AppContext(
@@ -745,17 +764,34 @@ def init(data_dir: Path) -> None:
         mention_worker.start(data_dir)
 
 
-def _backfill_name_index(name_index: vector.Index) -> None:
-    """Embed every unindexed name into `name_index`. Called during `init`
-    before the context is assembled, so it takes the index explicitly
-    rather than through `_name_idx()`."""
-    for row in store.list_all_names(_db()):
-        if store.get_name_vector_id(_db(), row["id"]) is not None:
-            continue
-        vid = store.next_name_vector_id(_db())
-        vec = embed.embed(row["text"])
-        name_index.add(vid, vec)
-        store.set_name_vector_id(_db(), row["id"], vid)
+def _rebuild_vector_index(
+    index: vector.Index,
+    rows: list[sqlite3.Row],
+    get_id: Callable[[sqlite3.Connection, str], int | None],
+    next_id: Callable[[sqlite3.Connection], int],
+    set_id: Callable[[sqlite3.Connection, str, int], None],
+    *,
+    label: str,
+) -> None:
+    """Populate an empty vector index by re-embedding every row in the DB.
+
+    Shared by the statement and name index rebuilds (parameterized by the
+    matching `*_vector_id` store calls). A restore drops the re-derivable .vec
+    files but keeps the `*_vector_ids` mappings, so reuse each row's existing
+    id when present — re-adding under the same id keeps rows that reference it
+    valid — and allocate (and persist) a fresh id only for rows with none.
+    Called during `init` before the context is assembled, so the index is
+    passed explicitly rather than reached through an accessor."""
+    if rows:
+        logger.info(
+            "rebuilding %s vector index: re-embedding %d row(s)", label, len(rows)
+        )
+    for row in rows:
+        existing = get_id(_db(), row["id"])
+        vid = existing if existing is not None else next_id(_db())
+        index.add(vid, embed.embed(row["text"]))
+        if existing is None:
+            set_id(_db(), row["id"], vid)
 
 
 def _persist_index() -> None:
