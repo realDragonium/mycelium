@@ -65,8 +65,7 @@ def main() -> int:
     conn = store.connect(db_path)
     store.migrate(conn)
 
-    index = vector.Index()
-    index.load(vec_path)
+    index = vector.Index.load(vec_path)
 
     # Sanity check: confirm we're pointed at the substrate the operator
     # thinks they're pointed at. A wrong data_dir is the most likely

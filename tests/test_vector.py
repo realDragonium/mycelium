@@ -9,8 +9,7 @@ def rand_vec(seed: int) -> list[float]:
 
 
 def test_add_and_search():
-    idx = vector.Index()
-    idx.init_empty()
+    idx = vector.Index.empty()
 
     v0 = rand_vec(1)
     v1 = rand_vec(2)
@@ -24,8 +23,7 @@ def test_add_and_search():
 
 
 def test_replace_then_search(tmp_path):
-    idx = vector.Index()
-    idx.init_empty()
+    idx = vector.Index.empty()
     idx.add(0, rand_vec(1))
     idx.add(1, rand_vec(2))
 
@@ -37,20 +35,17 @@ def test_replace_then_search(tmp_path):
 
 def test_save_and_load(tmp_path):
     path = tmp_path / "x.bin"
-    idx = vector.Index()
-    idx.init_empty()
+    idx = vector.Index.empty()
     idx.add(7, rand_vec(3))
     idx.save(path)
 
-    idx2 = vector.Index()
-    idx2.load(path)
+    idx2 = vector.Index.load(path)
     hits = idx2.search(rand_vec(3), k=1)
     assert hits[0][0] == 7
 
 
 def test_search_empty_index():
-    idx = vector.Index()
-    idx.init_empty()
+    idx = vector.Index.empty()
     assert idx.search(rand_vec(1), k=5) == []
 
 
@@ -60,8 +55,7 @@ def test_get_vector_returns_none_on_missing_label():
     return None rather than raise so audit-shaped callers
     (find_duplicates) can skip stranded ids and finish the pass.
     """
-    idx = vector.Index()
-    idx.init_empty()
+    idx = vector.Index.empty()
     idx.add(0, rand_vec(1))
 
     assert idx.get_vector(0) is not None
@@ -77,8 +71,7 @@ def test_delete_is_idempotent_on_missing_label():
     and leaves the SQL row orphaned with no way for the caller to
     recover except via direct DB surgery.
     """
-    idx = vector.Index()
-    idx.init_empty()
+    idx = vector.Index.empty()
     idx.add(0, rand_vec(1))
 
     # Slot exists — first delete marks it.
