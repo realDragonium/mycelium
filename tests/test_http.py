@@ -2817,6 +2817,7 @@ def test_history_api_shows_deletes_and_link_composite(tmp_path, monkeypatch):
 
 
 def test_operations_recorded_end_to_end(tmp_path, monkeypatch):
+    monkeypatch.delenv("MYCELIUM_OPS_LEDGER", raising=False)
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
         # A successful write, a no-hit search, and a phrasing-rejected write —
         # three distinct outcomes, all through the one @tool seam.
@@ -2846,6 +2847,7 @@ def test_operations_recorded_end_to_end(tmp_path, monkeypatch):
 
 
 def test_operations_filter_by_outcome(tmp_path, monkeypatch):
+    monkeypatch.delenv("MYCELIUM_OPS_LEDGER", raising=False)
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
         client.post(
             "/search-statements",
@@ -2857,6 +2859,19 @@ def test_operations_filter_by_outcome(tmp_path, monkeypatch):
         )
         rows = client.get("/api/operations?outcome=no_hit&limit=200").json()["operations"]
         assert rows and all(o["outcome"] == "no_hit" for o in rows)
+
+
+def test_operations_unknown_outcome_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.delenv("MYCELIUM_OPS_LEDGER", raising=False)
+    with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
+        client.post(
+            "/upsert-statement",
+            json={"kind": "event", "text": "A recorded op", "mentions": [], "links": []},
+        )
+        # An unknown outcome is an explicit filter that matches nothing — not a
+        # dropped filter that returns everything.
+        body = client.get("/api/operations?outcome=bogus&limit=200").json()
+        assert body["total"] == 0 and body["operations"] == []
 
 
 def test_operations_disabled_does_not_change_tool_result(tmp_path, monkeypatch):

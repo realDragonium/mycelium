@@ -226,8 +226,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         session_id = request.headers.get("mcp-session-id")
         session_ctx = auth.current_session_id.set(session_id)
         # The MCP streamable-HTTP app is mounted at `/mcp`; everything else is
-        # the REST mirror. Labels operation-ledger rows by transport.
-        transport = "mcp" if request.url.path.startswith("/mcp") else "rest"
+        # the REST mirror. Labels operation-ledger rows by transport. Match the
+        # mount exactly (or a sub-path) so a REST route like `/mcp-status` is
+        # never misfiled as MCP.
+        path = request.url.path
+        transport = "mcp" if path == "/mcp" or path.startswith("/mcp/") else "rest"
         transport_ctx = auth.current_transport.set(transport)
         if principal is not None:
             store.set_actor(principal.id)

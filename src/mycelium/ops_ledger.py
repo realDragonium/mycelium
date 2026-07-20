@@ -28,6 +28,7 @@ contract (DRA-229 scope #5) will fill without a migration.
 
 from __future__ import annotations
 
+import itertools
 import json as _json
 import os
 import sqlite3
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS operations (
 CREATE INDEX IF NOT EXISTS operations_at_start ON operations (at_start);
 CREATE INDEX IF NOT EXISTS operations_tool ON operations (tool);
 CREATE INDEX IF NOT EXISTS operations_outcome ON operations (outcome);
+CREATE INDEX IF NOT EXISTS operations_actor ON operations (actor);
 CREATE INDEX IF NOT EXISTS operations_correlation ON operations (correlation_id);
 """
 
@@ -83,19 +85,37 @@ OUTCOMES = frozenset(
 # Longest a captured string value is kept before truncation. Keeps the ledger
 # a *summary*, not a mirror of full payloads.
 _MAX_STR = 500
-# Keys whose values are redacted wholesale regardless of length.
+# Cap on how many returned ids are persisted per operation — a large search
+# result shouldn't produce an unbounded result_ids column.
+_MAX_IDS = 200
+# How often (every Nth append, by rowid) a record() call also trims the ledger
+# to its retention bound, so a long-running process stays bounded without a
+# separate scheduler.
+_PRUNE_EVERY = 1000
+# Keys whose values are redacted wholesale. Matched exactly, plus any key that
+# *contains* one of `_SECRET_SUBSTRINGS` (so access_token / refresh_token /
+# client_secret / x-api-key are all caught without listing every variant).
 _SECRET_KEYS = frozenset(
-    {"token", "password", "secret", "authorization", "api_key", "apikey", "cookie"}
+    {"authorization", "cookie", "api_key", "apikey", "private_key", "bearer"}
 )
+_SECRET_SUBSTRINGS = ("password", "secret", "token", "authorization")
+
+
+def _is_secret(key: str) -> bool:
+    k = key.lower()
+    return k in _SECRET_KEYS or any(s in k for s in _SECRET_SUBSTRINGS)
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    # WAL + busy timeout: the ledger is written from every request thread and
-    # read by the operations API concurrently. Its own file means these never
-    # contend with the substrate's write lock. (No-op on :memory:.)
-    conn.execute("PRAGMA busy_timeout = 5000")
+    # WAL + a SHORT busy timeout: the ledger is written from every request
+    # thread and read by the operations API concurrently. It's best-effort
+    # telemetry, so a contended write must fail fast and be dropped rather than
+    # stall the tool call that is waiting on record() to return — hence 250ms,
+    # not the multi-second timeout the substrate stores use. Its own file means
+    # this never contends with the substrate's write lock. (No-op on :memory:.)
+    conn.execute("PRAGMA busy_timeout = 250")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
@@ -194,14 +214,14 @@ def _redact(value: Any, key: str = "") -> Any:
     """Sanitise one value for capture: drop secrets, truncate long strings,
     replace big/opaque structures with a shape hint so the ledger never
     mirrors a full payload (or consumes a stream)."""
-    if key.lower() in _SECRET_KEYS:
+    if key and _is_secret(key):
         return "[redacted]"
     if isinstance(value, str):
         return value if len(value) <= _MAX_STR else value[:_MAX_STR] + "…"
     if isinstance(value, (int, float, bool)) or value is None:
         return value
     if isinstance(value, dict):
-        return {k: _redact(v, k) for k, v in list(value.items())[:50]}
+        return {k: _redact(v, k) for k, v in itertools.islice(value.items(), 50)}
     if isinstance(value, list):
         # Long/likely-vector lists collapse to a length hint; short ones keep
         # their (redacted) items.
@@ -215,6 +235,20 @@ def sanitize_request(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {k: _redact(v, k) for k, v in kwargs.items()}
 
 
+def _extract_ids(rows: list[Any]) -> list[str] | None:
+    """Pull up to `_MAX_IDS` statement/entity ids out of a result row list."""
+    ids: list[str] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("id") or r.get("statement_id")
+        if rid:
+            ids.append(str(rid))
+            if len(ids) >= _MAX_IDS:
+                break
+    return ids or None
+
+
 def summarize_result(result: Any) -> tuple[Any, int | None, list[str] | None, str | None]:
     """Return ``(summary, count, ids, draft_id)`` extracted from a result.
 
@@ -223,13 +257,7 @@ def summarize_result(result: Any) -> tuple[Any, int | None, list[str] | None, st
     so a streaming/generator result passes through untouched (summary None).
     """
     if isinstance(result, list):
-        ids = [
-            r.get("id") or r.get("statement_id")
-            for r in result
-            if isinstance(r, dict)
-        ]
-        ids = [str(i) for i in ids if i] or None
-        return _redact(result), len(result), ids, None
+        return _redact(result), len(result), _extract_ids(result), None
     if not isinstance(result, dict):
         return None, None, None, None
     draft_id = result.get("draft_id")
@@ -238,12 +266,7 @@ def summarize_result(result: Any) -> tuple[Any, int | None, list[str] | None, st
     results = result.get("results")
     if isinstance(results, list):
         count = len(results)
-        extracted = [
-            r.get("id") or r.get("statement_id")
-            for r in results
-            if isinstance(r, dict)
-        ]
-        ids = [str(i) for i in extracted if i] or None
+        ids = _extract_ids(results)
     for single in ("statement_id", "entity_id", "id"):
         if single in result and ids is None:
             ids = [str(result[single])]
@@ -277,10 +300,15 @@ def record(
         )
         result_summary = _json.dumps(summary) if capture and summary is not None else None
         error_class = type(error).__name__ if error is not None else None
-        error_message = str(error) if (error is not None and capture) else None
+        # An exception's text can echo request values (incl. secrets) and be
+        # arbitrarily long, so it goes through the same truncation as any other
+        # captured string, and is suppressed entirely under capture=none.
+        error_message = (
+            _redact(str(error)) if (error is not None and capture) else None
+        )
 
         conn = connection()
-        conn.execute(
+        cur = conn.execute(
             "INSERT INTO operations (op_id, at_start, at_end, duration_ms, actor, "
             "transport, tool, outcome, session_id, request_summary, result_summary, "
             "result_count, result_ids, draft_id, error_class, error_message) "
@@ -305,6 +333,11 @@ def record(
             ),
         )
         conn.commit()
+        # Amortise retention across the process's lifetime: roughly every
+        # `_PRUNE_EVERY` rows, trim to the configured bound. Keeps a long-running
+        # server bounded without a scheduler; still best-effort under the guard.
+        if cur.lastrowid and cur.lastrowid % _PRUNE_EVERY == 0:
+            prune_configured()
         return op_id
     except Exception:  # never let telemetry break the operation
         import logging
@@ -327,17 +360,25 @@ def query(
 ) -> tuple[list[sqlite3.Row], int]:
     """Page over recorded operations, newest first by the monotonic `seq`.
 
-    Filters are optional; `outcomes` is intersected with the known vocabulary
-    by the caller. Returns `(rows, total)`.
+    `tools`/`outcomes` are None for "no filter" or a set to filter by. An
+    explicitly empty set means "match nothing" (e.g. the caller intersected an
+    unknown `outcome` param with the vocabulary and got nothing) — distinct from
+    None, which imposes no filter. Returns `(rows, total)`.
     """
     where: list[str] = []
     params: list[Any] = []
-    if tools:
-        where.append(f"tool IN ({','.join('?' for _ in tools)})")
-        params.extend(sorted(tools))
-    if outcomes:
-        where.append(f"outcome IN ({','.join('?' for _ in outcomes)})")
-        params.extend(sorted(outcomes))
+
+    def _in(col: str, values: set[str] | None) -> None:
+        if values is None:
+            return
+        if not values:
+            where.append("0")  # explicit empty filter → no rows
+            return
+        where.append(f"{col} IN ({','.join('?' for _ in values)})")
+        params.extend(sorted(values))
+
+    _in("tool", tools)
+    _in("outcome", outcomes)
     if actor:
         where.append("actor = ?")
         params.append(actor)

@@ -8,7 +8,15 @@ import sqlite3
 
 import pytest
 
-from mycelium import ops_ledger
+from mycelium import ops_ledger, timestamps
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    """Neutralise ledger env the host may have set, so tests start from the
+    documented defaults regardless of the runner's environment."""
+    monkeypatch.delenv("MYCELIUM_OPS_LEDGER", raising=False)
+    monkeypatch.delenv("MYCELIUM_OPS_CAPTURE", raising=False)
 
 
 @pytest.fixture
@@ -81,10 +89,12 @@ def test_summarize_result_passes_through_non_dict():
 # --- append + query ---------------------------------------------------------
 
 
-def _rec(tool, *, result=None, error=None, actor="alice", transport="rest"):
-    ctx = ops_ledger.CallContext(tool=tool, actor=actor, transport=transport, request={})
+def _rec(tool, *, result=None, error=None, actor="alice", transport="rest", request=None):
+    ctx = ops_ledger.CallContext(
+        tool=tool, actor=actor, transport=transport, request=request or {}
+    )
     return ops_ledger.record(
-        ctx, at_start="2026-07-20T00:00:00.000Z", duration_ms=1.0, result=result, error=error
+        ctx, at_start=timestamps.now(), duration_ms=1.0, result=result, error=error
     )
 
 
@@ -142,7 +152,7 @@ def test_record_is_best_effort_on_broken_connection(ledger):
 
 
 def test_enabled_kill_switch(ledger, monkeypatch):
-    assert ops_ledger.enabled() is True
+    assert ops_ledger.enabled() is True  # default-on when configured
     monkeypatch.setenv("MYCELIUM_OPS_LEDGER", "0")
     assert ops_ledger.enabled() is False
 
@@ -181,8 +191,60 @@ def test_prune_by_age(ledger):
         "INSERT INTO operations (op_id, at_start, tool, outcome) VALUES (?,?,?,?)",
         ("op_old", "2000-01-01T00:00:00.000Z", "search_statements", "no_hit"),
     )
-    _rec("search_statements", result={"results": []})  # today
+    _rec("search_statements", result={"results": []})  # at_start = now()
     removed = ops_ledger.prune(ledger, keep_days=30, keep_rows=None)
     assert removed == 1
     rows, _ = ops_ledger.query(ledger, limit=50, offset=0)
     assert all(r["op_id"] != "op_old" for r in rows)
+
+
+def test_runtime_prune_bounds_a_long_lived_ledger(ledger, monkeypatch):
+    """record() amortises retention so a never-restarted process stays bounded."""
+    monkeypatch.setattr(ops_ledger, "_PRUNE_EVERY", 2)
+    monkeypatch.setenv("MYCELIUM_OPS_RETENTION_ROWS", "3")
+    for _ in range(10):
+        _rec("search_statements", result={"results": []})
+    _, total = ops_ledger.query(ledger, limit=50, offset=0)
+    assert total <= 3  # pruned in-flight, not only at startup
+
+
+# --- redaction of error messages & nested secrets ---------------------------
+
+
+def test_error_message_is_truncated_and_gated(ledger):
+    _rec("upsert_statement", error=ValueError("x" * 2000))
+    row = ledger.execute("SELECT * FROM operations").fetchone()
+    assert row["error_class"] == "ValueError"
+    assert row["error_message"].endswith("…") and len(row["error_message"]) <= 501
+
+
+def test_secret_substrings_redacted_in_request(ledger):
+    _rec(
+        "upsert_statement",
+        result={"statement_id": "stm_1"},
+        request={"access_token": "abc", "client_secret": "def", "kind": "event"},
+    )
+    row = ledger.execute("SELECT request_summary FROM operations").fetchone()
+    assert '"access_token": "[redacted]"' in row["request_summary"]
+    assert '"client_secret": "[redacted]"' in row["request_summary"]
+    assert '"kind": "event"' in row["request_summary"]
+
+
+def test_result_ids_are_capped(ledger):
+    big = [{"id": f"stm_{i}"} for i in range(ops_ledger._MAX_IDS + 50)]
+    _rec("search_statements", result=big)
+    row = ledger.execute("SELECT result_count, result_ids FROM operations").fetchone()
+    import json
+
+    assert row["result_count"] == ops_ledger._MAX_IDS + 50  # true count kept
+    assert len(json.loads(row["result_ids"])) == ops_ledger._MAX_IDS  # ids capped
+
+
+def test_query_empty_filter_matches_nothing(ledger):
+    _rec("search_statements", result={"results": []})
+    # An explicitly empty set (e.g. an unknown outcome intersected away) must
+    # return zero rows — distinct from None, which imposes no filter.
+    _, total = ops_ledger.query(ledger, limit=50, offset=0, outcomes=set())
+    assert total == 0
+    _, total = ops_ledger.query(ledger, limit=50, offset=0, outcomes=None)
+    assert total == 1

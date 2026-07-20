@@ -311,12 +311,16 @@ def tool(
             # ledger isn't configured — zero overhead and identical behaviour.
             if not ops_ledger.enabled():
                 return _dispatch()
+            # Snapshot the request kwargs before _dispatch pops draft_id. Drop
+            # draft_id from the captured request — it has its own ledger column,
+            # and it shouldn't be duplicated into the free-form request summary.
+            captured = {k: v for k, v in kwargs.items() if k != "draft_id"}
             ctx = ops_ledger.CallContext(
                 tool=func.__name__,
                 actor=getattr(_auth.current_principal.get(), "id", None),
                 transport=_auth.current_transport.get(),
                 session_id=_auth.current_session_id.get(),
-                request=dict(kwargs),
+                request=captured,
             )
             at_start = timestamps.now()
             started = time.monotonic()
@@ -745,9 +749,16 @@ def init(data_dir: Path) -> None:
     # Operation ledger: a bounded, best-effort record of attempted tool calls,
     # in its own file so telemetry writes never contend with the substrate's
     # single write lock. Prune to the configured retention bound on startup.
-    ops_ledger.configure(data_dir / "mycelium-ops.db")
-    ops_ledger.migrate(ops_ledger.connection())
-    ops_ledger.prune_configured()
+    # Guarded: telemetry must never break the substrate, and that includes
+    # startup — a corrupt/unwritable mycelium-ops.db leaves the ledger simply
+    # disabled (records become no-ops) rather than aborting the whole server.
+    try:
+        ops_ledger.configure(data_dir / "mycelium-ops.db")
+        ops_ledger.migrate(ops_ledger.connection())
+        ops_ledger.prune_configured()
+    except Exception:
+        logger.warning("operation ledger unavailable; disabling", exc_info=True)
+        ops_ledger.reset()
     orphaned = research_store.mark_orphaned(_drafts_db())
     if orphaned:
         logger.warning(
