@@ -4,6 +4,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from mycelium import embed, mention_worker, server, store
+from mycelium.http import _history_target_id
 
 
 def fake_embed_factory():
@@ -2725,3 +2726,88 @@ def test_pending_mention_reject_writes_no_mention(tmp_path, monkeypatch):
             client.get("/api/pending-mentions?status=open").json()["pending_mentions"]
             == []
         )
+
+
+# --- /api/history reads the audit log --------------------------------------
+# Regression coverage for the reader switch: the endpoint must surface
+# deletes (invisible to the old live-table feed) and keep addressing link
+# events by their endpoints, not by the audit log's numeric link_id.
+
+
+def test_history_target_id_rebuilds_link_composite():
+    assert (
+        _history_target_id(
+            "statement_link",
+            "42",
+            {"from_id": "stm_a", "to_id": "stm_b", "link_type": "triggers"},
+        )
+        == "stm_a|stm_b|triggers"
+    )
+    assert (
+        _history_target_id(
+            "entity_statement_link",
+            "7",
+            {
+                "entity_id": "ent_x",
+                "statement_id": "stm_y",
+                "direction": "es",
+                "link_type": "about",
+            },
+        )
+        == "ent_x|stm_y|es|about"
+    )
+
+
+def test_history_target_id_passthrough():
+    # Non-link kinds are untouched.
+    assert _history_target_id("statement", "stm_a", {"text": "hi"}) == "stm_a"
+    # entity_link already stores the composite as its target_id.
+    assert (
+        _history_target_id("entity_link", "e1|e2|contains", {"from_entity_id": "e1"})
+        == "e1|e2|contains"
+    )
+    # Missing payload / field falls back to the stored id rather than guessing.
+    assert _history_target_id("statement_link", "42", {"from_id": "stm_a"}) == "42"
+    assert _history_target_id("statement_link", "42", None) == "42"
+
+
+def test_history_api_shows_deletes_and_link_composite(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
+        a = client.post(
+            "/upsert-statement",
+            json={"kind": "event", "text": "Alpha", "mentions": [], "links": []},
+        ).json()["statement_id"]
+        b = client.post(
+            "/upsert-statement",
+            json={
+                "kind": "event",
+                "text": "Beta",
+                "mentions": [],
+                "links": [{"to_id": a, "link_type": "triggers"}],
+            },
+        ).json()["statement_id"]
+        assert client.post("/delete-statement", json={"id": b}).status_code == 200
+
+        events = client.get("/api/history?limit=200").json()["events"]
+        ops = {e["op"] for e in events}
+        assert "delete" in ops  # audit-log truth the old feed couldn't show
+
+        # Link event is addressed by endpoints (b --triggers--> a), not by the
+        # audit log's numeric link_id.
+        link_ev = next(
+            e
+            for e in events
+            if e["target_kind"] == "statement_link" and e["op"] == "link"
+        )
+        assert link_ev["target_id"] == f"{b}|{a}|triggers"
+
+        # The delete carries its before-snapshot; nothing after.
+        del_ev = next(
+            e
+            for e in events
+            if e["op"] == "delete"
+            and e["target_kind"] == "statement"
+            and e["target_id"] == b
+        )
+        assert del_ev["before"]["text"] == "Beta"
+        assert del_ev["after"] is None

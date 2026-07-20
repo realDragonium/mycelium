@@ -217,3 +217,100 @@ def test_history_row_lands_in_same_transaction(tmp_path):
         (eid,),
     ).fetchone()["n"]
     assert main_count == 1 and hist_count == 1
+
+
+# --- history_feed read model ------------------------------------------------
+# The read model that powers /api/history. Unlike the live-table activity_feed,
+# it reads the audit log, so deletes and superseded updates survive.
+
+
+def _feed(conn, *, ops=frozenset(), kinds=frozenset(), query="", limit=100, offset=0):
+    return store.history_feed(
+        conn,
+        limit=limit,
+        offset=offset,
+        ops=set(ops),
+        kinds=set(kinds),
+        query=query,
+    )
+
+
+def test_history_feed_includes_deletes(tmp_path):
+    """A deleted entity is gone from the live tables but present in the feed —
+    this is the whole reason the feed reads the audit log."""
+    conn = fresh_with_history(tmp_path)
+    store.set_actor("alice")
+    eid = store.create_entity(conn, "doomed")
+    store.delete_entity(conn, eid)
+
+    rows, total = _feed(conn, kinds={"entity"})
+    ops = [r["op"] for r in rows]
+    assert "delete" in ops
+    assert total == len(rows)
+    delete_row = next(r for r in rows if r["op"] == "delete")
+    assert delete_row["target_id"] == eid
+    assert json.loads(delete_row["before_json"])["description"] == "doomed"
+
+
+def test_history_feed_keeps_superseded_updates(tmp_path):
+    """Two updates to the same statement both appear — the live-table feed
+    would only ever show the latest updated_at."""
+    conn = fresh_with_history(tmp_path)
+    store.set_actor("alice")
+    sid = store.create_statement(conn, "event", "user logs in")
+    store.update_statement_text(conn, sid, "user signs in")
+    store.update_statement_text(conn, sid, "user authenticates")
+
+    rows, _ = _feed(conn, ops={"update"}, query=sid)
+    assert len(rows) == 2  # both historical updates survive
+
+
+def test_history_feed_newest_first_and_paginates(tmp_path):
+    conn = fresh_with_history(tmp_path)
+    store.set_actor("alice")
+    first = store.create_entity(conn, "first")
+    last = store.create_entity(conn, "last")
+
+    page1, total = _feed(conn, kinds={"entity"}, limit=1, offset=0)
+    assert total == 2
+    assert page1[0]["target_id"] == last  # newest first
+    page2, _ = _feed(conn, kinds={"entity"}, limit=1, offset=1)
+    assert page2[0]["target_id"] == first
+
+
+def test_history_feed_filters_by_op_and_kind(tmp_path):
+    conn = fresh_with_history(tmp_path)
+    store.set_actor("alice")
+    eid = store.create_entity(conn, "x")
+    store.update_entity_description(conn, eid, "y")
+
+    creates, _ = _feed(conn, ops={"create"}, kinds={"entity"})
+    assert [r["op"] for r in creates] == ["create"]
+
+
+def test_history_feed_returns_context(tmp_path):
+    """context_json rides along so the endpoint can surface audit reasons
+    (rename/merge/reassignment) — not just before/after."""
+    conn = fresh_with_history(tmp_path)
+    store.set_actor("alice")
+    eid = store.create_entity(conn, None)
+    nid = store.create_name(conn, "Login", eid)
+    store.rename_name(conn, nid, "Sign-in")
+
+    rows, _ = _feed(conn, ops={"update"}, kinds={"name"})
+    assert json.loads(rows[0]["context_json"])["reason"] == "rename_name"
+
+
+def test_history_feed_query_treats_wildcards_literally(tmp_path):
+    """A `%` in the query must match a literal percent, not act as a LIKE
+    wildcard — otherwise `q` silently over-matches."""
+    conn = fresh_with_history(tmp_path)
+    store.set_actor("alice")
+    plain = store.create_entity(conn, "plain")  # id has no '%'
+    # No target_id contains a literal '%', so a literal search finds nothing;
+    # if '%' were an unescaped wildcard it would match everything.
+    rows, total = _feed(conn, query="%")
+    assert total == 0 and rows == []
+    # Sanity: a real substring of a real id still matches.
+    rows, _ = _feed(conn, query=plain[:4])
+    assert any(r["target_id"] == plain for r in rows)

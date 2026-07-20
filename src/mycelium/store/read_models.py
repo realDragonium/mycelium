@@ -13,6 +13,16 @@ from .kernel import _load_when_tree
 # and all substrate SQL stays behind the store boundary. No commits.
 
 
+def _like_escape(s: str) -> str:
+    """Escape LIKE wildcards so a substring `query` matches literally.
+
+    `%` and `_` are LIKE metacharacters and `\\` is our chosen ESCAPE char;
+    all three must be backslash-escaped. Callers pair this with an
+    `ESCAPE '\\'` clause on the LIKE.
+    """
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
     """Dump the entire substrate in the shape the UI expects.
 
@@ -178,8 +188,8 @@ def activity_feed(
         where_parts.append(f"target_kind IN ({','.join('?' for _ in kinds)})")
         params.extend(sorted(kinds))
     if query:
-        where_parts.append("LOWER(target_id) LIKE ?")
-        params.append(f"%{query.lower()}%")
+        where_parts.append(r"LOWER(target_id) LIKE ? ESCAPE '\'")
+        params.append(f"%{_like_escape(query.lower())}%")
     where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     base = f"SELECT * FROM ({_ACTIVITY_UNION}){where_sql}"
@@ -189,6 +199,62 @@ def activity_feed(
 
     rows = conn.execute(
         f"{base} ORDER BY at DESC LIMIT ? OFFSET ?",
+        (*params, limit, offset),
+    ).fetchall()
+    return rows, total
+
+
+def history_feed(
+    conn: sqlite3.Connection,
+    *,
+    limit: int,
+    offset: int,
+    ops: set[str],
+    kinds: set[str],
+    query: str,
+) -> tuple[list[sqlite3.Row], int]:
+    """Page over the attached transactional audit log, newest first.
+
+    Unlike `activity_feed` (which reconstructs events from the live tables'
+    `created_at`/`updated_at` and therefore cannot show deletes or a
+    superseded update), this reads `history.history_events` — the durable
+    record written in the same transaction as every state-changing write.
+    Deletes, unlinks, and every historical update are all present.
+
+    Requires a history DB to be attached (`has_history(conn)`); the caller
+    is responsible for falling back to `activity_feed` when it isn't.
+
+    Filters mirror `activity_feed`: `ops`/`kinds` are already-validated
+    subsets, `query` is a stripped case-insensitive substring match on
+    `target_id`, and `limit`/`offset` are pre-clamped. Ordering is by the
+    monotonic `event_id` so equal timestamps keep a stable order.
+
+    Returns `(rows, total)` where each row carries `event_id`, `at`, `op`,
+    `target_kind`, `target_id`, `actor`, `before_json`, and `after_json`.
+    """
+    where_parts: list[str] = []
+    params: list[Any] = []
+    if ops:
+        where_parts.append(f"op IN ({','.join('?' for _ in ops)})")
+        params.extend(sorted(ops))
+    if kinds:
+        where_parts.append(f"target_kind IN ({','.join('?' for _ in kinds)})")
+        params.extend(sorted(kinds))
+    if query:
+        where_parts.append(r"LOWER(target_id) LIKE ? ESCAPE '\'")
+        params.append(f"%{_like_escape(query.lower())}%")
+    where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    total_row = conn.execute(
+        f"SELECT COUNT(*) AS n FROM history.history_events{where_sql}", params
+    ).fetchone()
+    total = int(total_row["n"]) if total_row else 0
+
+    rows = conn.execute(
+        "SELECT event_id, at, actor, op, target_kind, target_id, "
+        "before_json, after_json, context_json "
+        f"FROM history.history_events{where_sql} "
+        "ORDER BY event_id DESC LIMIT ? OFFSET ?",
         (*params, limit, offset),
     ).fetchall()
     return rows, total

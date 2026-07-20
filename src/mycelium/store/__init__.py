@@ -116,6 +116,7 @@ from .names import (
 )
 from .read_models import (
     activity_feed,
+    history_feed,
     substrate_dump,
 )
 from .statement_mentions import (
@@ -163,6 +164,7 @@ __all__ = [
     "HISTORY_SCHEMA",
     "SCHEMA",
     "activity_feed",
+    "history_feed",
     "add_mentions",
     "all_statement_ids",
     "all_statements_with_text",
