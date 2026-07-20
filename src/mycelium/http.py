@@ -29,7 +29,16 @@ from pydantic import Field as PydField
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import auth, connect_page, oauth_server, oidc, server, store, tracing
+from . import (
+    auth,
+    connect_page,
+    oauth_server,
+    oidc,
+    ops_ledger,
+    server,
+    store,
+    tracing,
+)
 
 # Build FastMCP's streamable-HTTP sub-app once at import time. The
 # sub-app owns a session manager that can only be started once per
@@ -216,6 +225,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # leave it None — they have no drafts to auto-target.
         session_id = request.headers.get("mcp-session-id")
         session_ctx = auth.current_session_id.set(session_id)
+        # The MCP streamable-HTTP app is mounted at `/mcp`; everything else is
+        # the REST mirror. Labels operation-ledger rows by transport.
+        transport = "mcp" if request.url.path.startswith("/mcp") else "rest"
+        transport_ctx = auth.current_transport.set(transport)
         if principal is not None:
             store.set_actor(principal.id)
         try:
@@ -224,6 +237,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             store.set_actor(None)
             auth.current_principal.reset(ctx_token)
             auth.current_session_id.reset(session_ctx)
+            auth.current_transport.reset(transport_ctx)
 
     @staticmethod
     def _resolve(request: Request) -> auth.Principal | None:
@@ -617,6 +631,89 @@ def get_history(
             for r in rows
         ]
     return {"events": events, "total": total, "limit": limit, "offset": offset}
+
+
+# --- operation ledger -----------------------------------------------------
+# The "Operations" half of Activity: attempted tool calls — searches,
+# no-hits, rejected/failed writes, queued drafts — with truthful outcome
+# and latency. Distinct from /api/history (successful knowledge changes).
+# A separate store, so this never contends with the substrate write lock.
+
+
+def _serialize_operation(row) -> dict[str, Any]:
+    return {
+        "op_id": row["op_id"],
+        "at_start": row["at_start"],
+        "at_end": row["at_end"],
+        "duration_ms": row["duration_ms"],
+        "actor": row["actor"],
+        "transport": row["transport"],
+        "tool": row["tool"],
+        "outcome": row["outcome"],
+        "correlation_id": row["correlation_id"],
+        "session_id": row["session_id"],
+        "request": json.loads(row["request_summary"]) if row["request_summary"] else None,
+        "result": json.loads(row["result_summary"]) if row["result_summary"] else None,
+        "result_count": row["result_count"],
+        "result_ids": json.loads(row["result_ids"]) if row["result_ids"] else None,
+        "draft_id": row["draft_id"],
+        "error_class": row["error_class"],
+        "error_message": row["error_message"],
+    }
+
+
+@app.get("/api/operations")
+def get_operations(
+    request: Request,
+    limit: int = 50,
+    offset: int = 0,
+    tool: str | None = None,
+    outcome: str | None = None,
+    actor: str | None = None,
+) -> dict[str, Any]:
+    """Paginated, filterable view of attempted operations, newest first.
+
+    `enabled` is False when the ledger isn't configured or is switched off —
+    the UI shows an empty, explained state rather than an error.
+
+    Query params:
+      - tool: comma-separated tool names (open vocabulary)
+      - outcome: comma-separated subset of the outcome vocabulary
+      - actor: exact actor id match
+    """
+    _require_principal(request)
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
+    if not ops_ledger.enabled():
+        return {
+            "operations": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "enabled": False,
+        }
+
+    tools = {p.strip() for p in tool.split(",") if p.strip()} if tool else None
+    outcomes = (
+        {p.strip() for p in outcome.split(",") if p.strip()} & ops_ledger.OUTCOMES
+        if outcome
+        else None
+    )
+    rows, total = ops_ledger.query(
+        ops_ledger.connection(),
+        limit=limit,
+        offset=offset,
+        tools=tools,
+        outcomes=outcomes,
+        actor=(actor or None),
+    )
+    return {
+        "operations": [_serialize_operation(r) for r in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "enabled": True,
+    }
 
 
 # --- account & token endpoints --------------------------------------------

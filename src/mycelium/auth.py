@@ -131,6 +131,18 @@ current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 )
 
 
+# Transport the current call arrived on: "rest" (the UI/REST mirror), "mcp"
+# (the mounted streamable-HTTP MCP app), or None for in-process/stdio callers
+# (unit tests, local stdio) that never pass through the HTTP middleware. Set by
+# `AuthMiddleware` from the request path; read by the operation ledger seam in
+# `server.tool` so one shared seam can label both transports without duplicating
+# the emit per transport.
+current_transport: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "mycelium_current_transport",
+    default=None,
+)
+
+
 # --- role classification --------------------------------------------------
 # Naming conventions in `server.py` are the source of truth for what a
 # tool does. Read tools start with one of `_READ_PREFIXES`; destructive

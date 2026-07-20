@@ -27,10 +27,12 @@ from mcp.server.fastmcp import FastMCP
 from . import (
     embed,
     link_rules,
+    ops_ledger,
     phrasing,
     plurals,
     store,
     survey,
+    timestamps,
     vector,
     when_expression,
 )
@@ -266,39 +268,75 @@ def tool(
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            principal = _auth.current_principal.get()
-            if principal is not None and not _auth.principal_satisfies(
-                principal, required
-            ):
-                raise PermissionError(
-                    f"tool '{func.__name__}' requires the {required} role; "
-                    f"caller has {principal.role}"
-                )
-
-            if has_draft_id:
-                draft_id = kwargs.pop("draft_id", None)
-            else:
-                draft_id = None
-
-            if is_mutation:
-                redirect = _resolve_draft_target(principal, draft_id)
-                if redirect is not None:
-                    # Bind the remaining kwargs against func's original
-                    # signature so positional args become named — keeps
-                    # the stored payload uniform regardless of how the
-                    # caller invoked the tool.
-                    bound = _ORIG_SIGNATURES[func.__name__].bind_partial(
-                        *args, **kwargs
+            def _dispatch() -> Any:
+                principal = _auth.current_principal.get()
+                if principal is not None and not _auth.principal_satisfies(
+                    principal, required
+                ):
+                    raise PermissionError(
+                        f"tool '{func.__name__}' requires the {required} role; "
+                        f"caller has {principal.role}"
                     )
-                    payload = dict(bound.arguments)
-                    return _queue_draft_op(redirect, func.__name__, payload, principal)
 
-            if is_draftable_read and draft_id is not None:
-                return _list_from_draft(draft_id, _LIST_TOOL_KINDS[func.__name__])
+                if has_draft_id:
+                    draft_id = kwargs.pop("draft_id", None)
+                else:
+                    draft_id = None
 
-            if _profile_enabled():
-                return _run_with_profile(func, args, kwargs)
-            return func(*args, **kwargs)
+                if is_mutation:
+                    redirect = _resolve_draft_target(principal, draft_id)
+                    if redirect is not None:
+                        # Bind the remaining kwargs against func's original
+                        # signature so positional args become named — keeps
+                        # the stored payload uniform regardless of how the
+                        # caller invoked the tool.
+                        bound = _ORIG_SIGNATURES[func.__name__].bind_partial(
+                            *args, **kwargs
+                        )
+                        payload = dict(bound.arguments)
+                        return _queue_draft_op(
+                            redirect, func.__name__, payload, principal
+                        )
+
+                if is_draftable_read and draft_id is not None:
+                    return _list_from_draft(draft_id, _LIST_TOOL_KINDS[func.__name__])
+
+                if _profile_enabled():
+                    return _run_with_profile(func, args, kwargs)
+                return func(*args, **kwargs)
+
+            # Operation ledger: record every attempted call (outcome + latency)
+            # through this one shared seam, so REST and MCP are covered without
+            # per-transport duplication. Best-effort and fully bypassed when the
+            # ledger isn't configured — zero overhead and identical behaviour.
+            if not ops_ledger.enabled():
+                return _dispatch()
+            ctx = ops_ledger.CallContext(
+                tool=func.__name__,
+                actor=getattr(_auth.current_principal.get(), "id", None),
+                transport=_auth.current_transport.get(),
+                session_id=_auth.current_session_id.get(),
+                request=dict(kwargs),
+            )
+            at_start = timestamps.now()
+            started = time.monotonic()
+            try:
+                result = _dispatch()
+            except BaseException as exc:
+                ops_ledger.record(
+                    ctx,
+                    at_start=at_start,
+                    duration_ms=(time.monotonic() - started) * 1000.0,
+                    error=exc,
+                )
+                raise
+            ops_ledger.record(
+                ctx,
+                at_start=at_start,
+                duration_ms=(time.monotonic() - started) * 1000.0,
+                result=result,
+            )
+            return result
 
         # Expose the required role on the wrapper so other layers
         # (e.g. http.py's role-classifier loop and the tools/list
@@ -703,6 +741,13 @@ def init(data_dir: Path) -> None:
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
     research_store.migrate(_drafts_db())
+
+    # Operation ledger: a bounded, best-effort record of attempted tool calls,
+    # in its own file so telemetry writes never contend with the substrate's
+    # single write lock. Prune to the configured retention bound on startup.
+    ops_ledger.configure(data_dir / "mycelium-ops.db")
+    ops_ledger.migrate(ops_ledger.connection())
+    ops_ledger.prune_configured()
     orphaned = research_store.mark_orphaned(_drafts_db())
     if orphaned:
         logger.warning(
