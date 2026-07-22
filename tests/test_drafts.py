@@ -250,6 +250,63 @@ def test_list_drafts_endpoint_returns_counts(tmp_path, monkeypatch):
         assert body["drafts"][0]["status"] == "open"
 
 
+def _push_principal(principal, session_id):
+    p_tok = auth.current_principal.set(principal)
+    s_tok = auth.current_session_id.set(session_id)
+    return (p_tok, s_tok)
+
+
+def test_list_drafts_curator_sees_all_creators(tmp_path, monkeypatch):
+    """The MCP `list_drafts` tool returns every creator's drafts (unlike
+    `list_my_drafts`), each carrying an op_count, for a real writer+."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        # Two distinct drafters each queue an op under their own draft.
+        for pid, sess in (("d-a", "sess-A"), ("d-b", "sess-B")):
+            p = auth.Principal(id=pid, name=pid, role="drafter", type="human")
+            tokens = _push_principal(p, sess)
+            try:
+                server.upsert_entity(name=f"E-{pid}", description="x")
+            finally:
+                _restore(tokens)
+
+        curator = auth.Principal(id="w1", name="W", role="writer", type="human")
+        tokens = _push_principal(curator, "sess-cur")
+        try:
+            # list_my_drafts is scoped to the curator → nothing of theirs.
+            assert server.list_my_drafts() == []
+            # list_drafts spans both creators.
+            drafts = server.list_drafts()
+        finally:
+            _restore(tokens)
+
+        assert {d["created_by"] for d in drafts} == {"d-a", "d-b"}
+        assert all(d["op_count"] == 1 for d in drafts)
+        assert all(d["status"] == "open" for d in drafts)
+
+        # status filter narrows the set (nothing submitted yet).
+        tokens = _push_principal(curator, "sess-cur")
+        try:
+            assert server.list_drafts(status="submitted") == []
+        finally:
+            _restore(tokens)
+
+
+def test_list_drafts_denied_for_drafter(tmp_path, monkeypatch):
+    """A drafter passes the writer rank via the redirect shortcut for
+    normal writes, but must NOT be able to enumerate everyone's drafts."""
+    import pytest
+
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        tokens = _as_drafter("sess-deny")
+        try:
+            with pytest.raises(PermissionError):
+                server.list_drafts()
+        finally:
+            _restore(tokens)
+
+
 def test_list_tools_with_draft_id_return_queued_ops(tmp_path, monkeypatch):
     """list_entities(draft_id=X) returns upsert_entity ops, NOT substrate
     rows. The substrate stays untouched so the ops are the only source."""

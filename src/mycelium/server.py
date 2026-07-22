@@ -4016,6 +4016,53 @@ def list_my_drafts() -> list[dict[str, Any]]:
     return [drafts_store.serialize_draft(r) for r in rows]
 
 
+_DRAFT_STATUS_VALUES = (
+    "all",
+    "open",
+    "submitted",
+    "approved",
+    "rejected",
+    "withdrawn",
+)
+
+
+@tool
+def list_drafts(status: str = "all") -> list[dict[str, Any]]:
+    """List *every* draft across all creators, newest first (curators only).
+
+    Unlike `list_my_drafts` (scoped to the caller), this returns the whole
+    review queue so a curator can discover work awaiting review and then
+    `get_draft(<id>)` to inspect the queued ops. Each entry carries an
+    `op_count`. Filter with `status`: all / open / submitted / approved /
+    rejected / withdrawn.
+
+    Requires a real writer or admin role — same bar as approving or
+    rejecting a draft. Drafters (whose writes get redirected into their own
+    draft) do not pass, so they can't enumerate other people's drafts.
+    """
+    from . import auth as _auth
+    from . import drafts_store
+
+    principal = _auth.current_principal.get()
+    if principal is None or not _auth.principal_has_real_role(principal, "writer"):
+        raise PermissionError(
+            "tool 'list_drafts' requires the writer or admin role; "
+            "use list_my_drafts to see your own drafts"
+        )
+    if status not in _DRAFT_STATUS_VALUES:
+        raise ValueError("status must be one of: " + ", ".join(_DRAFT_STATUS_VALUES))
+
+    conn = _drafts_db()
+    rows = drafts_store.list_drafts(conn, status=status)
+    counts = drafts_store.count_ops_by_draft(conn)
+    out = []
+    for r in rows:
+        d = drafts_store.serialize_draft(r)
+        d["op_count"] = counts.get(r["id"], 0)
+        out.append(d)
+    return out
+
+
 @tool
 def get_draft(draft_id: str) -> dict[str, Any]:
     """Return a draft and its queued ops, in seq order.
