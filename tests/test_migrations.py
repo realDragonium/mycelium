@@ -258,6 +258,12 @@ def _downgrade_names_to_case_sensitive(conn):
     conn.execute("INSERT INTO names_plain SELECT * FROM names")
     conn.execute("DROP TABLE names")
     conn.execute("ALTER TABLE names_plain RENAME TO names")
+    # The INSERT above opened sqlite3's implicit transaction, and FK
+    # pragmas are no-ops while one is open — commit first, or the
+    # re-enable is silently swallowed and everything after this helper
+    # runs unenforced (which is exactly how the v6 FK bug slipped past
+    # the first version of these tests).
+    conn.commit()
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA user_version = 5")
     conn.commit()
@@ -283,6 +289,14 @@ def test_v6_merges_case_variant_names_and_absorbs_empty_entities():
     conn.execute(
         "INSERT INTO statement_mentions (statement_id, name_id) VALUES (?, ?)",
         (sid, variant),
+    )
+    # A statement reachable ONLY through a pending (suspect) row on the
+    # variant — must still be enqueued for recompute when that row goes.
+    pending_sid = store.create_statement(conn, "state", "checklist pending only")
+    conn.execute(
+        "INSERT INTO pending_mentions (statement_id, name_id, created_at) "
+        "VALUES (?, ?, '2026-01-01T00:00:00.000Z')",
+        (pending_sid, variant),
     )
     # ent_b carries links: one that duplicates an existing ent_a link
     # (dropped), one only it has (repointed onto ent_a).
@@ -319,6 +333,22 @@ def test_v6_merges_case_variant_names_and_absorbs_empty_entities():
         ).fetchone()["n"]
         == 1
     )
+    # The pending-only statement lost its review row but is queued to
+    # re-derive it against the keeper.
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM pending_mentions WHERE statement_id = ?",
+            (pending_sid,),
+        ).fetchone()["n"]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM mention_recompute_queue WHERE statement_id = ?",
+            (pending_sid,),
+        ).fetchone()["n"]
+        == 1
+    )
     # The nameless duplicate entity is gone; its unique link moved, the
     # duplicate link was dropped rather than doubled.
     assert (
@@ -334,6 +364,9 @@ def test_v6_merges_case_variant_names_and_absorbs_empty_entities():
         (ent_a, ent_c, "contains"),
         (ent_a, ent_c, "relates-to"),
     ]
+    # Foreign-key enforcement survived the rebuild's pragma dance (an
+    # OFF or ON swallowed by an open transaction would show up here).
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     # The rebuilt table enforces case-insensitive uniqueness.
     import pytest as _pytest
 

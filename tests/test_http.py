@@ -3037,3 +3037,39 @@ def test_operations_disabled_does_not_change_tool_result(tmp_path, monkeypatch):
         assert r.status_code == 200 and r.json()["statement_id"].startswith("stm_")
         body = client.get("/api/operations").json()
         assert body["enabled"] is False and body["operations"] == []
+
+
+def test_init_prunes_stranded_name_vectors(tmp_path, monkeypatch):
+    """A migration can delete name rows + vector mappings while the
+    persisted hnsw file keeps the vectors (v6's variant merge does).
+    init must prune those stranded slots when loading the index."""
+    import sqlite3 as _sq
+
+    with _client(tmp_path, monkeypatch, deterministic_embed) as client:
+        client.post("/upsert-entity", json={"name": "Falcon", "description": ""})
+        client.post("/upsert-entity", json={"name": "Heron", "description": ""})
+
+    # Simulate the migration's effect directly in SQLite: drop the
+    # "Falcon" names and their vector mappings, leaving the .vec file
+    # untouched.
+    conn = _sq.connect(tmp_path / "mycelium.db")
+    conn.row_factory = _sq.Row
+    stranded_vids = [
+        r["vector_id"]
+        for r in conn.execute(
+            "SELECT vector_id FROM name_vector_ids WHERE name_id IN "
+            "(SELECT id FROM names WHERE text LIKE 'Falcon%')"
+        )
+    ]
+    assert stranded_vids
+    conn.execute(
+        "DELETE FROM name_vector_ids WHERE name_id IN "
+        "(SELECT id FROM names WHERE text LIKE 'Falcon%')"
+    )
+    conn.execute("DELETE FROM names WHERE text LIKE 'Falcon%'")
+    conn.commit()
+    conn.close()
+
+    with _client(tmp_path, monkeypatch, deterministic_embed):
+        for vid in stranded_vids:
+            assert server._name_idx().get_vector(vid) is None

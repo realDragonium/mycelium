@@ -443,6 +443,18 @@ def _v6_merge_variant_names(
                 "DELETE FROM statement_mentions WHERE name_id = ?", (dropped_id,)
             )
         if _has_table(conn, "pending_mentions"):
+            # A statement can be reachable ONLY through a pending row (a
+            # suspect match has no statement_mentions row until approved)
+            # — collect it too, or deleting the pending row would erase
+            # the review item without the recompute that recreates it
+            # against the keeper.
+            affected.update(
+                r["statement_id"]
+                for r in conn.execute(
+                    "SELECT statement_id FROM pending_mentions WHERE name_id = ?",
+                    (dropped_id,),
+                )
+            )
             conn.execute(
                 "DELETE FROM pending_mentions WHERE name_id = ?", (dropped_id,)
             )
@@ -530,7 +542,20 @@ def _v6_absorb_entity(conn: sqlite3.Connection, eid: str, target: str) -> None:
 
 def _v6_rebuild_names_nocase(conn: sqlite3.Connection) -> None:
     """v6 step 3: rebuild `names` with the NOCASE unique constraint
-    (rename-and-copy, as in v2/v3)."""
+    (rename-and-copy, as in v2/v3).
+
+    Unlike v2/v3, DML has already run by the time this executes (the
+    variant merge above), so sqlite3's implicit transaction is open —
+    and foreign-key pragmas are silent no-ops inside a transaction.
+    Commit before turning enforcement OFF (or the DROP below trips FK
+    checks from statement_mentions / name_vector_ids / pending_mentions
+    rows referencing `names`), and commit again before turning it back
+    ON so that pragma isn't swallowed the same way. The early commit is
+    safe: if the rebuild then fails, `user_version` is still 5 and
+    re-running v6 is harmless — the merge finds nothing left to do and
+    the rebuild retries.
+    """
+    conn.commit()
     conn.execute("PRAGMA foreign_keys = OFF")
     # Defensive: a previous half-applied migration may have left the
     # scratch table behind.
@@ -554,6 +579,10 @@ def _v6_rebuild_names_nocase(conn: sqlite3.Connection) -> None:
         conn.execute(f"INSERT INTO names_new ({cols}) SELECT {cols} FROM names")
         conn.execute("DROP TABLE names")
         conn.execute("ALTER TABLE names_new RENAME TO names")
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
 

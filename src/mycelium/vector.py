@@ -98,6 +98,12 @@ class Index:
                 return
             raise
 
+    def ids(self) -> list[int]:
+        """Labels present in the index. May include slots already marked
+        deleted (hnswlib keeps them addressable); callers pruning via
+        `delete()` don't care — it is idempotent."""
+        return [int(x) for x in self._index.get_ids_list()]
+
     def get_vector(self, vector_id: int) -> list[float] | None:
         """Return the stored vector at `vector_id`, or `None` if the
         slot is missing from the index.

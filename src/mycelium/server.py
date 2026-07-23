@@ -789,6 +789,20 @@ def init(data_dir: Path) -> None:
     name_index_path = data_dir / "mycelium-names.vec"
     if name_index_path.exists():
         name_index = vector.Index.load(name_index_path)
+        # A migration can drop name rows and their vector mappings while
+        # the persisted index keeps the vectors (v6's case-variant merge
+        # does). Stranded vectors resolve to nothing but still occupy
+        # top-k slots in every name search — prune them on load.
+        stranded = [
+            vid
+            for vid in name_index.ids()
+            if store.get_name_id_by_vector_id(_db(), vid) is None
+        ]
+        if stranded:
+            logger.info("pruning %d stranded name vector(s)", len(stranded))
+            for vid in stranded:
+                name_index.delete(vid)
+            name_index.save(name_index_path)
     else:
         name_index = vector.Index.empty()
         _rebuild_vector_index(
