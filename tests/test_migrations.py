@@ -241,3 +241,156 @@ def test_v5_upgrade_enqueues_existing_statements_for_rederive():
     mention_worker.drain(conn)
     assert store.get_mentions(conn, sid) == []
     assert [p["name"] for p in store.list_pending_mentions(conn)] == ["result"]
+
+
+def _downgrade_names_to_case_sensitive(conn):
+    """Rebuild `names` without the NOCASE collation, simulating a pre-v6
+    DB so the v6 migration's merge actually runs (same rename-and-copy
+    dance the migration itself uses)."""
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute(
+        "CREATE TABLE names_plain ("
+        "id TEXT PRIMARY KEY, text TEXT NOT NULL UNIQUE, "
+        "entity_id TEXT NOT NULL REFERENCES entities(id), "
+        "generated_from_name_id TEXT REFERENCES names_plain(id), "
+        "created_at TEXT, updated_at TEXT, created_by TEXT, updated_by TEXT)"
+    )
+    conn.execute("INSERT INTO names_plain SELECT * FROM names")
+    conn.execute("DROP TABLE names")
+    conn.execute("ALTER TABLE names_plain RENAME TO names")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA user_version = 5")
+    conn.commit()
+
+
+def test_v6_merges_case_variant_names_and_absorbs_empty_entities():
+    """A pre-v6 DB where a case-variant upsert minted a duplicate entity:
+    v6 merges the name rows onto the oldest, moves its mentions, absorbs
+    the now-nameless duplicate entity (links repointed, duplicates
+    dropped), and leaves the table case-insensitive."""
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    _downgrade_names_to_case_sensitive(conn)
+
+    ent_a = store.create_entity(conn, "the checklist feature")
+    ent_b = store.create_entity(conn, None)  # minted by a variant upsert
+    ent_c = store.create_entity(conn, "unrelated")
+    keeper = store.create_name(conn, "Checklist", ent_a)
+    variant = store.create_name(conn, "checklist", ent_b)
+    store.create_name(conn, "Other", ent_c)
+
+    sid = store.create_statement(conn, "state", "the checklist has items")
+    conn.execute(
+        "INSERT INTO statement_mentions (statement_id, name_id) VALUES (?, ?)",
+        (sid, variant),
+    )
+    # ent_b carries links: one that duplicates an existing ent_a link
+    # (dropped), one only it has (repointed onto ent_a).
+    conn.execute(
+        "INSERT INTO entity_links (from_entity_id, to_entity_id, link_type) "
+        "VALUES (?, ?, 'relates-to'), (?, ?, 'relates-to'), (?, ?, 'contains')",
+        (ent_a, ent_c, ent_b, ent_c, ent_b, ent_c),
+    )
+    conn.execute("DELETE FROM mention_recompute_queue")
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    # One "Checklist" row survives, on the original entity.
+    rows = conn.execute(
+        "SELECT id, text, entity_id FROM names ORDER BY text"
+    ).fetchall()
+    assert [(r["id"], r["text"], r["entity_id"]) for r in rows] == [
+        (keeper, "Checklist", ent_a),
+        *[(r["id"], "Other", ent_c) for r in rows[1:]],
+    ]
+    # The variant's mention moved to the keeper; the statement is queued
+    # for recompute.
+    assert [
+        r["name_id"]
+        for r in conn.execute(
+            "SELECT name_id FROM statement_mentions WHERE statement_id = ?", (sid,)
+        )
+    ] == [keeper]
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM mention_recompute_queue WHERE statement_id = ?",
+            (sid,),
+        ).fetchone()["n"]
+        == 1
+    )
+    # The nameless duplicate entity is gone; its unique link moved, the
+    # duplicate link was dropped rather than doubled.
+    assert (
+        conn.execute("SELECT 1 FROM entities WHERE id = ?", (ent_b,)).fetchone() is None
+    )
+    links = conn.execute(
+        "SELECT from_entity_id, to_entity_id, link_type FROM entity_links "
+        "ORDER BY link_type"
+    ).fetchall()
+    assert [
+        (r["from_entity_id"], r["to_entity_id"], r["link_type"]) for r in links
+    ] == [
+        (ent_a, ent_c, "contains"),
+        (ent_a, ent_c, "relates-to"),
+    ]
+    # The rebuilt table enforces case-insensitive uniqueness.
+    import pytest as _pytest
+
+    with _pytest.raises(sqlite3.IntegrityError):
+        store.create_name(conn, "CHECKLIST", ent_c)
+
+
+def test_v6_adopts_description_and_prefers_human_authored_keeper():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    _downgrade_names_to_case_sensitive(conn)
+
+    # Keeper preference: a human-authored variant wins over an OLDER
+    # generated plural.
+    ent_a = store.create_entity(conn, None)
+    ent_b = store.create_entity(conn, "described by the variant")
+    widget = store.create_name(conn, "Widget", ent_a)
+    conn.execute(
+        "INSERT INTO names (id, text, entity_id, generated_from_name_id) "
+        "VALUES ('nam_gen', 'Widgets', ?, ?)",
+        (ent_a, widget),
+    )
+    human = store.create_name(conn, "widgets", ent_b)
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    rows = {
+        r["text"]: r
+        for r in conn.execute("SELECT id, text, entity_id FROM names").fetchall()
+    }
+    assert set(rows) == {"Widget", "widgets"}
+    assert rows["widgets"]["id"] == human  # human-authored row won
+    assert rows["widgets"]["entity_id"] == ent_b
+    # ent_a kept "Widget", so it was NOT absorbed; both entities remain.
+    assert conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"] == 2
+
+
+def test_v6_description_adoption_on_absorb():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    _downgrade_names_to_case_sensitive(conn)
+
+    ent_a = store.create_entity(conn, None)  # keeper entity, no description
+    ent_b = store.create_entity(conn, "rich description from the duplicate")
+    store.create_name(conn, "Gadget", ent_a)
+    store.create_name(conn, "gadget", ent_b)
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    assert (
+        conn.execute("SELECT 1 FROM entities WHERE id = ?", (ent_b,)).fetchone() is None
+    )
+    assert (
+        conn.execute(
+            "SELECT description FROM entities WHERE id = ?", (ent_a,)
+        ).fetchone()["description"]
+        == "rich description from the duplicate"
+    )

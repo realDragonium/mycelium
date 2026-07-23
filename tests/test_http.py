@@ -836,11 +836,133 @@ def test_list_entities_pagination_and_prefix(tmp_path, monkeypatch):
             "/list-entities", json={"prefix": "Ap", "limit": 50, "offset": 0}
         ).json()
         assert [e["name"] for e in body["entities"]] == ["Apple", "Apricot"]
+        # total reflects the filter, so it can drive pagination
+        assert body["total"] == 2
 
         body = client.post(
             "/list-entities", json={"prefix": "", "limit": 2, "offset": 1}
         ).json()
         assert [e["name"] for e in body["entities"]] == ["Apricot", "Banana"]
+
+
+def test_list_entities_prefix_matches_aliases(tmp_path, monkeypatch):
+    """The prefix filter searches every attached name, not just the
+    primary — an entity whose alias starts with the prefix is found and
+    still listed under its primary name."""
+    with _client(tmp_path, monkeypatch, deterministic_embed) as client:
+        eid = client.post(
+            "/upsert-entity", json={"name": "Assistant", "description": ""}
+        ).json()["entity_id"]
+        client.post("/upsert-name", json={"text": "Aivy", "entity_id": eid})
+        client.post("/upsert-entity", json={"name": "Checkout", "description": ""})
+
+        body = client.post(
+            "/list-entities", json={"prefix": "Aiv", "limit": 50, "offset": 0}
+        ).json()
+        assert body["total"] == 1
+        assert [e["id"] for e in body["entities"]] == [eid]
+        # listed under its alphabetically-first name (the alias's
+        # auto-plural, here), not the matching alias itself
+        assert body["entities"][0]["name"] == "Aivies"
+
+
+def test_upsert_entity_and_name_are_case_insensitive(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch, deterministic_embed) as client:
+        aivy = client.post(
+            "/upsert-entity", json={"name": "Aivy", "description": "the assistant"}
+        ).json()["entity_id"]
+
+        # A case-variant upsert resolves to the existing entity instead
+        # of minting a duplicate.
+        again = client.post(
+            "/upsert-entity", json={"name": "AIVY", "description": "updated"}
+        ).json()["entity_id"]
+        assert again == aivy
+        body = client.post("/get-entity", json={"id": aivy}).json()
+        assert body["description"] == "updated"
+
+        # upsert_name: case-variant on the same entity is idempotent...
+        nid = client.post(
+            "/upsert-name", json={"text": "aivy bot", "entity_id": aivy}
+        ).json()["name_id"]
+        assert (
+            client.post(
+                "/upsert-name", json={"text": "Aivy Bot", "entity_id": aivy}
+            ).json()["name_id"]
+            == nid
+        )
+        # ...and on a different entity it is a conflict, not a new name.
+        other = client.post(
+            "/upsert-entity", json={"name": "Checkout", "description": ""}
+        ).json()["entity_id"]
+        r = client.post("/upsert-name", json={"text": "AIVY BOT", "entity_id": other})
+        assert r.status_code == 400
+        assert aivy in r.json()["detail"]
+
+
+def test_search_entities_finds_via_alias(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch, deterministic_embed) as client:
+        login = client.post(
+            "/upsert-entity", json={"name": "Login", "description": "auth surface"}
+        ).json()["entity_id"]
+        client.post("/upsert-name", json={"text": "sign-in", "entity_id": login})
+        client.post("/upsert-entity", json={"name": "Checkout", "description": ""})
+
+        # exact alias text → cosine ≈ 1.0 under the deterministic embedder
+        body = client.post(
+            "/search-entities", json={"query": "sign-in", "min_score": 0.99}
+        ).json()
+        assert [e["id"] for e in body["entities"]] == [login]
+        hit = body["entities"][0]
+        assert hit["matched_name"] == "sign-in"
+        assert hit["name"] == "Login"  # alphabetically-first attached name
+        assert hit["description"] == "auth surface"
+        assert hit["score"] >= 0.99
+
+        r = client.post("/search-entities", json={"query": ""})
+        assert r.status_code == 400
+
+
+def test_find_entity_duplicates_fold_and_embedding(tmp_path, monkeypatch):
+    # Same vector for the lexically-distinct texts we want the embedding
+    # pass to pair; deterministic elsewhere. "check-list" shares the
+    # vector but sits on the same entity as "Checklist", so the only
+    # extra pair it may produce is with the OTHER entity's twin.
+    twins = {"Checklist", "Check List Item", "check-list"}
+    twin_vec = deterministic_embed("twin")
+
+    def embedder(text: str) -> list[float]:
+        return twin_vec if text in twins else deterministic_embed(text)
+
+    with _client(tmp_path, monkeypatch, embedder) as client:
+        a = client.post(
+            "/upsert-entity", json={"name": "Answer-Type", "description": ""}
+        ).json()["entity_id"]
+        b = client.post(
+            "/upsert-entity", json={"name": "answer type", "description": ""}
+        ).json()["entity_id"]
+        c = client.post(
+            "/upsert-entity", json={"name": "Checklist", "description": ""}
+        ).json()["entity_id"]
+        d = client.post(
+            "/upsert-entity", json={"name": "Check List Item", "description": ""}
+        ).json()["entity_id"]
+        # An alias on the SAME entity must never be reported.
+        client.post("/upsert-name", json={"text": "check-list", "entity_id": c})
+
+        pairs = client.post("/find-entity-duplicates", json={"threshold": 0.9}).json()
+        entity_pairs = {
+            (p["via"], frozenset((p["a_entity_id"], p["b_entity_id"]))) for p in pairs
+        }
+        # "Answer-Type" / "answer type" collapse under the matcher fold
+        # (dash → space); their auto-plurals collide the same way.
+        assert ("fold", frozenset((a, b))) in entity_pairs
+        # The vector twins pair via the embedding pass.
+        assert ("embedding", frozenset((c, d))) in entity_pairs
+        # Same-entity alias pairs are excluded.
+        assert all(len(fs) == 2 for _, fs in entity_pairs)
+        fold_pair = next(p for p in pairs if p["via"] == "fold")
+        assert fold_pair["score"] == 1.0
 
 
 def test_list_statements_pagination(tmp_path, monkeypatch):
@@ -2142,10 +2264,14 @@ def test_move_name_splits_into_new_entity(tmp_path, monkeypatch):
             json={"kind": "event", "text": "the reviewer proceeds", "links": []},
         )
 
-        # split: new entity for the actor, then move "reviewer" onto it
+        # split: new entity for the actor, then move "reviewer" onto it.
+        # The target must be created under a name that does NOT case-fold
+        # to the moving alias — "Reviewer" would resolve to the existing
+        # "reviewer" name (case-insensitive upsert) instead of creating
+        # a fresh entity.
         action_id = client.post(
             "/upsert-entity",
-            json={"name": "Reviewer", "description": "the reviewer"},
+            json={"name": "Reviewer (actor)", "description": "the reviewer"},
         ).json()["entity_id"]
         r = client.post(
             "/move-name", json={"name_id": reviewer_name_id, "to_entity_id": action_id}
@@ -2823,7 +2949,12 @@ def test_operations_recorded_end_to_end(tmp_path, monkeypatch):
         # three distinct outcomes, all through the one @tool seam.
         client.post(
             "/upsert-statement",
-            json={"kind": "event", "text": "User signs in", "mentions": [], "links": []},
+            json={
+                "kind": "event",
+                "text": "User signs in",
+                "mentions": [],
+                "links": [],
+            },
         )
         client.post(
             "/search-statements",
@@ -2831,7 +2962,12 @@ def test_operations_recorded_end_to_end(tmp_path, monkeypatch):
         )
         client.post(
             "/upsert-statement",
-            json={"kind": "event", "text": "user must verify email", "mentions": [], "links": []},
+            json={
+                "kind": "event",
+                "text": "user must verify email",
+                "mentions": [],
+                "links": [],
+            },
         )
 
         body = client.get("/api/operations?limit=200").json()
@@ -2855,9 +2991,16 @@ def test_operations_filter_by_outcome(tmp_path, monkeypatch):
         )
         client.post(
             "/upsert-statement",
-            json={"kind": "event", "text": "Server issues a token", "mentions": [], "links": []},
+            json={
+                "kind": "event",
+                "text": "Server issues a token",
+                "mentions": [],
+                "links": [],
+            },
         )
-        rows = client.get("/api/operations?outcome=no_hit&limit=200").json()["operations"]
+        rows = client.get("/api/operations?outcome=no_hit&limit=200").json()[
+            "operations"
+        ]
         assert rows and all(o["outcome"] == "no_hit" for o in rows)
 
 
@@ -2866,7 +3009,12 @@ def test_operations_unknown_outcome_returns_empty(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
         client.post(
             "/upsert-statement",
-            json={"kind": "event", "text": "A recorded op", "mentions": [], "links": []},
+            json={
+                "kind": "event",
+                "text": "A recorded op",
+                "mentions": [],
+                "links": [],
+            },
         )
         # An unknown outcome is an explicit filter that matches nothing — not a
         # dropped filter that returns everything.
@@ -2879,7 +3027,12 @@ def test_operations_disabled_does_not_change_tool_result(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
         r = client.post(
             "/upsert-statement",
-            json={"kind": "event", "text": "Telemetry is off here", "mentions": [], "links": []},
+            json={
+                "kind": "event",
+                "text": "Telemetry is off here",
+                "mentions": [],
+                "links": [],
+            },
         )
         assert r.status_code == 200 and r.json()["statement_id"].startswith("stm_")
         body = client.get("/api/operations").json()

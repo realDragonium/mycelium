@@ -112,8 +112,10 @@ def list_entities(
     limit: int = 50,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
-    """Entities with their alphabetically-first name. Optional case-
-    insensitive prefix filter on that name."""
+    """Entities with their alphabetically-first name. The optional case-
+    insensitive prefix filter matches ANY name attached to the entity —
+    an entity found via an alias is still listed under its primary
+    name."""
     if prefix:
         rows = conn.execute(
             """
@@ -121,8 +123,11 @@ def list_entities(
                    MIN(n.text) AS primary_name
             FROM entities e
             LEFT JOIN names n ON n.entity_id = e.id
+            WHERE EXISTS (
+                SELECT 1 FROM names a
+                WHERE a.entity_id = e.id AND a.text LIKE ? COLLATE NOCASE
+            )
             GROUP BY e.id
-            HAVING primary_name LIKE ? COLLATE NOCASE
             ORDER BY primary_name
             LIMIT ? OFFSET ?
             """,
@@ -192,7 +197,20 @@ def list_statements(
     ).fetchall()
 
 
-def count_entities(conn: sqlite3.Connection) -> int:
+def count_entities(conn: sqlite3.Connection, prefix: str | None = None) -> int:
+    """Entity count, under the same alias-aware prefix filter as
+    `list_entities` so the pair drives pagination consistently."""
+    if prefix:
+        return conn.execute(
+            """
+            SELECT COUNT(*) AS n FROM entities e
+            WHERE EXISTS (
+                SELECT 1 FROM names a
+                WHERE a.entity_id = e.id AND a.text LIKE ? COLLATE NOCASE
+            )
+            """,
+            (prefix + "%",),
+        ).fetchone()["n"]
     return conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
 
 

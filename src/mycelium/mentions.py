@@ -28,8 +28,8 @@ Matching rules
   in "service account token", a name "service account token" suppresses both
   "service account" and "token" within that span. Two names that cover the
   *exact same* span (different entities whose names fold together — e.g.
-  "Token" and "token") are co-mentions, not competitors: both survive, and
-  dedup-to-entity keeps them distinct.
+  "answer-type" and "answer type") are co-mentions, not competitors: both
+  survive, and dedup-to-entity keeps them distinct.
 - **Dedup to entity.** One mention per entity, however many of its names hit.
 - **Suspect names are held, not linked.** Short/common names (see
   `is_suspect_name`) are too ambiguous to auto-link — the same word can be a
@@ -159,9 +159,11 @@ def _tokenize(text: str) -> list[_Token]:
     return tokens
 
 
-def _name_tokens(text: str) -> tuple[str, ...]:
+def name_tokens(text: str) -> tuple[str, ...]:
     """The normalized token sequence of a name. Empty if the name has no
-    word characters (it can then never match)."""
+    word characters (it can then never match). Two names with equal token
+    sequences are indistinguishable to the matcher — `find_entity_duplicates`
+    uses this as its lexical collision key for exactly that reason."""
     normalized = normalize_with_map(text)[0]
     return tuple(_TOKEN_RE.findall(normalized))
 
@@ -172,7 +174,7 @@ def text_contains_name(text: str, name_text: str) -> bool:
     by the recompute worker's scan pass to find statements that a new or
     renamed name newly matches — a cheap membership test, not full
     derivation."""
-    name_toks = list(_name_tokens(name_text))
+    name_toks = list(name_tokens(name_text))
     if not name_toks:
         return False
     toks = [t.text for t in _tokenize(text)]
@@ -206,7 +208,7 @@ def is_suspect_name(text: str) -> bool:
     suspect-ness as an input, so a richer (e.g. frequency-based) refinement can
     be layered in later without changing this signature.
     """
-    toks = _name_tokens(text)
+    toks = name_tokens(text)
     if len(toks) != 1:
         return False
     tok = toks[0]
@@ -232,7 +234,7 @@ def build_index(
     """
     index: dict[str, list[IndexedName]] = {}
     for name_id, entity_id, text in names:
-        toks = _name_tokens(text)
+        toks = name_tokens(text)
         if not toks:
             continue
         index.setdefault(toks[0], []).append(
@@ -281,11 +283,11 @@ def _resolve_overlaps(candidates: list[_Candidate]) -> list[_Candidate]:
 
     Candidates covering the *exact same* span (same start and length) are an
     exception: they are co-mentions of different entities whose names fold to
-    the same tokens (`names.text` is unique but case-sensitive, and the shared
-    fold collapses case/dash/quote variants). All of them are kept — dropping
-    one by an arbitrary `name_id` tiebreak would leave that entity silently
-    unlinkable with no review entry. `name_id` still orders the sort so output
-    is deterministic.
+    the same tokens (`names.text` is unique only up to ASCII case, and the
+    shared fold also collapses dash/quote and Unicode-case variants). All of
+    them are kept — dropping one by an arbitrary `name_id` tiebreak would
+    leave that entity silently unlinkable with no review entry. `name_id`
+    still orders the sort so output is deterministic.
     """
     ordered = sorted(candidates, key=lambda c: (-c.length, c.start, c.indexed.name_id))
     consumed: set[int] = set()

@@ -27,6 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from . import (
     embed,
     link_rules,
+    mentions,
     ops_ledger,
     phrasing,
     plurals,
@@ -1814,9 +1815,10 @@ def list_research_sources() -> dict[str, Any]:
 def upsert_entity(name: str, description: str) -> dict[str, str]:
     """Create or update an entity by name.
 
-    If a name with this text already exists, updates that entity's description
-    and returns its id. Otherwise creates a new entity AND a name pointing
-    at it.
+    If a name with this text already exists — the match is
+    case-insensitive, so "AIVY" resolves to an existing "Aivy" — updates
+    that entity's description and returns its id. Otherwise creates a
+    new entity AND a name pointing at it.
     """
     existing = store.get_name_by_text(_db(), name)
     with store.transaction(_db()):
@@ -2577,9 +2579,11 @@ def patch_statement(
 def upsert_name(text: str, entity_id: str) -> dict[str, str]:
     """Attach an alias `text` to an existing entity.
 
-    Idempotent if the name already points at `entity_id`. Fails if
-    `entity_id` is unknown, or if the text is already taken by a different
-    entity (use `move_name` or `merge_entities` to resolve those cases).
+    Name texts are case-insensitive: "AIVY" and "Aivy" are the same
+    name. Idempotent if the name (in any casing) already points at
+    `entity_id`. Fails if `entity_id` is unknown, or if the text is
+    already taken by a different entity (use `move_name` or
+    `merge_entities` to resolve those cases).
     """
     if store.get_entity_by_id(_db(), entity_id) is None:
         raise ValueError(f"entity {entity_id!r} does not exist")
@@ -2645,7 +2649,11 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
 
     Combine with `upsert_entity` to split a name out into its own
     entity: create a fresh target entity first, then move the name onto
-    it. Names left behind on the source entity are untouched.
+    it. The target's name must not case-fold to the name being moved —
+    `upsert_entity` resolves names case-insensitively, so "Reviewer"
+    would find the existing "reviewer" instead of creating a new entity;
+    pick a distinct label (e.g. "Reviewer (actor)"). Names left behind
+    on the source entity are untouched.
 
     Raises ValueError if `name_id` or `to_entity_id` does not exist.
     """
@@ -3243,19 +3251,21 @@ def list_entities(
 ) -> dict[str, Any]:
     """Page through entities, sorted by their alphabetically-first name.
 
-    Optional `prefix` does a case-insensitive prefix match on the
-    entity's primary name (alphabetically first attached name); pass
-    empty string for no filter. Returns `{total, entities: [{id, name,
-    description}]}` where `total` is the total count (unfiltered) so a
-    caller can drive pagination.
+    Optional `prefix` does a case-insensitive prefix match against EVERY
+    name attached to an entity — aliases included, so `prefix="Aivy"`
+    finds the entity even when "Aivy" is an alias and the primary name
+    is something else. Pass empty string for no filter. Returns
+    `{total, entities: [{id, name, description}]}` where `total` counts
+    the entities matching the filter, so a caller can drive pagination.
 
     `name` is the entity's alphabetically-first attached name, or the
     entity_id as a fallback if it has no names. To enumerate all aliases
-    of one entity, use `get_entity(id)`.
+    of one entity, use `get_entity(id)`. For conceptual (non-literal)
+    lookup, use `search_entities`.
     """
     rows = store.list_entities(_db(), prefix=prefix or None, limit=limit, offset=offset)
     return {
-        "total": store.count_entities(_db()),
+        "total": store.count_entities(_db(), prefix=prefix or None),
         "entities": [
             {
                 "id": r["id"],
@@ -3265,6 +3275,65 @@ def list_entities(
             for r in rows
         ],
     }
+
+
+@tool
+def search_entities(
+    query: str,
+    k: int = 10,
+    min_score: float = 0.3,
+) -> dict[str, Any]:
+    """Semantic search over entity names and aliases.
+
+    Embeds `query` and searches the name vector index (the same index
+    that powers `search_statements`' name_boost), so conceptual queries
+    work — "assessment part" can find an entity named "Test" — where
+    `list_entities(prefix=…)` only matches literal prefixes.
+
+    Names scoring at or above `min_score` are resolved to their
+    entities; each entity is reported once, under its best-scoring
+    name. Returns `{entities: [{id, name, matched_name, score,
+    description}]}` sorted by score descending, capped at `k`. `name`
+    is the entity's alphabetically-first attached name (as in
+    `list_entities`); `matched_name` is the alias that actually
+    matched. Follow up with `get_entity(id)` for all aliases.
+    """
+    if not query:
+        raise ValueError("query must be a non-empty string")
+    vec = embed.embed(query)
+    # Over-fetch: several aliases of one entity can occupy top slots,
+    # and dedup-to-entity may otherwise leave fewer than k results.
+    best: dict[str, tuple[float, str]] = {}
+    for vid, distance in _name_idx().search(vec, k=max(k * 3, 20)):
+        score = 1.0 - distance
+        if score < min_score:
+            continue
+        nid = store.get_name_id_by_vector_id(_db(), vid)
+        if nid is None:
+            continue
+        name_row = store.get_name_by_id(_db(), nid)
+        if name_row is None:
+            continue
+        eid = name_row["entity_id"]
+        if eid not in best or score > best[eid][0]:
+            best[eid] = (score, name_row["text"])
+    ranked = sorted(best.items(), key=lambda item: item[1][0], reverse=True)[:k]
+    entities: list[dict[str, Any]] = []
+    for eid, (score, matched_name) in ranked:
+        entity = store.get_entity_by_id(_db(), eid)
+        if entity is None:
+            continue
+        names = store.get_names_by_entity(_db(), eid)
+        entities.append(
+            {
+                "id": eid,
+                "name": names[0]["text"] if names else eid,
+                "matched_name": matched_name,
+                "score": score,
+                "description": entity["description"] or "",
+            }
+        )
+    return {"entities": entities}
 
 
 @tool
@@ -3381,6 +3450,108 @@ def find_duplicates(
 
     pairs.sort(key=lambda p: p["score"], reverse=True)
     return pairs[:limit]
+
+
+@tool
+def find_entity_duplicates(
+    threshold: float = 0.9,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Audit entity names for likely duplicate entities.
+
+    Two passes over every name in the substrate, both reporting only
+    pairs whose names point at DIFFERENT entities (multiple aliases on
+    one entity are fine):
+
+    - `"fold"`: the names collapse to the same token sequence under the
+      mention matcher's normalization (casefold + NFKC + dash/quote
+      folding) — e.g. "answer type" vs "Answer-Type". Near-certain
+      duplicates, reported with score 1.0.
+    - `"embedding"`: the names' vectors on the name index have cosine
+      similarity at or above `threshold` — catches variants the fold
+      can't, like "Checklist" vs "Check List Item" or conceptual twins.
+
+    The statement-level counterpart is `find_duplicates`; this covers
+    the entity layer it skips.
+
+    Each pair: `{a_entity_id, a_name, b_entity_id, b_name, score, via}`,
+    sorted by score descending, capped at `limit`. Resolve with
+    `merge_entities` (same concept) or `move_name` / `delete_name` (an
+    alias sits on the wrong entity).
+    """
+    names = store.list_all_names(_db())
+    by_id = {r["id"]: r for r in names}
+    seen_pairs: set[tuple[str, str]] = set()
+    pairs: list[dict[str, Any]] = []
+
+    def _add(a_name_id: str, b_name_id: str, score: float, via: str) -> None:
+        a, b = by_id[a_name_id], by_id[b_name_id]
+        if a["entity_id"] == b["entity_id"]:
+            return
+        key = (
+            (a_name_id, b_name_id) if a_name_id < b_name_id else (b_name_id, a_name_id)
+        )
+        if key in seen_pairs:
+            return
+        seen_pairs.add(key)
+        pairs.append(
+            {
+                "a_entity_id": a["entity_id"],
+                "a_name": a["text"],
+                "b_entity_id": b["entity_id"],
+                "b_name": b["text"],
+                "score": score,
+                "via": via,
+            }
+        )
+
+    for group in _fold_collision_groups(names):
+        for i, a_name_id in enumerate(group):
+            for b_name_id in group[i + 1 :]:
+                _add(a_name_id, b_name_id, 1.0, "fold")
+
+    for row in names:
+        for other_name_id, score in _name_embedding_neighbours(row["id"], threshold):
+            if other_name_id in by_id:
+                _add(row["id"], other_name_id, score, "embedding")
+
+    pairs.sort(key=lambda p: p["score"], reverse=True)
+    return pairs[:limit]
+
+
+def _fold_collision_groups(names: list[sqlite3.Row]) -> list[list[str]]:
+    """Groups of name_ids whose texts collapse to the same token sequence
+    under the mention matcher's fold."""
+    folds: dict[tuple[str, ...], list[str]] = {}
+    for row in names:
+        toks = mentions.name_tokens(row["text"])
+        if toks:
+            folds.setdefault(toks, []).append(row["id"])
+    return [group for group in folds.values() if len(group) > 1]
+
+
+def _name_embedding_neighbours(name_id: str, threshold: float):
+    """Yield `(other_name_id, score)` for names whose vectors sit at or
+    above `threshold` cosine similarity to `name_id`'s."""
+    vid = store.get_name_vector_id(_db(), name_id)
+    if vid is None:
+        return
+    vec = _name_idx().get_vector(vid)
+    if vec is None:
+        # Slot is stranded — SQLite mapping points at an id the
+        # hnsw file doesn't have. Skip rather than crash the audit.
+        return
+    # Same k tradeoff as find_duplicates: wide enough to cover any
+    # realistic cluster of variants at MVP scale.
+    for other_vid, distance in _name_idx().search(vec, k=10):
+        if other_vid == vid:
+            continue
+        score = 1.0 - distance
+        if score < threshold:
+            continue
+        other_name_id = store.get_name_id_by_vector_id(_db(), other_vid)
+        if other_name_id is not None:
+            yield other_name_id, score
 
 
 @tool

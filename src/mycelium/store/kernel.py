@@ -206,9 +206,14 @@ CREATE TABLE IF NOT EXISTS statement_vector_ids (
 -- in app code (no FK cascade — the self-reference can't express it
 -- cleanly and we want explicit control). They are ordinary name rows in
 -- every other respect, so the exact-match matcher treats them uniformly.
+-- `text` is unique COLLATE NOCASE: "Checklist" and "checklist" are the
+-- same name, so a case-variant lookup resolves to the existing entity
+-- instead of minting a duplicate. Stored casing is preserved for
+-- display; NOCASE folds ASCII only (the mention matcher's Unicode
+-- casefold is wider, and such collisions surface as co-mentions).
 CREATE TABLE IF NOT EXISTS names (
     id         TEXT PRIMARY KEY,
-    text       TEXT NOT NULL UNIQUE,
+    text       TEXT NOT NULL COLLATE NOCASE UNIQUE,
     entity_id  TEXT NOT NULL REFERENCES entities(id),
     generated_from_name_id TEXT REFERENCES names(id),
     created_at TEXT,

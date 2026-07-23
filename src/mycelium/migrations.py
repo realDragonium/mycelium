@@ -333,6 +333,231 @@ def _migration_v5_derived_mentions(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v6_nocase_names(conn: sqlite3.Connection) -> None:
+    """Make name identity case-insensitive.
+
+    `names.text` becomes UNIQUE COLLATE NOCASE, so "Checklist" and
+    "checklist" are one name and a case-variant `upsert_entity` resolves
+    to the existing entity instead of minting a duplicate. Before the
+    constraint can hold, existing case-variant rows are merged:
+
+    1. Group name rows by `lower(text)` (the same ASCII fold NOCASE
+       applies). Each group keeps one row — human-authored over
+       generated plural, then oldest. The dropped rows'
+       `statement_mentions` move to the keeper (duplicates collapse),
+       their `pending_mentions` and vector mappings are removed (the
+       enqueued recompute below regenerates suspects against the
+       keeper), and `generated_from_name_id` references are repointed.
+    2. An entity left with zero names is absorbed into the entity that
+       kept its name: `entity_links` and `entity_statement_links` rows
+       are repointed (self-loops and duplicates dropped — when_nodes of
+       dropped rows cascade via trigger), a missing description is
+       adopted from it, and the empty entity is deleted. An absorb
+       target always keeps at least one name, so it is never itself
+       empty and chains cannot form.
+    3. `names` is rebuilt with the NOCASE constraint (rename-and-copy,
+       as in v2/v3).
+
+    Statements that mentioned a dropped name are enqueued for mention
+    recompute so their derived rows settle against the merged names."""
+    if not _has_table(conn, "names"):
+        return
+    ddl = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='names'"
+    ).fetchone()
+    if "NOCASE" in ((ddl["sql"] or "").upper()):
+        return
+
+    affected, absorb = _v6_merge_variant_names(conn)
+
+    for eid, target in absorb.items():
+        if (
+            conn.execute(
+                "SELECT 1 FROM names WHERE entity_id = ? LIMIT 1", (eid,)
+            ).fetchone()
+            is not None
+        ):
+            continue  # kept other names; it stays a distinct entity
+        _v6_absorb_entity(conn, eid, target)
+
+    if affected and _has_table(conn, "mention_recompute_queue"):
+        from datetime import datetime, timezone
+
+        t = datetime.now(timezone.utc)
+        now = f"{t.strftime('%Y-%m-%dT%H:%M:%S')}.{t.microsecond // 1000:03d}Z"
+        conn.executemany(
+            "INSERT INTO mention_recompute_queue (statement_id, enqueued_at) "
+            "VALUES (?, ?)",
+            [(sid, now) for sid in sorted(affected)],
+        )
+
+    _v6_rebuild_names_nocase(conn)
+
+
+def _v6_merge_variant_names(
+    conn: sqlite3.Connection,
+) -> tuple[set[str], dict[str, str]]:
+    """v6 step 1: collapse case-variant name rows onto one keeper each.
+    Returns `(statement_ids needing mention recompute, entity that lost a
+    name -> entity that kept it)`."""
+    rows = conn.execute(
+        "SELECT id, text, lower(text) AS fold, entity_id, generated_from_name_id, "
+        "rowid AS rid FROM names ORDER BY rid"
+    ).fetchall()
+    groups: dict[str, list[sqlite3.Row]] = {}
+    for r in rows:
+        groups.setdefault(r["fold"], []).append(r)
+
+    mapping: dict[str, str] = {}  # dropped name_id -> keeper name_id
+    absorb: dict[str, str] = {}  # entity that lost a name -> entity that kept it
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        keeper = min(
+            group,
+            key=lambda r: (r["generated_from_name_id"] is not None, r["rid"]),
+        )
+        for r in group:
+            if r["id"] == keeper["id"]:
+                continue
+            mapping[r["id"]] = keeper["id"]
+            if r["entity_id"] != keeper["entity_id"]:
+                absorb.setdefault(r["entity_id"], keeper["entity_id"])
+
+    affected: set[str] = set()
+    for dropped_id, keeper_id in mapping.items():
+        if _has_table(conn, "statement_mentions"):
+            affected.update(
+                r["statement_id"]
+                for r in conn.execute(
+                    "SELECT statement_id FROM statement_mentions WHERE name_id = ?",
+                    (dropped_id,),
+                )
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO statement_mentions (statement_id, name_id) "
+                "SELECT statement_id, ? FROM statement_mentions WHERE name_id = ?",
+                (keeper_id, dropped_id),
+            )
+            conn.execute(
+                "DELETE FROM statement_mentions WHERE name_id = ?", (dropped_id,)
+            )
+        if _has_table(conn, "pending_mentions"):
+            conn.execute(
+                "DELETE FROM pending_mentions WHERE name_id = ?", (dropped_id,)
+            )
+        if _has_table(conn, "name_vector_ids"):
+            conn.execute("DELETE FROM name_vector_ids WHERE name_id = ?", (dropped_id,))
+        conn.execute(
+            "UPDATE names SET generated_from_name_id = ? "
+            "WHERE generated_from_name_id = ?",
+            (keeper_id, dropped_id),
+        )
+    conn.execute(
+        "UPDATE names SET generated_from_name_id = NULL "
+        "WHERE generated_from_name_id = id"
+    )
+    conn.executemany("DELETE FROM names WHERE id = ?", [(nid,) for nid in mapping])
+    return affected, absorb
+
+
+def _v6_absorb_entity(conn: sqlite3.Connection, eid: str, target: str) -> None:
+    """v6 step 2: fold a now-nameless entity into the entity that kept
+    its name — links repointed (self-loops and duplicates dropped, the
+    dropped rows' when_nodes cascade via trigger), a missing description
+    adopted, the empty entity deleted."""
+    if _has_table(conn, "entity_links"):
+        for r in conn.execute(
+            "SELECT rowid AS rid, from_entity_id, to_entity_id, link_type "
+            "FROM entity_links WHERE from_entity_id = ? OR to_entity_id = ?",
+            (eid, eid),
+        ).fetchall():
+            new_from = target if r["from_entity_id"] == eid else r["from_entity_id"]
+            new_to = target if r["to_entity_id"] == eid else r["to_entity_id"]
+            duplicate = (
+                new_from == new_to
+                or conn.execute(
+                    "SELECT 1 FROM entity_links WHERE from_entity_id = ? "
+                    "AND to_entity_id = ? AND link_type = ?",
+                    (new_from, new_to, r["link_type"]),
+                ).fetchone()
+                is not None
+            )
+            if duplicate:
+                conn.execute("DELETE FROM entity_links WHERE rowid = ?", (r["rid"],))
+            else:
+                conn.execute(
+                    "UPDATE entity_links SET from_entity_id = ?, to_entity_id = ? "
+                    "WHERE rowid = ?",
+                    (new_from, new_to, r["rid"]),
+                )
+    if _has_table(conn, "entity_statement_links"):
+        for r in conn.execute(
+            "SELECT link_id, statement_id, direction, link_type, when_hash "
+            "FROM entity_statement_links WHERE entity_id = ?",
+            (eid,),
+        ).fetchall():
+            duplicate = conn.execute(
+                "SELECT 1 FROM entity_statement_links WHERE entity_id = ? "
+                "AND statement_id = ? AND direction = ? AND link_type = ? "
+                "AND when_hash = ?",
+                (
+                    target,
+                    r["statement_id"],
+                    r["direction"],
+                    r["link_type"],
+                    r["when_hash"],
+                ),
+            ).fetchone()
+            if duplicate is not None:
+                conn.execute(
+                    "DELETE FROM entity_statement_links WHERE link_id = ?",
+                    (r["link_id"],),
+                )
+            else:
+                conn.execute(
+                    "UPDATE entity_statement_links SET entity_id = ? WHERE link_id = ?",
+                    (target, r["link_id"]),
+                )
+    conn.execute(
+        "UPDATE entities SET description = "
+        "(SELECT description FROM entities WHERE id = ?) "
+        "WHERE id = ? AND (description IS NULL OR description = '')",
+        (eid, target),
+    )
+    conn.execute("DELETE FROM entities WHERE id = ?", (eid,))
+
+
+def _v6_rebuild_names_nocase(conn: sqlite3.Connection) -> None:
+    """v6 step 3: rebuild `names` with the NOCASE unique constraint
+    (rename-and-copy, as in v2/v3)."""
+    conn.execute("PRAGMA foreign_keys = OFF")
+    # Defensive: a previous half-applied migration may have left the
+    # scratch table behind.
+    conn.execute("DROP TABLE IF EXISTS names_new")
+    try:
+        conn.execute("""
+            CREATE TABLE names_new (
+                id         TEXT PRIMARY KEY,
+                text       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+                entity_id  TEXT NOT NULL REFERENCES entities(id),
+                generated_from_name_id TEXT REFERENCES names_new(id),
+                created_at TEXT,
+                updated_at TEXT,
+                created_by TEXT,
+                updated_by TEXT
+            )
+        """)
+        cols = ", ".join(
+            r["name"] for r in conn.execute("PRAGMA table_info(names)").fetchall()
+        )
+        conn.execute(f"INSERT INTO names_new ({cols}) SELECT {cols} FROM names")
+        conn.execute("DROP TABLE names")
+        conn.execute("ALTER TABLE names_new RENAME TO names")
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -342,6 +567,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (3, _migration_v3_entity_statement_links),
     (4, _migration_v4_auth_tables),
     (5, _migration_v5_derived_mentions),
+    (6, _migration_v6_nocase_names),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -434,13 +660,14 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
 
     The sentinel checks one column added in a representative past
     migration — `entities.created_at` (v1), `when_nodes.link_kind` (v3),
-    and `names.generated_from_name_id` (v5). A fresh DB will have all
-    three (created in one shot by `SCHEMA`). A legacy DB at any prior
-    version will be missing at least one (CREATE TABLE IF NOT EXISTS
-    leaves existing tables untouched, so columns added by ALTER TABLE in
-    past migrations are absent until the runner adds them; tables
-    introduced by later migrations are present only on fresh DBs or on
-    legacy DBs that have already been migrated past them)."""
+    `names.generated_from_name_id` (v5), and the NOCASE collation on
+    `names.text` (v6). A fresh DB will have all of them (created in one
+    shot by `SCHEMA`). A legacy DB at any prior version will be missing
+    at least one (CREATE TABLE IF NOT EXISTS leaves existing tables
+    untouched, so columns added by ALTER TABLE in past migrations are
+    absent until the runner adds them; tables introduced by later
+    migrations are present only on fresh DBs or on legacy DBs that have
+    already been migrated past them)."""
 
     def _has(table: str, column: str) -> bool:
         return any(
@@ -448,17 +675,16 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
             for r in conn.execute(f"PRAGMA table_info({table})").fetchall()
         )
 
-    def _has_table(table: str) -> bool:
-        return (
-            conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                (table,),
-            ).fetchone()
-            is not None
-        )
+    def _table_sql(table: str) -> str:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+        return (row["sql"] or "") if row is not None else ""
 
     return (
         _has("entities", "created_at")
         and _has("when_nodes", "link_kind")
         and _has("names", "generated_from_name_id")
+        and "NOCASE" in _table_sql("names").upper()
     )
