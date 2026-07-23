@@ -655,7 +655,9 @@ def _serialize_operation(row) -> dict[str, Any]:
         "outcome": row["outcome"],
         "correlation_id": row["correlation_id"],
         "session_id": row["session_id"],
-        "request": json.loads(row["request_summary"]) if row["request_summary"] else None,
+        "request": json.loads(row["request_summary"])
+        if row["request_summary"]
+        else None,
         "result": json.loads(row["result_summary"]) if row["result_summary"] else None,
         "result_count": row["result_count"],
         "result_ids": json.loads(row["result_ids"]) if row["result_ids"] else None,

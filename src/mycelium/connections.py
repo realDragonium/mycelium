@@ -58,7 +58,9 @@ class ConnectionProvider(Generic[ConfigT]):
     def is_configured(self) -> bool:
         """True when a path is configured or this thread has pinned an
         override — i.e. `connection()` would return rather than raise."""
-        return self._config is not None or getattr(self._tls, "override", None) is not None
+        return (
+            self._config is not None or getattr(self._tls, "override", None) is not None
+        )
 
     def reset(self) -> None:
         """Forget the configured value and this thread's cached/override

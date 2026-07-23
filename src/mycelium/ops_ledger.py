@@ -249,7 +249,9 @@ def _extract_ids(rows: list[Any]) -> list[str] | None:
     return ids or None
 
 
-def summarize_result(result: Any) -> tuple[Any, int | None, list[str] | None, str | None]:
+def summarize_result(
+    result: Any,
+) -> tuple[Any, int | None, list[str] | None, str | None]:
     """Return ``(summary, count, ids, draft_id)`` extracted from a result.
 
     Handles the two shapes tools actually return — a bare list (search/list
@@ -296,16 +298,18 @@ def record(
         capture = _capture_content()
         summary, count, ids, draft_id = summarize_result(result)
         request_summary = (
-            _json.dumps(sanitize_request(ctx.request)) if capture and ctx.request else None
+            _json.dumps(sanitize_request(ctx.request))
+            if capture and ctx.request
+            else None
         )
-        result_summary = _json.dumps(summary) if capture and summary is not None else None
+        result_summary = (
+            _json.dumps(summary) if capture and summary is not None else None
+        )
         error_class = type(error).__name__ if error is not None else None
         # An exception's text can echo request values (incl. secrets) and be
         # arbitrarily long, so it goes through the same truncation as any other
         # captured string, and is suppressed entirely under capture=none.
-        error_message = (
-            _redact(str(error)) if (error is not None and capture) else None
-        )
+        error_message = _redact(str(error)) if (error is not None and capture) else None
 
         conn = connection()
         cur = conn.execute(
@@ -399,7 +403,9 @@ def query(
 # --- retention --------------------------------------------------------------
 
 
-def prune(conn: sqlite3.Connection, *, keep_days: int | None, keep_rows: int | None) -> int:
+def prune(
+    conn: sqlite3.Connection, *, keep_days: int | None, keep_rows: int | None
+) -> int:
     """Trim the ledger to a retention bound. Deletes rows older than
     `keep_days` and, independently, any beyond the newest `keep_rows`.
     Returns the number of rows removed. A `None` bound disables that rule.

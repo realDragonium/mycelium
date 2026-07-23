@@ -38,7 +38,10 @@ def test_classify_from_response_envelope():
     assert ops_ledger.classify({"rejected": True, "violations": []}, None) == "rejected"
     assert ops_ledger.classify({"results": []}, None) == "no_hit"
     assert ops_ledger.classify({"results": [{"id": "stm_1"}]}, None) == "succeeded"
-    assert ops_ledger.classify({"draft_id": "drf_1", "seq": 1, "queued": "x"}, None) == "queued"
+    assert (
+        ops_ledger.classify({"draft_id": "drf_1", "seq": 1, "queued": "x"}, None)
+        == "queued"
+    )
 
 
 def test_classify_from_error():
@@ -89,7 +92,9 @@ def test_summarize_result_passes_through_non_dict():
 # --- append + query ---------------------------------------------------------
 
 
-def _rec(tool, *, result=None, error=None, actor="alice", transport="rest", request=None):
+def _rec(
+    tool, *, result=None, error=None, actor="alice", transport="rest", request=None
+):
     ctx = ops_ledger.CallContext(
         tool=tool, actor=actor, transport=transport, request=request or {}
     )
@@ -105,7 +110,11 @@ def test_record_and_query_newest_first(ledger):
 
     rows, total = ops_ledger.query(ledger, limit=50, offset=0)
     assert total == 3
-    assert [r["outcome"] for r in rows] == ["failed", "succeeded", "no_hit"]  # newest first
+    assert [r["outcome"] for r in rows] == [
+        "failed",
+        "succeeded",
+        "no_hit",
+    ]  # newest first
 
 
 def test_query_filters(ledger):
@@ -118,7 +127,9 @@ def test_query_filters(ledger):
     rows, total = ops_ledger.query(ledger, limit=50, offset=0, actor="bob")
     assert total == 1 and rows[0]["actor"] == "bob"
 
-    rows, total = ops_ledger.query(ledger, limit=50, offset=0, tools={"upsert_statement"})
+    rows, total = ops_ledger.query(
+        ledger, limit=50, offset=0, tools={"upsert_statement"}
+    )
     assert total == 1
 
 
