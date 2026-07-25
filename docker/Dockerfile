@@ -39,18 +39,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- runtime ----------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
-# curl: ALB/container health check. sqlite3: WAL pragma in entrypoint.
-# awscli + zstd: derived-artifact snapshot push/pull. Litestream: WAL -> S3.
+# ca-certificates: TLS for the app's outbound calls (Anthropic, Auth0, Ollama).
+# Nothing else on purpose — this image is deployment-agnostic. Persistence and
+# WAL replication, derived-artifact snapshotting, and any cloud CLIs are deploy
+# concerns and live in the image that wraps this one (which overrides ENTRYPOINT).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl sqlite3 zstd awscli \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-ARG LITESTREAM_VERSION=0.3.13
-RUN curl -fsSL \
-      "https://github.com/benbjohnson/litestream/releases/download/v${LITESTREAM_VERSION}/litestream-v${LITESTREAM_VERSION}-linux-amd64.deb" \
-      -o /tmp/litestream.deb \
-    && dpkg -i /tmp/litestream.deb \
-    && rm /tmp/litestream.deb
 
 WORKDIR /app
 COPY --from=builder /app /app
@@ -62,7 +57,6 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     MYCELIUM_HTTP_PORT=8765 \
     MALLOC_ARENA_MAX=2
 
-COPY docker/litestream.yml /etc/litestream.yml
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh && mkdir -p /data
 

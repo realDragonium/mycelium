@@ -1,5 +1,5 @@
 """The top-level error capture: an uncaught exception must produce one
-structured, greppable line (so a CloudWatch metric filter can count it) and an
+structured, greppable line (so a log-metric filter can count it) and an
 opaque 500, while deliberate ValueErrors keep their 400 and don't pollute the
 error stream.
 

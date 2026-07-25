@@ -4,8 +4,8 @@ Tracing is OFF by default; an admin arms it for a debugging window (see the
 `/api/tracing/*` endpoints). While armed, every top-level op produces two
 artifacts, at two altitudes:
 
-  1. A one-line per-phase summary to stderr → CloudWatch (`emit_trace`), built
-     from lightweight named spans — the cheap `aws logs tail` triage line
+  1. A one-line per-phase summary to stderr (`emit_trace`), built from
+     lightweight named spans — the cheap log-tail triage line
      ("embed = 500ms, vector_search = 1ms").
   2. A self-contained pyinstrument **HTML flamegraph** (`profile_to_html`),
      written to the trace dir and served rendered by `GET /api/traces/{id}` —
@@ -35,22 +35,22 @@ from typing import Any, Iterator
 # (kind, frame name, milliseconds-since-recorder-start); kind is "O" | "C".
 SpanEvent = tuple[str, str, float]
 
-#: One structured line per traced op to stderr → CloudWatch on Fargate (mirrors
-#: the `mycelium.profile` logger idiom). The speedscope file holds the detail;
-#: this is the at-a-glance "where did the time go" for `aws logs tail`.
+#: One structured line per traced op to stderr (mirrors the `mycelium.profile`
+#: logger idiom). The speedscope file holds the detail; this is the at-a-glance
+#: "where did the time go" line for a log tail.
 _TRACE_LOG = logging.getLogger("mycelium.trace")
 if not _TRACE_LOG.handlers:
     _TRACE_LOG.addHandler(logging.StreamHandler(sys.stderr))
     _TRACE_LOG.setLevel(logging.INFO)
 
-#: The literal token every uncaught-error line starts with. A CloudWatch metric
-#: filter matches on exactly this string to count errors (see the service stack
-#: in infra/). Don't change it casually — the filter pattern is coupled to it.
+#: The literal token every uncaught-error line starts with. A deployment's
+#: log-metric filter matches on exactly this string to count errors. Treat it as
+#: public API: don't change it casually — downstream alerting is coupled to it.
 ERROR_TOKEN = "MYCELIUM_ERROR"
 
 #: Errors always log, regardless of the tracing on/off toggle — an unhandled
-#: exception in production is exactly what we never want to miss. Same
-#: stderr→CloudWatch idiom as the trace/profile loggers.
+#: exception in production is exactly what we never want to miss. Same stderr
+#: idiom as the trace/profile loggers.
 _ERROR_LOG = logging.getLogger("mycelium.errors")
 if not _ERROR_LOG.handlers:
     _ERROR_LOG.addHandler(logging.StreamHandler(sys.stderr))
@@ -58,8 +58,8 @@ if not _ERROR_LOG.handlers:
 
 
 def emit_error(*, where: str, exc: BaseException, **fields: Any) -> None:
-    """Log one structured, greppable line for an uncaught error to stderr →
-    CloudWatch, with the traceback attached via ``exc_info``.
+    """Log one structured, greppable line for an uncaught error to stderr, with
+    the traceback attached via ``exc_info``.
 
     Every line begins with ``ERROR_TOKEN`` so a single metric filter can count
     errors; ``where`` says which boundary caught it (e.g. "http") and ``fields``
@@ -216,10 +216,10 @@ def emit_trace(
     record: dict[str, Any],
     trace_dir: str | Path | None = None,  # unused; kept for caller compatibility
 ) -> None:
-    """Log a one-line per-phase timing summary to stderr → CloudWatch. The
-    visual artifact (a pyinstrument HTML flamegraph) is written separately by
-    `profile_to_html`; this is just the cheap `aws logs tail` triage line. No-op
-    when tracing is disabled (the default)."""
+    """Log a one-line per-phase timing summary to stderr. The visual artifact
+    (a pyinstrument HTML flamegraph) is written separately by `profile_to_html`;
+    this is just the cheap log-tail triage line. No-op when tracing is disabled
+    (the default)."""
     if not tracing_enabled():
         return
     try:

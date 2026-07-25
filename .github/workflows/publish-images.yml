@@ -46,8 +46,8 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
-          # Fargate runs amd64; the server Dockerfile also hardcodes the
-          # linux-amd64 Litestream package.
+          # amd64 only: that is what the known consumers deploy on. The images
+          # themselves are deployment-agnostic — nothing here is arch-locked.
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}

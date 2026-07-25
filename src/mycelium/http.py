@@ -78,8 +78,8 @@ async def _value_error_handler(request: Request, exc: ValueError) -> JSONRespons
 @app.exception_handler(Exception)
 async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Last-resort capture for any error that isn't a deliberate 4xx. Emits one
-    structured `MYCELIUM_ERROR` line (→ stderr → CloudWatch, where a metric
-    filter counts it) and returns an opaque 500. More specific handlers win, so
+    structured `MYCELIUM_ERROR` line (→ stderr, where a deployment's log-metric
+    filter can count it) and returns an opaque 500. More specific handlers win, so
     ValueError keeps its 400 and FastAPI's HTTPException/validation responses are
     untouched — only genuinely unexpected failures land here."""
     tracing.emit_error(

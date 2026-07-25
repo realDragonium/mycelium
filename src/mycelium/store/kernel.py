@@ -491,8 +491,8 @@ def connect(
     # WAL + a busy timeout let the background mention-recompute worker
     # (its own connection on its own thread) write without colliding with
     # foreground tool-calls: readers never block the writer, and a writer
-    # that finds the lock held waits rather than erroring. WAL is also what
-    # litestream replication expects. No-op on :memory: DBs (stays memory).
+    # that finds the lock held waits rather than erroring. WAL also lets an
+    # out-of-process replicator tail the -wal file. No-op on :memory: DBs.
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
     if history_path is not None:
