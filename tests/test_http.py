@@ -599,9 +599,21 @@ def test_get_statement_returns_both_link_directions(tmp_path, monkeypatch):
         assert body["links"] == [{"to_id": a, "link_type": "part"}]
         assert body["incoming_links"] == []
 
-        # unknown id → 400
+        # unknown id → reported in `missing`, not raised
         r = client.post("/get-statements", json={"ids": ["stm_missing"]})
-        assert r.status_code == 400
+        assert r.status_code == 200
+        assert r.json() == {"statements": [], "missing": ["stm_missing"]}
+
+        # a bad id in a batch must not cost the caller the good ones
+        r = client.post("/get-statements", json={"ids": [b, "stm_missing"]})
+        assert r.status_code == 200
+        assert [s["id"] for s in r.json()["statements"]] == [b]
+        assert r.json()["missing"] == ["stm_missing"]
+
+        # empty in, empty out
+        r = client.post("/get-statements", json={"ids": []})
+        assert r.status_code == 200
+        assert r.json() == {"statements": [], "missing": []}
 
 
 def test_entity_links_lifecycle(tmp_path, monkeypatch):
@@ -784,7 +796,9 @@ def test_merge_entities_rewrites_entity_links(tmp_path, monkeypatch):
         assert incoming_pairs == sorted([(parent, "contains"), (sibling, "partner-of")])
 
         # Source is gone
-        assert client.post("/get-entity", json={"id": a}).status_code == 400
+        gone = client.post("/get-entity", json={"id": a})
+        assert gone.status_code == 200
+        assert gone.json()["missing"] == [a]
 
 
 def test_get_entity_returns_all_names(tmp_path, monkeypatch):
@@ -809,8 +823,15 @@ def test_get_entity_returns_all_names(tmp_path, monkeypatch):
             "sign-ins",
         ]
 
+        # An id no entity carries is an answer, not an error. `missing` is the
+        # only key besides `id` — empty names/links would read as "exists but
+        # is bare", which is a different claim.
         r = client.post("/get-entity", json={"id": "ent_missing"})
-        assert r.status_code == 400
+        assert r.status_code == 200
+        assert r.json() == {"id": "ent_missing", "missing": ["ent_missing"]}
+
+        # And it is present-but-empty on the hit, so one check covers both.
+        assert client.post("/get-entity", json={"id": eid}).json()["missing"] == []
 
 
 def test_list_entities_pagination_and_prefix(tmp_path, monkeypatch):
@@ -1073,20 +1094,31 @@ def test_list_statements_filter_by_entity_and_name(tmp_path, monkeypatch):
                 "name": "dashboard",
             },
         )
+        # Both filters at once still raises: there is no answer to a request
+        # that filters two ways, so the caller has to fix the call.
         assert r.status_code == 400
 
-        # Unknown name → 400
+        # An unknown name is a filter matching nothing, not a failure.
         r = client.post(
             "/list-statements", json={"limit": 50, "offset": 0, "name": "NonExistent"}
         )
-        assert r.status_code == 400
+        assert r.status_code == 200
+        assert r.json() == {"total": 0, "statements": [], "missing": ["NonExistent"]}
 
-        # Unknown entity_id → 400
+        r = client.post(
+            "/list-statements",
+            json={"limit": 50, "offset": 0, "entity_id": "ent_missing"},
+        )
+        assert r.status_code == 200
+        assert r.json() == {"total": 0, "statements": [], "missing": ["ent_missing"]}
+
+        # Unknown entity_id → a filter matching nothing
         r = client.post(
             "/list-statements",
             json={"limit": 50, "offset": 0, "entity_id": "ent_does_not_exist"},
         )
-        assert r.status_code == 400
+        assert r.status_code == 200
+        assert r.json()["missing"] == ["ent_does_not_exist"]
 
 
 def test_kind_filter_on_list_search_grep(tmp_path, monkeypatch):
@@ -1421,7 +1453,8 @@ def test_merge_statements_unions_links_and_drops_self_loops(tmp_path, monkeypatc
 
         # Source A is gone
         r = client.post("/get-statements", json={"ids": [a]})
-        assert r.status_code == 400
+        assert r.status_code == 200
+        assert r.json() == {"statements": [], "missing": [a]}
 
         # B keeps its OWN derived mention (dashboard); A's invoice mention is discarded with A.
         body = client.post("/get-statements", json={"ids": [b]}).json()["statements"][0]
@@ -1671,8 +1704,10 @@ def test_delete_statement_cascades_mentions_and_links(tmp_path, monkeypatch):
             "entity_statement_links_removed": 0,  # none were created
         }
 
-        # Statement is gone — get_statement raises (400)
-        assert client.post("/get-statements", json={"ids": [target]}).status_code == 400
+        # Statement is gone — reported as missing, not raised
+        gone = client.post("/get-statements", json={"ids": [target]})
+        assert gone.status_code == 200
+        assert gone.json() == {"statements": [], "missing": [target]}
 
         # Search no longer surfaces it
         hits = client.post(
@@ -2416,7 +2451,9 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
         }
 
         # Entity is gone.
-        assert client.post("/get-entity", json={"id": login_id}).status_code == 400
+        gone = client.post("/get-entity", json={"id": login_id})
+        assert gone.status_code == 200
+        assert gone.json() == {"id": login_id, "missing": [login_id]}
         # Auxiliary entity survives.
         assert client.post("/get-entity", json={"id": auth_id}).status_code == 200
         # Statements survive but no longer report any mentions.

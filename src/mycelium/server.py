@@ -3315,19 +3315,20 @@ def get_statements(ids: list[str]) -> dict[str, Any]:
     and `{statement_id: ...}` leaves) that gates when the edge fires;
     `list_link_types()` also documents that grammar.
 
-    Raises ValueError if `ids` is empty or if any id does not exist (no
-    partial results — fix the input and retry).
+    Also returns `missing` — the subset of `ids` that no statement carries,
+    always present and empty when everything resolved. An id that does not
+    exist is an answer, not a failure: you get every statement that did
+    resolve, so a single bad id in a batch does not cost you the rest, and
+    `missing` tells you exactly which ones to stop asking for. An empty `ids`
+    yields empty everything.
     """
-    if not ids:
-        raise ValueError("ids must be a non-empty list")
     missing = [i for i in ids if store.get_statement(_db(), i) is None]
-    if missing:
-        raise ValueError(f"statement(s) not found: {missing!r}")
+    ids = [i for i in ids if i not in set(missing)]
     # Uncapped reverse edges: get_statements is an explicit, targeted fetch, so
     # it returns the complete neighborhood (search/survey cap it — see
     # `_hydrate_statement_full`).
     statements = [_hydrate_statement_full(sid, score=None) for sid in ids]
-    return {"statements": statements}
+    return {"statements": statements, "missing": missing}
 
 
 @tool
@@ -3350,16 +3351,20 @@ def get_entity(id: str) -> dict[str, Any]:
     Use `search_statements` with the `mentions` filter to find
     statements that mention this entity by name.
 
-    Raises ValueError if `id` does not exist.
+    Also returns `missing` — always present, empty when the entity resolved,
+    and `[id]` when no entity carries that id. In that case it is the only
+    key besides `id`: there is no entity to describe, and returning empty
+    `names`/`links` would read as "exists but is bare".
     """
     row = store.get_entity_by_id(_db(), id)
     if row is None:
-        raise ValueError(f"entity {id!r} does not exist")
+        return {"id": id, "missing": [id]}
     outgoing = store.get_entity_links_outgoing(_db(), id)
     incoming = store.get_entity_links_incoming(_db(), id)
     es_outgoing, es_incoming = store.get_entity_statement_links_for_entity(_db(), id)
     return {
         "id": row["id"],
+        "missing": [],
         "description": row["description"] or "",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -3496,13 +3501,18 @@ def list_statements(
     same entity collapse into one filter — passing `"Login"` and
     passing `"sign-in"` (an alias of the same entity) yield the same
     set. Pass at most one of `entity_id` / `name`; both raises
-    ValueError. Unknown name or unknown entity_id also raises.
+    ValueError, because there is no answer to a request that filters
+    two ways at once.
+
+    A `name` or `entity_id` that does not exist is a filter matching
+    nothing, not a failure: you get `total: 0` and the unresolved value
+    in `missing`, so you can fix the spelling rather than retry.
 
     `kind` ("event" / "state" / "capability") restricts to statements
     of that kind. Combines with the entity filter under AND.
 
-    Returns `{total, statements: [{id, kind, text}]}` — text only, with
-    no mentions or links to keep the response light. To inspect a
+    Returns `{total, statements: [{id, kind, text}], missing}` — text only,
+    with no mentions or links to keep the response light. To inspect a
     single statement's full structure use `get_statements([id])`.
     """
     if entity_id is not None and name is not None:
@@ -3510,14 +3520,15 @@ def list_statements(
     if name is not None:
         row = store.get_name_by_text(_db(), name)
         if row is None:
-            raise ValueError(f"name not found: {name!r}")
+            return {"total": 0, "statements": [], "missing": [name]}
         entity_id = row["entity_id"]
     if entity_id is not None and store.get_entity_by_id(_db(), entity_id) is None:
-        raise ValueError(f"entity not found: {entity_id!r}")
+        return {"total": 0, "statements": [], "missing": [entity_id]}
     rows = store.list_statements(
         _db(), limit=limit, offset=offset, entity_id=entity_id, kind=kind
     )
     return {
+        "missing": [],
         "total": store.count_statements(_db(), entity_id=entity_id, kind=kind),
         "statements": [
             {"id": r["id"], "kind": r["kind"], "text": r["text"]} for r in rows
@@ -4139,9 +4150,13 @@ def grep_statements(
     Optional `entity_id` / `name` (mutually exclusive) restricts results
     to statements that mention that entity. When set, alias-mention
     expansion is suppressed — the explicit entity filter already
-    specifies the mention scope. Returns `{total, statements: [{id,
-    kind, text, matched_via}]}`. Use `get_statements(ids)` for full
-    mentions and links.
+    specifies the mention scope. A `name` or `entity_id` that does not
+    exist is a filter matching nothing, not a failure: you get
+    `total: 0` and the unresolved value in `missing`.
+
+    Returns `{total, statements: [{id, kind, text, matched_via}], missing}`.
+    `missing` is always present and empty when the filters resolved. Use
+    `get_statements(ids)` for full mentions and links.
     """
     if not query:
         raise ValueError("query must be a non-empty string")
@@ -4150,10 +4165,10 @@ def grep_statements(
     if name is not None:
         row = store.get_name_by_text(_db(), name)
         if row is None:
-            raise ValueError(f"name not found: {name!r}")
+            return {"total": 0, "statements": [], "missing": [name]}
         entity_id = row["entity_id"]
     if entity_id is not None and store.get_entity_by_id(_db(), entity_id) is None:
-        raise ValueError(f"entity not found: {entity_id!r}")
+        return {"total": 0, "statements": [], "missing": [entity_id]}
 
     # Text-match path — the historical behavior. When entity_id is set,
     # this is the only path; explicit filters suppress alias expansion.
@@ -4176,6 +4191,7 @@ def grep_statements(
             kind=kind,
         )
         return {
+            "missing": [],
             "total": total,
             "statements": [
                 {
@@ -4227,6 +4243,7 @@ def grep_statements(
     total = len(combined)
     sliced = combined[offset : offset + limit]
     return {
+        "missing": [],
         "total": total,
         "statements": [
             {
@@ -4384,15 +4401,18 @@ def get_draft(draft_id: str) -> dict[str, Any]:
 
     Anyone with read access can fetch any draft — drafts are intended
     for curator review so visibility is broad. The shape mirrors the
-    HTTP `/api/drafts/<id>` response.
+    HTTP `/api/drafts/<id>` response, plus `missing`: always present,
+    empty when the draft resolved, and `[draft_id]` when no draft
+    carries that id (an id that was never minted, or a draft already
+    applied and swept).
     """
     from . import drafts_store
 
     row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
-        raise ValueError(f"draft '{draft_id}' not found")
+        return {"id": draft_id, "missing": [draft_id]}
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
-    return drafts_store.serialize_draft(row, ops=ops)
+    return {**drafts_store.serialize_draft(row, ops=ops), "missing": []}
 
 
 @tool
