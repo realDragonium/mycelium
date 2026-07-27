@@ -1196,6 +1196,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
+    { name = "anyio" },
     { name = "authlib" },
     { name = "fastapi" },
     { name = "hnswlib" },
@@ -1221,6 +1222,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anthropic", specifier = ">=0.109.1" },
+    { name = "anyio", specifier = ">=4.0" },
     { name = "authlib", specifier = ">=1.7.2" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "hnswlib", specifier = ">=0.8.0" },

@@ -10,6 +10,7 @@ Add a tool in `server.py` with `@tool` and you'll find it here too at
 """
 
 import asyncio
+import functools
 import inspect
 import json
 import os
@@ -19,6 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
+import anyio.to_thread
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
@@ -169,7 +171,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         from urllib.parse import quote
 
-        principal = self._resolve(request)
+        raw_token, session_user_id = self._credentials(request)
+        principal = await self._resolve(raw_token, session_user_id)
         if principal is None and auth.is_enabled() and not _is_exempt(request.url.path):
             if _is_browser_navigation(request):
                 # Send the user through logout-then-login, not straight to
@@ -243,7 +246,27 @@ class AuthMiddleware(BaseHTTPMiddleware):
             auth.current_transport.reset(transport_ctx)
 
     @staticmethod
-    def _resolve(request: Request) -> auth.Principal | None:
+    def _credentials(request: Request) -> tuple[str | None, str | None]:
+        """Pull the raw credentials off the request. Pure — no I/O, so it stays
+        on the event loop and tells the caller whether there is anything worth
+        a database round trip at all.
+
+        Starlette session is exposed as a dict on `request.session` once
+        SessionMiddleware has run. The presence check is defensive for
+        early-boot edge cases.
+        """
+        raw = auth.parse_bearer(request.headers.get("authorization"))
+        try:
+            user_id = request.session.get("user_id")
+        except AssertionError:
+            user_id = None
+        return raw, user_id
+
+    @staticmethod
+    def _lookup(raw: str | None, user_id: str | None) -> auth.Principal | None:
+        """Resolve credentials against the auth DB. Blocking: a token hit also
+        WRITES (last_used_at), so under concurrent traffic this waits on the
+        single writer — which is why `_resolve` keeps it off the event loop."""
         try:
             conn = server._auth_db()
         except RuntimeError:
@@ -251,7 +274,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # without the context manager), so the auth store isn't
             # configured yet. Treat as no credentials.
             return None
-        raw = auth.parse_bearer(request.headers.get("authorization"))
         if raw is not None:
             # resolve_token bumps last_used_at; own that write here since
             # the auth layer is the unit of work for the token lookup.
@@ -259,14 +281,18 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 principal = auth.resolve_token(conn, raw)
             if principal is not None:
                 return principal
-        # Starlette session is exposed as a dict on `request.session`
-        # once SessionMiddleware has run. The presence check is defensive
-        # for early-boot edge cases.
-        try:
-            user_id = request.session.get("user_id")
-        except AssertionError:
-            user_id = None
         return auth.resolve_session_user(conn, user_id)
+
+    @classmethod
+    async def _resolve(
+        cls, raw: str | None, user_id: str | None
+    ) -> auth.Principal | None:
+        """An anonymous request carries nothing to look up, so it never touches
+        the DB and never needs a worker thread — which is what keeps the health
+        probe cheap even while every thread is busy serving tool calls."""
+        if raw is None and not user_id:
+            return None
+        return await anyio.to_thread.run_sync(cls._lookup, raw, user_id)
 
 
 # Middleware in Starlette runs in *reverse* registration order (last
@@ -344,15 +370,48 @@ _STREAM_GRACE_SECONDS = 5.0
 _STREAM_HEARTBEAT_SECONDS = 15.0
 
 
+def _offload(func: Callable[..., Any], kwargs: dict[str, Any]):
+    """Run a blocking tool in a worker thread under whatever bound it declares.
+
+    `server.limiter_for` is the single source of that bound. Going through it
+    here is what stops the REST mirror from being a way around it: these
+    handlers are built from the raw sync wrapper in `server.TOOLS`, not from the
+    offloading shim the MCP transport gets, so without this a caller could
+    exceed the model-loop bound just by posting to `/ask` instead.
+
+    anyio (not asyncio.to_thread) for two reasons: it takes the limiter, and it
+    shares the same worker pool FastAPI already dispatches sync endpoints to.
+    Contextvars — including the resolved principal — propagate either way.
+    """
+    return anyio.to_thread.run_sync(
+        functools.partial(func, **kwargs), limiter=server.limiter_for(func.__name__)
+    )
+
+
+def _make_offloaded_post_handler(
+    func: Callable[..., Any], BodyModel: type, required_role: str
+) -> Callable[..., Any]:
+    """For bounded tools that aren't streamed. A plain sync handler would take a
+    worker thread and hold it while waiting on the bound; this waits on the
+    limiter first and only then occupies a thread."""
+
+    async def handler(body, request: Request):
+        _enforce_role(request, required_role)
+        return await _offload(func, body.model_dump())
+
+    handler.__name__ = func.__name__
+    handler.__doc__ = func.__doc__
+    handler.__annotations__ = {"body": BodyModel, "request": Request}
+    return handler
+
+
 def _make_streaming_post_handler(
     func: Callable[..., Any], BodyModel: type, required_role: str
 ) -> Callable[..., Any]:
     async def handler(body, request: Request):
         _enforce_role(request, required_role)
         kwargs = body.model_dump()
-        # Run the blocking tool in a worker thread. asyncio.to_thread copies the
-        # current contextvars (incl. the resolved principal) into the thread.
-        task = asyncio.ensure_future(asyncio.to_thread(func, **kwargs))
+        task = asyncio.ensure_future(_offload(func, kwargs))
 
         done, _ = await asyncio.wait({task}, timeout=_STREAM_GRACE_SECONDS)
         if task in done:
@@ -469,6 +528,8 @@ def _register(func: Callable[..., Any]) -> None:
     BodyModel = create_model(_model_name_for(func.__name__), **fields)
     if func.__name__ in _STREAMING_TOOLS:
         make = _make_streaming_post_handler
+    elif server.limiter_for(func.__name__) is not None:
+        make = _make_offloaded_post_handler
     elif func.__name__ in _TRACED_TOOLS:
         make = _make_traced_post_handler
     else:
@@ -1046,7 +1107,7 @@ def tracing_disable(request: Request) -> Any:
 
 
 @app.get("/api/server-info")
-def get_server_info(request: Request) -> dict[str, Any]:
+async def get_server_info(request: Request) -> dict[str, Any]:
     """Public-ish discovery endpoint used by the setup help page so the
     UI can render config snippets containing the actual MCP URL the
     client should connect to.
@@ -1055,6 +1116,15 @@ def get_server_info(request: Request) -> dict[str, Any]:
     returns no secrets) — but to keep the surface honest we only
     expose data the user would learn just by looking at the address
     bar. No tokens, no env, no internal config.
+
+    Deliberately `async` while every other endpoint here is sync: deployments
+    tend to point their health check at this path, and a sync endpoint would
+    need a slot in the same worker pool the tool calls occupy. Enough concurrent
+    tools in flight and the probe queues behind them and times out — so a
+    deployment that replaces unhealthy instances kills a server for being busy.
+    Answering on the event loop makes the probe mean "this process's loop is
+    still turning", which is the condition a restart can actually fix. It does
+    no I/O, so there is nothing here that needs a thread. Keep it that way.
     """
     base = str(request.base_url).rstrip("/")
     return {

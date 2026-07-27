@@ -22,6 +22,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, NotRequired, TypedDict
 
+import anyio
+import anyio.to_thread
 from mcp.server.fastmcp import FastMCP
 
 from . import (
@@ -224,6 +226,71 @@ _install_role_based_tool_filter()
 #: REST endpoints. Order is preserved.
 TOOLS: list[Callable[..., Any]] = []
 
+#: Tools that drive a multi-turn model loop, so they occupy a worker thread for
+#: tens of seconds and hold a model context worth of memory while they do. They
+#: share a limiter far tighter than the general pool: memory, not threads, is
+#: what runs out first, and the embedding backend is usually competing for the
+#: same box. `start_research` is absent on purpose — it returns immediately and
+#: its own runner enforces MYCELIUM_RESEARCH_MAX_ACTIVE.
+_MODEL_LOOP_TOOLS = frozenset({"ask", "ingest"})
+_MODEL_LOOP_MAX_CONCURRENT_ENV = "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT"
+
+
+@functools.cache
+def _model_loop_limiter() -> anyio.CapacityLimiter:
+    """One limiter shared by every model-loop tool, built on first use so the
+    env var is read after the process has its environment (import order puts
+    this module ahead of the server's own env loading), then cached because a
+    limiter only bounds anything if all its callers hold the same one."""
+    return anyio.CapacityLimiter(
+        int(os.environ.get(_MODEL_LOOP_MAX_CONCURRENT_ENV) or 2)
+    )
+
+
+def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
+    """The bound `tool_name` runs under, or None to use the general worker pool.
+
+    Deliberately shared by BOTH transports — the MCP shim below and the REST
+    mirror's handlers in `http.py`. The bound exists to cap memory on the box,
+    which does not care which transport asked, so a caller must not be able to
+    slip past it by calling `/ingest` instead of the MCP tool.
+    """
+    return _model_loop_limiter() if tool_name in _MODEL_LOOP_TOOLS else None
+
+
+def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
+    """Present `wrapper` to FastMCP as a coroutine that runs the real work in a
+    worker thread.
+
+    FastMCP calls a *sync* tool function inline on the running event loop
+    (`func_metadata.call_fn_with_arg_validation`), so a single multi-second tool
+    call freezes every other request the process is serving — including the load
+    balancer's health probe, which is what turns one slow `ask` into a 503 for
+    everyone. The REST mirror never had this problem because FastAPI dispatches
+    sync endpoints to anyio's worker threads; this gives the MCP transport the
+    same treatment, against that same bounded pool.
+
+    Safe because the store hands every thread its own SQLite connection
+    (`store.kernel.ConnectionProvider`), and `anyio.to_thread.run_sync`
+    propagates contextvars, so the resolved principal follows the call in.
+    """
+
+    name = wrapper.__name__
+
+    @functools.wraps(wrapper)
+    async def offloaded(*args: Any, **kwargs: Any) -> Any:
+        return await anyio.to_thread.run_sync(
+            functools.partial(wrapper, *args, **kwargs), limiter=limiter_for(name)
+        )
+
+    # No __signature__ is set here: functools.wraps copies the wrapper's __dict__
+    # (carrying the spliced draft_id signature when there is one) and otherwise
+    # leaves inspect.signature to follow __wrapped__ back to the original, whose
+    # annotations Pydantic can still resolve. Setting one explicitly would freeze
+    # in the unresolved string forward refs this module's `from __future__ import
+    # annotations` produces.
+    return offloaded
+
 
 def tool(
     func: Callable[..., Any] | None = None,
@@ -352,7 +419,9 @@ def tool(
             _add_draft_id_to_signature(func, wrapper)
 
         TOOLS.append(wrapper)
-        mcp.tool()(wrapper)
+        # http.py builds its sync FastAPI handlers from TOOLS (FastAPI does its
+        # own thread dispatch), so only the MCP side gets the offloading shim.
+        mcp.tool()(_offloaded(wrapper))
         return wrapper
 
     # Allow both `@tool` and `@tool(role="reader")` forms.
