@@ -192,6 +192,74 @@ def test_rest_offload_applies_the_same_bound(monkeypatch):
     assert peak == 2
 
 
+def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
+    """Research runs on its own daemon thread with no event loop, so it cannot
+    wait on the anyio limiter. If it kept a private cap the two would add up and
+    the box would hold more model contexts than either cap intended."""
+    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "2")
+    server._model_loop_budget.cache_clear()
+
+    peak = 0
+    live = 0
+    lock = threading.Lock()
+
+    def model_loop():
+        nonlocal peak, live
+        with server.model_loop_slot():
+            with lock:
+                live += 1
+                peak = max(peak, live)
+            time.sleep(0.05)
+            with lock:
+                live -= 1
+
+    # Mixed starters: some on worker threads (ask/ingest), some standing in for
+    # a research run's own daemon thread. One budget covers both.
+    threads = [threading.Thread(target=model_loop) for _ in range(6)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+    finally:
+        server._model_loop_budget.cache_clear()
+
+    assert peak == 2
+
+
+def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
+    """The wiring: the runner must execute inside the slot, not beside it."""
+    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "1")
+    server._model_loop_budget.cache_clear()
+
+    from mycelium import research_runs, research_store
+
+    db_path = tmp_path / "mycelium-drafts.db"
+    conn = research_store.connect(db_path)
+    research_store.migrate(conn)
+    run_id = research_store.create_run(conn, topic="t", source="src", created_by=None)
+    research_store.mark_started(conn, run_id)
+
+    observed = {}
+
+    def runner(topic, *, source=None):
+        # With the budget at 1 and the run holding it, this must find none free.
+        observed["another_slot_available"] = server._model_loop_budget().acquire(
+            blocking=False
+        )
+        return {"outcome": "nothing_found", "reason": "test"}
+
+    try:
+        research_runs._execute_run(
+            run_id, "t", "src", str(db_path), str(tmp_path), runner
+        )
+    finally:
+        server._model_loop_budget.cache_clear()
+
+    assert observed["another_slot_available"] is False
+    assert research_store.get_run(conn, run_id)["outcome"] == "nothing_found"
+
+
 def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):
     monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "2")
     server._model_loop_limiter.cache_clear()

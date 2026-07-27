@@ -8,6 +8,7 @@ interfaces for free.
 
 from __future__ import annotations
 
+import contextlib
 import cProfile
 import datetime as _dt
 import functools
@@ -17,7 +18,9 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, NotRequired, TypedDict
@@ -228,23 +231,79 @@ TOOLS: list[Callable[..., Any]] = []
 
 #: Tools that drive a multi-turn model loop, so they occupy a worker thread for
 #: tens of seconds and hold a model context worth of memory while they do. They
-#: share a limiter far tighter than the general pool: memory, not threads, is
-#: what runs out first, and the embedding backend is usually competing for the
-#: same box. `start_research` is absent on purpose — it returns immediately and
-#: its own runner enforces MYCELIUM_RESEARCH_MAX_ACTIVE.
+#: are bounded far tighter than the general pool: memory, not threads, is what
+#: runs out first, and the embedding backend is usually competing for the same
+#: box. `start_research` is not here because the TOOL is fast — it returns a run
+#: id immediately. Its background run is a model loop like any other and draws
+#: on the same budget; see `model_loop_slot`.
 _MODEL_LOOP_TOOLS = frozenset({"ask", "ingest"})
 _MODEL_LOOP_MAX_CONCURRENT_ENV = "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT"
 
 
+def _model_loop_max_concurrent() -> int:
+    return int(os.environ.get(_MODEL_LOOP_MAX_CONCURRENT_ENV) or 2)
+
+
+# Two primitives, one number, because the model loops do not all start from the
+# same place. `ask`/`ingest` are requests: they arrive on the event loop, so the
+# CapacityLimiter gates them BEFORE they take a worker thread — without it, an
+# arbitrary number of them would each grab a thread just to sit blocked, which
+# is how the general pool gets starved. A research run has no event loop at all;
+# it is a plain daemon thread, and can only wait on a threading primitive.
+#
+# So the semaphore is the real budget — every model loop holds one of its slots
+# while it runs, whatever started it — and the limiter is the front door that
+# keeps request-shaped callers from piling up on threads to reach it. Both are
+# sized from MYCELIUM_MODEL_LOOP_MAX_CONCURRENT, so at most that many loops run
+# and at most that many threads are ever parked waiting for one.
+
+
 @functools.cache
 def _model_loop_limiter() -> anyio.CapacityLimiter:
-    """One limiter shared by every model-loop tool, built on first use so the
-    env var is read after the process has its environment (import order puts
-    this module ahead of the server's own env loading), then cached because a
-    limiter only bounds anything if all its callers hold the same one."""
-    return anyio.CapacityLimiter(
-        int(os.environ.get(_MODEL_LOOP_MAX_CONCURRENT_ENV) or 2)
-    )
+    """Built on first use so the env var is read after the process has its
+    environment (import order puts this module ahead of the server's own env
+    loading), then cached because a limiter only bounds anything if all its
+    callers hold the same one."""
+    return anyio.CapacityLimiter(_model_loop_max_concurrent())
+
+
+@functools.cache
+def _model_loop_budget() -> threading.BoundedSemaphore:
+    return threading.BoundedSemaphore(_model_loop_max_concurrent())
+
+
+@contextlib.contextmanager
+def model_loop_slot() -> Iterator[None]:
+    """Hold one slot of the shared model-loop budget for the duration of the
+    call. Acquirable from any thread, which is the point: `ask` and `ingest`
+    take a slot from their worker thread, a research run takes one from its own
+    daemon thread, and the three cannot collectively exceed the budget."""
+    budget = _model_loop_budget()
+    budget.acquire()
+    try:
+        yield
+    finally:
+        budget.release()
+
+
+def _run_tool(
+    func: Callable[..., Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    budgeted: bool,
+) -> Any:
+    """Execute a tool body — under the shared model-loop budget when the tool
+    declares one, and under the profiler when MYCELIUM_PROFILE is set.
+
+    This is the seam every transport passes through, which is the point: the
+    budget is enforced here rather than at any one entry point, so MCP, the REST
+    mirror, stdio and draft replay are all bound by the same accounting.
+    """
+    with model_loop_slot() if budgeted else contextlib.nullcontext():
+        if _profile_enabled():
+            return _run_with_profile(func, args, kwargs)
+        return func(*args, **kwargs)
 
 
 def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
@@ -333,6 +392,10 @@ def tool(
         # ops table instead of redirecting a write.
         is_draftable_read = func.__name__ in _LIST_TOOL_KINDS
         has_draft_id = is_mutation or is_draftable_read
+        # Claimed around the call itself, not around the whole wrapper: a
+        # drafter whose call is redirected onto a draft never runs the model
+        # loop, so it must not hold a slot the real work is waiting for.
+        is_model_loop = func.__name__ in _MODEL_LOOP_TOOLS
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -369,9 +432,7 @@ def tool(
                 if is_draftable_read and draft_id is not None:
                     return _list_from_draft(draft_id, _LIST_TOOL_KINDS[func.__name__])
 
-                if _profile_enabled():
-                    return _run_with_profile(func, args, kwargs)
-                return func(*args, **kwargs)
+                return _run_tool(func, args, kwargs, budgeted=is_model_loop)
 
             # Operation ledger: record every attempted call (outcome + latency)
             # through this one shared seam, so REST and MCP are covered without

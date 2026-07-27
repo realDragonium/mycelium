@@ -167,7 +167,17 @@ def _execute_run(
         if conn is None:
             own_conn = research_store.connect(db_path)
             conn = own_conn
-        result = runner(topic, source=source)
+        # A research run is a model loop like `ask` and `ingest`, so it draws on
+        # the same budget rather than a private one — otherwise the two caps add
+        # up and the box holds more model contexts than either intended. The
+        # wait happens on this daemon thread, which costs nothing shared, and
+        # MYCELIUM_RESEARCH_MAX_ACTIVE already bounds how many can be queued
+        # behind it. The row stays 'running' while waiting, which is honest:
+        # the run has been accepted and nothing else needs to happen to it.
+        from . import server
+
+        with server.model_loop_slot():
+            result = runner(topic, source=source)
         payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
         if payload.get("outcome") == "draft_created":
             outcome = "draft_created"
