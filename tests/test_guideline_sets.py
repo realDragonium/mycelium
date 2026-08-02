@@ -162,6 +162,28 @@ def test_dry_run_leaves_no_database_behind(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+def test_dry_run_does_not_write_to_an_existing_database(tmp_path):
+    """Nor may it write to one that is already there. The file is byte-for-
+    byte what it was — no appended version, and no rewritten journal mode
+    either, which an ordinary `prompt_store.connect` would have done."""
+    seed = _seed_script()
+    db_path = tmp_path / "mycelium-prompts.db"
+    rows = seed.read_rows(seed.SOURCE_DIR)
+
+    conn = prompt_store.connect(db_path)
+    prompt_store.migrate(conn)
+    seed.seed(conn, rows)
+    conn.close()
+    before = db_path.read_bytes()
+
+    assert seed.pending(db_path, rows) == []
+    assert db_path.read_bytes() == before
+
+    reopened = prompt_store.connect(db_path)
+    assert {r["version"] for r in prompt_store.list_current(reopened)} == {1}
+    reopened.close()
+
+
 # --- the second variant set, added through the tools alone ------------------
 
 

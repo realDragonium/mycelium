@@ -82,12 +82,22 @@ def seed(conn: sqlite3.Connection, rows: dict[str, str]) -> list[str]:
 
 
 def pending(db_path: Path, rows: dict[str, str]) -> list[str]:
-    """`outdated`, read-only down to the filesystem: opening the DB would
-    create the file and WAL-mode it, so an absent prompts DB is answered
-    without touching it — nothing is stored, so every row is pending."""
+    """`outdated` for a dry run, which must store nothing.
+
+    `prompt_store.connect` writes: it creates the file and sets its journal
+    mode. So an absent DB is answered without opening it — nothing is stored
+    there, so every row is pending — and an existing one is opened `mode=ro`,
+    which SQLite refuses to write to. Reading a WAL database still
+    coordinates through its `-shm` sidecar; the guarantee is over the
+    database, not over every file sitting next to it."""
     if not db_path.exists():
         return list(rows)
-    return outdated(prompt_store.connect(db_path), rows)
+    conn = sqlite3.connect(f"{db_path.resolve().as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        return outdated(conn, rows)
+    finally:
+        conn.close()
 
 
 def _resolve_data_dir(arg: str | None) -> Path:
