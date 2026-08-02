@@ -11,6 +11,11 @@ dependencies = [
     "anthropic>=0.109.1",
     "anyio>=4.0",
     "authlib>=1.7.2",
+    # Phrasing validation (phrasing.check, reached from server._phrasing_gate on
+    # every statement write) loads this model at runtime, so it is a runtime
+    # dependency, not a dev one. spaCy models aren't on PyPI — pinning the wheel
+    # by URL is what lets a plain `uv sync` produce a working environment.
+    "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     "fastapi>=0.136.1",
     "hnswlib>=0.8.0",
     "httpx>=0.28.1",

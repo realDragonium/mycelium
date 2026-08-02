@@ -557,6 +557,14 @@ wheels = [
 ]
 
 [[package]]
+name = "en-core-web-sm"
+version = "3.8.0"
+source = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+wheels = [
+    { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl", hash = "sha256:1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.136.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1198,6 +1206,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "anyio" },
     { name = "authlib" },
+    { name = "en-core-web-sm" },
     { name = "fastapi" },
     { name = "hnswlib" },
     { name = "httpx" },
@@ -1224,6 +1233,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.109.1" },
     { name = "anyio", specifier = ">=4.0" },
     { name = "authlib", specifier = ">=1.7.2" },
+    { name = "en-core-web-sm", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" },
     { name = "fastapi", specifier = ">=0.136.1" },
     { name = "hnswlib", specifier = ">=0.8.0" },
     { name = "httpx", specifier = ">=0.28.1" },
