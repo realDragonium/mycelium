@@ -242,12 +242,18 @@ def _archive_prompts(prompts_db_path: Path, out_path: Path) -> int | None:
     one from before prompt texts existed) and "its prompts DB would not
     read". Neither aborts the export: the substrate is the payload, and an
     instance restored without steering texts re-seeds the packaged defaults
-    at startup."""
+    at startup.
+
+    Anything the section throws is anything the export survives — a DB that
+    won't open, a row SQLite serves but JSON can't hold (a BLOB where text
+    belongs, after a hand repair). Scheduled backups and the force-restore
+    safety snapshot both run through here, and neither may be stopped by
+    the smaller of the two payloads."""
     if not prompts_db_path.exists():
         return None
     try:
         return _write_prompts(prompts_db_path, out_path)
-    except (sqlite3.Error, OSError):
+    except Exception:
         logger.warning(
             "could not read prompt texts from %s; the archive carries none",
             prompts_db_path,

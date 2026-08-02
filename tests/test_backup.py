@@ -478,6 +478,37 @@ def test_export_survives_an_unreadable_prompts_db(tmp_path, caplog):
     assert _row_count(dst, "statements") == _row_count(src, "statements")
 
 
+def test_export_survives_a_prompt_row_json_cannot_hold(tmp_path, caplog):
+    """The other way a prompts DB reads badly: SQLite hands back a BLOB
+    where text belongs. The archive loses its prompts section, not the
+    backup — scheduled backups and the pre-restore safety snapshot both
+    come through here."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    conn = prompt_store.connect(src / backup.PROMPTS_DB_NAME)
+    conn.execute(
+        "INSERT INTO prompt_texts "
+        "  (id, type, name, text, deleted, version, created_at) "
+        "VALUES ('ptx_blob', 'doctrine', 'blob', ?, 0, 1, '2026-01-01T00:00:00Z')",
+        (b"\x00\x01raw bytes",),
+    )
+    conn.close()
+
+    archive = tmp_path / "snap.tar.gz"
+    with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
+        manifest = backup.export_substrate(src, archive)
+
+    assert manifest["includes_prompts"] is False
+    assert any("prompt texts" in r.getMessage() for r in caplog.records)
+
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+
+
 def test_import_survives_an_unreadable_prompts_section(tmp_path, caplog):
     """Same posture on the way back in, and all-or-nothing: a damaged
     section leaves an empty store — which startup re-seeds — rather than a
