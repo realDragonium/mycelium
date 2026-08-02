@@ -22,6 +22,11 @@ from ..ingest.config import DEFAULT_MODEL
 #: The research doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 
+#: Prompt-store name the research doctrine is kept under (type `doctrine`).
+#: Startup seeds that row from `doctrine_path`; the loop reads it per run,
+#: so an edit through `save_prompt_text` lands on the next research run.
+DOCTRINE_NAME = "research"
+
 
 @dataclass(frozen=True)
 class ResearchConfig:

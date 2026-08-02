@@ -81,6 +81,13 @@ def connection() -> sqlite3.Connection:
     return _provider.connection()
 
 
+def is_configured() -> bool:
+    """True when `connection()` would return rather than raise. Consumers
+    that also run outside the server (bench scripts, unit tests) ask this to
+    tell "no store here" apart from "the store is broken"."""
+    return _provider.is_configured()
+
+
 def use_connection(conn: sqlite3.Connection) -> None:
     """Pin `conn` as this thread's prompts connection (for :memory: / tests)."""
     _provider.use(conn)

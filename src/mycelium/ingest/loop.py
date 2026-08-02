@@ -51,7 +51,7 @@ from ..agentloop import (
 # Reuse ask's read seam wholesale — do NOT duplicate it.
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
-from .config import IngestConfig
+from .config import DOCTRINE_NAME, IngestConfig
 from .draft import DraftEmitter, InProcessDraftEmitter
 from .schema import (
     CandidateLedger,
@@ -127,7 +127,9 @@ def run_ingest(
     if client is None:
         client = default_client(config.max_retries)
 
-    doctrine_text, doctrine_note = load_doctrine(config.doctrine_path)
+    doctrine_text, doctrine_note = load_doctrine(
+        config.doctrine_path, name=DOCTRINE_NAME
+    )
 
     with tracing.profile_to_html("ingest", f"{len(text)} chars"):
         result = _execute(
