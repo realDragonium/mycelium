@@ -812,6 +812,16 @@ def _drafts_db() -> sqlite3.Connection:
     return drafts_store.connection()
 
 
+def _prompts_db() -> sqlite3.Connection:
+    """This thread's prompt-texts connection (see `prompt_store.connection`).
+
+    Configured by `init`; each thread reopens lazily against the prompts file.
+    Raises if reached before the server is initialized."""
+    from . import prompt_store
+
+    return prompt_store.connection()
+
+
 def _idx() -> vector.Index:
     """The statement vector index. Loaded by `init`; raises if reached
     before the server is initialized."""
@@ -856,7 +866,7 @@ def init(data_dir: Path) -> None:
     # indexes against the new substrate.
     _ctx = None
 
-    from . import auth_store, drafts_store, research_store
+    from . import auth_store, drafts_store, prompt_store, research_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
     store.configure_substrate(
@@ -876,6 +886,12 @@ def init(data_dir: Path) -> None:
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
     research_store.migrate(_drafts_db())
+
+    # Prompt texts are instance configuration, so they get their own file:
+    # dropping the substrate or wiping drafts leaves an instance's steering
+    # texts intact.
+    prompt_store.configure(data_dir / "mycelium-prompts.db")
+    prompt_store.migrate(_prompts_db())
 
     # Operation ledger: a bounded, best-effort record of attempted tool calls,
     # in its own file so telemetry writes never contend with the substrate's
@@ -4280,6 +4296,127 @@ def report_knowledge_gap(text: str) -> dict[str, Any]:
     with store.transaction(_db()):
         gap_id = store.create_knowledge_gap(_db(), text)
     return {"gap_id": gap_id}
+
+
+# --- prompt-text tools ------------------------------------------------------
+# Steering texts (doctrines, prompt preambles, guideline sets) as editable
+# rows — see `prompt_store`. Deliberately named outside `_MUTATION_PREFIXES`:
+# prompt texts are instance configuration, so an edit takes effect directly
+# and never queues onto a draft. `retire_` carries the admin gate that the
+# `delete_` prefix would otherwise have derived, and because an edit here
+# lands live, the write tools re-check the caller's REAL role so the
+# drafter-equivalence in `auth.principal_satisfies` can't stand in for one.
+
+
+def _actor_id() -> str | None:
+    from . import auth as _auth
+
+    principal = _auth.current_principal.get()
+    return principal.id if principal is not None else None
+
+
+def _require_real_role(tool_name: str, required: str) -> None:
+    """Re-check the gate against the caller's REAL role.
+
+    `auth.principal_satisfies` lets a drafter clear writer and admin gates
+    because the @tool wrapper redirects their writes onto a draft. These
+    tools sit outside that machinery on purpose — an edit here lands live —
+    so the equivalence must not carry. Same shape as the curator-only check
+    on `list_drafts`; a None principal is the local stdio caller, which the
+    wrapper's own gate also lets through."""
+    from . import auth as _auth
+
+    principal = _auth.current_principal.get()
+    if principal is not None and not _auth.principal_has_real_role(principal, required):
+        raise PermissionError(
+            f"tool '{tool_name}' requires a real {required} role; prompt texts "
+            f"are instance configuration and never queue onto a draft"
+        )
+
+
+@tool
+def save_prompt_text(type: str, name: str, text: str) -> dict[str, Any]:
+    """Store a new version of a steering text under (type, name).
+
+    `type` and `name` are free strings — nothing enumerates them, so a new
+    sort of steering text needs no code change; consumers declare what they
+    load. Saving appends a version rather than rewriting one, and consumers
+    read at run start, so an edit applies to the next run with no restart.
+
+    Returns the stored row {id, type, name, text, version, deleted,
+    created_at, created_by}."""
+    from . import prompt_store
+
+    _require_real_role("save_prompt_text", "writer")
+    row = prompt_store.save(
+        _prompts_db(), type=type, name=name, text=text, created_by=_actor_id()
+    )
+    return prompt_store.serialize(row)
+
+
+@tool
+def get_prompt_text(type: str, name: str) -> dict[str, Any]:
+    """Fetch the current text stored under (type, name), body included.
+
+    Returns the row {id, type, name, text, version, deleted, created_at,
+    created_by}. Raises when the name has never been saved or was retired."""
+    from . import prompt_store
+
+    row = prompt_store.latest(_prompts_db(), type, name)
+    if row is None:
+        raise ValueError(f"prompt text not found: {type}/{name}")
+    return prompt_store.serialize(row)
+
+
+@tool
+def list_prompt_texts(type: str | None = None) -> dict[str, Any]:
+    """List the prompt texts currently in force, optionally narrowed to one
+    `type`. Retired names are omitted.
+
+    Bodies are left out — use `get_prompt_text` for one. Returns
+    {"prompt_texts": [{type, name, version, chars, created_at, created_by}]}.
+    """
+    from . import prompt_store
+
+    return {
+        "prompt_texts": [
+            prompt_store.serialize_summary(row)
+            for row in prompt_store.list_current(_prompts_db(), type)
+        ]
+    }
+
+
+@tool
+def list_prompt_text_versions(type: str, name: str) -> dict[str, Any]:
+    """List every version ever saved under (type, name), newest first.
+
+    The store is append-only, so this is the full edit history — including
+    the tombstone version left by `retire_prompt_text`. Bodies included.
+    Returns {"versions": [prompt-text rows]}."""
+    from . import prompt_store
+
+    return {
+        "versions": [
+            prompt_store.serialize(row)
+            for row in prompt_store.history(_prompts_db(), type, name)
+        ]
+    }
+
+
+@tool(role="admin")
+def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
+    """Retire the text stored under (type, name): it stops being listed and
+    served, while its history stays readable and the name can be saved again.
+
+    Returns {"retired": true} — or false when nothing live was stored
+    there."""
+    from . import prompt_store
+
+    _require_real_role("retire_prompt_text", "admin")
+    retired = prompt_store.delete(
+        _prompts_db(), type=type, name=name, created_by=_actor_id()
+    )
+    return {"retired": retired}
 
 
 # --- draft management tools -----------------------------------------------
