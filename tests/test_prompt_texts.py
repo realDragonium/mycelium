@@ -434,6 +434,7 @@ def test_retiring_a_seeded_doctrine_is_refused(tmp_path, monkeypatch):
             "/retire-prompt-text", json={"type": "doctrine", "name": "ingest"}
         )
         assert r.status_code == 400
+        assert "seeded at startup" in r.json()["detail"]
         assert "save_prompt_text" in r.json()["detail"]
 
 
