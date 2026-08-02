@@ -1,4 +1,5 @@
-"""Export / import the entire substrate as a portable .tar.gz archive.
+"""Export / import an instance — substrate plus its steering texts — as a
+portable .tar.gz archive.
 
 The same code powers manual exports ("snapshot this for sharing") and
 automated backups ("snapshot this on a schedule"). Future automated
@@ -11,6 +12,7 @@ Archive layout
     data.jsonl                 relational data, one record per line,
                                 discriminated by `_kind`, dependency-ordered
     history.jsonl              audit log events (omit with --no-history)
+    prompts.jsonl              editable prompt texts, every version
     vectors/mycelium.vec       statement vector index (omit with --no-vectors)
     vectors/mycelium-names.vec
 
@@ -18,6 +20,20 @@ Records carry their full column set, including audit columns and the
 internal autoincrement keys (link_id, node_id) so the substrate
 round-trips byte-for-byte at the semantic level. Vector index files are
 copied verbatim — they're binary blobs produced by hnswlib.
+
+Prompt texts live in their own DB (`mycelium-prompts.db`) and are instance
+configuration, not substrate — but nothing outside the instance can
+reconstruct an operator's edit, so they ride along in every archive with no
+opt-out flag. The archive carries *every* version, tombstones included: the
+store is append-only and a restore is a point-in-time recovery of it, so a
+name an operator retired comes back retired.
+
+Two payloads, two postures. The substrate is what the archive is for — no
+`mycelium.db`, no export. Prompt texts degrade instead of failing: an
+unreadable prompts DB is left out of the archive with a warning, and an
+unreadable prompts section is skipped on import, because startup re-seeds
+its packaged defaults into an empty store and an instance that comes back
+with default steering beats one that doesn't come back.
 """
 
 from __future__ import annotations
@@ -52,6 +68,9 @@ _LEGACY_ANNOTATION_KINDS: frozenset[str] = frozenset(
 # Archives carry the schema version the substrate was at when exported.
 # Sourced from the migration runner so the two stay in lock-step.
 SCHEMA_VERSION = migrations.CURRENT_VERSION
+
+# The editable prompt texts, alongside the substrate in the data dir.
+PROMPTS_DB_NAME = "mycelium-prompts.db"
 
 
 # Tables exported in dependency order. The same order is used on import,
@@ -123,6 +142,7 @@ def export_substrate(
     if not db_path.exists():
         raise FileNotFoundError(f"no substrate at {data_dir!r}")
     history_db_path = data_dir / "mycelium-history.db"
+    prompts_db_path = data_dir / PROMPTS_DB_NAME
 
     # Read everything via a fresh connection — never touch the live one
     # the running server (if any) may be using.
@@ -143,6 +163,10 @@ def export_substrate(
                 )
                 row_counts["history_events"] = history_count
 
+            prompts_count = _archive_prompts(prompts_db_path, staging / "prompts.jsonl")
+            if prompts_count is not None:
+                row_counts["prompt_texts"] = prompts_count
+
             if include_vectors:
                 vectors_dir = staging / "vectors"
                 vectors_dir.mkdir()
@@ -155,6 +179,7 @@ def export_substrate(
                 "schema_version": SCHEMA_VERSION,
                 "exported_at": _now_iso(),
                 "includes_history": include_history and history_db_path.exists(),
+                "includes_prompts": prompts_count is not None,
                 "includes_vectors": include_vectors,
                 "row_counts": row_counts,
             }
@@ -209,6 +234,53 @@ def _write_history(history_db_path: Path, out_path: Path) -> int:
         conn.close()
 
 
+def _archive_prompts(prompts_db_path: Path, out_path: Path) -> int | None:
+    """Dump every prompt-text row to JSONL. Returns rows written, or None
+    when the archive carries no prompts section at all.
+
+    None covers both "this instance has no prompts DB" (a fresh data dir, or
+    one from before prompt texts existed) and "its prompts DB would not
+    read". Neither aborts the export: the substrate is the payload, and an
+    instance restored without steering texts re-seeds the packaged defaults
+    at startup."""
+    if not prompts_db_path.exists():
+        return None
+    try:
+        return _write_prompts(prompts_db_path, out_path)
+    except (sqlite3.Error, OSError):
+        logger.warning(
+            "could not read prompt texts from %s; the archive carries none",
+            prompts_db_path,
+            exc_info=True,
+        )
+        out_path.unlink(missing_ok=True)
+        return None
+
+
+def _write_prompts(prompts_db_path: Path, out_path: Path) -> int:
+    """Dump the whole `prompt_texts` table — every version of every name,
+    tombstones included — one JSONL line per row. Returns rows written.
+
+    Ordered by (type, name, version) so a hand-read archive shows each
+    name's history in the order it was written."""
+    conn = sqlite3.connect(str(prompts_db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        count = 0
+        with out_path.open("w", encoding="utf-8") as fp:
+            for row in conn.execute(
+                "SELECT * FROM prompt_texts ORDER BY type, name, version"
+            ):
+                payload: dict[str, Any] = {"_kind": "prompt_text"}
+                for col in row.keys():
+                    payload[col] = row[col]
+                fp.write(json.dumps(payload) + "\n")
+                count += 1
+        return count
+    finally:
+        conn.close()
+
+
 def _make_archive(staging: Path, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(out_path, "w:gz") as tar:
@@ -226,10 +298,16 @@ def import_substrate(
     *,
     force: bool = False,
 ) -> dict[str, Any]:
-    """Restore an archive into `data_dir`. By default refuses to clobber
-    an existing substrate; `force=True` first auto-snapshots the current
-    state to `<data_dir>.before-restore.<timestamp>.tar.gz` and then
-    wipes the data dir.
+    """Restore an archive into `data_dir`. By default refuses to clobber an
+    instance already there; `force=True` first auto-snapshots the current
+    state to `<data_dir>.before-restore.<timestamp>.tar.gz` and then wipes
+    the data dir.
+
+    Substrate and prompt texts both count as "already there", and the wipe
+    takes both — a restore makes the data dir be the archive, never a mix of
+    two instances' steering texts. A dir holding prompt texts but no
+    substrate has nothing `export_substrate` can snapshot, so forcing over
+    one is the one restore that keeps no safety net.
 
     Returns the manifest read from the archive.
     """
@@ -237,13 +315,14 @@ def import_substrate(
     data_dir = Path(data_dir)
 
     db_path = data_dir / "mycelium.db"
-    if db_path.exists():
+    if db_path.exists() or (data_dir / PROMPTS_DB_NAME).exists():
         if not force:
             raise FileExistsError(
-                f"data dir {data_dir!r} already contains a substrate; "
+                f"data dir {data_dir!r} already contains an instance; "
                 "pass force=True to clobber (auto-snapshots first)"
             )
-        _safety_snapshot(data_dir)
+        if db_path.exists():
+            _safety_snapshot(data_dir)
         _wipe_data_dir(data_dir)
 
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -283,6 +362,13 @@ def import_substrate(
                     _load_history_jsonl(conn, staging / "history.jsonl")
         finally:
             conn.close()
+
+        # Prompt texts: keyed on the section actually being in the archive,
+        # not on what the manifest claims, so a truncated archive degrades
+        # the same way one exported without prompts does.
+        prompts_jsonl = staging / "prompts.jsonl"
+        if prompts_jsonl.exists():
+            _restore_prompts(data_dir / PROMPTS_DB_NAME, prompts_jsonl)
 
         # Vector files: copy back if present in the archive. Otherwise
         # leave the data dir without them — the server's next `init()`
@@ -329,6 +415,60 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
         )
 
 
+def _restore_prompts(prompts_db_path: Path, path: Path) -> None:
+    """Rebuild the prompts DB from the archive's prompt-text rows.
+
+    Every archived version is inserted exactly as it was written — ids,
+    version numbers and tombstones included — so the restored store is the
+    one that was backed up rather than a flattened copy of its current
+    rows. Nothing is rewritten in place: the store is append-only, and a
+    restore appends nothing of its own.
+
+    All-or-nothing, and never fatal. An unreadable or conflicting section
+    rolls back to an empty store and logs, because by this point the
+    substrate has already landed and an instance whose steering texts fall
+    back to the packaged seeds is worth far more than a failed restore."""
+    from . import prompt_store
+
+    try:
+        conn = prompt_store.connect(prompts_db_path)
+        try:
+            prompt_store.migrate(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _insert_prompt_rows(conn, path)
+            except BaseException:
+                conn.rollback()
+                raise
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        logger.warning(
+            "could not restore prompt texts from the archive; the instance "
+            "comes back with none and startup re-seeds its packaged defaults",
+            exc_info=True,
+        )
+
+
+def _insert_prompt_rows(conn: sqlite3.Connection, path: Path) -> None:
+    with path.open("r", encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            kind = row.pop("_kind", None)
+            if kind != "prompt_text":
+                raise ValueError(f"unknown record kind in prompts.jsonl: {kind!r}")
+            cols = list(row.keys())
+            placeholders = ", ".join("?" * len(cols))
+            conn.execute(
+                f"INSERT INTO prompt_texts ({', '.join(cols)}) VALUES ({placeholders})",
+                [row[c] for c in cols],
+            )
+
+
 def _load_history_jsonl(conn: sqlite3.Connection, path: Path) -> None:
     with path.open("r", encoding="utf-8") as fp:
         for line in fp:
@@ -366,6 +506,7 @@ def _wipe_data_dir(data_dir: Path) -> None:
     for name in (
         "mycelium.db",
         "mycelium-history.db",
+        PROMPTS_DB_NAME,
         *_VECTOR_FILES,
         *_LEGACY_VECTOR_FILES,
     ):

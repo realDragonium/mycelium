@@ -492,6 +492,44 @@ def test_a_store_level_tombstone_is_refilled_by_the_next_start(tmp_path, monkeyp
         assert revived["created_by"] == "seed"
 
 
+def test_a_restore_brings_back_the_edits_instead_of_re_seeding(tmp_path, monkeypatch):
+    """The whole instance round trip. An operator edits a doctrine and
+    retires an unseeded text; the archive is restored into a fresh data dir
+    and started. The doctrine reads as the operator left it — startup finds
+    a live row and adds no seed version on top — and the retired name is
+    still retired rather than resurrected by the restore."""
+    from mycelium import backup
+
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    client = _app(src, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "ingest", "operator edit")
+        server.save_prompt_text("preamble", "ask", "v1")
+        assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+    backup.import_substrate(archive, dst)
+
+    _reset_server()
+    client = _app(dst, monkeypatch)  # a fresh instance on the restored dir
+    with client:
+        assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
+        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        assert [v["version"] for v in versions] == [2, 1]
+        assert [v["created_by"] for v in versions] == [None, "seed"]
+
+        # The packaged research doctrine came back too, unduplicated.
+        research = server.list_prompt_text_versions("doctrine", "research")["versions"]
+        assert [v["version"] for v in research] == [1]
+        assert research[0]["text"] == _doctrine_file("research")
+
+        with pytest.raises(ValueError):
+            server.get_prompt_text("preamble", "ask")
+        retired = server.list_prompt_text_versions("preamble", "ask")["versions"]
+        assert [v["deleted"] for v in retired] == [True, False]
+
+
 def test_a_malformed_loop_setting_does_not_block_startup(tmp_path, monkeypatch):
     """Resolving where a doctrine comes from parses that loop's whole config,
     so an unrelated bad tunable must degrade to an unseeded doctrine rather
