@@ -508,6 +508,41 @@ def test_import_survives_an_unreadable_prompts_section(tmp_path, caplog):
     assert _row_count(dst, "statements") == _row_count(src, "statements")
 
 
+def test_import_refuses_prompt_columns_the_table_does_not_have(tmp_path, caplog):
+    """A row's column names reach the INSERT as text, so an archive that
+    names something other than a `prompt_texts` column — a tampered one
+    smuggling SQL, say — is refused before the statement is built, and the
+    restore degrades to an empty store like any other damaged section."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _smuggle_a_column(work: Path) -> None:
+        lines = (work / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
+        lines.append(
+            json.dumps(
+                {"_kind": "prompt_text", "id) VALUES ('x') --": "anything"},
+            )
+        )
+        (work / "prompts.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    tampered = _repack(
+        archive, tmp_path / "work", tmp_path / "tampered.tar.gz", _smuggle_a_column
+    )
+
+    dst = tmp_path / "dst"
+    with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
+        backup.import_substrate(tampered, dst)
+
+    assert any("prompt texts" in r.getMessage() for r in caplog.records)
+    assert _prompt_rows(dst) == []
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+
+
 def test_import_refuses_a_data_dir_holding_only_prompt_texts(tmp_path):
     """Steering texts left behind by a wiped substrate are still an
     instance. Restoring into them would merge two instances' configuration,

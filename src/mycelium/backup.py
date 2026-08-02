@@ -262,9 +262,12 @@ def _write_prompts(prompts_db_path: Path, out_path: Path) -> int:
     tombstones included — one JSONL line per row. Returns rows written.
 
     Ordered by (type, name, version) so a hand-read archive shows each
-    name's history in the order it was written."""
-    conn = sqlite3.connect(str(prompts_db_path))
-    conn.row_factory = sqlite3.Row
+    name's history in the order it was written. Opened through the store's
+    own `connect`, whose busy timeout is what lets this read overlap a live
+    server saving a version instead of failing the section outright."""
+    from . import prompt_store
+
+    conn = prompt_store.connect(prompts_db_path)
     try:
         count = 0
         with out_path.open("w", encoding="utf-8") as fp:
@@ -452,6 +455,13 @@ def _restore_prompts(prompts_db_path: Path, path: Path) -> None:
 
 
 def _insert_prompt_rows(conn: sqlite3.Connection, path: Path) -> None:
+    """Insert each archived row with the columns it carries.
+
+    Those column names end up in the statement text, where a bound
+    parameter cannot go — so they are checked against the table first. An
+    archive is untrusted input, the same reason extraction runs with
+    `filter="data"`."""
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(prompt_texts)")}
     with path.open("r", encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
@@ -462,6 +472,14 @@ def _insert_prompt_rows(conn: sqlite3.Connection, path: Path) -> None:
             if kind != "prompt_text":
                 raise ValueError(f"unknown record kind in prompts.jsonl: {kind!r}")
             cols = list(row.keys())
+            if not cols:
+                raise ValueError("prompts.jsonl row carries no columns")
+            foreign = sorted(set(cols) - columns)
+            if foreign:
+                raise ValueError(
+                    f"prompts.jsonl row carries columns prompt_texts has not: "
+                    f"{foreign!r}"
+                )
             placeholders = ", ".join("?" * len(cols))
             conn.execute(
                 f"INSERT INTO prompt_texts ({', '.join(cols)}) VALUES ({placeholders})",
