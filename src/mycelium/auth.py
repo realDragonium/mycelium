@@ -190,6 +190,14 @@ def principal_has_real_role(principal: "Principal", required: str) -> bool:
     return _ROLE_RANK[principal.role] >= _ROLE_RANK[required]
 
 
+class RoleRequired(PermissionError):
+    """The caller's role doesn't clear a check made inside a tool body.
+
+    A `PermissionError` so the operation ledger keeps classifying it as a
+    rejection, but its own type so the HTTP layer can answer 403 for it
+    without also swallowing a filesystem PermissionError."""
+
+
 # --- toggle ---------------------------------------------------------------
 
 

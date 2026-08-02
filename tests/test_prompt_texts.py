@@ -7,6 +7,7 @@ tests go through the `@tool` registry, so they also cover the derived role
 gates and the REST mirror the decorator generates.
 """
 
+import contextlib
 import sqlite3
 
 import pytest
@@ -41,11 +42,16 @@ def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
     return TestClient(app)
 
 
+@contextlib.contextmanager
 def _as(role: str):
     """Run the enclosed tool calls as a principal of `role`."""
-    return auth.current_principal.set(
+    token = auth.current_principal.set(
         auth.Principal(id=role[0], name=role, role=role, type="human"),
     )
+    try:
+        yield
+    finally:
+        auth.current_principal.reset(token)
 
 
 # --- store ------------------------------------------------------------------
@@ -164,9 +170,11 @@ def test_save_if_absent_never_overwrites():
     assert prompt_store.latest_text(conn, "doctrine", "ingest") == "operator edit"
 
     prompt_store.delete(conn, type="doctrine", name="ingest")
-    assert prompt_store.save_if_absent(
+    reseeded = prompt_store.save_if_absent(
         conn, type="doctrine", name="ingest", text="packaged"
     )
+    # Continues the sequence past the tombstone rather than restarting.
+    assert reseeded["version"] == 4
     assert prompt_store.latest_text(conn, "doctrine", "ingest") == "packaged"
 
 
@@ -253,11 +261,8 @@ def test_unknown_name_raises(tmp_path, monkeypatch):
 def test_save_records_the_caller(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        token = _as("writer")
-        try:
+        with _as("writer"):
             saved = server.save_prompt_text("doctrine", "ingest", "v1")
-        finally:
-            auth.current_principal.reset(token)
         assert saved["created_by"] == "w"
 
 
@@ -266,27 +271,18 @@ def test_role_gates(tmp_path, monkeypatch):
     and `retire_` is explicitly admin — nothing here is draftable."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        token = _as("reader")
-        try:
+        with _as("reader"):
             with pytest.raises(PermissionError):
                 server.save_prompt_text("doctrine", "ingest", "v1")
             assert server.list_prompt_texts()["prompt_texts"] == []
-        finally:
-            auth.current_principal.reset(token)
 
-        token = _as("writer")
-        try:
+        with _as("writer"):
             server.save_prompt_text("doctrine", "ingest", "v1")
             with pytest.raises(PermissionError):
                 server.retire_prompt_text("doctrine", "ingest")
-        finally:
-            auth.current_principal.reset(token)
 
-        token = _as("admin")
-        try:
+        with _as("admin"):
             assert server.retire_prompt_text("doctrine", "ingest") == {"retired": True}
-        finally:
-            auth.current_principal.reset(token)
 
 
 def test_drafter_cannot_edit_prompt_texts(tmp_path, monkeypatch):
@@ -298,16 +294,13 @@ def test_drafter_cannot_edit_prompt_texts(tmp_path, monkeypatch):
     with client:
         server.save_prompt_text("doctrine", "ingest", "v1")
 
-        token = _as("drafter")
-        try:
-            with pytest.raises(PermissionError):
+        with _as("drafter"):
+            with pytest.raises(auth.RoleRequired):
                 server.save_prompt_text("doctrine", "ingest", "hijacked")
-            with pytest.raises(PermissionError):
+            with pytest.raises(auth.RoleRequired):
                 server.retire_prompt_text("doctrine", "ingest")
             assert server.get_prompt_text("doctrine", "ingest")["text"] == "v1"
             assert server.list_my_drafts() == []
-        finally:
-            auth.current_principal.reset(token)
 
 
 def test_rest_mirror(tmp_path, monkeypatch):

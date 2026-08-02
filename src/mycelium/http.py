@@ -77,15 +77,14 @@ async def _value_error_handler(request: Request, exc: ValueError) -> JSONRespons
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-@app.exception_handler(PermissionError)
-async def _permission_error_handler(
-    request: Request, exc: PermissionError
+@app.exception_handler(auth.RoleRequired)
+async def _role_required_handler(
+    request: Request, exc: auth.RoleRequired
 ) -> JSONResponse:
-    """A tool that re-checks the caller's role in its own body (the
-    curator-only and instance-config tools, which need a stricter gate than
-    the route's declared role) rejects with PermissionError. That's a
-    deliberate 403, not a server fault — the message names the role required.
-    """
+    """A tool that re-checks the caller's role in its own body — needing a
+    stricter gate than its route declares — rejects with `RoleRequired`.
+    That's a deliberate 403, not a server fault, and the message names the
+    role required."""
     return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 

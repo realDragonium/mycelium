@@ -4328,7 +4328,7 @@ def _require_real_role(tool_name: str, required: str) -> None:
 
     principal = _auth.current_principal.get()
     if principal is not None and not _auth.principal_has_real_role(principal, required):
-        raise PermissionError(
+        raise _auth.RoleRequired(
             f"tool '{tool_name}' requires a real {required} role; prompt texts "
             f"are instance configuration and never queue onto a draft"
         )
