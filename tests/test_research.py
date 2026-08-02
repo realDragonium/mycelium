@@ -764,6 +764,8 @@ def test_unreadable_doctrine_falls_back_to_base_prompt_with_note():
         _full_run_turns(), doctrine_path="/nonexistent/path/doctrine.md"
     )
     assert any("doctrine unreadable" in n for n in result.trace["notes"])
+    # base protocol still present in the system prompt
+    assert "reviewable DRAFT" in client.calls[0]["system"]
     assert _FILE_MARKER not in client.calls[0]["system"]
 
 

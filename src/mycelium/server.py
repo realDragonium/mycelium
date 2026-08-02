@@ -993,8 +993,10 @@ def _seed_doctrines() -> None:
     starts from.
 
     Best-effort per doctrine, resolution included: an instance that can't
-    seed still starts, and still ingests and researches, because
-    `load_doctrine` falls back to this same file.
+    seed one still starts, and an unseeded doctrine still reaches its loop,
+    because `load_doctrine` falls back to this same file. What a failure
+    here cannot repair is its own cause — a malformed loop tunable that
+    stopped `from_env` also raises when that loop runs.
     """
     from . import prompt_store
     from .agentloop import DOCTRINE_TYPE
