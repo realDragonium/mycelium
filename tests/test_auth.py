@@ -469,6 +469,61 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
         assert any(n.startswith("merge_") for n in admin)
 
 
+def test_tool_list_hides_tools_whose_gate_is_stricter_than_its_prefix(
+    tmp_path, monkeypatch
+):
+    """A listed tool must be one the caller can actually invoke.
+
+    Three tools declare `real_role=True`, dropping the drafter equivalence
+    that `principal_satisfies` grants. Deriving visibility from the name
+    prefix alone would advertise `list_drafts` to a reader (it starts with
+    `list_`) and the prompt-text editors to a drafter, and every one of
+    those calls would then be refused.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from mcp.types import ListToolsResult
+
+    client = _app(tmp_path, monkeypatch, auth_mode="off")
+    with client:
+        from mycelium import server
+
+        middleware = server._RoleFilteredTools()
+        ctx = SimpleNamespace(method="tools/list")
+
+        async def unfiltered(_ctx):
+            result = ListToolsResult(tools=await server.mcp.list_tools())
+            return result.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+        async def listed_for(role: auth.Role):
+            token = auth.current_principal.set(
+                auth.Principal(id="t", name="t", role=role, type="human"),
+            )
+            try:
+                result = await middleware(ctx, unfiltered)
+                return {t["name"] for t in result["tools"]}
+            finally:
+                auth.current_principal.reset(token)
+
+        reader = asyncio.run(listed_for("reader"))
+        drafter = asyncio.run(listed_for("drafter"))
+        writer = asyncio.run(listed_for("writer"))
+        admin = asyncio.run(listed_for("admin"))
+
+        # Curator-only despite the `list_` prefix.
+        assert "list_drafts" not in reader
+        assert "list_drafts" not in drafter
+        assert "list_drafts" in writer
+
+        # Instance config: lands live, never queues onto a draft.
+        assert "save_prompt_text" not in drafter
+        assert "save_prompt_text" in writer
+        assert "retire_prompt_text" not in drafter
+        assert "retire_prompt_text" not in writer
+        assert "retire_prompt_text" in admin
+
+
 def test_admin_can_delete(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:

@@ -220,7 +220,9 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
             _restore(tokens)
         from mycelium import drafts_store
 
-        row = drafts_store.find_open_session_draft(server._drafts_db(), "sess-E")
+        row = drafts_store.find_open_session_draft(
+            server._drafts_db(), "sess-E", "d1"
+        )
         draft_id = row["id"]
 
         client.post(f"/api/drafts/{draft_id}/submit")
@@ -407,3 +409,43 @@ def test_drafter_without_session_id_falls_back_to_actor_scope(tmp_path, monkeypa
             .fetchone()
         )
         assert row["session_id"] == "actor:d2"
+
+
+def test_another_drafter_cannot_reach_a_draft_by_reusing_its_session_id(
+    tmp_path, monkeypatch
+):
+    """A session id is minted by the transport and travels in a header. It is
+    not bound to the principal that obtained it, so presenting someone else's
+    must not hand over write access to their draft.
+
+    The auto-draft lookup matches on creator as well as session, so the second
+    drafter gets their own draft and the first one's queue is untouched.
+    """
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        tokens = _as_drafter("sess-shared")
+        try:
+            server.upsert_entity(name="Victim Work", description="")
+        finally:
+            _restore(tokens)
+
+        conn = server._drafts_db()
+        victim = drafts_store.find_open_session_draft(conn, "sess-shared", "d1")
+        assert victim is not None
+
+        other = auth.Principal(id="d2", name="Drafter Two", role="drafter", type="human")
+        p_tok = auth.current_principal.set(other)
+        s_tok = auth.current_session_id.set("sess-shared")
+        try:
+            server.upsert_entity(name="Attacker Work", description="")
+        finally:
+            auth.current_principal.reset(p_tok)
+            auth.current_session_id.reset(s_tok)
+
+        attacker = drafts_store.find_open_session_draft(conn, "sess-shared", "d2")
+        assert attacker is not None
+        assert attacker["id"] != victim["id"]
+
+        victim_ops = drafts_store.list_ops(conn, victim["id"])
+        assert len(victim_ops) == 1
+        assert "Victim Work" in str(dict(victim_ops[0]))
