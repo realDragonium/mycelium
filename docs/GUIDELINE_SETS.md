@@ -48,11 +48,20 @@ The cost is that a set is several rows rather than one, which is why the
 
 ## Sets that exist
 
-**`kb-authoring`** — six rows, seeded from `.claude/skills/kb-authoring/` by
-`scripts/seed_guideline_sets.py`: `guidance` (from `SKILL.md`) plus
-`tutorial`, `how-to`, `reference`, `explanation` and `troubleshooting` (from
-`templates/`). Substrate-first: it instructs the writer to flag facts the
-substrate does not support rather than invent them.
+**`kb-authoring`** — six rows, seeded by `scripts/seed_guideline_sets.py`:
+`guidance` from `guidelines/kb-authoring/guidance.md`, plus `tutorial`,
+`how-to`, `reference`, `explanation` and `troubleshooting` from
+`.claude/skills/kb-authoring/templates/`. Substrate-first: it instructs the
+writer to flag facts the substrate does not support rather than invent them.
+
+The guidance has a source of its own, separate from the kb-authoring skill's
+`SKILL.md`, because the two address readers with different reach. The skill
+runs in a repo checkout and points at its templates by path; a generation run
+holds the store and nothing else, and reaches the same templates as sibling
+rows. So the guidance names rows, and carries no skill frontmatter — that
+metadata dispatches a local skill and tells a generation run nothing. A
+template reads the same to either reader, which is why those five rows are
+the skill's own files.
 
 The seed compares each row against the stored latest version and appends only
 what differs, so re-running it against unchanged sources writes nothing. The

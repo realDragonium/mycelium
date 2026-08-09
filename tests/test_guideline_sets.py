@@ -2,8 +2,9 @@
 
 Two layers, matching how the convention in `docs/GUIDELINE_SETS.md` is meant
 to hold. The seed tests drive `scripts/seed_guideline_sets.py` against an
-in-memory prompts DB and pin its naming and its idempotency against the
-append-only store. The variant test adds a second set through the management
+in-memory prompts DB and pin its naming, its idempotency against the
+append-only store, and what the stored guidance may assume its reader can
+reach. The variant test adds a second set through the management
 tools and nothing else — no seeder, no source files, no code — which is the
 claim the convention makes about new documentation variants.
 """
@@ -11,6 +12,7 @@ claim the convention makes about new documentation variants.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sqlite3
 from pathlib import Path
 
@@ -91,7 +93,7 @@ def test_seed_writes_the_named_rows():
     source file verbatim."""
     seed = _seed_script()
     conn = _conn()
-    rows = seed.read_rows(seed.SOURCE_DIR)
+    rows = seed.read_rows(seed.REPO_ROOT)
 
     assert seed.seed(conn, rows) != []
 
@@ -101,17 +103,45 @@ def test_seed_writes_the_named_rows():
     assert {r["created_by"] for r in listed} == {"system:seed-guideline-sets"}
 
 
-def test_seeded_text_is_the_skill_source():
+def test_seeded_text_is_the_source_file():
+    """The seed is a copier: every row is its source file byte for byte, so
+    what a run reads is what a reviewer read in the diff. The guidance is
+    written for the store and has its own source, which is why the copy can
+    stay verbatim — the adaptation lives in a file, not in a transform."""
     seed = _seed_script()
     conn = _conn()
-    seed.seed(conn, seed.read_rows(seed.SOURCE_DIR))
+    seed.seed(conn, seed.read_rows(seed.REPO_ROOT))
 
     for slot, rel in seed.SOURCES.items():
         stored = prompt_store.latest_text(conn, "guideline-set", f"kb-authoring/{slot}")
-        assert stored == (seed.SOURCE_DIR / rel).read_text(encoding="utf-8")
+        assert stored == (seed.REPO_ROOT / rel).read_text(encoding="utf-8")
 
     guidance = prompt_store.latest_text(conn, "guideline-set", "kb-authoring/guidance")
     assert "Knowledge-Base Authoring from Substrate" in guidance
+    assert "> ⚠️ needs verification:" in guidance
+
+
+def test_stored_guidance_addresses_a_run_that_has_only_the_store():
+    """What the guidance may assume its reader can reach. It names each
+    template as the sibling row it is — every name resolves to a row that
+    was seeded, and every seeded template is named — reaches for no file,
+    and carries none of the frontmatter that dispatches a local skill."""
+    seed = _seed_script()
+    conn = _conn()
+    seed.seed(conn, seed.read_rows(seed.REPO_ROOT))
+
+    guidance = prompt_store.latest_text(conn, "guideline-set", "kb-authoring/guidance")
+    seeded = {r["name"] for r in prompt_store.list_current(conn, "guideline-set")}
+
+    named = set(re.findall(r"kb-authoring/[a-z-]+", guidance))
+    assert named == seeded - {"kb-authoring/guidance"}
+
+    assert re.findall(r"[\w./-]+\.md", guidance) == []
+    assert ".claude" not in guidance
+
+    assert not guidance.startswith("---")
+    assert "description:" not in guidance
+    assert "Use this skill" not in guidance
 
 
 def test_reseeding_unchanged_sources_appends_nothing():
@@ -119,7 +149,7 @@ def test_reseeding_unchanged_sources_appends_nothing():
     seed compares against the latest version and writes no second one."""
     seed = _seed_script()
     conn = _conn()
-    rows = seed.read_rows(seed.SOURCE_DIR)
+    rows = seed.read_rows(seed.REPO_ROOT)
     seed.seed(conn, rows)
 
     assert seed.outdated(conn, rows) == []
@@ -134,7 +164,7 @@ def test_changed_source_appends_only_that_row():
     source still lands, and only it does."""
     seed = _seed_script()
     conn = _conn()
-    rows = seed.read_rows(seed.SOURCE_DIR)
+    rows = seed.read_rows(seed.REPO_ROOT)
     seed.seed(conn, rows)
 
     rows["kb-authoring/how-to"] += "\nAlways link the matching explanation.\n"
@@ -155,7 +185,7 @@ def test_dry_run_leaves_no_database_behind(tmp_path):
     instance's prompts DB."""
     seed = _seed_script()
     db_path = tmp_path / "mycelium-prompts.db"
-    rows = seed.read_rows(seed.SOURCE_DIR)
+    rows = seed.read_rows(seed.REPO_ROOT)
 
     assert seed.pending(db_path, rows) == list(rows)
     assert not db_path.exists()
@@ -168,7 +198,7 @@ def test_dry_run_does_not_write_to_an_existing_database(tmp_path):
     either, which an ordinary `prompt_store.connect` would have done."""
     seed = _seed_script()
     db_path = tmp_path / "mycelium-prompts.db"
-    rows = seed.read_rows(seed.SOURCE_DIR)
+    rows = seed.read_rows(seed.REPO_ROOT)
 
     conn = prompt_store.connect(db_path)
     prompt_store.migrate(conn)
@@ -209,7 +239,7 @@ def test_sets_share_the_type_and_separate_by_prefix(tmp_path, monkeypatch):
     seed = _seed_script()
     client = _app(tmp_path, monkeypatch)
     with client:
-        seed.seed(server._prompts_db(), seed.read_rows(seed.SOURCE_DIR))
+        seed.seed(server._prompts_db(), seed.read_rows(seed.REPO_ROOT))
         for name, text in _INTERNAL_DOC.items():
             server.save_prompt_text("guideline-set", name, text)
 

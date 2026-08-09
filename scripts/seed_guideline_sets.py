@@ -1,9 +1,13 @@
 """Seed the `kb-authoring` guideline set into the prompt-text store.
 
-Six rows under type `guideline-set`: the set-wide guidance from the
-kb-authoring skill plus one template per Diátaxis document type, so a
-generation run fetches exactly the type it is writing. See
-`docs/GUIDELINE_SETS.md` for the naming convention.
+Six rows under type `guideline-set`: the set-wide guidance plus one template
+per Diátaxis document type, so a generation run fetches exactly the type it
+is writing. See `docs/GUIDELINE_SETS.md` for the naming convention.
+
+Each row is its source file verbatim. The guidance has its own source under
+`guidelines/`, addressed to a run whose only handle on the set is the store:
+it names the templates as the sibling rows they are. The templates are the
+kb-authoring skill's files, which say the same thing to either consumer.
 
 Idempotent. The store is append-only, so the seed reads the latest version
 of each row first and appends only what differs — re-running it against
@@ -35,24 +39,26 @@ GUIDELINE_TYPE = "guideline-set"
 SET_NAME = "kb-authoring"
 ACTOR = "system:seed-guideline-sets"
 
-SOURCE_DIR = Path(__file__).resolve().parents[1] / ".claude" / "skills" / "kb-authoring"
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Row slot -> source file under SOURCE_DIR. `guidance` is the set-wide
+_SKILL_TEMPLATES = ".claude/skills/kb-authoring/templates"
+
+# Row slot -> source file, relative to REPO_ROOT. `guidance` is the set-wide
 # instruction; the rest are named for the document type they produce.
 SOURCES = {
-    "guidance": "SKILL.md",
-    "tutorial": "templates/tutorial.md",
-    "how-to": "templates/how-to.md",
-    "reference": "templates/reference.md",
-    "explanation": "templates/explanation.md",
-    "troubleshooting": "templates/troubleshooting.md",
+    "guidance": "guidelines/kb-authoring/guidance.md",
+    "tutorial": f"{_SKILL_TEMPLATES}/tutorial.md",
+    "how-to": f"{_SKILL_TEMPLATES}/how-to.md",
+    "reference": f"{_SKILL_TEMPLATES}/reference.md",
+    "explanation": f"{_SKILL_TEMPLATES}/explanation.md",
+    "troubleshooting": f"{_SKILL_TEMPLATES}/troubleshooting.md",
 }
 
 
-def read_rows(source_dir: Path) -> dict[str, str]:
-    """The set's rows as {name: text}, read from the skill directory."""
+def read_rows(root: Path) -> dict[str, str]:
+    """The set's rows as {name: text}, each its source file verbatim."""
     return {
-        f"{SET_NAME}/{slot}": (source_dir / rel).read_text(encoding="utf-8")
+        f"{SET_NAME}/{slot}": (root / rel).read_text(encoding="utf-8")
         for slot, rel in SOURCES.items()
     }
 
@@ -125,7 +131,7 @@ def main() -> None:
     if not data_dir.is_dir():
         raise SystemExit(f"no data dir at {data_dir}")
 
-    rows = read_rows(SOURCE_DIR)
+    rows = read_rows(REPO_ROOT)
     db_path = data_dir / "mycelium-prompts.db"
 
     if args.dry_run:
