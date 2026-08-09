@@ -8,6 +8,7 @@ gates and the REST mirror the decorator generates.
 """
 
 import contextlib
+import pathlib
 import sqlite3
 
 import pytest
@@ -189,6 +190,11 @@ def test_blank_key_or_text_rejected():
 
 
 # --- tools ------------------------------------------------------------------
+#
+# The tool tests write under `preamble`/`guidelines`, not `doctrine`: startup
+# seeds the two real doctrines (see the seeding section below), so a generic
+# tool test that used those names would be editing live instance config and
+# counting its versions from 2.
 
 
 def test_tool_round_trip(tmp_path, monkeypatch):
@@ -196,21 +202,19 @@ def test_tool_round_trip(tmp_path, monkeypatch):
     to the next read with no restart in between."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        saved = server.save_prompt_text("doctrine", "ingest", "Be precise.")
+        saved = server.save_prompt_text("preamble", "ask", "Be precise.")
         assert saved["version"] == 1 and saved["deleted"] is False
 
-        assert server.get_prompt_text("doctrine", "ingest")["text"] == "Be precise."
+        assert server.get_prompt_text("preamble", "ask")["text"] == "Be precise."
 
-        server.save_prompt_text("doctrine", "ingest", "Be very precise.")
-        assert (
-            server.get_prompt_text("doctrine", "ingest")["text"] == "Be very precise."
-        )
+        server.save_prompt_text("preamble", "ask", "Be very precise.")
+        assert server.get_prompt_text("preamble", "ask")["text"] == "Be very precise."
 
-        listed = server.list_prompt_texts()["prompt_texts"]
+        listed = server.list_prompt_texts(type="preamble")["prompt_texts"]
         assert listed == [
             {
-                "type": "doctrine",
-                "name": "ingest",
+                "type": "preamble",
+                "name": "ask",
                 "version": 2,
                 "chars": len("Be very precise."),
                 "created_at": listed[0]["created_at"],
@@ -218,35 +222,35 @@ def test_tool_round_trip(tmp_path, monkeypatch):
             }
         ]
 
-        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        versions = server.list_prompt_text_versions("preamble", "ask")["versions"]
         assert [v["text"] for v in versions] == ["Be very precise.", "Be precise."]
 
 
 def test_tool_list_by_type(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text("doctrine", "ingest", "i")
+        server.save_prompt_text("preamble", "ask", "a")
         server.save_prompt_text("guidelines", "tutorial", "t")
 
         names = [
-            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
+            p["name"] for p in server.list_prompt_texts(type="preamble")["prompt_texts"]
         ]
-        assert names == ["ingest"]
+        assert names == ["ask"]
 
 
 def test_tool_retire(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text("doctrine", "ingest", "v1")
-        assert server.retire_prompt_text("doctrine", "ingest") == {"retired": True}
-        assert server.retire_prompt_text("doctrine", "ingest") == {"retired": False}
+        server.save_prompt_text("preamble", "ask", "v1")
+        assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
+        assert server.retire_prompt_text("preamble", "ask") == {"retired": False}
 
-        assert server.list_prompt_texts()["prompt_texts"] == []
+        assert server.list_prompt_texts(type="preamble")["prompt_texts"] == []
         with pytest.raises(ValueError):
-            server.get_prompt_text("doctrine", "ingest")
+            server.get_prompt_text("preamble", "ask")
 
         # History survives the tombstone.
-        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        versions = server.list_prompt_text_versions("preamble", "ask")["versions"]
         assert [v["deleted"] for v in versions] == [True, False]
 
 
@@ -262,7 +266,7 @@ def test_save_records_the_caller(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         with _as("writer"):
-            saved = server.save_prompt_text("doctrine", "ingest", "v1")
+            saved = server.save_prompt_text("preamble", "ask", "v1")
         assert saved["created_by"] == "w"
 
 
@@ -273,16 +277,16 @@ def test_role_gates(tmp_path, monkeypatch):
     with client:
         with _as("reader"):
             with pytest.raises(PermissionError):
-                server.save_prompt_text("doctrine", "ingest", "v1")
-            assert server.list_prompt_texts()["prompt_texts"] == []
+                server.save_prompt_text("preamble", "ask", "v1")
+            assert server.list_prompt_texts(type="preamble")["prompt_texts"] == []
 
         with _as("writer"):
-            server.save_prompt_text("doctrine", "ingest", "v1")
+            server.save_prompt_text("preamble", "ask", "v1")
             with pytest.raises(PermissionError):
-                server.retire_prompt_text("doctrine", "ingest")
+                server.retire_prompt_text("preamble", "ask")
 
         with _as("admin"):
-            assert server.retire_prompt_text("doctrine", "ingest") == {"retired": True}
+            assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
 
 
 def test_drafter_cannot_edit_prompt_texts(tmp_path, monkeypatch):
@@ -292,14 +296,14 @@ def test_drafter_cannot_edit_prompt_texts(tmp_path, monkeypatch):
     still work."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        server.save_prompt_text("doctrine", "ingest", "v1")
+        server.save_prompt_text("preamble", "ask", "v1")
 
         with _as("drafter"):
             with pytest.raises(auth.RoleRequired):
-                server.save_prompt_text("doctrine", "ingest", "hijacked")
+                server.save_prompt_text("preamble", "ask", "hijacked")
             with pytest.raises(auth.RoleRequired):
-                server.retire_prompt_text("doctrine", "ingest")
-            assert server.get_prompt_text("doctrine", "ingest")["text"] == "v1"
+                server.retire_prompt_text("preamble", "ask")
+            assert server.get_prompt_text("preamble", "ask")["text"] == "v1"
             assert server.list_my_drafts() == []
 
 
@@ -309,15 +313,15 @@ def test_rest_mirror(tmp_path, monkeypatch):
     with client:
         r = client.post(
             "/save-prompt-text",
-            json={"type": "doctrine", "name": "ingest", "text": "v1"},
+            json={"type": "preamble", "name": "ask", "text": "v1"},
         )
         assert r.status_code == 200 and r.json()["version"] == 1
 
-        r = client.post("/get-prompt-text", json={"type": "doctrine", "name": "ingest"})
+        r = client.post("/get-prompt-text", json={"type": "preamble", "name": "ask"})
         assert r.json()["text"] == "v1"
 
-        r = client.post("/list-prompt-texts", json={})
-        assert [p["name"] for p in r.json()["prompt_texts"]] == ["ingest"]
+        r = client.post("/list-prompt-texts", json={"type": "preamble"})
+        assert [p["name"] for p in r.json()["prompt_texts"]] == ["ask"]
 
 
 def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
@@ -336,7 +340,7 @@ def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
 
         r = client.post(
             "/save-prompt-text",
-            json={"type": "doctrine", "name": "ingest", "text": "v1"},
+            json={"type": "preamble", "name": "ask", "text": "v1"},
             headers=h,
         )
         assert r.status_code == 403
@@ -344,7 +348,81 @@ def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
 
         r = client.post(
             "/retire-prompt-text",
-            json={"type": "doctrine", "name": "ingest"},
+            json={"type": "preamble", "name": "ask"},
             headers=h,
         )
         assert r.status_code == 403
+
+
+# --- startup seeding --------------------------------------------------------
+#
+# Startup puts the packaged ingest/research doctrines in the store so they are
+# editable from the first run. The files stay the seed and the fallback; the
+# store is what the loops read (tests/test_ingest.py, tests/test_research.py).
+
+
+def _doctrine_file(name: str) -> str:
+    from mycelium.ingest.config import _DEFAULT_DOCTRINE_PATH as INGEST_PATH
+    from mycelium.research.config import _DEFAULT_DOCTRINE_PATH as RESEARCH_PATH
+
+    path = INGEST_PATH if name == "ingest" else RESEARCH_PATH
+    return pathlib.Path(path).read_text(encoding="utf-8")
+
+
+def test_startup_seeds_both_doctrines(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        seeded = server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        assert [p["name"] for p in seeded] == ["ingest", "research"]
+        assert [p["version"] for p in seeded] == [1, 1]
+        assert [p["created_by"] for p in seeded] == ["seed", "seed"]
+
+        for name in ("ingest", "research"):
+            stored = server.get_prompt_text("doctrine", name)["text"]
+            assert stored == _doctrine_file(name)
+
+
+def test_seeding_leaves_an_edit_alone_and_adds_no_versions(tmp_path, monkeypatch):
+    """Idempotency: restarting re-runs the seed, and a store that already has
+    a doctrine keeps it — same version, same text, no duplicate row."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "ingest", "operator edit")
+
+    _reset_server()
+    client = _app(tmp_path, monkeypatch)  # restart against the same data dir
+    with client:
+        assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
+        assert (
+            len(server.list_prompt_text_versions("doctrine", "ingest")["versions"]) == 2
+        )
+        research = server.list_prompt_text_versions("doctrine", "research")["versions"]
+        assert len(research) == 1  # untouched by the second startup
+
+
+def test_an_unreadable_doctrine_file_does_not_block_startup(tmp_path, monkeypatch):
+    """Seeding is best-effort: a missing file leaves that doctrine unseeded —
+    the loop falls back to the same file and records a note — and the other
+    doctrine, and the rest of startup, are unaffected."""
+    monkeypatch.setenv(
+        "MYCELIUM_INGEST_DOCTRINE_PATH", str(tmp_path / "nope" / "doctrine.md")
+    )
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        names = [
+            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        ]
+        assert names == ["research"]
+
+
+def test_a_malformed_loop_setting_does_not_block_startup(tmp_path, monkeypatch):
+    """Resolving where a doctrine comes from parses that loop's whole config,
+    so an unrelated bad tunable must degrade to an unseeded doctrine rather
+    than abort the server."""
+    monkeypatch.setenv("MYCELIUM_INGEST_OP_CAP", "not-a-number")
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        names = [
+            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        ]
+        assert names == ["research"]

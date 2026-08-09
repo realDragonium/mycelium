@@ -892,6 +892,7 @@ def init(data_dir: Path) -> None:
     # texts intact.
     prompt_store.configure(data_dir / "mycelium-prompts.db")
     prompt_store.migrate(_prompts_db())
+    _seed_doctrines()
 
     # Operation ledger: a bounded, best-effort record of attempted tool calls,
     # in its own file so telemetry writes never contend with the substrate's
@@ -979,6 +980,50 @@ def init(data_dir: Path) -> None:
         from . import mention_worker
 
         mention_worker.start(data_dir)
+
+
+def _seed_doctrines() -> None:
+    """Put each packaged doctrine in the store when it holds none.
+
+    `save_if_absent` carries the whole idempotency story: every startup runs
+    this, and one that finds a row leaves it alone — so an operator's edit
+    survives restarts and no duplicate versions accumulate. Which file seeds
+    a doctrine follows the same config the loops read, so
+    `MYCELIUM_{INGEST,RESEARCH}_DOCTRINE_PATH` chooses what a fresh instance
+    starts from.
+
+    Best-effort per doctrine, resolution included: an instance that can't
+    seed one still starts, and an unseeded doctrine still reaches its loop,
+    because `load_doctrine` falls back to this same file. What a failure
+    here cannot repair is its own cause — a malformed loop tunable that
+    stopped `from_env` also raises when that loop runs.
+    """
+    from . import prompt_store
+    from .agentloop import DOCTRINE_TYPE
+    from .ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
+    from .ingest.config import IngestConfig
+    from .research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
+    from .research.config import ResearchConfig
+
+    doctrines = (
+        (INGEST_DOCTRINE, IngestConfig),
+        (RESEARCH_DOCTRINE, ResearchConfig),
+    )
+    for name, loop_config in doctrines:
+        try:
+            # Inside the guard: `from_env` also parses that loop's numeric
+            # tunables, and one malformed op cap must not stop a server
+            # booting.
+            path = loop_config.from_env().doctrine_path
+            prompt_store.save_if_absent(
+                _prompts_db(),
+                type=DOCTRINE_TYPE,
+                name=name,
+                text=Path(path).read_text(encoding="utf-8"),
+                created_by="seed",
+            )
+        except Exception:
+            logger.warning("could not seed the %s doctrine", name, exc_info=True)
 
 
 def _rebuild_vector_index(
