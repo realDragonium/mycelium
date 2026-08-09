@@ -415,6 +415,83 @@ def test_an_unreadable_doctrine_file_does_not_block_startup(tmp_path, monkeypatc
         assert names == ["research"]
 
 
+def test_retiring_a_seeded_doctrine_is_refused(tmp_path, monkeypatch):
+    """Startup re-seeds these names, so retiring one would undo itself. The
+    tool says so at the moment of the attempt and appends no tombstone; the
+    REST mirror turns the same refusal into a 400 carrying the reason."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        for name in ("ingest", "research"):
+            with pytest.raises(ValueError, match="seeded at startup"):
+                server.retire_prompt_text("doctrine", name)
+            assert server.get_prompt_text("doctrine", name)["text"] == _doctrine_file(
+                name
+            )
+            versions = server.list_prompt_text_versions("doctrine", name)["versions"]
+            assert [v["deleted"] for v in versions] == [False]
+
+        r = client.post(
+            "/retire-prompt-text", json={"type": "doctrine", "name": "ingest"}
+        )
+        assert r.status_code == 400
+        assert "seeded at startup" in r.json()["detail"]
+        assert "save_prompt_text" in r.json()["detail"]
+
+
+def test_an_unseeded_doctrine_is_still_retirable(tmp_path, monkeypatch):
+    """The refusal is per name, not per type: a doctrine startup does not
+    seed is an ordinary prompt text."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "curation", "v1")
+        assert server.retire_prompt_text("doctrine", "curation") == {"retired": True}
+        assert [
+            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        ] == ["ingest", "research"]
+
+
+def test_a_seeded_doctrine_survives_a_restart_after_a_refused_retire(
+    tmp_path, monkeypatch
+):
+    """The restart case: an operator retires a seeded doctrine, is refused,
+    and the restart finds exactly what was there before — same version, same
+    text, no seed row added on top."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "ingest", "operator edit")
+        with pytest.raises(ValueError, match="seeded at startup"):
+            server.retire_prompt_text("doctrine", "ingest")
+
+    _reset_server()
+    client = _app(tmp_path, monkeypatch)  # restart against the same data dir
+    with client:
+        assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
+        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        assert [v["version"] for v in versions] == [2, 1]
+
+
+def test_a_store_level_tombstone_is_refilled_by_the_next_start(tmp_path, monkeypatch):
+    """Why the tool refuses. The store is ignorant of what is special, so a
+    tombstone written straight into it reads as "no live text" and the next
+    startup seeds the packaged default again at a new version."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        assert (
+            prompt_store.delete(server._prompts_db(), type="doctrine", name="ingest")
+            is True
+        )
+        with pytest.raises(ValueError):
+            server.get_prompt_text("doctrine", "ingest")
+
+    _reset_server()
+    client = _app(tmp_path, monkeypatch)  # restart against the same data dir
+    with client:
+        revived = server.get_prompt_text("doctrine", "ingest")
+        assert revived["text"] == _doctrine_file("ingest")
+        assert revived["version"] == 3  # seed, tombstone, re-seed
+        assert revived["created_by"] == "seed"
+
+
 def test_a_malformed_loop_setting_does_not_block_startup(tmp_path, monkeypatch):
     """Resolving where a doctrine comes from parses that loop's whole config,
     so an unrelated bad tunable must degrade to an unseeded doctrine rather

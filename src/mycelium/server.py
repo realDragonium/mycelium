@@ -982,6 +982,35 @@ def init(data_dir: Path) -> None:
         mention_worker.start(data_dir)
 
 
+def _seeded_prompt_texts() -> tuple[tuple[str, str, Any], ...]:
+    """The prompt texts startup owns: (type, name, the loop config that
+    resolves that name's seed file).
+
+    The one place that knows which names startup writes. `prompt_store`
+    keeps `type` and `name` free strings and enumerates neither, so
+    seeded-ness is a fact of the seeding caller: `_seed_doctrines` reads
+    this to write the packaged defaults, and `retire_prompt_text` reads it
+    to refuse a retirement the next start would undo.
+    """
+    from .agentloop import DOCTRINE_TYPE
+    from .ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
+    from .ingest.config import IngestConfig
+    from .research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
+    from .research.config import ResearchConfig
+
+    return (
+        (DOCTRINE_TYPE, INGEST_DOCTRINE, IngestConfig),
+        (DOCTRINE_TYPE, RESEARCH_DOCTRINE, ResearchConfig),
+    )
+
+
+def _is_seeded(type: str, name: str) -> bool:
+    """Whether startup seeds (type, name). Keys are compared as the store
+    stores them — stripped."""
+    key = (type.strip(), name.strip())
+    return any(key == (t, n) for t, n, _ in _seeded_prompt_texts())
+
+
 def _seed_doctrines() -> None:
     """Put each packaged doctrine in the store when it holds none.
 
@@ -992,6 +1021,11 @@ def _seed_doctrines() -> None:
     `MYCELIUM_{INGEST,RESEARCH}_DOCTRINE_PATH` chooses what a fresh instance
     starts from.
 
+    A tombstone reads as "no live text", so a seeded name that was retired
+    at the store level comes back here at a new version. That is why
+    `retire_prompt_text` refuses these names outright: an operator learns
+    the rule when they try, rather than discovering it after a deploy.
+
     Best-effort per doctrine, resolution included: an instance that can't
     seed one still starts, and an unseeded doctrine still reaches its loop,
     because `load_doctrine` falls back to this same file. What a failure
@@ -999,17 +1033,8 @@ def _seed_doctrines() -> None:
     stopped `from_env` also raises when that loop runs.
     """
     from . import prompt_store
-    from .agentloop import DOCTRINE_TYPE
-    from .ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
-    from .ingest.config import IngestConfig
-    from .research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
-    from .research.config import ResearchConfig
 
-    doctrines = (
-        (INGEST_DOCTRINE, IngestConfig),
-        (RESEARCH_DOCTRINE, ResearchConfig),
-    )
-    for name, loop_config in doctrines:
+    for doctrine_type, name, loop_config in _seeded_prompt_texts():
         try:
             # Inside the guard: `from_env` also parses that loop's numeric
             # tunables, and one malformed op cap must not stop a server
@@ -1017,7 +1042,7 @@ def _seed_doctrines() -> None:
             path = loop_config.from_env().doctrine_path
             prompt_store.save_if_absent(
                 _prompts_db(),
-                type=DOCTRINE_TYPE,
+                type=doctrine_type,
                 name=name,
                 text=Path(path).read_text(encoding="utf-8"),
                 created_by="seed",
@@ -4453,11 +4478,22 @@ def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
     """Retire the text stored under (type, name): it stops being listed and
     served, while its history stays readable and the name can be saved again.
 
+    Names that startup seeds — the `doctrine` texts `ingest` and `research` —
+    are refused, because startup would re-seed the packaged default at a new
+    version and undo the retirement at the next restart. Change one with
+    `save_prompt_text` instead.
+
     Returns {"retired": true} — or false when nothing live was stored
     there."""
     from . import prompt_store
 
     _require_real_role("retire_prompt_text", "admin")
+    if _is_seeded(type, name):
+        raise ValueError(
+            f"prompt text '{type}/{name}' is seeded at startup and cannot be "
+            f"retired: the next start would re-seed the packaged default at a "
+            f"new version. Edit it with save_prompt_text instead."
+        )
     retired = prompt_store.delete(
         _prompts_db(), type=type, name=name, created_by=_actor_id()
     )

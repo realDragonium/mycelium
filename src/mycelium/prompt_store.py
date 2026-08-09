@@ -203,7 +203,11 @@ def save_if_absent(
     already there. This is what lets a consumer seed its packaged default on
     every startup without ever overwriting an operator's edit — the check
     and the append share one write transaction, so a concurrent save wins
-    or loses cleanly rather than being clobbered."""
+    or loses cleanly rather than being clobbered.
+
+    "No live text" includes a tombstone, so a retired name seeds again. A
+    caller that seeds a name therefore owns whether that name may be
+    retired at all — the store enumerates nothing and cannot decide it."""
     type, name = _key(type, name)
     text = _require_text(text)
     with _writing(conn):
