@@ -149,16 +149,22 @@ def create_draft(
 
 
 def find_open_session_draft(
-    conn: sqlite3.Connection, session_id: str
+    conn: sqlite3.Connection, session_id: str, created_by: str
 ) -> sqlite3.Row | None:
-    """Return the drafter's currently-open draft for this MCP session,
-    or None if there isn't one yet. Open == submitted_at IS NULL AND
-    decided_at IS NULL."""
+    """Return `created_by`'s currently-open draft for this MCP session, or
+    None if there isn't one yet. Open == submitted_at IS NULL AND
+    decided_at IS NULL.
+
+    Matching on the creator as well as the session is what keeps a session
+    id from acting as a bearer credential: it is minted by the transport,
+    travels in a header, and is not bound to the principal that obtained
+    it, so a caller presenting someone else's session id gets their own
+    draft rather than write access to that person's."""
     return conn.execute(
-        "SELECT * FROM drafts WHERE session_id = ? "
+        "SELECT * FROM drafts WHERE session_id = ? AND created_by = ? "
         "  AND submitted_at IS NULL AND decided_at IS NULL "
         "ORDER BY created_at DESC LIMIT 1",
-        (session_id,),
+        (session_id, created_by),
     ).fetchone()
 
 

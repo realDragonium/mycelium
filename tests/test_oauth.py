@@ -229,10 +229,50 @@ def test_register_requires_redirect_uri(tmp_path, monkeypatch):
 
 
 def _full_flow(
-    client, *, admin_bearer: str, redirect_uri: str = "http://localhost:6274/cb"
+    client,
+    *,
+    admin_bearer: str,
+    redirect_uri: str = "http://localhost:6274/cb",
+    resource: str | None = None,
+    token_resource: str | None = None,
 ):
-    """Drive the OAuth flow end-to-end as a logged-in admin. Returns
-    the resulting access_token plus the client_id used."""
+    """Drive the OAuth flow end-to-end as a logged-in admin. Returns the
+    raw token response — the caller asserts its status, so failure modes
+    can be driven through the same path as the happy one."""
+    consent, client_id, verifier = _consent(
+        client, admin_bearer=admin_bearer, redirect_uri=redirect_uri, resource=resource
+    )
+    from urllib.parse import parse_qs, urlparse
+
+    code = parse_qs(urlparse(consent.headers["location"]).query)["code"][0]
+    r = client.post(
+        "/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "client_id": client_id,
+            "code_verifier": verifier,
+            **(
+                {"resource": token_resource if token_resource else resource}
+                if (resource or token_resource)
+                else {}
+            ),
+        },
+    )
+    return r, client_id, verifier, code
+
+
+def _consent(
+    client,
+    *,
+    admin_bearer: str,
+    redirect_uri: str = "http://localhost:6274/cb",
+    resource: str | None = None,
+):
+    """Register a client and drive it through consent. Returns the consent
+    redirect unasserted, so a test can inspect an authorization-stage
+    rejection as easily as a successful code."""
     # Register the client (anonymous).
     reg = client.post(
         "/register",
@@ -255,6 +295,7 @@ def _full_flow(
             "code_challenge_method": "S256",
             "state": state,
             "scope": "mcp",
+            **({"resource": resource} if resource else {}),
         },
         headers={"Authorization": f"Bearer {admin_bearer}"},
     )
@@ -271,41 +312,23 @@ def _full_flow(
             "scope": "mcp",
             "state": state,
             "decision": "allow",
+            **({"resource": resource} if resource else {}),
         },
         headers={"Authorization": f"Bearer {admin_bearer}"},
         follow_redirects=False,
     )
     assert r.status_code == 302, r.text
-    loc = r.headers["location"]
-    assert loc.startswith(redirect_uri)
-    # Pull the code out of the redirect URL.
-    from urllib.parse import parse_qs, urlparse
-
-    qs = parse_qs(urlparse(loc).query)
-    code = qs["code"][0]
-    assert qs["state"][0] == state
-
-    # Exchange.
-    r = client.post(
-        "/token",
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri,
-            "client_id": client_id,
-            "code_verifier": verifier,
-        },
-    )
-    assert r.status_code == 200, r.text
-    body = r.json()
-    return body, client_id, verifier, code
+    assert r.headers["location"].startswith(redirect_uri)
+    return r, client_id, verifier
 
 
 def test_full_oauth_flow(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         admin_bearer, _ = _admin_bearer(server._auth_db())
-        body, _, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        r, _, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        assert r.status_code == 200, r.text
+        body = r.json()
         assert body["token_type"] == "Bearer"
         assert body["access_token"].startswith("myc_")
         # The issued token works as a bearer.
@@ -409,7 +432,8 @@ def test_token_rejects_code_reuse(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         admin_bearer, _ = _admin_bearer(server._auth_db())
-        body, client_id, verifier, code = _full_flow(client, admin_bearer=admin_bearer)
+        r, client_id, verifier, code = _full_flow(client, admin_bearer=admin_bearer)
+        assert r.status_code == 200, r.text
         # Replay the same exchange.
         r = client.post(
             "/token",
@@ -464,3 +488,228 @@ def test_denial_redirects_with_error(tmp_path, monkeypatch):
         assert r.status_code == 302
         assert "error=access_denied" in r.headers["location"]
         assert "state=abc" in r.headers["location"]
+
+
+# --- 2026-07-28 authorization hardening -----------------------------------
+
+
+def test_authorization_response_carries_iss(tmp_path, monkeypatch):
+    """RFC 9207. A client that recorded our issuer at discovery compares it
+    against `iss` before redeeming the code; without it, a code minted by a
+    different authorization server can be walked onto our token endpoint.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        redirect_uri = "http://localhost:6274/cb"
+        reg = client.post(
+            "/register",
+            json={"client_name": "Iss client", "redirect_uris": [redirect_uri]},
+        ).json()
+        verifier, challenge = _pkce_pair()
+
+        meta = client.get("/.well-known/oauth-authorization-server").json()
+        # Emitting `iss` without advertising it leaves a strict client unable
+        # to tell a missing one from a server that never sends it.
+        assert meta["authorization_response_iss_parameter_supported"] is True
+
+        form = {
+            "client_id": reg["client_id"],
+            "redirect_uri": redirect_uri,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "scope": "mcp",
+            "state": "st",
+        }
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+
+        allowed = client.post(
+            "/authorize/decide",
+            data={**form, "decision": "allow"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        qs = parse_qs(urlparse(allowed.headers["location"]).query)
+        assert qs["iss"][0] == meta["issuer"]
+
+        # Error responses carry it too, or a mix-up is undetectable on the
+        # path where the client is told the request failed.
+        denied = client.post(
+            "/authorize/decide",
+            data={**form, "decision": "deny"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        qs = parse_qs(urlparse(denied.headers["location"]).query)
+        assert qs["error"][0] == "access_denied"
+        assert qs["iss"][0] == meta["issuer"]
+
+
+def test_token_rejects_a_resource_naming_a_different_server(tmp_path, monkeypatch):
+    """RFC 8707. Minting a token for a resource we are not would hand the
+    caller a credential to replay elsewhere.
+
+    Rejected at consent, before a code exists — so the user is never asked
+    to approve access that could not be granted, and no code is minted that
+    would then have to be refused.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        consent, _, _ = _consent(
+            client,
+            admin_bearer=admin_bearer,
+            resource="https://someone-elses-mcp.example.com",
+        )
+        qs = parse_qs(urlparse(consent.headers["location"]).query)
+        assert qs["error"][0] == "invalid_target"
+        assert "code" not in qs
+        # Even the rejection carries `iss`, or a client cannot tell whose
+        # error it is looking at.
+        assert qs["iss"][0] == "http://testserver"
+
+
+def test_token_rejects_a_foreign_resource_on_an_otherwise_valid_code(
+    tmp_path, monkeypatch
+):
+    """The token endpoint does not trust that consent already screened the
+    audience — a code can be presented to it directly."""
+    from urllib.parse import parse_qs, urlparse
+
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        redirect_uri = "http://localhost:6274/cb"
+        consent, client_id, verifier = _consent(
+            client, admin_bearer=admin_bearer, redirect_uri=redirect_uri
+        )
+        code = parse_qs(urlparse(consent.headers["location"]).query)["code"][0]
+
+        r = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "code_verifier": verifier,
+                "resource": "https://someone-elses-mcp.example.com",
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["error"] == "invalid_target"
+
+
+def test_token_accepts_both_canonical_forms_of_our_own_resource(tmp_path, monkeypatch):
+    """Clients are told to send the most specific URI they can, so the origin
+    and the `/mcp` endpoint under it must both be recognised as us."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        from mycelium.oauth_server import _resource_matches
+
+        base = "http://testserver"
+        assert _resource_matches(base, base)
+        assert _resource_matches(f"{base}/mcp", base)
+        assert _resource_matches(f"{base}/", base)
+        assert _resource_matches("HTTP://TESTSERVER/mcp", base)
+        assert not _resource_matches("http://testserver/other", base)
+        assert not _resource_matches("https://evil.example.com/mcp", base)
+
+
+def test_challenge_and_metadata_advertise_the_scope_to_request(tmp_path, monkeypatch):
+    """A client with no prior knowledge learns what to ask for from the 401
+    itself, rather than needing the metadata document first."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        assert r.status_code == 401
+        assert 'scope="mcp"' in r.headers["www-authenticate"]
+
+        prm = client.get("/.well-known/oauth-protected-resource").json()
+        assert prm["scopes_supported"] == ["mcp"]
+
+
+def test_full_flow_succeeds_when_the_client_names_this_server(tmp_path, monkeypatch):
+    """The path a conforming 2026-07-28 client actually takes. Exercises the
+    whole chain — query param, consent hidden field, token form — so dropping
+    `resource` anywhere along it fails here rather than silently issuing a
+    token bound to nothing."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r, _, _, _ = _full_flow(
+            client, admin_bearer=admin_bearer, resource="http://testserver/mcp"
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["access_token"].startswith("myc_")
+
+
+def test_token_rejects_a_resource_the_code_was_not_authorized_for(
+    tmp_path, monkeypatch
+):
+    """Both resources name this server, so only the binding can reject it. A
+    code consented for one audience must not be redeemable for another —
+    that binding is the whole point of sending `resource` twice."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r, _, _, _ = _full_flow(
+            client,
+            admin_bearer=admin_bearer,
+            resource="http://testserver/mcp",
+            token_resource="http://testserver",
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["error"] == "invalid_target"
+
+
+def test_resource_matching_rejects_non_canonical_uris(tmp_path, monkeypatch):
+    """Canonical means canonical. Each rejected form below is a different
+    identifier than the one we advertise, and normalising any of them away
+    would let a value that is not ours be accepted as ours."""
+    from mycelium.oauth_server import _resource_matches
+
+    base = "https://mycelium.example"
+    assert _resource_matches(base, base)
+    assert _resource_matches(f"{base}/mcp", base)
+    assert _resource_matches(f"{base}/", base)
+    assert _resource_matches("HTTPS://MYCELIUM.EXAMPLE/mcp", base)
+    assert _resource_matches(f"{base}/mcp/", base)  # one trailing slash is ours
+
+    for bad in (
+        f"{base}/mcp#fragment",  # a fragment is not a canonical URI
+        f"{base}/mcp?tenant=other",  # names something narrower than us
+        f"{base}//mcp",  # a different path, not a sloppier spelling
+        "https://user@mycelium.example/mcp",  # userinfo
+        "https://mycelium.example:8443/mcp",  # a different port is a different server
+        "mycelium.example/mcp",  # no scheme
+        "https://",  # no host
+        "https://[oops/mcp",  # malformed: must not raise
+        "",
+    ):
+        assert not _resource_matches(bad, base), bad
+
+
+def test_issuer_is_pinned_by_configuration_not_the_host_header(tmp_path, monkeypatch):
+    """A client compares `iss` byte-for-byte against the issuer it recorded at
+    discovery. Deriving it from the Host header means a second hostname for
+    the same deployment breaks a legitimate flow, and lets the caller choose
+    what audience a token claims."""
+    monkeypatch.setenv("MYCELIUM_PUBLIC_URL", "https://mycelium.example")
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        meta = client.get(
+            "/.well-known/oauth-authorization-server",
+            headers={"Host": "some-alias.internal"},
+        ).json()
+        assert meta["issuer"] == "https://mycelium.example"
+
+        prm = client.get(
+            "/.well-known/oauth-protected-resource",
+            headers={"Host": "some-alias.internal"},
+        ).json()
+        assert prm["resource"] == "https://mycelium.example"

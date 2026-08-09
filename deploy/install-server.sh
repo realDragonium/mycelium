@@ -120,11 +120,21 @@ if [[ ! -f "$ENV_FILE" ]]; then
 
 # --- public hostnames -----------------------------------------------
 # Comma-separated host[:port] values that the MCP transport should
-# accept on its Host header. Required because FastMCP defaults to
+# accept on its Host header. Required because the transport defaults to
 # localhost-only DNS-rebinding protection. Add every domain a real
 # client might use (apex + ports as needed).
 #   MYCELIUM_ALLOWED_HOSTS=mycelium.example.com,mycelium.example.com:443
 MYCELIUM_ALLOWED_HOSTS=
+
+# --- canonical public URL -------------------------------------------
+# This deployment's OAuth issuer and resource identifier. Set it to the
+# one origin clients reach you on, scheme included and no trailing
+# slash. An MCP client records the issuer during discovery and compares
+# it byte-for-byte against later responses, so if the service answers on
+# more than one hostname, leaving this unset breaks the OAuth flow for
+# whichever one the client did not discover through.
+#   MYCELIUM_PUBLIC_URL=https://mycelium.example.com
+MYCELIUM_PUBLIC_URL=
 
 # --- toggle ---------------------------------------------------------
 # Set to "on" once you're ready to require login. Default "off" lets

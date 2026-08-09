@@ -166,6 +166,20 @@ mcp = MCPServer(
 )
 
 
+def _satisfies(principal: Any, required: str, real_role: bool) -> bool:
+    """Whether `principal` clears a tool's role gate.
+
+    The single answer to "may this caller invoke this tool", asked by both
+    the `@tool` wrapper before running one and the listing filter before
+    advertising one. Two callers, one rule: a tool that appears in
+    `tools/list` is one the gate will let through.
+    """
+    from . import auth as _auth
+
+    check = _auth.principal_has_real_role if real_role else _auth.principal_satisfies
+    return check(principal, required)
+
+
 class _RoleFilteredTools:
     """Hide tools the caller doesn't have permission to invoke.
 
@@ -206,23 +220,22 @@ class _RoleFilteredTools:
         if principal is None:
             return result
 
-        # Resolve each tool's required role through the wrapper registered
-        # in `TOOLS`, so `@tool(role="reader")` overrides are honored. Fall
-        # back to prefix-derivation if a wrapper is missing for some reason
-        # (shouldn't happen in practice).
+        # Resolve each tool's gate through the wrapper registered in
+        # `TOOLS`, so `@tool(role=..., real_role=...)` overrides are
+        # honored. Fall back to prefix-derivation if a wrapper is missing
+        # for some reason (shouldn't happen in practice).
         wrappers_by_name = {w.__name__: w for w in TOOLS}
 
-        def _role_for(name: str) -> str:
+        def _invocable(name: str) -> bool:
             w = wrappers_by_name.get(name)
-            return getattr(
+            required = getattr(
                 w, "_mycelium_required_role", None
             ) or _auth.required_role_for(name)
+            return _satisfies(
+                principal, required, getattr(w, "_mycelium_real_role", False)
+            )
 
-        kept = [
-            t
-            for t in result.get("tools", ())
-            if _auth.principal_satisfies(principal, _role_for(t["name"]))
-        ]
+        kept = [t for t in result.get("tools", ()) if _invocable(t["name"])]
         return {**result, "tools": kept}
 
 
@@ -359,6 +372,7 @@ def tool(
     func: Callable[..., Any] | None = None,
     *,
     role: str | None = None,
+    real_role: bool = False,
 ) -> Callable[..., Any]:
     """Register `func` as both an MCP tool and an HTTP endpoint.
 
@@ -379,6 +393,14 @@ def tool(
     Pass `role=` to override for tools that don't fit the naming
     convention, e.g. `@tool(role="reader")` for a write-that-anyone-can-do
     like reporting a knowledge gap.
+
+    `real_role=True` drops the drafter equivalence: a drafter normally
+    clears writer and admin gates because the wrapper redirects their
+    writes onto a draft, which is wrong for a tool that sits outside that
+    machinery and lands live. Declaring it here rather than re-checking in
+    the body is what keeps `tools/list` honest — the listing filter reads
+    the same declaration, so a tool can't be advertised to a caller the
+    gate will then reject.
     """
     from . import auth as _auth  # local import: auth is loaded lazily so
     # server.py stays importable in environments that don't have the auth
@@ -405,11 +427,12 @@ def tool(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             def _dispatch() -> Any:
                 principal = _auth.current_principal.get()
-                if principal is not None and not _auth.principal_satisfies(
-                    principal, required
+                if principal is not None and not _satisfies(
+                    principal, required, real_role
                 ):
-                    raise PermissionError(
-                        f"tool '{func.__name__}' requires the {required} role; "
+                    raise _auth.RoleRequired(
+                        f"tool '{func.__name__}' requires the "
+                        f"{'real ' if real_role else ''}{required} role; "
                         f"caller has {principal.role}"
                     )
 
@@ -479,6 +502,7 @@ def tool(
         # (e.g. http.py's role-classifier loop and the tools/list
         # filter in this module) can read it without re-deriving.
         wrapper._mycelium_required_role = required  # type: ignore[attr-defined]
+        wrapper._mycelium_real_role = real_role  # type: ignore[attr-defined]
 
         if has_draft_id:
             _add_draft_id_to_signature(func, wrapper)
@@ -620,7 +644,9 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
         # passes `draft_id` explicitly, which always wins over
         # auto-targeting.
         session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
-        row = drafts_store.find_open_session_draft(_drafts_db(), session_id)
+        row = drafts_store.find_open_session_draft(
+            _drafts_db(), session_id, principal.id
+        )
         if row is not None:
             return row["id"]
         with store.transaction(_drafts_db()):
@@ -4391,26 +4417,7 @@ def _actor_id() -> str | None:
     return principal.id if principal is not None else None
 
 
-def _require_real_role(tool_name: str, required: str) -> None:
-    """Re-check the gate against the caller's REAL role.
-
-    `auth.principal_satisfies` lets a drafter clear writer and admin gates
-    because the @tool wrapper redirects their writes onto a draft. These
-    tools sit outside that machinery on purpose — an edit here lands live —
-    so the equivalence must not carry. Same shape as the curator-only check
-    on `list_drafts`; a None principal is the local stdio caller, which the
-    wrapper's own gate also lets through."""
-    from . import auth as _auth
-
-    principal = _auth.current_principal.get()
-    if principal is not None and not _auth.principal_has_real_role(principal, required):
-        raise _auth.RoleRequired(
-            f"tool '{tool_name}' requires a real {required} role; prompt texts "
-            f"are instance configuration and never queue onto a draft"
-        )
-
-
-@tool
+@tool(role="writer", real_role=True)
 def save_prompt_text(type: str, name: str, text: str) -> dict[str, Any]:
     """Store a new version of a steering text under (type, name).
 
@@ -4423,7 +4430,6 @@ def save_prompt_text(type: str, name: str, text: str) -> dict[str, Any]:
     created_at, created_by}."""
     from . import prompt_store
 
-    _require_real_role("save_prompt_text", "writer")
     row = prompt_store.save(
         _prompts_db(), type=type, name=name, text=text, created_by=_actor_id()
     )
@@ -4479,7 +4485,7 @@ def list_prompt_text_versions(type: str, name: str) -> dict[str, Any]:
     }
 
 
-@tool(role="admin")
+@tool(role="admin", real_role=True)
 def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
     """Retire the text stored under (type, name): it stops being listed and
     served, while its history stays readable and the name can be saved again.
@@ -4493,7 +4499,6 @@ def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
     there."""
     from . import prompt_store
 
-    _require_real_role("retire_prompt_text", "admin")
     if _is_seeded(type, name):
         raise ValueError(
             f"prompt text '{type}/{name}' is seeded at startup and cannot be "
@@ -4536,7 +4541,9 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
         if principal is None:
             raise ValueError("no draft_id given and no caller identity")
         session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
-        row = drafts_store.find_open_session_draft(_drafts_db(), session_id)
+        row = drafts_store.find_open_session_draft(
+            _drafts_db(), session_id, principal.id
+        )
         if row is None:
             raise ValueError("no open draft to submit for this caller")
         draft_id = row["id"]
@@ -4582,7 +4589,7 @@ _DRAFT_STATUS_VALUES = (
 )
 
 
-@tool
+@tool(role="writer", real_role=True)
 def list_drafts(status: str = "all") -> list[dict[str, Any]]:
     """List *every* draft across all creators, newest first (curators only).
 
@@ -4599,10 +4606,14 @@ def list_drafts(status: str = "all") -> list[dict[str, Any]]:
     from . import auth as _auth
     from . import drafts_store
 
+    # The role gate is the decorator's (`real_role=True`, so a drafter does
+    # not clear it). What remains here is the identity requirement: the
+    # review queue spans every creator, so an anonymous caller has no
+    # standing to read it even where the wrapper's gate stays out of the way.
     principal = _auth.current_principal.get()
-    if principal is None or not _auth.principal_has_real_role(principal, "writer"):
+    if principal is None:
         raise PermissionError(
-            "tool 'list_drafts' requires the writer or admin role; "
+            "tool 'list_drafts' requires an identified caller; "
             "use list_my_drafts to see your own drafts"
         )
     if status not in _DRAFT_STATUS_VALUES:

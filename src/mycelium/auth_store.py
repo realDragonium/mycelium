@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     code_challenge        TEXT NOT NULL,
     code_challenge_method TEXT NOT NULL CHECK (code_challenge_method IN ('S256', 'plain')),
     scope                 TEXT,
+    resource              TEXT,
     created_at            TEXT NOT NULL,
     expires_at            TEXT NOT NULL,
     used_at               TEXT
@@ -177,6 +178,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     mcp_tokens, invites) preserving every row.
     """
     conn.executescript(AUTH_SCHEMA)
+    _add_oauth_code_resource(conn)
     rebuilt = _drop_role_check(conn)
     if rebuilt:
         # Rebuild dropped explicit indexes along with the old table;
@@ -184,6 +186,22 @@ def migrate(conn: sqlite3.Connection) -> None:
         # statements are IF NOT EXISTS, so this is a no-op for fresh DBs).
         conn.executescript(AUTH_SCHEMA)
     conn.commit()
+
+
+def _add_oauth_code_resource(conn: sqlite3.Connection) -> None:
+    """Add `oauth_codes.resource` to a DB created before it existed.
+
+    The schema script only runs CREATE TABLE IF NOT EXISTS, so an existing
+    auth DB keeps its old column set — the token endpoint would then fail
+    on every exchange looking for a column that is only in the script.
+
+    Codes issued before the upgrade have NULL here and exchange as though
+    no resource was requested. They live 60 seconds, so the window closes
+    on its own.
+    """
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_codes)")}
+    if "resource" not in columns:
+        conn.execute("ALTER TABLE oauth_codes ADD COLUMN resource TEXT")
 
 
 def _drop_role_check(conn: sqlite3.Connection) -> bool:

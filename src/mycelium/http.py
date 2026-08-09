@@ -86,8 +86,8 @@ async def _value_error_handler(request: Request, exc: ValueError) -> JSONRespons
 async def _role_required_handler(
     request: Request, exc: auth.RoleRequired
 ) -> JSONResponse:
-    """A tool that re-checks the caller's role in its own body — needing a
-    stricter gate than its route declares — rejects with `RoleRequired`.
+    """The `@tool` wrapper's role gate rejects with `RoleRequired` — reached
+    when a call arrives by a route that did not already run `_enforce_role`.
     That's a deliberate 403, not a server fault, and the message names the
     role required."""
     return JSONResponse(status_code=403, content={"detail": str(exc)})
@@ -216,8 +216,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             headers = {}
             if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
                 base = str(request.base_url).rstrip("/")
+                # `scope` tells the client what to ask for without first
+                # fetching the metadata document; RFC 6750 §3 makes the
+                # challenge authoritative for this request, so a client
+                # that reads it needs no second round trip to find out.
                 headers["WWW-Authenticate"] = (
-                    f'Bearer realm="mycelium", '
+                    f'Bearer realm="mycelium", scope="mcp", '
                     f'resource_metadata="{base}/.well-known/oauth-protected-resource"'
                 )
             return JSONResponse(
@@ -342,18 +346,24 @@ def _model_name_for(func_name: str) -> str:
 # same policy without depending on the HTTP layer.
 
 
-def _enforce_role(request: Request, required: str) -> None:
+def _enforce_role(request: Request, required: str, real_role: bool = False) -> None:
     p = getattr(request.state, "principal", None)
     if p is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=401, detail="authentication required")
-    if not auth.principal_satisfies(p, required):
+    # `server._satisfies` is the one rule the MCP wrapper and the tools/list
+    # filter also ask, so a tool cannot be reachable over one transport and
+    # gated on another.
+    if not server._satisfies(p, required, real_role):
         from fastapi import HTTPException
 
         raise HTTPException(
             status_code=403,
-            detail=f"this operation requires the {required} role",
+            detail=(
+                f"this operation requires "
+                f"{'a real' if real_role else 'the'} {required} role"
+            ),
         )
 
 
@@ -361,7 +371,9 @@ def _make_post_handler(
     func: Callable[..., Any], BodyModel: type, required_role: str
 ) -> Callable[..., Any]:
     def handler(body, request: Request):
-        _enforce_role(request, required_role)
+        _enforce_role(
+            request, required_role, getattr(func, "_mycelium_real_role", False)
+        )
         return func(**body.model_dump())
 
     handler.__name__ = func.__name__
@@ -413,7 +425,9 @@ def _make_offloaded_post_handler(
     limiter first and only then occupies a thread."""
 
     async def handler(body, request: Request):
-        _enforce_role(request, required_role)
+        _enforce_role(
+            request, required_role, getattr(func, "_mycelium_real_role", False)
+        )
         return await _offload(func, body.model_dump())
 
     handler.__name__ = func.__name__
@@ -426,7 +440,9 @@ def _make_streaming_post_handler(
     func: Callable[..., Any], BodyModel: type, required_role: str
 ) -> Callable[..., Any]:
     async def handler(body, request: Request):
-        _enforce_role(request, required_role)
+        _enforce_role(
+            request, required_role, getattr(func, "_mycelium_real_role", False)
+        )
         kwargs = body.model_dump()
         task = asyncio.ensure_future(_offload(func, kwargs))
 
@@ -471,7 +487,9 @@ def _make_traced_post_handler(
     func: Callable[..., Any], BodyModel: type, required_role: str
 ) -> Callable[..., Any]:
     def handler(body, request: Request):
-        _enforce_role(request, required_role)
+        _enforce_role(
+            request, required_role, getattr(func, "_mycelium_real_role", False)
+        )
         kwargs = body.model_dump()
         if not tracing.tracing_enabled():
             return func(**kwargs)  # tracing off: zero overhead on the hot path
@@ -504,7 +522,9 @@ def _make_get_handler(
     func: Callable[..., Any], required_role: str
 ) -> Callable[..., Any]:
     def handler(request: Request):
-        _enforce_role(request, required_role)
+        _enforce_role(
+            request, required_role, getattr(func, "_mycelium_real_role", False)
+        )
         return func()
 
     handler.__name__ = func.__name__

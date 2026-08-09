@@ -244,6 +244,24 @@ Request bodies are capped at 4 MiB by the MCP transport. nginx's own
 `client_max_body_size` default of 1 MiB is the tighter limit and bites
 first; raise it in the site template if large `ingest` payloads get a 413.
 
+### Set `MYCELIUM_PUBLIC_URL` if OAuth is in use
+
+This is the deployment's OAuth issuer and its resource identifier, and
+both have to be one stable string: a client records the issuer during
+discovery and then compares it byte-for-byte against the `iss` on every
+authorization response.
+
+Unset, it is derived from each request's `Host` header. That works while
+there is exactly one hostname, and breaks the moment there are two — a
+client that discovered `https://mycelium.example.com` and later reaches
+an alias sees a different `iss` and rejects the response, correctly.
+
+```
+MYCELIUM_PUBLIC_URL=https://mycelium.example.com
+```
+
+Scheme included, no trailing slash.
+
 ---
 
 ## Subsequent deploys
