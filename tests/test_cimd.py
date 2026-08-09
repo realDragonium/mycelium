@@ -31,8 +31,8 @@ def _serving(doc, *, status: int = 200, cache_control: str | None = None):
     """A stand-in for the HTTP fetch that records how often it was called."""
     calls = []
 
-    def get(url):
-        calls.append(url)
+    def get(url, address=None):
+        calls.append((url, address))
         body = doc if isinstance(doc, str) else json.dumps(doc)
         return status, body, cache_control
 
@@ -262,3 +262,27 @@ def test_urls_that_would_widen_the_fetch_are_rejected(url):
     with pytest.raises(cimd.CimdError):
         cimd.fetch(url, resolve=PUBLIC, get=get)
     assert get.calls == []
+
+
+def test_the_connection_targets_the_address_that_was_vetted():
+    """The check is only worth anything if its answer is what gets connected
+    to. Re-resolving the hostname to open the socket would let a name answer
+    differently the second time and reach whatever it liked."""
+    get = _serving(_doc())
+    cimd.fetch(DOC_URL, resolve=lambda h, p: ["93.184.216.34"], get=get)
+    (url, address), = get.calls
+    assert url == DOC_URL
+    assert address == "93.184.216.34"
+
+
+def test_the_pinned_url_keeps_the_path_and_brackets_ipv6():
+    """The request goes to the address, so the rest of the URL has to survive
+    the substitution — and an IPv6 literal needs brackets to be a valid host."""
+    assert (
+        cimd._pinned_url("https://app.example.com/oauth/client.json", "93.184.216.34")
+        == "https://93.184.216.34/oauth/client.json"
+    )
+    assert (
+        cimd._pinned_url("https://app.example.com/c.json?v=2", "2606:2800:220:1::1")
+        == "https://[2606:2800:220:1::1]/c.json?v=2"
+    )

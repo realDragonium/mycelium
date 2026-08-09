@@ -9,9 +9,17 @@ client id portable across authorization servers.
 The security shape is unusual and worth stating plainly: an unauthenticated
 caller hands us a URL and we make a server-side request to it. That is a
 Server-Side Request Forgery primitive unless it is fenced in, so this module
-is deliberately strict — public HTTPS only, no redirects, a byte cap, a
-timeout, and a check that every address the hostname resolves to is on the
-public internet. A document that fails any check is not a client.
+is deliberately strict — public HTTPS on port 443 only, no redirects, no
+proxy, a cap on raw bytes, a deadline over the whole read, and a check that
+every address the hostname resolves to is on the public internet.
+
+The connection is then made to the address that check vetted, carrying the
+hostname for `Host` and SNI so the certificate is still validated against
+the name. Resolving the hostname a second time to connect is what would
+make the check decoration: a name is free to answer differently the second
+time, which is the whole of DNS rebinding.
+
+A document that fails any check is not a client.
 
 `fetch` is pure apart from the HTTP call itself, which is injectable, so the
 validation rules can be tested without a network or a server.
@@ -108,22 +116,21 @@ def _is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return ip.is_global
 
 
-def _assert_fetchable(
+def _vetted_address(
     url: str, resolve: Callable[[str, int], list[str]] = _resolve_addresses
-) -> None:
-    """Reject a URL that names anything but a public internet host.
+) -> str:
+    """Return the address to connect to, or raise if the URL names anything
+    but a public internet host.
 
-    Every address the hostname resolves to is checked, not just the first:
-    a name returning one public and one internal address would otherwise be
-    a way through, since nothing pins which one is connected to.
+    Every address the hostname resolves to is checked, not just the first,
+    because a name returning one public and one internal address would
+    otherwise be a way through.
 
-    That last part is also the limit of this check. It runs before the
-    request, so a name that answers differently the second time — DNS
-    rebinding — defeats it, and the internal GET still happens. Closing
-    that needs the socket pinned to a vetted address while keeping the
-    hostname for SNI, which the HTTP client does not expose. What is here
-    instead: no redirects, no proxy, port 443 only so this cannot be used
-    to sweep internal ports, and a hard cap on what a response can cost.
+    Returning the vetted address rather than merely approving the URL is
+    what makes this binding. If the caller re-resolved the hostname to open
+    the connection, a name that answers differently the second time — DNS
+    rebinding — would reach whatever it liked, and the check would have
+    been decoration.
     """
     parts = urlsplit(url)
     if parts.scheme != "https":
@@ -140,13 +147,17 @@ def _assert_fetchable(
     if port not in (None, 443):
         raise CimdError("client id must use the default https port")
 
-    for address in resolve(host, 443):
+    addresses = resolve(host, 443)
+    if not addresses:
+        raise CimdError(f"client id host does not resolve: {host}")
+    for address in addresses:
         try:
             ip = ipaddress.ip_address(address)
         except ValueError as exc:
             raise CimdError(f"unparseable address for {host}: {address}") from exc
         if not _is_public(ip):
             raise CimdError(f"client id host resolves to a non-public address: {ip}")
+    return addresses[0]
 
 
 def _parse(url: str, body: str) -> ClientMetadata:
@@ -236,7 +247,17 @@ def reset_cache() -> None:
     _CACHE.clear()
 
 
-def _default_get(url: str) -> tuple[int, str, str | None]:
+def _pinned_url(url: str, address: str) -> str:
+    """`url` with its host replaced by a specific address."""
+    parts = urlsplit(url)
+    literal = f"[{address}]" if ":" in address else address
+    rest = parts.path or "/"
+    if parts.query:
+        rest = f"{rest}?{parts.query}"
+    return f"https://{literal}{rest}"
+
+
+def _default_get(url: str, address: str | None = None) -> tuple[int, str, str | None]:
     """Fetch `url`, returning (status, body, cache-control).
 
     Every argument here is load-bearing against a hostile endpoint:
@@ -252,8 +273,22 @@ def _default_get(url: str) -> tuple[int, str, str | None]:
     - a deadline around the whole read, since httpx's timeout applies per
       operation: a peer dripping one byte every four seconds satisfies it
       indefinitely.
+
+    When `address` is given the request goes to that address, with the
+    hostname carried in `Host` and `sni_hostname` so the certificate is
+    still validated against the name. That is what makes the address check
+    binding: without it the hostname is resolved a second time here, and a
+    name that answers differently the second time reaches whatever it likes.
     """
     import httpx
+
+    parts = urlsplit(url)
+    target = _pinned_url(url, address) if address else url
+    headers = {"Accept": "application/json", "Accept-Encoding": "identity"}
+    extensions: dict[str, Any] = {}
+    if address:
+        headers["Host"] = parts.netloc
+        extensions["sni_hostname"] = parts.hostname
 
     deadline = time.monotonic() + TOTAL_FETCH_SECONDS
     try:
@@ -263,9 +298,7 @@ def _default_get(url: str) -> tuple[int, str, str | None]:
             timeout=FETCH_TIMEOUT_SECONDS,
         ) as http:
             with http.stream(
-                "GET",
-                url,
-                headers={"Accept": "application/json", "Accept-Encoding": "identity"},
+                "GET", target, headers=headers, extensions=extensions
             ) as resp:
                 body = bytearray()
                 for chunk in resp.iter_raw():
@@ -291,7 +324,7 @@ def _default_get(url: str) -> tuple[int, str, str | None]:
 def fetch(
     url: str,
     *,
-    get: Callable[[str], tuple[int, str, Any]] | None = None,
+    get: Callable[..., tuple[int, str, Any]] | None = None,
     resolve: Callable[[str, int], list[str]] | None = None,
 ) -> ClientMetadata:
     """Resolve a client id URL to its metadata, honouring the cache.
@@ -305,9 +338,9 @@ def fetch(
 
     if not looks_like_client_id_url(url):
         raise CimdError("client id must be an https URL with a path")
-    _assert_fetchable(url, resolve or _resolve_addresses)
+    address = _vetted_address(url, resolve or _resolve_addresses)
 
-    status, body, cache_control = (get or _default_get)(url)
+    status, body, cache_control = (get or _default_get)(url, address)
     if status != 200:
         raise CimdError(f"client metadata document returned HTTP {status}")
 
