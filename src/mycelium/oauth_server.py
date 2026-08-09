@@ -9,8 +9,12 @@ the user pasting a token. The flow:
      and discovers the authorization server URL (us — same host).
   3. Client fetches `/.well-known/oauth-authorization-server` (RFC 8414)
      and learns the endpoint URLs + supported parameters.
-  4. Client POSTs `/register` (RFC 7591 Dynamic Client Registration)
-     with its name + redirect URIs. We assign a `client_id`. No
+  4. Client obtains a `client_id`, one of two ways. Either it hosts a
+     Client ID Metadata Document and uses that HTTPS URL as its id — we
+     fetch and validate the document on demand, nothing is stored — or it
+     POSTs `/register` (RFC 7591 Dynamic Client Registration) and we
+     assign one. Registration is deprecated as of the 2026-07-28 revision
+     and kept for clients that predate metadata documents. Either way: no
      `client_secret` — public client + PKCE only.
   5. Client opens a browser to `/authorize?client_id=…&redirect_uri=…
      &response_type=code&code_challenge=…&code_challenge_method=S256
@@ -43,19 +47,22 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
 import sqlite3
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, urlencode, urlsplit
 
+import anyio.to_thread
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import auth, store
+from . import auth, cimd, store
 
 router = APIRouter(tags=["oauth"])
 
@@ -73,6 +80,11 @@ def _require_oauth_enabled() -> None:
 # round-trip and well below what an attacker could replay if a code
 # leaked through a URL log.
 CODE_TTL_SECONDS = 60
+
+# How long a rendered consent page stays answerable. Long enough for a
+# person to read it and decide, short enough that an abandoned tab is not
+# a standing invitation to approve something later.
+CONSENT_TTL_SECONDS = 600
 
 # Bearer tokens issued via OAuth flow. Mycelium's manual tokens never
 # expire (revocation is the only off-switch); for OAuth-issued tokens
@@ -133,6 +145,85 @@ def _pkce_verify(verifier: str, challenge: str, method: str) -> bool:
     return False
 
 
+@dataclass(frozen=True)
+class _Client:
+    """A client the authorization flow is willing to act for.
+
+    Registration and Client ID Metadata Documents are two ways of learning
+    the same three things, so the endpoints below take this rather than
+    caring which one applied. That is also what keeps the redirect_uri check
+    identical on both paths — the spec requires exact-match validation
+    whether the list came from our table or from the client's own document.
+    """
+
+    client_id: str
+    client_name: str
+    redirect_uris: tuple[str, ...]
+
+    def allows(self, redirect_uri: str) -> bool:
+        return redirect_uri in self.redirect_uris
+
+
+def _record_client(conn: sqlite3.Connection, client: _Client) -> None:
+    """Give a CIMD client a row, so the code and token it is about to own
+    have something to point at.
+
+    `oauth_codes.client_id` and `mcp_tokens.client_id` both reference
+    `oauth_clients`, and foreign keys are enforced, so a client that never
+    registered still needs a row to exist. This is bookkeeping, not
+    registration: the row is written only once the user has consented, and
+    the metadata document stays authoritative for redirect URIs — the row
+    is refreshed from it rather than consulted in its place.
+    """
+    conn.execute(
+        "INSERT INTO oauth_clients (client_id, client_name, redirect_uris, created_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(client_id) DO UPDATE SET "
+        "  client_name = excluded.client_name, "
+        "  redirect_uris = excluded.redirect_uris",
+        (
+            client.client_id,
+            client.client_name,
+            json.dumps(list(client.redirect_uris)),
+            _now().isoformat(),
+        ),
+    )
+
+
+def _resolve_client(conn: sqlite3.Connection, client_id: str) -> _Client | None:
+    """Find the client behind `client_id`, or None if there isn't one.
+
+    An https URL with a path is a Client ID Metadata Document and is
+    resolved by fetching it; anything else is one of our own registration
+    ids and is looked up. A document that fails to fetch or validate is not
+    a client, which callers report as `invalid_client` — the same answer an
+    unknown registration id gets, so neither reveals more than the other.
+    """
+    if cimd.looks_like_client_id_url(client_id):
+        try:
+            meta = cimd.fetch(client_id)
+        except cimd.CimdError:
+            return None
+        return _Client(
+            client_id=meta.client_id,
+            client_name=meta.client_name,
+            redirect_uris=meta.redirect_uris,
+        )
+
+    row = conn.execute(
+        "SELECT client_id, client_name, redirect_uris FROM oauth_clients "
+        "WHERE client_id = ?",
+        (client_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return _Client(
+        client_id=row["client_id"],
+        client_name=row["client_name"] or "An MCP client",
+        redirect_uris=tuple(json.loads(row["redirect_uris"])),
+    )
+
+
 # --- discovery: RFC 9728 & RFC 8414 ---------------------------------------
 
 
@@ -177,6 +268,10 @@ def authorization_server_metadata(request: Request) -> dict[str, Any]:
         # response that arrives without one. Mandatory once you emit `iss`
         # at all, which we do.
         "authorization_response_iss_parameter_supported": True,
+        # A client that sees this uses its own hosted metadata document as
+        # its client_id and skips registration entirely; DCR stays advertised
+        # above for clients that predate it.
+        "client_id_metadata_document_supported": True,
     }
 
 
@@ -306,6 +401,8 @@ _CONSENT_HTML = """<!doctype html>
   .btn-secondary:hover {{ background: #26262a; }}
   .scope {{ font-family: ui-monospace, monospace; font-size: 12px;
             background: #1a1a1d; padding: 2px 8px; border-radius: 4px; }}
+  .warn {{ border-left: 3px solid #b26a00; background: #1a1a1d; padding: 10px 14px;
+           margin: 0 0 20px; font-size: 13px; color: #c5c5cb; border-radius: 0 6px 6px 0; }}
 </style>
 </head>
 <body>
@@ -315,16 +412,12 @@ _CONSENT_HTML = """<!doctype html>
   <div class="row">
     <span>Signed in as</span><span>{user_name} <span class="scope">{user_role}</span></span>
     <span>Client</span><span>{client_name}</span>
+    <span>Redirects to</span><span class="scope">{redirect_host}</span>
     <span>Access</span><span>Read and write to the substrate (capped at your role)</span>
   </div>
+  {redirect_warning}
   <form method="post" action="/authorize/decide">
-    <input type="hidden" name="client_id" value="{client_id}" />
-    <input type="hidden" name="redirect_uri" value="{redirect_uri}" />
-    <input type="hidden" name="code_challenge" value="{code_challenge}" />
-    <input type="hidden" name="code_challenge_method" value="{code_challenge_method}" />
-    <input type="hidden" name="scope" value="{scope}" />
-    <input type="hidden" name="resource" value="{resource}" />
-    <input type="hidden" name="state" value="{state}" />
+    <input type="hidden" name="consent_id" value="{consent_id}" />
     <div class="actions">
       <button type="submit" name="decision" value="deny" class="btn-secondary">Deny</button>
       <button type="submit" name="decision" value="allow" class="primary">Allow</button>
@@ -365,14 +458,14 @@ async def authorize(
         )
 
     conn = _auth_conn(request)
-    client_row = conn.execute(
-        "SELECT client_id, client_name, redirect_uris FROM oauth_clients WHERE client_id = ?",
-        (client_id,),
-    ).fetchone()
-    if client_row is None:
+    # Resolving a metadata document means DNS and an HTTPS request to a
+    # host the caller chose. Both are blocking, and these handlers are
+    # async, so doing it inline would let one slow endpoint stall every
+    # other request the worker is serving.
+    client = await anyio.to_thread.run_sync(_resolve_client, conn, client_id)
+    if client is None:
         raise HTTPException(status_code=400, detail="invalid_client")
-    allowed = json.loads(client_row["redirect_uris"])
-    if redirect_uri not in allowed:
+    if not client.allows(redirect_uri):
         raise HTTPException(
             status_code=400,
             detail="invalid_request: redirect_uri not registered for this client",
@@ -393,28 +486,117 @@ async def authorize(
             status_code=302,
         )
 
-    # The form posts the OAuth params back as hidden fields rather than
-    # us stashing them in the session. Two reasons: (1) avoids
-    # session-modification races when multiple authorize flows interleave
-    # in the same browser/test session, and (2) the params are
-    # re-validated on decide (client_id exists, redirect_uri matches the
-    # registered list) so tampering with the form can't elevate access.
-    # The principal that consents is taken from the session/bearer —
-    # not the form — so a manipulated form can't grant tokens to a
-    # different account.
+    # Record the request and hand the form nothing but an id. The OAuth
+    # parameters are fixed here, where they have been validated against a
+    # request the user actually navigated to, and read back from the row on
+    # submit — so whoever posts the form cannot choose them.
+    #
+    # That is what makes the decision a decision. Re-validating parameters
+    # supplied by the submitter only ever proves the submitter picked valid
+    # ones; it cannot show the user saw them. Without this, a page on a
+    # sibling host — same-site, so `SameSite=Lax` still sends the session
+    # cookie on its POST — could auto-submit an approval for a client it
+    # controls and collect the code.
+    consent_id = str(uuid.uuid4())
+    with store.transaction(conn):
+        conn.execute(
+            "INSERT INTO oauth_consents "
+            "(id, user_id, client_id, redirect_uri, code_challenge, "
+            " code_challenge_method, scope, resource, state, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                consent_id,
+                principal.id,
+                client_id,
+                redirect_uri,
+                code_challenge,
+                code_challenge_method,
+                scope or "",
+                resource or None,
+                state or "",
+                _now().isoformat(),
+                (_now() + timedelta(seconds=CONSENT_TTL_SECONDS)).isoformat(),
+            ),
+        )
+
     html = _CONSENT_HTML.format(
-        client_name=_html_escape(client_row["client_name"] or "An MCP client"),
+        client_name=_html_escape(client.client_name),
         user_name=_html_escape(principal.name),
         user_role=_html_escape(principal.role),
-        client_id=_html_escape(client_id),
-        redirect_uri=_html_escape(redirect_uri),
-        code_challenge=_html_escape(code_challenge),
-        code_challenge_method=_html_escape(code_challenge_method),
-        scope=_html_escape(scope or ""),
-        resource=_html_escape(resource or ""),
-        state=_html_escape(state or ""),
+        consent_id=_html_escape(consent_id),
+        redirect_host=_html_escape(_redirect_host(redirect_uri)),
+        redirect_warning=_localhost_warning(redirect_uri),
     )
     return HTMLResponse(content=html)
+
+
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _redirect_host(redirect_uri: str) -> str:
+    """The host the code will be handed to, for the consent page.
+
+    `hostname` and not `netloc`: netloc carries userinfo, so
+    `https://login.trusted.example@evil.example/cb` would render starting
+    with the trusted name while the code goes to evil.example. Documents
+    carrying userinfo are rejected outright, and this is the second place
+    that would have to fail for the deception to land.
+
+    The port is kept, since a loopback client is identified by it.
+    """
+    try:
+        parts = urlsplit(redirect_uri)
+    except ValueError:
+        return "unparseable redirect"
+    if not parts.hostname:
+        return "unparseable redirect"
+    return f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
+
+
+def _is_loopback_redirect(redirect_uri: str) -> bool:
+    """Whether the code would be handed to this machine.
+
+    `ipaddress` only understands the fully-written forms, but resolvers
+    accept shorthand and alternate bases — `127.1`, `0177.0.0.1`,
+    `0x7f.0.0.1` all reach loopback — so `inet_aton` gets a turn too. Being
+    generous here is the safe direction: the cost of a false positive is one
+    extra caution on a consent page.
+    """
+    import socket
+
+    try:
+        host = (urlsplit(redirect_uri).hostname or "").rstrip(".")
+    except ValueError:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+    try:
+        packed = socket.inet_aton(host)
+    except OSError:
+        return False
+    return ipaddress.IPv4Address(packed).is_loopback
+
+
+def _localhost_warning(redirect_uri: str) -> str:
+    """A caution when the code will be handed to this machine.
+
+    Keyed on the redirect actually being authorized, not on the client's
+    whole list: a client asking for `127.0.0.1` could otherwise silence
+    this by listing one hosted URI it never uses. Any local program can
+    listen on a loopback port, so the document proves nothing about which
+    one is asking — the spec asks us to say so rather than imply otherwise.
+    """
+    if not _is_loopback_redirect(redirect_uri):
+        return ""
+    return (
+        '<div class="warn">This client receives the authorization on this '
+        "machine. Approve it only if you started it yourself — any local "
+        "program can listen on the same address.</div>"
+    )
 
 
 def _html_escape(s: str) -> str:
@@ -430,38 +612,60 @@ def _html_escape(s: str) -> str:
 @router.post("/authorize/decide", include_in_schema=False)
 async def authorize_decide(
     request: Request,
-    client_id: str = Form(...),
-    redirect_uri: str = Form(...),
-    code_challenge: str = Form(...),
-    code_challenge_method: str = Form(...),
+    consent_id: str = Form(...),
     decision: str = Form(...),
-    scope: str = Form(""),
-    state: str = Form(""),
-    resource: str = Form(""),
 ) -> RedirectResponse:
-    """Consume the consent decision. Re-validates the OAuth params
-    (client_id exists, redirect_uri is on the client's allow-list)
-    so the form can't be edited to redirect a code to a third party.
-    Identity comes from the session/bearer, not the form."""
+    """Consume the consent decision.
+
+    The submitter supplies only which pending decision this is and what the
+    user answered. Every OAuth parameter comes from the row written when the
+    page was rendered, so a forged submission cannot choose a client, a
+    redirect, or a PKCE challenge — the worst it can do is answer a consent
+    the user was already being shown, and the row is bound to that user.
+    """
     _require_oauth_enabled()
     principal = getattr(request.state, "principal", None)
     if principal is None or principal.synthetic:
         raise HTTPException(status_code=401, detail="session expired; please retry")
 
     conn = _auth_conn(request)
-    client_row = conn.execute(
-        "SELECT client_id, redirect_uris FROM oauth_clients WHERE client_id = ?",
-        (client_id,),
+    pending = conn.execute(
+        "SELECT * FROM oauth_consents WHERE id = ?", (consent_id,)
     ).fetchone()
-    if client_row is None:
+    # One answer per pending decision, by the user it was shown to. Failing
+    # all four the same way keeps this from reporting whether a given
+    # consent id exists or whose it is.
+    if (
+        pending is None
+        or pending["user_id"] != principal.id
+        or pending["used_at"] is not None
+        or datetime.fromisoformat(pending["expires_at"]) < _now()
+    ):
+        raise HTTPException(status_code=400, detail="invalid_request: no such consent")
+
+    client_id = pending["client_id"]
+    redirect_uri = pending["redirect_uri"]
+    code_challenge = pending["code_challenge"]
+    code_challenge_method = pending["code_challenge_method"]
+    scope = pending["scope"] or ""
+    state = pending["state"] or ""
+    resource = pending["resource"] or ""
+
+    with store.transaction(conn):
+        conn.execute(
+            "UPDATE oauth_consents SET used_at = ? WHERE id = ? AND used_at IS NULL",
+            (_now().isoformat(), consent_id),
+        )
+
+    # The document may have changed since the page was rendered, so the
+    # client is resolved again and the redirect re-checked against it —
+    # a URI revoked in the meantime must not still be honoured.
+    client = await anyio.to_thread.run_sync(_resolve_client, conn, client_id)
+    if client is None:
         raise HTTPException(status_code=400, detail="invalid_client")
-    if redirect_uri not in json.loads(client_row["redirect_uris"]):
+    if not client.allows(redirect_uri):
         raise HTTPException(
             status_code=400, detail="invalid_request: redirect_uri not registered"
-        )
-    if code_challenge_method not in ("S256", "plain"):
-        raise HTTPException(
-            status_code=400, detail="invalid_request: bad code_challenge_method"
         )
 
     # RFC 9207 §2: `iss` rides on every authorization response, errors
@@ -494,6 +698,8 @@ async def authorize_decide(
     code = secrets.token_urlsafe(32)
     expires_at = _now() + timedelta(seconds=CODE_TTL_SECONDS)
     with store.transaction(conn):
+        if cimd.looks_like_client_id_url(client_id):
+            _record_client(conn, client)
         conn.execute(
             "INSERT INTO oauth_codes "
             "(code, client_id, user_id, redirect_uri, code_challenge, "

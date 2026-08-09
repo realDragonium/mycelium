@@ -117,6 +117,27 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     used_at               TEXT
 );
 CREATE INDEX IF NOT EXISTS oauth_codes_expiry ON oauth_codes (expires_at);
+
+-- One pending consent decision. The consent form posts only this id and the
+-- user's answer, so the OAuth parameters cannot be chosen by whoever submits
+-- the form: they are fixed when the page is rendered and read back from here.
+-- `client_id` deliberately carries no foreign key — a metadata-document client
+-- has no `oauth_clients` row until it is granted one.
+CREATE TABLE IF NOT EXISTS oauth_consents (
+    id                    TEXT PRIMARY KEY,
+    user_id               TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id             TEXT NOT NULL,
+    redirect_uri          TEXT NOT NULL,
+    code_challenge        TEXT NOT NULL,
+    code_challenge_method TEXT NOT NULL,
+    scope                 TEXT,
+    resource              TEXT,
+    state                 TEXT,
+    created_at            TEXT NOT NULL,
+    expires_at            TEXT NOT NULL,
+    used_at               TEXT
+);
+CREATE INDEX IF NOT EXISTS oauth_consents_expiry ON oauth_consents (expires_at);
 """
 
 

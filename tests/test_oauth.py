@@ -8,6 +8,7 @@ endpoints 404 when auth is off).
 
 import base64
 import hashlib
+import re
 import secrets
 
 from fastapi.testclient import TestClient
@@ -46,6 +47,17 @@ def _admin_bearer(conn) -> tuple[str, str]:
         )
         raw, _ = auth.issue_token(conn, user_id=uid, name="bootstrap", scope="admin")
     return raw, uid
+
+
+def _consent_id(html: str) -> str:
+    """Read the consent id out of the rendered page.
+
+    The form carries nothing else, so a test that wants to answer a consent
+    has to go through the page — the same as a browser.
+    """
+    m = re.search(r'name="consent_id" value="([^"]+)"', html)
+    assert m, f"no consent_id in consent page: {html[:400]}"
+    return m.group(1)
 
 
 def _pkce_pair() -> tuple[str, str]:
@@ -300,20 +312,11 @@ def _consent(
         headers={"Authorization": f"Bearer {admin_bearer}"},
     )
     assert r.status_code == 200, r.text
-    # Approve. The consent form carries the OAuth params as hidden
-    # fields; we re-post them verbatim.
+    # Approve. The form carries only the consent id; everything else is read
+    # back from the row written when the page was rendered.
     r = client.post(
         "/authorize/decide",
-        data={
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "scope": "mcp",
-            "state": state,
-            "decision": "allow",
-            **({"resource": resource} if resource else {}),
-        },
+        data={"consent_id": _consent_id(r.text), "decision": "allow"},
         headers={"Authorization": f"Bearer {admin_bearer}"},
         follow_redirects=False,
     )
@@ -398,13 +401,7 @@ def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
         assert r.status_code == 200, r.text
         r = client.post(
             "/authorize/decide",
-            data={
-                "client_id": reg["client_id"],
-                "redirect_uri": redirect_uri,
-                "code_challenge": ch,
-                "code_challenge_method": "S256",
-                "decision": "allow",
-            },
+            data={"consent_id": _consent_id(r.text), "decision": "allow"},
             headers={"Authorization": f"Bearer {admin_bearer}"},
             follow_redirects=False,
         )
@@ -474,14 +471,7 @@ def test_denial_redirects_with_error(tmp_path, monkeypatch):
         )
         r = client.post(
             "/authorize/decide",
-            data={
-                "client_id": reg["client_id"],
-                "redirect_uri": "http://localhost/cb",
-                "code_challenge": challenge,
-                "code_challenge_method": "S256",
-                "state": "abc",
-                "decision": "deny",
-            },
+            data={"consent_id": _consent_id(r.text), "decision": "deny"},
             headers={"Authorization": f"Bearer {admin_bearer}"},
             follow_redirects=False,
         )
@@ -515,33 +505,33 @@ def test_authorization_response_carries_iss(tmp_path, monkeypatch):
         # to tell a missing one from a server that never sends it.
         assert meta["authorization_response_iss_parameter_supported"] is True
 
-        form = {
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+        params = {
             "client_id": reg["client_id"],
             "redirect_uri": redirect_uri,
+            "response_type": "code",
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "scope": "mcp",
             "state": "st",
         }
-        headers = {"Authorization": f"Bearer {admin_bearer}"}
 
-        allowed = client.post(
-            "/authorize/decide",
-            data={**form, "decision": "allow"},
-            headers=headers,
-            follow_redirects=False,
-        )
+        def _answer(decision):
+            page = client.get("/authorize", params=params, headers=headers)
+            return client.post(
+                "/authorize/decide",
+                data={"consent_id": _consent_id(page.text), "decision": decision},
+                headers=headers,
+                follow_redirects=False,
+            )
+
+        allowed = _answer("allow")
         qs = parse_qs(urlparse(allowed.headers["location"]).query)
         assert qs["iss"][0] == meta["issuer"]
 
         # Error responses carry it too, or a mix-up is undetectable on the
         # path where the client is told the request failed.
-        denied = client.post(
-            "/authorize/decide",
-            data={**form, "decision": "deny"},
-            headers=headers,
-            follow_redirects=False,
-        )
+        denied = _answer("deny")
         qs = parse_qs(urlparse(denied.headers["location"]).query)
         assert qs["error"][0] == "access_denied"
         assert qs["iss"][0] == meta["issuer"]
@@ -713,3 +703,338 @@ def test_issuer_is_pinned_by_configuration_not_the_host_header(tmp_path, monkeyp
             headers={"Host": "some-alias.internal"},
         ).json()
         assert prm["resource"] == "https://mycelium.example"
+
+
+# --- Client ID Metadata Documents -----------------------------------------
+
+_CIMD_URL = "https://app.example.com/oauth/client.json"
+_CIMD_REDIRECT = "http://127.0.0.1:6274/cb"
+
+
+def _stub_cimd(monkeypatch, *, redirect_uris=(_CIMD_REDIRECT,), name="Example Client"):
+    """Serve a fixed metadata document instead of reaching the network.
+
+    The document rules are covered in test_cimd.py; what matters here is that
+    the authorization endpoints act on a resolved document at all.
+    """
+    from mycelium import cimd
+
+    cimd.reset_cache()
+    monkeypatch.setattr(
+        cimd,
+        "fetch",
+        lambda url, **kw: cimd.ClientMetadata(
+            client_id=url, client_name=name, redirect_uris=tuple(redirect_uris)
+        ),
+    )
+
+
+def test_metadata_advertises_cimd_support(tmp_path, monkeypatch):
+    """A client checks this before using a URL as its client_id; without it
+    it falls back to registration."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        meta = client.get("/.well-known/oauth-authorization-server").json()
+        assert meta["client_id_metadata_document_supported"] is True
+        # DCR stays advertised for clients that predate CIMD.
+        assert meta["registration_endpoint"].endswith("/register")
+
+
+def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypatch):
+    """The point of the mechanism: no /register call, no stored credentials,
+    and the token comes out the far end."""
+    from urllib.parse import parse_qs, urlparse
+
+    _stub_cimd(monkeypatch)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        verifier, challenge = _pkce_pair()
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+        form = {
+            "client_id": _CIMD_URL,
+            "redirect_uri": _CIMD_REDIRECT,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "scope": "mcp",
+            "state": "st",
+        }
+
+        consent = client.get("/authorize", params={**form, "response_type": "code"},
+                             headers=headers)
+        assert consent.status_code == 200, consent.text
+        # The name comes from the document, and the destination is shown.
+        assert "Example Client" in consent.text
+        assert "127.0.0.1:6274" in consent.text
+
+        decided = client.post(
+            "/authorize/decide",
+            data={"consent_id": _consent_id(consent.text), "decision": "allow"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert decided.status_code == 302, decided.text
+        code = parse_qs(urlparse(decided.headers["location"]).query)["code"][0]
+
+        r = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _CIMD_REDIRECT,
+                "client_id": _CIMD_URL,
+                "code_verifier": verifier,
+            },
+        )
+        assert r.status_code == 200, r.text
+        access = r.json()["access_token"]
+
+        me = client.get("/api/me", headers={"Authorization": f"Bearer {access}"})
+        assert me.status_code == 200
+        assert me.json()["role"] == "admin"
+
+
+def test_a_cimd_client_cannot_use_a_redirect_uri_outside_its_document(
+    tmp_path, monkeypatch
+):
+    """The document is the allow-list. Skipping this check would turn any
+    hosted document into an open redirect for authorization codes."""
+    _stub_cimd(monkeypatch)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r = client.get(
+            "/authorize",
+            params={
+                "client_id": _CIMD_URL,
+                "redirect_uri": "http://evil.example.com/steal",
+                "response_type": "code",
+                "code_challenge": _pkce_pair()[1],
+                "code_challenge_method": "S256",
+            },
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+        )
+        assert r.status_code == 400
+        assert "redirect_uri" in r.json()["detail"]
+
+
+def test_an_unresolvable_document_is_simply_not_a_client(tmp_path, monkeypatch):
+    """Reported as invalid_client — the same answer an unknown registration
+    id gets, so neither tells the caller more than the other."""
+    from mycelium import cimd
+
+    cimd.reset_cache()
+
+    def _boom(url, **kw):
+        raise cimd.CimdError("nope")
+
+    monkeypatch.setattr(cimd, "fetch", _boom)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r = client.get(
+            "/authorize",
+            params={
+                "client_id": _CIMD_URL,
+                "redirect_uri": _CIMD_REDIRECT,
+                "response_type": "code",
+                "code_challenge": _pkce_pair()[1],
+                "code_challenge_method": "S256",
+            },
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"] == "invalid_client"
+
+
+def test_loopback_only_clients_get_a_warning_on_the_consent_page(
+    tmp_path, monkeypatch
+):
+    """Any local program can listen on a loopback port, so the document
+    proves nothing about which one is asking. A client with a real host
+    should not carry the same caution."""
+    _stub_cimd(monkeypatch)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+        params = {
+            "client_id": _CIMD_URL,
+            "redirect_uri": _CIMD_REDIRECT,
+            "response_type": "code",
+            "code_challenge": _pkce_pair()[1],
+            "code_challenge_method": "S256",
+        }
+        loopback = client.get("/authorize", params=params, headers=headers)
+        assert "any local program can listen" in loopback.text.lower()
+
+        _stub_cimd(monkeypatch, redirect_uris=("https://app.example.com/cb",))
+        hosted = client.get(
+            "/authorize",
+            params={**params, "redirect_uri": "https://app.example.com/cb"},
+            headers=headers,
+        )
+        assert "any local program can listen" not in hosted.text.lower()
+
+
+def test_consent_shows_the_hostname_the_code_goes_to(tmp_path, monkeypatch):
+    """A client name is chosen by whoever hosts the document, so the host is
+    the only part of the page a user can actually check. It must be the
+    parsed hostname — netloc would render
+    `https://login.trusted.example@evil.example/cb` starting with the
+    trusted name while the code goes elsewhere."""
+    from mycelium.oauth_server import _is_loopback_redirect, _redirect_host
+
+    assert _redirect_host("https://login.trusted.example@evil.example/cb") == (
+        "evil.example"
+    )
+    assert _redirect_host("http://127.0.0.1:6274/cb") == "127.0.0.1:6274"
+    assert _redirect_host("https://app.example.com/cb") == "app.example.com"
+
+    # Shorthand and trailing-dot forms still reach this machine.
+    for loopback in ("http://127.0.0.2:1/cb", "http://localhost./cb", "http://127.1/cb"):
+        assert _is_loopback_redirect(loopback), loopback
+    assert not _is_loopback_redirect("https://app.example.com/cb")
+
+
+def test_a_hosted_redirect_does_not_silence_the_loopback_warning(
+    tmp_path, monkeypatch
+):
+    """The warning follows the redirect being authorized, not the client's
+    whole list — otherwise listing one unused hosted URI suppresses it."""
+    _stub_cimd(
+        monkeypatch,
+        redirect_uris=(_CIMD_REDIRECT, "https://app.example.com/unused"),
+    )
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r = client.get(
+            "/authorize",
+            params={
+                "client_id": _CIMD_URL,
+                "redirect_uri": _CIMD_REDIRECT,
+                "response_type": "code",
+                "code_challenge": _pkce_pair()[1],
+                "code_challenge_method": "S256",
+            },
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+        )
+        assert "any local program can listen" in r.text.lower()
+
+
+# --- consent is a decision, not a form submission -------------------------
+
+
+def _pending_consent(client, admin_bearer, *, redirect_uri="http://localhost:6299/cb"):
+    reg = client.post(
+        "/register", json={"client_name": "Z", "redirect_uris": [redirect_uri]}
+    ).json()
+    page = client.get(
+        "/authorize",
+        params={
+            "client_id": reg["client_id"],
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "code_challenge": _pkce_pair()[1],
+            "code_challenge_method": "S256",
+        },
+        headers={"Authorization": f"Bearer {admin_bearer}"},
+    )
+    assert page.status_code == 200, page.text
+    return _consent_id(page.text)
+
+
+def test_a_forged_submission_cannot_choose_the_oauth_parameters(tmp_path, monkeypatch):
+    """The heart of it: a submitter supplies an id and an answer, nothing
+    else. Re-validating parameters the submitter chose would only ever prove
+    they picked valid ones — never that the user saw them."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        attacker = client.post(
+            "/register",
+            json={"client_name": "Evil", "redirect_uris": ["https://evil.example/cb"]},
+        ).json()
+
+        # Everything an attacker would need to forge, posted directly.
+        r = client.post(
+            "/authorize/decide",
+            data={
+                "decision": "allow",
+                "client_id": attacker["client_id"],
+                "redirect_uri": "https://evil.example/cb",
+                "code_challenge": _pkce_pair()[1],
+                "code_challenge_method": "S256",
+            },
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+            follow_redirects=False,
+        )
+        # No consent_id: there is nothing to answer.
+        assert r.status_code == 422, r.text
+
+
+def test_a_consent_can_only_be_answered_once(tmp_path, monkeypatch):
+    """Otherwise a leaked id is a standing authorization: replaying it mints
+    a second code for the same approval the user gave once."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        consent_id = _pending_consent(client, admin_bearer)
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+
+        first = client.post(
+            "/authorize/decide",
+            data={"consent_id": consent_id, "decision": "allow"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert first.status_code == 302
+
+        second = client.post(
+            "/authorize/decide",
+            data={"consent_id": consent_id, "decision": "allow"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert second.status_code == 400
+
+
+def test_a_consent_belongs_to_the_user_it_was_shown_to(tmp_path, monkeypatch):
+    """A pending consent is bound to one account. Another signed-in user
+    answering it would be approving access on someone else's behalf."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = server._auth_db()
+        admin_bearer, _ = _admin_bearer(conn)
+        consent_id = _pending_consent(client, admin_bearer)
+
+        with store.transaction(conn):
+            other = auth.create_user(
+                conn, name="Other", role="admin", type="human",
+                email="other@example.com",
+            )
+            other_raw, _ = auth.issue_token(
+                conn, user_id=other, name="t", scope="admin"
+            )
+
+        r = client.post(
+            "/authorize/decide",
+            data={"consent_id": consent_id, "decision": "allow"},
+            headers={"Authorization": f"Bearer {other_raw}"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 400, r.text
+
+
+def test_an_unknown_consent_is_refused(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r = client.post(
+            "/authorize/decide",
+            data={"consent_id": "nope", "decision": "allow"},
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 400
