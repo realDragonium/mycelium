@@ -187,15 +187,45 @@ def test_a_resolved_document_is_reused_rather_than_refetched():
     assert len(get.calls) == 1
 
 
-def test_cache_lifetime_is_clamped():
-    """A hostile or broken `max-age` must not be able to defeat the cache or
-    pin a stale document indefinitely."""
-    assert cimd._cache_seconds("max-age=0") == cimd.MIN_CACHE_SECONDS
+def test_a_request_not_to_store_is_obeyed_rather_than_clamped():
+    """A client that has just revoked a compromised redirect publishes
+    `no-store` precisely so the old document stops counting. Clamping that
+    up to a minimum would keep honouring the revoked list for a window the
+    client explicitly asked us not to take."""
+    assert cimd._cache_seconds("no-store") == 0
+    assert cimd._cache_seconds("no-cache") == 0
+    assert cimd._cache_seconds("max-age=0") == 0
+    assert cimd._cache_seconds("private, no-store") == 0
+
+
+def test_a_request_to_reuse_is_clamped():
+    """Where the directive asks for reuse, the bounds only limit how much of
+    it we grant."""
+    assert cimd._cache_seconds("max-age=1") == cimd.MIN_CACHE_SECONDS
     assert cimd._cache_seconds("max-age=99999999") == cimd.MAX_CACHE_SECONDS
     assert cimd._cache_seconds("max-age=600") == 600
     assert cimd._cache_seconds(None) == cimd.DEFAULT_CACHE_SECONDS
-    assert cimd._cache_seconds("no-cache") == cimd.DEFAULT_CACHE_SECONDS
     assert cimd._cache_seconds("max-age=abc") == cimd.DEFAULT_CACHE_SECONDS
+
+
+def test_a_no_store_document_is_refetched_every_time():
+    get = _serving(_doc(), cache_control="no-store")
+    cimd.fetch(DOC_URL, resolve=PUBLIC, get=get)
+    cimd.fetch(DOC_URL, resolve=PUBLIC, get=get)
+    assert len(get.calls) == 2
+
+
+def test_the_cache_is_bounded():
+    """Distinct URLs are free for an anonymous caller to mint, so an
+    unbounded cache is a way to grow a worker's memory until it dies."""
+    for i in range(cimd.MAX_CACHED_DOCUMENTS + 40):
+        url = f"https://app.example.com/c/{i}.json"
+        cimd.fetch(
+            url,
+            resolve=PUBLIC,
+            get=_serving({**_doc(), "client_id": url}, cache_control="max-age=600"),
+        )
+    assert len(cimd._CACHE) <= cimd.MAX_CACHED_DOCUMENTS
 
 
 def test_a_rejected_document_is_not_cached():
@@ -207,3 +237,28 @@ def test_a_rejected_document_is_not_cached():
 
     good = _serving(_doc())
     assert cimd.fetch(DOC_URL, resolve=PUBLIC, get=good).client_name == "Example MCP Client"
+
+
+def test_documents_with_userinfo_redirects_are_rejected():
+    """`https://login.trusted.example@evil.example/cb` reads as the trusted
+    host on a consent page while sending the code to evil.example."""
+    doc = _doc(redirect_uris=["https://login.trusted.example@evil.example/cb"])
+    with pytest.raises(cimd.CimdError, match="userinfo"):
+        cimd.fetch(DOC_URL, resolve=PUBLIC, get=_serving(doc))
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://app.example.com:8443/client.json",  # port sweeping
+        "https://app.example.com:99999/client.json",  # unparseable port
+        "https://user@app.example.com/client.json",  # userinfo
+    ],
+)
+def test_urls_that_would_widen_the_fetch_are_rejected(url):
+    """Each of these turns the fetch into something other than 'GET a
+    document from a public web server on 443'."""
+    get = _serving(_doc())
+    with pytest.raises(cimd.CimdError):
+        cimd.fetch(url, resolve=PUBLIC, get=get)
+    assert get.calls == []

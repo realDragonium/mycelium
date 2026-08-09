@@ -885,3 +885,49 @@ def test_loopback_only_clients_get_a_warning_on_the_consent_page(
             headers=headers,
         )
         assert "any local program can listen" not in hosted.text.lower()
+
+
+def test_consent_shows_the_hostname_the_code_goes_to(tmp_path, monkeypatch):
+    """A client name is chosen by whoever hosts the document, so the host is
+    the only part of the page a user can actually check. It must be the
+    parsed hostname — netloc would render
+    `https://login.trusted.example@evil.example/cb` starting with the
+    trusted name while the code goes elsewhere."""
+    from mycelium.oauth_server import _is_loopback_redirect, _redirect_host
+
+    assert _redirect_host("https://login.trusted.example@evil.example/cb") == (
+        "evil.example"
+    )
+    assert _redirect_host("http://127.0.0.1:6274/cb") == "127.0.0.1:6274"
+    assert _redirect_host("https://app.example.com/cb") == "app.example.com"
+
+    # Shorthand and trailing-dot forms still reach this machine.
+    for loopback in ("http://127.0.0.2:1/cb", "http://localhost./cb", "http://127.1/cb"):
+        assert _is_loopback_redirect(loopback), loopback
+    assert not _is_loopback_redirect("https://app.example.com/cb")
+
+
+def test_a_hosted_redirect_does_not_silence_the_loopback_warning(
+    tmp_path, monkeypatch
+):
+    """The warning follows the redirect being authorized, not the client's
+    whole list — otherwise listing one unused hosted URI suppresses it."""
+    _stub_cimd(
+        monkeypatch,
+        redirect_uris=(_CIMD_REDIRECT, "https://app.example.com/unused"),
+    )
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r = client.get(
+            "/authorize",
+            params={
+                "client_id": _CIMD_URL,
+                "redirect_uri": _CIMD_REDIRECT,
+                "response_type": "code",
+                "code_challenge": _pkce_pair()[1],
+                "code_challenge_method": "S256",
+            },
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+        )
+        assert "any local program can listen" in r.text.lower()

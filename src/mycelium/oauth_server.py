@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import secrets
@@ -57,6 +58,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
 
+import anyio.to_thread
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -457,7 +459,11 @@ async def authorize(
         )
 
     conn = _auth_conn(request)
-    client = _resolve_client(conn, client_id)
+    # Resolving a metadata document means DNS and an HTTPS request to a
+    # host the caller chose. Both are blocking, and these handlers are
+    # async, so doing it inline would let one slow endpoint stall every
+    # other request the worker is serving.
+    client = await anyio.to_thread.run_sync(_resolve_client, conn, client_id)
     if client is None:
         raise HTTPException(status_code=400, detail="invalid_client")
     if not client.allows(redirect_uri):
@@ -497,7 +503,7 @@ async def authorize(
         client_id=_html_escape(client_id),
         redirect_uri=_html_escape(redirect_uri),
         redirect_host=_html_escape(_redirect_host(redirect_uri)),
-        redirect_warning=_localhost_warning(client.redirect_uris),
+        redirect_warning=_localhost_warning(redirect_uri),
         code_challenge=_html_escape(code_challenge),
         code_challenge_method=_html_escape(code_challenge_method),
         scope=_html_escape(scope or ""),
@@ -507,39 +513,67 @@ async def authorize(
     return HTMLResponse(content=html)
 
 
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "[::1]"}
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 def _redirect_host(redirect_uri: str) -> str:
     """The host the code will be handed to, for the consent page.
 
-    Shown because it is the one part of the request that decides where the
-    credential ends up, and a client name alone cannot be checked against
-    anything — with metadata documents the name is chosen by whoever hosts
-    the document.
+    `hostname` and not `netloc`: netloc carries userinfo, so
+    `https://login.trusted.example@evil.example/cb` would render starting
+    with the trusted name while the code goes to evil.example. Documents
+    carrying userinfo are rejected outright, and this is the second place
+    that would have to fail for the deception to land.
+
+    The port is kept, since a loopback client is identified by it.
     """
     try:
         parts = urlsplit(redirect_uri)
     except ValueError:
-        return redirect_uri
-    return parts.netloc or redirect_uri
+        return "unparseable redirect"
+    if not parts.hostname:
+        return "unparseable redirect"
+    return f"{parts.hostname}:{parts.port}" if parts.port else parts.hostname
 
 
-def _localhost_warning(redirect_uris: tuple[str, ...]) -> str:
-    """A caution for a client whose redirects are all loopback.
+def _is_loopback_redirect(redirect_uri: str) -> bool:
+    """Whether the code would be handed to this machine.
 
-    Any program on the machine can listen on a loopback port, so a
-    loopback-only client proves nothing about which program is asking —
-    metadata documents cannot close that, and the spec asks us to say so
-    rather than pretend otherwise.
+    `ipaddress` only understands the fully-written forms, but resolvers
+    accept shorthand and alternate bases — `127.1`, `0177.0.0.1`,
+    `0x7f.0.0.1` all reach loopback — so `inet_aton` gets a turn too. Being
+    generous here is the safe direction: the cost of a false positive is one
+    extra caution on a consent page.
     """
-    hosts = set()
-    for uri in redirect_uris:
-        try:
-            hosts.add(urlsplit(uri).hostname or "")
-        except ValueError:
-            return ""
-    if not hosts or not hosts <= {h.strip("[]") for h in _LOOPBACK_HOSTS}:
+    import socket
+
+    try:
+        host = (urlsplit(redirect_uri).hostname or "").rstrip(".")
+    except ValueError:
+        return False
+    if host in _LOOPBACK_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+    try:
+        packed = socket.inet_aton(host)
+    except OSError:
+        return False
+    return ipaddress.IPv4Address(packed).is_loopback
+
+
+def _localhost_warning(redirect_uri: str) -> str:
+    """A caution when the code will be handed to this machine.
+
+    Keyed on the redirect actually being authorized, not on the client's
+    whole list: a client asking for `127.0.0.1` could otherwise silence
+    this by listing one hosted URI it never uses. Any local program can
+    listen on a loopback port, so the document proves nothing about which
+    one is asking — the spec asks us to say so rather than imply otherwise.
+    """
+    if not _is_loopback_redirect(redirect_uri):
         return ""
     return (
         '<div class="warn">This client receives the authorization on this '
@@ -580,7 +614,11 @@ async def authorize_decide(
         raise HTTPException(status_code=401, detail="session expired; please retry")
 
     conn = _auth_conn(request)
-    client = _resolve_client(conn, client_id)
+    # Resolving a metadata document means DNS and an HTTPS request to a
+    # host the caller chose. Both are blocking, and these handlers are
+    # async, so doing it inline would let one slow endpoint stall every
+    # other request the worker is serving.
+    client = await anyio.to_thread.run_sync(_resolve_client, conn, client_id)
     if client is None:
         raise HTTPException(status_code=400, detail="invalid_client")
     if not client.allows(redirect_uri):
