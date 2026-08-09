@@ -131,6 +131,11 @@ def protected_resource_metadata(request: Request) -> dict[str, Any]:
         "authorization_servers": [base],
         "bearer_methods_supported": ["header"],
         "resource_documentation": f"{base}/connect",
+        # The minimal set needed for basic functionality — a client with no
+        # `scope` challenge to work from asks for exactly this. Access is
+        # capped at the consenting user's role regardless of what is asked
+        # for, so there is nothing finer to advertise.
+        "scopes_supported": ["mcp"],
     }
 
 
@@ -150,6 +155,12 @@ def authorization_server_metadata(request: Request) -> dict[str, Any]:
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
+        # RFC 9207 §2.3. A client that records our issuer at discovery
+        # compares it against the `iss` we put on every authorization
+        # response; advertising it is what tells the client to reject a
+        # response that arrives without one. Mandatory once you emit `iss`
+        # at all, which we do.
+        "authorization_response_iss_parameter_supported": True,
     }
 
 
@@ -296,6 +307,7 @@ _CONSENT_HTML = """<!doctype html>
     <input type="hidden" name="code_challenge" value="{code_challenge}" />
     <input type="hidden" name="code_challenge_method" value="{code_challenge_method}" />
     <input type="hidden" name="scope" value="{scope}" />
+    <input type="hidden" name="resource" value="{resource}" />
     <input type="hidden" name="state" value="{state}" />
     <div class="actions">
       <button type="submit" name="decision" value="deny" class="btn-secondary">Deny</button>
@@ -318,6 +330,7 @@ async def authorize(
     code_challenge_method: str = "S256",
     scope: str | None = None,
     state: str | None = None,
+    resource: str | None = None,
 ) -> Any:
     """Start the auth-code flow. Validates the request, ensures the
     user has a session (bouncing through OIDC if not), and shows the
@@ -382,6 +395,7 @@ async def authorize(
         code_challenge=_html_escape(code_challenge),
         code_challenge_method=_html_escape(code_challenge_method),
         scope=_html_escape(scope or ""),
+        resource=_html_escape(resource or ""),
         state=_html_escape(state or ""),
     )
     return HTMLResponse(content=html)
@@ -407,6 +421,7 @@ async def authorize_decide(
     decision: str = Form(...),
     scope: str = Form(""),
     state: str = Form(""),
+    resource: str = Form(""),
 ) -> RedirectResponse:
     """Consume the consent decision. Re-validates the OAuth params
     (client_id exists, redirect_uri is on the client's allow-list)
@@ -433,9 +448,28 @@ async def authorize_decide(
             status_code=400, detail="invalid_request: bad code_challenge_method"
         )
 
+    # RFC 9207 §2: `iss` rides on every authorization response, errors
+    # included, so a client that recorded our issuer at discovery can tell
+    # a response from us apart from one from another authorization server
+    # it also talks to. Without it, a mix-up attack lands a code meant for
+    # someone else on our token endpoint.
+    issuer = _base_url(request)
+
     if decision != "allow":
         return RedirectResponse(
-            url=_with_query(redirect_uri, {"error": "access_denied", "state": state}),
+            url=_with_query(
+                redirect_uri,
+                {"error": "access_denied", "state": state, "iss": issuer},
+            ),
+            status_code=302,
+        )
+
+    if resource and not _resource_matches(resource, issuer):
+        return RedirectResponse(
+            url=_with_query(
+                redirect_uri,
+                {"error": "invalid_target", "state": state, "iss": issuer},
+            ),
             status_code=302,
         )
 
@@ -462,7 +496,9 @@ async def authorize_decide(
             ),
         )
     return RedirectResponse(
-        url=_with_query(redirect_uri, {"code": code, "state": state}),
+        url=_with_query(
+            redirect_uri, {"code": code, "state": state, "iss": issuer}
+        ),
         status_code=302,
     )
 
@@ -470,6 +506,29 @@ async def authorize_decide(
 def _with_query(url: str, params: dict[str, str]) -> str:
     sep = "&" if "?" in url else "?"
     return url + sep + urlencode({k: v for k, v in params.items() if v})
+
+
+def _resource_matches(value: str, base: str) -> bool:
+    """Whether an RFC 8707 `resource` names this server.
+
+    A client is told to send the most specific URI it can, so both the
+    origin and the `/mcp` endpoint under it are legitimate ways to name
+    us. Scheme and host compare case-insensitively and a trailing slash
+    is ignored, per RFC 8707's guidance to accept the robust forms; the
+    path is compared exactly, since that is what distinguishes one
+    server from another when several are hosted on one origin.
+    """
+    from urllib.parse import urlsplit
+
+    def _canon(u: str) -> tuple[str, str, str]:
+        parts = urlsplit(u.rstrip("/"))
+        return (parts.scheme.lower(), parts.netloc.lower(), parts.path)
+
+    scheme, netloc, path = _canon(value)
+    b_scheme, b_netloc, b_path = _canon(base)
+    if (scheme, netloc) != (b_scheme, b_netloc):
+        return False
+    return path in (b_path, f"{b_path}/mcp")
 
 
 # --- /token: code → access token -----------------------------------------
@@ -483,6 +542,7 @@ async def token_endpoint(
     redirect_uri: str = Form(...),
     client_id: str = Form(...),
     code_verifier: str = Form(...),
+    resource: str = Form(""),
 ) -> JSONResponse:
     """Exchange an authorization code for an access token. Per OAuth 2.1
     + PKCE: the verifier must hash to the challenge captured at /authorize,
@@ -496,6 +556,16 @@ async def token_endpoint(
     if grant_type != "authorization_code":
         return _oauth_error(
             "unsupported_grant_type", "only authorization_code is supported"
+        )
+
+    # RFC 8707 §2: a token is minted for one resource. We serve exactly
+    # one, so a request naming a different one is asking us to issue a
+    # credential for somewhere else — the confused-deputy shape resource
+    # indicators exist to close. Honouring it silently is what would make
+    # the token replayable against another server.
+    if resource and not _resource_matches(resource, _base_url(request)):
+        return _oauth_error(
+            "invalid_target", "resource does not identify this MCP server"
         )
 
     conn = _auth_conn(request)

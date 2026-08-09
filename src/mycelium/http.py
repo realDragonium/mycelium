@@ -216,8 +216,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             headers = {}
             if request.url.path == "/mcp" or request.url.path.startswith("/mcp/"):
                 base = str(request.base_url).rstrip("/")
+                # `scope` tells the client what to ask for without first
+                # fetching the metadata document; RFC 6750 §3 makes the
+                # challenge authoritative for this request, so a client
+                # that reads it needs no second round trip to find out.
                 headers["WWW-Authenticate"] = (
-                    f'Bearer realm="mycelium", '
+                    f'Bearer realm="mycelium", scope="mcp", '
                     f'resource_metadata="{base}/.well-known/oauth-protected-resource"'
                 )
             return JSONResponse(

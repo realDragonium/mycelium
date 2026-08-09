@@ -464,3 +464,118 @@ def test_denial_redirects_with_error(tmp_path, monkeypatch):
         assert r.status_code == 302
         assert "error=access_denied" in r.headers["location"]
         assert "state=abc" in r.headers["location"]
+
+
+# --- 2026-07-28 authorization hardening -----------------------------------
+
+
+def test_authorization_response_carries_iss(tmp_path, monkeypatch):
+    """RFC 9207. A client that recorded our issuer at discovery compares it
+    against `iss` before redeeming the code; without it, a code minted by a
+    different authorization server can be walked onto our token endpoint.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        redirect_uri = "http://localhost:6274/cb"
+        reg = client.post(
+            "/register",
+            json={"client_name": "Iss client", "redirect_uris": [redirect_uri]},
+        ).json()
+        verifier, challenge = _pkce_pair()
+
+        meta = client.get("/.well-known/oauth-authorization-server").json()
+        # Emitting `iss` without advertising it leaves a strict client unable
+        # to tell a missing one from a server that never sends it.
+        assert meta["authorization_response_iss_parameter_supported"] is True
+
+        form = {
+            "client_id": reg["client_id"],
+            "redirect_uri": redirect_uri,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "scope": "mcp",
+            "state": "st",
+        }
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+
+        allowed = client.post(
+            "/authorize/decide",
+            data={**form, "decision": "allow"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        qs = parse_qs(urlparse(allowed.headers["location"]).query)
+        assert qs["iss"][0] == meta["issuer"]
+
+        # Error responses carry it too, or a mix-up is undetectable on the
+        # path where the client is told the request failed.
+        denied = client.post(
+            "/authorize/decide",
+            data={**form, "decision": "deny"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        qs = parse_qs(urlparse(denied.headers["location"]).query)
+        assert qs["error"][0] == "access_denied"
+        assert qs["iss"][0] == meta["issuer"]
+
+
+def test_token_rejects_a_resource_naming_a_different_server(tmp_path, monkeypatch):
+    """RFC 8707. Minting a token for a resource we are not would hand the
+    caller a credential to replay elsewhere.
+
+    The code here has already been redeemed by `_full_flow`, so this also
+    pins the ordering: the audience is checked before the code is looked at,
+    and a request for the wrong resource is answered `invalid_target` rather
+    than leaking whether the code was real.
+    """
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        body, client_id, verifier, code = _full_flow(client, admin_bearer=admin_bearer)
+
+        r = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": "http://localhost:6274/cb",
+                "client_id": client_id,
+                "code_verifier": verifier,
+                "resource": "https://someone-elses-mcp.example.com",
+            },
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["error"] == "invalid_target"
+
+
+def test_token_accepts_both_canonical_forms_of_our_own_resource(tmp_path, monkeypatch):
+    """Clients are told to send the most specific URI they can, so the origin
+    and the `/mcp` endpoint under it must both be recognised as us."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        from mycelium.oauth_server import _resource_matches
+
+        base = "http://testserver"
+        assert _resource_matches(base, base)
+        assert _resource_matches(f"{base}/mcp", base)
+        assert _resource_matches(f"{base}/", base)
+        assert _resource_matches("HTTP://TESTSERVER/mcp", base)
+        assert not _resource_matches("http://testserver/other", base)
+        assert not _resource_matches("https://evil.example.com/mcp", base)
+
+
+def test_challenge_and_metadata_advertise_the_scope_to_request(tmp_path, monkeypatch):
+    """A client with no prior knowledge learns what to ask for from the 401
+    itself, rather than needing the metadata document first."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        assert r.status_code == 401
+        assert 'scope="mcp"' in r.headers["www-authenticate"]
+
+        prm = client.get("/.well-known/oauth-protected-resource").json()
+        assert prm["scopes_supported"] == ["mcp"]
