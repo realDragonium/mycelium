@@ -118,15 +118,13 @@ From inside the project directory:
 
 ```sh
 uv sync
-uv run python -m spacy download en_core_web_sm
 ```
 
 `uv` reads `pyproject.toml` + `uv.lock`, creates `.venv/`, and installs
-everything pinned. This takes about 10 seconds the first time and is a
-no-op on subsequent runs unless deps change. The second command installs
-the spaCy model that phrasing validation loads at runtime (the Docker
-image bakes it in the same way). Note: a plain `uv sync` prunes the
-model (it isn't in the lockfile), so re-run the download after syncing.
+everything pinned — including the `en_core_web_sm` spaCy model that
+phrasing validation loads at runtime, pinned by wheel URL alongside the
+other dependencies. This takes about 10 seconds the first time and is a
+no-op on subsequent runs unless deps change.
 
 If you'll be committing, enable the format/lint pre-commit hook once:
 

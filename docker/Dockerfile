@@ -3,7 +3,7 @@
 #   docker build -f docker/Dockerfile -t mycelium-server .
 ARG PYTHON_VERSION=3.13
 
-# --- builder: resolve deps + install the project + spaCy model --------------
+# --- builder: resolve deps + install the project ----------------------------
 FROM python:${PYTHON_VERSION}-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -28,13 +28,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
-
-# spaCy model the app loads at runtime (phrasing.py -> en_core_web_sm).
-# Installed as a wheel into the venv so it travels with the copied .venv.
-ARG SPACY_MODEL_VERSION=3.8.0
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install \
-      "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-${SPACY_MODEL_VERSION}/en_core_web_sm-${SPACY_MODEL_VERSION}-py3-none-any.whl"
 
 # --- runtime ----------------------------------------------------------------
 FROM python:${PYTHON_VERSION}-slim AS runtime

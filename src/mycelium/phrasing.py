@@ -278,8 +278,8 @@ def _get_nlp() -> "Language":
             _nlp = spacy.load(_MODEL_NAME)
         except OSError as exc:
             raise RuntimeError(
-                f"spaCy model {_MODEL_NAME!r} is not installed. Run: "
-                f"`uv run python -m spacy download {_MODEL_NAME}`"
+                f"spaCy model {_MODEL_NAME!r} is not installed. It is a "
+                f"pinned project dependency — run: `uv sync`"
             ) from exc
     return _nlp
 

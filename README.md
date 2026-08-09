@@ -23,7 +23,6 @@ the why.
 
 ```sh
 uv sync
-uv run python -m spacy download en_core_web_sm  # phrasing validation model
 ```
 
 ## Run the server
