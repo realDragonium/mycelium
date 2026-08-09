@@ -648,8 +648,8 @@ spawns when the user adds Mycelium to `claude_desktop_config.json`. The
 process appears to hang when started by hand because stdio is occupied by
 the protocol — that is expected.
 
-The MCP server uses the official Anthropic `mcp` package and the
-`FastMCP` server class. Tools are registered via `mcp.tool()` inside the
+The MCP server uses the official Anthropic `mcp` package and its
+`MCPServer` class. Tools are registered via `mcp.tool()` inside the
 `@tool` decorator, which means every registered tool's signature and
 docstring become the tool's MCP schema and description automatically.
 

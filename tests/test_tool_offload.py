@@ -1,9 +1,9 @@
 """A slow tool must not freeze the server for everyone else.
 
-FastMCP calls a *sync* tool function inline on the running event loop, so before
-`server._offloaded` a single multi-second `ask` stalled every concurrent request
-on the process — including any health probe, which is what turned one slow call
-into a 503 for every caller behind a proxy that drops unhealthy backends.
+`server._offloaded` runs each tool body on a worker thread under that tool's
+bound, so a single multi-second `ask` cannot stall every concurrent request on
+the process — including any health probe, which is what would turn one slow
+call into a 503 for every caller behind a proxy that drops unhealthy backends.
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def test_offloaded_call_carries_the_principal_into_the_worker_thread():
 
 
 def test_offloaded_preserves_the_signature_pydantic_reads():
-    """FastMCP derives each tool's JSON schema from `inspect.signature`, and this
+    """The MCP server derives each tool's JSON schema from `inspect.signature`, and this
     module's `from __future__ import annotations` means a naively-copied
     signature carries unresolvable string forward refs."""
 

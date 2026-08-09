@@ -42,30 +42,35 @@ from . import (
     tracing,
 )
 
-# Build FastMCP's streamable-HTTP sub-app once at import time. The
-# sub-app owns a session manager that can only be started once per
-# instance — building per-request or per-test would explode.
-_MCP_SUBAPP = server.mcp.streamable_http_app()
+# Build the streamable-HTTP sub-app once at import time. Transport
+# configuration lives here rather than on the MCPServer: `MCPServer` holds
+# the server's identity and tools, the app builder decides how they are
+# served. The same endpoint answers both MCP protocol revisions — a
+# 2025-era client's `initialize` handshake and a 2026-07-28 client's
+# self-describing requests — with nothing to configure.
+_MCP_SUBAPP = server.mcp.streamable_http_app(
+    transport_security=server._build_transport_security(),
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
     server.init(data_dir)
-    # Compose the MCP sub-app's lifespan (session manager startup) with
-    # ours so the mounted /mcp endpoint can accept connections.
+    # Start the MCP session manager under our lifespan. A mounted sub-app's
+    # own lifespan never runs, so nothing else initialises it — without this
+    # every `/mcp` call fails with "Task group is not initialized".
     #
-    # `MYCELIUM_DISABLE_MCP_HTTP=1` skips this; the test suite sets the
-    # flag because FastMCP's session manager is a process-singleton
-    # with run-once semantics, and a test that brings up multiple
-    # TestClient instances against the same module would otherwise
-    # explode on the second lifespan entry. The MCP REST mirror and
-    # the auth-gated /api/* endpoints still work without the manager;
-    # only `/mcp` JSON-RPC needs it.
+    # `MYCELIUM_DISABLE_MCP_HTTP=1` skips this; the test suite sets the flag
+    # because `StreamableHTTPSessionManager.run()` may only be called once
+    # per instance, and a test that brings up a second TestClient against
+    # this module would otherwise raise on the second lifespan entry. The
+    # REST mirror and the auth-gated /api/* endpoints work without the
+    # manager; only `/mcp` JSON-RPC needs it.
     if os.environ.get("MYCELIUM_DISABLE_MCP_HTTP") == "1":
         yield
         return
-    async with _MCP_SUBAPP.router.lifespan_context(_MCP_SUBAPP):
+    async with server.mcp.session_manager.run():
         yield
 
 
@@ -233,10 +238,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # app. The contextvar is task-local, so concurrent requests
         # don't see each other's principal.
         ctx_token = auth.current_principal.set(principal)
-        # Carry the MCP session id (set by FastMCP's streamable HTTP
-        # transport after `initialize`) so the @tool wrapper can find
-        # this caller's auto-created draft. Non-MCP HTTP requests just
-        # leave it None — they have no drafts to auto-target.
+        # Carry the MCP session id so the @tool wrapper can find this
+        # caller's auto-created draft. Only a 2025-era client has one: the
+        # 2026-07-28 revision removed sessions, so a modern MCP request and
+        # a REST request both leave this None and the wrapper falls back to
+        # a principal-scoped key.
         session_id = request.headers.get("mcp-session-id")
         session_ctx = auth.current_session_id.set(session_id)
         # The MCP streamable-HTTP app is mounted at `/mcp`; everything else is
@@ -1697,7 +1703,7 @@ def _cockpit_redirect() -> RedirectResponse:
 
 # --- MCP transport mount --------------------------------------------------
 # Remote MCP clients (Claude Desktop, Claude Code) connect to
-# `https://host/mcp`. FastMCP's streamable-HTTP sub-app exposes `/mcp`
+# `https://host/mcp`. The streamable-HTTP sub-app exposes `/mcp`
 # at its root, so mounting that sub-app at `/` makes the public path
 # `/mcp` exactly. Mounted last so it can't shadow explicit routes
 # above — Starlette matches routes in registration order, and a

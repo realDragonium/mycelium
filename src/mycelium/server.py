@@ -27,7 +27,8 @@ from typing import Any, Callable, Literal, NotRequired, TypedDict
 
 import anyio
 import anyio.to_thread
-from mcp.server.fastmcp import FastMCP
+from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
+from mcp.server.mcpserver import MCPServer
 
 from . import (
     embed,
@@ -127,12 +128,15 @@ _INSTRUCTIONS = (os.environ.get("MYCELIUM_INSTRUCTIONS") or "").strip() or None
 
 
 # When Mycelium is fronted by a reverse proxy (nginx, Cloudflare),
-# requests reach FastMCP with the public Host header — not 127.0.0.1.
-# FastMCP's DNS-rebinding protection rejects unrecognised hosts with
+# requests reach the MCP transport with the public Host header — not
+# 127.0.0.1. Its DNS-rebinding protection rejects unrecognised hosts with
 # 421 unless we tell it which to trust. MYCELIUM_ALLOWED_HOSTS is a
 # comma-separated list of `host[:port]` patterns (e.g.
 # `mycelium.example.com,mycelium.example.com:443`). When unset, the
 # default localhost protection stays in place — fine for local dev.
+#
+# This is transport configuration, so it is passed to `streamable_http_app()`
+# where the ASGI app is built (`mycelium.http`), not to `MCPServer` itself.
 def _build_transport_security() -> Any:
     raw = (os.environ.get("MYCELIUM_ALLOWED_HOSTS") or "").strip()
     if not raw:
@@ -156,55 +160,56 @@ def _build_transport_security() -> Any:
     return TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=origins)
 
 
-mcp = FastMCP(
+mcp = MCPServer(
     "mycelium",
     instructions=_INSTRUCTIONS,
-    transport_security=_build_transport_security(),
 )
 
 
-def _install_role_based_tool_filter() -> None:
+class _RoleFilteredTools:
     """Hide tools the caller doesn't have permission to invoke.
 
-    By default FastMCP's `tools/list` returns every registered tool to
-    every caller. The `@tool` wrapper below still rejects the actual
-    call with PermissionError when a reader tries to invoke a writer
-    tool — but exposing those names to the LLM is noisy at best and
-    misleading at worst (the model will reach for tools it can't use).
-    This filter trims the listed surface to what the caller's role
-    can actually call.
+    `tools/list` returns every registered tool to every caller. The `@tool`
+    wrapper below still rejects the actual call with PermissionError when a
+    reader tries to invoke a writer tool — but exposing those names to the
+    LLM is noisy at best and misleading at worst (the model will reach for
+    tools it can't use). This trims the listed surface to what the caller's
+    role can actually call.
 
-    Hooks the existing ListToolsRequest handler that FastMCP registers
-    under the hood, awaits it, then strips the tools that fail the
-    role gate. No change to the wire protocol — just a smaller `tools`
-    array in the response.
+    Registered on the server's middleware chain: it sees every inbound
+    message and narrows the result of the one it cares about. No change to
+    the wire protocol — just a smaller `tools` array in the response.
 
-    Skipped when no principal is set (stdio / local-admin mode); the
-    handler returns the full list. That preserves the unchanged-from-
-    before behaviour for local single-user installs.
+    The dispatcher serializes a handler's return to its wire dict *before*
+    the middleware chain runs, so what arrives here is that dict, not a
+    `ListToolsResult`.
+
+    Skipped when no principal is set (stdio / local-admin mode); the full
+    list goes out, which is what local single-user installs want.
+
+    The listed surface is per-role, which is why `cache_hints` must never
+    mark `tools/list` `scope="public"`: a shared cache entry would hand one
+    role's tool list to another. The SDK's default hint is `private`, so
+    leaving `cache_hints` unset is the safe configuration.
     """
-    import mcp.types as mcp_types
 
-    underlying = mcp._mcp_server.request_handlers.get(mcp_types.ListToolsRequest)
-    if underlying is None:  # pragma: no cover — FastMCP always registers it
-        return
+    async def __call__(
+        self, ctx: ServerRequestContext[Any, Any], call_next: CallNext
+    ) -> HandlerResult:
+        result = await call_next(ctx)
+        if ctx.method != "tools/list" or not isinstance(result, dict):
+            return result
 
-    async def filtered(req: mcp_types.ListToolsRequest):
         from . import auth as _auth
 
-        result = await underlying(req)
         principal = _auth.current_principal.get()
         if principal is None:
             return result
 
-        # FastMCP wraps the result in a `ServerResult` whose `.root`
-        # is the `ListToolsResult`. Mutate in place so caching layers
-        # downstream (FastMCP's own _tool_cache) stay consistent with
-        # what we returned.
-        # Resolve each tool's required role through the wrapper
-        # registered in `TOOLS`, so `@tool(role="reader")` overrides
-        # are honored. Fall back to prefix-derivation if a wrapper
-        # is missing for some reason (shouldn't happen in practice).
+        # Resolve each tool's required role through the wrapper registered
+        # in `TOOLS`, so `@tool(role="reader")` overrides are honored. Fall
+        # back to prefix-derivation if a wrapper is missing for some reason
+        # (shouldn't happen in practice).
         wrappers_by_name = {w.__name__: w for w in TOOLS}
 
         def _role_for(name: str) -> str:
@@ -213,17 +218,16 @@ def _install_role_based_tool_filter() -> None:
                 w, "_mycelium_required_role", None
             ) or _auth.required_role_for(name)
 
-        tools = result.root.tools
         kept = [
-            t for t in tools if _auth.principal_satisfies(principal, _role_for(t.name))
+            t
+            for t in result.get("tools", ())
+            if _auth.principal_satisfies(principal, _role_for(t["name"]))
         ]
-        result.root.tools = kept
-        return result
-
-    mcp._mcp_server.request_handlers[mcp_types.ListToolsRequest] = filtered
+        return {**result, "tools": kept}
 
 
-_install_role_based_tool_filter()
+# Appended, so it runs inside the SDK's own built-in middleware.
+mcp.middleware.append(_RoleFilteredTools())
 
 #: Functions registered as tools — read by `mycelium.http` to auto-generate
 #: REST endpoints. Order is preserved.
@@ -318,16 +322,16 @@ def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
 
 
 def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
-    """Present `wrapper` to FastMCP as a coroutine that runs the real work in a
-    worker thread.
+    """Present `wrapper` to the MCP server as a coroutine that runs the real
+    work in a worker thread, under this tool's bound.
 
-    FastMCP calls a *sync* tool function inline on the running event loop
-    (`func_metadata.call_fn_with_arg_validation`), so a single multi-second tool
-    call freezes every other request the process is serving — including the load
-    balancer's health probe, which is what turns one slow `ask` into a 503 for
-    everyone. The REST mirror never had this problem because FastAPI dispatches
-    sync endpoints to anyio's worker threads; this gives the MCP transport the
-    same treatment, against that same bounded pool.
+    The SDK dispatches a sync tool function to its own worker thread, but on
+    the general pool with no per-tool bound. That bound is the point here: the
+    model-loop tools each hold a model context worth of memory, so what runs
+    out first is the box, not the thread pool. Registering as a coroutine
+    keeps the dispatch ours, which is what lets `limiter_for` gate it —
+    against the same limiter the REST mirror uses, so a caller cannot slip
+    past the cap by choosing a transport.
 
     Safe because the store hands every thread its own SQLite connection
     (`store.kernel.ConnectionProvider`), and `anyio.to_thread.run_sync`
@@ -537,14 +541,14 @@ def _add_draft_id_to_signature(
     func: Callable[..., Any], wrapper: Callable[..., Any]
 ) -> None:
     """Splice an optional `draft_id: str | None = None` onto the wrapper's
-    public signature. FastMCP's tool-schema introspection and http.py's
+    public signature. The MCP server's tool-schema introspection and http.py's
     body-model generation both read `inspect.signature(wrapper)`, so
     overriding `__signature__` + `__annotations__` is enough to make the
     new param appear in both surfaces.
 
     The module has `from __future__ import annotations`, so each
     parameter's `.annotation` arrives here as a string forward ref.
-    Pydantic (used by FastMCP for arg-model generation) can no longer
+    Pydantic (used by the MCP server for arg-model generation) can no longer
     resolve those once we replace the signature object — `inspect`
     short-circuits and returns ours without walking back to `__wrapped__`
     for globals. So we resolve them eagerly here using the function's
@@ -570,7 +574,7 @@ def _add_draft_id_to_signature(
     # a mutation tool whose substrate result is `dict[str, str]` may
     # instead return a queue receipt `{draft_id, seq: int, queued}`,
     # and a list tool whose substrate result is `dict[str, Any]` may
-    # instead return `list[dict[...]]` of queued ops. FastMCP validates
+    # instead return `list[dict[...]]` of queued ops. The MCP server validates
     # outputs against the schema, so use `Any` to subsume every branch.
     return_ann: Any = Any
     new_sig = sig.replace(parameters=params, return_annotation=return_ann)
@@ -605,14 +609,16 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
         return draft_id
 
     if principal is not None and principal.role == "drafter":
-        # Prefer the MCP session id when the client propagates it
-        # (one auto-draft per active conversation). Many clients don't
-        # echo `Mcp-Session-Id` back on tool calls, and reverse proxies
-        # sometimes strip non-standard headers — so fall back to a
-        # principal-scoped key. Net effect of the fallback: a drafter
-        # has at most one open auto-draft at a time across all their
-        # clients; they must submit it before another auto-draft opens.
-        # Explicit `draft_id` always wins over auto-targeting.
+        # Prefer the MCP session id when there is one (one auto-draft per
+        # active conversation), and fall back to a principal-scoped key
+        # when there isn't. The fallback is the common case, not the edge
+        # one: the 2026-07-28 protocol has no sessions at all, many 2025
+        # clients don't echo `Mcp-Session-Id` back on tool calls, and the
+        # REST mirror never had one. Net effect: a drafter has at most one
+        # open auto-draft at a time across all their clients, and must
+        # submit it before another opens. A drafter who wants two at once
+        # passes `draft_id` explicitly, which always wins over
+        # auto-targeting.
         session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
         row = drafts_store.find_open_session_draft(_drafts_db(), session_id)
         if row is not None:

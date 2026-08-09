@@ -400,13 +400,15 @@ def test_writer_can_write_but_not_delete(tmp_path, monkeypatch):
 
 def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
     """A reader's tools/list response shouldn't carry write tools.
-    Verified at the server's request-handler level — what arrives over
-    the MCP wire is whatever this handler returns, so this test covers
-    both the stdio and HTTP transports.
+
+    Drives the filtering middleware over the server's real tool list. Every
+    transport's `tools/list` passes through this one middleware, so covering
+    it here covers stdio and HTTP, on both protocol revisions.
     """
     import asyncio
+    from types import SimpleNamespace
 
-    import mcp.types as mt
+    from mcp.types import ListToolsResult
 
     # The filter is driven by the principal in the contextvar, not by
     # auth-mode; we manipulate it manually below. Run with auth off
@@ -416,16 +418,26 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
     with client:
         from mycelium import server
 
-        handler = server.mcp._mcp_server.request_handlers[mt.ListToolsRequest]
-        req = mt.ListToolsRequest(method="tools/list")
+        middleware = server._RoleFilteredTools()
+        # Only `.method` is read; a stub keeps the test off the SDK's
+        # session-bound context construction.
+        ctx = SimpleNamespace(method="tools/list")
+
+        async def unfiltered(_ctx):
+            # The dispatcher serializes the handler's result before the
+            # middleware chain sees it, so hand over the wire dict — feeding
+            # the model here would test a shape that never reaches the
+            # middleware in a live server.
+            result = ListToolsResult(tools=await server.mcp.list_tools())
+            return result.model_dump(by_alias=True, mode="json", exclude_none=True)
 
         async def call_with(role: auth.Role):
             token = auth.current_principal.set(
                 auth.Principal(id="t", name="t", role=role, type="human"),
             )
             try:
-                result = await handler(req)
-                return {t.name for t in result.root.tools}
+                result = await middleware(ctx, unfiltered)
+                return {t["name"] for t in result["tools"]}
             finally:
                 auth.current_principal.reset(token)
 
