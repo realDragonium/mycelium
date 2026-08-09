@@ -70,7 +70,7 @@ from ..ingest.loop import (
 from ..ingest.tools import EMIT_TOOL, build_tools, parse_emit_input
 from ..ingest.trace import TraceBuilder
 from . import prompts, sources
-from .config import ResearchConfig
+from .config import DOCTRINE_NAME, ResearchConfig
 from .schema import NothingFound, ProposedOp, ResearchDraftCreated, ResearchResult
 from .sources import Source, SourceError
 from .workspace import WorkspaceError, WorkspaceReader
@@ -123,7 +123,9 @@ def run_research(
     if client is None:
         client = default_client(config.max_retries)
 
-    doctrine_text, doctrine_note = load_doctrine(config.doctrine_path)
+    doctrine_text, doctrine_note = load_doctrine(
+        config.doctrine_path, name=DOCTRINE_NAME
+    )
 
     with tracing.profile_to_html("research", f"{source_name}: {topic[:40]}"):
         if workspace is None:

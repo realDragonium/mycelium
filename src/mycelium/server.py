@@ -812,6 +812,16 @@ def _drafts_db() -> sqlite3.Connection:
     return drafts_store.connection()
 
 
+def _prompts_db() -> sqlite3.Connection:
+    """This thread's prompt-texts connection (see `prompt_store.connection`).
+
+    Configured by `init`; each thread reopens lazily against the prompts file.
+    Raises if reached before the server is initialized."""
+    from . import prompt_store
+
+    return prompt_store.connection()
+
+
 def _idx() -> vector.Index:
     """The statement vector index. Loaded by `init`; raises if reached
     before the server is initialized."""
@@ -856,7 +866,7 @@ def init(data_dir: Path) -> None:
     # indexes against the new substrate.
     _ctx = None
 
-    from . import auth_store, drafts_store, research_store
+    from . import auth_store, drafts_store, prompt_store, research_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
     store.configure_substrate(
@@ -876,6 +886,13 @@ def init(data_dir: Path) -> None:
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
     research_store.migrate(_drafts_db())
+
+    # Prompt texts are instance configuration, so they get their own file:
+    # dropping the substrate or wiping drafts leaves an instance's steering
+    # texts intact.
+    prompt_store.configure(data_dir / "mycelium-prompts.db")
+    prompt_store.migrate(_prompts_db())
+    _seed_doctrines()
 
     # Operation ledger: a bounded, best-effort record of attempted tool calls,
     # in its own file so telemetry writes never contend with the substrate's
@@ -963,6 +980,75 @@ def init(data_dir: Path) -> None:
         from . import mention_worker
 
         mention_worker.start(data_dir)
+
+
+def _seeded_prompt_texts() -> tuple[tuple[str, str, Any], ...]:
+    """The prompt texts startup owns: (type, name, the loop config that
+    resolves that name's seed file).
+
+    The one place that knows which names startup writes. `prompt_store`
+    keeps `type` and `name` free strings and enumerates neither, so
+    seeded-ness is a fact of the seeding caller: `_seed_doctrines` reads
+    this to write the packaged defaults, and `retire_prompt_text` reads it
+    to refuse a retirement the next start would undo.
+    """
+    from .agentloop import DOCTRINE_TYPE
+    from .ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
+    from .ingest.config import IngestConfig
+    from .research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
+    from .research.config import ResearchConfig
+
+    return (
+        (DOCTRINE_TYPE, INGEST_DOCTRINE, IngestConfig),
+        (DOCTRINE_TYPE, RESEARCH_DOCTRINE, ResearchConfig),
+    )
+
+
+def _is_seeded(type: str, name: str) -> bool:
+    """Whether startup seeds (type, name). Keys are compared as the store
+    stores them — stripped."""
+    key = (type.strip(), name.strip())
+    return any(key == (t, n) for t, n, _ in _seeded_prompt_texts())
+
+
+def _seed_doctrines() -> None:
+    """Put each packaged doctrine in the store when it holds none.
+
+    `save_if_absent` carries the whole idempotency story: every startup runs
+    this, and one that finds a row leaves it alone — so an operator's edit
+    survives restarts and no duplicate versions accumulate. Which file seeds
+    a doctrine follows the same config the loops read, so
+    `MYCELIUM_{INGEST,RESEARCH}_DOCTRINE_PATH` chooses what a fresh instance
+    starts from.
+
+    A tombstone reads as "no live text", so a seeded name that was retired
+    at the store level comes back here at a new version. That is why
+    `retire_prompt_text` refuses these names outright: an operator learns
+    the rule when they try, rather than discovering it after a deploy.
+
+    Best-effort per doctrine, resolution included: an instance that can't
+    seed one still starts, and an unseeded doctrine still reaches its loop,
+    because `load_doctrine` falls back to this same file. What a failure
+    here cannot repair is its own cause — a malformed loop tunable that
+    stopped `from_env` also raises when that loop runs.
+    """
+    from . import prompt_store
+
+    for doctrine_type, name, loop_config in _seeded_prompt_texts():
+        try:
+            # Inside the guard: `from_env` also parses that loop's numeric
+            # tunables, and one malformed op cap must not stop a server
+            # booting.
+            path = loop_config.from_env().doctrine_path
+            prompt_store.save_if_absent(
+                _prompts_db(),
+                type=doctrine_type,
+                name=name,
+                text=Path(path).read_text(encoding="utf-8"),
+                created_by="seed",
+            )
+        except Exception:
+            logger.warning("could not seed the %s doctrine", name, exc_info=True)
 
 
 def _rebuild_vector_index(
@@ -4280,6 +4366,138 @@ def report_knowledge_gap(text: str) -> dict[str, Any]:
     with store.transaction(_db()):
         gap_id = store.create_knowledge_gap(_db(), text)
     return {"gap_id": gap_id}
+
+
+# --- prompt-text tools ------------------------------------------------------
+# Steering texts (doctrines, prompt preambles, guideline sets) as editable
+# rows — see `prompt_store`. Deliberately named outside `_MUTATION_PREFIXES`:
+# prompt texts are instance configuration, so an edit takes effect directly
+# and never queues onto a draft. `retire_` carries the admin gate that the
+# `delete_` prefix would otherwise have derived, and because an edit here
+# lands live, the write tools re-check the caller's REAL role so the
+# drafter-equivalence in `auth.principal_satisfies` can't stand in for one.
+
+
+def _actor_id() -> str | None:
+    from . import auth as _auth
+
+    principal = _auth.current_principal.get()
+    return principal.id if principal is not None else None
+
+
+def _require_real_role(tool_name: str, required: str) -> None:
+    """Re-check the gate against the caller's REAL role.
+
+    `auth.principal_satisfies` lets a drafter clear writer and admin gates
+    because the @tool wrapper redirects their writes onto a draft. These
+    tools sit outside that machinery on purpose — an edit here lands live —
+    so the equivalence must not carry. Same shape as the curator-only check
+    on `list_drafts`; a None principal is the local stdio caller, which the
+    wrapper's own gate also lets through."""
+    from . import auth as _auth
+
+    principal = _auth.current_principal.get()
+    if principal is not None and not _auth.principal_has_real_role(principal, required):
+        raise _auth.RoleRequired(
+            f"tool '{tool_name}' requires a real {required} role; prompt texts "
+            f"are instance configuration and never queue onto a draft"
+        )
+
+
+@tool
+def save_prompt_text(type: str, name: str, text: str) -> dict[str, Any]:
+    """Store a new version of a steering text under (type, name).
+
+    `type` and `name` are free strings — nothing enumerates them, so a new
+    sort of steering text needs no code change; consumers declare what they
+    load. Saving appends a version rather than rewriting one, and consumers
+    read at run start, so an edit applies to the next run with no restart.
+
+    Returns the stored row {id, type, name, text, version, deleted,
+    created_at, created_by}."""
+    from . import prompt_store
+
+    _require_real_role("save_prompt_text", "writer")
+    row = prompt_store.save(
+        _prompts_db(), type=type, name=name, text=text, created_by=_actor_id()
+    )
+    return prompt_store.serialize(row)
+
+
+@tool
+def get_prompt_text(type: str, name: str) -> dict[str, Any]:
+    """Fetch the current text stored under (type, name), body included.
+
+    Returns the row {id, type, name, text, version, deleted, created_at,
+    created_by}. Raises when the name has never been saved or was retired."""
+    from . import prompt_store
+
+    row = prompt_store.latest(_prompts_db(), type, name)
+    if row is None:
+        raise ValueError(f"prompt text not found: {type}/{name}")
+    return prompt_store.serialize(row)
+
+
+@tool
+def list_prompt_texts(type: str | None = None) -> dict[str, Any]:
+    """List the prompt texts currently in force, optionally narrowed to one
+    `type`. Retired names are omitted.
+
+    Bodies are left out — use `get_prompt_text` for one. Returns
+    {"prompt_texts": [{type, name, version, chars, created_at, created_by}]}.
+    """
+    from . import prompt_store
+
+    return {
+        "prompt_texts": [
+            prompt_store.serialize_summary(row)
+            for row in prompt_store.list_current(_prompts_db(), type)
+        ]
+    }
+
+
+@tool
+def list_prompt_text_versions(type: str, name: str) -> dict[str, Any]:
+    """List every version ever saved under (type, name), newest first.
+
+    The store is append-only, so this is the full edit history — including
+    the tombstone version left by `retire_prompt_text`. Bodies included.
+    Returns {"versions": [prompt-text rows]}."""
+    from . import prompt_store
+
+    return {
+        "versions": [
+            prompt_store.serialize(row)
+            for row in prompt_store.history(_prompts_db(), type, name)
+        ]
+    }
+
+
+@tool(role="admin")
+def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
+    """Retire the text stored under (type, name): it stops being listed and
+    served, while its history stays readable and the name can be saved again.
+
+    Names that startup seeds — the `doctrine` texts `ingest` and `research` —
+    are refused, because startup would re-seed the packaged default at a new
+    version and undo the retirement at the next restart. Change one with
+    `save_prompt_text` instead.
+
+    Returns {"retired": true} — or false when nothing live was stored
+    there."""
+    from . import prompt_store
+
+    _require_real_role("retire_prompt_text", "admin")
+    if _is_seeded(type, name):
+        raise ValueError(
+            f"prompt text '{type}/{name}' is seeded at startup and cannot be "
+            f"retired: the next start would re-seed the packaged default at a "
+            f"new version. Edit it with save_prompt_text instead."
+        )
+    retired = prompt_store.delete(
+        _prompts_db(), type=type, name=name, created_by=_actor_id()
+    )
+    return {"retired": retired}
 
 
 # --- draft management tools -----------------------------------------------

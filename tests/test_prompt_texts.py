@@ -1,0 +1,543 @@
+"""Editable prompt texts — store semantics + management tools.
+
+Two layers. The store tests drive `prompt_store` against an in-memory DB
+and pin the append-only contract: latest-wins reads, ordered history, a
+tombstone that hides a name without touching its past versions. The tool
+tests go through the `@tool` registry, so they also cover the derived role
+gates and the REST mirror the decorator generates.
+"""
+
+import contextlib
+import pathlib
+import sqlite3
+
+import pytest
+from fastapi.testclient import TestClient
+
+from mycelium import auth, auth_store, prompt_store, server, store
+
+
+def _conn() -> sqlite3.Connection:
+    conn = prompt_store.connect(":memory:")
+    prompt_store.migrate(conn)
+    return conn
+
+
+def _reset_server() -> None:
+    store.reset_substrate()
+    auth_store.reset()
+    prompt_store.reset()
+    server._ctx = None
+
+
+def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
+    monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MYCELIUM_AUTH", auth_mode)
+    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
+    _reset_server()
+    from mycelium import embed
+
+    monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
+    from mycelium.http import app
+
+    return TestClient(app)
+
+
+@contextlib.contextmanager
+def _as(role: str):
+    """Run the enclosed tool calls as a principal of `role`."""
+    token = auth.current_principal.set(
+        auth.Principal(id=role[0], name=role, role=role, type="human"),
+    )
+    try:
+        yield
+    finally:
+        auth.current_principal.reset(token)
+
+
+# --- store ------------------------------------------------------------------
+
+
+def test_save_round_trip():
+    conn = _conn()
+    row = prompt_store.save(
+        conn, type="doctrine", name="ingest", text="Be precise.", created_by="u1"
+    )
+    assert row["version"] == 1
+    assert row["created_by"] == "u1"
+    assert prompt_store.latest_text(conn, "doctrine", "ingest") == "Be precise."
+
+
+def test_latest_wins_after_multiple_saves():
+    """Each save appends; reads serve the newest version, and the earlier
+    rows are still there untouched."""
+    conn = _conn()
+    for text in ("v1", "v2", "v3"):
+        prompt_store.save(conn, type="doctrine", name="ingest", text=text)
+
+    assert prompt_store.latest_text(conn, "doctrine", "ingest") == "v3"
+    assert prompt_store.latest(conn, "doctrine", "ingest")["version"] == 3
+    assert [r["text"] for r in prompt_store.history(conn, "doctrine", "ingest")] == [
+        "v3",
+        "v2",
+        "v1",
+    ]
+
+
+def test_history_is_ordered_newest_first():
+    conn = _conn()
+    for text in ("a", "b", "c"):
+        prompt_store.save(conn, type="doctrine", name="ingest", text=text)
+    versions = [r["version"] for r in prompt_store.history(conn, "doctrine", "ingest")]
+    assert versions == [3, 2, 1]
+
+
+def test_names_are_independent():
+    """Versions count per (type, name) — two names never share a sequence,
+    and a same-named text under another type is a different row."""
+    conn = _conn()
+    prompt_store.save(conn, type="doctrine", name="ingest", text="i1")
+    prompt_store.save(conn, type="doctrine", name="ingest", text="i2")
+    prompt_store.save(conn, type="doctrine", name="research", text="r1")
+    prompt_store.save(conn, type="guidelines", name="ingest", text="g1")
+
+    assert prompt_store.latest(conn, "doctrine", "research")["version"] == 1
+    assert prompt_store.latest_text(conn, "guidelines", "ingest") == "g1"
+    assert prompt_store.latest_text(conn, "doctrine", "ingest") == "i2"
+
+
+def test_delete_hides_the_name_and_keeps_history():
+    """The tombstone stops the name being served and listed; every earlier
+    version stays readable, and the name can be saved again afterwards."""
+    conn = _conn()
+    prompt_store.save(conn, type="doctrine", name="ingest", text="v1")
+    prompt_store.save(conn, type="doctrine", name="ingest", text="v2")
+
+    assert prompt_store.delete(conn, type="doctrine", name="ingest") is True
+    assert prompt_store.latest(conn, "doctrine", "ingest") is None
+    assert prompt_store.list_current(conn) == []
+
+    hist = prompt_store.history(conn, "doctrine", "ingest")
+    assert [r["version"] for r in hist] == [3, 2, 1]
+    assert bool(hist[0]["deleted"]) is True
+    assert [r["text"] for r in hist[1:]] == ["v2", "v1"]
+
+    revived = prompt_store.save(conn, type="doctrine", name="ingest", text="v3")
+    assert revived["version"] == 4
+    assert prompt_store.latest_text(conn, "doctrine", "ingest") == "v3"
+
+
+def test_delete_unknown_name_is_false():
+    conn = _conn()
+    assert prompt_store.delete(conn, type="doctrine", name="nope") is False
+
+
+def test_list_current_filters_by_type():
+    conn = _conn()
+    prompt_store.save(conn, type="doctrine", name="ingest", text="i")
+    prompt_store.save(conn, type="doctrine", name="research", text="r")
+    prompt_store.save(conn, type="guidelines", name="tutorial", text="t")
+    prompt_store.save(conn, type="doctrine", name="ingest", text="i2")
+
+    everything = [(r["type"], r["name"]) for r in prompt_store.list_current(conn)]
+    assert everything == [
+        ("doctrine", "ingest"),
+        ("doctrine", "research"),
+        ("guidelines", "tutorial"),
+    ]
+
+    doctrines = prompt_store.list_current(conn, "doctrine")
+    assert [r["name"] for r in doctrines] == ["ingest", "research"]
+    assert [r["version"] for r in doctrines] == [2, 1]
+    assert prompt_store.list_current(conn, "unknown-type") == []
+
+
+def test_save_if_absent_never_overwrites():
+    """The seeding path: it fills an empty name, leaves an edited one alone,
+    and seeds again once the name has been retired."""
+    conn = _conn()
+    seeded = prompt_store.save_if_absent(
+        conn, type="doctrine", name="ingest", text="packaged"
+    )
+    assert seeded["version"] == 1
+
+    prompt_store.save(conn, type="doctrine", name="ingest", text="operator edit")
+    assert (
+        prompt_store.save_if_absent(
+            conn, type="doctrine", name="ingest", text="packaged"
+        )
+        is None
+    )
+    assert prompt_store.latest_text(conn, "doctrine", "ingest") == "operator edit"
+
+    prompt_store.delete(conn, type="doctrine", name="ingest")
+    reseeded = prompt_store.save_if_absent(
+        conn, type="doctrine", name="ingest", text="packaged"
+    )
+    # Continues the sequence past the tombstone rather than restarting.
+    assert reseeded["version"] == 4
+    assert prompt_store.latest_text(conn, "doctrine", "ingest") == "packaged"
+
+
+def test_blank_key_or_text_rejected():
+    conn = _conn()
+    with pytest.raises(ValueError):
+        prompt_store.save(conn, type="  ", name="ingest", text="x")
+    with pytest.raises(ValueError):
+        prompt_store.save(conn, type="doctrine", name="", text="x")
+    with pytest.raises(ValueError):
+        prompt_store.save(conn, type="doctrine", name="ingest", text="   ")
+
+
+# --- tools ------------------------------------------------------------------
+#
+# The tool tests write under `preamble`/`guidelines`, not `doctrine`: startup
+# seeds the two real doctrines (see the seeding section below), so a generic
+# tool test that used those names would be editing live instance config and
+# counting its versions from 2.
+
+
+def test_tool_round_trip(tmp_path, monkeypatch):
+    """save → get → list through the registry, and a second save is visible
+    to the next read with no restart in between."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        saved = server.save_prompt_text("preamble", "ask", "Be precise.")
+        assert saved["version"] == 1 and saved["deleted"] is False
+
+        assert server.get_prompt_text("preamble", "ask")["text"] == "Be precise."
+
+        server.save_prompt_text("preamble", "ask", "Be very precise.")
+        assert server.get_prompt_text("preamble", "ask")["text"] == "Be very precise."
+
+        listed = server.list_prompt_texts(type="preamble")["prompt_texts"]
+        assert listed == [
+            {
+                "type": "preamble",
+                "name": "ask",
+                "version": 2,
+                "chars": len("Be very precise."),
+                "created_at": listed[0]["created_at"],
+                "created_by": None,
+            }
+        ]
+
+        versions = server.list_prompt_text_versions("preamble", "ask")["versions"]
+        assert [v["text"] for v in versions] == ["Be very precise.", "Be precise."]
+
+
+def test_tool_list_by_type(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("preamble", "ask", "a")
+        server.save_prompt_text("guidelines", "tutorial", "t")
+
+        names = [
+            p["name"] for p in server.list_prompt_texts(type="preamble")["prompt_texts"]
+        ]
+        assert names == ["ask"]
+
+
+def test_tool_retire(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("preamble", "ask", "v1")
+        assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
+        assert server.retire_prompt_text("preamble", "ask") == {"retired": False}
+
+        assert server.list_prompt_texts(type="preamble")["prompt_texts"] == []
+        with pytest.raises(ValueError):
+            server.get_prompt_text("preamble", "ask")
+
+        # History survives the tombstone.
+        versions = server.list_prompt_text_versions("preamble", "ask")["versions"]
+        assert [v["deleted"] for v in versions] == [True, False]
+
+
+def test_unknown_name_raises(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        with pytest.raises(ValueError):
+            server.get_prompt_text("doctrine", "nope")
+        assert server.list_prompt_text_versions("doctrine", "nope") == {"versions": []}
+
+
+def test_save_records_the_caller(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        with _as("writer"):
+            saved = server.save_prompt_text("preamble", "ask", "v1")
+        assert saved["created_by"] == "w"
+
+
+def test_role_gates(tmp_path, monkeypatch):
+    """Names carry the gate: `save_`/`get_`/`list_` derive writer/reader,
+    and `retire_` is explicitly admin — nothing here is draftable."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        with _as("reader"):
+            with pytest.raises(PermissionError):
+                server.save_prompt_text("preamble", "ask", "v1")
+            assert server.list_prompt_texts(type="preamble")["prompt_texts"] == []
+
+        with _as("writer"):
+            server.save_prompt_text("preamble", "ask", "v1")
+            with pytest.raises(PermissionError):
+                server.retire_prompt_text("preamble", "ask")
+
+        with _as("admin"):
+            assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
+
+
+def test_drafter_cannot_edit_prompt_texts(tmp_path, monkeypatch):
+    """A drafter clears writer/admin gates only because their substrate
+    writes get redirected onto a draft. These tools are outside that
+    machinery, so the write path rejects them and queues nothing; reads
+    still work."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        server.save_prompt_text("preamble", "ask", "v1")
+
+        with _as("drafter"):
+            with pytest.raises(auth.RoleRequired):
+                server.save_prompt_text("preamble", "ask", "hijacked")
+            with pytest.raises(auth.RoleRequired):
+                server.retire_prompt_text("preamble", "ask")
+            assert server.get_prompt_text("preamble", "ask")["text"] == "v1"
+            assert server.list_my_drafts() == []
+
+
+def test_rest_mirror(tmp_path, monkeypatch):
+    """The @tool decorator generates the REST routes; no custom HTTP code."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        r = client.post(
+            "/save-prompt-text",
+            json={"type": "preamble", "name": "ask", "text": "v1"},
+        )
+        assert r.status_code == 200 and r.json()["version"] == 1
+
+        r = client.post("/get-prompt-text", json={"type": "preamble", "name": "ask"})
+        assert r.json()["text"] == "v1"
+
+        r = client.post("/list-prompt-texts", json={"type": "preamble"})
+        assert [p["name"] for p in r.json()["prompt_texts"]] == ["ask"]
+
+
+def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
+    """The real-role check runs inside the tool, past the route's own gate —
+    it still has to read as a role rejection, not a server fault."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = server._auth_db()
+        uid = auth.create_user(
+            conn, name="D", role="drafter", type="human", email="d@x.com"
+        )
+        conn.commit()
+        raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="drafter")
+        conn.commit()
+        h = {"Authorization": f"Bearer {raw}"}
+
+        r = client.post(
+            "/save-prompt-text",
+            json={"type": "preamble", "name": "ask", "text": "v1"},
+            headers=h,
+        )
+        assert r.status_code == 403
+        assert "writer" in r.json()["detail"]
+
+        r = client.post(
+            "/retire-prompt-text",
+            json={"type": "preamble", "name": "ask"},
+            headers=h,
+        )
+        assert r.status_code == 403
+
+
+# --- startup seeding --------------------------------------------------------
+#
+# Startup puts the packaged ingest/research doctrines in the store so they are
+# editable from the first run. The files stay the seed and the fallback; the
+# store is what the loops read (tests/test_ingest.py, tests/test_research.py).
+
+
+def _doctrine_file(name: str) -> str:
+    from mycelium.ingest.config import _DEFAULT_DOCTRINE_PATH as INGEST_PATH
+    from mycelium.research.config import _DEFAULT_DOCTRINE_PATH as RESEARCH_PATH
+
+    path = INGEST_PATH if name == "ingest" else RESEARCH_PATH
+    return pathlib.Path(path).read_text(encoding="utf-8")
+
+
+def test_startup_seeds_both_doctrines(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        seeded = server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        assert [p["name"] for p in seeded] == ["ingest", "research"]
+        assert [p["version"] for p in seeded] == [1, 1]
+        assert [p["created_by"] for p in seeded] == ["seed", "seed"]
+
+        for name in ("ingest", "research"):
+            stored = server.get_prompt_text("doctrine", name)["text"]
+            assert stored == _doctrine_file(name)
+
+
+def test_seeding_leaves_an_edit_alone_and_adds_no_versions(tmp_path, monkeypatch):
+    """Idempotency: restarting re-runs the seed, and a store that already has
+    a doctrine keeps it — same version, same text, no duplicate row."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "ingest", "operator edit")
+
+    _reset_server()
+    client = _app(tmp_path, monkeypatch)  # restart against the same data dir
+    with client:
+        assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
+        assert (
+            len(server.list_prompt_text_versions("doctrine", "ingest")["versions"]) == 2
+        )
+        research = server.list_prompt_text_versions("doctrine", "research")["versions"]
+        assert len(research) == 1  # untouched by the second startup
+
+
+def test_an_unreadable_doctrine_file_does_not_block_startup(tmp_path, monkeypatch):
+    """Seeding is best-effort: a missing file leaves that doctrine unseeded —
+    the loop falls back to the same file and records a note — and the other
+    doctrine, and the rest of startup, are unaffected."""
+    monkeypatch.setenv(
+        "MYCELIUM_INGEST_DOCTRINE_PATH", str(tmp_path / "nope" / "doctrine.md")
+    )
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        names = [
+            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        ]
+        assert names == ["research"]
+
+
+def test_retiring_a_seeded_doctrine_is_refused(tmp_path, monkeypatch):
+    """Startup re-seeds these names, so retiring one would undo itself. The
+    tool says so at the moment of the attempt and appends no tombstone; the
+    REST mirror turns the same refusal into a 400 carrying the reason."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        for name in ("ingest", "research"):
+            with pytest.raises(ValueError, match="seeded at startup"):
+                server.retire_prompt_text("doctrine", name)
+            assert server.get_prompt_text("doctrine", name)["text"] == _doctrine_file(
+                name
+            )
+            versions = server.list_prompt_text_versions("doctrine", name)["versions"]
+            assert [v["deleted"] for v in versions] == [False]
+
+        r = client.post(
+            "/retire-prompt-text", json={"type": "doctrine", "name": "ingest"}
+        )
+        assert r.status_code == 400
+        assert "seeded at startup" in r.json()["detail"]
+        assert "save_prompt_text" in r.json()["detail"]
+
+
+def test_an_unseeded_doctrine_is_still_retirable(tmp_path, monkeypatch):
+    """The refusal is per name, not per type: a doctrine startup does not
+    seed is an ordinary prompt text."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "curation", "v1")
+        assert server.retire_prompt_text("doctrine", "curation") == {"retired": True}
+        assert [
+            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        ] == ["ingest", "research"]
+
+
+def test_a_seeded_doctrine_survives_a_restart_after_a_refused_retire(
+    tmp_path, monkeypatch
+):
+    """The restart case: an operator retires a seeded doctrine, is refused,
+    and the restart finds exactly what was there before — same version, same
+    text, no seed row added on top."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "ingest", "operator edit")
+        with pytest.raises(ValueError, match="seeded at startup"):
+            server.retire_prompt_text("doctrine", "ingest")
+
+    _reset_server()
+    client = _app(tmp_path, monkeypatch)  # restart against the same data dir
+    with client:
+        assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
+        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        assert [v["version"] for v in versions] == [2, 1]
+
+
+def test_a_store_level_tombstone_is_refilled_by_the_next_start(tmp_path, monkeypatch):
+    """Why the tool refuses. The store is ignorant of what is special, so a
+    tombstone written straight into it reads as "no live text" and the next
+    startup seeds the packaged default again at a new version."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        assert (
+            prompt_store.delete(server._prompts_db(), type="doctrine", name="ingest")
+            is True
+        )
+        with pytest.raises(ValueError):
+            server.get_prompt_text("doctrine", "ingest")
+
+    _reset_server()
+    client = _app(tmp_path, monkeypatch)  # restart against the same data dir
+    with client:
+        revived = server.get_prompt_text("doctrine", "ingest")
+        assert revived["text"] == _doctrine_file("ingest")
+        assert revived["version"] == 3  # seed, tombstone, re-seed
+        assert revived["created_by"] == "seed"
+
+
+def test_a_restore_brings_back_the_edits_instead_of_re_seeding(tmp_path, monkeypatch):
+    """The whole instance round trip. An operator edits a doctrine and
+    retires an unseeded text; the archive is restored into a fresh data dir
+    and started. The doctrine reads as the operator left it — startup finds
+    a live row and adds no seed version on top — and the retired name is
+    still retired rather than resurrected by the restore."""
+    from mycelium import backup
+
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    client = _app(src, monkeypatch)
+    with client:
+        server.save_prompt_text("doctrine", "ingest", "operator edit")
+        server.save_prompt_text("preamble", "ask", "v1")
+        assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+    backup.import_substrate(archive, dst)
+
+    _reset_server()
+    client = _app(dst, monkeypatch)  # a fresh instance on the restored dir
+    with client:
+        assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
+        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        assert [v["version"] for v in versions] == [2, 1]
+        assert [v["created_by"] for v in versions] == [None, "seed"]
+
+        # The packaged research doctrine came back too, unduplicated.
+        research = server.list_prompt_text_versions("doctrine", "research")["versions"]
+        assert [v["version"] for v in research] == [1]
+        assert research[0]["text"] == _doctrine_file("research")
+
+        with pytest.raises(ValueError):
+            server.get_prompt_text("preamble", "ask")
+        retired = server.list_prompt_text_versions("preamble", "ask")["versions"]
+        assert [v["deleted"] for v in retired] == [True, False]
+
+
+def test_a_malformed_loop_setting_does_not_block_startup(tmp_path, monkeypatch):
+    """Resolving where a doctrine comes from parses that loop's whole config,
+    so an unrelated bad tunable must degrade to an unseeded doctrine rather
+    than abort the server."""
+    monkeypatch.setenv("MYCELIUM_INGEST_OP_CAP", "not-a-number")
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        names = [
+            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
+        ]
+        assert names == ["research"]

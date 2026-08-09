@@ -77,6 +77,17 @@ async def _value_error_handler(request: Request, exc: ValueError) -> JSONRespons
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
+@app.exception_handler(auth.RoleRequired)
+async def _role_required_handler(
+    request: Request, exc: auth.RoleRequired
+) -> JSONResponse:
+    """A tool that re-checks the caller's role in its own body — needing a
+    stricter gate than its route declares — rejects with `RoleRequired`.
+    That's a deliberate 403, not a server fault, and the message names the
+    role required."""
+    return JSONResponse(status_code=403, content={"detail": str(exc)})
+
+
 @app.exception_handler(Exception)
 async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Last-resort capture for any error that isn't a deliberate 4xx. Emits one

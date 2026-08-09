@@ -26,6 +26,11 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 #: The reasoning doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 
+#: Prompt-store name the ingest doctrine is kept under (type `doctrine`).
+#: Startup seeds that row from `doctrine_path`; the loop reads it per run,
+#: so an edit through `save_prompt_text` lands on the next ingest.
+DOCTRINE_NAME = "ingest"
+
 
 @dataclass(frozen=True)
 class IngestConfig:

@@ -1022,23 +1022,25 @@ def test_f_new_statement_links_to_preexisting_id_from_adjacency_search():
     assert "stm_existing" in op.targets_existing
 
 
-# (g) doctrine loaded from FILE: system prompt contains doctrine.md content;
-#     config.doctrine_path points at the bundled file; env override works.
-def test_g_doctrine_loaded_from_bundled_file_into_system_prompt():
-    import os
+# (g) doctrine: the editable store decides, the packaged file is the seed and
+#     the fallback. These pin their own in-memory prompt store — conftest
+#     leaves every test with none wired up, which is the file-only case.
+#: A distinctive phrase from the bundled doctrine, absent from any store text.
+_FILE_MARKER = "walkable story"
 
-    from mycelium.ingest.config import _DEFAULT_DOCTRINE_PATH
 
-    cfg = IngestConfig()
-    assert cfg.doctrine_path == _DEFAULT_DOCTRINE_PATH
-    assert cfg.doctrine_path.endswith("doctrine.md")
-    assert os.path.exists(cfg.doctrine_path)
+def _prompt_store():
+    """Pin an empty in-memory prompt store on this thread."""
+    from mycelium import prompt_store
 
-    with open(cfg.doctrine_path, encoding="utf-8") as fh:
-        doctrine_text = fh.read()
-    marker = "walkable story"  # a distinctive phrase from the bundled doctrine
-    assert marker in doctrine_text
+    conn = prompt_store.connect(":memory:")
+    prompt_store.migrate(conn)
+    prompt_store.use_connection(conn)
+    return conn
 
+
+def _system_prompt_of_one_run(config=None):
+    """Run ingest to a duplicate-only emit; return the system prompt sent."""
     emit = _emit_input(
         ledger=[_ledger_row("x", "duplicate", matched=["stm_1"])],
         skipped=["x :: stm_1"],
@@ -1051,10 +1053,66 @@ def test_g_doctrine_loaded_from_bundled_file_into_system_prompt():
         client=client,
         substrate=FakeSubstrate(),
         emitter=FakeEmitter(),
-        config=IngestConfig(trace_log_path=None),
+        config=config or IngestConfig(trace_log_path=None),
     )
-    system_prompt = client.calls[0]["system"]
-    assert marker in system_prompt  # the FILE content reached the model
+    return client.calls[0]["system"]
+
+
+def test_g_stored_doctrine_wins_over_the_packaged_file():
+    from mycelium import prompt_store
+
+    conn = _prompt_store()
+    prompt_store.save(
+        conn, type="doctrine", name="ingest", text="STORED DOCTRINE MARKER 4242"
+    )
+
+    system_prompt = _system_prompt_of_one_run()
+    assert "STORED DOCTRINE MARKER 4242" in system_prompt
+    assert _FILE_MARKER not in system_prompt  # the file did not get a say
+
+
+def test_g_store_without_a_row_falls_back_to_the_packaged_file():
+    _prompt_store()
+    assert _FILE_MARKER in _system_prompt_of_one_run()
+
+
+def test_g_unreadable_store_falls_back_to_the_packaged_file():
+    """A broken prompts DB degrades a run to the packaged file; it never
+    turns into an exception that fails the run."""
+    _prompt_store().close()
+    assert _FILE_MARKER in _system_prompt_of_one_run()
+
+
+def test_g_saved_doctrine_applies_to_the_next_run_without_a_restart():
+    """The edit loop end to end: save through the tool, and the very next
+    run's system prompt carries the new text."""
+    from mycelium import server
+
+    _prompt_store()
+    assert _FILE_MARKER in _system_prompt_of_one_run()
+
+    server.save_prompt_text("doctrine", "ingest", "EDITED DOCTRINE MARKER 777")
+
+    system_prompt = _system_prompt_of_one_run()
+    assert "EDITED DOCTRINE MARKER 777" in system_prompt
+    assert _FILE_MARKER not in system_prompt
+
+
+def test_g_doctrine_loaded_from_bundled_file_into_system_prompt():
+    import os
+
+    from mycelium.ingest.config import _DEFAULT_DOCTRINE_PATH
+
+    cfg = IngestConfig()
+    assert cfg.doctrine_path == _DEFAULT_DOCTRINE_PATH
+    assert cfg.doctrine_path.endswith("doctrine.md")
+    assert os.path.exists(cfg.doctrine_path)
+
+    with open(cfg.doctrine_path, encoding="utf-8") as fh:
+        doctrine_text = fh.read()
+    assert _FILE_MARKER in doctrine_text
+
+    assert _FILE_MARKER in _system_prompt_of_one_run()  # the FILE reached the model
 
 
 def test_g_doctrine_path_override_via_env(tmp_path, monkeypatch):
@@ -1065,20 +1123,14 @@ def test_g_doctrine_path_override_via_env(tmp_path, monkeypatch):
     cfg = IngestConfig.from_env()
     assert cfg.doctrine_path == str(custom)
 
-    emit = _emit_input(
-        ledger=[_ledger_row("x", "duplicate", matched=["stm_1"])],
-        skipped=["x :: stm_1"],
-    )
-    client = FakeAnthropic(
-        _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
-    )
-    run_ingest(
-        "x", client=client, substrate=FakeSubstrate(), emitter=FakeEmitter(), config=cfg
-    )
-    assert "CUSTOM DOCTRINE MARKER 12345" in client.calls[0]["system"]
+    system_prompt = _system_prompt_of_one_run(cfg)
+    assert "CUSTOM DOCTRINE MARKER 12345" in system_prompt
 
 
 def test_g_unreadable_doctrine_falls_back_to_base_prompt_with_note():
+    """Total failure — nothing in the store, no readable file — still runs on
+    the base prompt and records why."""
+    _prompt_store()
     cfg = IngestConfig(
         doctrine_path="/nonexistent/path/doctrine.md", trace_log_path=None
     )

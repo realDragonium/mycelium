@@ -650,6 +650,126 @@ def test_config_model_falls_back_to_ingest_default(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# Doctrine
+# --------------------------------------------------------------------------- #
+#
+# The editable prompt store decides what a run reads; the packaged
+# research/doctrine.md is the seed startup writes into the store and the
+# fallback when the store holds nothing. conftest leaves every test with no
+# store wired up, which is exactly the file-only case.
+
+#: A distinctive phrase from the bundled doctrine, absent from the base
+#: protocol and from every store text below.
+_FILE_MARKER = "north star"
+
+
+def _prompt_store():
+    """Pin an empty in-memory prompt store on this thread."""
+    from mycelium import prompt_store
+
+    conn = prompt_store.connect(":memory:")
+    prompt_store.migrate(conn)
+    prompt_store.use_connection(conn)
+    return conn
+
+
+def _system_prompt_of_one_run(**config_over):
+    _result, client, *_ = _run(_full_run_turns(), **config_over)
+    return client.calls[0]["system"]
+
+
+def test_doctrine_loaded_from_bundled_file_into_system_prompt():
+    import os
+
+    from mycelium.research.config import _DEFAULT_DOCTRINE_PATH
+
+    cfg = ResearchConfig()
+    assert cfg.doctrine_path == _DEFAULT_DOCTRINE_PATH
+    assert cfg.doctrine_path.endswith("doctrine.md")
+    assert os.path.exists(cfg.doctrine_path)
+
+    assert _FILE_MARKER in _system_prompt_of_one_run()
+
+
+def test_doctrine_path_override_via_env(tmp_path, monkeypatch):
+    custom = tmp_path / "custom_doctrine.md"
+    custom.write_text("CUSTOM DOCTRINE MARKER 12345", encoding="utf-8")
+    monkeypatch.setenv("MYCELIUM_RESEARCH_DOCTRINE_PATH", str(custom))
+
+    assert ResearchConfig.from_env().doctrine_path == str(custom)
+    assert "CUSTOM DOCTRINE MARKER 12345" in _system_prompt_of_one_run(
+        doctrine_path=str(custom)
+    )
+
+
+def test_stored_doctrine_wins_over_the_packaged_file():
+    from mycelium import prompt_store
+
+    conn = _prompt_store()
+    prompt_store.save(
+        conn, type="doctrine", name="research", text="STORED DOCTRINE MARKER 4242"
+    )
+
+    system_prompt = _system_prompt_of_one_run()
+    assert "STORED DOCTRINE MARKER 4242" in system_prompt
+    assert _FILE_MARKER not in system_prompt  # the file did not get a say
+
+
+def test_store_without_a_row_falls_back_to_the_packaged_file():
+    _prompt_store()
+    assert _FILE_MARKER in _system_prompt_of_one_run()
+
+
+def test_unreadable_store_falls_back_to_the_packaged_file():
+    """A broken prompts DB degrades a run to the packaged file; it never
+    turns into an exception that fails the run."""
+    _prompt_store().close()
+    assert _FILE_MARKER in _system_prompt_of_one_run()
+
+
+def test_ingest_doctrine_is_not_served_to_research():
+    """The two doctrines are separate rows — research reads its own name."""
+    from mycelium import prompt_store
+
+    conn = _prompt_store()
+    prompt_store.save(
+        conn, type="doctrine", name="ingest", text="INGEST ONLY MARKER 999"
+    )
+
+    system_prompt = _system_prompt_of_one_run()
+    assert "INGEST ONLY MARKER 999" not in system_prompt
+    assert _FILE_MARKER in system_prompt
+
+
+def test_saved_doctrine_applies_to_the_next_run_without_a_restart():
+    """The edit loop end to end: save through the tool, and the very next
+    run's system prompt carries the new text."""
+    from mycelium import server
+
+    _prompt_store()
+    assert _FILE_MARKER in _system_prompt_of_one_run()
+
+    server.save_prompt_text("doctrine", "research", "EDITED DOCTRINE MARKER 777")
+
+    system_prompt = _system_prompt_of_one_run()
+    assert "EDITED DOCTRINE MARKER 777" in system_prompt
+    assert _FILE_MARKER not in system_prompt
+
+
+def test_unreadable_doctrine_falls_back_to_base_prompt_with_note():
+    """Total failure — nothing in the store, no readable file — still runs on
+    the base prompt and records why."""
+    _prompt_store()
+    result, client, *_ = _run(
+        _full_run_turns(), doctrine_path="/nonexistent/path/doctrine.md"
+    )
+    assert any("doctrine unreadable" in n for n in result.trace["notes"])
+    # base protocol still present in the system prompt
+    assert "reviewable DRAFT" in client.calls[0]["system"]
+    assert _FILE_MARKER not in client.calls[0]["system"]
+
+
+# --------------------------------------------------------------------------- #
 # Structural no-live-write
 # --------------------------------------------------------------------------- #
 
