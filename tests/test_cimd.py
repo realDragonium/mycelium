@@ -128,6 +128,41 @@ def test_urls_naming_non_public_hosts_are_never_fetched():
     assert get.calls == [], "a rejected URL must not be requested at all"
 
 
+@pytest.mark.parametrize(
+    "address",
+    [
+        "127.0.0.1",
+        "10.0.0.1",
+        "192.168.1.1",
+        "169.254.169.254",  # cloud instance metadata
+        "::1",
+        "::ffff:127.0.0.1",  # IPv4-mapped loopback
+        "::ffff:169.254.169.254",  # IPv4-mapped metadata address
+        "fd00::1",
+        "0.0.0.0",
+    ],
+)
+def test_every_non_public_address_form_is_refused(address):
+    """A public name is checked by where it *resolves*, not by how it is
+    spelled — including the IPv4-mapped IPv6 forms, which are easy to
+    assume are covered and easy to leave uncovered."""
+    get = _serving(_doc())
+    with pytest.raises(cimd.CimdError, match="non-public address"):
+        cimd.fetch(DOC_URL, resolve=lambda h, p: [address], get=get)
+    assert get.calls == []
+
+
+def test_a_host_resolving_to_both_public_and_private_is_refused():
+    """Checking only the first answer would let a name that returns one of
+    each through, since nothing pins which address is connected to."""
+    get = _serving(_doc())
+    with pytest.raises(cimd.CimdError, match="non-public address"):
+        cimd.fetch(
+            DOC_URL, resolve=lambda h, p: ["93.184.216.34", "127.0.0.1"], get=get
+        )
+    assert get.calls == []
+
+
 def test_malformed_and_non_https_urls_are_rejected_before_any_request():
     get = _serving(_doc())
     for url in (
