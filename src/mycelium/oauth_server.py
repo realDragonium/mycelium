@@ -44,6 +44,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import secrets
 import sqlite3
 import uuid
@@ -88,8 +89,23 @@ def _now() -> datetime:
 
 
 def _base_url(request: Request) -> str:
-    """The public scheme://host. Reverse-proxy aware (uses Host header
-    + the X-Forwarded-Proto restored by Starlette from the proxy)."""
+    """This deployment's canonical public origin — its OAuth issuer and its
+    resource identifier, which have to be one stable string.
+
+    `MYCELIUM_PUBLIC_URL` pins it. Deriving it from the request's Host
+    header instead makes both values vary per request, and each direction
+    of that is a defect: a client records the issuer during discovery and
+    then compares it byte-for-byte against the `iss` on the authorization
+    response, so reaching the same deployment by a second hostname breaks
+    a legitimate flow; and an attacker-chosen Host would otherwise decide
+    what audience a token claims to be for.
+
+    Falling back to the request keeps local development working, where
+    there is one host and no proxy in front of it.
+    """
+    configured = (os.environ.get("MYCELIUM_PUBLIC_URL") or "").strip()
+    if configured:
+        return configured.rstrip("/")
     return str(request.base_url).rstrip("/")
 
 
@@ -481,8 +497,8 @@ async def authorize_decide(
         conn.execute(
             "INSERT INTO oauth_codes "
             "(code, client_id, user_id, redirect_uri, code_challenge, "
-            " code_challenge_method, scope, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " code_challenge_method, scope, resource, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 code,
                 client_id,
@@ -491,6 +507,7 @@ async def authorize_decide(
                 code_challenge,
                 code_challenge_method,
                 scope,
+                resource or None,
                 _now().isoformat(),
                 expires_at.isoformat(),
             ),
@@ -509,26 +526,46 @@ def _with_query(url: str, params: dict[str, str]) -> str:
 
 
 def _resource_matches(value: str, base: str) -> bool:
-    """Whether an RFC 8707 `resource` names this server.
+    """Whether an RFC 8707 `resource` is a canonical URI naming this server.
 
     A client is told to send the most specific URI it can, so both the
-    origin and the `/mcp` endpoint under it are legitimate ways to name
-    us. Scheme and host compare case-insensitively and a trailing slash
-    is ignored, per RFC 8707's guidance to accept the robust forms; the
-    path is compared exactly, since that is what distinguishes one
-    server from another when several are hosted on one origin.
+    origin and the `/mcp` endpoint under it name us. Scheme and host
+    compare case-insensitively — the spec asks servers to accept uppercase
+    components — and one trailing slash is ignored, since the canonical
+    form omits it.
+
+    Everything else is rejected rather than normalised away. A fragment is
+    explicitly not a canonical URI; a query string or userinfo means the
+    caller is naming something other than what we advertise; and repeated
+    slashes are a different path, not a sloppier spelling of ours. Each
+    would otherwise let a value that is not our identifier be accepted as
+    if it were.
     """
     from urllib.parse import urlsplit
 
-    def _canon(u: str) -> tuple[str, str, str]:
-        parts = urlsplit(u.rstrip("/"))
-        return (parts.scheme.lower(), parts.netloc.lower(), parts.path)
+    def _canon(u: str) -> tuple[str, str, str] | None:
+        try:
+            parts = urlsplit(u)
+            netloc = parts.netloc  # raises on a malformed IPv6 literal
+            host = parts.hostname
+        except ValueError:
+            return None
+        if not parts.scheme or not host:
+            return None
+        if parts.fragment or parts.query or "@" in netloc:
+            return None
+        path = parts.path[:-1] if parts.path.endswith("/") else parts.path
+        if "//" in path:
+            return None
+        return (parts.scheme.lower(), netloc.lower(), path)
 
-    scheme, netloc, path = _canon(value)
-    b_scheme, b_netloc, b_path = _canon(base)
-    if (scheme, netloc) != (b_scheme, b_netloc):
+    target = _canon(value)
+    ours = _canon(base)
+    if target is None or ours is None:
         return False
-    return path in (b_path, f"{b_path}/mcp")
+    if target[:2] != ours[:2]:
+        return False
+    return target[2] in (ours[2], f"{ours[2]}/mcp")
 
 
 # --- /token: code → access token -----------------------------------------
@@ -571,7 +608,7 @@ async def token_endpoint(
     conn = _auth_conn(request)
     row = conn.execute(
         "SELECT client_id, user_id, redirect_uri, code_challenge, "
-        "       code_challenge_method, scope, expires_at, used_at "
+        "       code_challenge_method, scope, resource, expires_at, used_at "
         "FROM oauth_codes WHERE code = ?",
         (code,),
     ).fetchone()
@@ -591,6 +628,17 @@ async def token_endpoint(
         code_verifier, row["code_challenge"], row["code_challenge_method"]
     ):
         return _oauth_error("invalid_grant", "PKCE verification failed")
+
+    # RFC 8707 §2: the token request's resource must be the one the code was
+    # authorized for. Re-validating against our own identity is not enough on
+    # its own — that would let a code obtained for one audience be redeemed
+    # for another, which is the binding the resource parameter exists to
+    # create. Codes minted before this column existed carry NULL and are
+    # treated as having named no resource.
+    if (row["resource"] or "") != resource:
+        return _oauth_error(
+            "invalid_target", "resource does not match the authorization request"
+        )
 
     # Mark used BEFORE minting the token so a concurrent exchange
     # can't double-redeem (SQLite under default isolation serializes
