@@ -13,14 +13,14 @@ prompt configuration with it.
 Append-only. A save inserts a row carrying the next `version` for its
 (type, name); reads serve the highest version. A delete appends a tombstone
 (`deleted = 1`) instead of removing rows, so the full history of a name
-survives and the name can be saved again later.
+survives and the name can be saved again later. `backup.py` archives that
+history in full rather than the current row per name, so "every edit is
+kept" holds across a restore too — and a name a tombstone retired comes
+back retired instead of being resurrected by the archive.
 
 `type` and `name` are free strings — the store never enumerates them.
 Consumers declare what they load, so a new sort of steering text is a new
 `type` value rather than a code change.
-
-Backup: `backup.py` archives the substrate only; prompt texts are outside it
-and join the archive with the media work.
 """
 
 from __future__ import annotations

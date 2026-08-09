@@ -2,17 +2,22 @@
 
 Builds a small substrate, exports it, restores into a fresh data dir,
 and verifies every row survives. Also covers the opt-out flags, the
-fresh-dir refusal, and the --force safety snapshot.
+fresh-dir refusal, the --force safety snapshot, and the prompt texts
+that ride along with the substrate — every version of them, and what
+happens when that part of the archive is missing or unreadable.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import tarfile
+from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
-from mycelium import backup, store
+from mycelium import backup, prompt_store, store
 
 # Build the substrate via the same store helpers normal writes go
 # through, so audit columns and history events populate naturally.
@@ -56,6 +61,47 @@ def _seed_substrate(data_dir):
         "names": [n1, n2],
         "statements": [b1, b2],
     }
+
+
+def _seed_prompts(data_dir):
+    """An edited doctrine (three versions) plus a retired guideline set —
+    the two shapes a restore has to bring back: the newest text, and a name
+    whose newest version is a tombstone."""
+    conn = prompt_store.connect(data_dir / backup.PROMPTS_DB_NAME)
+    prompt_store.migrate(conn)
+    try:
+        for text in ("packaged default", "operator edit", "sharper edit"):
+            prompt_store.save(conn, type="doctrine", name="ingest", text=text)
+        prompt_store.save(conn, type="guidelines", name="tutorial", text="g1")
+        prompt_store.delete(conn, type="guidelines", name="tutorial")
+    finally:
+        conn.close()
+
+
+def _prompt_rows(data_dir):
+    conn = prompt_store.connect(data_dir / backup.PROMPTS_DB_NAME)
+    try:
+        return list(
+            conn.execute(
+                "SELECT * FROM prompt_texts ORDER BY type, name, version"
+            ).fetchall()
+        )
+    finally:
+        conn.close()
+
+
+def _repack(archive: Path, work: Path, out: Path, mutate: Callable[[Path], None]):
+    """Unpack `archive`, let `mutate` edit the extracted tree, repack to
+    `out` — how a damaged or hand-edited archive is simulated."""
+    work.mkdir()
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(work, filter="data")
+    mutate(work)
+    with tarfile.open(out, "w:gz") as tar:
+        for item in sorted(work.rglob("*")):
+            if item.is_file():
+                tar.add(item, arcname=str(item.relative_to(work)))
+    return out
 
 
 def _row_count(data_dir, table, *, history=False):
@@ -335,3 +381,262 @@ def test_import_skips_legacy_annotation_records(tmp_path, caplog):
                 tar.add(item, arcname=str(item.relative_to(work2)))
     with pytest.raises(ValueError, match="unknown record kind"):
         backup.import_substrate(bad_archive, tmp_path / "dst2")
+
+
+# --- prompt texts -----------------------------------------------------------
+
+
+def test_export_archives_every_prompt_text_version(tmp_path):
+    """The store is append-only and the archive keeps it that way: five
+    rows in, five rows out — superseded versions and the tombstone
+    included, not one current row per name."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    manifest = backup.export_substrate(src, archive)
+
+    with tarfile.open(archive, "r:gz") as tar:
+        assert "prompts.jsonl" in set(tar.getnames())
+    assert manifest["includes_prompts"] is True
+    assert manifest["row_counts"]["prompt_texts"] == 5
+
+
+def test_round_trip_preserves_prompt_text_history(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+
+    # Row for row, column for column — ids and version numbers included.
+    before = [dict(r) for r in _prompt_rows(src)]
+    after = [dict(r) for r in _prompt_rows(dst)]
+    assert after == before
+
+    conn = prompt_store.connect(dst / backup.PROMPTS_DB_NAME)
+    try:
+        # The edit is what the instance reads, not the seed it shipped with.
+        assert prompt_store.latest_text(conn, "doctrine", "ingest") == "sharper edit"
+        # A retired name stays retired: the tombstone rode along.
+        assert prompt_store.latest(conn, "guidelines", "tutorial") is None
+        assert [
+            r["deleted"] for r in prompt_store.history(conn, "guidelines", "tutorial")
+        ] == [1, 0]
+    finally:
+        conn.close()
+
+
+def test_export_without_a_prompts_db_carries_no_prompts_section(tmp_path):
+    """An instance that never wrote a prompt text — or an archive made
+    before they existed — exports and imports as it always did."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    manifest = backup.export_substrate(src, archive)
+
+    with tarfile.open(archive, "r:gz") as tar:
+        assert "prompts.jsonl" not in set(tar.getnames())
+    assert manifest["includes_prompts"] is False
+    assert "prompt_texts" not in manifest["row_counts"]
+
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+    assert not (dst / backup.PROMPTS_DB_NAME).exists()
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+
+
+def test_export_survives_an_unreadable_prompts_db(tmp_path, caplog):
+    """The substrate is the payload. A prompts DB that will not open costs
+    the archive its prompt texts and a warning, not the backup."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    (src / backup.PROMPTS_DB_NAME).write_bytes(b"this is not a database")
+
+    archive = tmp_path / "snap.tar.gz"
+    with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
+        manifest = backup.export_substrate(src, archive)
+
+    assert manifest["includes_prompts"] is False
+    with tarfile.open(archive, "r:gz") as tar:
+        assert "prompts.jsonl" not in set(tar.getnames())
+    assert any("prompt texts" in r.getMessage() for r in caplog.records)
+
+    # And the substrate in that archive is intact.
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+
+
+def test_export_survives_a_prompt_row_json_cannot_hold(tmp_path, caplog):
+    """The other way a prompts DB reads badly: SQLite hands back a BLOB
+    where text belongs. The archive loses its prompts section, not the
+    backup — scheduled backups and the pre-restore safety snapshot both
+    come through here."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    conn = prompt_store.connect(src / backup.PROMPTS_DB_NAME)
+    conn.execute(
+        "INSERT INTO prompt_texts "
+        "  (id, type, name, text, deleted, version, created_at) "
+        "VALUES ('ptx_blob', 'doctrine', 'blob', ?, 0, 1, '2026-01-01T00:00:00Z')",
+        (b"\x00\x01raw bytes",),
+    )
+    conn.close()
+
+    archive = tmp_path / "snap.tar.gz"
+    with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
+        manifest = backup.export_substrate(src, archive)
+
+    assert manifest["includes_prompts"] is False
+    assert any("prompt texts" in r.getMessage() for r in caplog.records)
+
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+
+
+def test_import_survives_an_unreadable_prompts_section(tmp_path, caplog):
+    """Same posture on the way back in, and all-or-nothing: a damaged
+    section leaves an empty store — which startup re-seeds — rather than a
+    half-restored history or a failed restore."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _truncate_mid_history(work: Path) -> None:
+        lines = (work / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
+        lines[2] = "{ this is not json"
+        (work / "prompts.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    damaged = _repack(
+        archive, tmp_path / "work", tmp_path / "damaged.tar.gz", _truncate_mid_history
+    )
+
+    dst = tmp_path / "dst"
+    with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
+        backup.import_substrate(damaged, dst)
+
+    assert any("prompt texts" in r.getMessage() for r in caplog.records)
+    assert _prompt_rows(dst) == []  # rolled back, not partially applied
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+
+
+def test_import_refuses_prompt_columns_the_table_does_not_have(tmp_path, caplog):
+    """A row's column names reach the INSERT as text, so an archive that
+    names something other than a `prompt_texts` column — a tampered one
+    smuggling SQL, say — is refused before the statement is built, and the
+    restore degrades to an empty store like any other damaged section."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _smuggle_a_column(work: Path) -> None:
+        lines = (work / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
+        lines.append(
+            json.dumps(
+                {"_kind": "prompt_text", "id) VALUES ('x') --": "anything"},
+            )
+        )
+        (work / "prompts.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    tampered = _repack(
+        archive, tmp_path / "work", tmp_path / "tampered.tar.gz", _smuggle_a_column
+    )
+
+    dst = tmp_path / "dst"
+    with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
+        backup.import_substrate(tampered, dst)
+
+    assert any("prompt texts" in r.getMessage() for r in caplog.records)
+    assert _prompt_rows(dst) == []
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+
+
+def test_import_refuses_a_data_dir_holding_only_prompt_texts(tmp_path):
+    """Steering texts left behind by a wiped substrate are still an
+    instance. Restoring into them would merge two instances' configuration,
+    so it takes the same --force as any other clobber, and the force starts
+    the prompts from empty rather than on top."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    conn = prompt_store.connect(dst / backup.PROMPTS_DB_NAME)
+    prompt_store.migrate(conn)
+    prompt_store.save(conn, type="doctrine", name="ingest", text="another instance")
+    conn.close()
+
+    with pytest.raises(FileExistsError):
+        backup.import_substrate(archive, dst)
+
+    backup.import_substrate(archive, dst, force=True)
+
+    assert [dict(r) for r in _prompt_rows(dst)] == [dict(r) for r in _prompt_rows(src)]
+    # No substrate was there to snapshot, so the force left no safety net.
+    assert list(dst.parent.glob(f"{dst.name}.before-restore.*.tar.gz")) == []
+
+
+def test_force_restore_replaces_prompt_texts(tmp_path):
+    """A restore makes the data dir be the archive: the destination's own
+    steering texts go, and the safety snapshot is where they went."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_prompts(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+
+    conn = prompt_store.connect(dst / backup.PROMPTS_DB_NAME)
+    prompt_store.save(conn, type="doctrine", name="ingest", text="local drift")
+    conn.close()
+
+    backup.import_substrate(archive, dst, force=True)
+
+    conn = prompt_store.connect(dst / backup.PROMPTS_DB_NAME)
+    try:
+        assert prompt_store.latest_text(conn, "doctrine", "ingest") == "sharper edit"
+        assert len(prompt_store.history(conn, "doctrine", "ingest")) == 3
+    finally:
+        conn.close()
+
+    # The drifted version is not lost — it is in the pre-restore snapshot.
+    (snapshot,) = list(dst.parent.glob(f"{dst.name}.before-restore.*.tar.gz"))
+    recovered = tmp_path / "recovered"
+    backup.import_substrate(snapshot, recovered)
+    conn = prompt_store.connect(recovered / backup.PROMPTS_DB_NAME)
+    try:
+        assert prompt_store.latest_text(conn, "doctrine", "ingest") == "local drift"
+    finally:
+        conn.close()
