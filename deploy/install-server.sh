@@ -120,7 +120,7 @@ if [[ ! -f "$ENV_FILE" ]]; then
 
 # --- public hostnames -----------------------------------------------
 # Comma-separated host[:port] values that the MCP transport should
-# accept on its Host header. Required because FastMCP defaults to
+# accept on its Host header. Required because the transport defaults to
 # localhost-only DNS-rebinding protection. Add every domain a real
 # client might use (apex + ports as needed).
 #   MYCELIUM_ALLOWED_HOSTS=mycelium.example.com,mycelium.example.com:443
