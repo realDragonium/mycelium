@@ -81,6 +81,11 @@ def _require_oauth_enabled() -> None:
 # leaked through a URL log.
 CODE_TTL_SECONDS = 60
 
+# How long a rendered consent page stays answerable. Long enough for a
+# person to read it and decide, short enough that an abandoned tab is not
+# a standing invitation to approve something later.
+CONSENT_TTL_SECONDS = 600
+
 # Bearer tokens issued via OAuth flow. Mycelium's manual tokens never
 # expire (revocation is the only off-switch); for OAuth-issued tokens
 # we mirror that for simplicity — `expires_at` is left NULL. The MCP
@@ -412,13 +417,7 @@ _CONSENT_HTML = """<!doctype html>
   </div>
   {redirect_warning}
   <form method="post" action="/authorize/decide">
-    <input type="hidden" name="client_id" value="{client_id}" />
-    <input type="hidden" name="redirect_uri" value="{redirect_uri}" />
-    <input type="hidden" name="code_challenge" value="{code_challenge}" />
-    <input type="hidden" name="code_challenge_method" value="{code_challenge_method}" />
-    <input type="hidden" name="scope" value="{scope}" />
-    <input type="hidden" name="resource" value="{resource}" />
-    <input type="hidden" name="state" value="{state}" />
+    <input type="hidden" name="consent_id" value="{consent_id}" />
     <div class="actions">
       <button type="submit" name="decision" value="deny" class="btn-secondary">Deny</button>
       <button type="submit" name="decision" value="allow" class="primary">Allow</button>
@@ -487,28 +486,46 @@ async def authorize(
             status_code=302,
         )
 
-    # The form posts the OAuth params back as hidden fields rather than
-    # us stashing them in the session. Two reasons: (1) avoids
-    # session-modification races when multiple authorize flows interleave
-    # in the same browser/test session, and (2) the params are
-    # re-validated on decide (client_id exists, redirect_uri matches the
-    # registered list) so tampering with the form can't elevate access.
-    # The principal that consents is taken from the session/bearer —
-    # not the form — so a manipulated form can't grant tokens to a
-    # different account.
+    # Record the request and hand the form nothing but an id. The OAuth
+    # parameters are fixed here, where they have been validated against a
+    # request the user actually navigated to, and read back from the row on
+    # submit — so whoever posts the form cannot choose them.
+    #
+    # That is what makes the decision a decision. Re-validating parameters
+    # supplied by the submitter only ever proves the submitter picked valid
+    # ones; it cannot show the user saw them. Without this, a page on a
+    # sibling host — same-site, so `SameSite=Lax` still sends the session
+    # cookie on its POST — could auto-submit an approval for a client it
+    # controls and collect the code.
+    consent_id = str(uuid.uuid4())
+    with store.transaction(conn):
+        conn.execute(
+            "INSERT INTO oauth_consents "
+            "(id, user_id, client_id, redirect_uri, code_challenge, "
+            " code_challenge_method, scope, resource, state, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                consent_id,
+                principal.id,
+                client_id,
+                redirect_uri,
+                code_challenge,
+                code_challenge_method,
+                scope or "",
+                resource or None,
+                state or "",
+                _now().isoformat(),
+                (_now() + timedelta(seconds=CONSENT_TTL_SECONDS)).isoformat(),
+            ),
+        )
+
     html = _CONSENT_HTML.format(
         client_name=_html_escape(client.client_name),
         user_name=_html_escape(principal.name),
         user_role=_html_escape(principal.role),
-        client_id=_html_escape(client_id),
-        redirect_uri=_html_escape(redirect_uri),
+        consent_id=_html_escape(consent_id),
         redirect_host=_html_escape(_redirect_host(redirect_uri)),
         redirect_warning=_localhost_warning(redirect_uri),
-        code_challenge=_html_escape(code_challenge),
-        code_challenge_method=_html_escape(code_challenge_method),
-        scope=_html_escape(scope or ""),
-        resource=_html_escape(resource or ""),
-        state=_html_escape(state or ""),
     )
     return HTMLResponse(content=html)
 
@@ -595,39 +612,60 @@ def _html_escape(s: str) -> str:
 @router.post("/authorize/decide", include_in_schema=False)
 async def authorize_decide(
     request: Request,
-    client_id: str = Form(...),
-    redirect_uri: str = Form(...),
-    code_challenge: str = Form(...),
-    code_challenge_method: str = Form(...),
+    consent_id: str = Form(...),
     decision: str = Form(...),
-    scope: str = Form(""),
-    state: str = Form(""),
-    resource: str = Form(""),
 ) -> RedirectResponse:
-    """Consume the consent decision. Re-validates the OAuth params
-    (client_id exists, redirect_uri is on the client's allow-list)
-    so the form can't be edited to redirect a code to a third party.
-    Identity comes from the session/bearer, not the form."""
+    """Consume the consent decision.
+
+    The submitter supplies only which pending decision this is and what the
+    user answered. Every OAuth parameter comes from the row written when the
+    page was rendered, so a forged submission cannot choose a client, a
+    redirect, or a PKCE challenge — the worst it can do is answer a consent
+    the user was already being shown, and the row is bound to that user.
+    """
     _require_oauth_enabled()
     principal = getattr(request.state, "principal", None)
     if principal is None or principal.synthetic:
         raise HTTPException(status_code=401, detail="session expired; please retry")
 
     conn = _auth_conn(request)
-    # Resolving a metadata document means DNS and an HTTPS request to a
-    # host the caller chose. Both are blocking, and these handlers are
-    # async, so doing it inline would let one slow endpoint stall every
-    # other request the worker is serving.
+    pending = conn.execute(
+        "SELECT * FROM oauth_consents WHERE id = ?", (consent_id,)
+    ).fetchone()
+    # One answer per pending decision, by the user it was shown to. Failing
+    # all four the same way keeps this from reporting whether a given
+    # consent id exists or whose it is.
+    if (
+        pending is None
+        or pending["user_id"] != principal.id
+        or pending["used_at"] is not None
+        or datetime.fromisoformat(pending["expires_at"]) < _now()
+    ):
+        raise HTTPException(status_code=400, detail="invalid_request: no such consent")
+
+    client_id = pending["client_id"]
+    redirect_uri = pending["redirect_uri"]
+    code_challenge = pending["code_challenge"]
+    code_challenge_method = pending["code_challenge_method"]
+    scope = pending["scope"] or ""
+    state = pending["state"] or ""
+    resource = pending["resource"] or ""
+
+    with store.transaction(conn):
+        conn.execute(
+            "UPDATE oauth_consents SET used_at = ? WHERE id = ? AND used_at IS NULL",
+            (_now().isoformat(), consent_id),
+        )
+
+    # The document may have changed since the page was rendered, so the
+    # client is resolved again and the redirect re-checked against it —
+    # a URI revoked in the meantime must not still be honoured.
     client = await anyio.to_thread.run_sync(_resolve_client, conn, client_id)
     if client is None:
         raise HTTPException(status_code=400, detail="invalid_client")
     if not client.allows(redirect_uri):
         raise HTTPException(
             status_code=400, detail="invalid_request: redirect_uri not registered"
-        )
-    if code_challenge_method not in ("S256", "plain"):
-        raise HTTPException(
-            status_code=400, detail="invalid_request: bad code_challenge_method"
         )
 
     # RFC 9207 §2: `iss` rides on every authorization response, errors
