@@ -383,6 +383,125 @@ def test_import_skips_legacy_annotation_records(tmp_path, caplog):
         backup.import_substrate(bad_archive, tmp_path / "dst2")
 
 
+# --- tampered archives ------------------------------------------------------
+
+# A record's column names reach the INSERT as statement text, where a bound
+# parameter cannot go. Each shape is a different way a name that is not a
+# column of the destination table can matter: rewriting the statement,
+# reaching for a second one, naming something that simply is not there, and
+# the two SQLite would accept as `id` even though no export ever wrote them.
+_HOSTILE_ENTITY_ROWS = [
+    pytest.param(
+        {
+            "id) SELECT ? WHERE ? OR 1=1 --": "ent_injected_by_archive",
+            "description": "smuggled",
+        },
+        "id) SELECT ? WHERE ? OR 1=1 --",
+        id="statement-splitting",
+    ),
+    pytest.param(
+        {
+            "id) VALUES ('ent_injected_by_archive'); "
+            "ATTACH DATABASE 'evil.db' AS evil --": "smuggled",
+        },
+        "ATTACH DATABASE",
+        id="attach-attempt",
+    ),
+    pytest.param(
+        {"id": "ent_injected_by_archive", "nickname": "smuggled"},
+        "nickname",
+        id="unknown-but-innocent",
+    ),
+    pytest.param(
+        {"ID": "ent_injected_by_archive"},
+        "ID",
+        id="case-differing",
+    ),
+    pytest.param(
+        {" id": "ent_injected_by_archive"},
+        " id",
+        id="space-padded",
+    ),
+]
+
+_HOSTILE_HISTORY_ROWS = [
+    pytest.param(
+        {
+            "at, op, target_kind, target_id) "
+            "SELECT ?, 'inject', 'entity', ? --": "2026-01-01T00:00:00Z",
+            "actor": "ent_injected_by_archive",
+        },
+        "SELECT ?, 'inject'",
+        id="statement-splitting",
+    ),
+    pytest.param(
+        {"event_id": 9001, "nickname": "smuggled"},
+        "nickname",
+        id="unknown-but-innocent",
+    ),
+]
+
+
+def _tampered_archive(tmp_path, src, kind: str, member: str, row: dict) -> Path:
+    """Export `src`, splice one hostile record into `member`, repack."""
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _smuggle(work: Path) -> None:
+        with (work / member).open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps({"_kind": kind, **row}) + "\n")
+
+    return _repack(archive, tmp_path / "work", tmp_path / "tampered.tar.gz", _smuggle)
+
+
+@pytest.mark.parametrize("row,offender", _HOSTILE_ENTITY_ROWS)
+def test_import_refuses_substrate_columns_the_table_does_not_have(
+    tmp_path, row, offender
+):
+    """A restore treats the archive as data: a record naming a column
+    `entities` does not have is refused before the statement is built, and
+    the restore's transaction rolls back rather than landing part of it."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    tampered = _tampered_archive(tmp_path, src, "entity", "data.jsonl", row)
+
+    dst = tmp_path / "dst"
+    with pytest.raises(ValueError) as excinfo:
+        backup.import_substrate(tampered, dst)
+
+    message = str(excinfo.value)
+    assert "entities" in message  # names the destination table
+    assert offender in message  # and the column it would not accept
+
+    # Nothing written: not the smuggled row, not the archive's own rows.
+    assert _row_count(dst, "entities") == 0
+    assert _row_count(dst, "statements") == 0
+
+
+@pytest.mark.parametrize("row,offender", _HOSTILE_HISTORY_ROWS)
+def test_import_refuses_history_columns_the_table_does_not_have(
+    tmp_path, row, offender
+):
+    """Same posture on the audit log, which restores in the same
+    transaction as the substrate — so its refusal takes that back too."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    tampered = _tampered_archive(tmp_path, src, "history_event", "history.jsonl", row)
+
+    dst = tmp_path / "dst"
+    with pytest.raises(ValueError) as excinfo:
+        backup.import_substrate(tampered, dst)
+
+    message = str(excinfo.value)
+    assert "history_events" in message
+    assert offender in message
+
+    assert _row_count(dst, "history_events", history=True) == 0
+    assert _row_count(dst, "entities") == 0
+
+
 # --- prompt texts -----------------------------------------------------------
 
 
@@ -539,7 +658,34 @@ def test_import_survives_an_unreadable_prompts_section(tmp_path, caplog):
     assert _row_count(dst, "statements") == _row_count(src, "statements")
 
 
-def test_import_refuses_prompt_columns_the_table_does_not_have(tmp_path, caplog):
+_HOSTILE_PROMPT_ROWS = [
+    pytest.param(
+        {"id, type) SELECT ?, ? --": "ptx_injected_by_archive", "x": "doctrine"},
+        "id, type) SELECT ?, ? --",
+        id="statement-splitting",
+    ),
+    pytest.param(
+        {
+            "id) VALUES ('ptx_injected_by_archive'); "
+            "ATTACH DATABASE 'evil.db' AS evil --": "smuggled",
+        },
+        "ATTACH DATABASE",
+        id="attach-attempt",
+    ),
+    pytest.param(
+        {"id": "ptx_injected_by_archive", "nickname": "smuggled"},
+        "nickname",
+        id="unknown-but-innocent",
+    ),
+    pytest.param({"ID": "ptx_injected_by_archive"}, "ID", id="case-differing"),
+    pytest.param({" id": "ptx_injected_by_archive"}, " id", id="space-padded"),
+]
+
+
+@pytest.mark.parametrize("row,offender", _HOSTILE_PROMPT_ROWS)
+def test_import_refuses_prompt_columns_the_table_does_not_have(
+    tmp_path, caplog, row, offender
+):
     """A row's column names reach the INSERT as text, so an archive that
     names something other than a `prompt_texts` column — a tampered one
     smuggling SQL, say — is refused before the statement is built, and the
@@ -549,27 +695,17 @@ def test_import_refuses_prompt_columns_the_table_does_not_have(tmp_path, caplog)
     _seed_substrate(src)
     _seed_prompts(src)
 
-    archive = tmp_path / "snap.tar.gz"
-    backup.export_substrate(src, archive)
-
-    def _smuggle_a_column(work: Path) -> None:
-        lines = (work / "prompts.jsonl").read_text(encoding="utf-8").splitlines()
-        lines.append(
-            json.dumps(
-                {"_kind": "prompt_text", "id) VALUES ('x') --": "anything"},
-            )
-        )
-        (work / "prompts.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-    tampered = _repack(
-        archive, tmp_path / "work", tmp_path / "tampered.tar.gz", _smuggle_a_column
-    )
+    tampered = _tampered_archive(tmp_path, src, "prompt_text", "prompts.jsonl", row)
 
     dst = tmp_path / "dst"
     with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
         backup.import_substrate(tampered, dst)
 
     assert any("prompt texts" in r.getMessage() for r in caplog.records)
+    # Refused for naming the column, not for whatever SQLite would have made
+    # of it: the logged cause names the table and the offending column.
+    assert "prompt_texts" in caplog.text
+    assert offender in caplog.text
     assert _prompt_rows(dst) == []
     assert _row_count(dst, "statements") == _row_count(src, "statements")
 

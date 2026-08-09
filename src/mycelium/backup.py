@@ -394,10 +394,54 @@ def import_substrate(
         return manifest
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
+    """The columns `table` actually has — the allow-list an archived
+    record's column names are checked against.
+
+    `table` is one of this module's own literals, optionally schema-
+    qualified (`history.history_events`), never a name from an archive."""
+    schema, _, name = table.rpartition(".")
+    prefix = f"{schema}." if schema else ""
+    rows = conn.execute(f"PRAGMA {prefix}table_info({name})").fetchall()
+    return frozenset(r["name"] for r in rows)
+
+
+def _insert_archived_row(
+    conn: sqlite3.Connection,
+    row: dict[str, Any],
+    *,
+    table: str,
+    columns: frozenset[str],
+    source: str,
+) -> None:
+    """Insert one archived record with the columns it carries.
+
+    Those column names end up in the statement text, where a bound
+    parameter cannot go — so they are checked against the destination
+    table first, exact spelling and all. An archive is untrusted input,
+    the same reason extraction runs with `filter="data"`. An unexpected
+    name fails the restore; the caller's transaction is what keeps a
+    refusal from leaving half a database behind."""
+    cols = list(row)
+    if not cols:
+        raise ValueError(f"{source} record for {table} carries no columns")
+    unknown = sorted(set(cols) - columns)
+    if unknown:
+        raise ValueError(
+            f"{source} record names columns {table} does not have: {unknown!r}"
+        )
+    placeholders = ", ".join("?" * len(cols))
+    conn.execute(
+        f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+        [row[c] for c in cols],
+    )
+
+
 def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
     """Stream the JSONL back into the freshly-migrated DB. Each line
     becomes an INSERT into the table its `_kind` resolves to."""
     legacy_skipped = 0
+    columns = {t: _table_columns(conn, t) for t in _KIND_TO_TABLE.values()}
     with path.open("r", encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
@@ -411,11 +455,12 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
             table = _KIND_TO_TABLE.get(kind)
             if table is None:
                 raise ValueError(f"unknown record kind in archive: {kind!r}")
-            cols = list(row.keys())
-            placeholders = ", ".join("?" * len(cols))
-            conn.execute(
-                f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
-                [row[c] for c in cols],
+            _insert_archived_row(
+                conn,
+                row,
+                table=table,
+                columns=columns[table],
+                source="data.jsonl",
             )
     if legacy_skipped:
         logger.info(
@@ -461,13 +506,8 @@ def _restore_prompts(prompts_db_path: Path, path: Path) -> None:
 
 
 def _insert_prompt_rows(conn: sqlite3.Connection, path: Path) -> None:
-    """Insert each archived row with the columns it carries.
-
-    Those column names end up in the statement text, where a bound
-    parameter cannot go — so they are checked against the table first. An
-    archive is untrusted input, the same reason extraction runs with
-    `filter="data"`."""
-    columns = {r["name"] for r in conn.execute("PRAGMA table_info(prompt_texts)")}
+    """Insert each archived prompt-text row with the columns it carries."""
+    columns = _table_columns(conn, "prompt_texts")
     with path.open("r", encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
@@ -477,23 +517,19 @@ def _insert_prompt_rows(conn: sqlite3.Connection, path: Path) -> None:
             kind = row.pop("_kind", None)
             if kind != "prompt_text":
                 raise ValueError(f"unknown record kind in prompts.jsonl: {kind!r}")
-            cols = list(row.keys())
-            if not cols:
-                raise ValueError("prompts.jsonl row carries no columns")
-            foreign = sorted(set(cols) - columns)
-            if foreign:
-                raise ValueError(
-                    f"prompts.jsonl row carries columns prompt_texts has not: "
-                    f"{foreign!r}"
-                )
-            placeholders = ", ".join("?" * len(cols))
-            conn.execute(
-                f"INSERT INTO prompt_texts ({', '.join(cols)}) VALUES ({placeholders})",
-                [row[c] for c in cols],
+            _insert_archived_row(
+                conn,
+                row,
+                table="prompt_texts",
+                columns=columns,
+                source="prompts.jsonl",
             )
 
 
 def _load_history_jsonl(conn: sqlite3.Connection, path: Path) -> None:
+    """Insert each archived audit event into the attached history DB."""
+    table = "history.history_events"
+    columns = _table_columns(conn, table)
     with path.open("r", encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
@@ -501,12 +537,12 @@ def _load_history_jsonl(conn: sqlite3.Connection, path: Path) -> None:
                 continue
             row = json.loads(line)
             row.pop("_kind", None)
-            cols = list(row.keys())
-            placeholders = ", ".join("?" * len(cols))
-            conn.execute(
-                f"INSERT INTO history.history_events ({', '.join(cols)}) "
-                f"VALUES ({placeholders})",
-                [row[c] for c in cols],
+            _insert_archived_row(
+                conn,
+                row,
+                table=table,
+                columns=columns,
+                source="history.jsonl",
             )
 
 
