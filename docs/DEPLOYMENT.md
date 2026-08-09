@@ -219,6 +219,31 @@ Short version:
 
 4. `claude mcp list` should show `mycelium` as connected.
 
+### Protocol revisions at `/mcp`
+
+The one `/mcp` endpoint answers both MCP revisions, and which one a client
+speaks is its choice, not a server setting:
+
+- **2026-07-28** — one self-describing POST per call. No `initialize`
+  handshake and no `Mcp-Session-Id`, so nothing pins a client to a
+  particular worker: these requests survive a plain round-robin load
+  balancer with no session affinity.
+- **2025-era** — the `initialize` handshake, with an `Mcp-Session-Id`
+  echoed on later requests. Sessions live in the serving process, so a
+  deployment running more than one replica still needs affinity for
+  these clients.
+
+A 2026-07-28 request is routed by its `MCP-Protocol-Version` header and
+carries `Mcp-Method` (plus `Mcp-Name` for tool calls), which must agree
+with the body. nginx forwards hyphenated headers untouched, so the site
+template needs no change — but a proxy that filters request headers must
+pass all three through, or modern clients land on the legacy path and fail
+for want of a session id.
+
+Request bodies are capped at 4 MiB by the MCP transport. nginx's own
+`client_max_body_size` default of 1 MiB is the tighter limit and bites
+first; raise it in the site template if large `ingest` payloads get a 413.
+
 ---
 
 ## Subsequent deploys

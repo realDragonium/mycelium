@@ -1,10 +1,11 @@
 """Test-wide setup.
 
-Disables the MCP-over-HTTP transport for the whole suite. FastMCP's
-session manager is a process-singleton with run-once semantics, so
-multiple TestClient lifespans against the same module would explode
-on the second startup. The MCP REST mirror and `/api/*` endpoints
-don't depend on the session manager — only `/mcp` JSON-RPC does.
+Disables the MCP-over-HTTP transport for the whole suite.
+`StreamableHTTPSessionManager.run()` may only be called once per instance,
+so multiple TestClient lifespans against the same module raise on the
+second startup. The REST mirror and `/api/*` endpoints don't depend on the
+session manager — only `/mcp` JSON-RPC does, which is why the dedicated
+protocol test in `test_mcp_protocol_eras.py` builds its own app.
 """
 
 import os
