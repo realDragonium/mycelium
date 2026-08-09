@@ -713,3 +713,175 @@ def test_issuer_is_pinned_by_configuration_not_the_host_header(tmp_path, monkeyp
             headers={"Host": "some-alias.internal"},
         ).json()
         assert prm["resource"] == "https://mycelium.example"
+
+
+# --- Client ID Metadata Documents -----------------------------------------
+
+_CIMD_URL = "https://app.example.com/oauth/client.json"
+_CIMD_REDIRECT = "http://127.0.0.1:6274/cb"
+
+
+def _stub_cimd(monkeypatch, *, redirect_uris=(_CIMD_REDIRECT,), name="Example Client"):
+    """Serve a fixed metadata document instead of reaching the network.
+
+    The document rules are covered in test_cimd.py; what matters here is that
+    the authorization endpoints act on a resolved document at all.
+    """
+    from mycelium import cimd
+
+    cimd.reset_cache()
+    monkeypatch.setattr(
+        cimd,
+        "fetch",
+        lambda url, **kw: cimd.ClientMetadata(
+            client_id=url, client_name=name, redirect_uris=tuple(redirect_uris)
+        ),
+    )
+
+
+def test_metadata_advertises_cimd_support(tmp_path, monkeypatch):
+    """A client checks this before using a URL as its client_id; without it
+    it falls back to registration."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        meta = client.get("/.well-known/oauth-authorization-server").json()
+        assert meta["client_id_metadata_document_supported"] is True
+        # DCR stays advertised for clients that predate CIMD.
+        assert meta["registration_endpoint"].endswith("/register")
+
+
+def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypatch):
+    """The point of the mechanism: no /register call, no stored credentials,
+    and the token comes out the far end."""
+    from urllib.parse import parse_qs, urlparse
+
+    _stub_cimd(monkeypatch)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        verifier, challenge = _pkce_pair()
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+        form = {
+            "client_id": _CIMD_URL,
+            "redirect_uri": _CIMD_REDIRECT,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "scope": "mcp",
+            "state": "st",
+        }
+
+        consent = client.get("/authorize", params={**form, "response_type": "code"},
+                             headers=headers)
+        assert consent.status_code == 200, consent.text
+        # The name comes from the document, and the destination is shown.
+        assert "Example Client" in consent.text
+        assert "127.0.0.1:6274" in consent.text
+
+        decided = client.post(
+            "/authorize/decide",
+            data={**form, "decision": "allow"},
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert decided.status_code == 302, decided.text
+        code = parse_qs(urlparse(decided.headers["location"]).query)["code"][0]
+
+        r = client.post(
+            "/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": _CIMD_REDIRECT,
+                "client_id": _CIMD_URL,
+                "code_verifier": verifier,
+            },
+        )
+        assert r.status_code == 200, r.text
+        access = r.json()["access_token"]
+
+        me = client.get("/api/me", headers={"Authorization": f"Bearer {access}"})
+        assert me.status_code == 200
+        assert me.json()["role"] == "admin"
+
+
+def test_a_cimd_client_cannot_use_a_redirect_uri_outside_its_document(
+    tmp_path, monkeypatch
+):
+    """The document is the allow-list. Skipping this check would turn any
+    hosted document into an open redirect for authorization codes."""
+    _stub_cimd(monkeypatch)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r = client.get(
+            "/authorize",
+            params={
+                "client_id": _CIMD_URL,
+                "redirect_uri": "http://evil.example.com/steal",
+                "response_type": "code",
+                "code_challenge": _pkce_pair()[1],
+                "code_challenge_method": "S256",
+            },
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+        )
+        assert r.status_code == 400
+        assert "redirect_uri" in r.json()["detail"]
+
+
+def test_an_unresolvable_document_is_simply_not_a_client(tmp_path, monkeypatch):
+    """Reported as invalid_client — the same answer an unknown registration
+    id gets, so neither tells the caller more than the other."""
+    from mycelium import cimd
+
+    cimd.reset_cache()
+
+    def _boom(url, **kw):
+        raise cimd.CimdError("nope")
+
+    monkeypatch.setattr(cimd, "fetch", _boom)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        r = client.get(
+            "/authorize",
+            params={
+                "client_id": _CIMD_URL,
+                "redirect_uri": _CIMD_REDIRECT,
+                "response_type": "code",
+                "code_challenge": _pkce_pair()[1],
+                "code_challenge_method": "S256",
+            },
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+        )
+        assert r.status_code == 400
+        assert r.json()["detail"] == "invalid_client"
+
+
+def test_loopback_only_clients_get_a_warning_on_the_consent_page(
+    tmp_path, monkeypatch
+):
+    """Any local program can listen on a loopback port, so the document
+    proves nothing about which one is asking. A client with a real host
+    should not carry the same caution."""
+    _stub_cimd(monkeypatch)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(server._auth_db())
+        headers = {"Authorization": f"Bearer {admin_bearer}"}
+        params = {
+            "client_id": _CIMD_URL,
+            "redirect_uri": _CIMD_REDIRECT,
+            "response_type": "code",
+            "code_challenge": _pkce_pair()[1],
+            "code_challenge_method": "S256",
+        }
+        loopback = client.get("/authorize", params=params, headers=headers)
+        assert "any local program can listen" in loopback.text.lower()
+
+        _stub_cimd(monkeypatch, redirect_uris=("https://app.example.com/cb",))
+        hosted = client.get(
+            "/authorize",
+            params={**params, "redirect_uri": "https://app.example.com/cb"},
+            headers=headers,
+        )
+        assert "any local program can listen" not in hosted.text.lower()

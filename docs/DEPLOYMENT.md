@@ -262,6 +262,21 @@ MYCELIUM_PUBLIC_URL=https://mycelium.example.com
 
 Scheme included, no trailing slash.
 
+### Outbound requests from the OAuth endpoints
+
+A client may identify itself with a Client ID Metadata Document — an HTTPS
+URL it hosts — instead of registering. Resolving one means Mycelium makes an
+outbound HTTPS request to a URL chosen by the caller, so an egress-filtered
+deployment needs to allow that, and an operator should know it happens.
+
+The fetch is fenced: HTTPS only, redirects not followed, a 5s timeout, a
+64 KiB cap, and every address the hostname resolves to must be on the public
+internet. Documents are cached per process, honouring `Cache-Control` within
+a 1-minute to 1-hour bound.
+
+Registration (`/register`) still works for clients that predate the
+mechanism; it is deprecated upstream, not removed.
+
 ---
 
 ## Subsequent deploys
