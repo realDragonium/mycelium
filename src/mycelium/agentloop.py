@@ -163,7 +163,7 @@ def serialize(result: Any) -> str:
         # A cut inside an id can leave a shorter id that was never in the
         # result, and downstream provenance checks read this text. Losing a
         # few characters from an already-broken JSON fragment costs nothing.
-        kept = re.sub(r"stm_\w*$", "", kept)
+        kept = re.sub(r"stm_\w*\Z", "", kept)
         text = kept + "\n…[truncated]"
     return text
 
@@ -197,7 +197,7 @@ def collect_statement_ids(obj: Any, acc: set[str]) -> None:
 
 def ids_present_in(text: str, ids: Iterable[str]) -> set[str]:
     """Which of `ids` appear in `text` as whole ids."""
-    return {i for i in ids if re.search(re.escape(i) + r"(?!\w)", text)}
+    return {i for i in ids if re.search(r"(?<!\w)" + re.escape(i) + r"(?!\w)", text)}
 
 
 def append_tool_error(

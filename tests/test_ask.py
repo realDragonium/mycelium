@@ -629,6 +629,11 @@ def test_ids_present_in_matches_statement_identity_not_a_shared_prefix():
     assert ids_present_in('{"first": "stm_1", "second": "stm_12"}', ids) == ids
 
 
+def test_ids_present_in_rejects_an_id_at_the_tail_of_a_longer_token():
+    """A token ending in an id must not count as that statement's identity."""
+    assert ids_present_in("xstm_1", {"stm_1"}) == set()
+
+
 def test_serialize_drops_a_statement_id_fragment_cut_by_the_cap():
     """Truncation must not manufacture a shorter id for provenance checks."""
     full_id = "stm_partial_identifier"
@@ -640,6 +645,22 @@ def test_serialize_drops_a_statement_id_fragment_cut_by_the_cap():
 
     assert raw[:20_000].endswith(partial_id)
     assert partial_id not in serialize(result)
+
+
+def test_serialize_keeps_a_complete_id_before_a_trailing_newline():
+    """The truncation guard is anchored to the true end, beyond any newline."""
+    statement_id = "stm_12"
+    raw = "x" * (20_000 - len(statement_id) - 1) + statement_id + "\nmore"
+
+    class JsonFailure(dict):
+        def __str__(self):
+            return raw
+
+    result = JsonFailure()
+    result["cycle"] = result
+
+    assert raw[:20_000].endswith(statement_id + "\n")
+    assert statement_id in serialize(result)
 
 
 def test_substrate_retries_once_then_raises():
