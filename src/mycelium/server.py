@@ -2197,7 +2197,10 @@ def request_documentation(
 @tool
 def list_documentation_runs() -> dict[str, Any]:
     """List documentation runs, newest first, each with a derived `status`
-    (queued/running/document_written/nothing_written/failed).
+    (queued/running/document_written/nothing_written/failed) and
+    `document_superseded`, which is true when the document this run wrote has
+    since been replaced by a later run, so the body at `document_id` is no
+    longer this run's.
 
     Returns {"runs": [run rows]}."""
     from . import docs_store
@@ -2212,7 +2215,9 @@ def list_documentation_runs() -> dict[str, Any]:
 @tool
 def get_documentation_run(run_id: str) -> dict[str, Any]:
     """Fetch one documentation run by id, including outcome, document_id,
-    and error.
+    error, and `document_superseded`, which is true when the document this run
+    wrote has since been replaced by a later run, so the body at `document_id`
+    is no longer this run's.
 
     Returns the serialized run row. Raises for an unknown run_id."""
     from . import docs_store
