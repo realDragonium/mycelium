@@ -1,10 +1,11 @@
 # Guideline sets
 
 A **guideline set** is the writing guidance a documentation-generation run
-follows: one set-wide instruction text plus one template per document type it
-can produce. Sets live in the prompt-text store (`prompt_store`, its own
-`mycelium-prompts.db`) as ordinary rows, so adding, editing or replacing one
-is a tool call — never a code change and never a redeploy.
+follows: one set-wide instruction text, one set-wide exposure boundary, plus
+one template per document type it can produce. Sets live in the prompt-text
+store (`prompt_store`, its own `mycelium-prompts.db`) as ordinary rows, so
+adding, editing or replacing one is a tool call — never a code change and
+never a redeploy.
 
 This document is the convention. Nothing enforces it: `type` and `name` are
 free strings and the store never enumerates them. That is the point — a new
@@ -24,9 +25,12 @@ with theirs.
 
 - `<set>` is the variant's name, kebab-case: `kb-authoring`, `internal-doc`.
   It is the shared prefix that makes a set greppable in a listing.
-- `<slot>` is what the row is for. Two shapes:
+- `<slot>` is what the row is for. Three shapes:
   - `guidance` — the set-wide instructions: how to research, what counts as
     a fact, how to mark uncertainty, what "done" means. Exactly one per set.
+  - `exposure` — the set-wide disclosure boundary: what a finished document
+    may reveal and what must stay internal. At most one per set; a set without
+    one can still write, but its exposure goes unchecked.
   - a **document type** — `tutorial`, `how-to`, `reference`, `explanation`,
     `troubleshooting`, … — the template for producing that type. As many as
     the set supports.
@@ -36,11 +40,12 @@ So `kb-authoring/guidance` and `kb-authoring/how-to`.
 ## Why one row per document type
 
 A generation run writes one document of one type. With a row per type it
-fetches exactly two texts — `<set>/guidance` and `<set>/<type>` — instead of
-pulling a kilobytes-long omnibus row and slicing the right section out of it
-with a parser that the store would then have to guarantee. Editing one
-template also versions only that template, so the history of
-`kb-authoring/reference` is the history of that template and nothing else.
+fetches exactly three texts — `<set>/guidance`, `<set>/exposure`, and
+`<set>/<type>` — instead of pulling a kilobytes-long omnibus row and slicing
+the right section out of it with a parser that the store would then have to
+guarantee. Editing one template also versions only that template, so the
+history of `kb-authoring/reference` is the history of that template and
+nothing else.
 
 The cost is that a set is several rows rather than one, which is why the
 `<set>/` prefix exists: the listing groups them by eye, and
@@ -61,19 +66,20 @@ on the next run, and one whose rows were retired stops being offered. A pair
 that does not appear together is sent back once and then refused; the run
 writes nothing rather than falling back to a set nobody configured.
 
-Having chosen, the run fetches its two texts — `<set>/guidance` and
-`<set>/<type>` — and writes against them. A named set that is not configured,
-or a type that set has no template for, is refused at the door by
-`request_documentation` instead of failing minutes later inside a background
-run.
+Having chosen, the run fetches its three texts — `<set>/guidance`,
+`<set>/exposure`, and `<set>/<type>` — and writes against them. A named set
+that is not configured, or a type that set has no template for, is refused at
+the door by `request_documentation` instead of failing minutes later inside a
+background run.
 
 ## Sets that exist
 
-**`kb-authoring`** — six rows, and the one set that ships. Its sources are
-`src/mycelium/guidelines/kb-authoring/`: `guidance.md` for the set-wide row,
-and `templates/` for `tutorial`, `how-to`, `reference`, `explanation` and
-`troubleshooting`. Substrate-first: it instructs the writer to flag facts the
-substrate does not support rather than invent them.
+**`kb-authoring`** — seven rows, and the one set that ships. Its sources are
+under `src/mycelium/guidelines/kb-authoring/`: one file for set-wide guidance,
+one for the exposure boundary, and the files under `templates/` for `tutorial`,
+`how-to`, `reference`, `explanation` and `troubleshooting`. Substrate-first:
+it instructs the writer to flag facts the substrate does not support rather
+than invent them.
 
 The files sit inside the package because that is what a deployment gets. The
 wheel carries `src/mycelium/` and the image copies it, the same way the loop
@@ -98,12 +104,12 @@ template into an instance they hold a checkout of, and `--dry-run` reports
 what it would supersede first. Both read the same files and build the same
 names, from `mycelium.guidelines`; only the write differs.
 
-Because startup re-seeds them, these six names cannot be retired.
+Because startup re-seeds them, these seven names cannot be retired.
 `retire_prompt_text` refuses them outright rather than letting the next
 restart quietly undo the retirement — edit them with `save_prompt_text`
 instead.
 
-**`internal-doc`** — three rows, a deliberately minimal set for terse
+**`internal-doc`** — four rows, a deliberately minimal set for terse
 internal notes. It exists to prove that a variant needs no code: it was added
 entirely through the management tools and has no source files, no seeding at
 startup and no entry anywhere in `src/`.
@@ -115,6 +121,21 @@ exactly these calls:
 
 ```python
 save_prompt_text("guideline-set", "internal-doc/guidance", "…")
+save_prompt_text(
+    "guideline-set",
+    "internal-doc/exposure",
+    (
+        "These notes are for staff. Internal hostnames may be stated when "
+        "useful and supported. Service and repository names, infrastructure "
+        "topology, ticket IDs, staff names, and unreleased work may be stated "
+        "too. This inverts the external boundary: the question is not whether "
+        "a reader is outside the company, but whether the material is secret "
+        "whoever is reading.\n\nWithhold live credentials, tokens, and private "
+        "keys; personal data about an identifiable person; and material a "
+        "third party gave us in confidence. A secret is a secret whoever is "
+        "reading.\n"
+    ),
+)
 save_prompt_text("guideline-set", "internal-doc/how-to",   "…")
 save_prompt_text("guideline-set", "internal-doc/reference", "…")
 ```

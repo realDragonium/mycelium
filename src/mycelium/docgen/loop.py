@@ -163,15 +163,17 @@ def _store_catalogue() -> dict[str, list[str]]:
         return {}
 
 
-def _store_texts(set_name: str, document_type: str) -> tuple[str | None, str | None]:
+def _store_texts(
+    set_name: str, document_type: str
+) -> tuple[str | None, str | None, str | None]:
     from .. import guidelines, prompt_store
 
     if not prompt_store.is_configured():
-        return None, None
+        return None, None, None
     try:
         return guidelines.texts(prompt_store.connection(), set_name, document_type)
     except Exception:  # noqa: BLE001 — best-effort; a missing template refuses
-        return None, None
+        return None, None, None
 
 
 def _default_gap_reporter(text: str) -> Any:
@@ -211,7 +213,7 @@ def _execute(
     doctrine_text: str,
     doctrine_note: str | None,
     catalogue: dict[str, list[str]],
-    load_texts: Callable[[str, str], tuple[str | None, str | None]],
+    load_texts: Callable[[str, str], tuple[str | None, str | None, str | None]],
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -253,7 +255,7 @@ def _execute(
     ctx.guideline_set, ctx.document_type = resolved
     trace.guideline_set, trace.document_type = resolved
 
-    guidance, template = load_texts(*resolved)
+    guidance, exposure, template = load_texts(*resolved)
     if not (template or "").strip():
         return _nothing(
             ctx,
@@ -262,12 +264,21 @@ def _execute(
         )
     if not (guidance or "").strip():
         trace.notes.append(f"no set-wide guidance row for '{ctx.guideline_set}'")
+    if not (exposure or "").strip():
+        trace.notes.append(
+            f"guideline set '{ctx.guideline_set}' states no exposure rules"
+        )
 
+    # The writer sees the exposure rules so the reviewer never grades against
+    # a rule the writer did not see. Enforcement remains the later review
+    # stage's job: prompt trust alone was ruled out for material that leaves
+    # the system.
     ctx.system_prompt = prompts.build_system_prompt(
         doctrine_text,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
         guidance=guidance,
+        exposure=exposure,
         template=template,
     )
     ctx.tools = build_tools(substrate.tool_specs())

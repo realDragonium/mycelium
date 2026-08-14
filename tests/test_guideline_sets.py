@@ -34,6 +34,7 @@ _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "seed_guideline_sets
 
 _KB_ROWS = [
     "kb-authoring/explanation",
+    "kb-authoring/exposure",
     "kb-authoring/guidance",
     "kb-authoring/how-to",
     "kb-authoring/reference",
@@ -41,7 +42,7 @@ _KB_ROWS = [
     "kb-authoring/tutorial",
 ]
 
-# The second variant set, verbatim as it was saved through the tools. Three
+# The second variant set, verbatim as it was saved through the tools. Four
 # rows, deliberately minimal: this is the proof that a variant is data, not
 # a template suite of its own.
 _INTERNAL_DOC = {
@@ -50,6 +51,17 @@ _INTERNAL_DOC = {
         "the welcome.\n\nEvery product claim traces to a substrate statement. "
         "Mark anything the substrate does not support with `needs "
         "verification` rather than filling it in.\n\nOne document, one type.\n"
+    ),
+    "internal-doc/exposure": (
+        "These notes are for staff. Internal hostnames may be stated when "
+        "useful and supported. Service and repository names, infrastructure "
+        "topology, ticket IDs, staff names, and unreleased work may be stated "
+        "too. This inverts the external boundary: the question is not whether "
+        "a reader is outside the company, but whether the material is secret "
+        "whoever is reading.\n\nWithhold live credentials, tokens, and private "
+        "keys; personal data about an identifiable person; and material a "
+        "third party gave us in confidence. A secret is a secret whoever is "
+        "reading.\n"
     ),
     "internal-doc/how-to": (
         "---\ntitle:\ntype: how-to\naudience: internal\n---\n\n"
@@ -153,7 +165,7 @@ def test_startup_leaves_an_edited_row_alone(tmp_path, monkeypatch):
 
 def test_an_unreadable_source_degrades_only_that_row(tmp_path, monkeypatch):
     """Best-effort per row: one source that cannot be read costs that row and
-    nothing else — not its five siblings, not the doctrines, not the boot."""
+    nothing else — not its six siblings, not the doctrines, not the boot."""
     monkeypatch.setitem(
         guidelines.SOURCES, "reference", tmp_path / "gone" / "reference.md"
     )
@@ -194,7 +206,7 @@ def test_retiring_a_seeded_guideline_row_is_refused(tmp_path, monkeypatch):
 
 
 def test_seed_writes_the_named_rows():
-    """Six rows under one type, each named `<set>/<slot>` and carrying its
+    """Seven rows under one type, each named `<set>/<slot>` and carrying its
     source file verbatim."""
     seed = _seed_script()
     conn = _conn()
@@ -239,7 +251,8 @@ def test_stored_guidance_addresses_a_run_that_has_only_the_store():
     seeded = {r["name"] for r in prompt_store.list_current(conn, "guideline-set")}
 
     named = set(re.findall(r"kb-authoring/[a-z-]+", guidance))
-    assert named == seeded - {"kb-authoring/guidance"}
+    non_types = {guidelines.row_name(slot) for slot in guidelines.NON_TYPE_SLOTS}
+    assert named == seeded - non_types
 
     assert re.findall(r"[\w./-]+\.md", guidance) == []
     assert ".claude" not in guidance
@@ -320,6 +333,19 @@ def test_dry_run_does_not_write_to_an_existing_database(tmp_path):
 
 
 # --- the second variant set, added through the tools alone ------------------
+
+
+def test_the_two_sets_answer_the_exposure_slot_differently():
+    """Exposure is variant data, not a constant under two names: the public
+    set withholds an internal hostname while the staff set explicitly permits
+    one, without weakening the secrets that stay secret for every reader."""
+    kb_exposure = guidelines.SOURCES["exposure"].read_text(encoding="utf-8").lower()
+    internal_exposure = _INTERNAL_DOC["internal-doc/exposure"].lower()
+
+    assert "internal hostnames and ip ranges must not appear" in kb_exposure
+    assert "internal hostnames may be stated" in internal_exposure
+    assert "credentials, tokens, private keys" in kb_exposure
+    assert "live credentials, tokens, and private keys" in internal_exposure
 
 
 def test_variant_set_is_added_through_tools_only(tmp_path, monkeypatch):

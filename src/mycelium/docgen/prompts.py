@@ -1,13 +1,14 @@
 """Prompt text and message construction for the docgen inner model.
 
-Three texts stack into one system prompt, in widening specificity:
+Three layers stack into one system prompt, in widening specificity:
 
 1. the base harness protocol below — what this loop is, what its tools do,
    and what it will refuse;
 2. the DOCTRINE — how to run a generation loop, loaded by `loop.py` from the
    `(doctrine, docgen)` row;
 3. the GUIDELINE SET — how to write this particular document: the set-wide
-   `guidance` row and the template row for the resolved document type.
+   `guidance` and `exposure` rows, then the template row for the resolved
+   document type.
 
 They are delimited so the model can tell them apart, because they can
 disagree. A guideline set is written for whoever holds it, which has
@@ -42,9 +43,11 @@ __all__ = [
 _BASE_PROTOCOL = """\
 You write ONE document about a topic, from a knowledge substrate, and you are \
 HONEST ABOUT WHAT THE SUBSTRATE DOES NOT HOLD. What you write is stored as it \
-stands and served to readers: there is no editing pass after you, no reviewer \
-between you and the reader, and nothing downstream that will notice a \
-plausible sentence you could not source.
+stands and served to readers. A reviewer that has not seen your reasoning will \
+check the finished document against this set's exposure rules and template and \
+may return it once, but cannot check facts without your run's reads. Nothing \
+downstream will notice a sentence you could not source; substrate discipline \
+is yours alone.
 
 THE SUBSTRATE
 - It holds atomic `statement`s (kinds like event/state/capability/rule/property \
@@ -121,7 +124,11 @@ _DOCTRINE_FOOTER = "\n=== END DOCTRINE ===\n"
 
 
 def _guideline_block(
-    guideline_set: str, document_type: str, guidance: str | None, template: str | None
+    guideline_set: str,
+    document_type: str,
+    guidance: str | None,
+    exposure: str | None,
+    template: str | None,
 ) -> str:
     parts = [
         f"\n\n=== GUIDELINE SET `{guideline_set}` (how to write this document) ===\n"
@@ -132,6 +139,12 @@ def _guideline_block(
         parts.append(
             f"--- {guideline_set}/guidance ---\n(this set has no set-wide "
             "guidance row; follow the template and this protocol)\n"
+        )
+    if exposure:
+        parts.append(f"\n--- {guideline_set}/exposure ---\n{exposure.strip()}\n")
+    else:
+        parts.append(
+            f"\n--- {guideline_set}/exposure ---\n(this set states no exposure rules)\n"
         )
     parts.append(
         f"\n--- {guideline_set}/{document_type} (the template you are "
@@ -147,6 +160,7 @@ def build_system_prompt(
     guideline_set: str,
     document_type: str,
     guidance: str | None,
+    exposure: str | None,
     template: str | None,
 ) -> str:
     """The base protocol, the loaded doctrine, then the guideline set — each
@@ -158,7 +172,9 @@ def build_system_prompt(
     out = _BASE_PROTOCOL
     if doctrine:
         out += _DOCTRINE_HEADER + doctrine + _DOCTRINE_FOOTER
-    return out + _guideline_block(guideline_set, document_type, guidance, template)
+    return out + _guideline_block(
+        guideline_set, document_type, guidance, exposure, template
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -225,8 +241,8 @@ def initial_user_message(
     return (
         f"DOCUMENTATION REQUEST:\n-----\n{prompt}\n-----\n\n"
         f"You are writing a `{document_type}` against the `{guideline_set}` "
-        "guideline set, whose guidance and template are in your system "
-        "prompt.\n\n"
+        "guideline set, whose guidance, exposure rules, and template are in "
+        "your system prompt.\n\n"
         "RECON (survey_statements of the request — a wide starting map, not "
         "material to write from):\n"
         f"{format_recon(recon)}\n\n"

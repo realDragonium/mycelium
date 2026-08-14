@@ -1066,7 +1066,7 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
         ),
         *(
             # `path=path` binds the file per row; a bare closure over the
-            # loop variable would hand all six rows the last one.
+            # loop variable would hand all seven rows the last one.
             (guidelines.TYPE, guidelines.row_name(slot), lambda path=path: path)
             for slot, path in guidelines.SOURCES.items()
         ),

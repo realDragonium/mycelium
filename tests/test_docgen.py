@@ -188,6 +188,7 @@ def kb_set(prompts_db):
         "kb-authoring",
         {
             "guidance": "SET-WIDE GUIDANCE: source everything.",
+            "exposure": "EXPOSURE RULES: reveal only published behaviour.",
             "how-to": "HOW-TO TEMPLATE: steps.",
             "reference": "REFERENCE TEMPLATE: tables.",
         },
@@ -310,7 +311,11 @@ def test_no_tool_the_model_sees_can_reach_the_substrate_or_a_draft():
 def test_resolution_offers_exactly_what_the_store_holds(kb_set):
     """A set added purely as rows is selectable with no code change: the
     resolution tool's enums ARE the listing."""
-    _save_set(kb_set, "internal-doc", {"guidance": "terse", "reference": "table"})
+    _save_set(
+        kb_set,
+        "internal-doc",
+        {"guidance": "terse", "exposure": "staff-safe", "reference": "table"},
+    )
     client = FakeAnthropic([_resolve("internal-doc", "reference"), _emit()])
 
     result = _run(client)
@@ -340,7 +345,11 @@ def test_a_request_that_named_both_costs_no_resolution_turn(kb_set):
 def test_a_named_set_narrows_the_choice_to_its_own_types(kb_set):
     """The request fixed the set, so only that set's types are offerable —
     the model cannot answer with a type belonging to a different set."""
-    _save_set(kb_set, "internal-doc", {"guidance": "terse", "tutorial": "walk"})
+    _save_set(
+        kb_set,
+        "internal-doc",
+        {"guidance": "terse", "exposure": "staff-safe", "tutorial": "walk"},
+    )
     client = FakeAnthropic([_resolve("kb-authoring", "how-to"), _emit()])
 
     _run(client, guideline_set="kb-authoring")
@@ -354,7 +363,11 @@ def test_a_pair_that_does_not_exist_together_is_sent_back_then_refused(kb_set):
     """`tutorial` exists in another set but not in this one. The harness says
     so once; a run that still cannot name a real pair writes nothing rather
     than falling back to a guess."""
-    _save_set(kb_set, "internal-doc", {"guidance": "terse", "tutorial": "walk"})
+    _save_set(
+        kb_set,
+        "internal-doc",
+        {"guidance": "terse", "exposure": "staff-safe", "tutorial": "walk"},
+    )
     client = FakeAnthropic(
         [_resolve("kb-authoring", "tutorial"), _resolve("kb-authoring", "tutorial")]
     )
@@ -378,7 +391,11 @@ def test_a_named_document_type_is_not_up_for_decision(kb_set):
     is removed from the choice rather than merely asked for in prose — a
     strict enum of one — and a model that answers with a different one is
     treated as not having chosen."""
-    _save_set(kb_set, "internal-doc", {"guidance": "terse", "reference": "table"})
+    _save_set(
+        kb_set,
+        "internal-doc",
+        {"guidance": "terse", "exposure": "staff-safe", "reference": "table"},
+    )
     client = FakeAnthropic(
         [
             _resolve("kb-authoring", "how-to"),
@@ -457,7 +474,7 @@ def test_a_listed_type_whose_template_will_not_load_refuses():
     store that failed). Writing against a template that is not there would be
     writing against nothing, so the run refuses."""
     result = _execute_with(
-        load_texts=lambda *_a: (None, None),
+        load_texts=lambda *_a: (None, None, None),
         client=FakeAnthropic([]),
         guideline_set="kb-authoring",
         document_type="how-to",
@@ -472,7 +489,7 @@ def test_a_set_with_no_guidance_row_costs_a_note_not_the_run():
     """Missing set-wide guidance only costs the run context; the template is
     what it cannot do without."""
     result = _execute_with(
-        load_texts=lambda *_a: (None, "TEMPLATE"),
+        load_texts=lambda *_a: (None, "EXPOSURE", "TEMPLATE"),
         client=FakeAnthropic([_emit()]),
         guideline_set="kb-authoring",
         document_type="how-to",
@@ -480,6 +497,22 @@ def test_a_set_with_no_guidance_row_costs_a_note_not_the_run():
 
     assert isinstance(result, DocumentWritten)
     assert "no set-wide guidance row for 'kb-authoring'" in result.trace["notes"]
+
+
+def test_a_set_with_no_exposure_row_costs_a_note_not_the_run():
+    """Missing exposure rules are recorded for the later review stage, but
+    do not prevent the writer from producing a document from its template."""
+    result = _execute_with(
+        load_texts=lambda *_a: ("GUIDANCE", None, "TEMPLATE"),
+        client=FakeAnthropic([_emit()]),
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+
+    assert isinstance(result, DocumentWritten)
+    assert (
+        "guideline set 'kb-authoring' states no exposure rules" in result.trace["notes"]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -497,6 +530,18 @@ def test_both_guideline_texts_are_injected_and_labelled(kb_set):
     assert "HOW-TO TEMPLATE: steps." in system
     assert "REFERENCE TEMPLATE: tables." not in system  # only the resolved type
     assert "kb-authoring/how-to (the template you are filling)" in system
+
+
+def test_the_resolved_sets_exposure_text_reaches_the_writer(kb_set):
+    """The writer receives the disclosure boundary for the resolved set,
+    labelled as that set's exposure row rather than undifferentiated prose."""
+    client = FakeAnthropic([_emit()])
+
+    _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    system = client.calls[0]["system"]
+    assert "--- kb-authoring/exposure ---" in system
+    assert "EXPOSURE RULES: reveal only published behaviour." in system
 
 
 def test_the_stored_doctrine_wins_over_the_packaged_file(kb_set):
