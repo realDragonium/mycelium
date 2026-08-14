@@ -1,10 +1,11 @@
 """The `docgen` generation loop.
 
-One model context resolves what to write, reads the substrate, and hands back
-a document; this module is the deterministic harness around it — the
-resolution turn, recon, the tool-use loop, the grounding gate, the op-cap /
-wall-clock ceilings, and graceful degradation. The model writes; this code
-chooses nothing about the prose, and refuses what it cannot let stand.
+One writer context resolves what to write, reads the substrate, and hands back
+a document; a separate reviewer context gates it before it can escape. This
+module is the deterministic harness around them — the resolution turn, recon,
+the tool-use loop, the grounding and review gates, the op-cap / wall-clock
+ceilings, and graceful degradation. The model writes; this code chooses
+nothing about the prose, and refuses what it cannot let stand.
 
 Core-at-the-center: `_execute` depends only on a client-like object (anything
 with `.messages.create(...)`), a `SubstrateReader`, a gap-reporting callable,
@@ -63,14 +64,17 @@ from ..agentloop import (
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
 from .config import DOCTRINE_NAME, DocgenConfig
-from .schema import DocgenResult, DocumentWritten, NothingWritten
+from .schema import DocgenResult, DocumentWritten, NothingWritten, ReviewRecord
 from .tools import (
     EMIT_TOOL,
     GAP_TOOL,
     RESOLVE_TOOL,
+    REVIEW_TOOL,
     build_tools,
     parse_emit_input,
+    parse_review_input,
     resolve_tool_def,
+    review_tool_def,
 )
 from .trace import TraceBuilder
 
@@ -78,10 +82,14 @@ from .trace import TraceBuilder
 _MAX_EMIT_BLOCKS = 3
 _MAX_MALFORMED_RETRIES = 1
 _MAX_RESOLUTION_RETRIES = 1
+#: `ask/substrate.py` establishes the try-once-retry-once convention.
+_MAX_REVIEW_RETRIES = 1
 #: Hard ceiling on model turns, well above any real run (op cap bounds reads).
 _TURN_HEADROOM = 16
 #: How many unretrieved ids to name back when an emit cites them.
 _MAX_NAMED_IDS = 10
+#: Keep a failed review useful in a run-row error without copying a document.
+_MAX_REVIEW_FINDINGS = 8
 #: Longest slug the harness will derive from a title.
 _MAX_SLUG_CHARS = 80
 
@@ -240,6 +248,10 @@ def _execute(
         tools=[],
         guideline_set=None,
         document_type=None,
+        exposure=None,
+        template=None,
+        review_error="",
+        review=None,
         unresolved="",
         retrieved_ids=set(),
         successful_reads=0,
@@ -268,6 +280,8 @@ def _execute(
         trace.notes.append(
             f"guideline set '{ctx.guideline_set}' states no exposure rules"
         )
+    ctx.exposure = exposure
+    ctx.template = template
 
     # The writer sees the exposure rules so the reviewer never grades against
     # a rule the writer did not see. Enforcement remains the later review
@@ -631,6 +645,36 @@ def _handle_emit(
     trace.declared_gaps = list(gaps)
     if degraded:
         trace.degraded = True
+    review = _review(ctx, title, body, ids)
+    if review is None:
+        # The reviewer is the gate between generated text and the registry.
+        # A gate that could not run is closed, never treated as an implicit
+        # pass merely because the writer produced grounded text.
+        return _nothing(ctx, f"the document could not be reviewed: {ctx.review_error}")
+    if not review.passed:
+        if review.attempts <= _MAX_REVIEW_RETRIES and not degraded:
+            # This replacement discards the pending emit_document tool_use
+            # with the old conversation, so it needs no tool_result. Keeping
+            # either would also keep the reasoning the findings contradict.
+            ctx.messages = [
+                {
+                    "role": "user",
+                    "content": prompts.review_retry_message(
+                        prompt=ctx.prompt,
+                        title=title,
+                        body=body,
+                        exposure_findings=review.exposure.findings,
+                        conformance_findings=review.conformance.findings,
+                    ),
+                }
+            ]
+            # A fresh context gets fresh allowances for failures that belong
+            # to message history, while the run-wide operation budget stays.
+            ctx.nudged = False
+            ctx.emit_blocks = 0
+            ctx.malformed_retries = 0
+            return None
+        return _nothing(ctx, _review_refusal_reason(review), review=review)
     return DocumentWritten(
         slug=_slug(title),
         title=title,
@@ -638,9 +682,112 @@ def _handle_emit(
         statement_ids=ids,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
+        review=review,
         gaps=_merged_gaps(ctx, gaps),
         trace=_build_trace(ctx, "document_written", cited=ids),
     )
+
+
+def _review(
+    ctx: _RunContext, title: str, body: str, ids: list[str]
+) -> ReviewRecord | None:
+    """Put one grounded document through an isolated reviewer context.
+
+    Statement hydration is a deterministic harness read. The reviewer gets no
+    substrate tools and no writer messages, so it can inspect the document's
+    footing without inheriting how the writer justified it.
+    """
+    trace: TraceBuilder = ctx.trace
+    statements: Any | None = None
+    args = {"ids": ids}
+    if not _substrate_has(ctx.substrate, "get_statements"):
+        trace.notes.append(
+            "review statement hydration skipped: get_statements not available"
+        )
+    else:
+        try:
+            with trace.span("review:get_statements"):
+                statements = ctx.substrate.call("get_statements", args)
+            trace.record_tool_call(
+                "get_statements", args, statements, ok=True, counts_as_op=True
+            )
+        except Exception as exc:  # noqa: BLE001 — review hydration is best-effort
+            trace.record_tool_call(
+                "get_statements",
+                args,
+                None,
+                ok=False,
+                counts_as_op=True,
+                error=str(exc),
+            )
+            trace.notes.append(f"review statement hydration failed: {exc}")
+
+    check_exposure = bool((ctx.exposure or "").strip())
+    system = prompts.build_review_system_prompt(
+        guideline_set=ctx.guideline_set,
+        document_type=ctx.document_type,
+        exposure=ctx.exposure,
+        template=ctx.template,
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": prompts.review_message(
+                prompt=ctx.prompt,
+                title=title,
+                body=body,
+                statements=statements,
+            ),
+        }
+    ]
+    try:
+        with trace.span("model_turn:review"):
+            resp = _model_turn(
+                ctx,
+                messages,
+                force_tool=REVIEW_TOOL,
+                tools=[review_tool_def(check_exposure=check_exposure)],
+                system=system,
+            )
+    except Exception as exc:  # noqa: BLE001 — a failed gate stays closed
+        ctx.review_error = f"review model error: {exc}"
+        trace.notes.append(ctx.review_error)
+        return None
+    trace.model_turns += 1
+    trace.add_usage(getattr(resp, "usage", None))
+
+    tool_use = _first_tool_use(resp)
+    if tool_use is None or tool_use.name != REVIEW_TOOL:
+        ctx.review_error = "the reviewer did not record a review"
+        trace.notes.append(ctx.review_error)
+        return None
+    try:
+        exposure, conformance = parse_review_input(
+            dict(tool_use.input or {}), check_exposure=check_exposure
+        )
+    except (TypeError, ValueError) as exc:
+        ctx.review_error = f"the review was malformed: {exc}"
+        trace.notes.append(ctx.review_error)
+        return None
+
+    passed = exposure.status in ("pass", "unchecked") and (conformance.status == "pass")
+    attempt = len(trace.reviews) + 1
+    record = ReviewRecord(
+        exposure=exposure,
+        conformance=conformance,
+        attempts=attempt,
+        passed=passed,
+    )
+    ctx.review = record
+    trace.reviews.append(
+        {
+            "attempt": attempt,
+            "exposure": exposure.model_dump(),
+            "conformance": conformance.model_dump(),
+            "passed": passed,
+        }
+    )
+    return record
 
 
 def _emit_problem(
@@ -709,14 +856,34 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> DocgenResult:
 # --------------------------------------------------------------------------- #
 
 
-def _nothing(ctx: _RunContext, reason: str) -> NothingWritten:
+def _nothing(
+    ctx: _RunContext, reason: str, *, review: ReviewRecord | None = None
+) -> NothingWritten:
+    carried_review = review if review is not None else ctx.review
     return NothingWritten(
         reason=reason,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
+        review=carried_review,
         gaps=list(ctx.gaps),
         trace=_build_trace(ctx, "nothing_written", cited=[]),
     )
+
+
+def _review_refusal_reason(record: ReviewRecord) -> str:
+    """Render bounded, actionable review findings for the run-row error."""
+    details = []
+    for name, check in (
+        ("exposure", record.exposure),
+        ("conformance", record.conformance),
+    ):
+        if check.status != "fail":
+            continue
+        for finding in check.findings:
+            details.append(f"{name}: {finding.where} — {finding.problem}")
+    shown = details[:_MAX_REVIEW_FINDINGS]
+    suffix = "" if len(details) <= len(shown) else "; additional findings omitted"
+    return "the document failed review: " + "; ".join(shown) + suffix
 
 
 def _merged_gaps(ctx: _RunContext, declared: list[str]) -> list[str]:
@@ -782,6 +949,7 @@ def _model_turn(
     *,
     force_tool: str | None,
     tools: list[dict] | None = None,
+    system: str | None = None,
 ) -> Any:
     config: DocgenConfig = ctx.config
     client = ctx.client
@@ -795,8 +963,11 @@ def _model_turn(
         "messages": messages,
         "tools": tools if tools is not None else ctx.tools,
     }
-    if ctx.system_prompt:
-        kwargs["system"] = ctx.system_prompt
+    # The reviewer's prompt is not the writer's: reusing the generation
+    # protocol would put writing instructions in front of a judging context.
+    selected_system = ctx.system_prompt if system is None else system
+    if selected_system:
+        kwargs["system"] = selected_system
     if force_tool:
         # Forcing a specific tool is incompatible with extended thinking, so
         # thinking stays off on a forced turn — and the thinking blocks the

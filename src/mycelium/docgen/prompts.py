@@ -18,7 +18,10 @@ The base protocol resolves the conflicts it can predict (there is no file to
 save, no caller to ask) so the doctrine does not have to restate the set.
 
 The resolution turn has its own, much smaller, prompt: it precedes the
-guideline texts because it is what chooses them.
+guideline texts because it is what chooses them. The reviewer also has its
+own prompt, containing only its protocol, the exposure rules when present,
+and the resolved template; writer instructions and history do not cross that
+boundary.
 """
 
 from __future__ import annotations
@@ -27,10 +30,14 @@ import json
 from typing import Any
 
 from ..ask.prompts import format_recon
+from .schema import ReviewFinding
 
 __all__ = [
     "build_system_prompt",
+    "build_review_system_prompt",
     "initial_user_message",
+    "review_message",
+    "review_retry_message",
     "resolution_message",
     "resolution_retry_message",
     "emit_block_message",
@@ -119,6 +126,31 @@ following the chain and on concept-seeded re-search, not on repeating \
 near-identical queries."""
 
 
+_REVIEW_PROTOCOL = """\
+You are reviewing ONE finished document that another context wrote. You did \
+not write it, and you are deliberately not being shown how it was produced: \
+an agent that produced something believes it works, and that belief is not \
+evidence.
+
+{checks}
+
+You are NOT fact-checking, and you cannot: you do not have the run's reads. \
+The statements the document cites are shown to you so you can see what \
+material the document was standing on when it revealed something, and \
+whether a required section is populated or padded — not so you can verify \
+the product's behaviour. Do not fail a claim for being unfamiliar.
+
+Every finding names WHERE — a section heading or a quoted phrase — and WHAT \
+failed. A finding the writer cannot locate cannot be fixed. Fail only on \
+something you can point at; unease is not a finding.
+
+Report no findings on a check that passes. Passing a document you have doubts \
+about is a decision; padding the findings list to look diligent sends a \
+correct document back for no reason and spends the run's one retry.
+
+Call `record_review` exactly once."""
+
+
 _DOCTRINE_HEADER = "\n\n=== GENERATION DOCTRINE (how to run this loop; follow it) ===\n"
 _DOCTRINE_FOOTER = "\n=== END DOCTRINE ===\n"
 
@@ -175,6 +207,49 @@ def build_system_prompt(
     return out + _guideline_block(
         guideline_set, document_type, guidance, exposure, template
     )
+
+
+def build_review_system_prompt(
+    *,
+    guideline_set: str,
+    document_type: str,
+    exposure: str | None,
+    template: str | None,
+) -> str:
+    """The independent review protocol and only the rules it judges.
+
+    The writer's protocol, generation doctrine and set-wide guidance are
+    deliberately absent: they describe producing a document, while this
+    context only judges the finished one.
+    """
+    exposure_text = (exposure or "").strip()
+    if exposure_text:
+        checks = (
+            "Run TWO checks and report them separately, because they fail "
+            "differently. EXPOSURE: does the text respect what this guideline "
+            "set may reveal? The rules are below. CONFORMANCE: does it match "
+            f"the template below and the content expectations of a "
+            f"`{document_type}`?"
+        )
+    else:
+        checks = (
+            "Run the CONFORMANCE check: does the document match the template "
+            "below and the content expectations of a "
+            f"`{document_type}`? Report that check separately."
+        )
+    parts = [_REVIEW_PROTOCOL.format(checks=checks)]
+    if exposure_text:
+        parts.append(
+            f"\n\n=== `{guideline_set}` EXPOSURE RULES ===\n"
+            f"{exposure_text}\n"
+            "=== END EXPOSURE RULES ===\n"
+        )
+    parts.append(
+        f"\n\n=== `{guideline_set}/{document_type}` TEMPLATE ===\n"
+        f"{(template or '').strip()}\n"
+        "=== END TEMPLATE ===\n"
+    )
+    return "".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -251,6 +326,77 @@ def initial_user_message(
         "you gather rather than on the request's wording. File a "
         "report_knowledge_gap for anything the template needs and the "
         "substrate does not hold. Then call emit_document once."
+    )
+
+
+def review_message(
+    *, prompt: str, title: str, body: str, statements: Any | None
+) -> str:
+    """The reviewer's sole user message, composed without writer history."""
+    if statements is None:
+        statement_text = "the cited statements could not be retrieved for this review"
+    else:
+        statement_text = json.dumps(statements, ensure_ascii=False, indent=2)
+    return (
+        "ORIGINAL DOCUMENTATION REQUEST:\n-----\n"
+        f"{prompt}\n"
+        "-----\n\n"
+        "FINISHED DOCUMENT TO REVIEW (verbatim):\n"
+        "=== DOCUMENT ===\n"
+        f"TITLE: {title}\n\n{body}"
+        "\n=== END DOCUMENT ===\n\n"
+        "CITED STATEMENTS:\n"
+        f"{statement_text}\n\n"
+        "Review only this finished document against the checks in your system "
+        "prompt, then call record_review once."
+    )
+
+
+def review_retry_message(
+    *,
+    prompt: str,
+    title: str,
+    body: str,
+    exposure_findings: list[ReviewFinding],
+    conformance_findings: list[ReviewFinding],
+) -> str:
+    """The rejected document and findings for the fresh writer context."""
+    groups = []
+    if exposure_findings:
+        groups.append(
+            "EXPOSURE FINDINGS:\n"
+            + "\n".join(
+                f"- {finding.where} — {finding.problem}"
+                for finding in exposure_findings
+            )
+        )
+    if conformance_findings:
+        groups.append(
+            "CONFORMANCE FINDINGS:\n"
+            + "\n".join(
+                f"- {finding.where} — {finding.problem}"
+                for finding in conformance_findings
+            )
+        )
+    findings = "\n\n".join(groups)
+    return (
+        "A reviewer checked this document and sent it back. This is a NEW "
+        "context: neither you nor the reviewer has the conversation in which "
+        "the document was written.\n\n"
+        "ORIGINAL DOCUMENTATION REQUEST:\n-----\n"
+        f"{prompt}\n"
+        "-----\n\n"
+        "DOCUMENT AS IT STANDS (verbatim):\n"
+        "=== DOCUMENT ===\n"
+        f"TITLE: {title}\n\n{body}"
+        "\n=== END DOCUMENT ===\n\n"
+        f"REVIEW FINDINGS:\n{findings}\n\n"
+        "This is the ONE further attempt. A second rejection ends the run "
+        "with nothing recorded. Fix the findings. You may read more from the "
+        "substrate if a finding needs material you do not have. The same "
+        "grounding rule applies: every statement_ids entry must be one THIS "
+        "RUN retrieved, including anything read before the rejection. Then "
+        "call emit_document once."
     )
 
 

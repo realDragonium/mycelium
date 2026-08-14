@@ -13,6 +13,7 @@ source becomes a filed gap rather than a paragraph.
 
 from __future__ import annotations
 
+import json
 import types
 
 import pytest
@@ -21,7 +22,13 @@ from mycelium import guidelines, prompt_store
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 from mycelium.docgen import DocgenConfig, DocumentWritten, NothingWritten
 from mycelium.docgen.loop import _slug, run_docgen
-from mycelium.docgen.tools import EMIT_TOOL, GAP_TOOL, RESOLVE_TOOL, build_tools
+from mycelium.docgen.tools import (
+    EMIT_TOOL,
+    GAP_TOOL,
+    RESOLVE_TOOL,
+    REVIEW_TOOL,
+    build_tools,
+)
 
 # --------------------------------------------------------------------------- #
 # Fakes
@@ -75,6 +82,41 @@ def _emit(**overrides):
     return _message([_tool_use(EMIT_TOOL, payload)])
 
 
+def _review_ok(*, check_exposure: bool = True):
+    payload = {"conformance": {"status": "pass", "findings": []}}
+    if check_exposure:
+        payload["exposure"] = {"status": "pass", "findings": []}
+    return _message(
+        [
+            _tool_use(
+                REVIEW_TOOL,
+                payload,
+            )
+        ]
+    )
+
+
+def _review_fail(
+    *,
+    check: str = "conformance",
+    where: str = "Steps",
+    problem: str = "the required verification step is missing",
+    status: str = "fail",
+    findings: list[dict] | None = None,
+):
+    payload = {
+        "exposure": {"status": "pass", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+    }
+    payload[check] = {
+        "status": status,
+        "findings": (
+            [{"where": where, "problem": problem}] if findings is None else findings
+        ),
+    }
+    return _message([_tool_use(REVIEW_TOOL, payload)])
+
+
 class FakeAnthropic:
     """Scripts a sequence of model responses; records each request's kwargs."""
 
@@ -87,6 +129,35 @@ class FakeAnthropic:
         return self
 
     def create(self, **kwargs):
+        messages = kwargs.get("messages") or []
+        for index, message in enumerate(messages):
+            if message.get("role") != "assistant":
+                continue
+            blocks = message.get("content")
+            if not isinstance(blocks, list):
+                continue
+            for block in blocks:
+                block_type = (
+                    block.get("type")
+                    if isinstance(block, dict)
+                    else getattr(block, "type", None)
+                )
+                if block_type != "tool_use":
+                    continue
+                tool_use_id = (
+                    block.get("id")
+                    if isinstance(block, dict)
+                    else getattr(block, "id", None)
+                )
+                following = messages[index + 1] if index + 1 < len(messages) else {}
+                results = following.get("content", [])
+                answered = following.get("role") == "user" and any(
+                    isinstance(result, dict)
+                    and result.get("type") == "tool_result"
+                    and result.get("tool_use_id") == tool_use_id
+                    for result in results
+                )
+                assert answered, f"unanswered tool_use id: {tool_use_id}"
         # `messages` is one list the loop mutates in place, so the snapshot has
         # to be taken here or every recorded call would show the final state.
         self.calls.append({**kwargs, "messages": list(kwargs.get("messages") or [])})
@@ -316,7 +387,9 @@ def test_resolution_offers_exactly_what_the_store_holds(kb_set):
         "internal-doc",
         {"guidance": "terse", "exposure": "staff-safe", "reference": "table"},
     )
-    client = FakeAnthropic([_resolve("internal-doc", "reference"), _emit()])
+    client = FakeAnthropic(
+        [_resolve("internal-doc", "reference"), _emit(), _review_ok()]
+    )
 
     result = _run(client)
 
@@ -331,14 +404,15 @@ def test_resolution_offers_exactly_what_the_store_holds(kb_set):
 
 
 def test_a_request_that_named_both_costs_no_resolution_turn(kb_set):
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     result = _run(client, guideline_set="kb-authoring", document_type="reference")
 
     assert isinstance(result, DocumentWritten)
     assert result.document_type == "reference"
-    # One turn only — the emit. Nothing was asked of the model about the set.
-    assert len(client.calls) == 1
+    # One writer turn and one independent review. Nothing was asked of the
+    # model about the set before the writer started.
+    assert len(client.calls) == 2
     assert result.trace["resolution_reason"] == "named by the request"
 
 
@@ -350,7 +424,7 @@ def test_a_named_set_narrows_the_choice_to_its_own_types(kb_set):
         "internal-doc",
         {"guidance": "terse", "exposure": "staff-safe", "tutorial": "walk"},
     )
-    client = FakeAnthropic([_resolve("kb-authoring", "how-to"), _emit()])
+    client = FakeAnthropic([_resolve("kb-authoring", "how-to"), _emit(), _review_ok()])
 
     _run(client, guideline_set="kb-authoring")
 
@@ -401,6 +475,7 @@ def test_a_named_document_type_is_not_up_for_decision(kb_set):
             _resolve("kb-authoring", "how-to"),
             _resolve("internal-doc", "reference"),
             _emit(),
+            _review_ok(),
         ]
     )
 
@@ -490,7 +565,7 @@ def test_a_set_with_no_guidance_row_costs_a_note_not_the_run():
     what it cannot do without."""
     result = _execute_with(
         load_texts=lambda *_a: (None, "EXPOSURE", "TEMPLATE"),
-        client=FakeAnthropic([_emit()]),
+        client=FakeAnthropic([_emit(), _review_ok()]),
         guideline_set="kb-authoring",
         document_type="how-to",
     )
@@ -499,17 +574,22 @@ def test_a_set_with_no_guidance_row_costs_a_note_not_the_run():
     assert "no set-wide guidance row for 'kb-authoring'" in result.trace["notes"]
 
 
-def test_a_set_with_no_exposure_row_costs_a_note_not_the_run():
-    """Missing exposure rules are recorded for the later review stage, but
-    do not prevent the writer from producing a document from its template."""
+def test_a_set_with_no_exposure_slot_is_conformance_checked_with_exposure_unchecked():
+    """No exposure row removes that property from the model's wire contract;
+    the harness records unchecked while still requiring conformance."""
+    client = FakeAnthropic([_emit(), _review_ok(check_exposure=False)])
     result = _execute_with(
         load_texts=lambda *_a: ("GUIDANCE", None, "TEMPLATE"),
-        client=FakeAnthropic([_emit()]),
+        client=client,
         guideline_set="kb-authoring",
         document_type="how-to",
     )
 
     assert isinstance(result, DocumentWritten)
+    schema = client.calls[1]["tools"][0]["input_schema"]
+    assert set(schema["properties"]) == {"conformance"}
+    assert schema["required"] == ["conformance"]
+    assert result.review.exposure.status == "unchecked"
     assert (
         "guideline set 'kb-authoring' states no exposure rules" in result.trace["notes"]
     )
@@ -521,7 +601,7 @@ def test_a_set_with_no_exposure_row_costs_a_note_not_the_run():
 
 
 def test_both_guideline_texts_are_injected_and_labelled(kb_set):
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -535,7 +615,7 @@ def test_both_guideline_texts_are_injected_and_labelled(kb_set):
 def test_the_resolved_sets_exposure_text_reaches_the_writer(kb_set):
     """The writer receives the disclosure boundary for the resolved set,
     labelled as that set's exposure row rather than undifferentiated prose."""
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -548,7 +628,7 @@ def test_the_stored_doctrine_wins_over_the_packaged_file(kb_set):
     prompt_store.save(
         kb_set, type="doctrine", name="docgen", text="EDITED DOCTRINE ROW"
     )
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -558,7 +638,7 @@ def test_the_stored_doctrine_wins_over_the_packaged_file(kb_set):
 
 
 def test_an_unreadable_doctrine_leaves_the_run_standing(kb_set, tmp_path):
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     result = _run(
         client,
@@ -575,7 +655,7 @@ def test_an_unreadable_doctrine_leaves_the_run_standing(kb_set, tmp_path):
 def test_the_packaged_doctrine_is_what_a_fresh_instance_reads(kb_set):
     """No stored row: the file beside the package is the seed and the
     fallback, and it actually reaches the model."""
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -589,7 +669,7 @@ def test_the_packaged_doctrine_is_what_a_fresh_instance_reads(kb_set):
 
 def test_recon_runs_on_the_request_and_its_ids_count_as_retrieved(kb_set):
     substrate = _substrate()
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     result = _run(
         client,
@@ -639,7 +719,9 @@ def test_a_failing_read_is_reported_not_fabricated(kb_set):
 
 
 def test_a_document_with_no_statement_ids_is_refused_and_asked_again(kb_set):
-    client = FakeAnthropic([_emit(statement_ids=[]), _emit(statement_ids=["stm_1"])])
+    client = FakeAnthropic(
+        [_emit(statement_ids=[]), _emit(statement_ids=["stm_1"]), _review_ok()]
+    )
 
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -671,6 +753,7 @@ def test_citing_an_id_the_run_never_retrieved_is_refused(kb_set):
         [
             _emit(statement_ids=["stm_1", "stm_404"]),
             _emit(statement_ids=["stm_1"]),
+            _review_ok(),
         ]
     )
 
@@ -715,6 +798,7 @@ def test_an_id_truncated_out_of_the_tool_result_is_not_retrieved(kb_set):
             _message([_tool_use("search_statements", {"query": "sso"})]),
             _emit(statement_ids=["stm_1", "stm_cut"]),
             _emit(statement_ids=["stm_1"]),
+            _review_ok(),
         ]
     )
 
@@ -731,7 +815,9 @@ def test_an_id_truncated_out_of_the_tool_result_is_not_retrieved(kb_set):
 
 
 def test_a_blank_title_or_body_is_refused(kb_set):
-    client = FakeAnthropic([_emit(title="   "), _emit(body="  \n "), _emit()])
+    client = FakeAnthropic(
+        [_emit(title="   "), _emit(body="  \n "), _emit(), _review_ok()]
+    )
 
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -749,7 +835,7 @@ def test_a_malformed_emit_is_retried_once_then_refused(kb_set):
 
 
 def test_the_slug_is_derived_from_the_title_not_chosen(kb_set):
-    client = FakeAnthropic([_emit(title="Configuring Single Sign-On!")])
+    client = FakeAnthropic([_emit(title="Configuring Single Sign-On!"), _review_ok()])
 
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -793,6 +879,7 @@ def test_a_missing_fact_is_filed_as_a_gap_and_the_run_continues(kb_set):
                 [_tool_use(GAP_TOOL, {"text": "no statements on sso session TTL"})]
             ),
             _emit(gaps=["session TTL"]),
+            _review_ok(),
         ]
     )
 
@@ -821,7 +908,11 @@ def test_a_missing_fact_is_filed_as_a_gap_and_the_run_continues(kb_set):
 
 def test_a_gap_store_failure_does_not_take_the_run_down(kb_set):
     client = FakeAnthropic(
-        [_message([_tool_use(GAP_TOOL, {"text": "missing"})]), _emit()]
+        [
+            _message([_tool_use(GAP_TOOL, {"text": "missing"})]),
+            _emit(),
+            _review_ok(),
+        ]
     )
 
     result = _run(
@@ -839,7 +930,13 @@ def test_a_gap_store_failure_does_not_take_the_run_down(kb_set):
 
 def test_an_empty_gap_report_is_rejected_without_reaching_the_store(kb_set):
     reporter = FakeGapReporter()
-    client = FakeAnthropic([_message([_tool_use(GAP_TOOL, {"text": "   "})]), _emit()])
+    client = FakeAnthropic(
+        [
+            _message([_tool_use(GAP_TOOL, {"text": "   "})]),
+            _emit(),
+            _review_ok(),
+        ]
+    )
 
     _run(
         client,
@@ -877,7 +974,7 @@ def test_the_op_cap_forces_a_finalize_that_is_still_gated(kb_set):
 
 
 def test_a_forced_finalize_can_still_produce_a_grounded_document(kb_set):
-    client = FakeAnthropic([_emit()])
+    client = FakeAnthropic([_emit(), _review_ok()])
 
     result = _run(
         client,
@@ -893,7 +990,11 @@ def test_a_forced_finalize_can_still_produce_a_grounded_document(kb_set):
 
 def test_a_text_only_turn_is_nudged_once_then_forced(kb_set):
     client = FakeAnthropic(
-        [_message([_text("Here is the document:")], stop="end_turn"), _emit()]
+        [
+            _message([_text("Here is the document:")], stop="end_turn"),
+            _emit(),
+            _review_ok(),
+        ]
     )
 
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
@@ -903,7 +1004,7 @@ def test_a_text_only_turn_is_nudged_once_then_forced(kb_set):
 
 
 def test_a_model_error_mid_run_degrades_rather_than_raising(kb_set):
-    client = FakeAnthropic([RuntimeError("overloaded"), _emit()])
+    client = FakeAnthropic([RuntimeError("overloaded"), _emit(), _review_ok()])
 
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
 
@@ -912,12 +1013,258 @@ def test_a_model_error_mid_run_degrades_rather_than_raising(kb_set):
 
 
 # --------------------------------------------------------------------------- #
+# Independent review
+# --------------------------------------------------------------------------- #
+
+
+def test_the_reviewer_never_receives_the_writers_reasoning(kb_set):
+    """The isolation claim is pinned at the client boundary: writer-only
+    reasoning reaches a later writer request and no part of the review call."""
+    sentinel = "WRITER_PRIVATE_REASONING_7e3c"
+    thinking = types.SimpleNamespace(
+        type="thinking", thinking=sentinel, signature="test-signature"
+    )
+    client = FakeAnthropic(
+        [
+            _message(
+                [
+                    thinking,
+                    _text(sentinel),
+                    _tool_use("get_statements", {"ids": ["stm_1"]}, id="read-1"),
+                ]
+            ),
+            _emit(),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(
+        client,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        config=_config(thinking=True),
+    )
+
+    assert isinstance(result, DocumentWritten)
+    writer_calls = client.calls[:2]
+    reviewer_calls = client.calls[2:]
+    assert sentinel in json.dumps(writer_calls, default=str)
+    assert all(sentinel not in json.dumps(call, default=str) for call in reviewer_calls)
+    assert len(reviewer_calls) == 1
+    review_call = reviewer_calls[0]
+    assert len(review_call["messages"]) == 1
+    assert review_call["messages"][0]["role"] == "user"
+    assert review_call["system"] != writer_calls[0]["system"]
+
+
+def test_the_reviewer_is_given_the_document_the_exposure_text_and_the_template(
+    kb_set,
+):
+    """The judging context receives its evidence and both judging rules, but
+    not the production guidance that belongs only to the writer."""
+    body = "# SSO\n\nA reader-visible finished body."
+    client = FakeAnthropic([_emit(body=body), _review_ok()])
+
+    _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    review_call = client.calls[1]
+    assert body in review_call["messages"][0]["content"]
+    assert "EXPOSURE RULES: reveal only published behaviour." in review_call["system"]
+    assert "HOW-TO TEMPLATE: steps." in review_call["system"]
+    assert "SET-WIDE GUIDANCE: source everything." not in review_call["system"]
+
+
+def test_the_reviewer_sees_the_statements_the_document_cited(kb_set):
+    """The harness hydrates cited ids for review, so the reviewer can inspect
+    the material behind a disclosure without inheriting the writer's reads."""
+    cited = {"id": "stm_1", "kind": "capability", "text": "CITED SSO FACT"}
+    uncited = {"id": "stm_2", "kind": "state", "text": "UNCITED OTHER FACT"}
+
+    def get_statements(arguments):
+        return [item for item in (cited, uncited) if item["id"] in arguments["ids"]]
+
+    substrate = _substrate(
+        survey_statements=[cited, uncited], get_statements=get_statements
+    )
+    client = FakeAnthropic([_emit(statement_ids=["stm_1"]), _review_ok()])
+
+    result = _run(
+        client,
+        substrate=substrate,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+
+    assert isinstance(result, DocumentWritten)
+    review_request = json.dumps(client.calls[1], default=str)
+    assert "CITED SSO FACT" in review_request
+    assert "UNCITED OTHER FACT" not in review_request
+
+
+def test_the_two_checks_are_reported_separately(kb_set):
+    """An exposure failure does not blur into conformance; each verdict and
+    its own findings remain independently visible in the review trace."""
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(
+                check="exposure",
+                where="Credentials",
+                problem="reveals an internal token",
+            ),
+            _emit(),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    first = result.trace["reviews"][0]
+    assert first["exposure"]["status"] == "fail"
+    assert first["exposure"]["findings"][0]["problem"] == ("reveals an internal token")
+    assert first["conformance"] == {"status": "pass", "findings": []}
+
+
+def test_a_failed_review_returns_to_the_writer_exactly_once(kb_set):
+    """One rejection creates one fresh writer request carrying the rejected
+    body and actionable finding; a passing second review ends the exchange."""
+    rejected_body = "# SSO\n\nRejected body version one."
+    client = FakeAnthropic(
+        [
+            _emit(body=rejected_body),
+            _review_fail(problem="add the missing verification step"),
+            _emit(body="# SSO\n\nRevised body with verification."),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    assert result.review.attempts == 2
+    retry = client.calls[2]
+    assert len(retry["messages"]) == 1
+    assert retry["messages"][0]["role"] == "user"
+    retry_text = retry["messages"][0]["content"]
+    assert "add the missing verification step" in retry_text
+    assert rejected_body in retry_text
+    assert "RECON (survey_statements" not in retry_text
+    assert len(result.trace["reviews"]) == 2
+
+
+def test_a_second_failed_review_finishes_the_run_with_the_findings(kb_set):
+    """The one retry is a hard boundary: another rejection returns nothing,
+    and its actionable text is preserved for the documentation run row."""
+    problem = "the procedure still omits validation"
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(problem="add validation"),
+            _emit(body="# SSO\n\nStill incomplete."),
+            _review_fail(problem=problem),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, NothingWritten)
+    assert result.review is not None
+    assert result.review.passed is False
+    assert result.review.attempts == 2
+    assert problem in result.reason
+
+
+def test_findings_make_a_check_fail_however_the_reviewer_labelled_it(kb_set):
+    """Finding evidence wins over a contradictory pass label and sends the
+    document back through the single writer retry."""
+    problem = "the summary exposes an internal hostname"
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(
+                check="exposure", status="pass", problem=problem, where="Summary"
+            ),
+            _emit(body="# SSO\n\nHostname removed."),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    assert result.trace["reviews"][0]["exposure"]["status"] == "fail"
+    assert problem in client.calls[2]["messages"][0]["content"]
+
+
+def test_a_reviewer_that_fails_a_check_without_saying_where_still_gives_the_writer_something(
+    kb_set,
+):
+    """A bare fail is reconciled into a harness-authored finding, avoiding a
+    content-free instruction to try the same document again."""
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(findings=[]),
+            _emit(body="# SSO\n\nA second version."),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    retry_text = client.calls[2]["messages"][0]["content"]
+    assert "without naming a problem" in retry_text
+    first_finding = result.trace["reviews"][0]["conformance"]["findings"][0]
+    assert first_finding["where"] == "the document (no location supplied)"
+
+
+def test_a_review_that_cannot_be_run_records_no_document(kb_set):
+    """A reviewer API failure closes the registry gate; grounded writer text
+    cannot escape as DocumentWritten without an independent verdict."""
+    client = FakeAnthropic([_emit(), RuntimeError("review service unavailable")])
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, NothingWritten)
+    assert result.review is None
+    assert "could not be reviewed" in result.reason
+    assert "review service unavailable" in result.reason
+
+
+def test_the_trace_records_every_review(kb_set):
+    """Each gate invocation has an ordered trace entry with its attempt,
+    separate checks, findings, and combined verdict."""
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(problem="missing prerequisite"),
+            _emit(body="# SSO\n\nPrerequisite added."),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    assert [review["attempt"] for review in result.trace["reviews"]] == [1, 2]
+    assert result.trace["reviews"][0]["passed"] is False
+    assert result.trace["reviews"][1] == {
+        "attempt": 2,
+        "exposure": {"status": "pass", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "passed": True,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # The trace
 # --------------------------------------------------------------------------- #
 
 
 def test_the_trace_records_what_the_run_resolved_and_grounded(kb_set):
-    client = FakeAnthropic([_resolve(), _emit()])
+    client = FakeAnthropic([_resolve(), _emit(), _review_ok()])
 
     result = _run(client)
 
@@ -933,5 +1280,5 @@ def test_the_trace_records_what_the_run_resolved_and_grounded(kb_set):
         "cited_ids": 1,
         "gaps_filed": 0,
     }
-    assert trace["model_turns"] == 2
-    assert trace["tokens"]["total"] == 30
+    assert trace["model_turns"] == 3
+    assert trace["tokens"]["total"] == 45

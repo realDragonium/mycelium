@@ -3,7 +3,8 @@
 `run_docgen` returns exactly one of `DocumentWritten | NothingWritten`. These
 are the shapes `doc_runs` persists: it reads `outcome` to decide the run's
 terminal state, hands the document fields to `docs_store.upsert_document`,
-and records `reason` on a refusal.
+and records `reason` on a refusal. The review record travels with the
+document, so reaching the persistent shape proves that the gate ran.
 
 Neither shape carries an id. The loop decides *what the document says*; where
 it lands — the `gdc_…` row, its `last_run_id` — is the executor's business,
@@ -21,6 +22,37 @@ from typing import Literal, Union
 from pydantic import BaseModel, Field
 
 
+class ReviewFinding(BaseModel):
+    """One actionable reason a review check failed."""
+
+    #: Where in the document the problem is — a section heading or a quoted
+    #: phrase. A finding a writer cannot locate is not actionable.
+    where: str
+    #: What failed, in the reviewer's own words.
+    problem: str
+
+
+class ReviewCheck(BaseModel):
+    """One independently reported side of the review gate."""
+
+    status: Literal["pass", "fail", "unchecked"]
+    findings: list[ReviewFinding] = Field(default_factory=list)
+
+
+class ReviewRecord(BaseModel):
+    """The review gate's verdict carried by a terminal outcome."""
+
+    #: Whether the text respects what this guideline set may reveal.
+    #: `unchecked` when the set states no exposure rules.
+    exposure: ReviewCheck
+    #: Whether it matches the template and the document type's expectations.
+    conformance: ReviewCheck
+    #: How many times a written document was put to the reviewer. 1 is a
+    #: clean first pass; 2 means the retry fired.
+    attempts: int
+    passed: bool
+
+
 class DocumentWritten(BaseModel):
     outcome: Literal["document_written"] = "document_written"
     #: Stable identity of the page. Derived from the title by the harness,
@@ -33,6 +65,8 @@ class DocumentWritten(BaseModel):
     statement_ids: list[str] = Field(default_factory=list)
     guideline_set: str
     document_type: str
+    #: The independent gate that accepted this exact document.
+    review: ReviewRecord
     #: What the guideline set asked for that the substrate could not supply —
     #: the run's own account, which is NOT a receipt. What actually reached a
     #: curator's queue is `trace["reported_gaps"]`, and the two are kept apart
@@ -51,6 +85,8 @@ class NothingWritten(BaseModel):
     reason: str
     guideline_set: str | None = None
     document_type: str | None = None
+    #: Present only when a written document reached and failed the review gate.
+    review: ReviewRecord | None = None
     gaps: list[str] = Field(default_factory=list)
     trace: dict = Field(default_factory=dict)
 

@@ -1,6 +1,6 @@
 """Tool wiring for the inner model.
 
-Three kinds of tool reach the model:
+Four kinds of tool reach the model contexts:
 
   * the discovered substrate READ primitives (from `substrate.tool_specs()`),
     which this module never names — `ask/substrate.py` decides what a read is,
@@ -11,8 +11,10 @@ Three kinds of tool reach the model:
     loop that wants it says so. A generation run wants it: a guideline
     section the substrate cannot support is a gap to file, not a paragraph to
     invent;
-  * one **terminal** tool, `emit_document`, which is how the model hands the
-    finished document to the harness.
+  * one writer **terminal** tool, `emit_document`, which is how the model hands
+    the finished document to the harness; and
+  * the isolated reviewer's sole tool, `record_review`. It never shares a
+    context or a tool list with the writer.
 
 There is no write tool and no `draft_id` splice, so nothing a documentation
 run produces can reach the substrate.
@@ -29,10 +31,12 @@ from typing import Any
 
 from ..agentloop import read_tool_defs
 from ..ask.substrate import ToolSpec
+from .schema import ReviewCheck, ReviewFinding
 
 EMIT_TOOL = "emit_document"
 GAP_TOOL = "report_knowledge_gap"
 RESOLVE_TOOL = "choose_guideline_set"
+REVIEW_TOOL = "record_review"
 
 _EMIT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -179,6 +183,72 @@ def resolve_tool_def(catalogue: dict[str, list[str]], preferred: str | None) -> 
     }
 
 
+def review_tool_def(*, check_exposure: bool) -> dict:
+    """The reviewer's one forced tool, shaped only for checks it can run.
+
+    Omitting exposure altogether when the set has no rules makes
+    ``unchecked`` a property of the harness request, not a verdict the model
+    can assert or contradict.
+    """
+
+    check_schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "description": (
+            "Report pass with no findings. Report fail only with findings "
+            "that name both what failed and where in the document it failed. "
+            "A reviewer who cannot point at the problem does not have one."
+        ),
+        "properties": {
+            "status": {"type": "string", "enum": ["pass", "fail"]},
+            "findings": {
+                "type": "array",
+                "description": (
+                    "Actionable failures. A check with no findings is a pass; "
+                    "each finding must name what failed and where it appears."
+                ),
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "where": {
+                            "type": "string",
+                            "description": (
+                                "A section heading or quoted phrase locating "
+                                "the problem in the document."
+                            ),
+                        },
+                        "problem": {
+                            "type": "string",
+                            "description": "What failed at that location.",
+                        },
+                    },
+                    "required": ["where", "problem"],
+                },
+            },
+        },
+        "required": ["status", "findings"],
+    }
+    properties = {"conformance": check_schema}
+    if check_exposure:
+        properties = {"exposure": check_schema, **properties}
+    checks = "two independent checks" if check_exposure else "conformance check"
+    return {
+        "name": REVIEW_TOOL,
+        "description": (
+            f"Record the {checks} on the finished document. Call exactly once "
+            "after reviewing it."
+        ),
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": properties,
+            "required": list(properties),
+        },
+    }
+
+
 def build_tools(read_specs: list[ToolSpec]) -> list[dict]:
     """Full tool list handed to the model: the discovered read primitives,
     the knowledge-gap report, and the emit terminal."""
@@ -205,6 +275,61 @@ def parse_emit_input(data: dict) -> tuple[str, str, list[str], list[str]]:
     ids = _str_list(data.get("statement_ids"))
     gaps = _str_list(data.get("gaps"))
     return title.strip(), body, ids, gaps
+
+
+def parse_review_input(
+    data: dict, *, check_exposure: bool
+) -> tuple[ReviewCheck, ReviewCheck]:
+    """Parse review wire input into ``(exposure, conformance)``.
+
+    Wire shape only — raises ``ValueError`` for the loop's closed-gate path.
+    Whether the checks amount to a passing review is the loop's judgement;
+    this function only reconciles labels with the findings that constitute
+    their evidence.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("record_review input is not an object")
+    conformance = _parse_review_check(data.get("conformance"), "conformance")
+    if check_exposure:
+        exposure = _parse_review_check(data.get("exposure"), "exposure")
+    else:
+        exposure = ReviewCheck(status="unchecked")
+    return exposure, conformance
+
+
+def _parse_review_check(value: Any, name: str) -> ReviewCheck:
+    if not isinstance(value, dict):
+        raise ValueError(f"{name} review is not an object")
+    status = value.get("status")
+    if status not in ("pass", "fail"):
+        raise ValueError(f"{name} status must be pass or fail")
+    raw_findings = value.get("findings")
+    if not isinstance(raw_findings, list):
+        raise ValueError(f"{name} findings must be an array")
+    findings: list[ReviewFinding] = []
+    for raw in raw_findings:
+        if not isinstance(raw, dict):
+            raise ValueError(f"{name} finding is not an object")
+        where = raw.get("where")
+        problem = raw.get("problem")
+        if not isinstance(where, str) or not isinstance(problem, str):
+            raise ValueError(f"{name} finding needs string where and problem")
+        findings.append(ReviewFinding(where=where, problem=problem))
+
+    # Findings are the evidence and the label is not. Reconcile a model that
+    # called evidence a pass instead of trusting the contradictory label.
+    if findings:
+        status = "fail"
+    elif status == "fail":
+        # A bare fail gives the writer only "try again". Preserve the failure
+        # but manufacture the actionable fact that the reviewer named none.
+        findings.append(
+            ReviewFinding(
+                where="the document (no location supplied)",
+                problem="the reviewer failed this check without naming a problem",
+            )
+        )
+    return ReviewCheck(status=status, findings=findings)
 
 
 def _str_list(value: Any) -> list[str]:
