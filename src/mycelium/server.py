@@ -250,9 +250,10 @@ TOOLS: list[Callable[..., Any]] = []
 #: tens of seconds and hold a model context worth of memory while they do. They
 #: are bounded far tighter than the general pool: memory, not threads, is what
 #: runs out first, and the embedding backend is usually competing for the same
-#: box. `start_research` is not here because the TOOL is fast — it returns a run
-#: id immediately. Its background run is a model loop like any other and draws
-#: on the same budget; see `model_loop_slot`.
+#: box. `start_research` and `request_documentation` are not here because the
+#: TOOLS are fast — they return a run id immediately. Their background runs are
+#: model loops like any other and draw on the same budget; see
+#: `model_loop_slot`.
 _MODEL_LOOP_TOOLS = frozenset({"ask", "ingest"})
 _MODEL_LOOP_MAX_CONCURRENT_ENV = "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT"
 
@@ -2080,6 +2081,106 @@ def get_research_run(run_id: str) -> dict[str, Any]:
     if row is None:
         raise ValueError(f"research run not found: {run_id}")
     return research_store.serialize_run(row)
+
+
+def _check_guideline_selection(
+    guideline_set: str | None, document_type: str | None
+) -> None:
+    """Refuse a guideline set, or a document type within one, that nothing is
+    stored under.
+
+    Sets are not a registry to consult: they are prompt-store rows named
+    `<set>/<slot>` (docs/GUIDELINE_SETS.md), so "does this set exist" is "are
+    there live rows with that prefix" — answered from the same listing that
+    names the alternatives back to the caller.
+
+    A document type is only checkable once a set is named, since the template
+    is a row of that set. Named together, both are checked here rather than
+    left to fail deep inside a background run whose only report is an `error`
+    column read minutes later.
+    """
+    from . import guidelines, prompt_store
+
+    if guideline_set is None:
+        return
+
+    slots: dict[str, set[str]] = {}
+    for row in prompt_store.list_current(_prompts_db(), guidelines.TYPE):
+        set_name, _, slot = row["name"].partition("/")
+        slots.setdefault(set_name, set()).add(slot)
+
+    if guideline_set not in slots:
+        raise ValueError(
+            f"unknown guideline set '{guideline_set}'; configured: {sorted(slots)}"
+        )
+    if document_type is None:
+        return
+    # `guidance` is the set-wide instruction, not something a run can produce.
+    available = sorted(slots[guideline_set] - {"guidance"})
+    if document_type not in available:
+        raise ValueError(
+            f"guideline set '{guideline_set}' has no template for document type "
+            f"'{document_type}'; available: {available}"
+        )
+
+
+def _optional_name(value: str | None) -> str | None:
+    """A caller-supplied optional name, normalized: blank is not a name."""
+    return value.strip() or None if value is not None else None
+
+
+@tool
+def request_documentation(
+    prompt: str,
+    guideline_set: str | None = None,
+    document_type: str | None = None,
+) -> dict[str, Any]:
+    """Request a background documentation run: generate one document from
+    `prompt` and store it as a generated document.
+
+    Returns immediately with the serialized run row (its `status` will be
+    "running"); poll `get_documentation_run(run_id)` for the outcome and
+    `get_generated_document(document_id)` for what it wrote. `guideline_set`
+    picks the writing guidance (see `list_prompt_texts(type="guideline-set")`)
+    and `document_type` the template within it; left out, they stay null on
+    the row and the run resolves them. Raises when the active-run cap is
+    reached (MYCELIUM_DOCGEN_MAX_ACTIVE, default 2), when `guideline_set` is
+    unknown, when `document_type` is not one that set can write, or when
+    `prompt` is blank or longer than MYCELIUM_DOCGEN_MAX_PROMPT_CHARS.
+    Returns {run row: id, prompt, guideline_set, document_type, status,
+    created_at, created_by, started_at, finished_at, outcome, document_id,
+    error}."""
+    from . import auth as _auth
+    from . import doc_runs, docs_store
+    from .docgen import DocgenConfig
+
+    text = prompt.strip()
+    if not text:
+        raise ValueError("prompt is required")
+    max_chars = DocgenConfig.from_env().max_prompt_chars
+    if len(text) > max_chars:
+        raise ValueError(
+            f"prompt is {len(text)} characters; the limit is {max_chars} "
+            "(MYCELIUM_DOCGEN_MAX_PROMPT_CHARS)"
+        )
+
+    guideline_set = _optional_name(guideline_set)
+    document_type = _optional_name(document_type)
+    _check_guideline_selection(guideline_set, document_type)
+
+    principal = _auth.current_principal.get()
+    created_by = principal.id if principal is not None else None
+    run_id = doc_runs.start_run(
+        prompt=text,
+        guideline_set=guideline_set,
+        document_type=document_type,
+        created_by=created_by,
+        conn=_drafts_db(),
+    )
+    row = require(
+        docs_store.get_run(_drafts_db(), run_id), "documentation run just created"
+    )
+    return docs_store.serialize_run(row)
 
 
 @tool

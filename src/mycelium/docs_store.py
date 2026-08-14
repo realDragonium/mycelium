@@ -164,6 +164,17 @@ def list_runs(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
     )
 
 
+def count_active(conn: sqlite3.Connection) -> int:
+    """Runs that have started and not finished. The executor's concurrency
+    bound is counted from here rather than from live threads, so a restart
+    that loses the threads does not also lose the count."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM documentation_runs "
+        "WHERE started_at IS NOT NULL AND finished_at IS NULL"
+    ).fetchone()
+    return int(row["n"])
+
+
 def mark_orphaned(conn: sqlite3.Connection) -> int:
     # Called at server startup, when no worker thread can exist — so EVERY
     # unfinished row is an orphan, including one stranded 'queued' by a crash
