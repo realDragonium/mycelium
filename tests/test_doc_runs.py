@@ -284,6 +284,105 @@ def test_a_page_rewritten_by_a_second_run_carries_the_second_review(tmp_path):
     assert document["review"] == second_review
 
 
+def test_two_runs_that_only_share_a_title_keep_their_own_pages(tmp_path):
+    """A slug is derived from the title, so an unremarkable title like
+    "Overview" is one every guideline set and document type will reach for.
+
+    They are not the same page. A tutorial's overview and a reference's
+    overview answer different questions, and collapsing them loses one body
+    while telling both runs they succeeded.
+    """
+    conn = _conn(tmp_path)
+    first_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            slug="overview",
+            title="Overview",
+            body="The tutorial's overview",
+            guideline_set="kb-authoring",
+            document_type="tutorial",
+        ),
+    )
+    doc_runs.wait_all()
+    second_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            slug="overview",
+            title="Overview",
+            body="The reference's overview",
+            guideline_set="kb-authoring",
+            document_type="reference",
+        ),
+    )
+    doc_runs.wait_all()
+
+    assert len(docs_store.list_documents(conn)) == 2
+
+    first = docs_store.serialize_run(docs_store.get_run(conn, first_run_id))
+    second = docs_store.serialize_run(docs_store.get_run(conn, second_run_id))
+    assert first["outcome"] == second["outcome"] == "document_written"
+    assert first["document_id"] != second["document_id"]
+    assert first["document_superseded"] is False
+    assert second["document_superseded"] is False
+
+    first_document = docs_store.get_document(conn, first["document_id"])
+    second_document = docs_store.get_document(conn, second["document_id"])
+    assert first_document["body"] == "The tutorial's overview"
+    assert second_document["body"] == "The reference's overview"
+
+
+def test_a_run_whose_page_was_rewritten_says_so(tmp_path):
+    """Two runs against the same page is a legitimate update, and the first
+    run did write. What it may not do is keep pointing at a body that is no
+    longer the one it wrote with nothing to say so."""
+    conn = _conn(tmp_path)
+    common = {"guideline_set": "kb-authoring", "document_type": "how-to"}
+    first_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            body="First body", **common
+        ),
+    )
+    doc_runs.wait_all()
+    second_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            body="Second body", **common
+        ),
+    )
+    doc_runs.wait_all()
+
+    assert len(docs_store.list_documents(conn)) == 1
+    first = docs_store.serialize_run(docs_store.get_run(conn, first_run_id))
+    second = docs_store.serialize_run(docs_store.get_run(conn, second_run_id))
+    assert first["document_id"] == second["document_id"]
+    assert first["outcome"] == "document_written"
+    assert first["document_superseded"] is True
+    assert second["document_superseded"] is False
+    assert docs_store.get_document(conn, first["document_id"])["body"] == "Second body"
+
+
+def test_a_run_that_wrote_nothing_is_not_superseded(tmp_path):
+    conn = _conn(tmp_path)
+    run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: {
+            "outcome": "nothing_written",
+            "reason": "the substrate had nothing to say",
+        },
+    )
+    doc_runs.wait_all()
+
+    row = docs_store.serialize_run(docs_store.get_run(conn, run_id))
+    assert row["outcome"] == "nothing_written"
+    assert row["document_superseded"] is False
+
+
 def test_runner_exception_marks_failed(tmp_path):
     conn = _conn(tmp_path)
 

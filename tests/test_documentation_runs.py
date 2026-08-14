@@ -203,6 +203,150 @@ def test_upsert_document_updates_same_slug_in_place(tmp_path):
     assert len(docs_store.list_documents(conn)) == 1
 
 
+def test_upsert_document_keeps_the_same_slug_apart_across_sets_and_types(tmp_path):
+    """A slug follows from a title, and titles repeat. What makes two pages the
+    same page is the slug together with the set and type they were written
+    for — a tutorial's "Overview" is not a reference's."""
+    conn = _conn(tmp_path)
+    tutorial = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="The tutorial's overview",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+    )
+    reference = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="The reference's overview",
+        guideline_set="kb-authoring",
+        document_type="reference",
+    )
+    other_set = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Another set's overview",
+        guideline_set="api-docs",
+        document_type="tutorial",
+    )
+
+    assert len({tutorial, reference, other_set}) == 3
+    assert len(docs_store.list_documents(conn)) == 3
+    assert docs_store.get_document(conn, tutorial)["body"] == "The tutorial's overview"
+    assert (
+        docs_store.get_document(conn, reference)["body"] == "The reference's overview"
+    )
+
+
+def test_upsert_document_still_updates_the_same_page_in_place(tmp_path):
+    """The finer key must not turn a genuine second pass at one page into a
+    second row."""
+    conn = _conn(tmp_path)
+    first = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+        run_id="drn_1",
+    )
+    second = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Second",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+        run_id="drn_2",
+    )
+
+    assert first == second
+    assert len(docs_store.list_documents(conn)) == 1
+    assert docs_store.get_document(conn, first)["body"] == "Second"
+
+
+def test_migrating_a_pre_rekey_database_keeps_its_pages_and_applies_the_new_key(
+    tmp_path,
+):
+    """The table this changes already exists in deployed databases, holding
+    rows under a UNIQUE(slug) it no longer has.
+
+    This is that table verbatim as the previous release created it, including
+    a page whose set and type were never resolved — the case a NULL-tolerant
+    unique key would quietly fail to constrain.
+    """
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    conn.executescript(
+        """
+        CREATE TABLE generated_documents (
+            id            TEXT PRIMARY KEY,
+            slug          TEXT NOT NULL UNIQUE,
+            title         TEXT NOT NULL,
+            guideline_set TEXT,
+            document_type TEXT,
+            body          TEXT NOT NULL,
+            statement_ids TEXT NOT NULL DEFAULT '[]',
+            review        TEXT NOT NULL DEFAULT '{}',
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            last_run_id   TEXT
+        );
+        CREATE INDEX generated_documents_updated
+            ON generated_documents (updated_at);
+        INSERT INTO generated_documents
+            (id, slug, title, guideline_set, document_type, body, statement_ids,
+             review, created_at, updated_at, last_run_id)
+        VALUES
+            ('gdc_sso', 'configuring-sso', 'Configuring SSO', 'kb-authoring',
+             'how-to', '# SSO', '["stm_1"]', '{"passed": true}',
+             '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 'drn_old'),
+            ('gdc_overview', 'overview', 'Overview', NULL, NULL,
+             'Legacy overview', '["stm_9"]', '{}',
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL);
+        """
+    )
+    conn.commit()
+
+    docs_store.migrate(conn)
+    docs_store.migrate(conn)
+
+    rows = {row["id"]: row for row in docs_store.list_documents(conn)}
+    assert set(rows) == {"gdc_sso", "gdc_overview"}
+    assert rows["gdc_sso"]["body"] == "# SSO"
+    assert rows["gdc_sso"]["created_at"] == "2026-01-01T00:00:00Z"
+    assert rows["gdc_sso"]["last_run_id"] == "drn_old"
+    assert docs_store.serialize_document(rows["gdc_sso"])["statement_ids"] == ["stm_1"]
+    assert rows["gdc_overview"]["body"] == "Legacy overview"
+
+    # The old page is still reachable and still updated in place by its own key.
+    assert (
+        docs_store.upsert_document(
+            conn,
+            slug="configuring-sso",
+            title="Configuring SSO",
+            body="# SSO\n\nRewritten",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+        )
+        == "gdc_sso"
+    )
+    # And the slug alone no longer collapses two pages onto it.
+    other = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="The tutorial",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+    )
+    assert other != "gdc_sso"
+    assert len(docs_store.list_documents(conn)) == 3
+
+
 def test_upsert_document_rejects_blank_slug_and_title(tmp_path):
     conn = _conn(tmp_path)
 
