@@ -12,6 +12,7 @@ import types
 
 import pytest
 
+from mycelium.agentloop import ids_present_in, serialize
 from mycelium.ask import Answered, AskConfig, NeedsClarification, run_ask
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 
@@ -618,6 +619,27 @@ def test_strip_thinking_sanitizes_forced_turn_history():
     assert out[2]["content"][0]["type"] == "tool_result"  # tool_result kept
     assert out[0]["content"] == "q"  # string content untouched
     assert out[3]["content"] == [th]  # not emptied
+
+
+def test_ids_present_in_matches_statement_identity_not_a_shared_prefix():
+    """A longer statement id must not vouch for a shorter id sharing its prefix."""
+    ids = {"stm_1", "stm_12"}
+
+    assert ids_present_in('{"id": "stm_12"}', ids) == {"stm_12"}
+    assert ids_present_in('{"first": "stm_1", "second": "stm_12"}', ids) == ids
+
+
+def test_serialize_drops_a_statement_id_fragment_cut_by_the_cap():
+    """Truncation must not manufacture a shorter id for provenance checks."""
+    full_id = "stm_partial_identifier"
+    partial_id = "stm_partial"
+    empty = json.dumps({"padding": "", "id": full_id}, ensure_ascii=False)
+    padding_length = 20_000 - empty.index(full_id) - len(partial_id)
+    result = {"padding": "x" * padding_length, "id": full_id}
+    raw = json.dumps(result, ensure_ascii=False)
+
+    assert raw[:20_000].endswith(partial_id)
+    assert partial_id not in serialize(result)
 
 
 def test_substrate_retries_once_then_raises():

@@ -47,6 +47,7 @@ from ..agentloop import (
     check_budget,
     collect_statement_ids,
     default_client,
+    ids_present_in,
     load_doctrine,
 )
 from ..agentloop import (
@@ -570,15 +571,15 @@ def _note_retrieved(ctx: _RunContext, result: Any, sent: str) -> None:
 
     Two filters, and both matter. The structural one (`collect_statement_ids`)
     takes only `id` keys, so a link's `to_id` — a pointer to something not
-    fetched — is not counted as read. The textual one intersects with what was
-    actually SENT, because a large result is truncated on its way into the
-    conversation: an id past the cut never reached the model, and treating it
-    as retrieved would let a citation the model could only have guessed pass
-    the emit gate.
+    fetched — is not counted as read. The second is an identity test over the
+    text actually sent, because a large result is truncated on its way into the
+    conversation: an id past the cut never reached the model. A substring test
+    is wrong because a longer id sharing its prefix could vouch for one that was
+    cut, letting a citation the model could only have guessed pass the emit gate.
     """
     seen: set[str] = set()
     collect_statement_ids(result, seen)
-    ctx.retrieved_ids.update(i for i in seen if i in sent)
+    ctx.retrieved_ids.update(ids_present_in(sent, seen))
 
 
 def _handle_gap(tool_use: Any, ctx: _RunContext) -> None:
