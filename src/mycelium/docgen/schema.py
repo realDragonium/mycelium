@@ -33,9 +33,11 @@ class DocumentWritten(BaseModel):
     statement_ids: list[str] = Field(default_factory=list)
     guideline_set: str
     document_type: str
-    #: What the guideline set asked for that the substrate could not supply.
-    #: These are also filed through `report_knowledge_gap` as the run meets
-    #: them; this list is the run's own account of them.
+    #: What the guideline set asked for that the substrate could not supply —
+    #: the run's own account, which is NOT a receipt. What actually reached a
+    #: curator's queue is `trace["reported_gaps"]`, and the two are kept apart
+    #: there precisely because a run can declare a gap at emit time that it
+    #: never filed (a forced finalize has no turn left to file one in).
     gaps: list[str] = Field(default_factory=list)
     #: tool calls + args, op count, latency, token/cost, grounding.
     trace: dict = Field(default_factory=dict)

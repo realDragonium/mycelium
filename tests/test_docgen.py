@@ -363,9 +363,63 @@ def test_a_pair_that_does_not_exist_together_is_sent_back_then_refused(kb_set):
 
     assert isinstance(result, NothingWritten)
     assert "could not settle" in result.reason
-    retry = client.calls[1]["messages"][-1]["content"]
-    assert "'tutorial' is not a document type 'kb-authoring' has" in retry
-    assert "['how-to', 'reference']" in retry
+    # Sent as a tool_result, not as plain user text: the assistant turn it
+    # answers carries a pending tool_use, and the API requires that be
+    # answered before the next turn.
+    retry = client.calls[1]["messages"][-1]["content"][0]
+    assert retry["type"] == "tool_result"
+    assert retry["is_error"] is True
+    assert "'tutorial' is not a document type 'kb-authoring' has" in retry["content"]
+    assert "['how-to', 'reference']" in retry["content"]
+
+
+def test_a_named_document_type_is_not_up_for_decision(kb_set):
+    """The request named a type but no set, so only the set is open. The type
+    is removed from the choice rather than merely asked for in prose — a
+    strict enum of one — and a model that answers with a different one is
+    treated as not having chosen."""
+    _save_set(kb_set, "internal-doc", {"guidance": "terse", "reference": "table"})
+    client = FakeAnthropic(
+        [
+            _resolve("kb-authoring", "how-to"),
+            _resolve("internal-doc", "reference"),
+            _emit(),
+        ]
+    )
+
+    result = _run(client, document_type="reference")
+
+    schema = client.calls[0]["tools"][0]["input_schema"]["properties"]
+    assert schema["document_type"]["enum"] == ["reference"]
+    assert schema["guideline_set"]["enum"] == ["internal-doc", "kb-authoring"]
+    # The first answer swapped the type; it was sent back, not accepted.
+    assert isinstance(result, DocumentWritten)
+    assert (result.guideline_set, result.document_type) == (
+        "internal-doc",
+        "reference",
+    )
+
+
+def test_a_named_type_no_configured_set_can_write_refuses(kb_set):
+    client = FakeAnthropic([])
+
+    result = _run(client, document_type="tutorial")
+
+    assert isinstance(result, NothingWritten)
+    assert "no configured guideline set has a template" in result.reason
+    assert client.calls == []
+
+
+def test_a_named_pair_that_does_not_exist_is_refused_not_re_decided(kb_set):
+    """`request_documentation` refuses this at the door; if one reaches the
+    loop anyway it is a refusal, not an invitation to pick something else."""
+    client = FakeAnthropic([])
+
+    result = _run(client, guideline_set="kb-authoring", document_type="tutorial")
+
+    assert isinstance(result, NothingWritten)
+    assert "no template for" in result.reason
+    assert client.calls == []
 
 
 def test_an_unknown_requested_set_refuses_without_asking_the_model(kb_set):
@@ -605,6 +659,32 @@ def test_a_link_target_is_not_a_retrieved_statement(kb_set):
     assert "stm_2" in result.reason
 
 
+def test_an_id_truncated_out_of_the_tool_result_is_not_retrieved(kb_set):
+    """A large read is truncated on its way into the conversation. An id past
+    the cut never reached the model, so citing it is a guess — and the gate
+    treats it as one."""
+    bulk = [{"id": f"stm_{i}", "text": "x" * 6000} for i in range(1, 5)]
+    bulk.append({"id": "stm_cut", "text": "past the 20k cap"})
+    client = FakeAnthropic(
+        [
+            _message([_tool_use("search_statements", {"query": "sso"})]),
+            _emit(statement_ids=["stm_1", "stm_cut"]),
+            _emit(statement_ids=["stm_1"]),
+        ]
+    )
+
+    result = _run(
+        client,
+        substrate=_substrate(survey_statements=[], search_statements=bulk),
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+
+    assert isinstance(result, DocumentWritten)
+    assert result.statement_ids == ["stm_1"]
+    assert "stm_cut" in result.trace["refused_emits"][0]
+
+
 def test_a_blank_title_or_body_is_refused(kb_set):
     client = FakeAnthropic([_emit(title="   "), _emit(body="  \n "), _emit()])
 
@@ -681,9 +761,13 @@ def test_a_missing_fact_is_filed_as_a_gap_and_the_run_continues(kb_set):
     assert reporter.filed == ["no statements on sso session TTL"]
     assert isinstance(result, DocumentWritten)
     assert result.gaps == ["no statements on sso session TTL", "session TTL"]
+    # The two lists stay distinguishable on the trace: `reported_gaps` is what
+    # actually reached a curator's queue, `declared_gaps` is the run's own
+    # account. A gap the model only declared must never read as one it filed.
     assert result.trace["reported_gaps"] == [
         "gap_1 :: no statements on sso session TTL"
     ]
+    assert result.trace["declared_gaps"] == ["session TTL"]
     # Not terminal: the gap's result went back as an ordinary tool_result.
     gap_result = client.calls[1]["messages"][-1]["content"][0]
     assert gap_result["is_error"] is False

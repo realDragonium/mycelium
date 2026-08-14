@@ -24,7 +24,7 @@ them without a checkout and without an operator running anything. `.claude/`
 is a local tool's configuration directory; nothing that has to reach a server
 can live there.
 
-Two callers read this module, and they want different writes:
+Two callers SEED the shipped set, and they want different writes:
 
 - `server.init` seeds through `save_if_absent`, which never supersedes. An
   operator's edit outlives every restart, and a boot against a seeded store
@@ -35,7 +35,9 @@ Two callers read this module, and they want different writes:
 
 Neither write belongs to the other, which is why this module stops at the
 paths and the names: it is the shared half — where each row's text comes from
-and what the row is called — and each caller keeps its own write.
+and what the row is called — and each caller keeps its own write. The readers
+below take a connection for the same reason: whose connection it is belongs
+to the caller (`server._prompts_db()`, a run thread's own), not here.
 """
 
 from __future__ import annotations

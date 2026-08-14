@@ -187,6 +187,17 @@ def _execute_run(
             # refusal with no reason. Raising lands it on `error` as what it is.
             raise ValueError(f"runner returned an unknown outcome: {reported!r}")
         if reported == "document_written":
+            # The loop refuses an ungrounded document at its emit gate; this is
+            # the same rule at the place that actually records one, so "a
+            # stored document cites the statements it rests on" holds however
+            # the runner was wired. Raising rather than downgrading to
+            # `nothing_written`: a runner reporting a document with no
+            # provenance is broken, and that belongs on `error`.
+            if not payload.get("statement_ids"):
+                raise ValueError(
+                    "runner reported a document with no statement ids; a "
+                    "document that rests on nothing is not recorded"
+                )
             # Written before `outcome` is set, so a rejected document (blank
             # slug, unwritable DB) finishes the run failed rather than claiming
             # a document that is not there.

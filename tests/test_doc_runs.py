@@ -41,6 +41,9 @@ def _document(**overrides) -> dict:
         "slug": "how-to-x",
         "title": "How to X",
         "body": "# How to X\n\nDo the thing.\n",
+        # Never empty by default: the executor refuses to record a document
+        # that rests on nothing, so a canned one has to carry provenance.
+        "statement_ids": ["stm_1"],
     }
     payload.update(overrides)
     return payload
@@ -196,6 +199,26 @@ def test_unwritable_document_fails_the_run_rather_than_claiming_one(tmp_path):
     assert row["outcome"] == "failed"
     assert "slug is required" in row["error"]
     assert row["document_id"] is None
+
+
+def test_a_document_with_no_statement_ids_is_not_recorded(tmp_path):
+    """The loop refuses an ungrounded document at its emit gate; this is the
+    same rule where one is actually stored, so the guarantee does not depend
+    on which runner was wired in."""
+    conn = _conn(tmp_path)
+
+    run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(statement_ids=[]),
+    )
+    doc_runs.wait_all()
+
+    row = docs_store.get_run(conn, run_id)
+    assert row["outcome"] == "failed"
+    assert "rests on nothing is not recorded" in row["error"]
+    assert row["document_id"] is None
+    assert docs_store.list_documents(conn) == []
 
 
 def test_unknown_runner_outcome_fails_rather_than_reading_as_a_refusal(tmp_path):

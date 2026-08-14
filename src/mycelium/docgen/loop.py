@@ -362,13 +362,24 @@ def _resolve(
             f"the request named guideline set '{requested_set}', which is not "
             f"configured; configured: {sorted(catalogue)}",
         )
-    if requested_set and requested_type in catalogue[requested_set]:
+    if requested_set and requested_type:
+        if requested_type not in catalogue[requested_set]:
+            return _unresolvable(
+                ctx,
+                f"the request named document type '{requested_type}', which "
+                f"'{requested_set}' has no template for; it can write: "
+                f"{catalogue[requested_set]}",
+            )
         trace.resolution_reason = "named by the request"
-        return requested_set, str(requested_type)
+        return requested_set, requested_type
 
-    narrowed = (
-        {requested_set: catalogue[requested_set]} if requested_set else dict(catalogue)
-    )
+    narrowed = _narrow(catalogue, requested_set, requested_type)
+    if not narrowed:
+        return _unresolvable(
+            ctx,
+            f"no configured guideline set has a template for document type "
+            f"'{requested_type}'; configured: {catalogue}",
+        )
     tool = resolve_tool_def(narrowed, ctx.config.guideline_set)
     messages: list[dict[str, Any]] = [
         {
@@ -386,23 +397,50 @@ def _resolve(
         choice = _resolution_turn(ctx, messages, tool)
         if choice is None:
             return None  # `_resolution_turn` already recorded why
-        chosen_set, chosen_type, reason = choice
-        if chosen_type in catalogue.get(chosen_set, []):
+        tool_use_id, chosen_set, chosen_type, reason = choice
+        # Checked against `narrowed`, not the whole catalogue: it already
+        # carries what the request fixed, so a model that wandered off a named
+        # document type is caught here rather than trusted to have kept it.
+        if chosen_type in narrowed.get(chosen_set, []):
             trace.resolution_reason = reason
             return chosen_set, chosen_type
         if attempt == _MAX_RESOLUTION_RETRIES:
             break
-        messages.append(
-            {
-                "role": "user",
-                "content": prompts.resolution_retry_message(
-                    chosen_set, chosen_type, catalogue.get(chosen_set, [])
-                ),
-            }
+        # As a tool_result, not as plain user text: the assistant turn just
+        # added carries a pending tool_use, and the API requires it be
+        # answered before the next turn.
+        _append_tool_error(
+            messages,
+            tool_use_id,
+            prompts.resolution_retry_message(
+                chosen_set, chosen_type, narrowed.get(chosen_set, [])
+            ),
         )
     return _unresolvable(
         ctx, "could not settle a guideline set and document type that exist together"
     )
+
+
+def _narrow(
+    catalogue: dict[str, list[str]],
+    requested_set: str | None,
+    requested_type: str | None,
+) -> dict[str, list[str]]:
+    """The catalogue reduced to what the request left open.
+
+    Whatever the request named is not up for decision, so it is removed from
+    the choice rather than merely asked for in prose: a named set leaves one
+    set, and a named type leaves that type on every set that can write it.
+    Empty means nothing configured can satisfy what was named.
+    """
+    sets = {requested_set: catalogue[requested_set]} if requested_set else catalogue
+    if requested_type is None:
+        return dict(sets)
+    return {
+        name: [requested_type]
+        for name, types in sets.items()
+        if requested_type in types
+    }
 
 
 def _unresolvable(ctx: _RunContext, reason: str) -> None:
@@ -414,9 +452,9 @@ def _unresolvable(ctx: _RunContext, reason: str) -> None:
 
 def _resolution_turn(
     ctx: _RunContext, messages: list[dict[str, Any]], tool: dict
-) -> tuple[str, str, str] | None:
-    """One forced `choose_guideline_set` call. None on an API or shape
-    failure, with the reason noted."""
+) -> tuple[str, str, str, str] | None:
+    """One forced `choose_guideline_set` call, as (tool_use_id, set, type,
+    reason). None on an API or shape failure, with the reason noted."""
     trace: TraceBuilder = ctx.trace
     try:
         with trace.span("model_turn:resolve"):
@@ -435,7 +473,7 @@ def _resolution_turn(
     chosen_type = str(data.get("document_type") or "").strip()
     if not chosen_set or not chosen_type:
         return _unresolvable(ctx, "the run's guideline choice was incomplete")
-    return chosen_set, chosen_type, str(data.get("reason") or "").strip()
+    return tool_use.id, chosen_set, chosen_type, str(data.get("reason") or "").strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -458,7 +496,7 @@ def _recon(ctx: _RunContext) -> Any:
             "survey_statements", args, recon, ok=True, counts_as_op=True
         )
         ctx.successful_reads += 1
-        collect_statement_ids(recon, ctx.retrieved_ids)
+        _note_retrieved(ctx, recon, prompts.format_recon(recon))
         return recon
     except SubstrateError as exc:
         trace.record_tool_call(
@@ -491,12 +529,31 @@ def _dispatch_read(
         trace.record_tool_call(
             name, arguments, None, ok=False, counts_as_op=True, error=str(exc)
         )
-        _append_tool_result(ctx.messages, tool_use_id, {"error": str(exc)}, error=True)
+        _append_tool_result(
+            ctx.messages, tool_use_id, _serialize({"error": str(exc)}), error=True
+        )
         return
     trace.record_tool_call(name, arguments, result, ok=True, counts_as_op=True)
     ctx.successful_reads += 1
-    collect_statement_ids(result, ctx.retrieved_ids)
-    _append_tool_result(ctx.messages, tool_use_id, result, error=False)
+    sent = _serialize(result)
+    _note_retrieved(ctx, result, sent)
+    _append_tool_result(ctx.messages, tool_use_id, sent, error=False)
+
+
+def _note_retrieved(ctx: _RunContext, result: Any, sent: str) -> None:
+    """Record which statements this read actually put in front of the model.
+
+    Two filters, and both matter. The structural one (`collect_statement_ids`)
+    takes only `id` keys, so a link's `to_id` — a pointer to something not
+    fetched — is not counted as read. The textual one intersects with what was
+    actually SENT, because a large result is truncated on its way into the
+    conversation: an id past the cut never reached the model, and treating it
+    as retrieved would let a citation the model could only have guessed pass
+    the emit gate.
+    """
+    seen: set[str] = set()
+    collect_statement_ids(result, seen)
+    ctx.retrieved_ids.update(i for i in seen if i in sent)
 
 
 def _handle_gap(tool_use: Any, ctx: _RunContext) -> None:
@@ -520,13 +577,15 @@ def _handle_gap(tool_use: Any, ctx: _RunContext) -> None:
         trace.record_tool_call(
             GAP_TOOL, arguments, None, ok=False, counts_as_op=True, error=str(exc)
         )
-        _append_tool_result(ctx.messages, tool_use.id, {"error": str(exc)}, error=True)
+        _append_tool_result(
+            ctx.messages, tool_use.id, _serialize({"error": str(exc)}), error=True
+        )
         return
     trace.record_tool_call(GAP_TOOL, arguments, result, ok=True, counts_as_op=True)
     gap_id = result.get("gap_id") if isinstance(result, dict) else None
     trace.reported_gaps.append(f"{gap_id or '(unknown id)'} :: {text}")
     ctx.gaps.append(text)
-    _append_tool_result(ctx.messages, tool_use.id, result, error=False)
+    _append_tool_result(ctx.messages, tool_use.id, _serialize(result), error=False)
 
 
 def _handle_emit(
@@ -746,8 +805,11 @@ def _model_turn(
 
 
 def _append_tool_result(
-    messages: list[dict[str, Any]], tool_use_id: str, result: Any, *, error: bool
+    messages: list[dict[str, Any]], tool_use_id: str, content: str, *, error: bool
 ) -> None:
+    """Answer one tool_use. Takes already-serialized text rather than the raw
+    result, because the caller needs to know exactly what was sent — see
+    `_note_retrieved`."""
     messages.append(
         {
             "role": "user",
@@ -755,7 +817,7 @@ def _append_tool_result(
                 {
                     "type": "tool_result",
                     "tool_use_id": tool_use_id,
-                    "content": _serialize(result),
+                    "content": content,
                     "is_error": error,
                 }
             ],
