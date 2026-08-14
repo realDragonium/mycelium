@@ -196,6 +196,84 @@ def test_unwritable_document_fails_the_run_rather_than_claiming_one(tmp_path):
     assert row["document_id"] is None
 
 
+def test_unknown_runner_outcome_fails_rather_than_reading_as_a_refusal(tmp_path):
+    conn = _conn(tmp_path)
+
+    run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: {
+            "outcome": "failed",
+            "error": "the runner's own word for it",
+        },
+    )
+    doc_runs.wait_all()
+
+    row = docs_store.get_run(conn, run_id)
+    assert row["outcome"] == "failed"
+    assert "unknown outcome: 'failed'" in row["error"]
+
+
+def test_a_thread_that_never_starts_finishes_the_row(tmp_path, monkeypatch):
+    """The window between the insert and `Thread.start()`: the row is already
+    committed, so it must be finished as failed rather than left queued to
+    hold capacity until the next restart sweeps it."""
+    conn = _conn(tmp_path)
+    monkeypatch.setattr(
+        threading.Thread,
+        "start",
+        lambda self: (_ for _ in ()).throw(RuntimeError("can't start new thread")),
+    )
+
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        _start(
+            conn,
+            tmp_path,
+            lambda prompt, *, guideline_set, document_type: _document(),
+        )
+
+    (row,) = docs_store.list_runs(conn)
+    assert docs_store.status_for(row) == "failed"
+    assert "failed to start: RuntimeError" in row["error"]
+    assert doc_runs._threads == {}
+    assert doc_runs._in_memory_conns == {}
+
+
+def test_in_memory_runs_reuse_the_handed_connection(tmp_path):
+    """`:memory:` has no file path for the worker thread to reopen, so the
+    connection passed to `start_run` is what the run must finish through."""
+    conn = docs_store.connect(":memory:")
+    docs_store.migrate(conn)
+    started = threading.Event()
+    release = threading.Event()
+
+    def runner(prompt, *, guideline_set, document_type):
+        started.set()
+        release.wait()
+        return _document()
+
+    try:
+        run_id = _start(conn, tmp_path, runner)
+        assert started.wait(5)
+        assert doc_runs._threads[run_id].is_alive()
+        release.set()
+        doc_runs.wait_all()
+
+        # Visibility on THIS connection is the proof of the handoff: with no
+        # file path, a worker that opened its own connection would have
+        # written into a private temporary database instead.
+        row = docs_store.get_run(conn, run_id)
+        assert row["outcome"] == "document_written"
+        assert docs_store.get_document(conn, row["document_id"])["slug"] == "how-to-x"
+        # Nothing accumulates in either registry once the run is over.
+        assert doc_runs._in_memory_conns == {}
+        assert doc_runs._threads == {}
+    finally:
+        release.set()
+        doc_runs.wait_all()
+        conn.close()
+
+
 def test_unconfigured_runner_finishes_the_run_failed(tmp_path):
     """No RUNNER and no explicit runner: the request still becomes a run row
     that reaches a terminal state, saying why."""
@@ -378,8 +456,16 @@ def _save_set(conn, set_name: str, slots: list[str]) -> None:
 
 def test_request_documentation_returns_a_running_row(_stores):
     drafts_conn, _ = _stores
-    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: _document()
+    release = threading.Event()
 
+    def runner(prompt, *, guideline_set, document_type):
+        release.wait()
+        return _document()
+
+    doc_runs.RUNNER = runner
+
+    # Held open, so "returns immediately with a running row" is what is
+    # asserted rather than a race the worker usually loses.
     row = server.request_documentation("  document the login flow  ")
 
     assert row["prompt"] == "document the login flow"
@@ -387,24 +473,9 @@ def test_request_documentation_returns_a_running_row(_stores):
     assert row["guideline_set"] is None
     assert row["document_type"] is None
 
+    release.set()
     doc_runs.wait_all()
     assert docs_store.get_run(drafts_conn, row["id"])["outcome"] == "document_written"
-
-
-def test_request_documentation_records_the_caller(_stores):
-    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: {
-        "outcome": "nothing_written",
-        "reason": "done",
-    }
-    token = auth.current_principal.set(
-        auth.Principal(id="u1", name="Writer", role="writer", type="human")
-    )
-    try:
-        row = server.request_documentation("document the login flow")
-    finally:
-        auth.current_principal.reset(token)
-
-    assert row["created_by"] == "u1"
 
 
 def test_named_set_and_type_must_exist(_stores):
@@ -475,28 +546,69 @@ def test_blank_and_oversized_prompts_are_refused(_stores, monkeypatch):
         server.request_documentation("x" * 11)
 
 
-def test_a_refused_request_creates_no_run(_stores):
-    drafts_conn, _ = _stores
+def test_no_refusal_leaves_a_run_behind(_stores, monkeypatch):
+    """Every door this tool can close, closed before `create_run`: a refused
+    request must not leave a row that then counts against capacity."""
+    drafts_conn, prompts_conn = _stores
+    _save_set(prompts_conn, "internal-doc", ["guidance", "how-to"])
 
-    with pytest.raises(ValueError):
-        server.request_documentation("   ")
+    refusals = [
+        ({"prompt": "   "}, "prompt is required"),
+        ({"prompt": "x" * 3000}, "the limit is 2000"),
+        (
+            {"prompt": "p", "guideline_set": "no-such-set"},
+            "unknown guideline set",
+        ),
+        (
+            {"prompt": "p", "guideline_set": "internal-doc", "document_type": "essay"},
+            "no template for document type",
+        ),
+    ]
+    for kwargs, message in refusals:
+        with pytest.raises(ValueError, match=message):
+            server.request_documentation(**kwargs)
 
-    assert docs_store.list_runs(drafts_conn) == []
-
-
-def test_capacity_message_reaches_the_caller(_stores, monkeypatch):
     monkeypatch.setenv(doc_runs.MAX_ACTIVE_ENV, "0")
-
     with pytest.raises(ValueError, match="MYCELIUM_DOCGEN_MAX_ACTIVE"):
         server.request_documentation("p")
+
+    assert docs_store.list_runs(drafts_conn) == []
 
 
 def test_request_documentation_is_registered_outside_the_model_loop_set():
     names = {function.__name__ for function in server.TOOLS}
 
     assert "request_documentation" in names
-    assert auth.required_role_for("request_documentation") == "writer"
+    # `real_role`: a drafter must NOT reach this. Their write gates are waived
+    # only because the wrapper redirects them onto a draft, and a generated
+    # document is not redirected — it lands live.
+    assert server.request_documentation._mycelium_required_role == "writer"
+    assert server.request_documentation._mycelium_real_role is True
     # The TOOL is fast — it returns a run row. Its background run takes the
     # slot, so gating the tool would double-count the budget.
     assert "request_documentation" not in server._MODEL_LOOP_TOOLS
     assert server.limiter_for("request_documentation") is None
+
+
+def test_a_drafter_is_refused_and_a_writer_is_not(_stores):
+    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: {
+        "outcome": "nothing_written",
+        "reason": "done",
+    }
+
+    token = auth.current_principal.set(
+        auth.Principal(id="d", name="Drafter", role="drafter", type="human")
+    )
+    try:
+        with pytest.raises(PermissionError):
+            server.request_documentation("p")
+    finally:
+        auth.current_principal.reset(token)
+
+    token = auth.current_principal.set(
+        auth.Principal(id="w", name="Writer", role="writer", type="human")
+    )
+    try:
+        assert server.request_documentation("p")["created_by"] == "w"
+    finally:
+        auth.current_principal.reset(token)

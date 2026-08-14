@@ -2129,7 +2129,7 @@ def _optional_name(value: str | None) -> str | None:
     return value.strip() or None if value is not None else None
 
 
-@tool
+@tool(role="writer", real_role=True)
 def request_documentation(
     prompt: str,
     guideline_set: str | None = None,
@@ -2137,6 +2137,11 @@ def request_documentation(
 ) -> dict[str, Any]:
     """Request a background documentation run: generate one document from
     `prompt` and store it as a generated document.
+
+    Writers and admins only — `real_role`, so the drafter equivalence does not
+    apply. A drafter clears write gates because the wrapper redirects their
+    writes onto a reviewable draft, and this tool sits outside that machinery:
+    what it produces lands live and is served to readers as it stands.
 
     Returns immediately with the serialized run row (its `status` will be
     "running"); poll `get_documentation_run(run_id)` for the outcome and

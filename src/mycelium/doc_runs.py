@@ -169,7 +169,13 @@ def _execute_run(
                 prompt, guideline_set=guideline_set, document_type=document_type
             )
         payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
-        if payload.get("outcome") == "document_written":
+        reported = payload.get("outcome")
+        if reported not in ("document_written", "nothing_written"):
+            # Not folded into `nothing_written`: a runner that returns junk, or
+            # reports its own failure, would otherwise be recorded as a clean
+            # refusal with no reason. Raising lands it on `error` as what it is.
+            raise ValueError(f"runner returned an unknown outcome: {reported!r}")
+        if reported == "document_written":
             # Written before `outcome` is set, so a rejected document (blank
             # slug, unwritable DB) finishes the run failed rather than claiming
             # a document that is not there.
