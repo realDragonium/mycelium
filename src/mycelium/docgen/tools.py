@@ -314,6 +314,12 @@ def _parse_review_check(value: Any, name: str) -> ReviewCheck:
         problem = raw.get("problem")
         if not isinstance(where, str) or not isinstance(problem, str):
             raise ValueError(f"{name} finding needs string where and problem")
+        where = where.strip()
+        problem = problem.strip()
+        # Blank text is the content-free verdict the bare-fail branch absorbs.
+        # Drop one fumbled finding rather than closing the gate on the document.
+        if not where or not problem:
+            continue
         findings.append(ReviewFinding(where=where, problem=problem))
 
     # Findings are the evidence and the label is not. Reconcile a model that
