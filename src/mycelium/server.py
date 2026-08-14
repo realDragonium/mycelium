@@ -898,7 +898,7 @@ def init(data_dir: Path) -> None:
     # indexes against the new substrate.
     _ctx = None
 
-    from . import auth_store, drafts_store, prompt_store, research_store
+    from . import auth_store, docs_store, drafts_store, prompt_store, research_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
     store.configure_substrate(
@@ -918,6 +918,7 @@ def init(data_dir: Path) -> None:
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
     research_store.migrate(_drafts_db())
+    docs_store.migrate(_drafts_db())
 
     # Prompt texts are instance configuration, so they get their own file:
     # dropping the substrate or wiping drafts leaves an instance's steering
@@ -943,6 +944,12 @@ def init(data_dir: Path) -> None:
     if orphaned:
         logger.warning(
             "marked %d research run(s) failed: orphaned by restart", orphaned
+        )
+    orphaned_docs = docs_store.mark_orphaned(_drafts_db())
+    if orphaned_docs:
+        logger.warning(
+            "marked %d documentation run(s) failed: orphaned by restart",
+            orphaned_docs,
         )
 
     # The .vec files are re-derivable from the substrate, so backup.sh omits
@@ -2046,6 +2053,64 @@ def get_research_run(run_id: str) -> dict[str, Any]:
     if row is None:
         raise ValueError(f"research run not found: {run_id}")
     return research_store.serialize_run(row)
+
+
+@tool
+def list_documentation_runs() -> dict[str, Any]:
+    """List documentation runs, newest first, each with a derived `status`
+    (queued/running/document_written/nothing_written/failed).
+
+    Returns {"runs": [run rows]}."""
+    from . import docs_store
+
+    return {
+        "runs": [
+            docs_store.serialize_run(row) for row in docs_store.list_runs(_drafts_db())
+        ]
+    }
+
+
+@tool
+def get_documentation_run(run_id: str) -> dict[str, Any]:
+    """Fetch one documentation run by id, including outcome, document_id,
+    and error.
+
+    Returns the serialized run row. Raises for an unknown run_id."""
+    from . import docs_store
+
+    row = docs_store.get_run(_drafts_db(), run_id)
+    if row is None:
+        raise ValueError(f"documentation run not found: {run_id}")
+    return docs_store.serialize_run(row)
+
+
+@tool
+def list_generated_documents() -> dict[str, Any]:
+    """List generated documents, newest first, omitting each document body.
+
+    Returns {"documents": [document summaries]}; get_generated_document returns
+    the body."""
+    from . import docs_store
+
+    return {
+        "documents": [
+            docs_store.serialize_document_summary(row)
+            for row in docs_store.list_documents(_drafts_db())
+        ]
+    }
+
+
+@tool
+def get_generated_document(document_id: str) -> dict[str, Any]:
+    """Fetch one generated document by id, including its body.
+
+    Returns the serialized document row. Raises for an unknown document_id."""
+    from . import docs_store
+
+    row = docs_store.get_document(_drafts_db(), document_id)
+    if row is None:
+        raise ValueError(f"generated document not found: {document_id}")
+    return docs_store.serialize_document(row)
 
 
 @tool

@@ -28,6 +28,10 @@ _NON_READ_READER_TOOLS = frozenset(
         "ask",  # this tool itself — avoid recursion
         "list_my_drafts",  # draft-session state, not the substrate
         "get_draft",  # draft-session state, not the substrate
+        "list_documentation_runs",  # documentation history, not the substrate
+        "get_documentation_run",  # documentation run state, not the substrate
+        "list_generated_documents",  # generated projections, not the substrate
+        "get_generated_document",  # generated document state, not the substrate
     }
 )
 
