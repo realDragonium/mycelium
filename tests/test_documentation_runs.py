@@ -142,6 +142,47 @@ def test_upsert_document_inserts_and_round_trips_statement_ids(tmp_path):
     assert document["last_run_id"] == "drn_1"
 
 
+def test_migrate_adds_review_to_an_existing_table_and_is_idempotent(tmp_path):
+    """Upgrading a database preserves old pages and marks their review as
+    unrecorded, while repeated startup migrations leave the schema usable."""
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    conn.execute(
+        """
+        CREATE TABLE generated_documents (
+            id            TEXT PRIMARY KEY,
+            slug          TEXT NOT NULL UNIQUE,
+            title         TEXT NOT NULL,
+            guideline_set TEXT,
+            document_type TEXT,
+            body          TEXT NOT NULL,
+            statement_ids TEXT NOT NULL DEFAULT '[]',
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            last_run_id   TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO generated_documents "
+        "(id, slug, title, body, statement_ids, created_at, updated_at) "
+        "VALUES ('gdc_old', 'old-page', 'Old page', 'Old body', '[]', "
+        "'2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
+    )
+    conn.commit()
+
+    docs_store.migrate(conn)
+    docs_store.migrate(conn)
+
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(generated_documents)")
+    }
+    rows = docs_store.list_documents(conn)
+    assert "review" in columns
+    assert len(rows) == 1
+    assert rows[0]["id"] == "gdc_old"
+    assert docs_store.serialize_document(rows[0])["review"] == {}
+
+
 def test_upsert_document_updates_same_slug_in_place(tmp_path):
     conn = _conn(tmp_path)
     first_id = docs_store.upsert_document(
@@ -179,6 +220,7 @@ def test_serialize_document_summary_omits_body(tmp_path):
         title="Topic",
         body="four",
         statement_ids=["stm_1"],
+        review={"passed": True, "attempts": 1},
     )
 
     summary = docs_store.serialize_document_summary(
@@ -188,6 +230,7 @@ def test_serialize_document_summary_omits_body(tmp_path):
     assert "body" not in summary
     assert summary["chars"] == 4
     assert summary["statement_ids"] == ["stm_1"]
+    assert summary["review"] == {"passed": True, "attempts": 1}
 
 
 def test_get_document_by_slug(tmp_path):

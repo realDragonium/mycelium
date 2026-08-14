@@ -14,9 +14,9 @@ reference with deliberately no FK, so a document survives disposable run
 history. `slug` is the stable identity later runs update; deciding whether two
 topics are the same document belongs to a later issue, not this store.
 
-Statement ids are a JSON text column rather than a join table. They are an
-unqueried snapshot written and read as a whole, so a relationship table would
-add schema and queries without serving a lookup.
+Statement ids and the review record are JSON text columns rather than join
+tables. They are unqueried snapshots written and read as a whole, so
+relationship tables would add schema and queries without serving a lookup.
 """
 
 from __future__ import annotations
@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS generated_documents (
     document_type TEXT,
     body          TEXT NOT NULL,
     statement_ids TEXT NOT NULL DEFAULT '[]',
+    review        TEXT NOT NULL DEFAULT '{}',
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     last_run_id   TEXT
@@ -75,7 +76,28 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DOCUMENTATION_RUNS_SCHEMA)
     conn.executescript(GENERATED_DOCUMENTS_SCHEMA)
+    _add_generated_document_review(conn)
     conn.commit()
+
+
+def _add_generated_document_review(conn: sqlite3.Connection) -> None:
+    """Add `generated_documents.review` to a DB created before it existed.
+
+    The schema script only runs CREATE TABLE IF NOT EXISTS, so an existing
+    drafts DB keeps its old column set and every later document write would
+    fail despite the column appearing in the script.
+
+    Rows written before the upgrade read as `{}`: no review record was kept
+    for that page. This is deliberately not represented as a passing review.
+    """
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(generated_documents)")
+    }
+    if "review" not in columns:
+        conn.execute(
+            "ALTER TABLE generated_documents "
+            "ADD COLUMN review TEXT NOT NULL DEFAULT '{}'"
+        )
 
 
 def status_for(row: sqlite3.Row | dict) -> str:
@@ -227,6 +249,7 @@ def upsert_document(
     guideline_set: str | None = None,
     document_type: str | None = None,
     statement_ids: list[str] | None = None,
+    review: dict | None = None,
     run_id: str | None = None,
 ) -> str:
     slug = slug.strip()
@@ -240,12 +263,13 @@ def upsert_document(
     conn.execute(
         "INSERT INTO generated_documents "
         "(id, slug, title, guideline_set, document_type, body, statement_ids, "
-        "created_at, updated_at, last_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "review, created_at, updated_at, last_run_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(slug) DO UPDATE SET title = excluded.title, "
         "guideline_set = excluded.guideline_set, "
         "document_type = excluded.document_type, body = excluded.body, "
-        "statement_ids = excluded.statement_ids, updated_at = excluded.updated_at, "
-        "last_run_id = excluded.last_run_id",
+        "statement_ids = excluded.statement_ids, review = excluded.review, "
+        "updated_at = excluded.updated_at, last_run_id = excluded.last_run_id",
         (
             document_id,
             slug,
@@ -254,6 +278,7 @@ def upsert_document(
             document_type,
             body,
             json.dumps(list(statement_ids) if statement_ids is not None else []),
+            json.dumps(review if review is not None else {}),
             now,
             now,
             run_id,
@@ -292,6 +317,10 @@ def _statement_ids(row: sqlite3.Row) -> list[str]:
     return json.loads(row["statement_ids"])
 
 
+def _review(row: sqlite3.Row) -> dict:
+    return json.loads(row["review"])
+
+
 def serialize_document(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
@@ -301,6 +330,7 @@ def serialize_document(row: sqlite3.Row) -> dict:
         "document_type": row["document_type"],
         "body": row["body"],
         "statement_ids": _statement_ids(row),
+        "review": _review(row),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_run_id": row["last_run_id"],
@@ -321,6 +351,7 @@ def serialize_document_summary(row: sqlite3.Row) -> dict:
         "document_type": row["document_type"],
         "chars": len(row["body"]),
         "statement_ids": _statement_ids(row),
+        "review": _review(row),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_run_id": row["last_run_id"],
