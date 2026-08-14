@@ -387,6 +387,113 @@ def test_get_document_by_slug(tmp_path):
     assert docs_store.get_document_by_slug(conn, "unknown") is None
 
 
+def test_get_document_by_slug_filters_identity_and_defaults_to_latest(tmp_path):
+    """The slug-only compatibility lookup must be deterministic now that one
+    slug can correctly name several pages."""
+    conn = _conn(tmp_path)
+    unresolved = docs_store.upsert_document(
+        conn, slug="overview", title="Overview", body="Unresolved"
+    )
+    tutorial = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Tutorial",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+    )
+    reference = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Reference",
+        guideline_set="kb-authoring",
+        document_type="reference",
+    )
+    conn.executemany(
+        "UPDATE generated_documents SET updated_at = ? WHERE id = ?",
+        [
+            ("2026-01-01T00:00:00.000Z", unresolved),
+            ("2026-01-02T00:00:00.000Z", tutorial),
+            ("2026-01-03T00:00:00.000Z", reference),
+        ],
+    )
+    conn.commit()
+
+    assert docs_store.get_document_by_slug(conn, "overview")["id"] == reference
+    assert (
+        docs_store.get_document_by_slug(conn, "overview", guideline_set="kb-authoring")[
+            "id"
+        ]
+        == reference
+    )
+    assert (
+        docs_store.get_document_by_slug(conn, "overview", document_type="tutorial")[
+            "id"
+        ]
+        == tutorial
+    )
+    assert (
+        docs_store.get_document_by_slug(
+            conn,
+            "overview",
+            guideline_set="kb-authoring",
+            document_type="tutorial",
+        )["id"]
+        == tutorial
+    )
+    assert (
+        docs_store.get_document_by_slug(
+            conn, "overview", guideline_set="", document_type=""
+        )["id"]
+        == unresolved
+    )
+
+
+def test_migrating_an_already_rekeyed_database_is_a_no_op(tmp_path):
+    """The origin-sensitive detection must not rebuild the replacement table
+    on every startup merely because its explicit identity index is unique."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn, slug="topic", title="Topic", body="Body"
+    )
+    before_row = dict(docs_store.get_document(conn, document_id))
+    before_schema = list(
+        conn.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE tbl_name = 'generated_documents' ORDER BY type, name"
+        )
+    )
+
+    docs_store.migrate(conn)
+    docs_store.migrate(conn)
+
+    assert dict(docs_store.get_document(conn, document_id)) == before_row
+    assert (
+        list(
+            conn.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE tbl_name = 'generated_documents' ORDER BY type, name"
+            )
+        )
+        == before_schema
+    )
+
+    identity_indexes = []
+    for index in conn.execute("PRAGMA index_list(generated_documents)"):
+        columns = [
+            row["name"] for row in conn.execute(f"PRAGMA index_info({index['name']})")
+        ]
+        if index["unique"] and columns == [
+            "guideline_set",
+            "document_type",
+            "slug",
+        ]:
+            identity_indexes.append((index["name"], index["origin"]))
+
+    assert identity_indexes == [("generated_documents_identity", "c")]
+
+
 def test_documentation_tools_registered():
     tool_names = {
         "list_documentation_runs",
