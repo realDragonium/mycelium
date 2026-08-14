@@ -9,11 +9,16 @@ historical outcomes and guessing which run still represents the live page.
 
 State uses terminal timestamps rather than a `status` column: a run is queued
 until `started_at`, running until `finished_at`, then document_written,
-nothing_written, or failed according to `outcome`. `last_run_id` is a soft
-reference with deliberately no FK, so a document survives disposable run
-history. The guideline set, document type, and slug together are the stable
+document_superseded, nothing_written, or failed according to `outcome` and the
+document's current `last_run_id`. Supersession is derived at read time because
+the stored `outcome` is a closed record of what the run did, and another stored
+copy of the same fact could disagree with the document table. `last_run_id` is
+a soft reference with deliberately no FK, so a document survives disposable
+run history. The guideline set, document type, and slug together are the stable
 identity later runs update. A title-derived slug alone is too broad: unrelated
-kinds of page routinely choose the same ordinary title.
+kinds of page routinely choose the same ordinary title. A run whose document
+row is absent reads as `document_written`, not `document_superseded`, because
+nothing replaced it and its `document_id` simply resolves to nothing.
 
 Statement ids and the review record are JSON text columns rather than join
 tables. They are unqueried snapshots written and read as a whole, so
@@ -179,9 +184,24 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _document_superseded(row: sqlite3.Row | dict) -> bool:
+    """A missing document row is not supersession because nothing replaced it.
+    An existing row is superseded when its current writer differs, including no run.
+    """
+    return (
+        row["document_id"] is not None
+        and bool(row["document_exists"])
+        and row["document_last_run_id"] != row["id"]
+    )
+
+
 def status_for(row: sqlite3.Row | dict) -> str:
-    """Derive a documentation run's status from timestamps + outcome."""
+    """Derive a run's status from its timestamps, outcome, and current document.
+    The row must come from `get_run` or `list_runs`.
+    """
     if row["finished_at"]:
+        if row["outcome"] == "document_written" and _document_superseded(row):
+            return "document_superseded"
         return row["outcome"] or "failed"
     if row["started_at"]:
         return "running"
@@ -263,7 +283,8 @@ def finish_run(
 
 def get_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT r.*, d.last_run_id AS document_last_run_id "
+        "SELECT r.*, d.id IS NOT NULL AS document_exists, "
+        "d.last_run_id AS document_last_run_id "
         "FROM documentation_runs AS r "
         "LEFT JOIN generated_documents AS d ON d.id = r.document_id "
         "WHERE r.id = ?",
@@ -274,7 +295,8 @@ def get_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
 def list_runs(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
     return list(
         conn.execute(
-            "SELECT r.*, d.last_run_id AS document_last_run_id "
+            "SELECT r.*, d.id IS NOT NULL AS document_exists, "
+            "d.last_run_id AS document_last_run_id "
             "FROM documentation_runs AS r "
             "LEFT JOIN generated_documents AS d ON d.id = r.document_id "
             "ORDER BY r.created_at DESC, r.id DESC LIMIT ?",
@@ -327,8 +349,7 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "finished_at": row["finished_at"],
         "outcome": row["outcome"],
         "document_id": row["document_id"],
-        "document_superseded": row["document_id"] is not None
-        and row["document_last_run_id"] != row["id"],
+        "document_superseded": _document_superseded(row),
         "error": row["error"],
     }
 

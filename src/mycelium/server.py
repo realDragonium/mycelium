@@ -2197,10 +2197,10 @@ def request_documentation(
 @tool
 def list_documentation_runs() -> dict[str, Any]:
     """List documentation runs, newest first, each with a derived `status`
-    (queued/running/document_written/nothing_written/failed) and
-    `document_superseded`, which is true when the document this run wrote has
-    since been replaced by a later run, so the body at `document_id` is no
-    longer this run's.
+    (queued/running/document_written/document_superseded/nothing_written/failed).
+    A run whose page was replaced reports `document_superseded`, while its
+    stored `outcome` remains `document_written`; the matching
+    `document_superseded` boolean stays as explanatory detail.
 
     Returns {"runs": [run rows]}."""
     from . import docs_store
@@ -2215,9 +2215,10 @@ def list_documentation_runs() -> dict[str, Any]:
 @tool
 def get_documentation_run(run_id: str) -> dict[str, Any]:
     """Fetch one documentation run by id, including outcome, document_id,
-    error, and `document_superseded`, which is true when the document this run
-    wrote has since been replaced by a later run, so the body at `document_id`
-    is no longer this run's.
+    error, derived `status`, and `document_superseded`. A run whose page was
+    replaced reports status `document_superseded`, not `document_written`,
+    while its stored outcome remains `document_written`; the boolean stays as
+    explanatory detail.
 
     Returns the serialized run row. Raises for an unknown run_id."""
     from . import docs_store

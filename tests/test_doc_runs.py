@@ -324,6 +324,8 @@ def test_two_runs_that_only_share_a_title_keep_their_own_pages(tmp_path):
     second = docs_store.serialize_run(docs_store.get_run(conn, second_run_id))
     assert first["outcome"] == second["outcome"] == "document_written"
     assert first["document_id"] != second["document_id"]
+    assert first["status"] == "document_written"
+    assert second["status"] == "document_written"
     assert first["document_superseded"] is False
     assert second["document_superseded"] is False
 
@@ -334,9 +336,9 @@ def test_two_runs_that_only_share_a_title_keep_their_own_pages(tmp_path):
 
 
 def test_a_run_whose_page_was_rewritten_says_so(tmp_path):
-    """Two runs against the same page is a legitimate update, and the first
-    run did write. What it may not do is keep pointing at a body that is no
-    longer the one it wrote with nothing to say so."""
+    """A run whose document was replaced must not report document_written for
+    content that is no longer its own. Its stored outcome still truthfully
+    records that the run did write."""
     conn = _conn(tmp_path)
     common = {"guideline_set": "kb-authoring", "document_type": "how-to"}
     first_run_id = _start(
@@ -360,8 +362,13 @@ def test_a_run_whose_page_was_rewritten_says_so(tmp_path):
     first = docs_store.serialize_run(docs_store.get_run(conn, first_run_id))
     second = docs_store.serialize_run(docs_store.get_run(conn, second_run_id))
     assert first["document_id"] == second["document_id"]
+    # The losing run's outcome is the closed record of what it did.
     assert first["outcome"] == "document_written"
+    assert first["status"] == "document_superseded"
+    assert first["status"] != "document_written"
     assert first["document_superseded"] is True
+    assert second["outcome"] == "document_written"
+    assert second["status"] == "document_written"
     assert second["document_superseded"] is False
     assert docs_store.get_document(conn, first["document_id"])["body"] == "Second body"
 
@@ -380,6 +387,7 @@ def test_a_run_that_wrote_nothing_is_not_superseded(tmp_path):
 
     row = docs_store.serialize_run(docs_store.get_run(conn, run_id))
     assert row["outcome"] == "nothing_written"
+    assert row["status"] == "nothing_written"
     assert row["document_superseded"] is False
 
 

@@ -21,8 +21,33 @@ def test_status_derivation(tmp_path):
     docs_store.mark_started(conn, running)
     written = docs_store.create_run(conn, prompt="written", created_by="u1")
     docs_store.mark_started(conn, written)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="written",
+        title="Written",
+        body="First body",
+        run_id=written,
+    )
     docs_store.finish_run(
-        conn, written, outcome="document_written", document_id="gdc_1"
+        conn, written, outcome="document_written", document_id=document_id
+    )
+    written_row_before_rewrite = docs_store.get_run(conn, written)
+    assert docs_store.status_for(written_row_before_rewrite) == "document_written"
+    rewritten = docs_store.create_run(conn, prompt="rewritten", created_by="u1")
+    docs_store.mark_started(conn, rewritten)
+    rewritten_document_id = docs_store.upsert_document(
+        conn,
+        slug="written",
+        title="Written",
+        body="Second body",
+        run_id=rewritten,
+    )
+    assert rewritten_document_id == document_id
+    docs_store.finish_run(
+        conn,
+        rewritten,
+        outcome="document_written",
+        document_id=rewritten_document_id,
     )
     nothing = docs_store.create_run(conn, prompt="nothing", created_by="u1")
     docs_store.mark_started(conn, nothing)
@@ -40,12 +65,55 @@ def test_status_derivation(tmp_path):
 
     assert docs_store.status_for(docs_store.get_run(conn, queued)) == "queued"
     assert docs_store.status_for(docs_store.get_run(conn, running)) == "running"
-    assert (
-        docs_store.status_for(docs_store.get_run(conn, written)) == "document_written"
-    )
+    written_row_after_rewrite = docs_store.get_run(conn, written)
+    rewritten_row = docs_store.get_run(conn, rewritten)
+    assert docs_store.status_for(written_row_after_rewrite) == "document_superseded"
+    assert docs_store.status_for(rewritten_row) == "document_written"
     assert docs_store.status_for(docs_store.get_run(conn, nothing)) == "nothing_written"
     assert docs_store.status_for(docs_store.get_run(conn, failed)) == "failed"
     assert docs_store.status_for(docs_store.get_run(conn, null_outcome)) == "failed"
+
+
+def test_a_run_whose_document_row_is_gone_is_not_superseded(tmp_path):
+    """A missing row cannot establish that another run replaced the document."""
+    conn = _conn(tmp_path)
+    missing = docs_store.create_run(conn, prompt="missing", created_by="u1")
+    docs_store.mark_started(conn, missing)
+    docs_store.finish_run(
+        conn,
+        missing,
+        outcome="document_written",
+        document_id="gdc_missing",
+    )
+
+    missing_row = docs_store.get_run(conn, missing)
+    assert docs_store.status_for(missing_row) == "document_written"
+    assert docs_store.serialize_run(missing_row)["document_superseded"] is False
+
+
+def test_a_document_with_no_current_writer_still_leaves_an_earlier_run_superseded(
+    tmp_path,
+):
+    """An existing unattributed row means the run no longer owns its body."""
+    conn = _conn(tmp_path)
+    no_writer = docs_store.create_run(conn, prompt="no writer", created_by="u1")
+    docs_store.mark_started(conn, no_writer)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="no-writer",
+        title="No Writer",
+        body="Body",
+    )
+    docs_store.finish_run(
+        conn,
+        no_writer,
+        outcome="document_written",
+        document_id=document_id,
+    )
+
+    no_writer_row = docs_store.get_run(conn, no_writer)
+    assert docs_store.status_for(no_writer_row) == "document_superseded"
+    assert docs_store.serialize_run(no_writer_row)["document_superseded"] is True
 
 
 def test_finish_run_rejects_unknown_outcome(tmp_path):
