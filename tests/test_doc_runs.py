@@ -86,10 +86,11 @@ def test_row_is_running_before_the_runner_returns(tmp_path):
     assert document["last_run_id"] == run_id
 
 
-def test_runner_resolution_lands_on_the_document(tmp_path):
-    """A request that named neither leaves both null on the RUN row — that is
-    what it asked for. What the run actually wrote against is a property of
-    the document, and the store has columns for it there."""
+def test_runner_resolution_lands_on_the_run_and_the_document(tmp_path):
+    """A request that named neither hands the runner two nulls and gets the
+    run's own choice back. That choice belongs in both places: on the RUN row,
+    because a caller polling it should see what the run decided to write, and
+    on the DOCUMENT, because that is a property of the page itself."""
     conn = _conn(tmp_path)
     seen = {}
 
@@ -107,8 +108,9 @@ def test_runner_resolution_lands_on_the_document(tmp_path):
 
     assert seen == {"guideline_set": None, "document_type": None}
     row = docs_store.get_run(conn, run_id)
-    assert row["guideline_set"] is None
-    assert row["document_type"] is None
+    assert row["guideline_set"] == "kb-authoring"
+    assert row["document_type"] == "how-to"
+    assert row["started_at"] is not None
     document = docs_store.serialize_document(
         docs_store.get_document(conn, row["document_id"])
     )
@@ -274,17 +276,52 @@ def test_in_memory_runs_reuse_the_handed_connection(tmp_path):
         conn.close()
 
 
-def test_unconfigured_runner_finishes_the_run_failed(tmp_path):
-    """No RUNNER and no explicit runner: the request still becomes a run row
-    that reaches a terminal state, saying why."""
+def test_the_default_runner_is_the_generation_loop(tmp_path, monkeypatch):
+    """No RUNNER and no explicit runner is the PRODUCTION path, not an
+    unconfigured one: the run drives `docgen.run_docgen` with what the request
+    named. Stubbed at the package boundary — `_default_runner` imports it on
+    the worker thread, so a monkeypatch there is what the run actually calls,
+    and no model is reached."""
+    from mycelium import docgen
+
+    conn = _conn(tmp_path)
+    seen = {}
+
+    def fake_run_docgen(prompt, *, guideline_set=None, document_type=None):
+        seen.update(
+            prompt=prompt, guideline_set=guideline_set, document_type=document_type
+        )
+        return _document(guideline_set=guideline_set, document_type=document_type)
+
+    monkeypatch.setattr(docgen, "run_docgen", fake_run_docgen)
+
+    run_id = _start(
+        conn, tmp_path, guideline_set="kb-authoring", document_type="how-to"
+    )
+    doc_runs.wait_all()
+
+    assert seen == {
+        "prompt": "document X",
+        "guideline_set": "kb-authoring",
+        "document_type": "how-to",
+    }
+    assert docs_store.get_run(conn, run_id)["outcome"] == "document_written"
+
+
+def test_a_runner_that_raises_finishes_the_run_failed(tmp_path):
+    """Whatever the runner cannot survive lands on the row's `error`, which is
+    where a caller polling the run will read it."""
     conn = _conn(tmp_path)
 
-    run_id = _start(conn, tmp_path)
+    def runner(prompt, *, guideline_set, document_type):
+        raise RuntimeError("no API key")
+
+    run_id = _start(conn, tmp_path, runner)
     doc_runs.wait_all()
 
     row = docs_store.get_run(conn, run_id)
     assert row["outcome"] == "failed"
-    assert "no documentation runner is configured" in row["error"]
+    assert "no API key" in row["error"]
 
 
 def test_capacity_refuses_when_at_max_and_names_the_env_var(tmp_path, monkeypatch):

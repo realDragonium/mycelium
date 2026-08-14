@@ -166,7 +166,7 @@ def test_an_unreadable_source_degrades_only_that_row(tmp_path, monkeypatch):
         assert names == [n for n in _KB_ROWS if n != "kb-authoring/reference"]
         assert [
             p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
-        ] == ["ingest", "research"]
+        ] == ["docgen", "ingest", "research"]
 
 
 def test_retiring_a_seeded_guideline_row_is_refused(tmp_path, monkeypatch):

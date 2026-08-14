@@ -46,6 +46,27 @@ The cost is that a set is several rows rather than one, which is why the
 `<set>/` prefix exists: the listing groups them by eye, and
 `list_prompt_texts(type="guideline-set")` stays the index.
 
+## How a run picks one
+
+`request_documentation` takes `guideline_set` and `document_type`, and both
+are optional. What it does not get, the generation run decides for itself and
+records on the run row, so a caller who knows what they want can say and a
+caller who does not can just describe the document.
+
+The run's choice is bounded by the same listing this document describes: the
+loop reads `guideline-set` rows, groups them into sets, and offers the model
+exactly those set names and document types to choose between. It is not a
+list in code — a set saved with three `save_prompt_text` calls is choosable
+on the next run, and one whose rows were retired stops being offered. A pair
+that does not appear together is sent back once and then refused; the run
+writes nothing rather than falling back to a set nobody configured.
+
+Having chosen, the run fetches its two texts — `<set>/guidance` and
+`<set>/<type>` — and writes against them. A named set that is not configured,
+or a type that set has no template for, is refused at the door by
+`request_documentation` instead of failing minutes later inside a background
+run.
+
 ## Sets that exist
 
 **`kb-authoring`** — six rows, and the one set that ships. Its sources are

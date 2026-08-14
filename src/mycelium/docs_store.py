@@ -117,13 +117,25 @@ def mark_started(
     guideline_set: str | None = None,
     document_type: str | None = None,
 ) -> None:
-    # A run resolves these as it starts; callers that already know them can
-    # pass them to create_run instead.
+    """Stamp the run as started, and record what it resolved.
+
+    Two callers, in that order, and both are this function because they are
+    the same fact arriving in two parts. The executor calls it as it spawns
+    the worker, which is what makes the row count against the concurrency
+    bound before anything else can be admitted; the run calls it again once it
+    has settled which guideline set and document type it is writing against,
+    which it cannot know until it has read the prompt.
+
+    So `started_at` is written once (COALESCE keeps the first stamp — the
+    moment the run was admitted, not the moment it finished deciding) while
+    the two names are last-non-null-wins. A finished run is left alone: its
+    outcome is already recorded and nothing may reopen it.
+    """
     conn.execute(
-        "UPDATE documentation_runs SET started_at = ?, "
+        "UPDATE documentation_runs SET started_at = COALESCE(started_at, ?), "
         "guideline_set = COALESCE(?, guideline_set), "
         "document_type = COALESCE(?, document_type) "
-        "WHERE id = ? AND started_at IS NULL",
+        "WHERE id = ? AND finished_at IS NULL",
         (_now(), guideline_set, document_type, run_id),
     )
     conn.commit()

@@ -13,10 +13,9 @@ proven against a stub returning a canned document, and it puts the write where
 the run id and the connection already are, so `last_run_id` needs no extra
 plumbing to be correct.
 
-`RUNNER` is that seam's default. Until the generation loop exists there is
-none, so a run finishes `failed` with a message saying so rather than the tool
-refusing: the row, its thread and its finalization are the thing this module
-owes, and they are all exercised either way.
+`RUNNER` is that seam's override. Left None — which is the normal case — a
+run drives `docgen.run_docgen`; tests set it to a stub, and an explicit
+`runner=` argument beats both.
 """
 
 from __future__ import annotations
@@ -49,7 +48,7 @@ def start_run(
 ) -> str:
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
-    selected_runner = runner or RUNNER or _unconfigured_runner
+    selected_runner = runner or RUNNER or _default_runner
     max_active = int(os.environ.get(MAX_ACTIVE_ENV) or 2)
 
     with _spawn_lock:
@@ -117,21 +116,22 @@ def wait_all(timeout: float = 10.0) -> None:
         thread.join(timeout)
 
 
-def _unconfigured_runner(
+def _default_runner(
     prompt: str,
     *,
     guideline_set: str | None = None,
     document_type: str | None = None,
 ) -> Any:
-    """Stand-in for the generation loop, which is not built yet.
+    """The real generation loop.
 
-    Raising here rather than at `start_run` keeps the tool's contract whole —
-    a request always comes back as a run row — and lands the reason on that
-    row's `error`, where a caller polling the run will actually read it."""
-    raise RuntimeError(
-        "no documentation runner is configured; set doc_runs.RUNNER or pass "
-        "runner= to start_run"
-    )
+    Imported inside the call, on the worker thread: the loop pulls the
+    anthropic SDK, and requesting a documentation run must not be what makes
+    an instance that never generates pay for it. Anything the loop cannot
+    survive comes back as an exception here and lands on the row's `error`,
+    which is where a caller polling the run will read it."""
+    from .docgen import run_docgen
+
+    return run_docgen(prompt, guideline_set=guideline_set, document_type=document_type)
 
 
 def _execute_run(
@@ -169,6 +169,17 @@ def _execute_run(
                 prompt, guideline_set=guideline_set, document_type=document_type
             )
         payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+        # The request may have named neither, in which case the run chose. Put
+        # the choice on the row before the outcome is decided, so a run that
+        # settled on a set and then found nothing to say still shows what it
+        # was trying to write. COALESCE in the store means a runner that
+        # reports neither leaves whatever the request named standing.
+        docs_store.mark_started(
+            conn,
+            run_id,
+            guideline_set=payload.get("guideline_set"),
+            document_type=payload.get("document_type"),
+        )
         reported = payload.get("outcome")
         if reported not in ("document_written", "nothing_written"):
             # Not folded into `nothing_written`: a runner that returns junk, or
