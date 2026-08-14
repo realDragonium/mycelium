@@ -1,62 +1,64 @@
-# Exposure review for knowledge-base articles
+# What a knowledge-base article may reveal
 
-Review the finished document as material that may reach an external reader.
-The frontmatter may name its audience as `external`, `internal`, or `both`,
-but this set uses the most cautious boundary for all three.
-An audience label does not make sensitive material safe to publish.
-The writer should apply the same boundary before handing the document over.
+This set writes for a reader who is not in the room and may not be in the
+company. An article's frontmatter names its audience as `external`, `internal`
+or `both`, but the boundary below holds for all three: an audience label is a
+routing hint, not a control, and a document that leaks has leaked wherever it
+was filed.
 
-## What must stay out
+A reviewer checks the finished article against this text. A writer who applies
+it first keeps the run's one retry for something else.
 
-Internal hostnames and IP ranges must not appear.
-Do not expose internal service or repository names.
-Do not describe infrastructure topology that is not already public.
-Replace those details with the reader-visible product boundary or omit them.
+## What stays out
 
-Do not name customers or include tenant identifiers.
-Do not include names, contact details, account details, or other information
-that identifies an individual.
-Examples and diagnostics must be anonymised rather than merely shortened.
+**Where the system runs.** Internal hostnames and IP ranges must not appear,
+nor internal service or repository names, nor infrastructure topology that is
+not already public. Name the product boundary the reader can see and leave the
+machinery behind it out.
 
-Never include credentials, tokens, private keys, or connection strings.
-Treat a value as live unless the document makes clear that it is a synthetic
-placeholder that cannot authenticate or connect to anything.
+**Who the system runs for.** No named customers, no tenant identifiers, and
+nothing that identifies an individual — names, contact details, account
+numbers. An example drawn from a real case is anonymised, not shortened.
 
-Do not present unreleased or roadmap capability as available behaviour.
-Future work may appear only when it is already published as such and the
-wording preserves that status.
-Internal ticket identifiers and staff names must not appear.
+**Anything that authenticates.** Credentials, tokens, private keys and
+connection strings never appear. Treat a value as live unless the document
+makes plain it is a placeholder that cannot connect to anything.
 
-Do not put substrate statement ids in the document body.
-Provenance travels beside the document, not inside the text readers receive.
+**Work that has not shipped.** Unreleased and roadmap capability must not be
+written as behaviour the reader has today. It may be mentioned only where it
+is already published as forthcoming, and only in wording that keeps it
+forthcoming. Internal ticket identifiers and staff names stay out with it.
 
-Describe a security control only to the depth needed to use it safely.
-Withhold implementation detail that would help someone bypass, evade, or
-weaken the control rather than configure, operate, or recover from it.
+**The run's own bookkeeping.** Substrate statement ids do not belong in the
+body. Provenance travels beside the document, and a reader who cannot resolve
+an id is being shown a reference to nothing.
+
+**How to defeat a control.** Describe a security control to the depth a reader
+needs to use it — how to turn it on, what it refuses, how to recover from it.
+Stop before the detail that helps someone bypass, evade or weaken it.
 
 ## What may be revealed
 
-Published product behaviour may be stated when the substrate supports it.
-Configuration that the reader controls may be named and explained.
-Documented limits and defaults may be given precisely.
-Error text that a user actually sees may be quoted when it helps them act.
-These permissions do not override any exclusion above.
+Published product behaviour the substrate supports. Configuration the reader
+controls, named and explained. Documented limits and defaults, stated
+precisely rather than rounded into vagueness. Error text a user actually sees,
+quoted where quoting it helps them act.
 
-## How to decide a hard case
+These are permissions, not exceptions: none of them licenses anything the
+section above withholds.
 
-First identify the exact fact the section needs the reader to understand.
-Then separate its reader-visible effect from its internal implementation.
-Check each half independently against the exclusions above.
+## The hard case
 
-A substrate statement holding an internal detail is evidence that the detail
-exists; it is not permission to publish that detail.
-If the reader-visible half is supported, write that half and leave the
-internal half out.
-Do not hedge, euphemise, or partially encode the internal half into the body.
-If removing it makes the remaining claim unsupported or unusable, omit the
-claim and leave the gap for a safer source or formulation.
+Sooner or later a section genuinely needs a fact whose only supporting
+statement carries an internal detail along with it. That the substrate holds
+the detail is evidence the detail exists; it is not permission to publish it.
 
-Return the document when any forbidden detail remains or when a permitted
-claim depends on revealing one.
-Pass exposure review only when every included detail is both useful to the
-reader and inside this boundary.
+Separate the reader-visible effect from the implementation that produces it,
+and check each half on its own. Write the half that clears the boundary and
+drop the other — do not hedge it, euphemise it, or encode it thinly enough to
+be reconstructed. If what remains is then unsupported or useless to the
+reader, leave the claim out and let the gap stand.
+
+Fail the exposure check when a withheld detail is still in the text, or when a
+permitted claim only works because one is. Pass it when everything the article
+says is both useful to its reader and inside this boundary.

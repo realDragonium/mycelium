@@ -114,29 +114,26 @@ internal notes. It exists to prove that a variant needs no code: it was added
 entirely through the management tools and has no source files, no seeding at
 startup and no entry anywhere in `src/`.
 
+Its `exposure` row is where the two sets are most visibly different, which is
+the argument for the slot being a row rather than a constant. `kb-authoring`
+writes for a reader who may be outside the company, so internal hostnames,
+service names, ticket ids, staff names and unreleased work all stay out.
+`internal-doc` writes for staff, so all of those may be stated; what it
+withholds is the narrower set that is secret whoever is reading — live
+credentials, personal data about an identifiable person, and material a third
+party gave us in confidence. A reviewer would reach opposite verdicts on the
+same paragraph depending on which set the run resolved, which is exactly what
+a set-wide slot is for.
+
 ## Adding a variant set
 
 Save the rows. That is the whole procedure — `internal-doc` was created with
 exactly these calls:
 
 ```python
-save_prompt_text("guideline-set", "internal-doc/guidance", "…")
-save_prompt_text(
-    "guideline-set",
-    "internal-doc/exposure",
-    (
-        "These notes are for staff. Internal hostnames may be stated when "
-        "useful and supported. Service and repository names, infrastructure "
-        "topology, ticket IDs, staff names, and unreleased work may be stated "
-        "too. This inverts the external boundary: the question is not whether "
-        "a reader is outside the company, but whether the material is secret "
-        "whoever is reading.\n\nWithhold live credentials, tokens, and private "
-        "keys; personal data about an identifiable person; and material a "
-        "third party gave us in confidence. A secret is a secret whoever is "
-        "reading.\n"
-    ),
-)
-save_prompt_text("guideline-set", "internal-doc/how-to",   "…")
+save_prompt_text("guideline-set", "internal-doc/guidance",  "…")
+save_prompt_text("guideline-set", "internal-doc/exposure",  "…")
+save_prompt_text("guideline-set", "internal-doc/how-to",    "…")
 save_prompt_text("guideline-set", "internal-doc/reference", "…")
 ```
 
