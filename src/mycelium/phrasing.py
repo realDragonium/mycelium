@@ -771,6 +771,22 @@ def _check_hedges(
 # ─── public entry point ─────────────────────────────────────────────────────
 
 
+def _atomicity_checks(
+    doc: "Doc", normalized: str, original: str, pos_map: list[int]
+) -> list[Violation]:
+    """Run the four detectors that decide whether text is atomic.
+
+    Sole definition of that set: `check` and `atomicity_violations` both call
+    it, so the segmenter's re-check cannot drift from the catalog.
+    """
+    violations: list[Violation] = []
+    violations.extend(_check_compound_clauses(doc, original, pos_map))
+    violations.extend(_check_semicolons(doc, original, pos_map))
+    violations.extend(_check_compound_phrases(normalized, original, pos_map))
+    violations.extend(_check_precondition_sconj(doc, original, pos_map))
+    return violations
+
+
 def atomicity_violations(text: str) -> list[Violation]:
     """Run only the four atomicity detectors against `text`.
 
@@ -782,11 +798,7 @@ def atomicity_violations(text: str) -> list[Violation]:
         return []
 
     doc = _get_nlp()(normalized)
-    violations: list[Violation] = []
-    violations.extend(_check_compound_clauses(doc, text, pos_map))
-    violations.extend(_check_semicolons(doc, text, pos_map))
-    violations.extend(_check_compound_phrases(normalized, text, pos_map))
-    violations.extend(_check_precondition_sconj(doc, text, pos_map))
+    violations = _atomicity_checks(doc, normalized, text, pos_map)
     violations.sort(key=lambda violation: violation["position"])
     return violations
 
@@ -826,10 +838,7 @@ def check(text: str, kind: str = "event") -> list[Violation]:
     violations: list[Violation] = []
 
     # --- Common catalog: every kind runs these ---
-    violations.extend(_check_compound_clauses(doc, text, pos_map))
-    violations.extend(_check_semicolons(doc, text, pos_map))
-    violations.extend(_check_compound_phrases(normalized, text, pos_map))
-    violations.extend(_check_precondition_sconj(doc, text, pos_map))
+    violations.extend(_atomicity_checks(doc, normalized, text, pos_map))
     violations.extend(_check_universal_quantifier(doc, text, pos_map))
     violations.extend(_check_hedges(normalized, text, pos_map))
     violations.extend(_check_hidden_event_state(normalized, text, pos_map))
