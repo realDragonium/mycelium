@@ -31,6 +31,7 @@ relationship tables would add schema and queries without serving a lookup.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import uuid as _uuid
@@ -76,6 +77,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS generated_documents_identity
 """
 
 OUTCOMES = ("document_written", "nothing_written", "failed")
+
+
+def body_digest(body: str) -> str:
+    """Identify the body a caller believes it is replacing without retaining it."""
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
@@ -435,6 +441,7 @@ def upsert_document(
     review: dict | None = None,
     run_id: str | None = None,
     updates: str | None = None,
+    replacing: str | None = None,
 ) -> str:
     """Write content while preserving metadata a partial writer omits.
 
@@ -448,6 +455,8 @@ def upsert_document(
     share a title, so replacing another run's body is refused rather than
     merged. Identical bodies and same-run rewrites remain safe; a caller may
     request deliberate replacement by passing `updates` with the stored id.
+    `replacing` is accepted for the forthcoming body check but is not yet
+    enforced.
     """
     slug = slug.strip()
     title = title.strip()

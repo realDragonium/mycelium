@@ -393,6 +393,99 @@ def test_upsert_document_allows_a_replacement_the_caller_asked_for(tmp_path):
     assert document["last_run_id"] == "drn_second"
 
 
+def test_upsert_document_refuses_to_replace_a_body_the_caller_never_saw(tmp_path):
+    """A stale judgement must not destroy content written after it was made."""
+    conn = _conn(tmp_path)
+    body_a = "Body the stale caller saw"
+    body_b = "Body written after the stale caller read"
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body_a,
+        run_id="drn_owner",
+    )
+    replacing = docs_store.body_digest(body_a)
+    docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body_b,
+        run_id="drn_owner",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body=body_a,
+            run_id="drn_stale",
+            updates=document_id,
+            replacing=replacing,
+        )
+
+    assert document_id in str(exc_info.value)
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    document = docs_store.get_document(conn, document_id)
+    assert document["body"] == body_b
+    assert document["last_run_id"] == "drn_owner"
+
+
+def test_upsert_document_refuses_a_replacement_that_states_no_expectation(tmp_path):
+    """Naming a target alone must not authorize the loss of its current body."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    with pytest.raises(ValueError, match="replacing"):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Second body",
+            run_id="drn_second",
+            updates=document_id,
+        )
+
+    assert docs_store.get_document(conn, document_id)["body"] == "First body"
+
+
+def test_upsert_document_refuses_an_expectation_that_names_no_document(tmp_path):
+    """An expectation without a target cannot protect any known body."""
+    conn = _conn(tmp_path)
+
+    with pytest.raises(ValueError):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="First body",
+            run_id="drn_first",
+            replacing=docs_store.body_digest("Expected body"),
+        )
+
+    assert docs_store.list_documents(conn) == []
+
+
 def test_a_deliberate_replacement_carries_the_replacing_runs_review(tmp_path):
     """The stored review describes the body it accepted, so a deliberate
     replacement replaces the review with the body."""
