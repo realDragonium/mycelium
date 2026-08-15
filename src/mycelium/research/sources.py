@@ -42,9 +42,10 @@ class SourceError(RuntimeError):
 # options (a leading '-'), redirecting the PAT to another host (a stray '@' or
 # '/' in `host`), or escaping the workspace (a '..' in `repo`). This makes the
 # arg-injection safety explicit rather than relying on URL construction.
-_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
-_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?$")
+# `\Z` is used because `$` also matches immediately before a trailing newline.
+_OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
+_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?\Z")
 
 
 def _validate(name: str, field: str, value: str, pattern: re.Pattern[str]) -> str:
