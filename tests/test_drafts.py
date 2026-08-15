@@ -220,9 +220,7 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
             _restore(tokens)
         from mycelium import drafts_store
 
-        row = drafts_store.find_open_session_draft(
-            server._drafts_db(), "sess-E", "d1"
-        )
+        row = drafts_store.find_open_session_draft(server._drafts_db(), "sess-E", "d1")
         draft_id = row["id"]
 
         client.post(f"/api/drafts/{draft_id}/submit")
@@ -433,7 +431,9 @@ def test_another_drafter_cannot_reach_a_draft_by_reusing_its_session_id(
         victim = drafts_store.find_open_session_draft(conn, "sess-shared", "d1")
         assert victim is not None
 
-        other = auth.Principal(id="d2", name="Drafter Two", role="drafter", type="human")
+        other = auth.Principal(
+            id="d2", name="Drafter Two", role="drafter", type="human"
+        )
         p_tok = auth.current_principal.set(other)
         s_tok = auth.current_session_id.set("sess-shared")
         try:

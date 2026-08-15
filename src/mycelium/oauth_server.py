@@ -719,9 +719,7 @@ async def authorize_decide(
             ),
         )
     return RedirectResponse(
-        url=_with_query(
-            redirect_uri, {"code": code, "state": state, "iss": issuer}
-        ),
+        url=_with_query(redirect_uri, {"code": code, "state": state, "iss": issuer}),
         status_code=302,
     )
 

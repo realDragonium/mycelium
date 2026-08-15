@@ -39,7 +39,12 @@ mycelium-init = "mycelium.init_kb:main"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.14.4",
+    # Exact, not a floor: ruff is the formatter .githooks/pre-commit runs, and
+    # its output changes between minor versions. A floor lets `uv lock --upgrade`
+    # move it inside a lockfile hash diff nobody reads, which leaves every file
+    # in the tree reading as unformatted. Bumping this line is the deliberate
+    # act, and the reformat belongs in the same commit.
+    "ruff==0.15.20",
 ]
 
 [build-system]

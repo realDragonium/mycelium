@@ -278,11 +278,13 @@ def test_routing_headers_must_agree_with_the_body(client, bearer):
     that advice would silently become optional — and a proxy rewriting one but
     not the other would dispatch something the caller didn't ask for.
     """
-    body = {"_meta": {
-        PROTOCOL_VERSION_META_KEY: LATEST_PROTOCOL_VERSION,
-        CLIENT_INFO_META_KEY: {"name": "era-test", "version": "1.0"},
-        CLIENT_CAPABILITIES_META_KEY: {},
-    }}
+    body = {
+        "_meta": {
+            PROTOCOL_VERSION_META_KEY: LATEST_PROTOCOL_VERSION,
+            CLIENT_INFO_META_KEY: {"name": "era-test", "version": "1.0"},
+            CLIENT_CAPABILITIES_META_KEY: {},
+        }
+    }
     r = client.post(
         "/mcp",
         headers={
