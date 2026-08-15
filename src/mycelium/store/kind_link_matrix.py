@@ -65,6 +65,10 @@ def admissible_link_types(
     conn: sqlite3.Connection, from_kind: str, to_kind: str
 ) -> frozenset[str]:
     """Return the configured link types for a kind pair."""
+    # A kind counts as configured only while some row still mentions it, so a
+    # kind added to the ontology after seeding falls back to the whole
+    # vocabulary rather than to silence. The cost is the mirror case: empty
+    # every pair touching a kind and it reverts to the fallback too.
     known_kinds = matrix_kinds(conn)
     if from_kind not in known_kinds or to_kind not in known_kinds:
         return _live_link_types(conn)
