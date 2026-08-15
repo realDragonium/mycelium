@@ -213,9 +213,9 @@ def test_orphan_marking_on_init(tmp_path, monkeypatch):
 
 def test_role_gates(tmp_path, monkeypatch):
     assert server.start_research._mycelium_required_role == "drafter"
-    assert auth.required_role_for("list_research_runs") == "reader"
-    assert auth.required_role_for("get_research_run") == "reader"
-    assert auth.required_role_for("list_research_sources") == "reader"
+    assert server.list_research_runs._mycelium_required_role == "reader"
+    assert server.get_research_run._mycelium_required_role == "reader"
+    assert server.list_research_sources._mycelium_required_role == "reader"
     monkeypatch.delenv("MYCELIUM_SOURCES", raising=False)
 
     token = auth.current_principal.set(
