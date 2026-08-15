@@ -141,6 +141,7 @@ from .statement_mentions import (
     replace_mentions,
     reset_claimed_recompute,
     statements_mentioning_name,
+    statements_sharing_entities,
 )
 from .statements import (
     create_statement,
@@ -276,6 +277,7 @@ __all__ = [
     "set_name_vector_id",
     "set_vector_id",
     "statements_mentioning_name",
+    "statements_sharing_entities",
     "substrate_connection",
     "substrate_dump",
     "transaction",

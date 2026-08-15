@@ -181,6 +181,27 @@ def statements_mentioning_name(conn: sqlite3.Connection, name_id: str) -> list[s
     ]
 
 
+def statements_sharing_entities(
+    conn: sqlite3.Connection, entity_ids: Iterable[str]
+) -> list[tuple[str, str]]:
+    """Return statement and entity pairs for materialized shared mentions."""
+    unique_ids = list(dict.fromkeys(entity_ids))
+    pairs: list[tuple[str, str]] = []
+    # Keep each query below SQLite's host-parameter limit.
+    for start in range(0, len(unique_ids), 500):
+        chunk = unique_ids[start : start + 500]
+        placeholders = ",".join("?" * len(chunk))
+        rows = conn.execute(
+            "SELECT DISTINCT sm.statement_id, n.entity_id "
+            "FROM statement_mentions sm "
+            "JOIN names n ON n.id = sm.name_id "
+            f"WHERE n.entity_id IN ({placeholders})",
+            chunk,
+        ).fetchall()
+        pairs.extend((row["statement_id"], row["entity_id"]) for row in rows)
+    return pairs
+
+
 def all_statement_ids(conn: sqlite3.Connection) -> list[str]:
     return [r["id"] for r in conn.execute("SELECT id FROM statements").fetchall()]
 
