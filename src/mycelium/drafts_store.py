@@ -66,6 +66,10 @@ CREATE TABLE IF NOT EXISTS draft_ops (
 CREATE INDEX IF NOT EXISTS draft_ops_draft ON draft_ops (draft_id);
 """
 
+#: Op kinds that are records for the curator, not tool calls: replay skips them
+#: by membership rather than by name-matching scattered through the replayer.
+NON_REPLAYING_OP_KINDS = frozenset({"flag"})
+
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)

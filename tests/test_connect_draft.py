@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from mycelium import auth_store, drafts_store, phrasing, server, store
 from mycelium.connect.draft import BatchInput, _proposal_op, assemble_draft, summarize
+from mycelium.connect.extract import FlagInput
 from mycelium.connect.proposals import Proposal
 
 
@@ -156,6 +157,7 @@ def test_assemble_and_apply_transfers_links_and_records_proposals(
             "links": 1,
             "merges": 1,
             "conflicts": 1,
+            "flags": 0,
         }
 
         applied = server.apply_draft(draft_id)
@@ -182,6 +184,58 @@ def test_assemble_and_apply_transfers_links_and_records_proposals(
         ).fetchone()["n"]
         assert unresolved_links == 0
         assert unresolved_gaps == 0
+
+
+def test_assemble_writes_flags_last_and_summary_counts_them(tmp_path, monkeypatch):
+    flags = [
+        FlagInput(4, "The user logs in", "unmatched", "no shape", 2, (20, 36)),
+        FlagInput(5, "Every invite is sent", "phrasing", "universal", 3, (40, 60)),
+    ]
+    with _app(tmp_path, monkeypatch):
+        x_id, e_id, y_id = _existing_statements()
+        draft_id = assemble_draft(
+            server._drafts_db(),
+            batch=_batch(e_id),
+            proposals=_proposals(x_id, y_id),
+            text_of=_text_of,
+            created_by="tester",
+            flags=flags,
+        )
+
+        draft = server.get_draft(draft_id)
+        assert [op["kind"] for op in draft["ops"]] == [
+            "upsert_statements",
+            "add_links",
+            "merge_statements",
+            "report_knowledge_gap",
+            "flag",
+            "flag",
+        ]
+        assert draft["ops"][4]["payload"] == {
+            "text": "The user logs in",
+            "reason": "unmatched",
+            "detail": "no shape",
+            "sentence": 2,
+            "span": [20, 36],
+        }
+        assert draft["ops"][4]["provenance"] == {
+            "source": "shapes",
+            "reason": "unmatched",
+            "fragment_index": 4,
+        }
+        assert draft["ops"][5]["payload"] == {
+            "text": "Every invite is sent",
+            "reason": "phrasing",
+            "detail": "universal",
+            "sentence": 3,
+            "span": [40, 60],
+        }
+        assert draft["ops"][5]["provenance"] == {
+            "source": "phrasing",
+            "reason": "phrasing",
+            "fragment_index": 5,
+        }
+        assert summarize(server._drafts_db(), draft_id)["flags"] == 2
 
 
 def test_merge_proposal_can_be_removed_before_approval(tmp_path, monkeypatch):

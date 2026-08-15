@@ -8,11 +8,12 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from mycelium import drafts_store, store
 
+from .extract import FLAG_SOURCES, FlagInput
 from .proposals import Proposal
 
 _BATCH_TARGET = re.compile(r"^@(\d+)$")
@@ -106,6 +107,7 @@ def assemble_draft(
     created_by: str | None,
     title: str | None = None,
     session_id: str | None = None,
+    flags: Sequence[FlagInput] = (),
 ) -> str:
     """Write a connected batch and its proposals into one open draft."""
     with store.transaction(conn):
@@ -115,24 +117,44 @@ def assemble_draft(
             session_id=session_id,
             title=title,
         )
-        batch_seq = drafts_store.add_op(
-            conn,
-            draft_id=draft_id,
-            kind="upsert_statements",
-            payload=_batch_payload(batch),
-            created_by=created_by,
-        )
-        ordered_proposals = sorted(
-            proposals, key=lambda proposal: _PROPOSAL_ORDER[proposal.kind]
-        )
-        for proposal in ordered_proposals:
-            kind, payload = _proposal_op(proposal, batch, text_of, batch_seq)
+        if batch:
+            batch_seq = drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="upsert_statements",
+                payload=_batch_payload(batch),
+                created_by=created_by,
+            )
+            ordered_proposals = sorted(
+                proposals, key=lambda proposal: _PROPOSAL_ORDER[proposal.kind]
+            )
+            for proposal in ordered_proposals:
+                kind, payload = _proposal_op(proposal, batch, text_of, batch_seq)
+                drafts_store.add_op(
+                    conn,
+                    draft_id=draft_id,
+                    kind=kind,
+                    payload=payload,
+                    provenance=proposal.provenance,
+                    created_by=created_by,
+                )
+        for flag in flags:
             drafts_store.add_op(
                 conn,
                 draft_id=draft_id,
-                kind=kind,
-                payload=payload,
-                provenance=proposal.provenance,
+                kind="flag",
+                payload={
+                    "text": flag.text,
+                    "reason": flag.reason,
+                    "detail": flag.detail,
+                    "sentence": flag.sentence,
+                    "span": list(flag.span),
+                },
+                provenance={
+                    "source": FLAG_SOURCES[flag.reason],
+                    "reason": flag.reason,
+                    "fragment_index": flag.fragment_index,
+                },
                 created_by=created_by,
             )
     return draft_id
@@ -144,6 +166,7 @@ def summarize(conn: sqlite3.Connection, draft_id: str) -> dict:
     links = 0
     merges = 0
     conflicts = 0
+    flags = 0
     for op in drafts_store.list_ops(conn, draft_id):
         kind = op["kind"]
         if kind == "upsert_statements":
@@ -156,10 +179,13 @@ def summarize(conn: sqlite3.Connection, draft_id: str) -> dict:
             merges += 1
         elif kind == "report_knowledge_gap":
             conflicts += 1
+        elif kind == "flag":
+            flags += 1
     return {
         "draft_id": draft_id,
         "statements": statements,
         "links": links,
         "merges": merges,
         "conflicts": conflicts,
+        "flags": flags,
     }
