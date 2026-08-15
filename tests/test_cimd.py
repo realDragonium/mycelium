@@ -236,7 +236,10 @@ def test_a_rejected_document_is_not_cached():
         cimd.fetch(DOC_URL, resolve=PUBLIC, get=bad)
 
     good = _serving(_doc())
-    assert cimd.fetch(DOC_URL, resolve=PUBLIC, get=good).client_name == "Example MCP Client"
+    assert (
+        cimd.fetch(DOC_URL, resolve=PUBLIC, get=good).client_name
+        == "Example MCP Client"
+    )
 
 
 def test_documents_with_userinfo_redirects_are_rejected():
@@ -270,7 +273,7 @@ def test_the_connection_targets_the_address_that_was_vetted():
     differently the second time and reach whatever it liked."""
     get = _serving(_doc())
     cimd.fetch(DOC_URL, resolve=lambda h, p: ["93.184.216.34"], get=get)
-    (url, address), = get.calls
+    ((url, address),) = get.calls
     assert url == DOC_URL
     assert address == "93.184.216.34"
 

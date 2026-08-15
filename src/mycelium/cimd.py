@@ -197,7 +197,9 @@ def _parse(url: str, body: str) -> ClientMetadata:
         try:
             parsed = urlsplit(uri)
         except ValueError as exc:
-            raise CimdError(f"redirect_uris contains an unparseable URI: {uri}") from exc
+            raise CimdError(
+                f"redirect_uris contains an unparseable URI: {uri}"
+            ) from exc
         if parsed.username or parsed.password:
             raise CimdError("redirect_uris must not carry userinfo")
 

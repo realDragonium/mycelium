@@ -615,7 +615,9 @@ def test_challenge_and_metadata_advertise_the_scope_to_request(tmp_path, monkeyp
     itself, rather than needing the metadata document first."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        r = client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+        r = client.post(
+            "/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"}
+        )
         assert r.status_code == 401
         assert 'scope="mcp"' in r.headers["www-authenticate"]
 
@@ -760,8 +762,9 @@ def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypa
             "state": "st",
         }
 
-        consent = client.get("/authorize", params={**form, "response_type": "code"},
-                             headers=headers)
+        consent = client.get(
+            "/authorize", params={**form, "response_type": "code"}, headers=headers
+        )
         assert consent.status_code == 200, consent.text
         # The name comes from the document, and the destination is shown.
         assert "Example Client" in consent.text
@@ -847,9 +850,7 @@ def test_an_unresolvable_document_is_simply_not_a_client(tmp_path, monkeypatch):
         assert r.json()["detail"] == "invalid_client"
 
 
-def test_loopback_only_clients_get_a_warning_on_the_consent_page(
-    tmp_path, monkeypatch
-):
+def test_loopback_only_clients_get_a_warning_on_the_consent_page(tmp_path, monkeypatch):
     """Any local program can listen on a loopback port, so the document
     proves nothing about which one is asking. A client with a real host
     should not carry the same caution."""
@@ -892,14 +893,16 @@ def test_consent_shows_the_hostname_the_code_goes_to(tmp_path, monkeypatch):
     assert _redirect_host("https://app.example.com/cb") == "app.example.com"
 
     # Shorthand and trailing-dot forms still reach this machine.
-    for loopback in ("http://127.0.0.2:1/cb", "http://localhost./cb", "http://127.1/cb"):
+    for loopback in (
+        "http://127.0.0.2:1/cb",
+        "http://localhost./cb",
+        "http://127.1/cb",
+    ):
         assert _is_loopback_redirect(loopback), loopback
     assert not _is_loopback_redirect("https://app.example.com/cb")
 
 
-def test_a_hosted_redirect_does_not_silence_the_loopback_warning(
-    tmp_path, monkeypatch
-):
+def test_a_hosted_redirect_does_not_silence_the_loopback_warning(tmp_path, monkeypatch):
     """The warning follows the redirect being authorized, not the client's
     whole list — otherwise listing one unused hosted URI suppresses it."""
     _stub_cimd(
@@ -1011,7 +1014,10 @@ def test_a_consent_belongs_to_the_user_it_was_shown_to(tmp_path, monkeypatch):
 
         with store.transaction(conn):
             other = auth.create_user(
-                conn, name="Other", role="admin", type="human",
+                conn,
+                name="Other",
+                role="admin",
+                type="human",
                 email="other@example.com",
             )
             other_raw, _ = auth.issue_token(
