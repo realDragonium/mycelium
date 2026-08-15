@@ -390,6 +390,14 @@ def upsert_document(
     review: dict | None = None,
     run_id: str | None = None,
 ) -> str:
+    """Write content while preserving metadata a partial writer omits.
+
+    Omitted statement ids, review, and run id keep their stored values; explicit
+    empty collections still clear them. Guideline set and document type identify
+    the page, so omitting them selects the unresolved ``('', '')`` page instead
+    of blanking content. This matches `mark_started`'s last-non-null behaviour,
+    which the full-replace version of this function contradicted.
+    """
     slug = slug.strip()
     title = title.strip()
     if not slug:
@@ -400,38 +408,64 @@ def upsert_document(
         guideline_set = ""
     if document_type is None:
         document_type = ""
-    document_id = "gdc_" + _uuid.uuid4().hex[:12]
-    now = _now()
-    conn.execute(
-        "INSERT INTO generated_documents "
-        "(id, slug, title, guideline_set, document_type, body, statement_ids, "
-        "review, created_at, updated_at, last_run_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(guideline_set, document_type, slug) DO UPDATE SET "
-        "title = excluded.title, body = excluded.body, "
-        "statement_ids = excluded.statement_ids, review = excluded.review, "
-        "updated_at = excluded.updated_at, last_run_id = excluded.last_run_id",
-        (
-            document_id,
-            slug,
-            title,
-            guideline_set,
-            document_type,
-            body,
-            json.dumps(list(statement_ids) if statement_ids is not None else []),
-            json.dumps(review if review is not None else {}),
-            now,
-            now,
-            run_id,
-        ),
-    )
-    row = conn.execute(
-        "SELECT id FROM generated_documents "
-        "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
-        (guideline_set, document_type, slug),
-    ).fetchone()
-    conn.commit()
-    return str(row["id"])
+
+    # sqlite3's legacy isolation level leaves the read outside a transaction
+    # unless one is opened explicitly; another writer must not interleave here.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        existing = conn.execute(
+            "SELECT id, statement_ids, review, last_run_id "
+            "FROM generated_documents "
+            "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
+            (guideline_set, document_type, slug),
+        ).fetchone()
+        now = _now()
+        if existing is None:
+            document_id = "gdc_" + _uuid.uuid4().hex[:12]
+            conn.execute(
+                "INSERT INTO generated_documents "
+                "(id, slug, title, guideline_set, document_type, body, "
+                "statement_ids, review, created_at, updated_at, last_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    document_id,
+                    slug,
+                    title,
+                    guideline_set,
+                    document_type,
+                    body,
+                    json.dumps(
+                        list(statement_ids) if statement_ids is not None else []
+                    ),
+                    json.dumps(review if review is not None else {}),
+                    now,
+                    now,
+                    run_id,
+                ),
+            )
+        else:
+            document_id = str(existing["id"])
+            conn.execute(
+                "UPDATE generated_documents "
+                "SET title = ?, body = ?, statement_ids = ?, "
+                "review = ?, updated_at = ?, last_run_id = ? WHERE id = ?",
+                (
+                    title,
+                    body,
+                    existing["statement_ids"]
+                    if statement_ids is None
+                    else json.dumps(list(statement_ids)),
+                    existing["review"] if review is None else json.dumps(review),
+                    now,
+                    existing["last_run_id"] if run_id is None else run_id,
+                    document_id,
+                ),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return document_id
 
 
 def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
