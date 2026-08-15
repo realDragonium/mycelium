@@ -234,10 +234,6 @@ _BAND_MARKERS = frozenset({"for", "when", "unless", "if"})
 # "is able to" is the periphrastic capability modal, not a condition holding.
 _PERIPHRASTIC_MODAL_ADJECTIVES = frozenset({"able", "unable"})
 _DETERMINERS = frozenset({"a", "an", "the"})
-_NEGATED_MODAL_RE = re.compile(
-    r"\b(cannot|can not|can't|could not|couldn't|may not|might not)\b",
-    re.IGNORECASE,
-)
 _ABLE_TO_RE = re.compile(r"(?:^|\s)able\s+to(?:\s|$)", re.IGNORECASE)
 _RULE_FORMULA_RE = re.compile(
     r"\b(plus|minus|times)\b"
@@ -290,6 +286,11 @@ def _modal(doc: Doc) -> Token | None:
     )
 
 
+def _is_negated(modal: Token) -> bool:
+    """Report whether a negation particle attaches to the modal's head."""
+    return any(child.dep_ == "neg" for child in modal.head.children)
+
+
 def _complement(root: Token) -> Token | None:
     """Return the first copular complement in dependency order."""
     return next(
@@ -317,11 +318,11 @@ def _passive_match(
 
 def _capability_modal(doc: Doc, text: str) -> ShapeMatch | None:
     """Match modal and able-to capability phrasing."""
-    # A negated modal states a prohibition, which is rule territory. spaCy tags
-    # "cannot" as a plain capability modal, so catch the negation lexically.
-    if _NEGATED_MODAL_RE.search(text):
-        return None
     modal = _modal(doc)
+    # A negated modal ("cannot", "may not") states a prohibition, which is rule
+    # territory; spaCy tags the modal itself as an ordinary capability modal.
+    if modal is not None and _is_negated(modal):
+        return None
     if modal is not None:
         return ShapeMatch("capability", "capability-modal", modal.text)
     if _ABLE_TO_RE.search(text):
