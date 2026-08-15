@@ -9,6 +9,7 @@ refuses at the door, so a request that could only fail never becomes a run.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from types import SimpleNamespace
@@ -44,6 +45,12 @@ def _document(**overrides) -> dict:
         # Never empty by default: the executor refuses to record a document
         # that rests on nothing, so a canned one has to carry provenance.
         "statement_ids": ["stm_1"],
+        "review": {
+            "exposure": {"status": "pass", "findings": []},
+            "conformance": {"status": "pass", "findings": []},
+            "attempts": 1,
+            "passed": True,
+        },
     }
     payload.update(overrides)
     return payload
@@ -122,6 +129,32 @@ def test_runner_resolution_lands_on_the_run_and_the_document(tmp_path):
     assert document["statement_ids"] == ["stm_1", "stm_2"]
 
 
+def test_review_record_round_trips_onto_the_stored_document(tmp_path):
+    """The review that accepted a document remains readable with that page,
+    rather than surviving only in the runner's transient result."""
+    conn = _conn(tmp_path)
+    review = {
+        "exposure": {"status": "unchecked", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "attempts": 2,
+        "passed": True,
+    }
+
+    run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(review=review),
+    )
+    doc_runs.wait_all()
+
+    run = docs_store.get_run(conn, run_id)
+    stored = docs_store.get_document(conn, run["document_id"])
+    assert json.loads(stored["review"]) == review
+
+    document = docs_store.serialize_document(stored)
+    assert document["review"] == review
+
+
 def test_requested_set_and_type_reach_the_runner_and_the_row(tmp_path):
     conn = _conn(tmp_path)
     seen = {}
@@ -166,6 +199,89 @@ def test_nothing_written_reason_in_error_column(tmp_path):
     assert row["outcome"] == "nothing_written"
     assert row["error"] == "substrate has nothing on this"
     assert row["document_id"] is None
+
+
+def test_a_review_rejected_document_never_enters_the_registry(tmp_path):
+    """A second failed review leaves its findings only on the run, so no
+    rejected page can become the registry entry that a later run updates."""
+    conn = _conn(tmp_path)
+    reason = (
+        "review failed after 2 attempts: exposure: credentials section reveals "
+        "an internal token"
+    )
+
+    run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: {
+            "outcome": "nothing_written",
+            "reason": reason,
+            "review": {
+                "exposure": {
+                    "status": "fail",
+                    "findings": [
+                        {
+                            "where": "credentials section",
+                            "problem": "reveals an internal token",
+                        }
+                    ],
+                },
+                "conformance": {"status": "pass", "findings": []},
+                "attempts": 2,
+                "passed": False,
+            },
+        },
+    )
+    doc_runs.wait_all()
+
+    row = docs_store.get_run(conn, run_id)
+    assert docs_store.list_documents(conn) == []
+    assert row["outcome"] == "nothing_written"
+    assert row["document_id"] is None
+    assert row["error"] == reason
+
+
+def test_a_page_rewritten_by_a_second_run_carries_the_second_review(tmp_path):
+    """Updating a stable slug replaces the first review snapshot because it
+    describes the old body, not the page accepted by the later run."""
+    conn = _conn(tmp_path)
+    first_review = {
+        "exposure": {"status": "pass", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "attempts": 1,
+        "passed": True,
+    }
+    second_review = {
+        "exposure": {"status": "unchecked", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "attempts": 2,
+        "passed": True,
+    }
+
+    first_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            body="First body", review=first_review
+        ),
+    )
+    doc_runs.wait_all()
+    second_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            body="Second body", review=second_review
+        ),
+    )
+    doc_runs.wait_all()
+
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    document = docs_store.serialize_document(documents[0])
+    assert first_run_id != second_run_id
+    assert document["body"] == "Second body"
+    assert document["last_run_id"] == second_run_id
+    assert document["review"] == second_review
 
 
 def test_runner_exception_marks_failed(tmp_path):

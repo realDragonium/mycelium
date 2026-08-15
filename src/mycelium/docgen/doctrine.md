@@ -2,9 +2,11 @@
 
 You are writing **one document** about a topic, from a knowledge substrate,
 for a reader who will never see the substrate. What you write is stored as it
-stands and served as it stands. There is no editing pass after you, no
-reviewer between you and the reader, and nothing downstream that will notice a
-sentence you could not source.
+stands and served as it stands. A reviewer that has not seen your reasoning
+will check the finished document against the set's exposure rules and template
+and may return it once, but cannot check facts without your run's reads.
+Nothing downstream will notice a sentence you could not source; substrate
+discipline is yours alone.
 
 This doctrine is about **running the loop**. What the document should look
 like — its structure, its sections, its tone, its frontmatter — is the

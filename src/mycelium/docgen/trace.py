@@ -53,6 +53,8 @@ class TraceBuilder:
     #: emits the harness sent back, each with why (no ids, unretrieved ids,
     #: blank body). The anti-invention gate's own record.
     refused_emits: list[str] = field(default_factory=list)
+    #: One entry per independent review. The reviewer gate's own record.
+    reviews: list[dict] = field(default_factory=list)
     forced_finalize: str | None = None
     degraded: bool = False
     notes: list[str] = field(default_factory=list)
@@ -117,6 +119,7 @@ class TraceBuilder:
             "reported_gaps": self.reported_gaps,
             "declared_gaps": self.declared_gaps,
             "refused_emits": self.refused_emits,
+            "reviews": self.reviews,
             "tokens": tokens,
             "cost_usd": self.cost_usd(input_per_mtok, output_per_mtok),
             "forced_finalize": self.forced_finalize,

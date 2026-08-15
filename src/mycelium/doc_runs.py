@@ -211,11 +211,17 @@ def _execute_run(
                 guideline_set=payload.get("guideline_set") or guideline_set,
                 document_type=payload.get("document_type") or document_type,
                 statement_ids=payload.get("statement_ids"),
+                # The loop and DocumentWritten enforce that review ran. This
+                # overridable runner seam accepts older canned runners instead
+                # of making their missing record fatal; the store writes `{}`.
+                review=payload.get("review"),
                 run_id=run_id,
             )
             outcome = "document_written"
         else:
             outcome = "nothing_written"
+            # Keeping the reason verbatim is how a rejected document's review
+            # findings reach the run row; a bare status would discard them.
             error = payload.get("reason")
     except Exception as exc:
         logger.exception("documentation run failed: %s", run_id)
