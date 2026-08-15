@@ -6,17 +6,26 @@ import pytest
 
 from mycelium import server
 from mycelium.connect import funnel
-from mycelium.connect.funnel import BatchStatement, candidates_for, find_candidates
+from mycelium.connect.funnel import (
+    BatchStatement,
+    candidates_for,
+    find_candidates,
+    link_typable,
+)
 
 
 class FakeView:
-    def __init__(self) -> None:
+    def __init__(
+        self, allow_all_link_types: frozenset[str] = frozenset({"contains", "triggers"})
+    ) -> None:
         self.embeddings_by_text: dict[str, list[float]] = {}
         self.neighbours_by_vector: dict[tuple[float, ...], list[tuple[str, float]]] = {}
         self.similarities: dict[str, float | None] = {}
         self.entities_by_text: dict[str, frozenset[str]] = {}
         self.sharing: dict[str, frozenset[str]] = {}
         self.kinds: dict[str, str] = {}
+        self.link_types_by_kind_pair: dict[tuple[str, str], frozenset[str]] = {}
+        self.allow_all_link_types = allow_all_link_types
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
 
@@ -45,6 +54,11 @@ class FakeView:
 
     def kind_of(self, statement_id: str) -> str | None:
         return self.kinds.get(statement_id)
+
+    def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
+        return self.link_types_by_kind_pair.get(
+            (from_kind, to_kind), self.allow_all_link_types
+        )
 
 
 def test_unions_vector_and_mention_routes_before_thresholding():
@@ -176,6 +190,34 @@ def test_invalid_threshold_order_raises_before_work():
 
 def test_empty_batch_returns_empty_result():
     assert find_candidates([], FakeView()) == funnel.FunnelResult({}, {}, [])
+
+
+def test_empty_link_type_shortlist_preserves_related_candidate():
+    view = FakeView()
+    view.embeddings_by_text["new"] = [1.0]
+    view.neighbours_by_vector[(1.0,)] = [("existing", 0.7)]
+    view.kinds["existing"] = "state"
+    view.link_types_by_kind_pair[("event", "state")] = frozenset()
+
+    result = find_candidates([BatchStatement(0, "event", "new")], view)
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].relation == "related"
+    assert result.candidates[0].link_types == frozenset()
+    assert link_typable(result) == []
+
+
+def test_empty_link_type_shortlist_preserves_duplicate_relation():
+    view = FakeView()
+    view.embeddings_by_text["new"] = [1.0]
+    view.neighbours_by_vector[(1.0,)] = [("existing", 0.9)]
+    view.kinds["existing"] = "event"
+    view.link_types_by_kind_pair[("event", "event")] = frozenset()
+
+    result = find_candidates([BatchStatement(0, "event", "new")], view)
+
+    assert result.candidates[0].relation == "duplicate"
+    assert result.candidates[0].link_types == frozenset()
 
 
 def test_duplicate_threshold_matches_server_constant():
