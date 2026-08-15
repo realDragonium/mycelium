@@ -187,9 +187,15 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
 def _document_superseded(row: sqlite3.Row | dict) -> bool:
     """A missing document row is not supersession because nothing replaced it.
     An existing row is superseded when its current writer differs, including no run.
+
+    Gated on the same outcome `status_for` gates on, and the single place that
+    decision is made: a run that never wrote cannot lose a page it never owned,
+    and a boolean derived apart from the status could contradict it.
     """
     return (
-        row["document_id"] is not None
+        bool(row["finished_at"])
+        and row["outcome"] == "document_written"
+        and row["document_id"] is not None
         and bool(row["document_exists"])
         and row["document_last_run_id"] != row["id"]
     )
@@ -199,8 +205,26 @@ def status_for(row: sqlite3.Row | dict) -> str:
     """Derive a run's status from its timestamps, outcome, and current document.
     The row must come from `get_run` or `list_runs`.
     """
+    required_columns = (
+        "finished_at",
+        "started_at",
+        "outcome",
+        "id",
+        "document_id",
+        "document_exists",
+        "document_last_run_id",
+    )
+    missing_columns = [
+        column for column in required_columns if column not in row.keys()
+    ]
+    if missing_columns:
+        raise ValueError(
+            f"row is missing required columns: {', '.join(missing_columns)}; "
+            "row must come from get_run or list_runs"
+        )
+
     if row["finished_at"]:
-        if row["outcome"] == "document_written" and _document_superseded(row):
+        if _document_superseded(row):
             return "document_superseded"
         return row["outcome"] or "failed"
     if row["started_at"]:
