@@ -16,6 +16,7 @@ import inspect
 import json as _json
 import logging
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -4676,6 +4677,74 @@ def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
     return {"draft_id": draft_id, "seq": seq, "removed": True}
 
 
+_DRAFT_RESULT_REF = re.compile(r"^@(\d+):(\d+)$")
+
+
+def _resolve_draft_refs(payload: Any, results_by_seq: dict[int, Any]) -> Any:
+    """Resolve cross-operation statement references in a draft payload.
+
+    `"@<seq>:<index>"` addresses the statement the op at `seq` created at that
+    position. A bare `"@N"` is left alone: it belongs to `upsert_statements`'
+    own sibling grammar and is resolved by that tool, not here.
+    """
+    if isinstance(payload, dict):
+        return {
+            key: _resolve_draft_refs(value, results_by_seq)
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_resolve_draft_refs(value, results_by_seq) for value in payload]
+    if not isinstance(payload, str):
+        return payload
+
+    match = _DRAFT_RESULT_REF.fullmatch(payload)
+    if match is None:
+        return payload
+    seq, index = (int(value) for value in match.groups())
+    result = results_by_seq.get(seq)
+    items = result.get("results") if isinstance(result, dict) else None
+    item = items[index] if isinstance(items, list) and index < len(items) else None
+    if not isinstance(item, dict) or "statement_id" not in item:
+        raise ValueError(f"@{seq}:{index} which did not produce a statement")
+    return item["statement_id"]
+
+
+def _replay_draft_op(
+    op: sqlite3.Row,
+    tools_by_name: dict[str, Callable[..., Any]],
+    results_by_seq: dict[int, Any],
+) -> dict[str, Any]:
+    """Resolve and replay one draft operation with contextual errors."""
+    kind = op["kind"]
+    seq = op["seq"]
+    wrapper = tools_by_name.get(kind)
+    if wrapper is None:
+        # The tool was removed since this op was queued — notably
+        # `add_mentions` / `remove_mentions`, now that mentions are derived.
+        # Such an op is obsolete; skip it rather than fail the whole draft.
+        return {"seq": seq, "kind": kind, "skipped": "obsolete_tool"}
+
+    payload = _json.loads(op["payload_json"])
+    try:
+        payload = _resolve_draft_refs(payload, results_by_seq)
+    except ValueError as ex:
+        raise RuntimeError(f"op seq={seq} references {ex}") from ex
+
+    # Drop payload keys the tool no longer accepts (e.g. a stale `mentions` /
+    # `strict_mentions` on a queued upsert_statement) so an old draft replays
+    # cleanly instead of raising on an unexpected kwarg.
+    sig = _ORIG_SIGNATURES.get(kind)
+    if sig is not None:
+        for key in [key for key in payload if key not in sig.parameters]:
+            payload.pop(key)
+    try:
+        result = wrapper(**payload)
+    except Exception as ex:
+        raise RuntimeError(f"op seq={seq} ({kind}) failed during replay: {ex}") from ex
+    results_by_seq[seq] = result
+    return {"seq": seq, "kind": kind, "result": result}
+
+
 def apply_draft(draft_id: str) -> dict[str, Any]:
     """Replay an `open` or `submitted` draft's ops against the substrate.
 
@@ -4704,7 +4773,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
     tools_by_name = {w.__name__: w for w in TOOLS}
     results: list[dict[str, Any]] = []
-    import json as _j
+    results_by_seq: dict[int, Any] = {}
 
     # All-or-nothing replay: one transaction owns every op's substrate
     # writes. Each replayed tool opens its own `transaction(_db())`, which
@@ -4712,32 +4781,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     # whole draft back.
     with store.transaction(_db()):
         for op in ops:
-            kind = op["kind"]
-            wrapper = tools_by_name.get(kind)
-            payload = _j.loads(op["payload_json"])
-            if wrapper is None:
-                # The tool was removed since this op was queued — notably
-                # `add_mentions` / `remove_mentions`, now that mentions are
-                # derived. Such an op is obsolete; skip it rather than fail the
-                # whole draft.
-                results.append(
-                    {"seq": op["seq"], "kind": kind, "skipped": "obsolete_tool"}
-                )
-                continue
-            # Drop payload keys the tool no longer accepts (e.g. a stale
-            # `mentions` / `strict_mentions` on a queued upsert_statement) so an
-            # old draft replays cleanly instead of raising on an unexpected kwarg.
-            sig = _ORIG_SIGNATURES.get(kind)
-            if sig is not None:
-                for key in [k for k in payload if k not in sig.parameters]:
-                    payload.pop(key)
-            try:
-                result = wrapper(**payload)
-            except Exception as ex:
-                raise RuntimeError(
-                    f"op seq={op['seq']} ({kind}) failed during replay: {ex}"
-                ) from ex
-            results.append({"seq": op["seq"], "kind": kind, "result": result})
+            results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
     return {"applied": len(results), "results": results}
 
 
