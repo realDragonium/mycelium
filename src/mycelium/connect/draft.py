@@ -40,10 +40,10 @@ def _batch_payload(batch: list[BatchInput]) -> dict:
     return {"statements": statements}
 
 
-def _draft_ref(reference: str) -> str:
+def _draft_ref(reference: str, batch_seq: int) -> str:
     """Rewrite a bare batch sibling reference for cross-op replay."""
     match = _BATCH_TARGET.fullmatch(reference)
-    return f"@1:{match.group(1)}" if match else reference
+    return f"@{batch_seq}:{match.group(1)}" if match else reference
 
 
 def _conflict_text(
@@ -70,10 +70,11 @@ def _proposal_op(
     proposal: Proposal,
     batch: list[BatchInput],
     text_of: Callable[[str], str | None],
+    batch_seq: int,
 ) -> tuple[str, dict]:
     """Map one proposal to an existing replayable tool operation."""
-    source = f"@1:{proposal.new_index}"
-    target = _draft_ref(proposal.target)
+    source = f"@{batch_seq}:{proposal.new_index}"
+    target = _draft_ref(proposal.target, batch_seq)
     if proposal.kind == "link":
         return (
             "add_links",
@@ -114,7 +115,7 @@ def assemble_draft(
             session_id=session_id,
             title=title,
         )
-        drafts_store.add_op(
+        batch_seq = drafts_store.add_op(
             conn,
             draft_id=draft_id,
             kind="upsert_statements",
@@ -125,7 +126,7 @@ def assemble_draft(
             proposals, key=lambda proposal: _PROPOSAL_ORDER[proposal.kind]
         )
         for proposal in ordered_proposals:
-            kind, payload = _proposal_op(proposal, batch, text_of)
+            kind, payload = _proposal_op(proposal, batch, text_of, batch_seq)
             drafts_store.add_op(
                 conn,
                 draft_id=draft_id,
@@ -145,11 +146,12 @@ def summarize(conn: sqlite3.Connection, draft_id: str) -> dict:
     conflicts = 0
     for op in drafts_store.list_ops(conn, draft_id):
         kind = op["kind"]
-        if kind == "upsert_statements" and op["seq"] == 1:
+        if kind == "upsert_statements":
             payload = json.loads(op["payload_json"])
-            statements = len(payload.get("statements", []))
+            statements += len(payload.get("statements", []))
         elif kind == "add_links":
-            links += 1
+            payload = json.loads(op["payload_json"])
+            links += len(payload.get("links", []))
         elif kind == "merge_statements":
             merges += 1
         elif kind == "report_knowledge_gap":

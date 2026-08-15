@@ -8,6 +8,7 @@ never writes to the substrate, so no label ever auto-applies anything.
 from __future__ import annotations
 
 import importlib.util
+import math
 import os
 import threading
 from collections.abc import Callable
@@ -68,6 +69,21 @@ def _torch():
     return torch
 
 
+def _within_unit_range(value: float) -> bool:
+    """Return whether a confidence is finite and between 0.0 and 1.0."""
+    return math.isfinite(value) and 0.0 <= value <= 1.0
+
+
+def _resolve_threshold(threshold: float | None) -> float:
+    """Resolve an explicit threshold before consulting the environment."""
+    resolved = confidence_threshold() if threshold is None else threshold
+    if not _within_unit_range(resolved):
+        raise ValueError(
+            f"NLI confidence threshold {resolved!r} is not between 0.0 and 1.0"
+        )
+    return resolved
+
+
 class TransformersNli:
     """Run a CPU cross-encoder over ``transformers``.
 
@@ -96,6 +112,8 @@ class TransformersNli:
 
     def _load(self) -> None:
         """Load and validate the configured checkpoint once."""
+        # ``_transformer`` is assigned last, so a non-None read means the
+        # tokenizer and label map are already published to other threads.
         if self._transformer is not None:
             return
         # Concurrent tool calls reach this before the first load finishes; the
@@ -220,6 +238,25 @@ def _verdict(
     return "related"
 
 
+def _validate_labels(labels: list[NliLabel], pair_count: int) -> None:
+    """Reject model output that cannot resolve to a trustworthy verdict."""
+    if len(labels) != pair_count:
+        raise ValueError(
+            f"NLI model returned {len(labels)} labels for {pair_count} pairs"
+        )
+    for label in labels:
+        if label.label not in LABELS:
+            raise ValueError(
+                f"NLI model returned unknown label {label.label!r}, "
+                f"expected one of {sorted(LABELS)}"
+            )
+        if not _within_unit_range(label.confidence):
+            raise ValueError(
+                f"NLI model returned confidence {label.confidence!r} for label "
+                f"{label.label!r}, which is not between 0.0 and 1.0"
+            )
+
+
 def classify_candidates(
     batch: list[BatchStatement],
     candidates: list[Candidate],
@@ -234,7 +271,7 @@ def classify_candidates(
     confident contradiction in either direction proposes a conflict. All other
     results are demoted to related candidates.
     """
-    resolved_threshold = confidence_threshold() if threshold is None else threshold
+    resolved_threshold = _resolve_threshold(threshold)
     statements = {statement.index: statement for statement in batch}
     for candidate in candidates:
         if candidate.new_index not in statements:
@@ -255,10 +292,7 @@ def classify_candidates(
         return []
 
     labels = model.classify(pairs)
-    if len(labels) != len(pairs):
-        raise ValueError(
-            f"NLI model returned {len(labels)} labels for {len(pairs)} pairs"
-        )
+    _validate_labels(labels, len(pairs))
 
     verdicts: list[PairVerdict] = []
     for offset, (candidate, statement, _) in enumerate(surviving):

@@ -188,6 +188,17 @@ def test_invalid_threshold_order_raises_before_work():
     assert view.embed_calls == Counter()
 
 
+def test_repeated_batch_index_raises_before_work():
+    view = FakeView()
+    view.embeddings_by_text["new"] = [1.0]
+    batch = [BatchStatement(0, "event", "new"), BatchStatement(0, "state", "new")]
+
+    with pytest.raises(ValueError, match="batch statement indexes must be unique"):
+        find_candidates(batch, view)
+
+    assert view.embed_calls == Counter()
+
+
 def test_empty_batch_returns_empty_result():
     assert find_candidates([], FakeView()) == funnel.FunnelResult({}, {}, [])
 

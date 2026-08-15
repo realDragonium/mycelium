@@ -3,8 +3,16 @@ from __future__ import annotations
 import math
 from collections import Counter
 
+import pytest
+
 from mycelium.connect.funnel import BatchStatement, Candidate, FunnelResult
-from mycelium.connect.rules import LinkProposal, propose_links, shipped_cues
+from mycelium.connect.rules import (
+    TARGET_SHARING_CAP,
+    LinkProposal,
+    _cosine,
+    propose_links,
+    shipped_cues,
+)
 
 
 class FakeView:
@@ -21,6 +29,7 @@ class FakeView:
         self.allow_all_link_types = allow_all_link_types
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
+        self.similarity_calls: list[str] = []
 
     def embed(self, text: str) -> list[float]:
         self.embed_calls[text] += 1
@@ -30,6 +39,7 @@ class FakeView:
         return self.neighbours_by_vector.get(tuple(vec), [])[:k]
 
     def similarity(self, vec: list[float], statement_id: str) -> float | None:
+        self.similarity_calls.append(statement_id)
         return self.similarities.get(statement_id)
 
     def entities_in(self, text: str) -> frozenset[str]:
@@ -246,7 +256,13 @@ def test_shipped_cues_filters_pattern_membership_and_kind_restriction():
 
 def test_targetless_shipped_cue_proposes_nothing():
     view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
-    batch = [BatchStatement(0, "state", "Payroll export is locked")]
+    text = "Payroll export is locked"
+    batch = [BatchStatement(0, "state", text)]
+
+    # Pin the branch under test: a cue does fire, and it carries no target phrase.
+    cues = shipped_cues(text, "state")
+    assert [cue.pattern for cue in cues] == ["restricts-state"]
+    assert all(cue.target_text is None for cue in cues)
 
     assert propose_links(batch, _funnel({}), view) == []
     assert view.embed_calls == Counter()
@@ -303,6 +319,15 @@ def test_duplicate_proposals_keep_higher_score_and_never_target_source_index():
         "configures-configured-on": frozenset({"capability"}),
     }
 
+    # Pin the branch under test: both patterns fire, so one index/type/target key
+    # really is proposed twice and the higher score has to win.
+    assert [
+        cue.pattern for cue in shipped_cues(batch[0].text, "capability", shipped)
+    ] == [
+        "configures-verb",
+        "configures-configured-on",
+    ]
+
     proposals = propose_links(batch, funnel, view, shipped=shipped)
 
     assert len(proposals) == 1
@@ -325,3 +350,36 @@ def test_empty_batch_and_statements_without_shipped_cues_return_nothing():
 
     assert propose_links(batch, _funnel({}), view) == []
     assert view.embed_calls == Counter()
+
+
+def test_cosine_rejects_mismatched_embedding_dimensions():
+    assert _cosine([1.0, 0.0], [0.8, 0.6]) == pytest.approx(0.8)
+
+    with pytest.raises(ValueError):
+        _cosine([1.0, 0.0, 0.0], [1.0, 0.0])
+
+
+def test_anchored_substrate_fan_out_is_capped_per_cue_phrase():
+    view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
+    phrase = "the dispatch attempts"
+    view.embeddings_by_text[phrase] = [1.0, 0.0]
+    view.entities_by_text[phrase] = frozenset({"ent_dispatch", "ent_retry"})
+    popular = [f"stm_{index:02d}" for index in range(60)]
+    for statement_id in popular:
+        view.sharing[statement_id] = frozenset({"ent_dispatch"})
+        view.similarities[statement_id] = 0.7
+        view.kinds[statement_id] = "property"
+    # Two shared entities outrank one, so this id survives the cap despite sorting last.
+    view.sharing["stm_59"] = frozenset({"ent_dispatch", "ent_retry"})
+    view.similarities["stm_59"] = 0.9
+    # The best score of all, but it falls outside the cap and is never scored.
+    view.similarities["stm_58"] = 0.99
+    batch = [BatchStatement(0, "rule", "Retry budget limits the dispatch attempts")]
+
+    proposals = propose_links(batch, _funnel({}), view)
+
+    assert len(view.similarity_calls) == TARGET_SHARING_CAP
+    assert set(view.similarity_calls) == {"stm_59"} | set(popular[:49])
+    assert len(proposals) == 1
+    assert proposals[0].target == "stm_59"
+    assert proposals[0].score == 0.9
