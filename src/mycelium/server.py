@@ -4686,6 +4686,13 @@ def _resolve_draft_refs(payload: Any, results_by_seq: dict[int, Any]) -> Any:
     `"@<seq>:<index>"` addresses the statement the op at `seq` created at that
     position. A bare `"@N"` is left alone: it belongs to `upsert_statements`'
     own sibling grammar and is resolved by that tool, not here.
+
+    The walk is payload-wide rather than restricted to known id fields: an
+    allowlist would have to track every tool's parameter names and would fail
+    open — silently skipping resolution — the moment one grows a new endpoint
+    argument. The cost is that a free-form value equal in its entirety to
+    `@<int>:<int>` (never prose, and never produced by `connect.draft`) would
+    be substituted too.
     """
     if isinstance(payload, dict):
         return {
