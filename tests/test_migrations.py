@@ -442,3 +442,21 @@ def test_v6_rebuild_keeps_the_name_entity_index():
     assert conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'names_entity'"
     ).fetchone()
+
+
+def test_v7_carries_a_pre_matrix_db_forward_without_reseeding():
+    """A DB that predates the matrix reaches v7 and keeps whatever the
+    curator left behind: the version bump is a no-op because SCHEMA
+    creates the table, and seeding only fires on an empty one."""
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    store.set_admissible(conn, "event", "state", ["triggers"])
+    conn.execute("PRAGMA user_version = 6")
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    assert _user_version(conn) == migrations.CURRENT_VERSION
+    assert store.admissible_link_types(conn, "event", "state") == frozenset(
+        {"triggers"}
+    )

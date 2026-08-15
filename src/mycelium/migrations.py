@@ -591,6 +591,17 @@ def _v6_rebuild_names_nocase(conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys = ON")
 
 
+def _migration_v7_kind_link_matrix(conn: sqlite3.Connection) -> None:
+    """Create the `kind_link_matrix` table.
+
+    Like v4, a pure version bump: the CREATE TABLE lives in `SCHEMA` and
+    `store.migrate()` runs SCHEMA before the runner, so the table already
+    exists on legacy and fresh DBs alike. Seeding is deliberately not done
+    here — `store.kind_link_matrix.seed_kind_link_matrix` runs after the
+    glossaries it derives from, and only while the table is empty."""
+    pass
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -601,6 +612,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (4, _migration_v4_auth_tables),
     (5, _migration_v5_derived_mentions),
     (6, _migration_v6_nocase_names),
+    (7, _migration_v7_kind_link_matrix),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
