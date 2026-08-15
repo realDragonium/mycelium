@@ -41,6 +41,8 @@ def test_status_derivation(tmp_path):
         title="Written",
         body="Second body",
         run_id=rewritten,
+        updates=document_id,
+        replacing=docs_store.body_digest("First body"),
     )
     assert rewritten_document_id == document_id
     docs_store.finish_run(
@@ -72,6 +74,62 @@ def test_status_derivation(tmp_path):
     assert docs_store.status_for(docs_store.get_run(conn, nothing)) == "nothing_written"
     assert docs_store.status_for(docs_store.get_run(conn, failed)) == "failed"
     assert docs_store.status_for(docs_store.get_run(conn, null_outcome)) == "failed"
+
+
+def test_status_for_rejects_a_row_that_did_not_come_from_get_run(tmp_path):
+    """Reject a foreign row shape before a queued status can hide the mistake."""
+    conn = _conn(tmp_path)
+    run_id = docs_store.create_run(conn, prompt="raw", created_by=None)
+    raw_row = conn.execute(
+        "SELECT * FROM documentation_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+
+    with pytest.raises(
+        ValueError, match="document_exists.*document_last_run_id.*get_run.*list_runs"
+    ):
+        docs_store.status_for(raw_row)
+    assert docs_store.status_for(docs_store.get_run(conn, run_id)) == "queued"
+
+    docs_store.finish_run(
+        conn, run_id, outcome="document_written", document_id="gdc_missing"
+    )
+    raw_row = conn.execute(
+        "SELECT * FROM documentation_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+
+    with pytest.raises(
+        ValueError, match="document_exists.*document_last_run_id.*get_run.*list_runs"
+    ):
+        docs_store.status_for(raw_row)
+    assert docs_store.status_for(docs_store.get_run(conn, run_id)) == "document_written"
+
+
+def test_a_failed_run_holding_another_runs_document_is_not_superseded(tmp_path):
+    """A failed run cannot contradict its status by claiming supersession."""
+    conn = _conn(tmp_path)
+    run_a = docs_store.create_run(conn, prompt="write", created_by=None)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="shared",
+        title="Shared",
+        body="Body",
+        run_id=run_a,
+    )
+    docs_store.finish_run(
+        conn, run_a, outcome="document_written", document_id=document_id
+    )
+    run_b = docs_store.create_run(conn, prompt="fail", created_by=None)
+    docs_store.finish_run(
+        conn,
+        run_b,
+        outcome="failed",
+        document_id=document_id,
+        error="boom",
+    )
+
+    row_b = docs_store.get_run(conn, run_b)
+    assert docs_store.status_for(row_b) == "failed"
+    assert docs_store.serialize_run(row_b)["document_superseded"] is False
 
 
 def test_a_run_whose_document_row_is_gone_is_not_superseded(tmp_path):
@@ -210,6 +268,316 @@ def test_upsert_document_inserts_and_round_trips_statement_ids(tmp_path):
     assert document["last_run_id"] == "drn_1"
 
 
+def test_upsert_document_refuses_to_replace_another_runs_body(tmp_path):
+    """A title collision must not silently destroy an unrelated page."""
+    conn = _conn(tmp_path)
+    first_body = "# Getting started with SSO\n"
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=first_body,
+        statement_ids=["stm_sso"],
+        run_id="drn_first",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="# Getting started with billing\n",
+            statement_ids=["stm_billing"],
+            run_id="drn_second",
+        )
+
+    message = str(exc_info.value)
+    assert document_id in message
+    assert "drn_first" in message
+    assert "drn_second" in message
+    assert "getting-started" in message
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    document = docs_store.serialize_document(docs_store.get_document(conn, document_id))
+    assert document["body"] == first_body
+    assert document["last_run_id"] == "drn_first"
+    assert document["statement_ids"] == ["stm_sso"]
+
+
+def test_upsert_document_allows_the_same_run_to_rewrite_its_own_page(tmp_path):
+    """A run may refine the page it already owns without declaring an update."""
+    conn = _conn(tmp_path)
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="Second body",
+        run_id="drn_first",
+    )
+
+    assert second_id == first_id
+    assert docs_store.get_document(conn, first_id)["body"] == "Second body"
+
+
+def test_upsert_document_allows_an_identical_rewrite_by_anyone(tmp_path):
+    """Identical content cannot lose a page even when a new run claims it."""
+    conn = _conn(tmp_path)
+    body = "# Getting started with SSO\n"
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body,
+        run_id="drn_first",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body,
+        run_id="drn_second",
+    )
+
+    document = docs_store.get_document(conn, first_id)
+    assert second_id == first_id
+    assert document["last_run_id"] == "drn_second"
+
+
+def test_upsert_document_allows_a_replacement_the_caller_asked_for(tmp_path):
+    """An explicit target distinguishes a deliberate edit from a collision."""
+    conn = _conn(tmp_path)
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="Second body",
+        run_id="drn_second",
+        updates=first_id,
+        replacing=docs_store.body_digest("First body"),
+    )
+
+    document = docs_store.get_document(conn, first_id)
+    assert second_id == first_id
+    assert document["body"] == "Second body"
+    assert document["last_run_id"] == "drn_second"
+
+
+def test_upsert_document_refuses_to_replace_a_body_the_caller_never_saw(tmp_path):
+    """A stale judgement must not destroy content written after it was made."""
+    conn = _conn(tmp_path)
+    body_a = "Body the stale caller saw"
+    body_b = "Body written after the stale caller read"
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body_a,
+        run_id="drn_owner",
+    )
+    replacing = docs_store.body_digest(body_a)
+    docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body_b,
+        run_id="drn_owner",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body=body_a,
+            run_id="drn_stale",
+            updates=document_id,
+            replacing=replacing,
+        )
+
+    assert document_id in str(exc_info.value)
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    document = docs_store.get_document(conn, document_id)
+    assert document["body"] == body_b
+    assert document["last_run_id"] == "drn_owner"
+
+
+def test_upsert_document_refuses_a_replacement_that_states_no_expectation(tmp_path):
+    """Naming a target alone must not authorize the loss of its current body."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    with pytest.raises(ValueError, match="replacing"):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Second body",
+            run_id="drn_second",
+            updates=document_id,
+        )
+
+    assert docs_store.get_document(conn, document_id)["body"] == "First body"
+
+
+def test_upsert_document_refuses_an_expectation_that_names_no_document(tmp_path):
+    """An expectation without a target cannot protect any known body."""
+    conn = _conn(tmp_path)
+
+    with pytest.raises(ValueError):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="First body",
+            run_id="drn_first",
+            replacing=docs_store.body_digest("Expected body"),
+        )
+
+    assert docs_store.list_documents(conn) == []
+
+
+def test_a_deliberate_replacement_carries_the_replacing_runs_review(tmp_path):
+    """The stored review describes the body it accepted, so a deliberate
+    replacement replaces the review with the body."""
+    conn = _conn(tmp_path)
+    first_review = {
+        "exposure": {"status": "pass", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "attempts": 1,
+        "passed": True,
+    }
+    second_review = {
+        "exposure": {"status": "unchecked", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "attempts": 2,
+        "passed": True,
+    }
+    first_run_id = "drn_first"
+    second_run_id = "drn_second"
+
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="how-to-x",
+        title="How to X",
+        body="First body",
+        review=first_review,
+        run_id=first_run_id,
+    )
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="how-to-x",
+        title="How to X",
+        body="Second body",
+        review=second_review,
+        run_id=second_run_id,
+        updates=first_id,
+        replacing=docs_store.body_digest("First body"),
+    )
+
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    document = docs_store.serialize_document(documents[0])
+    assert first_run_id != second_run_id
+    assert second_id == first_id
+    assert document["body"] == "Second body"
+    assert document["last_run_id"] == second_run_id
+    assert document["review"] == second_review
+
+
+def test_upsert_document_refuses_an_intent_that_names_the_wrong_document(tmp_path):
+    """A stale or misplaced update target must never redirect a write."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    with pytest.raises(ValueError):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Second body",
+            run_id="drn_second",
+            updates="gdc_somewhere_else",
+            replacing=docs_store.body_digest("First body"),
+        )
+
+    document_count = len(docs_store.list_documents(conn))
+    with pytest.raises(ValueError):
+        docs_store.upsert_document(
+            conn,
+            slug="billing-overview",
+            title="Billing Overview",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Billing body",
+            run_id="drn_second",
+            updates=document_id,
+            replacing=docs_store.body_digest("First body"),
+        )
+    assert len(docs_store.list_documents(conn)) == document_count
+
+
 def test_migrate_adds_review_to_an_existing_table_and_is_idempotent(tmp_path):
     """Upgrading a database preserves old pages and marks their review as
     unrecorded, while repeated startup migrations leave the schema usable."""
@@ -259,7 +627,13 @@ def test_upsert_document_updates_same_slug_in_place(tmp_path):
     created_at = docs_store.get_document(conn, first_id)["created_at"]
 
     second_id = docs_store.upsert_document(
-        conn, slug="topic", title="New", body="New body", run_id="drn_2"
+        conn,
+        slug="topic",
+        title="New",
+        body="New body",
+        run_id="drn_2",
+        updates=first_id,
+        replacing=docs_store.body_digest("Old body"),
     )
     row = docs_store.get_document(conn, second_id)
 
@@ -269,6 +643,83 @@ def test_upsert_document_updates_same_slug_in_place(tmp_path):
     assert row["body"] == "New body"
     assert row["last_run_id"] == "drn_2"
     assert len(docs_store.list_documents(conn)) == 1
+
+
+def test_upsert_document_preserves_fields_a_later_write_omits(tmp_path):
+    """Partial writers must not erase metadata recorded by an earlier stage."""
+    conn = _conn(tmp_path)
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=["stm_a", "stm_b"],
+        review={"passed": True, "attempts": 1},
+        run_id="drn_1",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO (Revised)",
+        body="Second",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        run_id="drn_1",
+    )
+    document = docs_store.serialize_document(docs_store.get_document(conn, second_id))
+
+    assert second_id == first_id
+    assert document["title"] == "Configuring SSO (Revised)"
+    assert document["body"] == "Second"
+    assert document["statement_ids"] == ["stm_a", "stm_b"]
+    assert document["review"] == {"passed": True, "attempts": 1}
+
+    third_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO (Revised)",
+        body="Second",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+    document = docs_store.serialize_document(docs_store.get_document(conn, third_id))
+
+    assert document["last_run_id"] == "drn_1"
+
+
+def test_upsert_document_clears_a_field_only_when_the_caller_says_so(tmp_path):
+    """Merge semantics must retain an intentional way to clear stale metadata."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=["stm_a", "stm_b"],
+        review={"passed": True, "attempts": 1},
+        run_id="drn_1",
+    )
+
+    docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=[],
+        review={},
+        run_id="drn_1",
+    )
+    document = docs_store.serialize_document(docs_store.get_document(conn, document_id))
+
+    assert document["statement_ids"] == []
+    assert document["review"] == {}
 
 
 def test_upsert_document_keeps_the_same_slug_apart_across_sets_and_types(tmp_path):
@@ -310,8 +761,7 @@ def test_upsert_document_keeps_the_same_slug_apart_across_sets_and_types(tmp_pat
 
 
 def test_upsert_document_still_updates_the_same_page_in_place(tmp_path):
-    """The finer key must not turn a genuine second pass at one page into a
-    second row."""
+    """A deliberate second pass at one page updates it instead of adding a row."""
     conn = _conn(tmp_path)
     first = docs_store.upsert_document(
         conn,
@@ -330,6 +780,8 @@ def test_upsert_document_still_updates_the_same_page_in_place(tmp_path):
         guideline_set="kb-authoring",
         document_type="tutorial",
         run_id="drn_2",
+        updates=first,
+        replacing=docs_store.body_digest("First"),
     )
 
     assert first == second
@@ -399,6 +851,8 @@ def test_migrating_a_pre_rekey_database_keeps_its_pages_and_applies_the_new_key(
             body="# SSO\n\nRewritten",
             guideline_set="kb-authoring",
             document_type="how-to",
+            updates="gdc_sso",
+            replacing=docs_store.body_digest(rows["gdc_sso"]["body"]),
         )
         == "gdc_sso"
     )

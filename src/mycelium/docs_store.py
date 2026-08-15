@@ -18,7 +18,13 @@ run history. The guideline set, document type, and slug together are the stable
 identity later runs update. A title-derived slug alone is too broad: unrelated
 kinds of page routinely choose the same ordinary title. A run whose document
 row is absent reads as `document_written`, not `document_superseded`, because
-nothing replaced it and its `document_id` simply resolves to nothing.
+nothing replaced it and its `document_id` simply resolves to nothing. Even the
+triple cannot distinguish unrelated same-titled pages within one kind, so a
+write that would replace another run's body is refused rather than merged;
+replacement is something a caller requests explicitly with `updates=` naming
+the document and `replacing=` naming the body it expects to replace. A mistaken
+match therefore cannot destroy a body the caller never saw. The refused run
+wrote nothing and therefore does not report `document_written`.
 
 Statement ids and the review record are JSON text columns rather than join
 tables. They are unqueried snapshots written and read as a whole, so
@@ -27,6 +33,7 @@ relationship tables would add schema and queries without serving a lookup.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 import uuid as _uuid
@@ -72,6 +79,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS generated_documents_identity
 """
 
 OUTCOMES = ("document_written", "nothing_written", "failed")
+
+
+def body_digest(body: str) -> str:
+    """Identify the body a caller believes it is replacing without retaining it."""
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
@@ -187,9 +199,15 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
 def _document_superseded(row: sqlite3.Row | dict) -> bool:
     """A missing document row is not supersession because nothing replaced it.
     An existing row is superseded when its current writer differs, including no run.
+
+    Gated on the same outcome `status_for` gates on, and the single place that
+    decision is made: a run that never wrote cannot lose a page it never owned,
+    and a boolean derived apart from the status could contradict it.
     """
     return (
-        row["document_id"] is not None
+        bool(row["finished_at"])
+        and row["outcome"] == "document_written"
+        and row["document_id"] is not None
         and bool(row["document_exists"])
         and row["document_last_run_id"] != row["id"]
     )
@@ -199,8 +217,26 @@ def status_for(row: sqlite3.Row | dict) -> str:
     """Derive a run's status from its timestamps, outcome, and current document.
     The row must come from `get_run` or `list_runs`.
     """
+    required_columns = (
+        "finished_at",
+        "started_at",
+        "outcome",
+        "id",
+        "document_id",
+        "document_exists",
+        "document_last_run_id",
+    )
+    missing_columns = [
+        column for column in required_columns if column not in row.keys()
+    ]
+    if missing_columns:
+        raise ValueError(
+            f"row is missing required columns: {', '.join(missing_columns)}; "
+            "row must come from get_run or list_runs"
+        )
+
     if row["finished_at"]:
-        if row["outcome"] == "document_written" and _document_superseded(row):
+        if _document_superseded(row):
             return "document_superseded"
         return row["outcome"] or "failed"
     if row["started_at"]:
@@ -354,6 +390,69 @@ def serialize_run(row: sqlite3.Row) -> dict:
     }
 
 
+def _write_refusal(
+    existing: sqlite3.Row | None,
+    *,
+    identity: tuple[str, str, str],
+    body: str,
+    run_id: str | None,
+    updates: str | None,
+    replacing: str | None,
+) -> str | None:
+    """Why this write must not land, or None when it may.
+
+    The identity rule in one place, decided from values rather than from the
+    database, so what counts as losing a body reads as one thing. A caller
+    that named this document, a body already identical, and the run that
+    currently owns the row are the three ways a write may replace what is
+    there.
+    """
+    guideline_set, document_type, slug = identity
+    where = (
+        f"(guideline_set={guideline_set!r}, "
+        f"document_type={document_type!r}, slug={slug!r})"
+    )
+    document_id = None if existing is None else str(existing["id"])
+    if updates is not None and replacing is None:
+        return (
+            "document write refused: a deliberate replacement must state the body "
+            "it expects to replace; pass replacing=body_digest(stored_body) with "
+            f"updates={updates!r}"
+        )
+    if replacing is not None and updates is None:
+        return (
+            "document write refused: replacing names an expected body, but without "
+            "updates naming a document that expectation cannot be checked"
+        )
+    if updates is not None and updates != document_id:
+        resolved = "no document" if document_id is None else f"document {document_id!r}"
+        return (
+            f"document write refused: updates={updates!r}, but identity "
+            f"{where} resolved to {resolved}"
+        )
+    if updates is not None and existing is not None:
+        stored = body_digest(existing["body"])
+        if replacing != stored:
+            return (
+                f"document write refused: document {document_id!r} expected body "
+                f"digest {replacing!r}, but the stored body has digest {stored!r}; "
+                "the stored body has changed since the caller read it"
+            )
+    # Digest expectations are scoped to deliberate updates. Same-run rewrites
+    # wrote the current body, and identical bodies replace nothing.
+    if existing is None or updates == document_id or existing["body"] == body:
+        return None
+    if run_id is not None and run_id == existing["last_run_id"]:
+        return None
+    return (
+        "document write refused because it would replace another run's body: "
+        f"existing document {document_id!r} at identity {where} has "
+        f"last_run_id={existing['last_run_id']!r}; the attempting run has "
+        f"run_id={run_id!r}. To deliberately replace it, pass "
+        f"updates={document_id!r}"
+    )
+
+
 def upsert_document(
     conn: sqlite3.Connection,
     *,
@@ -365,7 +464,23 @@ def upsert_document(
     statement_ids: list[str] | None = None,
     review: dict | None = None,
     run_id: str | None = None,
+    updates: str | None = None,
+    replacing: str | None = None,
 ) -> str:
+    """Write content while preserving metadata a partial writer omits.
+
+    Omitted statement ids, review, and run id keep their stored values; explicit
+    empty collections still clear them. Guideline set and document type identify
+    the page, so omitting them selects the unresolved ``('', '')`` page instead
+    of blanking content. This matches `mark_started`'s last-non-null behaviour,
+    which the full-replace version of this function contradicted.
+
+    A finer title-derived key still collapses unrelated pages that happen to
+    share a title, so replacing another run's body is refused rather than
+    merged. Identical bodies and same-run rewrites remain safe. For a deliberate
+    replacement, `updates` says which document and `replacing` says which body;
+    the write is refused if the stored body has moved on since the caller read it.
+    """
     slug = slug.strip()
     title = title.strip()
     if not slug:
@@ -376,38 +491,74 @@ def upsert_document(
         guideline_set = ""
     if document_type is None:
         document_type = ""
-    document_id = "gdc_" + _uuid.uuid4().hex[:12]
-    now = _now()
-    conn.execute(
-        "INSERT INTO generated_documents "
-        "(id, slug, title, guideline_set, document_type, body, statement_ids, "
-        "review, created_at, updated_at, last_run_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(guideline_set, document_type, slug) DO UPDATE SET "
-        "title = excluded.title, body = excluded.body, "
-        "statement_ids = excluded.statement_ids, review = excluded.review, "
-        "updated_at = excluded.updated_at, last_run_id = excluded.last_run_id",
-        (
-            document_id,
-            slug,
-            title,
-            guideline_set,
-            document_type,
-            body,
-            json.dumps(list(statement_ids) if statement_ids is not None else []),
-            json.dumps(review if review is not None else {}),
-            now,
-            now,
-            run_id,
-        ),
-    )
-    row = conn.execute(
-        "SELECT id FROM generated_documents "
-        "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
-        (guideline_set, document_type, slug),
-    ).fetchone()
-    conn.commit()
-    return str(row["id"])
+
+    # sqlite3's legacy isolation level leaves the read outside a transaction
+    # unless one is opened explicitly; another writer must not interleave here.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        existing = conn.execute(
+            "SELECT id, body, statement_ids, review, last_run_id "
+            "FROM generated_documents "
+            "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
+            (guideline_set, document_type, slug),
+        ).fetchone()
+        refusal = _write_refusal(
+            existing,
+            identity=(guideline_set, document_type, slug),
+            body=body,
+            run_id=run_id,
+            updates=updates,
+            replacing=replacing,
+        )
+        if refusal is not None:
+            raise ValueError(refusal)
+        now = _now()
+        if existing is None:
+            document_id = "gdc_" + _uuid.uuid4().hex[:12]
+            conn.execute(
+                "INSERT INTO generated_documents "
+                "(id, slug, title, guideline_set, document_type, body, "
+                "statement_ids, review, created_at, updated_at, last_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    document_id,
+                    slug,
+                    title,
+                    guideline_set,
+                    document_type,
+                    body,
+                    json.dumps(
+                        list(statement_ids) if statement_ids is not None else []
+                    ),
+                    json.dumps(review if review is not None else {}),
+                    now,
+                    now,
+                    run_id,
+                ),
+            )
+        else:
+            document_id = str(existing["id"])
+            conn.execute(
+                "UPDATE generated_documents "
+                "SET title = ?, body = ?, statement_ids = ?, "
+                "review = ?, updated_at = ?, last_run_id = ? WHERE id = ?",
+                (
+                    title,
+                    body,
+                    existing["statement_ids"]
+                    if statement_ids is None
+                    else json.dumps(list(statement_ids)),
+                    existing["review"] if review is None else json.dumps(review),
+                    now,
+                    existing["last_run_id"] if run_id is None else run_id,
+                    document_id,
+                ),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return document_id
 
 
 def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
