@@ -335,6 +335,50 @@ def test_two_runs_that_only_share_a_title_keep_their_own_pages(tmp_path):
     assert second_document["body"] == "The reference's overview"
 
 
+def test_two_runs_that_collide_on_one_page_do_not_lose_a_body(tmp_path):
+    """A collapse here silently destroys a page and tells both runs they succeeded."""
+    conn = _conn(tmp_path)
+    first_body = "# Getting started with SSO\n"
+    first_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            slug="getting-started",
+            title="Getting Started",
+            body=first_body,
+            guideline_set="kb-authoring",
+            document_type="how-to",
+        ),
+    )
+    doc_runs.wait_all()
+    second_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            slug="getting-started",
+            title="Getting Started",
+            body="# Getting started with billing\n",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+        ),
+    )
+    doc_runs.wait_all()
+
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    assert documents[0]["body"] == first_body
+
+    second = docs_store.get_run(conn, second_run_id)
+    assert second["outcome"] == "failed"
+    assert second["document_id"] is None
+    assert first_run_id in second["error"]
+    assert "getting-started" in second["error"]
+
+    first = docs_store.serialize_run(docs_store.get_run(conn, first_run_id))
+    assert first["status"] == "document_written"
+    assert first["document_superseded"] is False
+
+
 def test_a_run_whose_page_was_rewritten_says_so(tmp_path):
     """A run whose document was replaced must not report document_written for
     content that is no longer its own. Its stored outcome still truthfully

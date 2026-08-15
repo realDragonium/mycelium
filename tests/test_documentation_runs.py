@@ -266,6 +266,172 @@ def test_upsert_document_inserts_and_round_trips_statement_ids(tmp_path):
     assert document["last_run_id"] == "drn_1"
 
 
+def test_upsert_document_refuses_to_replace_another_runs_body(tmp_path):
+    """A title collision must not silently destroy an unrelated page."""
+    conn = _conn(tmp_path)
+    first_body = "# Getting started with SSO\n"
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=first_body,
+        statement_ids=["stm_sso"],
+        run_id="drn_first",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="# Getting started with billing\n",
+            statement_ids=["stm_billing"],
+            run_id="drn_second",
+        )
+
+    message = str(exc_info.value)
+    assert document_id in message
+    assert "drn_first" in message
+    assert "drn_second" in message
+    assert "getting-started" in message
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    document = docs_store.serialize_document(docs_store.get_document(conn, document_id))
+    assert document["body"] == first_body
+    assert document["last_run_id"] == "drn_first"
+    assert document["statement_ids"] == ["stm_sso"]
+
+
+def test_upsert_document_allows_the_same_run_to_rewrite_its_own_page(tmp_path):
+    """A run may refine the page it already owns without declaring an update."""
+    conn = _conn(tmp_path)
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="Second body",
+        run_id="drn_first",
+    )
+
+    assert second_id == first_id
+    assert docs_store.get_document(conn, first_id)["body"] == "Second body"
+
+
+def test_upsert_document_allows_an_identical_rewrite_by_anyone(tmp_path):
+    """Identical content cannot lose a page even when a new run claims it."""
+    conn = _conn(tmp_path)
+    body = "# Getting started with SSO\n"
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body,
+        run_id="drn_first",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body,
+        run_id="drn_second",
+    )
+
+    document = docs_store.get_document(conn, first_id)
+    assert second_id == first_id
+    assert document["last_run_id"] == "drn_second"
+
+
+def test_upsert_document_allows_a_replacement_the_caller_asked_for(tmp_path):
+    """An explicit target distinguishes a deliberate edit from a collision."""
+    conn = _conn(tmp_path)
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="Second body",
+        run_id="drn_second",
+        updates=first_id,
+    )
+
+    document = docs_store.get_document(conn, first_id)
+    assert second_id == first_id
+    assert document["body"] == "Second body"
+    assert document["last_run_id"] == "drn_second"
+
+
+def test_upsert_document_refuses_an_intent_that_names_the_wrong_document(tmp_path):
+    """A stale or misplaced update target must never redirect a write."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body="First body",
+        run_id="drn_first",
+    )
+
+    with pytest.raises(ValueError):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Second body",
+            run_id="drn_second",
+            updates="gdc_somewhere_else",
+        )
+
+    document_count = len(docs_store.list_documents(conn))
+    with pytest.raises(ValueError):
+        docs_store.upsert_document(
+            conn,
+            slug="billing-overview",
+            title="Billing Overview",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Billing body",
+            run_id="drn_second",
+            updates=document_id,
+        )
+    assert len(docs_store.list_documents(conn)) == document_count
+
+
 def test_migrate_adds_review_to_an_existing_table_and_is_idempotent(tmp_path):
     """Upgrading a database preserves old pages and marks their review as
     unrecorded, while repeated startup migrations leave the schema usable."""
