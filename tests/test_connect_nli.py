@@ -180,6 +180,36 @@ def test_environment_confidence_is_used_by_default(monkeypatch: pytest.MonkeyPat
     assert verdict_for(entailment, entailment, threshold=None) == "related"
 
 
+def test_environment_confidence_outside_unit_range_raises(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("MYCELIUM_NLI_CONFIDENCE", "1.5")
+    entailment = NliLabel("entailment", 0.9)
+
+    with pytest.raises(ValueError, match="threshold 1.5"):
+        verdict_for(entailment, entailment, threshold=None)
+
+
+def test_explicit_confidence_outside_unit_range_raises():
+    entailment = NliLabel("entailment", 0.9)
+
+    with pytest.raises(ValueError, match="threshold -0.1"):
+        verdict_for(entailment, entailment, threshold=-0.1)
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        (NliLabel("duplicate", 0.9), "unknown label 'duplicate'"),
+        (NliLabel("entailment", float("nan")), "confidence nan"),
+        (NliLabel("entailment", 1.5), "confidence 1.5"),
+    ],
+)
+def test_invalid_model_result_raises(label: NliLabel, expected: str):
+    with pytest.raises(ValueError, match=expected):
+        verdict_for(label, NliLabel("neutral", 0.9))
+
+
 def test_empty_candidates_do_not_call_model():
     model = FakeNli()
 
