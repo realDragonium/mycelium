@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, drafts_store, server, store
-from mycelium.connect.nli import NliLabel
+from mycelium.connect.nli import NliLabel, NliUnavailable
 
 
 def _word_embed(text: str) -> list[float]:
@@ -247,10 +247,17 @@ def test_resolved_mention_hint_is_not_reported(tmp_path, monkeypatch):
         assert store.get_name_by_text(server._db(), "Company")["entity_id"] == entity_id
 
 
+def _raise_nli_unavailable():
+    raise NliUnavailable("nli extra disabled for this test")
+
+
 def test_nli_unavailable_keeps_similarity_only_merge(tmp_path, monkeypatch):
     text = "service returns the cached response"
     with _app(tmp_path, monkeypatch):
         existing_id = _statement("event", text)
+        monkeypatch.setattr(
+            "mycelium.connect.nli.default_model", _raise_nli_unavailable
+        )
 
         response = server.submit_connected_batch([{"kind": "event", "text": text}])
 
@@ -369,3 +376,60 @@ def test_apply_connected_draft_replays_batch_and_proposed_link(tmp_path, monkeyp
         assert store.get_links(server._db(), source_id) == [
             (target_id, "configures", None)
         ]
+
+
+def test_incoming_links_are_rejected_per_item(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        existing_id = _statement("event", "service returns the cached response")
+
+        response = server.submit_connected_batch(
+            [
+                {
+                    "kind": "event",
+                    "text": "service evicts the stale response",
+                    "incoming_links": [
+                        {"from_id": existing_id, "link_type": "triggers"}
+                    ],
+                },
+                {
+                    "kind": "state",
+                    "text": "the cache entry is stale",
+                    "links": [{"to_id": "@0", "link_type": "restricts"}],
+                },
+            ]
+        )
+
+        assert response["results"] == [
+            {"rejected": True, "reason": "incoming_links_not_supported"},
+            {"rejected": True, "reason": "depends_on_rejected", "depends_on": [0]},
+        ]
+        assert response["draft_id"] is None
+        assert response["proposals"] == {"links": 0, "merges": 0, "conflicts": 0}
+        # Nothing was planned against the refused edge, so it never reached
+        # the substrate either.
+        assert store.get_incoming_links(server._db(), existing_id) == []
+
+
+def test_empty_batch_returns_early(tmp_path, monkeypatch):
+    def _fail(*args, **kwargs):
+        raise AssertionError("an empty batch must not run the pipeline")
+
+    with _app(tmp_path, monkeypatch):
+        monkeypatch.setattr("mycelium.connect.nli.default_model", _fail)
+        monkeypatch.setattr(server, "LiveSubstrate", _fail)
+
+        response = server.submit_connected_batch([])
+
+        assert response == {
+            "draft_id": None,
+            "results": [],
+            "proposals": {"links": 0, "merges": 0, "conflicts": 0},
+            "links": [],
+            "merges": [],
+            "conflicts": [],
+            "related": [],
+            "dropped_merges": [],
+            "unresolved_hints": [],
+            "nli": "unavailable",
+            "draft": None,
+        }

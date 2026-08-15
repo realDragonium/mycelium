@@ -813,7 +813,8 @@ class ConnectedStatementSpec(TypedDict):
     """One statement in a connected batch draft.
 
     Same shape as one item of `upsert_statements`, except input-derived links
-    are always outgoing from this statement, so `incoming_links` is omitted.
+    are always outgoing from this statement, so `incoming_links` is omitted —
+    an item that sends one is rejected rather than losing the edge silently.
     `mention_hints` names texts the agent asserts this statement is about. They
     only widen candidate discovery for this call and are never written to the
     substrate.
@@ -2565,11 +2566,17 @@ class _BatchPlan:
     resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]]
 
 
-def _plan_batch(statements: list[BatchStatementSpec]) -> _BatchPlan:
+def _plan_batch(
+    statements: list[BatchStatementSpec], pre_rejected: set[int] | None = None
+) -> _BatchPlan:
     """Decide the fate of every item in a batch upsert without mutating
     anything: run the phrasing gate, cascade @-ref rejections to a fixed
     point, validate/resolve each survivor's cross-references, then reject
     items whose links flip a directional rule (cascading once more).
+
+    `pre_rejected` seeds the directly-rejected set before anything is
+    resolved, so a caller that refuses an item outright keeps its edges out
+    of reference validation and out of the directional flip check.
 
     Reads existing statements to validate non-sibling refs, but performs no
     writes — the caller embeds and persists the survivors."""
@@ -2578,6 +2585,7 @@ def _plan_batch(statements: list[BatchStatementSpec]) -> _BatchPlan:
     # Phrasing check per item; items that trip the catalog without bypass
     # are directly rejected.
     item_violations, direct_rejected = _batch_phrasing_pass(statements)
+    direct_rejected.update(pre_rejected or ())
     item_errors: list[list[str]] = [[] for _ in range(n)]
 
     # Cascade rejection — transitive closure on @-refs.
@@ -2735,6 +2743,23 @@ def _connected_statement_text(statement_id: str) -> str | None:
     return None if row is None else row["text"]
 
 
+def _connected_text_reader() -> Callable[[str], str | None]:
+    """Return a request-scoped, memoized statement-text lookup.
+
+    Every renderer and the draft assembler read the same neighbour ids, and
+    the candidate set grows with batch size times fan-out, so one reader per
+    request keeps that from becoming an N+1 read on the request thread.
+    """
+    cache: dict[str, str | None] = {}
+
+    def read(statement_id: str) -> str | None:
+        if statement_id not in cache:
+            cache[statement_id] = _connected_statement_text(statement_id)
+        return cache[statement_id]
+
+    return read
+
+
 def _reindex_connected_ref(reference: str, new_of: dict[int, int]) -> str:
     """Rewrite a sibling reference into accepted-only batch coordinates."""
     if not reference.startswith("@"):
@@ -2811,15 +2836,31 @@ def _connected_hints(
     return {text: frozenset(ids) for text, ids in by_text.items()}, unresolved
 
 
+def _items_with_incoming_links(statements: list[ConnectedStatementSpec]) -> set[int]:
+    """Index every item carrying `incoming_links`, which this tool refuses.
+
+    The draft batch only stores outgoing links, so an inbound edge would be
+    validated here and then silently dropped on the way to the draft.
+    """
+    return {
+        index
+        for index, spec in enumerate(statements)
+        if spec.get("incoming_links")  # type: ignore[typeddict-item]
+    }
+
+
 def _connected_results(
     statements: list[ConnectedStatementSpec],
     plan: _BatchPlan,
     new_of: dict[int, int],
+    unsupported: set[int],
 ) -> list[dict[str, Any]]:
     """Render connected-batch outcomes with batch-upsert rejection precedence."""
     results: list[dict[str, Any]] = []
     for index in range(len(statements)):
-        if plan.item_errors[index]:
+        if index in unsupported:
+            results.append({"rejected": True, "reason": "incoming_links_not_supported"})
+        elif plan.item_errors[index]:
             results.append({"rejected": True, "errors": plan.item_errors[index]})
         elif index in plan.direct_rejected:
             results.append(
@@ -2868,30 +2909,36 @@ def _connected_link(proposal: Proposal) -> dict[str, Any]:
     }
 
 
-def _connected_merge(proposal: Proposal) -> dict[str, Any]:
+def _connected_merge(
+    proposal: Proposal, text_of: Callable[[str], str | None]
+) -> dict[str, Any]:
     """Render a merge proposal with a bounded target-text preview."""
     return {
         "batch_index": proposal.new_index,
         "into": proposal.target,
-        "into_text": _snippet(_connected_statement_text(proposal.target) or ""),
+        "into_text": _snippet(text_of(proposal.target) or ""),
         "score": proposal.provenance["score"],
         "nli": _proposal_nli(proposal),
     }
 
 
-def _connected_conflict(proposal: Proposal) -> dict[str, Any]:
+def _connected_conflict(
+    proposal: Proposal, text_of: Callable[[str], str | None]
+) -> dict[str, Any]:
     """Render a contradiction proposal with its directional evidence."""
     return {
         "batch_index": proposal.new_index,
         "statement_id": proposal.target,
-        "text": _snippet(_connected_statement_text(proposal.target) or ""),
+        "text": _snippet(text_of(proposal.target) or ""),
         "nli": _proposal_nli(proposal),
         "score": proposal.provenance["score"],
     }
 
 
 def _connected_related(
-    result: connect_pipeline.PipelineResult, proposal_set: ProposalSet
+    result: connect_pipeline.PipelineResult,
+    proposal_set: ProposalSet,
+    text_of: Callable[[str], str | None],
 ) -> list[dict[str, Any]]:
     """Render candidates that produced neither kept nor dropped proposals."""
     proposed = {
@@ -2902,7 +2949,7 @@ def _connected_related(
         {
             "batch_index": candidate.new_index,
             "statement_id": candidate.statement_id,
-            "text": _snippet(_connected_statement_text(candidate.statement_id) or ""),
+            "text": _snippet(text_of(candidate.statement_id) or ""),
             "score": candidate.score,
         }
         for candidate in result.funnel.candidates
@@ -2914,6 +2961,7 @@ def _assemble_connected_draft(
     batch: list[BatchInput],
     proposal_set: ProposalSet,
     title: str | None,
+    text_of: Callable[[str], str | None],
 ) -> tuple[str | None, dict[str, int], dict[str, Any] | None]:
     """Write a non-empty connected batch and summarize its open draft."""
     if not batch:
@@ -2926,7 +2974,7 @@ def _assemble_connected_draft(
         _drafts_db(),
         batch=batch,
         proposals=proposal_set.proposals,
-        text_of=_connected_statement_text,
+        text_of=text_of,
         created_by=_actor_id(),
         title=title,
         session_id=None,
@@ -2939,6 +2987,28 @@ def _assemble_connected_draft(
     }
     op_count = 1 + counts["links"] + counts["merges"] + counts["conflicts"]
     return draft_id, counts, {"status": "open", "op_count": op_count}
+
+
+def _empty_connected_batch() -> dict[str, Any]:
+    """Return the no-op response for a batch with nothing to connect.
+
+    Same shape as a batch where every item was rejected, built without
+    touching the substrate or the NLI model — an empty batch has nothing to
+    classify, so `nli` reports the stage as not having run.
+    """
+    return {
+        "draft_id": None,
+        "results": [],
+        "proposals": {"links": 0, "merges": 0, "conflicts": 0},
+        "links": [],
+        "merges": [],
+        "conflicts": [],
+        "related": [],
+        "dropped_merges": [],
+        "unresolved_hints": [],
+        "nli": "unavailable",
+        "draft": None,
+    }
 
 
 @tool
@@ -2973,7 +3043,9 @@ def submit_connected_batch(
 
     Phrasing enforcement is `upsert_statements`' own, unchanged: per-item
     rejection, `allow_phrasing_violations` to bypass it, and an `@N` reference
-    to a rejected item cascades. Rejected items never reach the draft.
+    to a rejected item cascades. Rejected items never reach the draft. Links
+    are outgoing only: an item carrying `incoming_links` is rejected, because
+    the draft batch would not carry that edge.
 
     `mention_hints` are name texts you assert a statement is about — they
     widen candidate discovery for this call only, are never written as
@@ -2996,7 +3068,8 @@ def submit_connected_batch(
             {"rejected": true, "errors": [...]},
             {"rejected": true, "violations": [...]},
             {"rejected": true, "reason": "depends_on_rejected",
-             "depends_on": [<input indexes>]}
+             "depends_on": [<input indexes>]},
+            {"rejected": true, "reason": "incoming_links_not_supported"}
           ],
           "proposals": {"links": 0, "merges": 0, "conflicts": 0},
           "links": [
@@ -3023,14 +3096,19 @@ def submit_connected_batch(
         }
         ```
     """
-    plan = _plan_batch(statements)
+    if not statements:
+        return _empty_connected_batch()
+
+    unsupported = _items_with_incoming_links(statements)
+    plan = _plan_batch(statements, pre_rejected=unsupported)
     accepted, new_of, batch_inputs, batch = _prepare_connected_batch(statements, plan)
     hints, unresolved_hints = _connected_hints(statements, accepted)
+    text_of = _connected_text_reader()
     view = HintedView(LiveSubstrate(), hints)
     pipeline_result = connect_pipeline.run(
         batch,
         view,
-        text_of=_connected_statement_text,
+        text_of=text_of,
     )
     proposal_set = proposals_from(
         funnel=pipeline_result.funnel,
@@ -3038,12 +3116,12 @@ def submit_connected_batch(
         verdicts=pipeline_result.verdicts,
     )
     draft_id, counts, draft = _assemble_connected_draft(
-        batch_inputs, proposal_set, title
+        batch_inputs, proposal_set, title, text_of
     )
     proposals = proposal_set.proposals
     return {
         "draft_id": draft_id,
-        "results": _connected_results(statements, plan, new_of),
+        "results": _connected_results(statements, plan, new_of, unsupported),
         "proposals": counts,
         "links": [
             _connected_link(proposal)
@@ -3051,18 +3129,19 @@ def submit_connected_batch(
             if proposal.kind == "link"
         ],
         "merges": [
-            _connected_merge(proposal)
+            _connected_merge(proposal, text_of)
             for proposal in proposals
             if proposal.kind == "merge"
         ],
         "conflicts": [
-            _connected_conflict(proposal)
+            _connected_conflict(proposal, text_of)
             for proposal in proposals
             if proposal.kind == "conflict"
         ],
-        "related": _connected_related(pipeline_result, proposal_set),
+        "related": _connected_related(pipeline_result, proposal_set, text_of),
         "dropped_merges": [
-            _connected_merge(proposal) for proposal in proposal_set.dropped_merges
+            _connected_merge(proposal, text_of)
+            for proposal in proposal_set.dropped_merges
         ],
         "unresolved_hints": unresolved_hints,
         "nli": pipeline_result.nli,

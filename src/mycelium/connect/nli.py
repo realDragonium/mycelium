@@ -135,8 +135,10 @@ class TransformersNli:
                 f"{sorted(id2label.values())}, expected {sorted(LABELS)}"
             )
         self._tokenizer = tokenizer
-        self._transformer = transformer
         self._id2label = id2label
+        # Assigned last: `_load` reads this field outside the lock as the
+        # "fully loaded" flag, so every other field must be set first.
+        self._transformer = transformer
 
     def classify(self, pairs: list[tuple[str, str]]) -> list[NliLabel]:
         """Classify premise and hypothesis pairs in input order."""
