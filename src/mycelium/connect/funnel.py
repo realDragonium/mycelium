@@ -151,6 +151,11 @@ def find_candidates(
             "duplicate_threshold must be >= related_threshold "
             f"(got {duplicate_threshold} < {related_threshold})"
         )
+    # embeddings, entities and Candidate.new_index all key off index, so a repeat
+    # would silently drop one statement's results.
+    indexes = [statement.index for statement in batch]
+    if len(indexes) != len(set(indexes)):
+        raise ValueError("batch statement indexes must be unique")
 
     embeddings: dict[int, list[float]] = {}
     entities: dict[int, frozenset[str]] = {}
