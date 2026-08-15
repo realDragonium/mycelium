@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -82,21 +83,38 @@ class TransformersNli:
         self._tokenizer = None
         self._transformer = None
         self._id2label: dict[int, str] = {}
+        self._load_lock = threading.Lock()
 
     def _load(self) -> None:
         """Load and validate the configured checkpoint once."""
         if self._transformer is not None:
             return
+        # Concurrent tool calls reach this before the first load finishes; the
+        # checkpoint is ~1GB, so a second in-flight load is a second copy in
+        # memory and a second download.
+        with self._load_lock:
+            if self._transformer is None:
+                self._load_checkpoint()
 
-        from transformers import (  # local import: heavy optional nli dependency
-            AutoModelForSequenceClassification,
-            AutoTokenizer,
-        )
+    def _load_checkpoint(self) -> None:
+        """Fetch and validate the checkpoint, reporting any failure as unavailable."""
+        try:
+            from transformers import (  # local import: heavy optional nli dependency
+                AutoModelForSequenceClassification,
+                AutoTokenizer,
+            )
 
-        tokenizer = AutoTokenizer.from_pretrained(self._model_name)
-        transformer = AutoModelForSequenceClassification.from_pretrained(
-            self._model_name
-        )
+            tokenizer = AutoTokenizer.from_pretrained(self._model_name)
+            transformer = AutoModelForSequenceClassification.from_pretrained(
+                self._model_name
+            )
+        except (ImportError, OSError) as error:
+            # Callers degrade on NliUnavailable and only on that, so a missing
+            # package, an absent checkpoint and a failed download must arrive
+            # as one kind of failure.
+            raise NliUnavailable(
+                f"checkpoint {self._model_name!r} could not be loaded: {error}"
+            ) from error
         transformer.eval()
         id2label = {
             int(label_id): str(label).strip().lower()
@@ -146,14 +164,16 @@ class TransformersNli:
 
 
 _model: TransformersNli | None = None
+_model_lock = threading.Lock()
 
 
 def default_model() -> TransformersNli:
     """Return the process-wide default NLI model."""
     global _model
-    if _model is None:
-        _model = TransformersNli()
-    return _model
+    with _model_lock:
+        if _model is None:
+            _model = TransformersNli()
+        return _model
 
 
 @dataclass(frozen=True)
