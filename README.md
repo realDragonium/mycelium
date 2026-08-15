@@ -33,6 +33,9 @@ or neutral. The checkpoint downloads to the Hugging Face cache on first use (a f
 hundred MB). Configure `MYCELIUM_NLI_MODEL` (default
 `cross-encoder/nli-deberta-v3-base`) and `MYCELIUM_NLI_CONFIDENCE` (default `0.7`).
 Without the extra, the module still imports and `available()` returns `False`.
+The extra needs a platform PyTorch publishes CPU wheels for — Linux
+x86_64/aarch64, Apple Silicon, or Windows x86_64; elsewhere `uv sync --extra
+nli` will not resolve.
 
 ## Run the server
 
