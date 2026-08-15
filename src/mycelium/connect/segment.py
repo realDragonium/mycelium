@@ -17,8 +17,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING
 
 from mycelium import phrasing, phrasing_cues
+
+if TYPE_CHECKING:
+    from spacy.tokens import Doc
+
+# Parses of the working texts seen in one `segment` call, keyed by text. The
+# cutter chain re-runs at every recursion level, so without it a document-sized
+# input pays the same spaCy parse many times over.
+_Parses = dict[str, "Doc"]
 
 
 @dataclass(frozen=True)
@@ -104,6 +113,15 @@ _SINGLE_WORD_SUBORDINATORS = frozenset(
 _MAX_CUT_DEPTH = 10
 
 
+def _parse(text: str, parses: _Parses) -> "Doc":
+    """Parse a working text, reusing this segmentation's earlier parse."""
+    doc = parses.get(text)
+    if doc is None:
+        doc = phrasing._get_nlp()(text)
+        parses[text] = doc
+    return doc
+
+
 def _blocks(text: str) -> list[tuple[int, int]]:
     """Find paragraph and list-item slices without rewriting raw whitespace."""
     blocks: list[tuple[int, int]] = []
@@ -146,14 +164,15 @@ def _blocks(text: str) -> list[tuple[int, int]]:
     return blocks
 
 
-def _sentences(text: str, blocks: list[tuple[int, int]]) -> list[_Piece]:
+def _sentences(
+    text: str, blocks: list[tuple[int, int]], parses: _Parses
+) -> list[_Piece]:
     """Parse raw blocks into globally numbered sentence pieces."""
     pieces: list[_Piece] = []
     sentence_index = 0
-    nlp = phrasing._get_nlp()
     for block_start, block_end in blocks:
         block_text = text[block_start:block_end]
-        for sentence in nlp(block_text).sents:
+        for sentence in _parse(block_text, parses).sents:
             if not sentence.text.strip():
                 continue
             start = block_start + sentence.start_char
@@ -281,7 +300,7 @@ def _split(
     )
 
 
-def _cut_semicolons(piece: _Piece) -> _Split | None:
+def _cut_semicolons(piece: _Piece, parses: _Parses) -> _Split | None:
     """Cut at the first semicolon and include following whitespace in the cue."""
     semicolon = piece.text.find(";")
     if semicolon < 0:
@@ -299,9 +318,9 @@ def _cut_semicolons(piece: _Piece) -> _Split | None:
     )
 
 
-def _compound_conjunct(piece: _Piece, connective_end: int):
+def _compound_conjunct(piece: _Piece, connective_end: int, parses: _Parses):
     """Find a root verb's coordinated verb after a compound connective."""
-    doc = phrasing._get_nlp()(piece.text)
+    doc = _parse(piece.text, parses)
     return next(
         (
             (token.head, token)
@@ -316,7 +335,7 @@ def _compound_conjunct(piece: _Piece, connective_end: int):
     )
 
 
-def _cut_compound_phrases(piece: _Piece) -> _Split | None:
+def _cut_compound_phrases(piece: _Piece, parses: _Parses) -> _Split | None:
     """Cut at the earliest case-insensitive shared compound phrase."""
     matches = [
         match for pattern in _COMPOUND_PATTERNS if (match := pattern.search(piece.text))
@@ -326,7 +345,7 @@ def _cut_compound_phrases(piece: _Piece) -> _Split | None:
     match = min(matches, key=lambda item: item.start())
     left = _trim_piece(_subpiece(piece, 0, match.start()))
     right = _trim_piece(_subpiece(piece, match.end(), len(piece.text)))
-    coordinated = _compound_conjunct(piece, match.end())
+    coordinated = _compound_conjunct(piece, match.end(), parses)
     if coordinated:
         head, conjunct = coordinated
         right = _project_subject(piece, head, conjunct, right)
@@ -347,10 +366,13 @@ def _cut_compound_phrases(piece: _Piece) -> _Split | None:
 def _initial_opener(piece: _Piece) -> tuple[int, int] | None:
     """Locate a strip-table opener at the start of a piece."""
     start = len(piece.text) - len(piece.text.lstrip())
-    folded = piece.text.casefold()
     for opener in phrasing_cues.SUBORDINATOR_STRIP:
         end = start + len(opener)
-        if folded[start:end] == opener.casefold() and end < len(piece.text):
+        # Fold the slice, not the whole text: casefolding can change length
+        # ("ß" folds to "ss"), which would drift the returned raw span.
+        if piece.text[start:end].casefold() == opener.casefold() and end < len(
+            piece.text
+        ):
             if piece.text[end].isspace():
                 return start, end
     return None
@@ -563,9 +585,9 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
     return None
 
 
-def _cut_conditional(piece: _Piece) -> _Split | None:
+def _cut_conditional(piece: _Piece, parses: _Parses) -> _Split | None:
     """Apply initial, finite-fronted, then parsed advcl conditional rules."""
-    doc = phrasing._get_nlp()(piece.text)
+    doc = _parse(piece.text, parses)
     initial = _conditional_initial(piece, doc)
     if initial:
         return initial
@@ -601,9 +623,9 @@ def _project_subject(piece: _Piece, head, conjunct, right: _Piece) -> _Piece:
     )
 
 
-def _cut_coordination(piece: _Piece) -> _Split | None:
+def _cut_coordination(piece: _Piece, parses: _Parses) -> _Split | None:
     """Reuse the catalog's conservative coordinated-verb rule verbatim."""
-    doc = phrasing._get_nlp()(piece.text)
+    doc = _parse(piece.text, parses)
     for token in doc:
         if (
             token.pos_ != "CCONJ"
@@ -632,6 +654,10 @@ def _cut_coordination(piece: _Piece) -> _Split | None:
             for item in head.subtree
             if item.i not in right_ids and item.i != token.i
         ]
+        # Material on both sides of the conjunct: splicing it would invent a
+        # surface form and stretch its span across the removed conjunct.
+        if not _is_contiguous(left_tokens):
+            continue
         left = _trim_piece(_piece_from_tokens(piece, left_tokens, role=piece.role))
         right = _trim_piece(_piece_from_tokens(piece, right_tokens, role=piece.role))
         right = _project_subject(piece, head, conjunct, right)
@@ -718,6 +744,7 @@ def _descend(
     piece: _Piece,
     cuts: list[_PendingCut],
     proposals: list[_PendingProposal],
+    parses: _Parses,
     depth: int = 0,
 ) -> list[_Piece]:
     """Recursively apply the first available cut rule to a piece."""
@@ -725,13 +752,13 @@ def _descend(
         return [piece]
     split = None
     for cutter in _cutters(piece):
-        split = cutter(piece)
+        split = cutter(piece, parses)
         if split:
             break
     if split is None:
         return [piece]
-    left_leaves = _descend(split.left, cuts, proposals, depth + 1)
-    right_leaves = _descend(split.right, cuts, proposals, depth + 1)
+    left_leaves = _descend(split.left, cuts, proposals, parses, depth + 1)
+    right_leaves = _descend(split.right, cuts, proposals, parses, depth + 1)
     left_boundary, right_boundary = _cut_boundaries(split, left_leaves, right_leaves)
     cuts.append(
         _PendingCut(
@@ -821,8 +848,9 @@ def segment(text: str) -> Segmentation:
     leaves: list[_Piece] = []
     pending_cuts: list[_PendingCut] = []
     pending_proposals: list[_PendingProposal] = []
-    for sentence in _sentences(text, _blocks(text)):
-        leaves.extend(_descend(sentence, pending_cuts, pending_proposals))
+    parses: _Parses = {}
+    for sentence in _sentences(text, _blocks(text), parses):
+        leaves.extend(_descend(sentence, pending_cuts, pending_proposals, parses))
     leaves.sort(key=lambda piece: _span(piece) or (len(text), len(text)))
     fragments, indices = _fragments(leaves)
     return Segmentation(
