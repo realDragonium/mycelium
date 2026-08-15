@@ -37,6 +37,9 @@ from ..agentloop import (
     first_tool_use as _first_tool_use,
 )
 from ..agentloop import (
+    ids_present_in as _ids_present_in,
+)
+from ..agentloop import (
     serialize as _serialize,
 )
 from ..agentloop import (
@@ -113,6 +116,19 @@ class _RunContext:
         self.__dict__.update(kw)
 
 
+def _note_collected_ids(result: Any, sent: str, collected_ids: set[str]) -> None:
+    """Record structural statement ids that appeared whole in model-visible text.
+
+    Tool serialization can truncate at its character cap, and recon formatting can
+    omit result shapes entirely. Matching whole identities against the exact text
+    sent prevents both unseen ids and longer ids sharing a prefix from vouching for
+    fallback provenance.
+    """
+    seen: set[str] = set()
+    _collect_ids(result, seen)
+    collected_ids.update(_ids_present_in(sent, seen))
+
+
 def _execute(
     question: str,
     client: Any,
@@ -132,16 +148,12 @@ def _execute(
 
     # ---- Step 0: recon (counts toward the op cap) ----
     recon = _recon(question, substrate, config, trace)
-    _collect_ids(recon, collected_ids)
+    initial_message = prompts.initial_user_message(
+        question, recon, quick=not config.enforce_floor
+    )
+    _note_collected_ids(recon, initial_message, collected_ids)
 
-    messages: list[dict[str, Any]] = [
-        {
-            "role": "user",
-            "content": prompts.initial_user_message(
-                question, recon, quick=not config.enforce_floor
-            ),
-        }
-    ]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": initial_message}]
 
     max_turns = config.op_cap + _TURN_HEADROOM
 
@@ -361,10 +373,9 @@ def _dispatch_read(
         with trace.span(f"tool:{name}"):
             result = substrate.call(name, arguments)
         trace.record_tool_call(name, arguments, result, ok=True, counts_as_op=True)
-        _collect_ids(result, collected_ids)
-        result_blocks.append(
-            _tool_result_block(tool_use_id, _serialize(result), is_error=False)
-        )
+        sent = _serialize(result)
+        _note_collected_ids(result, sent, collected_ids)
+        result_blocks.append(_tool_result_block(tool_use_id, sent, is_error=False))
         return True
     except SubstrateError as exc:
         # Absence/failure is reported, never fabricated into an empty success.
