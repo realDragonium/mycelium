@@ -164,7 +164,7 @@ PERFECT_STATE_PARTICIPLES = frozenset(
 )
 
 LEVEL_LEMMAS = frozenset({"low", "medium", "high"})
-NEGATED_NP_OPENERS = frozenset({"no", "missing", "without", "single"})
+NEGATED_NP_OPENERS = frozenset({"no", "missing", "without"})
 
 UI_ACTION_LEMMAS = frozenset(
     {
@@ -324,9 +324,12 @@ def _complement(root: Token) -> Token | None:
     )
 
 
-def _band_marker(doc: Doc) -> Token | None:
-    """Return the first token that marks a conditional band."""
-    return next((token for token in doc if token.text.lower() in _BAND_MARKERS), None)
+def _band_marker(doc: Doc, root: Token) -> Token | None:
+    """Return the first band marker that conditions the copula."""
+    return next(
+        (token for token in doc[root.i + 1 :] if token.text.lower() in _BAND_MARKERS),
+        None,
+    )
 
 
 def _passive_match(
@@ -429,9 +432,10 @@ def _state_copula_condition(doc: Doc, text: str) -> ShapeMatch | None:
         or _modal(doc) is not None
     ):
         return None
-    if _band_marker(doc) is not None:
-        # "… for/when/if X" makes the copula a conditional value band, which is
-        # rule-shaped; a state holds unconditionally.
+    if _band_marker(doc, root) is not None:
+        # "is X for/when/if Y" makes the copula a conditional value band, which
+        # is rule-shaped; a state holds unconditionally. A marker inside the
+        # subject ("the list for a vacancy is empty") conditions nothing.
         return None
     complement = _complement(root)
     if (
@@ -541,7 +545,7 @@ def _rule_band(doc: Doc, text: str) -> ShapeMatch | None:
     ):
         return None
     complement = _complement(root)
-    marker = _band_marker(doc)
+    marker = _band_marker(doc, root)
     if complement is None or marker is None:
         return None
     value_shaped = (

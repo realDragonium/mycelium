@@ -6,11 +6,14 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 from mycelium.connect.shapes import (
     EVENT_PARTICIPLES,
     RULE_PARTICIPLES,
     SHAPE_NAMES,
     STATE_PARTICIPLES,
+    Classification,
     classify,
     match_shapes,
 )
@@ -83,6 +86,10 @@ def test_state_stative_verb_shape():
 
 def test_state_negated_np_shape():
     _assert_assigned_shape("No name on the invite", "state", "state-negated-np")
+    # "Single X" names a product feature far more often than an absence.
+    _assert_assigned_shape(
+        "Single sign-on configuration", "property", "property-noun-phrase"
+    )
 
 
 def test_rule_passive_shape():
@@ -227,6 +234,14 @@ def test_band_marker_keeps_a_conditional_copula_out_of_state():
     assert "state-copula-condition" not in shapes
 
 
+def test_a_marker_inside_the_subject_leaves_the_copula_unconditional():
+    _assert_assigned_shape(
+        "The reviewer list for a vacancy is empty",
+        "state",
+        "state-copula-condition",
+    )
+
+
 def test_passive_participle_lexicons_are_pairwise_disjoint():
     assert STATE_PARTICIPLES.isdisjoint(EVENT_PARTICIPLES)
     assert STATE_PARTICIPLES.isdisjoint(RULE_PARTICIPLES)
@@ -269,8 +284,12 @@ def _summary_rows() -> list[tuple[str, str]]:
     ]
 
 
+def _summary_results() -> list[tuple[str, str, Classification]]:
+    return measure_kind_shapes.classify_rows(_summary_rows())
+
+
 def test_summarize_counts_rates_confusion_and_floor():
-    report = measure_kind_shapes.summarize(_summary_rows())
+    report = measure_kind_shapes.summarize(_summary_results())
 
     assert report["totals"] == {
         "statements": 6,
@@ -308,15 +327,14 @@ def test_summarize_counts_rates_confusion_and_floor():
     assert report["confusion"]["state"]["(unmatched)"] == 1
     assert report["by_shape"]["event-passive"]["fires"] == 1
     assert report["by_shape"]["event-passive"]["correct"] == 1
-    assert "capability" in report["floor"]["kinds_without_ground_truth"]
-    assert "check" in report["floor"]["kinds_without_ground_truth"]
+    assert "capability" in report["floor"]["kinds_never_assigned"]
+    assert "check" in report["floor"]["kinds_never_assigned"]
     assert "property" in report["floor"]["kinds_missed"]
     assert "event" in report["floor"]["kinds_met"]
 
 
 def test_render_markdown_contains_counts_but_never_statement_text():
-    rows = _summary_rows()
-    report = measure_kind_shapes.summarize(rows)
+    report = measure_kind_shapes.summarize(_summary_results())
 
     markdown = measure_kind_shapes.render_markdown(report, source_label="fixture")
 
@@ -327,3 +345,14 @@ def test_render_markdown_contains_counts_but_never_statement_text():
     assert "never assigned in this snapshot" in markdown
     assert "An invite is sent" not in markdown
     assert "Verify the report" not in markdown
+
+
+def test_load_snapshot_names_the_line_of_a_record_missing_keys(tmp_path):
+    snapshot = tmp_path / "snapshot.jsonl"
+    snapshot.write_text(
+        '{"kind": "state", "text": "The invite is enabled"}\n{"kind": "state"}\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="missing text on line 2"):
+        measure_kind_shapes.load_snapshot(snapshot)
