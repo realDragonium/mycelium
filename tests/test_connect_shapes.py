@@ -258,10 +258,23 @@ def test_summarize_counts_rates_confusion_and_floor():
     assert report["by_kind"]["event"]["n"] == 2
     assert report["by_kind"]["event"]["correct"] == 1
     assert report["by_kind"]["event"]["wrong"] == 1
-    assert report["by_kind"]["event"]["precision"] == 0.5
     assert report["by_kind"]["event"]["recall"] == 0.5
     assert report["by_kind"]["state"]["unmatched"] == 1
     assert report["by_kind"]["state"]["flag_rate"] == 0.5
+    # Precision belongs to the assigned kind: the event row misassigned as
+    # property is a false positive for property, not for event.
+    assert report["by_assigned_kind"]["event"] == {
+        "assigned": 1,
+        "correct": 1,
+        "wrong": 0,
+        "precision": 1.0,
+    }
+    assert report["by_assigned_kind"]["property"] == {
+        "assigned": 1,
+        "correct": 0,
+        "wrong": 1,
+        "precision": 0.0,
+    }
     assert report["confusion"]["event"] == {"event": 1, "property": 1}
     assert report["confusion"]["check"]["(ambiguous)"] == 1
     assert report["confusion"]["state"]["(unmatched)"] == 1
@@ -269,7 +282,8 @@ def test_summarize_counts_rates_confusion_and_floor():
     assert report["by_shape"]["event-passive"]["correct"] == 1
     assert "capability" in report["floor"]["kinds_without_ground_truth"]
     assert "check" in report["floor"]["kinds_without_ground_truth"]
-    assert "event" in report["floor"]["kinds_missed"]
+    assert "property" in report["floor"]["kinds_missed"]
+    assert "event" in report["floor"]["kinds_met"]
 
 
 def test_render_markdown_contains_counts_but_never_statement_text():
@@ -280,7 +294,8 @@ def test_render_markdown_contains_counts_but_never_statement_text():
 
     assert "# Kind Shape Classification Accuracy" in markdown
     assert "| event | 2 | 1 | 1 | 0 | 0 | 1/2 (50.0%)" in markdown
+    assert "| property | 1 | 0 | 1 | 0/1 (0.0%) |" in markdown
     assert "3/4 (75.0%)" in markdown
-    assert "no ground truth in this snapshot" in markdown
+    assert "never assigned in this snapshot" in markdown
     assert "An invite is sent" not in markdown
     assert "Verify the report" not in markdown

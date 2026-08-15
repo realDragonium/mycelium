@@ -157,6 +157,12 @@ RULE_VERBS = frozenset(
     }
 )
 
+# Present-perfect participles that leave a condition behind rather than
+# report an occurrence — the positive evidence `state-perfect` needs.
+PERFECT_STATE_PARTICIPLES = frozenset(
+    {"elapse", "end", "expire", "fail", "finish", "lapse", "stop", "timeout"}
+)
+
 LEVEL_LEMMAS = frozenset({"low", "medium", "high"})
 NEGATED_NP_OPENERS = frozenset({"no", "missing", "without", "single"})
 
@@ -228,12 +234,14 @@ SHAPE_NAMES = (
     "procedure-how-to",
 )
 
+_PERFECT_STATE_LEMMAS = STATE_PARTICIPLES | PERFECT_STATE_PARTICIPLES
 _PRESENT_TAGS = frozenset({"VBZ", "VBP"})
 _COMPLEMENT_DEPS = frozenset({"attr", "acomp", "oprd"})
 _BAND_MARKERS = frozenset({"for", "when", "unless", "if"})
 # "is able to" is the periphrastic capability modal, not a condition holding.
 _PERIPHRASTIC_MODAL_ADJECTIVES = frozenset({"able", "unable"})
 _DETERMINERS = frozenset({"a", "an", "the"})
+_HOW_TO_RE = re.compile(r"how\s+to\b", re.IGNORECASE)
 _ABLE_TO_RE = re.compile(r"(?:^|\s)able\s+to(?:\s|$)", re.IGNORECASE)
 _RULE_FORMULA_RE = re.compile(
     r"\b(plus|minus|times)\b"
@@ -368,7 +376,9 @@ def _state_perfect(doc: Doc, text: str) -> ShapeMatch | None:
         or root.tag_ != "VBN"
         or _auxpass_child(root) is not None
         or _modal(doc) is not None
-        or root.lemma_.lower() in EVENT_PARTICIPLES
+        # Positive evidence only: an unlisted participle ("has approved") is
+        # novel event vocabulary, and must flag rather than read as a state.
+        or root.lemma_.lower() not in _PERFECT_STATE_LEMMAS
     ):
         return None
     auxiliary = next(
@@ -594,7 +604,7 @@ def _check_imperative(doc: Doc, text: str) -> ShapeMatch | None:
 
 def _procedure_how_to(doc: Doc, text: str) -> ShapeMatch | None:
     """Match a how-to procedure heading."""
-    if not text.lower().startswith("how to"):
+    if _HOW_TO_RE.match(text) is None:
         return None
     evidence = " ".join(token.text for token in doc[:2])
     return ShapeMatch("procedure", "procedure-how-to", evidence)

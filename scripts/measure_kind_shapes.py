@@ -50,16 +50,23 @@ def _empty_kind_row() -> dict[str, int | float | None]:
         "wrong": 0,
         "ambiguous": 0,
         "unmatched": 0,
-        "precision": None,
         "recall": None,
         "flag_rate": None,
     }
+
+
+def _empty_assigned_row() -> dict[str, int | float | None]:
+    """Create an empty aggregate row for one assigned (predicted) kind."""
+    return {"assigned": 0, "correct": 0, "wrong": 0, "precision": None}
 
 
 def summarize(rows: list[tuple[str, str]]) -> dict:
     """Summarize shape classifications as plain report data."""
     kinds = _kind_order(rows)
     by_kind = {kind: _empty_kind_row() for kind in kinds}
+    # Precision is a property of a prediction, so false positives accumulate
+    # against the kind that was assigned, not the kind that was true.
+    by_assigned_kind = {kind: _empty_assigned_row() for kind in kinds}
     confusion: dict[str, dict[str, int]] = {kind: {} for kind in kinds}
     # A shape name is "<kind>-<discriminator>", so a shape that never fires
     # still names its kind in the report.
@@ -91,12 +98,16 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
         if result.status == "assigned":
             totals["assigned"] += 1
             column = result.kind
+            assigned_row = by_assigned_kind.setdefault(column, _empty_assigned_row())
+            assigned_row["assigned"] += 1
             if result.kind == true_kind:
                 totals["correct"] += 1
                 kind_row["correct"] += 1
+                assigned_row["correct"] += 1
             else:
                 totals["wrong"] += 1
                 kind_row["wrong"] += 1
+                assigned_row["wrong"] += 1
         else:
             column = f"({result.status})"
             totals[result.status] += 1
@@ -111,11 +122,13 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
                 shape_row["correct"] += 1
 
     for kind_row in by_kind.values():
-        assigned = int(kind_row["correct"]) + int(kind_row["wrong"])
         flagged = int(kind_row["ambiguous"]) + int(kind_row["unmatched"])
-        kind_row["precision"] = _rate(int(kind_row["correct"]), assigned)
         kind_row["recall"] = _rate(int(kind_row["correct"]), int(kind_row["n"]))
         kind_row["flag_rate"] = _rate(flagged, int(kind_row["n"]))
+    for assigned_row in by_assigned_kind.values():
+        assigned_row["precision"] = _rate(
+            int(assigned_row["correct"]), int(assigned_row["assigned"])
+        )
 
     totals["precision"] = _rate(int(totals["correct"]), int(totals["assigned"]))
     totals["recall"] = _rate(int(totals["correct"]), int(totals["statements"]))
@@ -131,11 +144,10 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
     kinds_met: list[str] = []
     kinds_missed: list[str] = []
     kinds_without_ground_truth: list[str] = []
-    for kind, kind_row in by_kind.items():
-        assigned = int(kind_row["correct"]) + int(kind_row["wrong"])
-        if int(kind_row["n"]) == 0 or assigned == 0:
+    for kind, assigned_row in by_assigned_kind.items():
+        if int(assigned_row["assigned"]) == 0:
             kinds_without_ground_truth.append(kind)
-        elif float(kind_row["precision"]) >= _FLOOR_THRESHOLD:
+        elif float(assigned_row["precision"]) >= _FLOOR_THRESHOLD:
             kinds_met.append(kind)
         else:
             kinds_missed.append(kind)
@@ -143,6 +155,7 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
     return {
         "totals": totals,
         "by_kind": by_kind,
+        "by_assigned_kind": by_assigned_kind,
         "confusion": confusion,
         "by_shape": by_shape,
         "floor": {
@@ -185,23 +198,36 @@ def render_markdown(report: dict, *, source_label: str) -> str:
             f"{_fraction(totals['ambiguous'] + totals['unmatched'], totals['statements'])} |"
         ),
         "",
-        "## By kind",
+        "## By true kind",
         "",
         (
-            "| Kind | n | Correct | Wrong | Ambiguous | Unmatched | Precision | "
+            "| Kind | n | Correct | Misassigned | Ambiguous | Unmatched | "
             "Recall | Flag rate |"
         ),
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for kind, row in report["by_kind"].items():
-        assigned = row["correct"] + row["wrong"]
         flagged = row["ambiguous"] + row["unmatched"]
         lines.append(
             f"| {kind} | {row['n']} | {row['correct']} | {row['wrong']} | "
             f"{row['ambiguous']} | {row['unmatched']} | "
-            f"{_fraction(row['correct'], assigned)} | "
             f"{_fraction(row['correct'], row['n'])} | "
             f"{_fraction(flagged, row['n'])} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Precision by assigned kind",
+            "",
+            "| Assigned kind | Assigned | Correct | Wrong | Precision |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for kind, row in report["by_assigned_kind"].items():
+        lines.append(
+            f"| {kind} | {row['assigned']} | {row['correct']} | {row['wrong']} | "
+            f"{_fraction(row['correct'], row['assigned'])} |"
         )
 
     assigned_columns = [
@@ -240,15 +266,20 @@ def render_markdown(report: dict, *, source_label: str) -> str:
 
     lines.extend(["", "## Floor", ""])
     floor = report["floor"]
-    for kind, row in report["by_kind"].items():
+    threshold = floor["threshold"]
+    lines.append(
+        f"Precision of an assigned kind must reach {threshold:.0%}. A kind the "
+        "classifier never assigned has nothing to measure."
+    )
+    lines.append("")
+    for kind, row in report["by_assigned_kind"].items():
         if kind in floor["kinds_without_ground_truth"]:
-            lines.append(f"- `{kind}`: no ground truth in this snapshot")
+            lines.append(f"- `{kind}`: never assigned in this snapshot")
         else:
-            assigned = row["correct"] + row["wrong"]
             result = "met" if kind in floor["kinds_met"] else "missed"
             lines.append(
                 f"- `{kind}`: {result} — "
-                f"{_fraction(row['correct'], assigned)} precision"
+                f"{_fraction(row['correct'], row['assigned'])} precision"
             )
     lines.append("")
     return "\n".join(lines)
