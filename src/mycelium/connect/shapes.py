@@ -669,7 +669,13 @@ def match_shapes(text: str) -> list[ShapeMatch]:
     # Every detector reads the root, so a second coordinated predicate ("… is
     # sent and … is enabled") would be classified by its first clause alone.
     # That is the same compound the phrasing catalog rejects: flag, don't guess.
-    if root is not None and _coordinated_predicate(root) is not None:
+    # A how-to heading is exempt — it names one procedure however many verbs
+    # its title mentions.
+    if (
+        root is not None
+        and _coordinated_predicate(root) is not None
+        and _HOW_TO_RE.match(stripped) is None
+    ):
         return []
     matches = [detector(doc, stripped) for detector in _DETECTORS]
     return [match for match in matches if match is not None]

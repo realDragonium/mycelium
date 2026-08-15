@@ -134,6 +134,9 @@ def test_procedure_how_to_shape():
     )
     # The prefix needs a word boundary, or "How tools work" reads as a heading.
     assert classify("How tools work").status == "unmatched"
+    # A heading names one procedure however many verbs its title mentions, so
+    # the compound guard does not apply to it.
+    assert classify("How to configure automation and test it").kind == "procedure"
 
 
 def test_passive_participle_lexicons_control_event_state_collision():
