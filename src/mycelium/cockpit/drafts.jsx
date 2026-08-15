@@ -77,10 +77,20 @@ function titleFor(id) {
 // per-category breakdown is only available inside DraftReview (which has ops).
 function categoryOf(op) {
   const k = op.type;
+  if (k === 'flag') return 'flagged'; // a record for the curator, not a queued write
   if (k === 'upsert_statement' || k === 'upsert_statements' || k === 'patch_statement' || k === 'replace_text' || k === 'merge_statements') return 'statements';
   if (k === 'upsert_entity') return 'entities';
   if (k === 'upsert_name') return 'names';
   return 'links'; // add_links | add_entity_links
+}
+
+// A `flag` op is an unresolved fragment `ingest_text` refused to guess a
+// statement out of; it never replays, so it stays here until someone resolves
+// it and discards it. Everything else carries no flag reason.
+function flagReason(op) {
+  if (op.kind !== 'flag') return false;
+  const p = op.payload || {};
+  return p.detail ? `${p.reason} — ${p.detail}` : (p.reason || 'unresolved fragment');
 }
 
 /* ============================ op renderers ============================ */
@@ -176,6 +186,10 @@ function OpBody({ op }) {
     );
   }
 
+  if (op.type === 'flag') {
+    return <div className="op-stmt-text">{p.text}</div>;
+  }
+
   if (op.type === 'merge_statements') {
     return (
       <div className="op-link-line">
@@ -245,7 +259,7 @@ function adaptDraft(raw) {
     submittedAt: Date.parse(d.submitted_at),
     source: null,
     sourceType: '',
-    ops: (d.ops || []).map(o => ({ seq: o.seq, type: o.kind, payload: o.payload, flagged: false, quote: null })),
+    ops: (d.ops || []).map(o => ({ seq: o.seq, type: o.kind, payload: o.payload, flagged: flagReason(o), quote: null })),
   };
 }
 
@@ -280,7 +294,7 @@ function DraftReview({ id }) {
   const ops = draft.ops;
   const readOnly = draft.status !== 'open';
   const counts = { all: ops.length, statements: 0, entities: 0, names: 0, links: 0, flagged: 0 };
-  ops.forEach(o => { counts[categoryOf(o)]++; if (o.flagged) counts.flagged++; });
+  ops.forEach(o => { const c = categoryOf(o); if (c !== 'flagged') counts[c]++; if (o.flagged) counts.flagged++; });
   const shown = ops.filter(o => filter === 'all' ? true : filter === 'flagged' ? o.flagged : categoryOf(o) === filter);
 
   const onDiscardOp = (seq) => {
