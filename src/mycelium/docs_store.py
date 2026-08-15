@@ -21,8 +21,10 @@ row is absent reads as `document_written`, not `document_superseded`, because
 nothing replaced it and its `document_id` simply resolves to nothing. Even the
 triple cannot distinguish unrelated same-titled pages within one kind, so a
 write that would replace another run's body is refused rather than merged;
-replacement is something a caller requests explicitly with `updates=`. The
-refused run wrote nothing and therefore does not report `document_written`.
+replacement is something a caller requests explicitly with `updates=` naming
+the document and `replacing=` naming the body it expects to replace. A mistaken
+match therefore cannot destroy a body the caller never saw. The refused run
+wrote nothing and therefore does not report `document_written`.
 
 Statement ids and the review record are JSON text columns rather than join
 tables. They are unqueried snapshots written and read as a whole, so
@@ -395,6 +397,7 @@ def _write_refusal(
     body: str,
     run_id: str | None,
     updates: str | None,
+    replacing: str | None,
 ) -> str | None:
     """Why this write must not land, or None when it may.
 
@@ -410,12 +413,33 @@ def _write_refusal(
         f"document_type={document_type!r}, slug={slug!r})"
     )
     document_id = None if existing is None else str(existing["id"])
+    if updates is not None and replacing is None:
+        return (
+            "document write refused: a deliberate replacement must state the body "
+            "it expects to replace; pass replacing=body_digest(stored_body) with "
+            f"updates={updates!r}"
+        )
+    if replacing is not None and updates is None:
+        return (
+            "document write refused: replacing names an expected body, but without "
+            "updates naming a document that expectation cannot be checked"
+        )
     if updates is not None and updates != document_id:
         resolved = "no document" if document_id is None else f"document {document_id!r}"
         return (
             f"document write refused: updates={updates!r}, but identity "
             f"{where} resolved to {resolved}"
         )
+    if updates is not None and existing is not None:
+        stored = body_digest(existing["body"])
+        if replacing != stored:
+            return (
+                f"document write refused: document {document_id!r} expected body "
+                f"digest {replacing!r}, but the stored body has digest {stored!r}; "
+                "the stored body has changed since the caller read it"
+            )
+    # Digest expectations are scoped to deliberate updates. Same-run rewrites
+    # wrote the current body, and identical bodies replace nothing.
     if existing is None or updates == document_id or existing["body"] == body:
         return None
     if run_id is not None and run_id == existing["last_run_id"]:
@@ -453,10 +477,9 @@ def upsert_document(
 
     A finer title-derived key still collapses unrelated pages that happen to
     share a title, so replacing another run's body is refused rather than
-    merged. Identical bodies and same-run rewrites remain safe; a caller may
-    request deliberate replacement by passing `updates` with the stored id.
-    `replacing` is accepted for the forthcoming body check but is not yet
-    enforced.
+    merged. Identical bodies and same-run rewrites remain safe. For a deliberate
+    replacement, `updates` says which document and `replacing` says which body;
+    the write is refused if the stored body has moved on since the caller read it.
     """
     slug = slug.strip()
     title = title.strip()
@@ -485,6 +508,7 @@ def upsert_document(
             body=body,
             run_id=run_id,
             updates=updates,
+            replacing=replacing,
         )
         if refusal is not None:
             raise ValueError(refusal)

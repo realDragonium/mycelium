@@ -42,6 +42,7 @@ def test_status_derivation(tmp_path):
         body="Second body",
         run_id=rewritten,
         updates=document_id,
+        replacing=docs_store.body_digest("First body"),
     )
     assert rewritten_document_id == document_id
     docs_store.finish_run(
@@ -385,6 +386,7 @@ def test_upsert_document_allows_a_replacement_the_caller_asked_for(tmp_path):
         body="Second body",
         run_id="drn_second",
         updates=first_id,
+        replacing=docs_store.body_digest("First body"),
     )
 
     document = docs_store.get_document(conn, first_id)
@@ -521,6 +523,7 @@ def test_a_deliberate_replacement_carries_the_replacing_runs_review(tmp_path):
         review=second_review,
         run_id=second_run_id,
         updates=first_id,
+        replacing=docs_store.body_digest("First body"),
     )
 
     documents = docs_store.list_documents(conn)
@@ -556,6 +559,7 @@ def test_upsert_document_refuses_an_intent_that_names_the_wrong_document(tmp_pat
             body="Second body",
             run_id="drn_second",
             updates="gdc_somewhere_else",
+            replacing=docs_store.body_digest("First body"),
         )
 
     document_count = len(docs_store.list_documents(conn))
@@ -569,6 +573,7 @@ def test_upsert_document_refuses_an_intent_that_names_the_wrong_document(tmp_pat
             body="Billing body",
             run_id="drn_second",
             updates=document_id,
+            replacing=docs_store.body_digest("First body"),
         )
     assert len(docs_store.list_documents(conn)) == document_count
 
@@ -628,6 +633,7 @@ def test_upsert_document_updates_same_slug_in_place(tmp_path):
         body="New body",
         run_id="drn_2",
         updates=first_id,
+        replacing=docs_store.body_digest("Old body"),
     )
     row = docs_store.get_document(conn, second_id)
 
@@ -775,6 +781,7 @@ def test_upsert_document_still_updates_the_same_page_in_place(tmp_path):
         document_type="tutorial",
         run_id="drn_2",
         updates=first,
+        replacing=docs_store.body_digest("First"),
     )
 
     assert first == second
@@ -845,6 +852,7 @@ def test_migrating_a_pre_rekey_database_keeps_its_pages_and_applies_the_new_key(
             guideline_set="kb-authoring",
             document_type="how-to",
             updates="gdc_sso",
+            replacing=docs_store.body_digest(rows["gdc_sso"]["body"]),
         )
         == "gdc_sso"
     )

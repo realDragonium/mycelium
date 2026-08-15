@@ -366,6 +366,7 @@ def test_a_run_whose_page_was_rewritten_says_so(tmp_path):
         statement_ids=["stm_1"],
         run_id=second_run_id,
         updates=first_document_id,
+        replacing=docs_store.body_digest("First body"),
     )
     docs_store.finish_run(
         conn,
