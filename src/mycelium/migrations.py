@@ -579,6 +579,10 @@ def _v6_rebuild_names_nocase(conn: sqlite3.Connection) -> None:
         conn.execute(f"INSERT INTO names_new ({cols}) SELECT {cols} FROM names")
         conn.execute("DROP TABLE names")
         conn.execute("ALTER TABLE names_new RENAME TO names")
+        # Dropping the table drops its indexes, and SCHEMA already ran for
+        # this open — recreate what it created, or an upgrading DB loses the
+        # entity index until the next process starts.
+        conn.execute("CREATE INDEX IF NOT EXISTS names_entity ON names (entity_id)")
         conn.commit()
     except BaseException:
         conn.rollback()
