@@ -61,6 +61,8 @@ def test_state_passive_shape():
 
 def test_state_perfect_shape():
     _assert_assigned_shape("The invite has expired", "state", "state-perfect")
+    # An unlisted participle is novel event vocabulary, not a state by default.
+    assert classify("The reviewer has approved the request").status == "unmatched"
 
 
 def test_state_copula_condition_shape():
@@ -130,6 +132,8 @@ def test_procedure_how_to_shape():
         "procedure",
         "procedure-how-to",
     )
+    # The prefix needs a word boundary, or "How tools work" reads as a heading.
+    assert classify("How tools work").status == "unmatched"
 
 
 def test_passive_participle_lexicons_control_event_state_collision():
