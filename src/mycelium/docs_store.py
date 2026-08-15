@@ -9,10 +9,16 @@ historical outcomes and guessing which run still represents the live page.
 
 State uses terminal timestamps rather than a `status` column: a run is queued
 until `started_at`, running until `finished_at`, then document_written,
-nothing_written, or failed according to `outcome`. `last_run_id` is a soft
-reference with deliberately no FK, so a document survives disposable run
-history. `slug` is the stable identity later runs update; deciding whether two
-topics are the same document belongs to a later issue, not this store.
+document_superseded, nothing_written, or failed according to `outcome` and the
+document's current `last_run_id`. Supersession is derived at read time because
+the stored `outcome` is a closed record of what the run did, and another stored
+copy of the same fact could disagree with the document table. `last_run_id` is
+a soft reference with deliberately no FK, so a document survives disposable
+run history. The guideline set, document type, and slug together are the stable
+identity later runs update. A title-derived slug alone is too broad: unrelated
+kinds of page routinely choose the same ordinary title. A run whose document
+row is absent reads as `document_written`, not `document_superseded`, because
+nothing replaced it and its `document_id` simply resolves to nothing.
 
 Statement ids and the review record are JSON text columns rather than join
 tables. They are unqueried snapshots written and read as a whole, so
@@ -49,10 +55,10 @@ CREATE INDEX IF NOT EXISTS documentation_runs_active ON documentation_runs (star
 GENERATED_DOCUMENTS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS generated_documents (
     id            TEXT PRIMARY KEY,
-    slug          TEXT NOT NULL UNIQUE,
+    slug          TEXT NOT NULL,
     title         TEXT NOT NULL,
-    guideline_set TEXT,
-    document_type TEXT,
+    guideline_set TEXT NOT NULL DEFAULT '',
+    document_type TEXT NOT NULL DEFAULT '',
     body          TEXT NOT NULL,
     statement_ids TEXT NOT NULL DEFAULT '[]',
     review        TEXT NOT NULL DEFAULT '{}',
@@ -61,6 +67,8 @@ CREATE TABLE IF NOT EXISTS generated_documents (
     last_run_id   TEXT
 );
 CREATE INDEX IF NOT EXISTS generated_documents_updated ON generated_documents (updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS generated_documents_identity
+    ON generated_documents (guideline_set, document_type, slug);
 """
 
 OUTCOMES = ("document_written", "nothing_written", "failed")
@@ -77,6 +85,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DOCUMENTATION_RUNS_SCHEMA)
     conn.executescript(GENERATED_DOCUMENTS_SCHEMA)
     _add_generated_document_review(conn)
+    _rekey_generated_documents(conn)
     conn.commit()
 
 
@@ -100,9 +109,99 @@ def _add_generated_document_review(conn: sqlite3.Connection) -> None:
         )
 
 
+def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
+    """Replace the old slug-only key with the document's full identity.
+
+    SQLite cannot remove the table-level UNIQUE constraint or make the two
+    identity columns non-null in place, so deployed tables need rebuilding.
+    The copy cannot encounter a duplicate under the new key: a triple is a
+    strictly finer identity than slug alone, and every legacy slug was unique.
+    """
+    slug_only_unique = False
+    for index in conn.execute("PRAGMA index_list(generated_documents)"):
+        if index["unique"] != 1 or index["origin"] != "u":
+            continue
+        index_name = '"' + index["name"].replace('"', '""') + '"'
+        columns = [
+            row["name"] for row in conn.execute(f"PRAGMA index_info({index_name})")
+        ]
+        if columns == ["slug"]:
+            slug_only_unique = True
+            break
+
+    # Matching only SQLite's table-constraint origin makes this idempotent:
+    # the replacement identity index is explicitly created and has origin 'c'.
+    if not slug_only_unique:
+        return
+
+    # sqlite3's legacy isolation level lets DDL autocommit unless a transaction
+    # is opened explicitly; losing the old table halfway through is not safe.
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE generated_documents_rekeyed (
+                id            TEXT PRIMARY KEY,
+                slug          TEXT NOT NULL,
+                title         TEXT NOT NULL,
+                guideline_set TEXT NOT NULL DEFAULT '',
+                document_type TEXT NOT NULL DEFAULT '',
+                body          TEXT NOT NULL,
+                statement_ids TEXT NOT NULL DEFAULT '[]',
+                review        TEXT NOT NULL DEFAULT '{}',
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                last_run_id   TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO generated_documents_rekeyed
+                (id, slug, title, guideline_set, document_type, body,
+                 statement_ids, review, created_at, updated_at, last_run_id)
+            SELECT id, slug, title, COALESCE(guideline_set, ''),
+                   COALESCE(document_type, ''), body, statement_ids, review,
+                   created_at, updated_at, last_run_id
+            FROM generated_documents
+            """
+        )
+        conn.execute("DROP TABLE generated_documents")
+        conn.execute(
+            "ALTER TABLE generated_documents_rekeyed RENAME TO generated_documents"
+        )
+        conn.execute(
+            "CREATE INDEX generated_documents_updated "
+            "ON generated_documents (updated_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX generated_documents_identity "
+            "ON generated_documents (guideline_set, document_type, slug)"
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
+def _document_superseded(row: sqlite3.Row | dict) -> bool:
+    """A missing document row is not supersession because nothing replaced it.
+    An existing row is superseded when its current writer differs, including no run.
+    """
+    return (
+        row["document_id"] is not None
+        and bool(row["document_exists"])
+        and row["document_last_run_id"] != row["id"]
+    )
+
+
 def status_for(row: sqlite3.Row | dict) -> str:
-    """Derive a documentation run's status from timestamps + outcome."""
+    """Derive a run's status from its timestamps, outcome, and current document.
+    The row must come from `get_run` or `list_runs`.
+    """
     if row["finished_at"]:
+        if row["outcome"] == "document_written" and _document_superseded(row):
+            return "document_superseded"
         return row["outcome"] or "failed"
     if row["started_at"]:
         return "running"
@@ -184,15 +283,23 @@ def finish_run(
 
 def get_run(conn: sqlite3.Connection, run_id: str) -> sqlite3.Row | None:
     return conn.execute(
-        "SELECT * FROM documentation_runs WHERE id = ?", (run_id,)
+        "SELECT r.*, d.id IS NOT NULL AS document_exists, "
+        "d.last_run_id AS document_last_run_id "
+        "FROM documentation_runs AS r "
+        "LEFT JOIN generated_documents AS d ON d.id = r.document_id "
+        "WHERE r.id = ?",
+        (run_id,),
     ).fetchone()
 
 
 def list_runs(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
     return list(
         conn.execute(
-            "SELECT * FROM documentation_runs "
-            "ORDER BY created_at DESC, id DESC LIMIT ?",
+            "SELECT r.*, d.id IS NOT NULL AS document_exists, "
+            "d.last_run_id AS document_last_run_id "
+            "FROM documentation_runs AS r "
+            "LEFT JOIN generated_documents AS d ON d.id = r.document_id "
+            "ORDER BY r.created_at DESC, r.id DESC LIMIT ?",
             (limit,),
         ).fetchall()
     )
@@ -224,6 +331,12 @@ def mark_orphaned(conn: sqlite3.Connection) -> int:
 
 
 def serialize_run(row: sqlite3.Row) -> dict:
+    """Serialize a run while deriving whether its document was superseded.
+
+    Finished run rows are closed, so replacement cannot be copied back onto
+    them. Reading the document's current writer also keeps that fact in one
+    place instead of maintaining two rows that could disagree.
+    """
     return {
         "id": row["id"],
         "prompt": row["prompt"],
@@ -236,6 +349,7 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "finished_at": row["finished_at"],
         "outcome": row["outcome"],
         "document_id": row["document_id"],
+        "document_superseded": _document_superseded(row),
         "error": row["error"],
     }
 
@@ -258,6 +372,10 @@ def upsert_document(
         raise ValueError("slug is required")
     if not title:
         raise ValueError("title is required")
+    if guideline_set is None:
+        guideline_set = ""
+    if document_type is None:
+        document_type = ""
     document_id = "gdc_" + _uuid.uuid4().hex[:12]
     now = _now()
     conn.execute(
@@ -265,9 +383,8 @@ def upsert_document(
         "(id, slug, title, guideline_set, document_type, body, statement_ids, "
         "review, created_at, updated_at, last_run_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(slug) DO UPDATE SET title = excluded.title, "
-        "guideline_set = excluded.guideline_set, "
-        "document_type = excluded.document_type, body = excluded.body, "
+        "ON CONFLICT(guideline_set, document_type, slug) DO UPDATE SET "
+        "title = excluded.title, body = excluded.body, "
         "statement_ids = excluded.statement_ids, review = excluded.review, "
         "updated_at = excluded.updated_at, last_run_id = excluded.last_run_id",
         (
@@ -285,7 +402,9 @@ def upsert_document(
         ),
     )
     row = conn.execute(
-        "SELECT id FROM generated_documents WHERE slug = ?", (slug,)
+        "SELECT id FROM generated_documents "
+        "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
+        (guideline_set, document_type, slug),
     ).fetchone()
     conn.commit()
     return str(row["id"])
@@ -297,9 +416,32 @@ def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | No
     ).fetchone()
 
 
-def get_document_by_slug(conn: sqlite3.Connection, slug: str) -> sqlite3.Row | None:
+def get_document_by_slug(
+    conn: sqlite3.Connection,
+    slug: str,
+    *,
+    guideline_set: str | None = None,
+    document_type: str | None = None,
+) -> sqlite3.Row | None:
+    """Find a slug, optionally narrowed by either part of its full identity.
+
+    Slugs are no longer unique. The unfiltered fallback is explicitly the
+    most recently updated match so older callers get a stable, useful answer
+    instead of whichever row SQLite happens to visit first.
+    """
+    clauses = ["slug = ?"]
+    parameters = [slug]
+    if guideline_set is not None:
+        clauses.append("guideline_set = ?")
+        parameters.append(guideline_set)
+    if document_type is not None:
+        clauses.append("document_type = ?")
+        parameters.append(document_type)
     return conn.execute(
-        "SELECT * FROM generated_documents WHERE slug = ?", (slug,)
+        "SELECT * FROM generated_documents WHERE "
+        + " AND ".join(clauses)
+        + " ORDER BY updated_at DESC, id DESC LIMIT 1",
+        parameters,
     ).fetchone()
 
 

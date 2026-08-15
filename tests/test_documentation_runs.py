@@ -21,8 +21,33 @@ def test_status_derivation(tmp_path):
     docs_store.mark_started(conn, running)
     written = docs_store.create_run(conn, prompt="written", created_by="u1")
     docs_store.mark_started(conn, written)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="written",
+        title="Written",
+        body="First body",
+        run_id=written,
+    )
     docs_store.finish_run(
-        conn, written, outcome="document_written", document_id="gdc_1"
+        conn, written, outcome="document_written", document_id=document_id
+    )
+    written_row_before_rewrite = docs_store.get_run(conn, written)
+    assert docs_store.status_for(written_row_before_rewrite) == "document_written"
+    rewritten = docs_store.create_run(conn, prompt="rewritten", created_by="u1")
+    docs_store.mark_started(conn, rewritten)
+    rewritten_document_id = docs_store.upsert_document(
+        conn,
+        slug="written",
+        title="Written",
+        body="Second body",
+        run_id=rewritten,
+    )
+    assert rewritten_document_id == document_id
+    docs_store.finish_run(
+        conn,
+        rewritten,
+        outcome="document_written",
+        document_id=rewritten_document_id,
     )
     nothing = docs_store.create_run(conn, prompt="nothing", created_by="u1")
     docs_store.mark_started(conn, nothing)
@@ -40,12 +65,55 @@ def test_status_derivation(tmp_path):
 
     assert docs_store.status_for(docs_store.get_run(conn, queued)) == "queued"
     assert docs_store.status_for(docs_store.get_run(conn, running)) == "running"
-    assert (
-        docs_store.status_for(docs_store.get_run(conn, written)) == "document_written"
-    )
+    written_row_after_rewrite = docs_store.get_run(conn, written)
+    rewritten_row = docs_store.get_run(conn, rewritten)
+    assert docs_store.status_for(written_row_after_rewrite) == "document_superseded"
+    assert docs_store.status_for(rewritten_row) == "document_written"
     assert docs_store.status_for(docs_store.get_run(conn, nothing)) == "nothing_written"
     assert docs_store.status_for(docs_store.get_run(conn, failed)) == "failed"
     assert docs_store.status_for(docs_store.get_run(conn, null_outcome)) == "failed"
+
+
+def test_a_run_whose_document_row_is_gone_is_not_superseded(tmp_path):
+    """A missing row cannot establish that another run replaced the document."""
+    conn = _conn(tmp_path)
+    missing = docs_store.create_run(conn, prompt="missing", created_by="u1")
+    docs_store.mark_started(conn, missing)
+    docs_store.finish_run(
+        conn,
+        missing,
+        outcome="document_written",
+        document_id="gdc_missing",
+    )
+
+    missing_row = docs_store.get_run(conn, missing)
+    assert docs_store.status_for(missing_row) == "document_written"
+    assert docs_store.serialize_run(missing_row)["document_superseded"] is False
+
+
+def test_a_document_with_no_current_writer_still_leaves_an_earlier_run_superseded(
+    tmp_path,
+):
+    """An existing unattributed row means the run no longer owns its body."""
+    conn = _conn(tmp_path)
+    no_writer = docs_store.create_run(conn, prompt="no writer", created_by="u1")
+    docs_store.mark_started(conn, no_writer)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="no-writer",
+        title="No Writer",
+        body="Body",
+    )
+    docs_store.finish_run(
+        conn,
+        no_writer,
+        outcome="document_written",
+        document_id=document_id,
+    )
+
+    no_writer_row = docs_store.get_run(conn, no_writer)
+    assert docs_store.status_for(no_writer_row) == "document_superseded"
+    assert docs_store.serialize_run(no_writer_row)["document_superseded"] is True
 
 
 def test_finish_run_rejects_unknown_outcome(tmp_path):
@@ -203,6 +271,150 @@ def test_upsert_document_updates_same_slug_in_place(tmp_path):
     assert len(docs_store.list_documents(conn)) == 1
 
 
+def test_upsert_document_keeps_the_same_slug_apart_across_sets_and_types(tmp_path):
+    """A slug follows from a title, and titles repeat. What makes two pages the
+    same page is the slug together with the set and type they were written
+    for — a tutorial's "Overview" is not a reference's."""
+    conn = _conn(tmp_path)
+    tutorial = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="The tutorial's overview",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+    )
+    reference = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="The reference's overview",
+        guideline_set="kb-authoring",
+        document_type="reference",
+    )
+    other_set = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Another set's overview",
+        guideline_set="api-docs",
+        document_type="tutorial",
+    )
+
+    assert len({tutorial, reference, other_set}) == 3
+    assert len(docs_store.list_documents(conn)) == 3
+    assert docs_store.get_document(conn, tutorial)["body"] == "The tutorial's overview"
+    assert (
+        docs_store.get_document(conn, reference)["body"] == "The reference's overview"
+    )
+
+
+def test_upsert_document_still_updates_the_same_page_in_place(tmp_path):
+    """The finer key must not turn a genuine second pass at one page into a
+    second row."""
+    conn = _conn(tmp_path)
+    first = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+        run_id="drn_1",
+    )
+    second = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Second",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+        run_id="drn_2",
+    )
+
+    assert first == second
+    assert len(docs_store.list_documents(conn)) == 1
+    assert docs_store.get_document(conn, first)["body"] == "Second"
+
+
+def test_migrating_a_pre_rekey_database_keeps_its_pages_and_applies_the_new_key(
+    tmp_path,
+):
+    """The table this changes already exists in deployed databases, holding
+    rows under a UNIQUE(slug) it no longer has.
+
+    This is that table verbatim as the previous release created it, including
+    a page whose set and type were never resolved — the case a NULL-tolerant
+    unique key would quietly fail to constrain.
+    """
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    conn.executescript(
+        """
+        CREATE TABLE generated_documents (
+            id            TEXT PRIMARY KEY,
+            slug          TEXT NOT NULL UNIQUE,
+            title         TEXT NOT NULL,
+            guideline_set TEXT,
+            document_type TEXT,
+            body          TEXT NOT NULL,
+            statement_ids TEXT NOT NULL DEFAULT '[]',
+            review        TEXT NOT NULL DEFAULT '{}',
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL,
+            last_run_id   TEXT
+        );
+        CREATE INDEX generated_documents_updated
+            ON generated_documents (updated_at);
+        INSERT INTO generated_documents
+            (id, slug, title, guideline_set, document_type, body, statement_ids,
+             review, created_at, updated_at, last_run_id)
+        VALUES
+            ('gdc_sso', 'configuring-sso', 'Configuring SSO', 'kb-authoring',
+             'how-to', '# SSO', '["stm_1"]', '{"passed": true}',
+             '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z', 'drn_old'),
+            ('gdc_overview', 'overview', 'Overview', NULL, NULL,
+             'Legacy overview', '["stm_9"]', '{}',
+             '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL);
+        """
+    )
+    conn.commit()
+
+    docs_store.migrate(conn)
+    docs_store.migrate(conn)
+
+    rows = {row["id"]: row for row in docs_store.list_documents(conn)}
+    assert set(rows) == {"gdc_sso", "gdc_overview"}
+    assert rows["gdc_sso"]["body"] == "# SSO"
+    assert rows["gdc_sso"]["created_at"] == "2026-01-01T00:00:00Z"
+    assert rows["gdc_sso"]["last_run_id"] == "drn_old"
+    assert docs_store.serialize_document(rows["gdc_sso"])["statement_ids"] == ["stm_1"]
+    assert rows["gdc_overview"]["body"] == "Legacy overview"
+
+    # The old page is still reachable and still updated in place by its own key.
+    assert (
+        docs_store.upsert_document(
+            conn,
+            slug="configuring-sso",
+            title="Configuring SSO",
+            body="# SSO\n\nRewritten",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+        )
+        == "gdc_sso"
+    )
+    # And the slug alone no longer collapses two pages onto it.
+    other = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="The tutorial",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+    )
+    assert other != "gdc_sso"
+    assert len(docs_store.list_documents(conn)) == 3
+
+
 def test_upsert_document_rejects_blank_slug_and_title(tmp_path):
     conn = _conn(tmp_path)
 
@@ -241,6 +453,113 @@ def test_get_document_by_slug(tmp_path):
 
     assert docs_store.get_document_by_slug(conn, "topic")["id"] == document_id
     assert docs_store.get_document_by_slug(conn, "unknown") is None
+
+
+def test_get_document_by_slug_filters_identity_and_defaults_to_latest(tmp_path):
+    """The slug-only compatibility lookup must be deterministic now that one
+    slug can correctly name several pages."""
+    conn = _conn(tmp_path)
+    unresolved = docs_store.upsert_document(
+        conn, slug="overview", title="Overview", body="Unresolved"
+    )
+    tutorial = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Tutorial",
+        guideline_set="kb-authoring",
+        document_type="tutorial",
+    )
+    reference = docs_store.upsert_document(
+        conn,
+        slug="overview",
+        title="Overview",
+        body="Reference",
+        guideline_set="kb-authoring",
+        document_type="reference",
+    )
+    conn.executemany(
+        "UPDATE generated_documents SET updated_at = ? WHERE id = ?",
+        [
+            ("2026-01-01T00:00:00.000Z", unresolved),
+            ("2026-01-02T00:00:00.000Z", tutorial),
+            ("2026-01-03T00:00:00.000Z", reference),
+        ],
+    )
+    conn.commit()
+
+    assert docs_store.get_document_by_slug(conn, "overview")["id"] == reference
+    assert (
+        docs_store.get_document_by_slug(conn, "overview", guideline_set="kb-authoring")[
+            "id"
+        ]
+        == reference
+    )
+    assert (
+        docs_store.get_document_by_slug(conn, "overview", document_type="tutorial")[
+            "id"
+        ]
+        == tutorial
+    )
+    assert (
+        docs_store.get_document_by_slug(
+            conn,
+            "overview",
+            guideline_set="kb-authoring",
+            document_type="tutorial",
+        )["id"]
+        == tutorial
+    )
+    assert (
+        docs_store.get_document_by_slug(
+            conn, "overview", guideline_set="", document_type=""
+        )["id"]
+        == unresolved
+    )
+
+
+def test_migrating_an_already_rekeyed_database_is_a_no_op(tmp_path):
+    """The origin-sensitive detection must not rebuild the replacement table
+    on every startup merely because its explicit identity index is unique."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn, slug="topic", title="Topic", body="Body"
+    )
+    before_row = dict(docs_store.get_document(conn, document_id))
+    before_schema = list(
+        conn.execute(
+            "SELECT type, name, sql FROM sqlite_master "
+            "WHERE tbl_name = 'generated_documents' ORDER BY type, name"
+        )
+    )
+
+    docs_store.migrate(conn)
+    docs_store.migrate(conn)
+
+    assert dict(docs_store.get_document(conn, document_id)) == before_row
+    assert (
+        list(
+            conn.execute(
+                "SELECT type, name, sql FROM sqlite_master "
+                "WHERE tbl_name = 'generated_documents' ORDER BY type, name"
+            )
+        )
+        == before_schema
+    )
+
+    identity_indexes = []
+    for index in conn.execute("PRAGMA index_list(generated_documents)"):
+        columns = [
+            row["name"] for row in conn.execute(f"PRAGMA index_info({index['name']})")
+        ]
+        if index["unique"] and columns == [
+            "guideline_set",
+            "document_type",
+            "slug",
+        ]:
+            identity_indexes.append((index["name"], index["origin"]))
+
+    assert identity_indexes == [("generated_documents_identity", "c")]
 
 
 def test_documentation_tools_registered():

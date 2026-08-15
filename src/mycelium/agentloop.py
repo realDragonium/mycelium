@@ -20,11 +20,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from . import prompt_store
 
@@ -158,7 +159,12 @@ def serialize(result: Any) -> str:
     except Exception:  # noqa: BLE001
         text = str(result)
     if len(text) > _TOOL_RESULT_MAX_CHARS:
-        text = text[:_TOOL_RESULT_MAX_CHARS] + "\n…[truncated]"
+        kept = text[:_TOOL_RESULT_MAX_CHARS]
+        # A cut inside an id can leave a shorter id that was never in the
+        # result, and downstream provenance checks read this text. Losing a
+        # few characters from an already-broken JSON fragment costs nothing.
+        kept = re.sub(r"stm_\w*\Z", "", kept)
+        text = kept + "\n…[truncated]"
     return text
 
 
@@ -187,6 +193,11 @@ def collect_statement_ids(obj: Any, acc: set[str]) -> None:
     elif isinstance(obj, list):
         for item in obj:
             collect_statement_ids(item, acc)
+
+
+def ids_present_in(text: str, ids: Iterable[str]) -> set[str]:
+    """Which of `ids` appear in `text` as whole ids."""
+    return {i for i in ids if re.search(r"(?<!\w)" + re.escape(i) + r"(?!\w)", text)}
 
 
 def append_tool_error(

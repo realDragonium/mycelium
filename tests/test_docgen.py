@@ -814,6 +814,40 @@ def test_an_id_truncated_out_of_the_tool_result_is_not_retrieved(kb_set):
     assert "stm_cut" in result.trace["refused_emits"][0]
 
 
+def test_an_id_cut_by_the_cap_is_not_rescued_by_a_longer_id_sharing_its_prefix(kb_set):
+    """`stm_1` is a prefix of `stm_12`, and only `stm_12` survived the cap.
+
+    Checking the cited id against the text of the result would let the longer
+    id vouch for the shorter one the model never saw. Retrieval is an identity,
+    so the gate asks whether `stm_1` was retrieved, not whether its characters
+    appear somewhere.
+    """
+    bulk = [{"id": "stm_12", "text": "x" * 6000}]
+    bulk += [{"id": f"stm_{i}", "text": "x" * 6000} for i in (20, 21, 22)]
+    bulk.append({"id": "stm_1", "text": "past the 20k cap"})
+    client = FakeAnthropic(
+        [
+            _message([_tool_use("search_statements", {"query": "sso"})]),
+            _emit(statement_ids=["stm_12", "stm_1"]),
+            _emit(statement_ids=["stm_12"]),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(
+        client,
+        substrate=_substrate(survey_statements=[], search_statements=bulk),
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+
+    refusal = " ".join(result.trace["refused_emits"])
+    assert "never retrieved: stm_1" in refusal
+    assert "stm_12" not in refusal
+    assert isinstance(result, DocumentWritten)
+    assert result.statement_ids == ["stm_12"]
+
+
 def test_a_blank_title_or_body_is_refused(kb_set):
     client = FakeAnthropic(
         [_emit(title="   "), _emit(body="  \n "), _emit(), _review_ok()]
@@ -1218,6 +1252,61 @@ def test_a_reviewer_that_fails_a_check_without_saying_where_still_gives_the_writ
     assert "without naming a problem" in retry_text
     first_finding = result.trace["reviews"][0]["conformance"]["findings"][0]
     assert first_finding["where"] == "the document (no location supplied)"
+
+
+@pytest.mark.parametrize(
+    "blank",
+    [
+        {"where": "", "problem": ""},
+        {"where": "   ", "problem": "\t\n "},
+        {"where": "Summary", "problem": "   "},
+        {"where": " ", "problem": "the summary exposes a hostname"},
+    ],
+    ids=["empty", "whitespace", "blank-problem", "blank-where"],
+)
+def test_a_finding_that_names_nothing_is_treated_as_a_bare_fail(kb_set, blank):
+    """A finding whose text is blank is evidence of nothing.
+
+    Rendered, it becomes `conformance:  — ` on the run row and `-  — ` in the
+    retry: exactly the content-free verdict the bare-`fail` branch already
+    refuses to pass on. So it is reconciled the same way.
+    """
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(findings=[blank]),
+            _emit(body="# SSO\n\nA second version."),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    retry_text = client.calls[2]["messages"][0]["content"]
+    assert "without naming a problem" in retry_text
+    assert " — \n" not in retry_text and not retry_text.endswith(" — ")
+    findings = result.trace["reviews"][0]["conformance"]["findings"]
+    assert [
+        f for f in findings if not f["where"].strip() or not f["problem"].strip()
+    ] == []
+
+
+def test_a_pass_carrying_only_blank_findings_stays_a_pass(kb_set):
+    """Blank findings are not evidence, so they cannot flip a pass to a fail
+    the way real findings do."""
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(status="pass", findings=[{"where": "", "problem": ""}]),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    assert result.review.conformance.status == "pass"
+    assert result.review.conformance.findings == []
 
 
 def test_a_review_that_cannot_be_run_records_no_document(kb_set):
