@@ -268,14 +268,56 @@ def test_fragment_spans_match_their_retained_surface_text():
         "The job runs.",
         "The user logs in and receives a token.",
         "When the invite is sent, a reminder is scheduled.",
+        "The user logs in and receives a token, according to the policy.",
     )
     for source in sources:
         for fragment in seg.segment(source).fragments:
             raw = source[fragment.span[0] : fragment.span[1]]
-            if not fragment.subject_copied and len(raw) == len(fragment.text):
+            if not fragment.subject_copied:
                 assert raw == fragment.text
             else:
-                assert fragment.text in raw or raw in fragment.text
+                assert fragment.text.endswith(raw)
+
+
+def test_medial_material_blocks_the_coordination_cut():
+    source = "The user logs in and receives a token, according to the policy"
+    result = seg.segment(source)
+
+    # Splitting here would splice "The user logs in" onto ", according to the
+    # policy" and stretch that fragment's span over the removed conjunct.
+    assert fragment_texts(result) == [source]
+    assert result.cuts == []
+    assert result.fragments[0].unsplit is True
+
+
+def test_case_folding_expansion_cannot_forge_a_strip_table_opener():
+    # "ß" casefolds to "ss", so an opener matched against the folded text can
+    # cover raw characters that are not the opener.
+    result = seg.segment("as soon aß the flag is set, the job runs")
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("as soon aß the flag is set", "condition"),
+        ("the job runs", "claim"),
+    ]
+    assert result.proposals == []
+
+
+def test_each_working_text_is_parsed_once_per_segmentation(monkeypatch):
+    nlp = phrasing._get_nlp()
+    parsed: list[str] = []
+
+    def counting(text):
+        parsed.append(text)
+        return nlp(text)
+
+    monkeypatch.setattr(phrasing, "_get_nlp", lambda: counting)
+    source = "The service starts and records the time when the token expires"
+    seg.segment(source)
+
+    # Sentence splitting and every cutter at every recursion level ask for the
+    # same working texts; the atomicity re-check parses normalized leaf text.
+    assert parsed.count(source) == 1
+    assert parsed.count("The service records the time when the token expires") == 1
 
 
 def test_unsplittable_nested_clause_remnant_is_marked():
