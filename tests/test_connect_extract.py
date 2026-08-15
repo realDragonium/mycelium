@@ -56,6 +56,19 @@ def test_dropped_condition_link_is_recorded_on_both_surviving_records():
     assert result.condition_links == []
 
 
+def test_ambiguous_classification_is_flagged_with_its_shape_matches():
+    # The initial command and the embedded modal match check and capability.
+    result = ex.extract("Verify the report can be downloaded")
+
+    assert result.items == []
+    assert [(flag.fragment_index, flag.reason) for flag in result.flags] == [
+        (0, "ambiguous")
+    ]
+    assert result.flags[0].detail == (
+        "capability (capability-modal: can); check (check-imperative: Verify)"
+    )
+
+
 def test_flag_sources_cover_every_emitted_reason():
     assert {
         "unsplit",
