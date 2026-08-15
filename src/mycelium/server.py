@@ -2837,10 +2837,12 @@ def _connected_hints(
 
 
 def _items_with_incoming_links(statements: list[ConnectedStatementSpec]) -> set[int]:
-    """Index every item carrying `incoming_links`, which this tool refuses.
+    """Index every item carrying a non-empty `incoming_links`, which this
+    tool refuses.
 
     The draft batch only stores outgoing links, so an inbound edge would be
-    validated here and then silently dropped on the way to the draft.
+    validated here and then silently dropped on the way to the draft. An
+    empty list carries no edge, so it has nothing to drop and passes.
     """
     return {
         index
