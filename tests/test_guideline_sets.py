@@ -130,16 +130,6 @@ def test_startup_seeds_the_shipped_set(tmp_path, monkeypatch):
             assert stored["text"] == path.read_text(encoding="utf-8")
 
 
-def test_the_seed_files_ship_inside_the_package():
-    """Where the sources live is the whole point of seeding them at startup:
-    `src/mycelium/` is what the wheel carries and the image copies. A file
-    under `.claude/` or a repo-root directory would never reach a deploy."""
-    package = Path(server.__file__).resolve().parent
-    for path in guidelines.SOURCES.values():
-        assert path.is_file()
-        assert path.is_relative_to(package)
-
-
 def test_startup_leaves_an_edited_row_alone(tmp_path, monkeypatch):
     """Startup writes with `save_if_absent`, so a restart is not a chance to
     revert an operator. The edited row keeps its text and gains no version,

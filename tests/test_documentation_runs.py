@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-from mycelium import auth, docs_store, server
-from mycelium.ask import substrate
+from mycelium import docs_store, drafts_store, server
+from mycelium.ask.substrate import InProcessSubstrate
 
 
 def _conn(tmp_path) -> sqlite3.Connection:
@@ -562,15 +562,124 @@ def test_migrating_an_already_rekeyed_database_is_a_no_op(tmp_path):
     assert identity_indexes == [("generated_documents_identity", "c")]
 
 
-def test_documentation_tools_registered():
+def test_documentation_tools_are_registered_with_reader_role():
+    """The registered wrappers carry the role that callers actually enforce.
+
+    Reading it there matters: `auth.required_role_for` answers "reader" for any
+    list/get name, even one nobody registered, so it cannot witness registration.
+    """
     tool_names = {
         "list_documentation_runs",
         "get_documentation_run",
         "list_generated_documents",
         "get_generated_document",
     }
-    names = {function.__name__ for function in server.TOOLS}
+    wrappers = {function.__name__: function for function in server.TOOLS}
 
-    assert tool_names <= names
-    assert all(auth.required_role_for(name) == "reader" for name in tool_names)
-    assert tool_names <= substrate._NON_READ_READER_TOOLS
+    assert tool_names <= wrappers.keys()
+    for name in tool_names:
+        assert wrappers[name]._mycelium_required_role == "reader"
+
+
+def test_documentation_tools_are_excluded_from_live_substrate_discovery():
+    """Documentation history and generated projections are reader-role tools,
+    but they are not side-effect-free substrate reads for the inner reasoning
+    loop. Checking live discovery, with real reads as a positive control, makes
+    the exclusion capable of failing rather than merely restating the denylist.
+    """
+    documentation_tools = {
+        "list_documentation_runs",
+        "get_documentation_run",
+        "list_generated_documents",
+        "get_generated_document",
+    }
+
+    discovered = {spec.name for spec in InProcessSubstrate().tool_specs()}
+
+    assert documentation_tools.isdisjoint(discovered)
+    assert {
+        "search_statements",
+        "get_statements",
+        "survey_statements",
+    } <= discovered
+
+
+@pytest.fixture
+def documentation_connection(tmp_path):
+    """Pin the documentation database as this thread's drafts connection, as a
+    booted server would, so the tools can be called without building one —
+    `server._drafts_db()` is exactly `drafts_store.connection()`."""
+    conn = _conn(tmp_path)
+    drafts_store.use_connection(conn)
+    try:
+        yield conn
+    finally:
+        drafts_store.reset()
+        conn.close()
+
+
+def test_documentation_tools_round_trip_rows_and_missing_ids(
+    documentation_connection,
+):
+    """The four tool bodies, called as a caller calls them.
+
+    Everything below them is covered against `docs_store` directly, which
+    leaves the bodies themselves — the envelope key each builds, which
+    serializer it picks, and the raise it turns a missing row into — resting on
+    nothing. A summary that started returning the body, or a lookup that
+    started answering `None` instead of raising, would otherwise reach a
+    deployment with the whole suite green.
+    """
+    conn = documentation_connection
+    run_id = docs_store.create_run(conn, prompt="Write the page", created_by="u1")
+    docs_store.mark_started(conn, run_id)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="the-page",
+        title="The Page",
+        body="# The Page\n",
+        statement_ids=["stm_1"],
+        run_id=run_id,
+    )
+    docs_store.finish_run(
+        conn,
+        run_id,
+        outcome="document_written",
+        document_id=document_id,
+    )
+
+    listed_runs = server.list_documentation_runs()
+    assert set(listed_runs) == {"runs"}
+    assert len(listed_runs["runs"]) == 1
+    run_summary = listed_runs["runs"][0]
+    assert run_summary["id"] == run_id
+    assert run_summary["status"] == "document_written"
+    assert run_summary["document_id"] == document_id
+
+    run = server.get_documentation_run(run_id)
+    assert run["id"] == run_id
+    assert run["status"] == "document_written"
+    assert run["prompt"] == "Write the page"
+
+    listed_documents = server.list_generated_documents()
+    assert set(listed_documents) == {"documents"}
+    assert len(listed_documents["documents"]) == 1
+    document_summary = listed_documents["documents"][0]
+    assert document_summary["id"] == document_id
+    assert "body" not in document_summary
+
+    document = server.get_generated_document(document_id)
+    assert document["id"] == document_id
+    assert document["body"] == "# The Page\n"
+    assert document["statement_ids"] == ["stm_1"]
+
+    with pytest.raises(
+        ValueError,
+        match="documentation run not found: drn_missing",
+    ):
+        server.get_documentation_run("drn_missing")
+    with pytest.raises(
+        ValueError,
+        match="generated document not found: gdc_missing",
+    ):
+        server.get_generated_document("gdc_missing")
