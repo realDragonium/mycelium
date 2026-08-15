@@ -535,9 +535,14 @@ def _condition_without_opener(piece: _Piece, clause_tokens: list) -> _Piece:
 
 
 def _is_contiguous(tokens: list) -> bool:
-    """Report whether tokens form one unbroken run, trailing punctuation aside."""
+    """Report whether tokens form one unbroken run, trailing filler aside."""
     indices = [token.i for token in tokens]
-    while indices and tokens[len(indices) - 1].is_punct:
+    # A list item's block keeps its trailing newline, which spaCy tokenizes as a
+    # SPACE token after the final period — without dropping it the run looks
+    # broken and the cut is refused for text that splits fine on its own.
+    while indices and (
+        tokens[len(indices) - 1].is_punct or tokens[len(indices) - 1].is_space
+    ):
         indices.pop()
     return bool(indices) and indices == list(
         range(indices[0], indices[0] + len(indices))
