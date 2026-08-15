@@ -74,6 +74,62 @@ def test_status_derivation(tmp_path):
     assert docs_store.status_for(docs_store.get_run(conn, null_outcome)) == "failed"
 
 
+def test_status_for_rejects_a_row_that_did_not_come_from_get_run(tmp_path):
+    """Reject a foreign row shape before a queued status can hide the mistake."""
+    conn = _conn(tmp_path)
+    run_id = docs_store.create_run(conn, prompt="raw", created_by=None)
+    raw_row = conn.execute(
+        "SELECT * FROM documentation_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+
+    with pytest.raises(
+        ValueError, match="document_exists.*document_last_run_id.*get_run.*list_runs"
+    ):
+        docs_store.status_for(raw_row)
+    assert docs_store.status_for(docs_store.get_run(conn, run_id)) == "queued"
+
+    docs_store.finish_run(
+        conn, run_id, outcome="document_written", document_id="gdc_missing"
+    )
+    raw_row = conn.execute(
+        "SELECT * FROM documentation_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+
+    with pytest.raises(
+        ValueError, match="document_exists.*document_last_run_id.*get_run.*list_runs"
+    ):
+        docs_store.status_for(raw_row)
+    assert docs_store.status_for(docs_store.get_run(conn, run_id)) == "document_written"
+
+
+def test_a_failed_run_holding_another_runs_document_is_not_superseded(tmp_path):
+    """A failed run cannot contradict its status by claiming supersession."""
+    conn = _conn(tmp_path)
+    run_a = docs_store.create_run(conn, prompt="write", created_by=None)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="shared",
+        title="Shared",
+        body="Body",
+        run_id=run_a,
+    )
+    docs_store.finish_run(
+        conn, run_a, outcome="document_written", document_id=document_id
+    )
+    run_b = docs_store.create_run(conn, prompt="fail", created_by=None)
+    docs_store.finish_run(
+        conn,
+        run_b,
+        outcome="failed",
+        document_id=document_id,
+        error="boom",
+    )
+
+    row_b = docs_store.get_run(conn, run_b)
+    assert docs_store.status_for(row_b) == "failed"
+    assert docs_store.serialize_run(row_b)["document_superseded"] is False
+
+
 def test_a_run_whose_document_row_is_gone_is_not_superseded(tmp_path):
     """A missing row cannot establish that another run replaced the document."""
     conn = _conn(tmp_path)
