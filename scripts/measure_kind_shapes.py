@@ -24,6 +24,7 @@ from mycelium.connect.shapes import (
     DESCRIPTIVE_KINDS,
     PRESCRIPTIVE_KINDS,
     SHAPE_NAMES,
+    Classification,
     classify,
 )
 
@@ -36,10 +37,15 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
-def _kind_order(rows: list[tuple[str, str]]) -> list[str]:
+def _kind_order(results: list[tuple[str, str, Classification]]) -> list[str]:
     """Return standard kinds followed by extra ground-truth kinds."""
-    extras = sorted({kind for kind, _ in rows} - set(_STANDARD_KINDS))
+    extras = sorted({kind for kind, _, _ in results} - set(_STANDARD_KINDS))
     return [*_STANDARD_KINDS, *extras]
+
+
+def classify_rows(rows: list[tuple[str, str]]) -> list[tuple[str, str, Classification]]:
+    """Classify every row once so the summary and the misses share one pass."""
+    return [(true_kind, text, classify(text)) for true_kind, text in rows]
 
 
 def _empty_kind_row() -> dict[str, int | float | None]:
@@ -60,9 +66,9 @@ def _empty_assigned_row() -> dict[str, int | float | None]:
     return {"assigned": 0, "correct": 0, "wrong": 0, "precision": None}
 
 
-def summarize(rows: list[tuple[str, str]]) -> dict:
+def summarize(results: list[tuple[str, str, Classification]]) -> dict:
     """Summarize shape classifications as plain report data."""
-    kinds = _kind_order(rows)
+    kinds = _kind_order(results)
     by_kind = {kind: _empty_kind_row() for kind in kinds}
     # Precision is a property of a prediction, so false positives accumulate
     # against the kind that was assigned, not the kind that was true.
@@ -80,7 +86,7 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
         for name in SHAPE_NAMES
     }
     totals = {
-        "statements": len(rows),
+        "statements": len(results),
         "assigned": 0,
         "correct": 0,
         "wrong": 0,
@@ -91,8 +97,7 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
         "flag_rate": None,
     }
 
-    for true_kind, text in rows:
-        result = classify(text)
+    for true_kind, _, result in results:
         kind_row = by_kind[true_kind]
         kind_row["n"] += 1
         if result.status == "assigned":
@@ -143,10 +148,10 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
 
     kinds_met: list[str] = []
     kinds_missed: list[str] = []
-    kinds_without_ground_truth: list[str] = []
+    kinds_never_assigned: list[str] = []
     for kind, assigned_row in by_assigned_kind.items():
         if int(assigned_row["assigned"]) == 0:
-            kinds_without_ground_truth.append(kind)
+            kinds_never_assigned.append(kind)
         elif float(assigned_row["precision"]) >= _FLOOR_THRESHOLD:
             kinds_met.append(kind)
         else:
@@ -162,7 +167,7 @@ def summarize(rows: list[tuple[str, str]]) -> dict:
             "threshold": _FLOOR_THRESHOLD,
             "kinds_met": kinds_met,
             "kinds_missed": kinds_missed,
-            "kinds_without_ground_truth": kinds_without_ground_truth,
+            "kinds_never_assigned": kinds_never_assigned,
         },
     }
 
@@ -273,7 +278,7 @@ def render_markdown(report: dict, *, source_label: str) -> str:
     )
     lines.append("")
     for kind, row in report["by_assigned_kind"].items():
-        if kind in floor["kinds_without_ground_truth"]:
+        if kind in floor["kinds_never_assigned"]:
             lines.append(f"- `{kind}`: never assigned in this snapshot")
         else:
             result = "met" if kind in floor["kinds_met"] else "missed"
@@ -298,6 +303,9 @@ def load_snapshot(path: Path) -> list[tuple[str, str]]:
                 raise ValueError(
                     f"invalid JSON on line {line_number}: {error}"
                 ) from error
+            missing = [key for key in ("kind", "text") if key not in record]
+            if missing:
+                raise ValueError(f"missing {', '.join(missing)} on line {line_number}")
             rows.append((record["kind"], record["text"]))
     return rows
 
@@ -320,13 +328,14 @@ def load_store(data_dir: Path) -> list[tuple[str, str]]:
         conn.close()
 
 
-def _misses(rows: list[tuple[str, str]]) -> dict[str, dict[str, list[str]]]:
+def _misses(
+    results: list[tuple[str, str, Classification]],
+) -> dict[str, dict[str, list[str]]]:
     """Group missed statement text for optional stdout diagnostics."""
     buckets: dict[str, dict[str, list[str]]] = defaultdict(
         lambda: {"misclassified": [], "ambiguous": [], "unmatched": []}
     )
-    for true_kind, text in rows:
-        result = classify(text)
+    for true_kind, text, result in results:
         if result.status == "assigned" and result.kind != true_kind:
             buckets[true_kind]["misclassified"].append(f"{text} -> {result.kind}")
         elif result.status == "ambiguous":
@@ -337,12 +346,12 @@ def _misses(rows: list[tuple[str, str]]) -> dict[str, dict[str, list[str]]]:
     return buckets
 
 
-def _show_misses(rows: list[tuple[str, str]], limit: int) -> None:
+def _show_misses(results: list[tuple[str, str, Classification]], limit: int) -> None:
     """Print up to the requested number of samples per true-kind bucket."""
     if limit <= 0:
         return
-    buckets = _misses(rows)
-    for true_kind in _kind_order(rows):
+    buckets = _misses(results)
+    for true_kind in _kind_order(results):
         for bucket_name in ("misclassified", "ambiguous", "unmatched"):
             samples = buckets[true_kind][bucket_name][:limit]
             if samples:
@@ -387,13 +396,14 @@ def main(argv: list[str] | None = None) -> int:
     else:
         rows = load_snapshot(args.snapshot)
 
-    report = summarize(rows)
+    results = classify_rows(rows)
+    report = summarize(results)
     source_label = args.label if args.label is not None else str(source_path)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         render_markdown(report, source_label=source_label), encoding="utf-8"
     )
-    _show_misses(rows, args.show_misses)
+    _show_misses(results, args.show_misses)
     totals = report["totals"]
     precision = totals["precision"] or 0.0
     print(
