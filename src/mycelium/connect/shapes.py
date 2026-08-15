@@ -18,6 +18,8 @@ if TYPE_CHECKING:
 
 
 DESCRIPTIVE_KINDS = ("event", "state", "capability", "rule", "property")
+# `cause` is deliberately absent: a cause is identified by what it explains,
+# not by any phrasing of its own, so no shape can recognise one.
 PRESCRIPTIVE_KINDS = ("procedure", "action", "check")
 
 CAPABILITY_MODALS = frozenset({"can", "could", "may", "might"})
@@ -229,12 +231,14 @@ SHAPE_NAMES = (
 _PRESENT_TAGS = frozenset({"VBZ", "VBP"})
 _COMPLEMENT_DEPS = frozenset({"attr", "acomp", "oprd"})
 _BAND_MARKERS = frozenset({"for", "when", "unless", "if"})
+# "is able to" is the periphrastic capability modal, not a condition holding.
+_PERIPHRASTIC_MODAL_ADJECTIVES = frozenset({"able", "unable"})
 _DETERMINERS = frozenset({"a", "an", "the"})
 _NEGATED_MODAL_RE = re.compile(
     r"\b(cannot|can not|can't|could not|couldn't|may not|might not)\b",
     re.IGNORECASE,
 )
-_ABLE_TO_RE = re.compile(r"(?:^|\s)able to(?:\s|$)", re.IGNORECASE)
+_ABLE_TO_RE = re.compile(r"(?:^|\s)able\s+to(?:\s|$)", re.IGNORECASE)
 _RULE_FORMULA_RE = re.compile(
     r"\b(plus|minus|times)\b"
     r"|\b(multiplied|divided) by\b"
@@ -401,6 +405,7 @@ def _state_copula_condition(doc: Doc, text: str) -> ShapeMatch | None:
         complement is not None
         and complement.pos_ == "ADJ"
         and complement.lemma_.lower() not in LEVEL_LEMMAS
+        and complement.lemma_.lower() not in _PERIPHRASTIC_MODAL_ADJECTIVES
     ):
         return ShapeMatch(
             "state", "state-copula-condition", f"{root.text} {complement.text}"
