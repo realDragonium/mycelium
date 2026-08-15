@@ -269,6 +269,27 @@ def test_load_sources_rejects_injection_shaped_fields(monkeypatch, entry):
         load_sources()
 
 
+@_pytest.mark.parametrize(
+    "entry",
+    [
+        {"owner": "acme", "repo": "api\n"},
+        {"owner": "acme", "repo": "api", "ref": "main\n"},
+        {"owner": "acme", "repo": "api", "host": "github.com\n"},
+    ],
+)
+def test_load_sources_rejects_a_trailing_newline_in_repo_ref_and_host(
+    monkeypatch, entry
+):
+    """One case per validator. A pattern anchored with `$` accepts a value with
+    a trailing newline, because in Python `$` also matches just before one — and
+    these values are interpolated into a clone URL and a `--branch` argument."""
+    from mycelium.research.sources import SourceError, load_sources
+
+    monkeypatch.setenv("MYCELIUM_SOURCES", _json.dumps({"s": entry}))
+    with _pytest.raises(SourceError):
+        load_sources()
+
+
 def test_load_sources_accepts_normal_and_enterprise_hosts(monkeypatch):
     from mycelium.research.sources import load_sources
 

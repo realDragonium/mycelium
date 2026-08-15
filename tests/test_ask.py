@@ -407,6 +407,70 @@ def test_op_cap_with_unresponsive_model_still_returns_answer():
     assert result.trace["degraded"] is True
 
 
+def test_fallback_provenance_excludes_read_ids_cut_by_serialization():
+    """Fallback provenance includes only read ids sent before the result cap."""
+    kept_id = "stm_kept_before_cap"
+    cut_id = "stm_cut_after_cap"
+    search_result = [
+        {"id": kept_id, "text": "x" * 20_000},
+        {"id": cut_id, "text": "never sent"},
+    ]
+    raw = json.dumps(search_result)
+    sent = serialize(search_result)
+
+    assert kept_id in raw
+    assert kept_id in sent
+    assert cut_id in raw
+    assert cut_id not in sent
+
+    responses = [_message([_tool_use("search_statements", {"query": "retry"})])]
+    results = {"survey_statements": [], "search_statements": search_result}
+    result, _client, _sub = _run(responses, results=results, op_cap=2)
+
+    assert isinstance(result, Answered)
+    assert kept_id in result.provenance
+    assert cut_id not in result.provenance
+
+
+def test_fallback_provenance_rejects_cut_id_sharing_surviving_prefix():
+    """A longer id cannot vouch for a truncated prefix id (DRA-355).
+
+    A substring filter passes this test's siblings, but not this prefix collision.
+    """
+    kept_id = "stm_12"
+    cut_id = "stm_1"
+    search_result = [
+        {"id": kept_id, "text": "x" * 20_000},
+        {"id": cut_id, "text": "never sent"},
+    ]
+    raw = json.dumps(search_result)
+    sent = serialize(search_result)
+
+    assert kept_id in sent  # the longer id survived the cap
+    assert ids_present_in(raw, {cut_id}) == {cut_id}  # the shorter one WAS retrieved
+    assert cut_id in sent  # ... and is a substring of the text, via `stm_12`
+    assert ids_present_in(sent, {cut_id}) == set()  # ... but never reached the model
+
+    responses = [_message([_tool_use("search_statements", {"query": "retry"})])]
+    results = {"survey_statements": [], "search_statements": search_result}
+    result, _client, _sub = _run(responses, results=results, op_cap=2)
+
+    assert isinstance(result, Answered)
+    assert kept_id in result.provenance
+    assert cut_id not in result.provenance
+
+
+def test_fallback_provenance_excludes_recon_ids_not_rendered_to_model():
+    """Recon ids omitted by format_recon cannot become fallback provenance."""
+    hidden_id = "stm_hidden_by_recon_shape"
+    results = {"survey_statements": {"id": hidden_id, "text": "not rendered"}}
+
+    result, _client, _sub = _run([], results=results, op_cap=1)
+
+    assert isinstance(result, Answered)
+    assert hidden_id not in result.provenance
+
+
 def test_trace_record_is_complete():
     """#7 — every run emits one complete machine-readable trace."""
     responses = [
