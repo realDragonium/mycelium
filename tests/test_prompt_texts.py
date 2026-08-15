@@ -356,28 +356,36 @@ def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
 
 # --- startup seeding --------------------------------------------------------
 #
-# Startup puts the packaged ingest/research doctrines in the store so they are
-# editable from the first run. The files stay the seed and the fallback; the
-# store is what the loops read (tests/test_ingest.py, tests/test_research.py).
+# Startup puts every packaged loop doctrine in the store so they are editable
+# from the first run. The files stay the seed and the fallback; the store is
+# what the loops read (tests/test_ingest.py, test_research.py, test_docgen.py).
+
+#: Every doctrine startup seeds, in the order `list_prompt_texts` returns them.
+DOCTRINES = ("docgen", "ingest", "research")
 
 
 def _doctrine_file(name: str) -> str:
+    from mycelium.docgen.config import _DEFAULT_DOCTRINE_PATH as DOCGEN_PATH
     from mycelium.ingest.config import _DEFAULT_DOCTRINE_PATH as INGEST_PATH
     from mycelium.research.config import _DEFAULT_DOCTRINE_PATH as RESEARCH_PATH
 
-    path = INGEST_PATH if name == "ingest" else RESEARCH_PATH
+    path = {
+        "docgen": DOCGEN_PATH,
+        "ingest": INGEST_PATH,
+        "research": RESEARCH_PATH,
+    }[name]
     return pathlib.Path(path).read_text(encoding="utf-8")
 
 
-def test_startup_seeds_both_doctrines(tmp_path, monkeypatch):
+def test_startup_seeds_every_doctrine(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:
         seeded = server.list_prompt_texts(type="doctrine")["prompt_texts"]
-        assert [p["name"] for p in seeded] == ["ingest", "research"]
-        assert [p["version"] for p in seeded] == [1, 1]
-        assert [p["created_by"] for p in seeded] == ["seed", "seed"]
+        assert [p["name"] for p in seeded] == list(DOCTRINES)
+        assert [p["version"] for p in seeded] == [1] * len(DOCTRINES)
+        assert [p["created_by"] for p in seeded] == ["seed"] * len(DOCTRINES)
 
-        for name in ("ingest", "research"):
+        for name in DOCTRINES:
             stored = server.get_prompt_text("doctrine", name)["text"]
             assert stored == _doctrine_file(name)
 
@@ -403,7 +411,7 @@ def test_seeding_leaves_an_edit_alone_and_adds_no_versions(tmp_path, monkeypatch
 def test_an_unreadable_doctrine_file_does_not_block_startup(tmp_path, monkeypatch):
     """Seeding is best-effort: a missing file leaves that doctrine unseeded —
     the loop falls back to the same file and records a note — and the other
-    doctrine, and the rest of startup, are unaffected."""
+    doctrines, and the rest of startup, are unaffected."""
     monkeypatch.setenv(
         "MYCELIUM_INGEST_DOCTRINE_PATH", str(tmp_path / "nope" / "doctrine.md")
     )
@@ -412,7 +420,7 @@ def test_an_unreadable_doctrine_file_does_not_block_startup(tmp_path, monkeypatc
         names = [
             p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
         ]
-        assert names == ["research"]
+        assert names == [n for n in DOCTRINES if n != "ingest"]
 
 
 def test_retiring_a_seeded_doctrine_is_refused(tmp_path, monkeypatch):
@@ -447,7 +455,7 @@ def test_an_unseeded_doctrine_is_still_retirable(tmp_path, monkeypatch):
         assert server.retire_prompt_text("doctrine", "curation") == {"retired": True}
         assert [
             p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
-        ] == ["ingest", "research"]
+        ] == list(DOCTRINES)
 
 
 def test_a_seeded_doctrine_survives_a_restart_after_a_refused_retire(
@@ -540,4 +548,4 @@ def test_a_malformed_loop_setting_does_not_block_startup(tmp_path, monkeypatch):
         names = [
             p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
         ]
-        assert names == ["research"]
+        assert names == [n for n in DOCTRINES if n != "ingest"]

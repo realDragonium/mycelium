@@ -31,6 +31,9 @@ from ..agentloop import (
     default_client,
 )
 from ..agentloop import (
+    collect_statement_ids as _collect_ids,
+)
+from ..agentloop import (
     first_tool_use as _first_tool_use,
 )
 from ..agentloop import (
@@ -621,16 +624,3 @@ def _tool_result_block(
         "content": content,
         "is_error": is_error,
     }
-
-
-def _collect_ids(obj: Any, acc: set[str]) -> None:
-    """Recursively gather statement ids (stm_…) for fallback provenance."""
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == "id" and isinstance(value, str) and value.startswith("stm_"):
-                acc.add(value)
-            else:
-                _collect_ids(value, acc)
-    elif isinstance(obj, list):
-        for item in obj:
-            _collect_ids(item, acc)

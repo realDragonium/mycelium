@@ -169,6 +169,26 @@ def substrate_has(substrate: Any, name: str) -> bool:
     return any(spec.name == name for spec in substrate.tool_specs())
 
 
+def collect_statement_ids(obj: Any, acc: set[str]) -> None:
+    """Recursively gather statement ids (`stm_…`) out of a tool result.
+
+    What a loop has actually seen, from arbitrarily-shaped read results.
+    `ask` uses it for fallback provenance when a run degrades; `docgen` uses
+    it to check that a document only cites statements the run retrieved.
+    Only an `id` key counts — a link's `to_id` is a pointer to something the
+    run has NOT read, and treating it as seen would defeat both uses.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key == "id" and isinstance(value, str) and value.startswith("stm_"):
+                acc.add(value)
+            else:
+                collect_statement_ids(value, acc)
+    elif isinstance(obj, list):
+        for item in obj:
+            collect_statement_ids(item, acc)
+
+
 def append_tool_error(
     messages: list[dict[str, Any]], tool_use_id: str, message: str
 ) -> None:

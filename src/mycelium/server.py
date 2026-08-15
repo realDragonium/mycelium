@@ -1041,6 +1041,8 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
     """
     from . import guidelines
     from .agentloop import DOCTRINE_TYPE
+    from .docgen.config import DOCTRINE_NAME as DOCGEN_DOCTRINE
+    from .docgen.config import DocgenConfig
     from .ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
     from .ingest.config import IngestConfig
     from .research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
@@ -1051,6 +1053,11 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
             DOCTRINE_TYPE,
             INGEST_DOCTRINE,
             lambda: Path(IngestConfig.from_env().doctrine_path),
+        ),
+        (
+            DOCTRINE_TYPE,
+            DOCGEN_DOCTRINE,
+            lambda: Path(DocgenConfig.from_env().doctrine_path),
         ),
         (
             DOCTRINE_TYPE,
@@ -1074,7 +1081,7 @@ def _is_seeded(type: str, name: str) -> bool:
 
 
 def _seed_prompt_texts() -> None:
-    """Put each packaged default in the store when it holds none: the two
+    """Put each packaged default in the store when it holds none: the three
     loop doctrines and the rows of the shipped guideline set.
 
     `save_if_absent` carries the whole idempotency story: every startup runs
@@ -2098,25 +2105,24 @@ def _check_guideline_selection(
     is a row of that set. Named together, both are checked here rather than
     left to fail deep inside a background run whose only report is an `error`
     column read minutes later.
+
+    The listing comes from `guidelines.catalogue`, which is also what the
+    generation loop resolves against — so a request this refuses is exactly a
+    request the run could not have written, and vice versa.
     """
-    from . import guidelines, prompt_store
+    from . import guidelines
 
     if guideline_set is None:
         return
 
-    slots: dict[str, set[str]] = {}
-    for row in prompt_store.list_current(_prompts_db(), guidelines.TYPE):
-        set_name, _, slot = row["name"].partition("/")
-        slots.setdefault(set_name, set()).add(slot)
-
-    if guideline_set not in slots:
+    catalogue = guidelines.catalogue(_prompts_db())
+    if guideline_set not in catalogue:
         raise ValueError(
-            f"unknown guideline set '{guideline_set}'; configured: {sorted(slots)}"
+            f"unknown guideline set '{guideline_set}'; configured: {sorted(catalogue)}"
         )
     if document_type is None:
         return
-    # `guidance` is the set-wide instruction, not something a run can produce.
-    available = sorted(slots[guideline_set] - {"guidance"})
+    available = catalogue[guideline_set]
     if document_type not in available:
         raise ValueError(
             f"guideline set '{guideline_set}' has no template for document type "
