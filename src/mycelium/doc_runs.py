@@ -198,9 +198,9 @@ def _execute_run(
                     "runner reported a document with no statement ids; a "
                     "document that rests on nothing is not recorded"
                 )
-            # Written before `outcome` is set, so a rejected document (blank
-            # slug, unwritable DB) finishes the run failed rather than claiming
-            # a document that is not there.
+            # Written before `outcome` is set, so a rejected document (a
+            # refused collision, blank slug, or unwritable DB) finishes the run
+            # failed rather than claiming a document that is not there.
             document_id = docs_store.upsert_document(
                 conn,
                 slug=payload["slug"],

@@ -241,49 +241,6 @@ def test_a_review_rejected_document_never_enters_the_registry(tmp_path):
     assert row["error"] == reason
 
 
-def test_a_page_rewritten_by_a_second_run_carries_the_second_review(tmp_path):
-    """Updating a stable slug replaces the first review snapshot because it
-    describes the old body, not the page accepted by the later run."""
-    conn = _conn(tmp_path)
-    first_review = {
-        "exposure": {"status": "pass", "findings": []},
-        "conformance": {"status": "pass", "findings": []},
-        "attempts": 1,
-        "passed": True,
-    }
-    second_review = {
-        "exposure": {"status": "unchecked", "findings": []},
-        "conformance": {"status": "pass", "findings": []},
-        "attempts": 2,
-        "passed": True,
-    }
-
-    first_run_id = _start(
-        conn,
-        tmp_path,
-        lambda prompt, *, guideline_set, document_type: _document(
-            body="First body", review=first_review
-        ),
-    )
-    doc_runs.wait_all()
-    second_run_id = _start(
-        conn,
-        tmp_path,
-        lambda prompt, *, guideline_set, document_type: _document(
-            body="Second body", review=second_review
-        ),
-    )
-    doc_runs.wait_all()
-
-    documents = docs_store.list_documents(conn)
-    assert len(documents) == 1
-    document = docs_store.serialize_document(documents[0])
-    assert first_run_id != second_run_id
-    assert document["body"] == "Second body"
-    assert document["last_run_id"] == second_run_id
-    assert document["review"] == second_review
-
-
 def test_two_runs_that_only_share_a_title_keep_their_own_pages(tmp_path):
     """A slug is derived from the title, so an unremarkable title like
     "Overview" is one every guideline set and document type will reach for.
@@ -380,9 +337,8 @@ def test_two_runs_that_collide_on_one_page_do_not_lose_a_body(tmp_path):
 
 
 def test_a_run_whose_page_was_rewritten_says_so(tmp_path):
-    """A run whose document was replaced must not report document_written for
-    content that is no longer its own. Its stored outcome still truthfully
-    records that the run did write."""
+    """Supersession is an explicit replacement, and the run rows must say that
+    the first run's body is no longer current while both runs did write."""
     conn = _conn(tmp_path)
     common = {"guideline_set": "kb-authoring", "document_type": "how-to"}
     first_run_id = _start(
@@ -393,14 +349,30 @@ def test_a_run_whose_page_was_rewritten_says_so(tmp_path):
         ),
     )
     doc_runs.wait_all()
-    second_run_id = _start(
+    first_document_id = docs_store.get_run(conn, first_run_id)["document_id"]
+    second_run_id = docs_store.create_run(
         conn,
-        tmp_path,
-        lambda prompt, *, guideline_set, document_type: _document(
-            body="Second body", **common
-        ),
+        prompt="revise",
+        created_by=None,
     )
-    doc_runs.wait_all()
+    docs_store.mark_started(conn, second_run_id)
+    docs_store.upsert_document(
+        conn,
+        slug="how-to-x",
+        title="How to X",
+        body="Second body",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=["stm_1"],
+        run_id=second_run_id,
+        updates=first_document_id,
+    )
+    docs_store.finish_run(
+        conn,
+        second_run_id,
+        outcome="document_written",
+        document_id=first_document_id,
+    )
 
     assert len(docs_store.list_documents(conn)) == 1
     first = docs_store.serialize_run(docs_store.get_run(conn, first_run_id))

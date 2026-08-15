@@ -18,7 +18,11 @@ run history. The guideline set, document type, and slug together are the stable
 identity later runs update. A title-derived slug alone is too broad: unrelated
 kinds of page routinely choose the same ordinary title. A run whose document
 row is absent reads as `document_written`, not `document_superseded`, because
-nothing replaced it and its `document_id` simply resolves to nothing.
+nothing replaced it and its `document_id` simply resolves to nothing. Even the
+triple cannot distinguish unrelated same-titled pages within one kind, so a
+write that would replace another run's body is refused rather than merged;
+replacement is something a caller requests explicitly with `updates=`. The
+refused run wrote nothing and therefore does not report `document_written`.
 
 Statement ids and the review record are JSON text columns rather than join
 tables. They are unqueried snapshots written and read as a whole, so
@@ -378,6 +382,47 @@ def serialize_run(row: sqlite3.Row) -> dict:
     }
 
 
+def _write_refusal(
+    existing: sqlite3.Row | None,
+    *,
+    identity: tuple[str, str, str],
+    body: str,
+    run_id: str | None,
+    updates: str | None,
+) -> str | None:
+    """Why this write must not land, or None when it may.
+
+    The identity rule in one place, decided from values rather than from the
+    database, so what counts as losing a body reads as one thing. A caller
+    that named this document, a body already identical, and the run that
+    currently owns the row are the three ways a write may replace what is
+    there.
+    """
+    guideline_set, document_type, slug = identity
+    where = (
+        f"(guideline_set={guideline_set!r}, "
+        f"document_type={document_type!r}, slug={slug!r})"
+    )
+    document_id = None if existing is None else str(existing["id"])
+    if updates is not None and updates != document_id:
+        resolved = "no document" if document_id is None else f"document {document_id!r}"
+        return (
+            f"document write refused: updates={updates!r}, but identity "
+            f"{where} resolved to {resolved}"
+        )
+    if existing is None or updates == document_id or existing["body"] == body:
+        return None
+    if run_id is not None and run_id == existing["last_run_id"]:
+        return None
+    return (
+        "document write refused because it would replace another run's body: "
+        f"existing document {document_id!r} at identity {where} has "
+        f"last_run_id={existing['last_run_id']!r}; the attempting run has "
+        f"run_id={run_id!r}. To deliberately replace it, pass "
+        f"updates={document_id!r}"
+    )
+
+
 def upsert_document(
     conn: sqlite3.Connection,
     *,
@@ -389,6 +434,7 @@ def upsert_document(
     statement_ids: list[str] | None = None,
     review: dict | None = None,
     run_id: str | None = None,
+    updates: str | None = None,
 ) -> str:
     """Write content while preserving metadata a partial writer omits.
 
@@ -397,6 +443,11 @@ def upsert_document(
     the page, so omitting them selects the unresolved ``('', '')`` page instead
     of blanking content. This matches `mark_started`'s last-non-null behaviour,
     which the full-replace version of this function contradicted.
+
+    A finer title-derived key still collapses unrelated pages that happen to
+    share a title, so replacing another run's body is refused rather than
+    merged. Identical bodies and same-run rewrites remain safe; a caller may
+    request deliberate replacement by passing `updates` with the stored id.
     """
     slug = slug.strip()
     title = title.strip()
@@ -414,11 +465,20 @@ def upsert_document(
     conn.execute("BEGIN IMMEDIATE")
     try:
         existing = conn.execute(
-            "SELECT id, statement_ids, review, last_run_id "
+            "SELECT id, body, statement_ids, review, last_run_id "
             "FROM generated_documents "
             "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
             (guideline_set, document_type, slug),
         ).fetchone()
+        refusal = _write_refusal(
+            existing,
+            identity=(guideline_set, document_type, slug),
+            body=body,
+            run_id=run_id,
+            updates=updates,
+        )
+        if refusal is not None:
+            raise ValueError(refusal)
         now = _now()
         if existing is None:
             document_id = "gdc_" + _uuid.uuid4().hex[:12]

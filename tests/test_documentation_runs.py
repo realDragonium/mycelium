@@ -41,6 +41,7 @@ def test_status_derivation(tmp_path):
         title="Written",
         body="Second body",
         run_id=rewritten,
+        updates=document_id,
     )
     assert rewritten_document_id == document_id
     docs_store.finish_run(
@@ -392,6 +393,53 @@ def test_upsert_document_allows_a_replacement_the_caller_asked_for(tmp_path):
     assert document["last_run_id"] == "drn_second"
 
 
+def test_a_deliberate_replacement_carries_the_replacing_runs_review(tmp_path):
+    """The stored review describes the body it accepted, so a deliberate
+    replacement replaces the review with the body."""
+    conn = _conn(tmp_path)
+    first_review = {
+        "exposure": {"status": "pass", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "attempts": 1,
+        "passed": True,
+    }
+    second_review = {
+        "exposure": {"status": "unchecked", "findings": []},
+        "conformance": {"status": "pass", "findings": []},
+        "attempts": 2,
+        "passed": True,
+    }
+    first_run_id = "drn_first"
+    second_run_id = "drn_second"
+
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="how-to-x",
+        title="How to X",
+        body="First body",
+        review=first_review,
+        run_id=first_run_id,
+    )
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="how-to-x",
+        title="How to X",
+        body="Second body",
+        review=second_review,
+        run_id=second_run_id,
+        updates=first_id,
+    )
+
+    documents = docs_store.list_documents(conn)
+    assert len(documents) == 1
+    document = docs_store.serialize_document(documents[0])
+    assert first_run_id != second_run_id
+    assert second_id == first_id
+    assert document["body"] == "Second body"
+    assert document["last_run_id"] == second_run_id
+    assert document["review"] == second_review
+
+
 def test_upsert_document_refuses_an_intent_that_names_the_wrong_document(tmp_path):
     """A stale or misplaced update target must never redirect a write."""
     conn = _conn(tmp_path)
@@ -481,7 +529,12 @@ def test_upsert_document_updates_same_slug_in_place(tmp_path):
     created_at = docs_store.get_document(conn, first_id)["created_at"]
 
     second_id = docs_store.upsert_document(
-        conn, slug="topic", title="New", body="New body", run_id="drn_2"
+        conn,
+        slug="topic",
+        title="New",
+        body="New body",
+        run_id="drn_2",
+        updates=first_id,
     )
     row = docs_store.get_document(conn, second_id)
 
@@ -609,8 +662,7 @@ def test_upsert_document_keeps_the_same_slug_apart_across_sets_and_types(tmp_pat
 
 
 def test_upsert_document_still_updates_the_same_page_in_place(tmp_path):
-    """The finer key must not turn a genuine second pass at one page into a
-    second row."""
+    """A deliberate second pass at one page updates it instead of adding a row."""
     conn = _conn(tmp_path)
     first = docs_store.upsert_document(
         conn,
@@ -629,6 +681,7 @@ def test_upsert_document_still_updates_the_same_page_in_place(tmp_path):
         guideline_set="kb-authoring",
         document_type="tutorial",
         run_id="drn_2",
+        updates=first,
     )
 
     assert first == second
@@ -698,6 +751,7 @@ def test_migrating_a_pre_rekey_database_keeps_its_pages_and_applies_the_new_key(
             body="# SSO\n\nRewritten",
             guideline_set="kb-authoring",
             document_type="how-to",
+            updates="gdc_sso",
         )
         == "gdc_sso"
     )
