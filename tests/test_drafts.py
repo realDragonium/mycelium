@@ -10,11 +10,16 @@ Covers the contract:
   - Failed replay halts cleanly.
   - discard_draft_op (MCP) and DELETE /api/drafts/<id>/ops/<seq> drop
     queued ops.
+  - An op carries optional provenance, and replay resolves cross-op
+    `@<seq>:<index>` statement references without touching an
+    `upsert_statements` payload's own bare `@N` siblings.
 
 Tests run with auth disabled (so the local-admin principal is in
 play); we set the drafter principal directly via contextvar where
 needed — that's the same path the streamable-HTTP transport uses.
 """
+
+import sqlite3
 
 from fastapi.testclient import TestClient
 
@@ -220,9 +225,7 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
             _restore(tokens)
         from mycelium import drafts_store
 
-        row = drafts_store.find_open_session_draft(
-            server._drafts_db(), "sess-E", "d1"
-        )
+        row = drafts_store.find_open_session_draft(server._drafts_db(), "sess-E", "d1")
         draft_id = row["id"]
 
         client.post(f"/api/drafts/{draft_id}/submit")
@@ -433,7 +436,9 @@ def test_another_drafter_cannot_reach_a_draft_by_reusing_its_session_id(
         victim = drafts_store.find_open_session_draft(conn, "sess-shared", "d1")
         assert victim is not None
 
-        other = auth.Principal(id="d2", name="Drafter Two", role="drafter", type="human")
+        other = auth.Principal(
+            id="d2", name="Drafter Two", role="drafter", type="human"
+        )
         p_tok = auth.current_principal.set(other)
         s_tok = auth.current_session_id.set("sess-shared")
         try:
@@ -449,3 +454,84 @@ def test_another_drafter_cannot_reach_a_draft_by_reusing_its_session_id(
         victim_ops = drafts_store.list_ops(conn, victim["id"])
         assert len(victim_ops) == 1
         assert "Victim Work" in str(dict(victim_ops[0]))
+
+
+def test_op_provenance_round_trips_and_defaults_to_none():
+    conn = drafts_store.connect(":memory:")
+    drafts_store.migrate(conn)
+    draft_id = drafts_store.create_draft(conn, created_by="tester", session_id=None)
+
+    drafts_store.add_op(
+        conn,
+        draft_id=draft_id,
+        kind="add_links",
+        payload={"links": []},
+        provenance={"source": "rule", "score": 0.81},
+        created_by="tester",
+    )
+    drafts_store.add_op(
+        conn,
+        draft_id=draft_id,
+        kind="upsert_entity",
+        payload={"name": "ordinary"},
+        created_by="tester",
+    )
+
+    serialized = [
+        drafts_store.serialize_op(row) for row in drafts_store.list_ops(conn, draft_id)
+    ]
+    assert serialized[0]["provenance"] == {"source": "rule", "score": 0.81}
+    assert serialized[1]["provenance"] is None
+
+
+def test_migrate_adds_provenance_column_to_existing_draft_ops_table():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.executescript(
+        """
+        CREATE TABLE draft_ops (
+            id           TEXT PRIMARY KEY,
+            draft_id     TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+            seq          INTEGER NOT NULL,
+            kind         TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            created_by   TEXT,
+            UNIQUE (draft_id, seq)
+        );
+        """
+    )
+
+    drafts_store.migrate(conn)
+    drafts_store.migrate(conn)
+
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(draft_ops)").fetchall()
+    }
+    assert "provenance_json" in columns
+    draft_id = drafts_store.create_draft(conn, created_by="tester", session_id=None)
+    drafts_store.add_op(
+        conn,
+        draft_id=draft_id,
+        kind="add_links",
+        payload={"links": []},
+        provenance={"source": "rule"},
+        created_by="tester",
+    )
+    assert drafts_store.serialize_op(drafts_store.list_ops(conn, draft_id)[0])[
+        "provenance"
+    ] == {"source": "rule"}
+
+
+def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
+    payload = {
+        "statements": [{"links": [{"to_id": "@2"}]}],
+        "proposal": {"from_id": "@1:0"},
+    }
+    results = {1: {"results": [{"statement_id": "stm_created"}]}}
+
+    assert server._resolve_draft_refs(payload, results) == {
+        "statements": [{"links": [{"to_id": "@2"}]}],
+        "proposal": {"from_id": "stm_created"},
+    }
