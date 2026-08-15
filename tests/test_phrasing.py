@@ -1,4 +1,4 @@
-from mycelium import phrasing
+from mycelium import phrasing, phrasing_cues
 
 # ─── normalization ──────────────────────────────────────────────────────────
 
@@ -655,3 +655,28 @@ def test_state_clean_text_passes():
 
 def test_capability_clean_text_passes():
     assert phrasing.check("admin can revoke the session", kind="capability") == []
+
+
+# ─── shared atomicity catalog ────────────────────────────────────────────────
+
+
+def test_atomicity_cue_objects_are_shared_with_segmenter():
+    assert phrasing_cues.PRECONDITION_SCONJ is phrasing._PRECONDITION_SCONJ
+    assert phrasing_cues.COMPOUND_PHRASES is phrasing._COMPOUND_PHRASES
+    assert (
+        phrasing_cues.HIDDEN_EVENT_STATE_PHRASES is phrasing._HIDDEN_EVENT_STATE_PHRASES
+    )
+
+
+def test_atomicity_violations_runs_each_owned_detector():
+    assert phrasing.atomicity_violations("user logs in; session is created")
+    assert phrasing.atomicity_violations("user logs in and receives a token")
+    assert phrasing.atomicity_violations("user logs in and then receives a token")
+    assert phrasing.atomicity_violations("when the invite is sent, a reminder fires")
+
+
+def test_atomicity_violations_excludes_non_atomicity_catalogs():
+    text = "every user must usually be set to active"
+
+    assert phrasing.atomicity_violations(text) == []
+    assert phrasing.check(text)

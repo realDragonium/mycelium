@@ -60,9 +60,10 @@ text via a per-character position map.
 
 from __future__ import annotations
 
-import re
 import unicodedata
 from typing import TYPE_CHECKING, TypedDict
+
+from mycelium import phrasing_cues
 
 if TYPE_CHECKING:
     from spacy.language import Language
@@ -169,19 +170,8 @@ _PROPERTY_VERB_LEMMAS = {"consist", "belong", "comprise"}
 # outweighs the precision gain.
 _CAPABILITY_MODAL_LEMMAS = {"can", "could", "may", "might"}
 
-# Subordinating conjunctions that signal a precondition leaking into text
-_PRECONDITION_SCONJ = {
-    "when",
-    "before",
-    "after",
-    "while",
-    "until",
-    "since",
-    "if",
-    "unless",
-    "because",
-    "though",
-}
+# The cue vocabulary is shared with the raw-text segmenter.
+_PRECONDITION_SCONJ = phrasing_cues.PRECONDITION_SCONJ
 
 # Universal quantifiers — describe a population, not an instance event.
 # Note: "no" is intentionally excluded — it routinely appears in legitimate
@@ -203,59 +193,14 @@ _UNIVERSAL_PRON_LEMMAS = {
 
 # ─── hedges (regex on normalized text) ──────────────────────────────────────
 
-_HEDGE_WORDS = [
-    "usually",
-    "often",
-    "mostly",
-    "typically",
-    "sometimes",
-    "generally",
-    "occasionally",
-    "frequently",
-    "rarely",
-]
-_HEDGE_RE = re.compile(r"\b(" + "|".join(_HEDGE_WORDS) + r")\b")
-_HEDGE_PHRASE_RE = re.compile(r"\bin\s+most\s+cases\b")
+_HEDGE_WORDS = phrasing_cues.HEDGE_WORDS
+_HEDGE_RE = phrasing_cues.HEDGE_RE
+_HEDGE_PHRASE_RE = phrasing_cues.HEDGE_PHRASE_RE
 
-# High-precision phrase markers for compound events. spaCy's clause-level
-# detection misses these because the parser often mistags the head when
-# the construction starts mid-clause; literal phrases catch the long tail.
-_COMPOUND_PHRASES = [
-    (re.compile(r"\band\s+then\b"), '"and then" joins two events into one statement'),
-    (
-        re.compile(r"\band\s+also\b"),
-        '"and also" joins multiple actions into one statement',
-    ),
-    (re.compile(r",\s+then\b"), '", then" joins sequential events into one statement'),
-]
+# ─── compound and hidden-event/state phrase cues ────────────────────────────
 
-# Phrases that conceal an event + state pair into one statement.
-# "is set to <X>" — set is the event, status=X is the state.
-# "becomes <X>" — same shape.
-# "transitions to <X>" — same.
-# "gets marked as <X>" — same.
-_HIDDEN_EVENT_STATE_PHRASES = [
-    (
-        re.compile(r"\bis\s+set\s+to\b"),
-        '"is set to" hides the underlying event (something set the value) and the resulting state (the value now equals X)',
-    ),
-    (
-        re.compile(r"\bare\s+set\s+to\b"),
-        '"are set to" hides the underlying event (something set the value) and the resulting state (the value now equals X)',
-    ),
-    (
-        re.compile(r"\bbecomes?\b"),
-        '"become(s)" hides the underlying event (the transition) and the resulting state',
-    ),
-    (
-        re.compile(r"\btransitions?\s+to\b"),
-        '"transition(s) to" hides the underlying event (the transition) and the resulting state',
-    ),
-    (
-        re.compile(r"\bgets?\s+marked\s+as\b"),
-        '"gets marked as" hides the underlying event (the marking) and the resulting state',
-    ),
-]
+_COMPOUND_PHRASES = phrasing_cues.COMPOUND_PHRASES
+_HIDDEN_EVENT_STATE_PHRASES = phrasing_cues.HIDDEN_EVENT_STATE_PHRASES
 
 
 # ─── lazy-loaded spaCy ──────────────────────────────────────────────────────
@@ -821,6 +766,23 @@ def _check_hedges(
 
 
 # ─── public entry point ─────────────────────────────────────────────────────
+
+
+def atomicity_violations(text: str) -> list[Violation]:
+    """Run only the four atomicity detectors (compound clauses, semicolons,
+    compound phrases, precondition subordinators) against `text`."""
+    normalized, pos_map = normalize_with_map(text)
+    if not normalized.strip():
+        return []
+
+    doc = _get_nlp()(normalized)
+    violations: list[Violation] = []
+    violations.extend(_check_compound_clauses(doc, text, pos_map))
+    violations.extend(_check_semicolons(doc, text, pos_map))
+    violations.extend(_check_compound_phrases(normalized, text, pos_map))
+    violations.extend(_check_precondition_sconj(doc, text, pos_map))
+    violations.sort(key=lambda violation: violation["position"])
+    return violations
 
 
 def check(text: str, kind: str = "event") -> list[Violation]:
