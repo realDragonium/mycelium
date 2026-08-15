@@ -48,30 +48,44 @@ The cost is that a set is several rows rather than one, which is why the
 
 ## Sets that exist
 
-**`kb-authoring`** — six rows, seeded by `scripts/seed_guideline_sets.py`:
-`guidance` from `guidelines/kb-authoring/guidance.md`, plus `tutorial`,
-`how-to`, `reference`, `explanation` and `troubleshooting` from
-`.claude/skills/kb-authoring/templates/`. Substrate-first: it instructs the
-writer to flag facts the substrate does not support rather than invent them.
+**`kb-authoring`** — six rows, and the one set that ships. Its sources are
+`src/mycelium/guidelines/kb-authoring/`: `guidance.md` for the set-wide row,
+and `templates/` for `tutorial`, `how-to`, `reference`, `explanation` and
+`troubleshooting`. Substrate-first: it instructs the writer to flag facts the
+substrate does not support rather than invent them.
 
-The guidance has a source of its own, separate from the kb-authoring skill's
-`SKILL.md`, because the two address readers with different reach. The skill
-runs in a repo checkout and points at its templates by path; a generation run
-holds the store and nothing else, and reaches the same templates as sibling
-rows. So the guidance names rows, and carries no skill frontmatter — that
-metadata dispatches a local skill and tells a generation run nothing. A
-template reads the same to either reader, which is why those five rows are
-the skill's own files.
+The files sit inside the package because that is what a deployment gets. The
+wheel carries `src/mycelium/` and the image copies it, the same way the loop
+doctrines travel, so startup can seed the set with no checkout and nothing for
+an operator to run. An instance with an empty store has nothing to generate
+against, and that is not a state worth supporting.
 
-The seed compares each row against the stored latest version and appends only
-what differs, so re-running it against unchanged sources writes nothing. The
-store is append-only — the seed never rewrites a version, and an operator's
-edit is only ever superseded by a later save.
+The guidance is written for a generation run, whose only handle on the set is
+the store — so it names each template as the sibling row it is, reaches for no
+file, and carries no skill frontmatter. The `kb-authoring` skill in `.claude/`
+is a consumer of that same text, not a second copy of it: it points a reader
+who has a checkout at the guidance file and translates the row names into
+paths.
+
+**Two writers, on purpose.** `server.init` seeds through `save_if_absent`,
+which never supersedes: a boot against a store that already has these rows
+writes nothing, and an operator's edit outlives every restart and every
+redeploy. `scripts/seed_guideline_sets.py` writes through `save`, which
+compares each row against the stored latest version and appends a new one
+where the source has moved on — that is how an author publishes a reworked
+template into an instance they hold a checkout of, and `--dry-run` reports
+what it would supersede first. Both read the same files and build the same
+names, from `mycelium.guidelines`; only the write differs.
+
+Because startup re-seeds them, these six names cannot be retired.
+`retire_prompt_text` refuses them outright rather than letting the next
+restart quietly undo the retirement — edit them with `save_prompt_text`
+instead.
 
 **`internal-doc`** — three rows, a deliberately minimal set for terse
 internal notes. It exists to prove that a variant needs no code: it was added
-entirely through the management tools and has no seed script, no source files
-and no entry anywhere in `src/`.
+entirely through the management tools and has no source files, no seeding at
+startup and no entry anywhere in `src/`.
 
 ## Adding a variant set
 
@@ -93,8 +107,9 @@ get_prompt_text("guideline-set", "internal-doc/how-to")
 
 Editing a row is another `save_prompt_text` (it appends a version;
 `list_prompt_text_versions` shows the history). Withdrawing one is
-`retire_prompt_text`, which hides the name and keeps its past.
+`retire_prompt_text`, which hides the name and keeps its past — unless
+startup seeds the name, which it does only for `kb-authoring`.
 
-A set only needs a seed script when its source of truth is files in this
-repo, as `kb-authoring`'s is. A set authored directly in the store does not
-have one, and does not need one.
+A set only needs source files when it has to survive a fresh deployment, as
+`kb-authoring` does. A set authored directly in the store has none, is not
+seeded, and needs neither.

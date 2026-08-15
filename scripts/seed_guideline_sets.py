@@ -1,20 +1,21 @@
-"""Seed the `kb-authoring` guideline set into the prompt-text store.
+"""Push the packaged `kb-authoring` guideline set into an instance's store.
 
-Six rows under type `guideline-set`: the set-wide guidance plus one template
-per Diátaxis document type, so a generation run fetches exactly the type it
-is writing. See `docs/GUIDELINE_SETS.md` for the naming convention.
+Startup already seeds these rows (`server._seed_prompt_texts`), so a fresh
+instance has the set before anything is run by hand. This script exists for
+the case startup deliberately refuses: the source files have moved on and you
+want the instance to follow. It compares each row against the stored latest
+version and appends a new one where they differ — including over an operator's
+edit, which is why it is a checkout tool with a `--dry-run` rather than
+something a boot does behind your back.
 
-Each row is its source file verbatim. The guidance has its own source under
-`guidelines/`, addressed to a run whose only handle on the set is the store:
-it names the templates as the sibling rows they are. The templates are the
-kb-authoring skill's files, which say the same thing to either consumer.
+Both writes read the same files and build the same names, from
+`mycelium.guidelines`. What they do not share is the write: `save` here,
+`save_if_absent` at startup. Collapsing them would mean either a redeploy
+reverting live edits or a checkout unable to publish a rewritten template.
 
-Idempotent. The store is append-only, so the seed reads the latest version
-of each row first and appends only what differs — re-running it against
-unchanged sources writes nothing and creates no versions. An operator edit
-that has drifted from the file is a difference like any other and gets
-superseded; `--dry-run` reports which rows that would be before you commit
-to it.
+Idempotent. The store is append-only, so re-running against unchanged sources
+writes nothing and creates no versions. `--dry-run` reports which rows would
+be superseded before you commit to it.
 
 Writes through `prompt_store` rather than the `save_prompt_text` tool: the
 rows land in an instance's own SQLite file, so there is no server to boot
@@ -33,34 +34,9 @@ import os
 import sqlite3
 from pathlib import Path
 
-from mycelium import prompt_store
+from mycelium import guidelines, prompt_store
 
-GUIDELINE_TYPE = "guideline-set"
-SET_NAME = "kb-authoring"
 ACTOR = "system:seed-guideline-sets"
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-_SKILL_TEMPLATES = ".claude/skills/kb-authoring/templates"
-
-# Row slot -> source file, relative to REPO_ROOT. `guidance` is the set-wide
-# instruction; the rest are named for the document type they produce.
-SOURCES = {
-    "guidance": "guidelines/kb-authoring/guidance.md",
-    "tutorial": f"{_SKILL_TEMPLATES}/tutorial.md",
-    "how-to": f"{_SKILL_TEMPLATES}/how-to.md",
-    "reference": f"{_SKILL_TEMPLATES}/reference.md",
-    "explanation": f"{_SKILL_TEMPLATES}/explanation.md",
-    "troubleshooting": f"{_SKILL_TEMPLATES}/troubleshooting.md",
-}
-
-
-def read_rows(root: Path) -> dict[str, str]:
-    """The set's rows as {name: text}, each its source file verbatim."""
-    return {
-        f"{SET_NAME}/{slot}": (root / rel).read_text(encoding="utf-8")
-        for slot, rel in SOURCES.items()
-    }
 
 
 def outdated(conn: sqlite3.Connection, rows: dict[str, str]) -> list[str]:
@@ -69,7 +45,7 @@ def outdated(conn: sqlite3.Connection, rows: dict[str, str]) -> list[str]:
     return [
         name
         for name, text in rows.items()
-        if prompt_store.latest_text(conn, GUIDELINE_TYPE, name) != text
+        if prompt_store.latest_text(conn, guidelines.TYPE, name) != text
     ]
 
 
@@ -79,7 +55,7 @@ def seed(conn: sqlite3.Connection, rows: dict[str, str]) -> list[str]:
     for name in names:
         prompt_store.save(
             conn,
-            type=GUIDELINE_TYPE,
+            type=guidelines.TYPE,
             name=name,
             text=rows[name],
             created_by=ACTOR,
@@ -131,22 +107,25 @@ def main() -> None:
     if not data_dir.is_dir():
         raise SystemExit(f"no data dir at {data_dir}")
 
-    rows = read_rows(REPO_ROOT)
+    rows = guidelines.read_rows()
     db_path = data_dir / "mycelium-prompts.db"
 
     if args.dry_run:
         names = pending(db_path, rows)
         print(f"[dry-run] would write {len(names)}/{len(rows)} rows")
         for name in names:
-            print(f"  {GUIDELINE_TYPE}/{name}")
+            print(f"  {guidelines.TYPE}/{name}")
         return
 
     conn = prompt_store.connect(db_path)
     prompt_store.migrate(conn)
     written = seed(conn, rows)
-    print(f"seeded {len(written)}/{len(rows)} rows of the '{SET_NAME}' guideline set")
+    print(
+        f"seeded {len(written)}/{len(rows)} rows of the "
+        f"'{guidelines.SET_NAME}' guideline set"
+    )
     for name in written:
-        print(f"  {GUIDELINE_TYPE}/{name}")
+        print(f"  {guidelines.TYPE}/{name}")
     if not written:
         print("  (already current — nothing appended)")
 

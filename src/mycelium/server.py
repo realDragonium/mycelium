@@ -925,7 +925,7 @@ def init(data_dir: Path) -> None:
     # texts intact.
     prompt_store.configure(data_dir / "mycelium-prompts.db")
     prompt_store.migrate(_prompts_db())
-    _seed_doctrines()
+    _seed_prompt_texts()
 
     # Operation ledger: a bounded, best-effort record of attempted tool calls,
     # in its own file so telemetry writes never contend with the substrate's
@@ -1021,16 +1021,24 @@ def init(data_dir: Path) -> None:
         mention_worker.start(data_dir)
 
 
-def _seeded_prompt_texts() -> tuple[tuple[str, str, Any], ...]:
-    """The prompt texts startup owns: (type, name, the loop config that
-    resolves that name's seed file).
+def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
+    """The prompt texts startup owns: (type, name, where that name's seed
+    text is read from).
 
     The one place that knows which names startup writes. `prompt_store`
     keeps `type` and `name` free strings and enumerates neither, so
-    seeded-ness is a fact of the seeding caller: `_seed_doctrines` reads
+    seeded-ness is a fact of the seeding caller: `_seed_prompt_texts` reads
     this to write the packaged defaults, and `retire_prompt_text` reads it
     to refuse a retirement the next start would undo.
+
+    The third element is a callable rather than the file itself because the
+    two kinds of entry resolve differently and one of them can fail. A
+    doctrine's path comes from its loop config, so an env override moves it
+    and a malformed tunable raises; a guideline-set row is a packaged file
+    with nothing to resolve. Deferring both puts every resolution inside the
+    per-row guard in `_seed_prompt_texts`, where a failure costs one row.
     """
+    from . import guidelines
     from .agentloop import DOCTRINE_TYPE
     from .ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
     from .ingest.config import IngestConfig
@@ -1038,8 +1046,22 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Any], ...]:
     from .research.config import ResearchConfig
 
     return (
-        (DOCTRINE_TYPE, INGEST_DOCTRINE, IngestConfig),
-        (DOCTRINE_TYPE, RESEARCH_DOCTRINE, ResearchConfig),
+        (
+            DOCTRINE_TYPE,
+            INGEST_DOCTRINE,
+            lambda: Path(IngestConfig.from_env().doctrine_path),
+        ),
+        (
+            DOCTRINE_TYPE,
+            RESEARCH_DOCTRINE,
+            lambda: Path(ResearchConfig.from_env().doctrine_path),
+        ),
+        *(
+            # `path=path` binds the file per row; a bare closure over the
+            # loop variable would hand all six rows the last one.
+            (guidelines.TYPE, guidelines.row_name(slot), lambda path=path: path)
+            for slot, path in guidelines.SOURCES.items()
+        ),
     )
 
 
@@ -1050,44 +1072,49 @@ def _is_seeded(type: str, name: str) -> bool:
     return any(key == (t, n) for t, n, _ in _seeded_prompt_texts())
 
 
-def _seed_doctrines() -> None:
-    """Put each packaged doctrine in the store when it holds none.
+def _seed_prompt_texts() -> None:
+    """Put each packaged default in the store when it holds none: the two
+    loop doctrines and the rows of the shipped guideline set.
 
     `save_if_absent` carries the whole idempotency story: every startup runs
     this, and one that finds a row leaves it alone — so an operator's edit
-    survives restarts and no duplicate versions accumulate. Which file seeds
-    a doctrine follows the same config the loops read, so
-    `MYCELIUM_{INGEST,RESEARCH}_DOCTRINE_PATH` chooses what a fresh instance
-    starts from.
+    survives restarts and no duplicate versions accumulate. It is also the
+    difference between this pass and `scripts/seed_guideline_sets.py`, which
+    supersedes a row whose file has moved on. A boot may not do that: the
+    file it would compare against is whatever the deployed image happens to
+    carry, so a redeploy would silently revert every edit an operator made.
 
     A tombstone reads as "no live text", so a seeded name that was retired
     at the store level comes back here at a new version. That is why
     `retire_prompt_text` refuses these names outright: an operator learns
     the rule when they try, rather than discovering it after a deploy.
 
-    Best-effort per doctrine, resolution included: an instance that can't
-    seed one still starts, and an unseeded doctrine still reaches its loop,
-    because `load_doctrine` falls back to this same file. What a failure
-    here cannot repair is its own cause — a malformed loop tunable that
-    stopped `from_env` also raises when that loop runs.
+    Best-effort per row, resolution included: an instance that can't seed one
+    still starts. An unseeded doctrine still reaches its loop, because
+    `load_doctrine` falls back to this same file; an unseeded guideline-set
+    row is simply absent, and a generation run against it fails on its own
+    terms rather than taking the boot down with it. What a failure here
+    cannot repair is its own cause — a malformed loop tunable that stopped
+    `from_env` also raises when that loop runs.
     """
     from . import prompt_store
 
-    for doctrine_type, name, loop_config in _seeded_prompt_texts():
+    for type, name, source in _seeded_prompt_texts():
         try:
-            # Inside the guard: `from_env` also parses that loop's numeric
-            # tunables, and one malformed op cap must not stop a server
-            # booting.
-            path = loop_config.from_env().doctrine_path
+            # Resolution inside the guard: `from_env` also parses that loop's
+            # numeric tunables, and one malformed op cap must not stop a
+            # server booting.
             prompt_store.save_if_absent(
                 _prompts_db(),
-                type=doctrine_type,
+                type=type,
                 name=name,
-                text=Path(path).read_text(encoding="utf-8"),
+                text=source().read_text(encoding="utf-8"),
                 created_by="seed",
             )
         except Exception:
-            logger.warning("could not seed the %s doctrine", name, exc_info=True)
+            logger.warning(
+                "could not seed prompt text %s/%s", type, name, exc_info=True
+            )
 
 
 def _rebuild_vector_index(
@@ -4555,9 +4582,10 @@ def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
     """Retire the text stored under (type, name): it stops being listed and
     served, while its history stays readable and the name can be saved again.
 
-    Names that startup seeds — the `doctrine` texts `ingest` and `research` —
-    are refused, because startup would re-seed the packaged default at a new
-    version and undo the retirement at the next restart. Change one with
+    Names that startup seeds — the `doctrine` texts `ingest` and `research`,
+    and every row of the shipped `kb-authoring` guideline set — are refused,
+    because startup would re-seed the packaged default at a new version and
+    undo the retirement at the next restart. Change one with
     `save_prompt_text` instead.
 
     Returns {"retired": true} — or false when nothing live was stored
