@@ -5,8 +5,8 @@ import zlib
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth_store, drafts_store, server, store
-from mycelium.connect.draft import BatchInput, assemble_draft, summarize
+from mycelium import auth_store, drafts_store, phrasing, server, store
+from mycelium.connect.draft import BatchInput, _proposal_op, assemble_draft, summarize
 from mycelium.connect.proposals import Proposal
 
 
@@ -147,7 +147,9 @@ def test_assemble_and_apply_transfers_links_and_records_proposals(
         assert [op["provenance"] for op in draft["ops"][1:]] == [
             proposal.provenance for proposal in _proposals(x_id, y_id)
         ]
-        assert draft["ops"][1]["payload"]["links"][0]["from_id"] == "@1:0"
+        batch_seq = draft["ops"][0]["seq"]
+        assert draft["ops"][1]["payload"]["links"][0]["from_id"] == f"@{batch_seq}:0"
+        assert draft["ops"][2]["payload"]["from_id"] == f"@{batch_seq}:0"
         assert summarize(server._drafts_db(), draft_id) == {
             "draft_id": draft_id,
             "statements": 2,
@@ -209,6 +211,14 @@ def test_unresolvable_draft_reference_rolls_back_every_statement(tmp_path, monke
             BatchInput(kind="event", text="user clicks the login button"),
             BatchInput(kind="event", text="user must verify email"),
         ]
+        # The link proposal points at batch item 1, whose "must" trips the
+        # rule-shaped phrasing check. The item does not set
+        # `allow_phrasing_violations`, so the batch upsert rejects it and the
+        # `@1:1` reference has nothing to resolve to at replay.
+        assert not phrasing.check(batch[0].text, kind=batch[0].kind)
+        rejection = phrasing.check(batch[1].text, kind=batch[1].kind)
+        assert [violation["category"] for violation in rejection] == ["rule_shaped"]
+        assert batch[1].allow_phrasing_violations is False
         proposals = [
             Proposal(
                 kind="link",
@@ -240,3 +250,72 @@ def test_unresolvable_draft_reference_rolls_back_every_statement(tmp_path, monke
 
         after = conn.execute("SELECT COUNT(*) AS n FROM statements").fetchone()["n"]
         assert after == before
+
+
+def test_proposal_refs_name_the_batch_operations_seq():
+    proposals = _proposals("st_x", "st_y")
+    batch = [BatchInput(kind="event", text="user clicks the login button")]
+
+    kind, payload = _proposal_op(proposals[0], batch, lambda _: None, 7)
+
+    assert kind == "add_links"
+    assert payload["links"][0]["from_id"] == "@7:0"
+
+
+def test_sibling_reference_is_rewritten_onto_the_batch_operations_seq():
+    proposal = Proposal(
+        kind="merge",
+        new_index=1,
+        target="@0",
+        link_type=None,
+        provenance={"source": "similarity", "score": 0.9},
+    )
+    batch = [BatchInput(kind="event", text="a"), BatchInput(kind="event", text="b")]
+
+    _, payload = _proposal_op(proposal, batch, lambda _: None, 4)
+
+    assert payload == {"from_id": "@4:1", "into_id": "@4:0"}
+
+
+def test_summary_counts_links_inside_an_edited_operation(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        x_id, e_id, y_id = _existing_statements()
+        draft_id = _assemble(x_id, e_id, y_id)
+        conn = server._drafts_db()
+        link_op = next(
+            op
+            for op in drafts_store.list_ops(conn, draft_id)
+            if op["kind"] == "add_links"
+        )
+
+        drafts_store.update_op_payload(
+            conn,
+            draft_id,
+            link_op["seq"],
+            {
+                "links": [
+                    {"from_id": x_id, "to_id": y_id, "link_type": "requires"},
+                    {"from_id": y_id, "to_id": e_id, "link_type": "requires"},
+                ]
+            },
+        )
+
+        assert summarize(conn, draft_id)["links"] == 2
+
+
+def test_summary_counts_a_requeued_batch_operation(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        x_id, e_id, y_id = _existing_statements()
+        draft_id = _assemble(x_id, e_id, y_id)
+        conn = server._drafts_db()
+
+        drafts_store.remove_op(conn, draft_id, 1)
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_statements",
+            payload={"statements": [{"kind": "event", "text": "user opens the app"}]},
+            created_by="tester",
+        )
+
+        assert summarize(conn, draft_id)["statements"] == 1
