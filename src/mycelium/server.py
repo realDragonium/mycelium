@@ -48,7 +48,7 @@ from .app_context import AppContext
 from .connect import draft as connect_draft
 from .connect import pipeline as connect_pipeline
 from .connect.draft import BatchInput
-from .connect.extract import ExtractedItem, FlagInput, extract
+from .connect.extract import ExtractedItem, FlagInput, extract, violations_detail
 from .connect.funnel import BatchStatement
 from .connect.proposals import Proposal, ProposalSet, proposals_from
 from .connect.substrate import HintedView, LiveSubstrate
@@ -3242,10 +3242,7 @@ def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[Fla
             detail = "; ".join(plan.item_errors[index])
         elif index in plan.direct_rejected:
             reason = "phrasing"
-            detail = "; ".join(
-                f"{violation['category']}: {violation['matched_text']}"
-                for violation in plan.item_violations[index]
-            )
+            detail = violations_detail(plan.item_violations[index])
         else:
             reason = "depends_on_rejected"
             dependencies = ", ".join(
@@ -3268,23 +3265,12 @@ def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[Fla
 
 def _empty_ingest_text() -> dict[str, Any]:
     """Extend the shared empty connected response with extraction fields."""
-    connected = _empty_connected_batch()
     return {
-        "draft_id": connected["draft_id"],
+        **_empty_connected_batch(),
         "fragments": {"total": 0, "resolved": 0, "flagged": 0},
         "items": [],
         "flags": [],
         "condition_links": 0,
-        "results": connected["results"],
-        "proposals": connected["proposals"],
-        "links": connected["links"],
-        "merges": connected["merges"],
-        "conflicts": connected["conflicts"],
-        "related": connected["related"],
-        "dropped_merges": connected["dropped_merges"],
-        "unresolved_hints": connected["unresolved_hints"],
-        "nli": connected["nli"],
-        "draft": connected["draft"],
     }
 
 
@@ -3369,7 +3355,7 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
     )
     draft = None if run.draft is None else {**run.draft, "flags": len(run.flags)}
     return {
-        "draft_id": run.draft_id,
+        **connected,
         "fragments": {
             "total": total,
             "resolved": len(run.new_of),
@@ -3385,15 +3371,6 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
             for flag in run.flags
         ],
         "condition_links": condition_links,
-        "results": connected["results"],
-        "proposals": connected["proposals"],
-        "links": connected["links"],
-        "merges": connected["merges"],
-        "conflicts": connected["conflicts"],
-        "related": connected["related"],
-        "dropped_merges": connected["dropped_merges"],
-        "unresolved_hints": connected["unresolved_hints"],
-        "nli": connected["nli"],
         "draft": draft,
     }
 

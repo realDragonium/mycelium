@@ -51,16 +51,17 @@ FLAG_SOURCES = {
 }
 
 
+def violations_detail(violations: list[dict]) -> str:
+    """Render phrasing violations as curator-facing detail text."""
+    return "; ".join(
+        f"{violation['category']}: {violation['matched_text']}"
+        for violation in violations
+    )
+
+
 def _atomicity_detail(text: str) -> str:
     """Render the atomicity evidence for an unsplit fragment."""
-    violations = phrasing.atomicity_violations(text)
-    return (
-        "; ".join(
-            f"{violation['category']}: {violation['matched_text']}"
-            for violation in violations
-        )
-        or "compound remnant"
-    )
+    return violations_detail(phrasing.atomicity_violations(text)) or "compound remnant"
 
 
 def _classification_detail(classification: shapes.Classification) -> str:
