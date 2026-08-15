@@ -59,6 +59,15 @@ def _resolve_model_name(configured_name: str | None) -> str:
     return model_name() if configured_name is None else configured_name
 
 
+def _torch():
+    """Import torch, reporting an unusable installation as unavailable."""
+    try:
+        import torch  # local import: heavy optional nli dependency
+    except (ImportError, OSError) as error:
+        raise NliUnavailable(f"torch could not be imported: {error}") from error
+    return torch
+
+
 class TransformersNli:
     """Run a CPU cross-encoder over ``transformers``.
 
@@ -134,8 +143,7 @@ class TransformersNli:
         if not pairs:
             return []
 
-        import torch  # local import: heavy optional nli dependency
-
+        torch = _torch()
         self._load()
         labels: list[NliLabel] = []
         for start in range(0, len(pairs), self._batch_size):

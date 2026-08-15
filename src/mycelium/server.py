@@ -2791,6 +2791,10 @@ def _connected_hints(
     statements: list[ConnectedStatementSpec], accepted: list[int]
 ) -> tuple[dict[str, frozenset[str]], list[str]]:
     """Resolve accepted mention hints without creating names or entities."""
+    # Keyed by text because text is the only key the funnel hands to
+    # `entities_in`. Two accepted items with identical text therefore share
+    # their hints — they are already one statement to every other text-keyed
+    # stage (embedding, derived mentions, cue matching).
     by_text: dict[str, set[str]] = {}
     unresolved: list[str] = []
     seen_unresolved: set[str] = set()
