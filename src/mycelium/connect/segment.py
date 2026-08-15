@@ -512,6 +512,16 @@ def _condition_without_opener(piece: _Piece, clause_tokens: list) -> _Piece:
     return _trim_piece(condition)
 
 
+def _is_contiguous(tokens: list) -> bool:
+    """Report whether tokens form one unbroken run, trailing punctuation aside."""
+    indices = [token.i for token in tokens]
+    while indices and tokens[len(indices) - 1].is_punct:
+        indices.pop()
+    return bool(indices) and indices == list(
+        range(indices[0], indices[0] + len(indices))
+    )
+
+
 def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
     """Cut a parsed adverbial clause and suppress causal proposals."""
     for token in doc:
@@ -522,6 +532,10 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
         clause_ids = {item.i for item in clause_tokens}
         condition = _condition_without_opener(piece, clause_tokens)
         claim_tokens = [item for item in doc if item.i not in clause_ids]
+        # A medial clause leaves material on both sides: splicing it would
+        # invent a surface form and stretch the span over the removed clause.
+        if not _is_contiguous(claim_tokens):
+            continue
         claim = _trim_piece(_piece_from_tokens(piece, claim_tokens, role="claim"))
         if not _usable(claim):
             continue
@@ -679,6 +693,27 @@ def _cut_boundaries(
     return left_leaves[-1], right_leaves[0]
 
 
+def _cutters(piece: _Piece) -> tuple:
+    """Order the cut rules; an initial conditional opener outranks a phrase cut.
+
+    "If X, then Y" carries both cues, and the conditional is the one that
+    yields a condition fragment and a requires proposal.
+    """
+    if _initial_opener(piece):
+        return (
+            _cut_semicolons,
+            _cut_conditional,
+            _cut_compound_phrases,
+            _cut_coordination,
+        )
+    return (
+        _cut_semicolons,
+        _cut_compound_phrases,
+        _cut_conditional,
+        _cut_coordination,
+    )
+
+
 def _descend(
     piece: _Piece,
     cuts: list[_PendingCut],
@@ -689,12 +724,7 @@ def _descend(
     if depth >= _MAX_CUT_DEPTH:
         return [piece]
     split = None
-    for cutter in (
-        _cut_semicolons,
-        _cut_compound_phrases,
-        _cut_conditional,
-        _cut_coordination,
-    ):
+    for cutter in _cutters(piece):
         split = cutter(piece)
         if split:
             break

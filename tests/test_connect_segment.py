@@ -51,6 +51,26 @@ def test_trailing_once_condition_uses_strip_table_vocabulary():
     assert result.proposals == [seg.ConditionProposal(claim=0, condition=1, cue="once")]
 
 
+def test_if_then_conditional_outranks_the_phrase_cut():
+    result = seg.segment("If the flag is set, then the job runs")
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("the flag is set", "condition"),
+        ("then the job runs", "claim"),
+    ]
+    assert [item.kind for item in result.cuts] == ["conditional"]
+    assert result.proposals == [seg.ConditionProposal(claim=1, condition=0, cue="If")]
+
+
+def test_medial_clause_is_left_whole_and_flagged():
+    source = "The invite, if the flag is set, is sent to the user"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [source]
+    assert result.cuts == []
+    assert result.fragments[0].unsplit is True
+
+
 def test_causal_clause_cuts_without_requires_proposal():
     result = seg.segment("Because the token expired, the request is rejected")
 
