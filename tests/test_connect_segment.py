@@ -290,6 +290,18 @@ def test_medial_material_blocks_the_coordination_cut():
     assert result.fragments[0].unsplit is True
 
 
+def test_a_list_items_trailing_newline_does_not_block_the_coordination_cut():
+    # The block keeps the item's newline, which parses as a SPACE token after
+    # the final period; the same sentence on its own splits, so must this one.
+    result = seg.segment("- The user logs in and receives a token.\n- Blue widgets.")
+
+    assert fragment_texts(result) == [
+        "The user logs in",
+        "The user receives a token",
+        "Blue widgets",
+    ]
+
+
 def test_case_folding_expansion_cannot_forge_a_strip_table_opener():
     # "ß" casefolds to "ss", so an opener matched against the folded text can
     # cover raw characters that are not the opener.
