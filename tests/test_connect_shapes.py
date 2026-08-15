@@ -185,6 +185,27 @@ def test_negated_modal_is_a_prohibition_not_a_capability():
     assert classify(text).kind != "capability"
 
 
+def test_coordinated_predicates_match_nothing():
+    # Every detector reads the root, so the second predicate would be ignored.
+    result = classify("An invite is sent and auto result sharing is enabled")
+
+    assert result.status == "unmatched"
+    assert result.matches == ()
+
+
+def test_a_transitive_perfect_is_a_completed_action_not_a_state():
+    assert classify("The administrator has enabled result sharing").status == (
+        "unmatched"
+    )
+    assert classify("The invite has expired").kind == "state"
+
+
+def test_negated_able_to_is_a_prohibition_not_a_capability():
+    assert classify("A participant is not able to download the report").kind != (
+        "capability"
+    )
+
+
 def test_semicolon_marks_a_compound_remnant_and_matches_nothing():
     result = classify("The invite is sent; the report is enabled")
 

@@ -236,6 +236,7 @@ SHAPE_NAMES = (
 
 _PERFECT_STATE_LEMMAS = STATE_PARTICIPLES | PERFECT_STATE_PARTICIPLES
 _PRESENT_TAGS = frozenset({"VBZ", "VBP"})
+_OBJECT_DEPS = frozenset({"dobj", "obj", "dative", "attr", "oprd"})
 _COMPLEMENT_DEPS = frozenset({"attr", "acomp", "oprd"})
 _BAND_MARKERS = frozenset({"for", "when", "unless", "if"})
 # "is able to" is the periphrastic capability modal, not a condition holding.
@@ -299,6 +300,23 @@ def _is_negated(modal: Token) -> bool:
     return any(child.dep_ == "neg" for child in modal.head.children)
 
 
+def _has_negation(doc: Doc) -> bool:
+    """Report whether the fragment carries a negation particle at all."""
+    return any(token.dep_ == "neg" for token in doc)
+
+
+def _coordinated_predicate(root: Token) -> Token | None:
+    """Return a second predicate coordinated with the root, when there is one."""
+    return next(
+        (
+            child
+            for child in root.children
+            if child.dep_ == "conj" and child.pos_ in {"VERB", "AUX"}
+        ),
+        None,
+    )
+
+
 def _complement(root: Token) -> Token | None:
     """Return the first copular complement in dependency order."""
     return next(
@@ -333,7 +351,7 @@ def _capability_modal(doc: Doc, text: str) -> ShapeMatch | None:
         return None
     if modal is not None:
         return ShapeMatch("capability", "capability-modal", modal.text)
-    if _ABLE_TO_RE.search(text):
+    if _ABLE_TO_RE.search(text) and not _has_negation(doc):
         return ShapeMatch("capability", "capability-modal", "able to")
     return None
 
@@ -392,6 +410,10 @@ def _state_perfect(doc: Doc, text: str) -> ShapeMatch | None:
         None,
     )
     if auxiliary is None:
+        return None
+    # "The administrator has enabled result sharing" takes an object: that is a
+    # completed action, not a condition the subject is now in.
+    if any(child.dep_ in _OBJECT_DEPS for child in root.children):
         return None
     return ShapeMatch("state", "state-perfect", f"{auxiliary.text} {root.text}")
 
@@ -643,6 +665,12 @@ def match_shapes(text: str) -> list[ShapeMatch]:
 
     # Do not normalize: original capitalization distinguishes imperatives and values.
     doc = phrasing._get_nlp()(stripped)
+    root = _root(doc)
+    # Every detector reads the root, so a second coordinated predicate ("… is
+    # sent and … is enabled") would be classified by its first clause alone.
+    # That is the same compound the phrasing catalog rejects: flag, don't guess.
+    if root is not None and _coordinated_predicate(root) is not None:
+        return []
     matches = [detector(doc, stripped) for detector in _DETECTORS]
     return [match for match in matches if match is not None]
 
