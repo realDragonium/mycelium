@@ -104,3 +104,24 @@ def test_statements_sharing_entities_deduplicates_aliases_and_chunks():
     }
     assert len(rows) == 2
     assert store.statements_sharing_entities(conn, []) == []
+
+
+def test_statements_sharing_entities_never_scans_the_mention_table():
+    """The funnel runs this lookup once per entity-bearing batch item, so a
+    plan that scans every materialized mention would make ingest cost
+    O(batch x substrate)."""
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+
+    plan = conn.execute(
+        "EXPLAIN QUERY PLAN "
+        "SELECT DISTINCT sm.statement_id, n.entity_id "
+        "FROM statement_mentions sm "
+        "JOIN names n ON n.id = sm.name_id "
+        "WHERE n.entity_id IN (?, ?)",
+        ("ent_one", "ent_two"),
+    ).fetchall()
+
+    steps = [row["detail"] for row in plan]
+    assert any("names_entity" in step for step in steps), steps
+    assert not any(step.startswith("SCAN") for step in steps), steps
