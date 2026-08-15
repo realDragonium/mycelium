@@ -327,6 +327,83 @@ def test_upsert_document_updates_same_slug_in_place(tmp_path):
     assert len(docs_store.list_documents(conn)) == 1
 
 
+def test_upsert_document_preserves_fields_a_later_write_omits(tmp_path):
+    """Partial writers must not erase metadata recorded by an earlier stage."""
+    conn = _conn(tmp_path)
+    first_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=["stm_a", "stm_b"],
+        review={"passed": True, "attempts": 1},
+        run_id="drn_1",
+    )
+
+    second_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO (Revised)",
+        body="Second",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        run_id="drn_1",
+    )
+    document = docs_store.serialize_document(docs_store.get_document(conn, second_id))
+
+    assert second_id == first_id
+    assert document["title"] == "Configuring SSO (Revised)"
+    assert document["body"] == "Second"
+    assert document["statement_ids"] == ["stm_a", "stm_b"]
+    assert document["review"] == {"passed": True, "attempts": 1}
+
+    third_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO (Revised)",
+        body="Second",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+    document = docs_store.serialize_document(docs_store.get_document(conn, third_id))
+
+    assert document["last_run_id"] == "drn_1"
+
+
+def test_upsert_document_clears_a_field_only_when_the_caller_says_so(tmp_path):
+    """Merge semantics must retain an intentional way to clear stale metadata."""
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=["stm_a", "stm_b"],
+        review={"passed": True, "attempts": 1},
+        run_id="drn_1",
+    )
+
+    docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="First",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=[],
+        review={},
+        run_id="drn_1",
+    )
+    document = docs_store.serialize_document(docs_store.get_document(conn, document_id))
+
+    assert document["statement_ids"] == []
+    assert document["review"] == {}
+
+
 def test_upsert_document_keeps_the_same_slug_apart_across_sets_and_types(tmp_path):
     """A slug follows from a title, and titles repeat. What makes two pages the
     same page is the slug together with the set and type they were written
