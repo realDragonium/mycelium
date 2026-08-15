@@ -16,7 +16,7 @@ deliberately not an exact substring of the source.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from mycelium import phrasing, phrasing_cues
 
@@ -62,6 +62,7 @@ class _Piece:
     role: str
     sentence: int
     subject_copied: bool = False
+    flagged: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,36 +98,51 @@ _COMPOUND_PATTERNS = tuple(
     re.compile(pattern.pattern, pattern.flags | re.IGNORECASE)
     for pattern, _rule in phrasing_cues.COMPOUND_PHRASES
 )
+_SINGLE_WORD_SUBORDINATORS = frozenset(
+    opener for opener in phrasing_cues.SUBORDINATOR_STRIP if " " not in opener
+)
 _MAX_CUT_DEPTH = 10
 
 
 def _blocks(text: str) -> list[tuple[int, int]]:
     """Find paragraph and list-item slices without rewriting raw whitespace."""
     blocks: list[tuple[int, int]] = []
-    plain_start: int | None = None
-    plain_end = 0
+    block_start: int | None = None
+    block_end = 0
+    list_item = False
     offset = 0
     for line in text.splitlines(keepends=True):
         line_end = offset + len(line)
         marker = _LIST_MARKER_RE.match(line)
         if not line.strip():
-            if plain_start is not None:
-                blocks.append((plain_start, plain_end))
-                plain_start = None
+            if block_start is not None:
+                blocks.append((block_start, block_end))
+                block_start = None
+            list_item = False
         elif marker:
-            if plain_start is not None:
-                blocks.append((plain_start, plain_end))
-                plain_start = None
+            if block_start is not None:
+                blocks.append((block_start, block_end))
             content_start = offset + marker.end()
             if text[content_start:line_end].strip():
-                blocks.append((content_start, line_end))
+                block_start = content_start
+                block_end = line_end
+                list_item = True
+            else:
+                block_start = None
+                list_item = False
+        elif line[:1].isspace() and list_item and block_start is not None:
+            block_end = line_end
         else:
-            if plain_start is None:
-                plain_start = offset
-            plain_end = line_end
+            if list_item and block_start is not None:
+                blocks.append((block_start, block_end))
+                block_start = None
+            if block_start is None:
+                block_start = offset
+            block_end = line_end
+            list_item = False
         offset = line_end
-    if plain_start is not None:
-        blocks.append((plain_start, plain_end))
+    if block_start is not None:
+        blocks.append((block_start, block_end))
     return blocks
 
 
@@ -161,6 +177,7 @@ def _subpiece(
         role or piece.role,
         piece.sentence,
         piece.subject_copied,
+        piece.flagged,
     )
 
 
@@ -174,6 +191,7 @@ def _join_pieces(parts: list[_Piece], *, role: str) -> _Piece:
         role,
         parts[0].sentence,
         any(part.subject_copied for part in parts),
+        any(part.flagged for part in parts),
     )
 
 
@@ -312,6 +330,10 @@ def _cut_compound_phrases(piece: _Piece) -> _Split | None:
     if coordinated:
         head, conjunct = coordinated
         right = _project_subject(piece, head, conjunct, right)
+    else:
+        # No parsed coordination behind the phrase: the remnant is cut but
+        # cannot be shown to stand alone, so it flags.
+        right = replace(right, flagged=True)
     return _split(
         piece,
         kind="compound-phrase",
@@ -426,12 +448,22 @@ def _advcl_cue(token):
     for child in token.children:
         if child.dep_ not in ("mark", "case", "advmod"):
             continue
-        if child.lemma_ in phrasing_cues.PRECONDITION_SCONJ and child.pos_ in (
-            "SCONJ",
-            "ADP",
-        ):
+        catalogued = (
+            child.lemma_ in phrasing_cues.PRECONDITION_SCONJ
+            or child.text.lower() in _SINGLE_WORD_SUBORDINATORS
+        )
+        if child.pos_ in ("SCONJ", "ADP") and catalogued:
             return child
     return None
+
+
+def _is_finite_clause_token(token) -> bool:
+    """Report whether a token demonstrates a genuinely finite clause."""
+    if token.pos_ not in ("VERB", "AUX"):
+        return False
+    return "Fin" in token.morph.get("VerbForm") or any(
+        child.dep_ in ("nsubj", "nsubjpass") for child in token.children
+    )
 
 
 def _conditional_fronted(piece: _Piece, doc) -> _Split | None:
@@ -441,7 +473,7 @@ def _conditional_fronted(piece: _Piece, doc) -> _Split | None:
         return None
     root = next((token for token in doc if token.dep_ == "ROOT"), None)
     has_finite_verb = any(
-        token.idx < comma and token.pos_ in ("VERB", "AUX") for token in doc
+        token.idx < comma and _is_finite_clause_token(token) for token in doc
     )
     if root is None or root.idx <= comma or not has_finite_verb:
         return None
@@ -538,7 +570,8 @@ def _project_subject(piece: _Piece, head, conjunct, right: _Piece) -> _Piece:
         (child for child in head.children if child.dep_ in subject_dependencies), None
     )
     if subject is None:
-        return right
+        # No shared subject to project: the conjunct stays as-is and flags.
+        return replace(right, flagged=True)
     subject_piece = _piece_from_tokens(piece, list(subject.subtree), role=right.role)
     subject_text = subject_piece.text.strip()
     right_start = len(right.text) - len(right.text.lstrip())
@@ -550,6 +583,7 @@ def _project_subject(piece: _Piece, head, conjunct, right: _Piece) -> _Piece:
         right.role,
         right.sentence,
         True,
+        right.flagged,
     )
 
 
@@ -557,7 +591,10 @@ def _cut_coordination(piece: _Piece) -> _Split | None:
     """Reuse the catalog's conservative coordinated-verb rule verbatim."""
     doc = phrasing._get_nlp()(piece.text)
     for token in doc:
-        if token.pos_ != "CCONJ" or token.lemma_ != "and":
+        if (
+            token.pos_ != "CCONJ"
+            or token.lemma_ not in phrasing_cues.COORDINATING_CONJUNCTIONS
+        ):
             continue
         head = token.head
         if head.pos_ != "VERB":
@@ -702,7 +739,7 @@ def _fragments(leaves: list[_Piece]) -> tuple[list[Fragment], dict[int, int]]:
                 piece.role,
                 raw_span,
                 piece.sentence,
-                _mark_unsplit(cleaned.text),
+                piece.flagged or _mark_unsplit(cleaned.text),
                 piece.subject_copied,
             )
         )

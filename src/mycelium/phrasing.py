@@ -536,7 +536,10 @@ def _check_compound_clauses(
     ("apples and oranges") because both heads are NOUN, not VERB."""
     out: list[Violation] = []
     for tok in doc:
-        if tok.pos_ != "CCONJ" or tok.lemma_ != "and":
+        if (
+            tok.pos_ != "CCONJ"
+            or tok.lemma_ not in phrasing_cues.COORDINATING_CONJUNCTIONS
+        ):
             continue
         head = tok.head
         if head.pos_ != "VERB":
@@ -769,8 +772,11 @@ def _check_hedges(
 
 
 def atomicity_violations(text: str) -> list[Violation]:
-    """Run only the four atomicity detectors (compound clauses, semicolons,
-    compound phrases, precondition subordinators) against `text`."""
+    """Run only the four atomicity detectors against `text`.
+
+    Check compound clauses, semicolons, compound phrases, and precondition
+    subordinators.
+    """
     normalized, pos_map = normalize_with_map(text)
     if not normalized.strip():
         return []

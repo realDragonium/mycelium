@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import re
 
+# Coordinating conjunctions that join two clauses into a compound statement.
+# The catalog rejects on these and the segmenter cuts on them — one vocabulary.
+COORDINATING_CONJUNCTIONS = frozenset({"and"})
+
 # Subordinating conjunctions that signal a precondition leaking into text
 PRECONDITION_SCONJ = {
     "when",

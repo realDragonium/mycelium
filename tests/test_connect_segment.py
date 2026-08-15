@@ -43,6 +43,14 @@ def test_trailing_condition_preserves_reading_order():
     assert result.proposals == [seg.ConditionProposal(claim=0, condition=1, cue="when")]
 
 
+def test_trailing_once_condition_uses_strip_table_vocabulary():
+    result = seg.segment("The job runs once the flag is set")
+
+    assert fragment_texts(result) == ["The job runs", "the flag is set"]
+    assert [item.role for item in result.fragments] == ["claim", "condition"]
+    assert result.proposals == [seg.ConditionProposal(claim=0, condition=1, cue="once")]
+
+
 def test_causal_clause_cuts_without_requires_proposal():
     result = seg.segment("Because the token expired, the request is rejected")
 
@@ -95,10 +103,16 @@ def test_multiword_initial_opener_survives_parse_boundary():
 def test_unlisted_fronted_clause_proposes_nothing():
     result = seg.segment("As discussed yesterday, the service restarts")
 
-    assert fragment_texts(result) == [
-        "As discussed yesterday",
-        "the service restarts",
-    ]
+    assert fragment_texts(result) == ["As discussed yesterday, the service restarts"]
+    assert result.cuts == []
+    assert result.proposals == []
+
+
+def test_participial_fronted_clause_is_not_cut():
+    result = seg.segment("Smiling broadly, the user enters")
+
+    assert fragment_texts(result) == ["Smiling broadly, the user enters"]
+    assert result.cuts == []
     assert result.proposals == []
 
 
@@ -119,6 +133,14 @@ def test_subject_is_projected_onto_subjectless_conjunct():
     assert result.proposals == []
 
 
+def test_subjectless_imperative_conjunct_is_flagged():
+    result = seg.segment("Log in and receive a token")
+
+    assert fragment_texts(result) == ["Log in", "receive a token"]
+    assert result.fragments[1].unsplit is True
+    assert result.fragments[1].subject_copied is False
+
+
 def test_subject_is_projected_across_compound_phrase():
     result = seg.segment("The user logs in and then receives a token")
 
@@ -130,6 +152,13 @@ def test_subject_is_projected_across_compound_phrase():
     assert len(result.cuts) == 1
     assert result.cuts[0].kind == "compound-phrase"
     assert result.cuts[0].connective == "and then"
+
+
+def test_embedded_compound_phrase_remnant_is_flagged():
+    result = seg.segment("The admin says the user logs in and then receives a token")
+
+    remnant = next(item for item in result.fragments if item.text == "receives a token")
+    assert remnant.unsplit is True
 
 
 def test_conjunct_with_own_subject_is_not_projected():
@@ -203,6 +232,15 @@ def test_intro_and_bullet_items_are_separate_sentence_units():
     for item in items:
         raw = source[item.span[0] : item.span[1]]
         assert item.text in raw
+
+
+def test_wrapped_list_line_extends_its_list_item():
+    result = seg.segment("- Send the invite\n  after approval")
+
+    assert len({item.sentence for item in result.fragments}) == 1
+    assert len(result.fragments) == 1
+    assert "Send the invite" in result.fragments[0].text
+    assert "after approval" in result.fragments[0].text
 
 
 def test_fragment_spans_match_their_retained_surface_text():

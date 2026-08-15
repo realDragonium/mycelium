@@ -661,6 +661,7 @@ def test_capability_clean_text_passes():
 
 
 def test_atomicity_cue_objects_are_shared_with_segmenter():
+    assert "and" in phrasing_cues.COORDINATING_CONJUNCTIONS
     assert phrasing_cues.PRECONDITION_SCONJ is phrasing._PRECONDITION_SCONJ
     assert phrasing_cues.COMPOUND_PHRASES is phrasing._COMPOUND_PHRASES
     assert (
