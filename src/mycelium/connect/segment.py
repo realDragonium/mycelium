@@ -177,23 +177,35 @@ def _join_pieces(parts: list[_Piece], *, role: str) -> _Piece:
     )
 
 
+def _trim_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """Advance a slice past the whitespace and commas at either end."""
+    while start < end and _is_boundary(text[start]):
+        start += 1
+    while end > start and _is_boundary(text[end - 1]):
+        end -= 1
+    return start, end
+
+
+def _is_boundary(char: str) -> bool:
+    """Report whether a character is clause-boundary filler, not content."""
+    return char.isspace() or char == ","
+
+
 def _trim_piece(piece: _Piece) -> _Piece:
     """Remove whitespace and commas left at a clause boundary."""
-    start = 0
-    end = len(piece.text)
-    while start < end and (piece.text[start].isspace() or piece.text[start] == ","):
-        start += 1
-    while end > start and (piece.text[end - 1].isspace() or piece.text[end - 1] == ","):
-        end -= 1
+    return _subpiece(piece, *_trim_bounds(piece.text, 0, len(piece.text)))
+
+
+def _clean_piece(piece: _Piece) -> _Piece:
+    """Trim a leaf's boundary filler and one sentence-final period.
+
+    Text and origin map are trimmed together, so a fragment's span covers
+    exactly the raw material its surface form came from.
+    """
+    start, end = _trim_bounds(piece.text, 0, len(piece.text))
+    if end > start and piece.text[end - 1] == ".":
+        start, end = _trim_bounds(piece.text, start, end - 1)
     return _subpiece(piece, start, end)
-
-
-def _clean_text(text: str) -> str:
-    """Clean one leaf's boundary punctuation for its public surface form."""
-    cleaned = text.strip().strip(",").strip()
-    if cleaned.endswith("."):
-        cleaned = cleaned[:-1].rstrip()
-    return cleaned.strip(",").strip()
 
 
 def _span(piece: _Piece) -> tuple[int, int] | None:
@@ -219,7 +231,7 @@ def _connective(
 
 def _usable(piece: _Piece) -> bool:
     """Report whether a prospective side retains fragment text."""
-    return bool(_clean_text(piece.text))
+    return bool(_clean_piece(piece).text)
 
 
 def _split(
@@ -269,6 +281,23 @@ def _cut_semicolons(piece: _Piece) -> _Split | None:
     )
 
 
+def _compound_conjunct(piece: _Piece, connective_end: int):
+    """Find a root verb's coordinated verb after a compound connective."""
+    doc = phrasing._get_nlp()(piece.text)
+    return next(
+        (
+            (token.head, token)
+            for token in doc
+            if token.idx >= connective_end
+            and token.dep_ == "conj"
+            and token.pos_ == "VERB"
+            and token.head.dep_ == "ROOT"
+            and token.head.pos_ == "VERB"
+        ),
+        None,
+    )
+
+
 def _cut_compound_phrases(piece: _Piece) -> _Split | None:
     """Cut at the earliest case-insensitive shared compound phrase."""
     matches = [
@@ -277,13 +306,19 @@ def _cut_compound_phrases(piece: _Piece) -> _Split | None:
     if not matches:
         return None
     match = min(matches, key=lambda item: item.start())
+    left = _trim_piece(_subpiece(piece, 0, match.start()))
+    right = _trim_piece(_subpiece(piece, match.end(), len(piece.text)))
+    coordinated = _compound_conjunct(piece, match.end())
+    if coordinated:
+        head, conjunct = coordinated
+        right = _project_subject(piece, head, conjunct, right)
     return _split(
         piece,
         kind="compound-phrase",
         connective_start=match.start(),
         connective_end=match.end(),
-        left=_trim_piece(_subpiece(piece, 0, match.start())),
-        right=_trim_piece(_subpiece(piece, match.end(), len(piece.text))),
+        left=left,
+        right=right,
     )
 
 
@@ -299,17 +334,77 @@ def _initial_opener(piece: _Piece) -> tuple[int, int] | None:
     return None
 
 
-def _conditional_initial(piece: _Piece) -> _Split | None:
-    """Cut a comma-delimited condition introduced by the strip table."""
-    opener = _initial_opener(piece)
-    if not opener:
+def _initial_clause_tokens(doc, opener: tuple[int, int]) -> list | None:
+    """Derive an initial condition clause from its parsed opener."""
+    opener_start, opener_end = opener
+    opener_token = next((token for token in doc if token.idx == opener_start), None)
+    if opener_token is None:
+        return None
+    if opener_token.dep_ in ("mark", "case", "advmod"):
+        clause_tokens = sorted(opener_token.head.subtree, key=lambda item: item.idx)
+    else:
+        clause_tokens = sorted(opener_token.subtree, key=lambda item: item.idx)
+    if not clause_tokens or clause_tokens[0].idx != opener_start:
+        return None
+    clause_ids = {token.i for token in clause_tokens}
+    opener_tokens = [
+        token
+        for token in doc
+        if token.idx < opener_end and token.idx + len(token.text) > opener_start
+    ]
+    if not opener_tokens or any(token.i not in clause_ids for token in opener_tokens):
+        return None
+    return clause_tokens
+
+
+def _initial_subtree_sides(
+    piece: _Piece, doc, opener: tuple[int, int]
+) -> tuple[_Piece, _Piece] | None:
+    """Build initial conditional sides from the opener's parsed clause."""
+    clause_tokens = _initial_clause_tokens(doc, opener)
+    if clause_tokens is None:
         return None
     opener_start, opener_end = opener
+    clause_ids = {token.i for token in clause_tokens}
+    condition_piece = _piece_from_tokens(piece, clause_tokens, role="condition")
+    condition = _trim_piece(
+        _subpiece(
+            condition_piece,
+            opener_end - opener_start,
+            len(condition_piece.text),
+        )
+    )
+    claim_tokens = [token for token in doc if token.i not in clause_ids]
+    claim = _trim_piece(_piece_from_tokens(piece, claim_tokens, role="claim"))
+    if not _usable(claim):
+        return None
+    return condition, claim
+
+
+def _initial_comma_sides(
+    piece: _Piece, opener_end: int
+) -> tuple[_Piece, _Piece] | None:
+    """Build initial conditional sides from the first comma fallback."""
     comma = piece.text.find(",", opener_end)
     if comma < 0:
         return None
     condition = _trim_piece(_subpiece(piece, opener_end, comma, role="condition"))
     claim = _trim_piece(_subpiece(piece, comma + 1, len(piece.text), role="claim"))
+    return condition, claim
+
+
+def _conditional_initial(piece: _Piece, doc) -> _Split | None:
+    """Cut an initial strip-table condition at its parsed clause boundary."""
+    opener = _initial_opener(piece)
+    if not opener:
+        return None
+    opener_start, opener_end = opener
+    sides = _initial_subtree_sides(piece, doc, opener)
+    if sides is None:
+        sides = _initial_comma_sides(piece, opener_end)
+    if sides is None:
+        return None
+    condition, claim = sides
     cue = piece.text[opener_start:opener_end]
     return _split(
         piece,
@@ -340,7 +435,7 @@ def _advcl_cue(token):
 
 
 def _conditional_fronted(piece: _Piece, doc) -> _Split | None:
-    """Cut an unlisted finite fronted clause while excluding parsed advcl cues."""
+    """Cut an unlisted fronted clause without proposing a condition relation."""
     comma = piece.text.find(",")
     if comma < 0 or any(_advcl_cue(token) for token in doc):
         return None
@@ -355,8 +450,6 @@ def _conditional_fronted(piece: _Piece, doc) -> _Split | None:
         connective_end += 1
     condition = _trim_piece(_subpiece(piece, 0, comma, role="condition"))
     claim = _trim_piece(_subpiece(piece, connective_end, len(piece.text), role="claim"))
-    cue_match = re.search(r"\S+", condition.text)
-    cue = cue_match.group(0) if cue_match else ""
     return _split(
         piece,
         kind="conditional",
@@ -366,7 +459,6 @@ def _conditional_fronted(piece: _Piece, doc) -> _Split | None:
         right=claim,
         claim_side="right",
         condition_side="left",
-        cue=cue,
     )
 
 
@@ -379,23 +471,13 @@ def _piece_from_tokens(piece: _Piece, tokens: list, *, role: str) -> _Piece:
     return _join_pieces(parts, role=role)
 
 
-def _condition_without_opener(piece: _Piece, clause_tokens: list, cue_token) -> _Piece:
-    """Remove the parsed conditional opener and any remaining table opener."""
+def _condition_without_opener(piece: _Piece, clause_tokens: list) -> _Piece:
+    """Remove only a strip-table opener from a parsed condition."""
     condition = _piece_from_tokens(piece, clause_tokens, role="condition")
     opener = _initial_opener(condition)
     if opener:
         return _trim_piece(_subpiece(condition, opener[1], len(condition.text)))
-    cue_start = cue_token.idx - clause_tokens[0].idx
-    cue_end = cue_start + len(cue_token.text)
-    return _trim_piece(
-        _join_pieces(
-            [
-                _subpiece(condition, 0, cue_start, role="condition"),
-                _subpiece(condition, cue_end, len(condition.text), role="condition"),
-            ],
-            role="condition",
-        )
-    )
+    return _trim_piece(condition)
 
 
 def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
@@ -406,7 +488,7 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
             continue
         clause_tokens = sorted(token.subtree, key=lambda item: item.idx)
         clause_ids = {item.i for item in clause_tokens}
-        condition = _condition_without_opener(piece, clause_tokens, cue_token)
+        condition = _condition_without_opener(piece, clause_tokens)
         claim_tokens = [item for item in doc if item.i not in clause_ids]
         claim = _trim_piece(_piece_from_tokens(piece, claim_tokens, role="claim"))
         if not _usable(claim):
@@ -419,6 +501,8 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
         left, right = (condition, claim) if condition_first else (claim, condition)
         cue = cue_token.text
         proposal_cue = None if cue_token.lemma_ in phrasing_cues.CAUSAL_SCONJ else cue
+        # Unstripped cue spans deliberately overlap the condition: 5.1 still
+        # needs the cue's exact source location.
         return _split(
             piece,
             kind="conditional",
@@ -435,10 +519,10 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
 
 def _cut_conditional(piece: _Piece) -> _Split | None:
     """Apply initial, finite-fronted, then parsed advcl conditional rules."""
-    initial = _conditional_initial(piece)
+    doc = phrasing._get_nlp()(piece.text)
+    initial = _conditional_initial(piece, doc)
     if initial:
         return initial
-    doc = phrasing._get_nlp()(piece.text)
     fronted = _conditional_fronted(piece, doc)
     if fronted:
         return fronted
@@ -477,6 +561,10 @@ def _cut_coordination(piece: _Piece) -> _Split | None:
             continue
         head = token.head
         if head.pos_ != "VERB":
+            continue
+        # Only top-level coordination is safe: embedded heads omit material
+        # outside their subtree, so leave them intact for the catalog to flag.
+        if head.dep_ != "ROOT":
             continue
         conjuncts = [
             child
@@ -601,20 +689,20 @@ def _fragments(leaves: list[_Piece]) -> tuple[list[Fragment], dict[int, int]]:
     fragments: list[Fragment] = []
     indices: dict[int, int] = {}
     for piece in leaves:
-        cleaned = _clean_text(piece.text)
-        raw_span = _span(piece)
-        if not cleaned or raw_span is None:
+        cleaned = _clean_piece(piece)
+        raw_span = _span(cleaned)
+        if not cleaned.text or raw_span is None:
             continue
         index = len(fragments)
         indices[id(piece)] = index
         fragments.append(
             Fragment(
                 index,
-                cleaned,
+                cleaned.text,
                 piece.role,
                 raw_span,
                 piece.sentence,
-                _mark_unsplit(cleaned),
+                _mark_unsplit(cleaned.text),
                 piece.subject_copied,
             )
         )

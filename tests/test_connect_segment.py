@@ -46,9 +46,15 @@ def test_trailing_condition_preserves_reading_order():
 def test_causal_clause_cuts_without_requires_proposal():
     result = seg.segment("Because the token expired, the request is rejected")
 
-    assert len(result.cuts) == 1
-    assert any(item.role == "condition" for item in result.fragments)
+    assert fragment_texts(result) == [
+        "Because the token expired",
+        "the request is rejected",
+    ]
+    assert result.fragments[0].role == "condition"
+    assert result.fragments[0].unsplit is True
     assert result.proposals == []
+    assert len(result.cuts) == 1
+    assert result.cuts[0].connective == "Because"
 
 
 def test_unlisted_fronted_condition_keeps_opener_verbatim():
@@ -56,6 +62,44 @@ def test_unlisted_fronted_condition_keeps_opener_verbatim():
 
     assert fragment_texts(result) == ["Given the flag is set", "the job runs"]
     assert [item.role for item in result.fragments] == ["condition", "claim"]
+    assert result.proposals == []
+
+
+def test_condition_with_internal_commas_survives_whole():
+    result = seg.segment(
+        "If the report contains apples, bananas, and oranges, publish it."
+    )
+
+    assert fragment_texts(result) == [
+        "the report contains apples, bananas, and oranges",
+        "publish it",
+    ]
+    assert result.proposals == [seg.ConditionProposal(claim=1, condition=0, cue="If")]
+
+
+def test_initial_condition_without_comma_uses_parse_boundary():
+    result = seg.segment("If the flag is set the job runs")
+
+    assert fragment_texts(result) == ["the flag is set", "the job runs"]
+
+
+def test_multiword_initial_opener_survives_parse_boundary():
+    result = seg.segment("As soon as the flag is set, the job runs")
+
+    assert fragment_texts(result) == ["the flag is set", "the job runs"]
+    assert result.proposals == [
+        seg.ConditionProposal(claim=1, condition=0, cue="As soon as")
+    ]
+
+
+def test_unlisted_fronted_clause_proposes_nothing():
+    result = seg.segment("As discussed yesterday, the service restarts")
+
+    assert fragment_texts(result) == [
+        "As discussed yesterday",
+        "the service restarts",
+    ]
+    assert result.proposals == []
 
 
 # ─── coordination and lexical cuts ──────────────────────────────────────────
@@ -75,6 +119,19 @@ def test_subject_is_projected_onto_subjectless_conjunct():
     assert result.proposals == []
 
 
+def test_subject_is_projected_across_compound_phrase():
+    result = seg.segment("The user logs in and then receives a token")
+
+    assert fragment_texts(result) == [
+        "The user logs in",
+        "The user receives a token",
+    ]
+    assert [item.subject_copied for item in result.fragments] == [False, True]
+    assert len(result.cuts) == 1
+    assert result.cuts[0].kind == "compound-phrase"
+    assert result.cuts[0].connective == "and then"
+
+
 def test_conjunct_with_own_subject_is_not_projected():
     result = seg.segment("An invite is created and a notification email is sent")
 
@@ -89,6 +146,17 @@ def test_coordinated_nouns_are_not_split():
     result = seg.segment("apples and oranges are listed")
 
     assert fragment_texts(result) == ["apples and oranges are listed"]
+    assert result.cuts == []
+
+
+def test_embedded_coordination_is_not_split_and_is_flagged():
+    result = seg.segment("The admin says the user logs in and receives a token.")
+
+    assert fragment_texts(result) == [
+        "The admin says the user logs in and receives a token"
+    ]
+    assert "The admin says" in result.fragments[0].text
+    assert result.fragments[0].unsplit is True
     assert result.cuts == []
 
 
@@ -135,6 +203,21 @@ def test_intro_and_bullet_items_are_separate_sentence_units():
     for item in items:
         raw = source[item.span[0] : item.span[1]]
         assert item.text in raw
+
+
+def test_fragment_spans_match_their_retained_surface_text():
+    sources = (
+        "The job runs.",
+        "The user logs in and receives a token.",
+        "When the invite is sent, a reminder is scheduled.",
+    )
+    for source in sources:
+        for fragment in seg.segment(source).fragments:
+            raw = source[fragment.span[0] : fragment.span[1]]
+            if not fragment.subject_copied and len(raw) == len(fragment.text):
+                assert raw == fragment.text
+            else:
+                assert fragment.text in raw or raw in fragment.text
 
 
 def test_unsplittable_nested_clause_remnant_is_marked():
