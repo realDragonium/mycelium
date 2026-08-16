@@ -347,14 +347,19 @@ def test_tool_requires_a_score_for_automatic_provenance(
             )
 
 
-def test_unembedded_alias_count_falls_to_zero_on_drain(fresh_conn, monkeypatch):
-    seeded = len(store.list_link_type_aliases(fresh_conn))
-    assert store.count_unembedded_aliases(fresh_conn) == seeded
+def test_complete_alias_vectors_waits_for_the_last_embedding(fresh_conn):
+    assert store.complete_alias_vectors(fresh_conn) == []
 
     aliases.drain_alias_embeddings(
         fresh_conn,
         embed_text=lambda text: [float(len(text))] * 4,
         chunk=200,
     )
+    seeded = len(store.list_link_type_aliases(fresh_conn))
+    assert len(store.complete_alias_vectors(fresh_conn)) == seeded
 
-    assert store.count_unembedded_aliases(fresh_conn) == 0
+    with store.transaction(fresh_conn):
+        store.upsert_link_type_alias(fresh_conn, "proceeds", "then after")
+
+    # One alias added and not yet drained hides every other alias too.
+    assert store.complete_alias_vectors(fresh_conn) == []

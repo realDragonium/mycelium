@@ -51,7 +51,13 @@ from .connect import draft as connect_draft
 from .connect import pipeline as connect_pipeline
 from .connect.cue_gate import ABSORBING_DECISIONS, CueResolution
 from .connect.draft import BatchInput
-from .connect.extract import ExtractedItem, FlagInput, extract, violations_detail
+from .connect.extract import (
+    ExtractedItem,
+    Extraction,
+    FlagInput,
+    extract,
+    violations_detail,
+)
 from .connect.funnel import BatchStatement
 from .connect.proposals import Proposal, ProposalSet, proposals_from
 from .connect.substrate import HintedView, LiveSubstrate
@@ -3033,6 +3039,7 @@ def _run_connected(
     flags: Sequence[FlagInput] = (),
     cues: Sequence[CueResolution] = (),
     flags_from_plan: Callable[[_BatchPlan], list[FlagInput]] | None = None,
+    cues_from_plan: Callable[[_BatchPlan], list[CueResolution]] | None = None,
 ) -> _ConnectedRun:
     """Plan, connect, and draft one batch of connected statement specs."""
     plan = _plan_batch(statements, pre_rejected=pre_rejected)
@@ -3040,6 +3047,9 @@ def _run_connected(
     if flags_from_plan is not None:
         combined_flags.extend(flags_from_plan(plan))
     combined_flags.sort(key=lambda flag: flag.fragment_index)
+    combined_cues = list(cues)
+    if cues_from_plan is not None:
+        combined_cues.extend(cues_from_plan(plan))
 
     accepted, new_of, batch_inputs, batch = _prepare_connected_batch(statements, plan)
     hints, unresolved_hints = _connected_hints(statements, accepted)
@@ -3057,7 +3067,7 @@ def _run_connected(
         title,
         text_of,
         flags=combined_flags,
-        cues=cues,
+        cues=combined_cues,
     )
     return _ConnectedRun(
         plan=plan,
@@ -3067,7 +3077,7 @@ def _run_connected(
         text_of=text_of,
         unresolved_hints=unresolved_hints,
         flags=combined_flags,
-        cues=list(cues),
+        cues=combined_cues,
         draft_id=draft_id,
         counts=counts,
         draft=draft,
@@ -3286,27 +3296,20 @@ def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[Fla
     return flags
 
 
-def _alias_comparison_set() -> list[connect_aliases.AliasVector]:
-    """Load the alias vectors only while the alias set is fully embedded."""
-    # A half-drained queue hides rivals: a type whose other aliases are not
-    # embedded yet looks like it has no runner-up, and the gate would absorb
-    # confidently against a comparison set that is merely unfinished. An empty
-    # set resolves every cue as unresolved, which flags instead of guessing.
-    if store.count_unembedded_aliases(_db()):
-        return []
-    return connect_aliases.alias_vectors(_db())
-
-
 def _cue_resolver() -> Callable[[str], cue_gate.CueResolution]:
     """Bind the configured mode and the stored alias vectors into one resolver."""
     mode = cue_gate.resolution_mode()
     # Most prose carries no unknown cue, so the vector table is loaded on the
     # first candidate rather than on every ingest, and never in strict mode.
+    # A half-drained embedding queue reads as no vectors at all: a type whose
+    # other aliases are not embedded yet would look like it has no runner-up,
+    # and the gate would absorb confidently against an unfinished comparison
+    # set. No vectors resolves every cue as unresolved, which flags instead.
     loaded: list[list[connect_aliases.AliasVector]] = []
 
     def resolve(cue: str) -> cue_gate.CueResolution:
         if mode != "strict" and not loaded:
-            loaded.append(_alias_comparison_set())
+            loaded.append(connect_aliases.complete_alias_vectors(_db()))
         return cue_gate.resolve_cue(
             cue,
             loaded[0] if loaded else (),
@@ -3315,6 +3318,23 @@ def _cue_resolver() -> Callable[[str], cue_gate.CueResolution]:
         )
 
     return resolve
+
+
+def _surviving_cue_ops(extraction: Extraction, plan: _BatchPlan) -> list[CueResolution]:
+    """Keep the absorptions whose auto-typed edge survived planning."""
+    # Rejected content must not teach the vocabulary: a cue whose only edges
+    # were dropped with their statements has nothing left to have been right
+    # about.
+    surviving = {
+        cue
+        for left, right, _link_type, cue in extraction.cue_links
+        if left not in plan.rejected and right not in plan.rejected
+    }
+    return [
+        resolution
+        for resolution in extraction.cue_resolutions
+        if resolution.decision in ABSORBING_DECISIONS and resolution.cue in surviving
+    ]
 
 
 def _cue_response(
@@ -3432,8 +3452,8 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
         specs,
         title=title,
         flags=extraction.flags,
-        cues=extraction.cue_resolutions,
         flags_from_plan=lambda plan: _ingest_plan_flags(extraction.items, plan),
+        cues_from_plan=lambda plan: _surviving_cue_ops(extraction, plan),
     )
     connected = _connected_response(specs, run, set())
     accepted_items: list[dict[str, Any]] = []
@@ -3462,7 +3482,9 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
         for claim_position, _condition_position in extraction.condition_links
     )
     draft = None if run.draft is None else {**run.draft, "flags": len(run.flags)}
-    cues, cue_resolutions = _cue_response(run.cues)
+    # The response reports every decision the gate made; the draft carries only
+    # the absorptions whose edge survived.
+    cues, cue_resolutions = _cue_response(extraction.cue_resolutions)
     return {
         **connected,
         "fragments": {

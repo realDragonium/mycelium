@@ -51,6 +51,9 @@ class Extraction:
     condition_links: list[tuple[int, int]]
     cut_links: list[tuple[int, int, str]]
     cue_resolutions: list[CueResolution] = field(default_factory=list)
+    #: (left, right, link_type, cue) for every edge the gate typed, so a caller
+    #: can tell which cue an edge came from when the edge is later rejected.
+    cue_links: list[tuple[int, int, str, str]] = field(default_factory=list)
 
 
 FLAG_SOURCES = {
@@ -174,13 +177,13 @@ def _gate_cuts(
     item_position: dict[int, int],
     condition_links: list[tuple[int, int]],
     resolve: Callable[[str], CueResolution],
-) -> tuple[list[tuple[int, int, str]], list[FlagInput], list[CueResolution]]:
+) -> tuple[list[tuple[int, int, str, str]], list[FlagInput], list[CueResolution]]:
     """Apply cue decisions to unresolved cuts and render curator flags."""
     condition_pairs = set(condition_links)
     candidates = _cue_candidates(segmentation, aliases, item_position, condition_pairs)
     resolutions = _resolve_cues(candidates, resolve)
     fragments = {fragment.index: fragment for fragment in segmentation.fragments}
-    links: list[tuple[int, int, str]] = []
+    links: list[tuple[int, int, str, str]] = []
     flags: list[FlagInput] = []
     for cut, cue in candidates:
         resolution = resolutions[cue]
@@ -190,6 +193,7 @@ def _gate_cuts(
                     item_position[cut.left],
                     item_position[cut.right],
                     resolution.link_type,
+                    cue,
                 )
             )
             continue
@@ -302,6 +306,7 @@ def extract(
 
     cut_links = _cut_links(segmentation, item_position, condition_links)
     cue_resolutions: list[CueResolution] = []
+    cue_links: list[tuple[int, int, str, str]] = []
     if resolve_cue is not None:
         cue_links, cue_flags, cue_resolutions = _gate_cuts(
             segmentation,
@@ -310,7 +315,11 @@ def extract(
             condition_links,
             resolve_cue,
         )
-        cut_links.extend(cue_links)
+        cut_links.extend(
+            (left, right, link_type) for left, right, link_type, _cue in cue_links
+        )
         flags.extend(cue_flags)
 
-    return Extraction(items, flags, condition_links, cut_links, cue_resolutions)
+    return Extraction(
+        items, flags, condition_links, cut_links, cue_resolutions, cue_links
+    )

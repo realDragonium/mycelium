@@ -67,16 +67,26 @@ def drain_alias_embeddings(
         total += len(live)
 
 
-def alias_vectors(conn: sqlite3.Connection) -> list[AliasVector]:
-    """Load persisted float32 alias vectors."""
+def _vectors_of(rows: list) -> list[AliasVector]:
+    """Decode alias rows into float32 vectors."""
     return [
         AliasVector(
             link_type=row["link_type"],
             alias=row["alias"],
             vector=np.frombuffer(row["embedding"], dtype=np.float32),
         )
-        for row in store.alias_vectors(conn)
+        for row in rows
     ]
+
+
+def alias_vectors(conn: sqlite3.Connection) -> list[AliasVector]:
+    """Load persisted float32 alias vectors."""
+    return _vectors_of(store.alias_vectors(conn))
+
+
+def complete_alias_vectors(conn: sqlite3.Connection) -> list[AliasVector]:
+    """Load the alias vectors, or none while any alias is still unembedded."""
+    return _vectors_of(store.complete_alias_vectors(conn))
 
 
 def nearest_aliases(

@@ -525,3 +525,22 @@ def test_half_embedded_alias_set_flags_instead_of_guessing(tmp_path, monkeypatch
         flag = next(op for op in ops if op["kind"] == "flag")
         assert json.loads(flag["payload_json"])["reason"] == "cue"
         assert response["cues"]["unresolved"] == 1
+
+
+def test_rejected_edge_does_not_absorb_its_cue(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_CUE_RESOLUTION", "open")
+    with _app(tmp_path, monkeypatch):
+        _seed_vectors(
+            monkeypatch,
+            {"then": ("proceeds", [1.0, 0.0])},
+            {"and also": [1.0, 0.0]},
+        )
+
+        response = server.ingest_text(
+            "Every invite is always sent and also the reminder is scheduled"
+        )
+
+        assert response["cues"]["auto"] == 1
+        assert any(flag["reason"] == "phrasing" for flag in response["flags"])
+        ops = _draft_ops(response["draft_id"])
+        assert not any(op["kind"] == "upsert_link_type_alias" for op in ops)
