@@ -176,3 +176,27 @@ def test_cue_is_normalized_before_embedding(monkeypatch):
     )
 
     assert result.cue == "and also"
+
+
+def test_candidates_carry_one_score_per_link_type(monkeypatch):
+    monkeypatch.delenv("MYCELIUM_CUE_RESOLUTION", raising=False)
+    vectors = [
+        AliasVector("proceeds", "then", _vec(1.0, 0.0)),
+        AliasVector("proceeds", "afterwards", _vec(20.0, 1.0)),
+        AliasVector("proceeds", "next", _vec(10.0, 1.0)),
+        AliasVector("contains", "includes", _vec(4.0, 3.0)),
+    ]
+
+    result = resolve_cue(
+        "and also",
+        vectors,
+        k=2,
+        embed_text=_fake_embed({carrier_text("and also"): _vec(1.0, 0.0)}),
+    )
+
+    # Without the per-type reduction the rival type never reaches the flag.
+    assert [link_type for link_type, _alias, _score in result.candidates] == [
+        "proceeds",
+        "contains",
+    ]
+    assert result.candidates[1][2] == pytest.approx(0.8)

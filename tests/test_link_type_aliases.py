@@ -332,3 +332,16 @@ def test_curator_reassertion_retags_automatic_alias(tmp_path, monkeypatch):
         )
         assert row["provenance"] == "curator"
         assert row["score"] is None
+
+
+@pytest.mark.parametrize("provenance", ["auto", "auto:low-confidence"])
+def test_tool_requires_a_score_for_automatic_provenance(
+    tmp_path, monkeypatch, provenance
+):
+    with _app(tmp_path, monkeypatch):
+        with pytest.raises(ValueError):
+            server.upsert_link_type_alias(
+                "proceeds",
+                "then after",
+                provenance=provenance,
+            )

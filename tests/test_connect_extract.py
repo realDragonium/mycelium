@@ -294,3 +294,32 @@ def test_each_distinct_cue_is_resolved_once():
     assert calls == ["and also"]
     assert len(result.cut_links) == 2
     assert result.cue_resolutions == [resolution]
+
+
+def test_registered_ambiguous_cue_is_not_guessed():
+    def reject(cue: str) -> CueResolution:
+        raise AssertionError(f"unexpected cue: {cue!r}")
+
+    result = ex.extract(
+        "The invite is created and also the reminder is scheduled",
+        aliases={"and also": frozenset({"proceeds", "next"})},
+        resolve_cue=reject,
+    )
+
+    assert result.cut_links == []
+    assert result.cue_resolutions == []
+
+
+def test_cue_on_an_unclassified_endpoint_is_never_a_candidate():
+    def reject(cue: str) -> CueResolution:
+        raise AssertionError(f"unexpected cue: {cue!r}")
+
+    result = ex.extract(
+        "The invite is created and also archived",
+        aliases={},
+        resolve_cue=reject,
+    )
+
+    assert [item.text for item in result.items] == ["The invite is created"]
+    assert [flag.reason for flag in result.flags] == ["unmatched"]
+    assert result.cue_resolutions == []

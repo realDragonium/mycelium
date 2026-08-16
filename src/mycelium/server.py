@@ -3289,13 +3289,21 @@ def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[Fla
 def _cue_resolver() -> Callable[[str], cue_gate.CueResolution]:
     """Bind the configured mode and the stored alias vectors into one resolver."""
     mode = cue_gate.resolution_mode()
-    vectors = () if mode == "strict" else connect_aliases.alias_vectors(_db())
-    return lambda cue: cue_gate.resolve_cue(
-        cue,
-        vectors,
-        embed_text=embed.embed,
-        mode=mode,
-    )
+    # Most prose carries no unknown cue, so the vector table is loaded on the
+    # first candidate rather than on every ingest, and never in strict mode.
+    loaded: list[list[connect_aliases.AliasVector]] = []
+
+    def resolve(cue: str) -> cue_gate.CueResolution:
+        if mode != "strict" and not loaded:
+            loaded.append(connect_aliases.alias_vectors(_db()))
+        return cue_gate.resolve_cue(
+            cue,
+            loaded[0] if loaded else (),
+            embed_text=embed.embed,
+            mode=mode,
+        )
+
+    return resolve
 
 
 def _cue_response(
@@ -4998,6 +5006,10 @@ def upsert_link_type_alias(
         )
     if score is not None and not -1.0 <= float(score) <= 1.0:
         raise ValueError(f"score must be a cosine in [-1, 1]: {score!r}")
+    # An automatic absorption with no score is invisible to the audit sweep the
+    # provenance tag exists for.
+    if provenance in ABSORBING_DECISIONS and score is None:
+        raise ValueError(f"provenance {provenance!r} requires a score")
     normalized = store.normalize_alias(alias)
     with store.transaction(_db()):
         created = store.upsert_link_type_alias(

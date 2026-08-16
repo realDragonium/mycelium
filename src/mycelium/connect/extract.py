@@ -116,14 +116,30 @@ def _cut_links(
     return links
 
 
-def _cue_candidates(segmentation: Segmentation) -> list[tuple[Cut, str]]:
-    """Pair each unresolved, non-punctuation cut with the cue it carries."""
+def _cue_candidates(
+    segmentation: Segmentation,
+    aliases: Mapping[str, frozenset[str]],
+    item_position: dict[int, int],
+    condition_pairs: set[tuple[int, int]],
+) -> list[tuple[Cut, str]]:
+    """Pair each cut that could carry an unknown cue with the cue it carries."""
     candidates: list[tuple[Cut, str]] = []
     for cut in segmentation.cuts:
         if cut.link_type is not None or cut.kind in UNTYPED_CUT_KINDS:
             continue
+        left = item_position.get(cut.left)
+        right = item_position.get(cut.right)
+        # No typeable edge, nothing to type: an endpoint the pipeline could not
+        # classify is already its own flag, and a cue read off it would teach
+        # the vocabulary from material nothing else trusted.
+        if left is None or right is None or (left, right) in condition_pairs:
+            continue
         cue = connective_cue(cut.connective)
         if not cue or cue in _NEVER_A_CUE:
+            continue
+        # A cue the alias table already carries is either resolved upstream or
+        # ambiguous across types, and ambiguity is not grounds to guess.
+        if cue in aliases:
             continue
         candidates.append((cut, cue))
     return candidates
@@ -154,28 +170,28 @@ def _cue_detail(resolution: CueResolution) -> str:
 
 def _gate_cuts(
     segmentation: Segmentation,
+    aliases: Mapping[str, frozenset[str]],
     item_position: dict[int, int],
     condition_links: list[tuple[int, int]],
     resolve: Callable[[str], CueResolution],
 ) -> tuple[list[tuple[int, int, str]], list[FlagInput], list[CueResolution]]:
     """Apply cue decisions to unresolved cuts and render curator flags."""
-    candidates = _cue_candidates(segmentation)
-    resolutions = _resolve_cues(candidates, resolve)
     condition_pairs = set(condition_links)
+    candidates = _cue_candidates(segmentation, aliases, item_position, condition_pairs)
+    resolutions = _resolve_cues(candidates, resolve)
     fragments = {fragment.index: fragment for fragment in segmentation.fragments}
     links: list[tuple[int, int, str]] = []
     flags: list[FlagInput] = []
     for cut, cue in candidates:
         resolution = resolutions[cue]
         if resolution.decision in ABSORBING_DECISIONS:
-            left = item_position.get(cut.left)
-            right = item_position.get(cut.right)
-            if (
-                left is not None
-                and right is not None
-                and (left, right) not in condition_pairs
-            ):
-                links.append((left, right, resolution.link_type))
+            links.append(
+                (
+                    item_position[cut.left],
+                    item_position[cut.right],
+                    resolution.link_type,
+                )
+            )
             continue
 
         fragment = fragments[cut.left]
@@ -289,6 +305,7 @@ def extract(
     if resolve_cue is not None:
         cue_links, cue_flags, cue_resolutions = _gate_cuts(
             segmentation,
+            aliases or {},
             item_position,
             condition_links,
             resolve_cue,

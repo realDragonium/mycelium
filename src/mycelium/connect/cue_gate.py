@@ -50,6 +50,22 @@ def resolution_mode() -> str:
     return DEFAULT_MODE if not value else _validate_mode(value)
 
 
+def _best_per_type(
+    ranked: list[tuple[str, str, float]],
+) -> list[tuple[str, str, float]]:
+    """Keep each link type's nearest alias, preserving the ranking order."""
+    # The margin and the flag are both about *types*, so a type that owns
+    # several near aliases must not crowd its rivals out of the ranking.
+    seen: set[str] = set()
+    best: list[tuple[str, str, float]] = []
+    for link_type, alias, score in ranked:
+        if link_type in seen:
+            continue
+        seen.add(link_type)
+        best.append((link_type, alias, score))
+    return best
+
+
 def resolve_cue(
     cue: str,
     vectors: Sequence[AliasVector],
@@ -69,13 +85,10 @@ def resolve_cue(
         return CueResolution(cue, "unresolved", None, None, None, ())
 
     vector = embed_text(carrier_text(cue))
-    ranked = nearest_aliases(vector, vectors, k=len(vectors))
+    ranked = _best_per_type(nearest_aliases(vector, vectors, k=len(vectors)))
     candidates = tuple(ranked[:k])
     best_type, best_alias, best_score = ranked[0]
-    second = next(
-        (score for link_type, _alias, score in ranked if link_type != best_type),
-        None,
-    )
+    second = ranked[1][2] if len(ranked) > 1 else None
     if best_score < threshold:
         return CueResolution(cue, "unresolved", None, None, None, candidates)
 
