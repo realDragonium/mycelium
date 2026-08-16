@@ -27,8 +27,8 @@ def test_extracts_the_measured_paragraph():
 
 
 def test_empty_and_whitespace_only_text():
-    assert ex.extract("") == ex.Extraction([], [], [])
-    assert ex.extract("   \n ") == ex.Extraction([], [], [])
+    assert ex.extract("") == ex.Extraction([], [], [], [])
+    assert ex.extract("   \n ") == ex.Extraction([], [], [], [])
 
 
 def test_unsplit_fragment_is_flagged_without_classification():
@@ -78,3 +78,34 @@ def test_flag_sources_cover_every_emitted_reason():
         "flip",
         "depends_on_rejected",
     } <= ex.FLAG_SOURCES.keys()
+
+
+def test_resolved_cut_produces_left_to_right_item_link():
+    result = ex.extract(
+        "The invite is created and then the reminder is scheduled",
+        aliases={"and then": frozenset({"proceeds"})},
+    )
+
+    assert [item.text for item in result.items] == [
+        "The invite is created",
+        "the reminder is scheduled",
+    ]
+    assert result.cut_links == [(0, 1, "proceeds")]
+
+
+def test_cut_without_aliases_produces_no_link():
+    result = ex.extract("The invite is created and then the reminder is scheduled")
+
+    assert result.cut_links == []
+
+
+def test_cut_with_unclassified_endpoint_produces_only_a_flag():
+    result = ex.extract(
+        "The invite is created and then the user logs in",
+        aliases={"and then": frozenset({"proceeds"})},
+    )
+
+    assert result.cut_links == []
+    assert [(flag.text, flag.reason) for flag in result.flags] == [
+        ("the user logs in", "unmatched")
+    ]

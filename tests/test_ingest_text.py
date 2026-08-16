@@ -103,6 +103,21 @@ def test_happy_path_writes_connected_items_and_flags(tmp_path, monkeypatch):
             }
 
 
+def test_registered_cut_alias_adds_left_to_right_draft_link(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        response = server.ingest_text(
+            "The invite is created and then the reminder is scheduled"
+        )
+
+        assert response["results"] == [
+            {"accepted": True, "batch_index": 0},
+            {"accepted": True, "batch_index": 1},
+        ]
+        draft = server.get_draft(response["draft_id"])
+        statements = draft["ops"][0]["payload"]["statements"]
+        assert statements[0]["links"] == [{"to_id": "@1", "link_type": "proceeds"}]
+
+
 def test_apply_draft_skips_flags_and_creates_condition_link(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch):
         response = server.ingest_text(TEXT)

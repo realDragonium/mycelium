@@ -1037,15 +1037,15 @@ def init(data_dir: Path) -> None:
         layout_baker=baker,
     )
 
-    # Start the async mention-recompute worker on its own thread+connection
-    # (transport-agnostic: both stdio and HTTP funnel through init). Guarded
-    # by an env flag so the test suite — which would otherwise spawn a thread
-    # per TestClient lifecycle and race the assertions — can drain the queue
-    # synchronously via `mention_worker.drain` instead.
+    # Start background queue workers on their own threads and connections
+    # (transport-agnostic: both stdio and HTTP funnel through init). The flag is
+    # the test suite's single "background workers off" switch, not a per-worker
+    # knob, so tests can drain either queue synchronously without thread races.
     if os.environ.get("MYCELIUM_DISABLE_MENTION_WORKER") != "1":
-        from . import mention_worker
+        from . import alias_worker, mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
+        alias_worker.start(data_dir)
 
 
 def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
@@ -3425,9 +3425,11 @@ def submit_connected_batch(
 
 
 def _ingest_specs(
-    items: list[ExtractedItem], condition_links: list[tuple[int, int]]
+    items: list[ExtractedItem],
+    condition_links: list[tuple[int, int]],
+    cut_links: list[tuple[int, int, str]],
 ) -> list[ConnectedStatementSpec]:
-    """Build connected specs with the segmenter's conditional links."""
+    """Build connected specs with the segmenter's conditional and cut links."""
     specs: list[ConnectedStatementSpec] = [
         {"kind": item.kind, "text": item.text} for item in items
     ]
@@ -3436,6 +3438,13 @@ def _ingest_specs(
             {
                 "to_id": f"@{condition_position}",
                 "link_type": "requires",
+            }
+        )
+    for source_position, target_position, link_type in cut_links:
+        specs[source_position].setdefault("links", []).append(
+            {
+                "to_id": f"@{target_position}",
+                "link_type": link_type,
             }
         )
     return specs
@@ -3500,10 +3509,11 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
     fragment that classifies but then trips the catalog becomes a flag too.
 
     A conditional opener proposes a `requires` link from the claim to the
-    condition. No other relation is inferred. This uses no LLM, does not rewrite
-    your words, and never guesses kinds. For input too messy for these rules,
-    extract statements yourself (or with the `ingest` tool) and call
-    `submit_connected_batch`.
+    condition. A cut whose connective is a registered alias of exactly one link
+    type also proposes that link, left to right; nothing else is inferred. This
+    uses no LLM, does not rewrite your words, and never guesses kinds. For input
+    too messy for these rules, extract statements yourself (or with the `ingest`
+    tool) and call `submit_connected_batch`.
 
     Flag ops do not replay: `apply_draft` skips them. Resolve a flag by rewriting
     that fragment yourself and then `discard_draft_op`-ing the flag.
@@ -3531,11 +3541,13 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
         }
         ```
     """
-    extraction = extract(text)
+    extraction = extract(text, aliases=store.alias_lookup(_db()))
     if not extraction.items and not extraction.flags:
         return _empty_ingest_text()
 
-    specs = _ingest_specs(extraction.items, extraction.condition_links)
+    specs = _ingest_specs(
+        extraction.items, extraction.condition_links, extraction.cut_links
+    )
     run = _run_connected(
         specs,
         title=title,
@@ -5074,6 +5086,72 @@ def delete_link_type(link_type: str) -> dict[str, str]:
     with store.transaction(_db()):
         store.delete_statement_link_type_glossary(_db(), link_type)
     return {"link_type": link_type}
+
+
+@tool
+def upsert_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
+    """Create or update a cue-matcher phrasing for a canonical link type.
+
+    The alias is a phrasing the cue matcher will accept for this link type;
+    links still store the canonical `link_type`. The same alias may be
+    registered under more than one type. An alias ambiguous that way is not
+    resolved by the segmenter.
+
+    Embedding runs in the background, so `list_link_type_aliases` may briefly
+    show `embedded: false`. Returns `{link_type, alias, created}` with the
+    normalized alias and whether this call created it.
+    """
+    if not link_type or not link_type.strip():
+        raise ValueError("link_type cannot be empty")
+    if not alias or not alias.strip():
+        raise ValueError("alias cannot be empty")
+    normalized = store.normalize_alias(alias)
+    with store.transaction(_db()):
+        created = store.upsert_link_type_alias(
+            _db(), link_type, normalized, provenance="curator"
+        )
+
+    from . import alias_worker  # local import: avoid loading worker machinery eagerly
+
+    alias_worker.wake()
+    return {"link_type": link_type, "alias": normalized, "created": created}
+
+
+@tool
+def delete_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
+    """Delete one cue-matcher phrasing from a canonical link type.
+
+    Reach for this to retire vocabulary without changing links already stored
+    under the canonical type. Idempotent. Returns `{link_type, alias, deleted}`
+    with the normalized alias.
+    """
+    normalized = store.normalize_alias(alias)
+    with store.transaction(_db()):
+        deleted = store.delete_link_type_alias(_db(), link_type, normalized)
+    return {"link_type": link_type, "alias": normalized, "deleted": deleted}
+
+
+@tool
+def list_link_type_aliases(
+    link_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """List cue-matcher phrasings, optionally for one canonical link type.
+
+    Reach for this to inspect accepted vocabulary and whether its background
+    embedding is ready. Returns
+    `[{link_type, alias, provenance, score, embedded}]`; hand-authored and
+    seeded aliases have `score: null`.
+    """
+    return [
+        {
+            "link_type": row["link_type"],
+            "alias": row["alias"],
+            "provenance": row["provenance"],
+            "score": row["score"],
+            "embedded": bool(row["embedded"]),
+        }
+        for row in store.list_link_type_aliases(_db(), link_type)
+    ]
 
 
 @tool

@@ -3,7 +3,7 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, mention_worker, server, store
+from mycelium import alias_worker, embed, mention_worker, server, store
 from mycelium.http import _history_target_id
 
 
@@ -85,6 +85,55 @@ def test_http_full_surface(tmp_path, monkeypatch):
         )
         assert r.status_code == 400
         assert "ent_missing" in r.json()["detail"]
+
+
+def test_link_type_alias_tools_are_registered_and_reachable(tmp_path, monkeypatch):
+    tool_names = {tool.__name__ for tool in server.TOOLS}
+    assert {
+        "upsert_link_type_alias",
+        "delete_link_type_alias",
+        "list_link_type_aliases",
+    } <= tool_names
+
+    with _client(tmp_path, monkeypatch, deterministic_embed) as client:
+        created = client.post(
+            "/upsert-link-type-alias",
+            json={"link_type": "triggers", "alias": "  Sparks  Immediately "},
+        )
+        assert created.status_code == 200
+        assert created.json() == {
+            "link_type": "triggers",
+            "alias": "sparks immediately",
+            "created": True,
+        }
+
+        listed = client.post("/list-link-type-aliases", json={"link_type": "triggers"})
+        assert listed.status_code == 200
+        row = next(row for row in listed.json() if row["alias"] == "sparks immediately")
+        assert {k: v for k, v in row.items() if k != "embedded"} == {
+            "link_type": "triggers",
+            "alias": "sparks immediately",
+            "provenance": "curator",
+            "score": None,
+        }
+
+        # `embedded` reports a worker outcome, so assert it against a drain
+        # this test performed rather than against whichever thread won a race.
+        alias_worker.drain(store.substrate_connection())
+        listed = client.post("/list-link-type-aliases", json={"link_type": "triggers"})
+        row = next(row for row in listed.json() if row["alias"] == "sparks immediately")
+        assert row["embedded"] is True
+
+        deleted = client.post(
+            "/delete-link-type-alias",
+            json={"link_type": "triggers", "alias": "SPARKS IMMEDIATELY"},
+        )
+        assert deleted.status_code == 200
+        assert deleted.json() == {
+            "link_type": "triggers",
+            "alias": "sparks immediately",
+            "deleted": True,
+        }
 
 
 def test_search_min_score_filters_low_matches(tmp_path, monkeypatch):

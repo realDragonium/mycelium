@@ -1,9 +1,18 @@
-from mycelium import phrasing
+from mycelium import phrasing, store
 from mycelium.connect import segment as seg
 
 
 def fragment_texts(result):
     return [fragment.text for fragment in result.fragments]
+
+
+def seeded_alias_lookup():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    try:
+        return store.alias_lookup(conn)
+    finally:
+        conn.close()
 
 
 # ─── conditionals ───────────────────────────────────────────────────────────
@@ -229,6 +238,44 @@ def test_compound_phrase_isolated_verbatim():
     assert result.cuts[0].connective == "and then"
 
 
+def test_comma_then_cut_resolves_only_with_aliases():
+    source = "The invite is sent, then a reminder is scheduled"
+    aliases = {"then": frozenset({"proceeds"})}
+
+    resolved = seg.segment(source, aliases=aliases)
+    unresolved = seg.segment(source)
+
+    assert resolved.cuts[0].connective == ", then"
+    assert resolved.cuts[0].link_type == "proceeds"
+    assert unresolved.cuts[0].link_type is None
+
+
+def test_coordination_cut_is_absent_from_seeded_aliases():
+    aliases = seeded_alias_lookup()
+
+    assert "and" not in aliases
+    result = seg.segment("The user logs in and receives a token", aliases=aliases)
+    assert result.cuts[0].link_type is None
+
+
+def test_ambiguous_connective_alias_resolves_to_nothing():
+    aliases = {"then": frozenset({"proceeds", "next"})}
+    result = seg.segment(
+        "The invite is sent, then a reminder is scheduled", aliases=aliases
+    )
+
+    assert result.cuts[0].link_type is None
+
+
+def test_conditional_cut_is_absent_from_seeded_aliases():
+    aliases = seeded_alias_lookup()
+    result = seg.segment("If the flag is set, the job runs", aliases=aliases)
+
+    assert "if" not in aliases
+    assert result.cuts[0].connective == "If"
+    assert result.cuts[0].link_type is None
+
+
 # ─── blocks, offsets, and cleanup ────────────────────────────────────────────
 
 
@@ -382,3 +429,22 @@ def test_all_cut_spans_round_trip_to_connectives():
 def test_empty_and_whitespace_only_input_return_empty_segmentation():
     for source in ("", " \n\t "):
         assert seg.segment(source) == seg.Segmentation([], [], [])
+
+
+def test_conditional_cut_ignores_a_registered_alias():
+    result = seg.segment(
+        "When the flag is set, the job runs",
+        aliases={"when": frozenset({"requires"})},
+    )
+
+    assert result.cuts[0].link_type is None
+    assert result.proposals
+
+
+def test_coordination_cut_ignores_a_registered_alias():
+    result = seg.segment(
+        "The user logs in and receives a token",
+        aliases={"and": frozenset({"proceeds"})},
+    )
+
+    assert result.cuts[0].link_type is None

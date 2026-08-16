@@ -150,6 +150,9 @@ def test_hinted_view_widens_funnel_entity_candidates_without_persisting():
     text = "the account accepts a recovery code"
 
     class FakeView:
+        def __init__(self) -> None:
+            self.aliases: dict[str, tuple[str, ...]] = {}
+
         def embed(self, value: str) -> list[float]:
             return [1.0]
 
@@ -175,12 +178,17 @@ def test_hinted_view_widens_funnel_entity_candidates_without_persisting():
         def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
             return frozenset({"requires"})
 
+        def aliases_by_type(self) -> dict[str, tuple[str, ...]]:
+            return self.aliases
+
     batch = [BatchStatement(0, "event", text)]
     base = FakeView()
+    base.aliases = {"restricts": ("throttles",)}
 
     assert find_candidates(batch, base).candidates == []
 
     hinted = HintedView(base, {text: frozenset({"e"})})
+    assert hinted.aliases_by_type() is base.aliases
     candidates = find_candidates(batch, hinted).candidates
 
     assert len(candidates) == 1

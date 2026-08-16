@@ -16,6 +16,7 @@ deliberately not an exact substring of the source.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,7 @@ class Cut:
     span: tuple[int, int]
     left: int
     right: int
+    link_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -808,8 +810,44 @@ def _fragments(leaves: list[_Piece]) -> tuple[list[Fragment], dict[int, int]]:
     return fragments, indices
 
 
-def _resolve_cuts(pending: list[_PendingCut], indices: dict[int, int]) -> list[Cut]:
+#: Boundary filler a raw connective slice carries that an alias never does —
+#: a cut records `", then"` or `";"`, the alias table stores `"then"`.
+_CONNECTIVE_EDGE_RE = re.compile(r"^[\s\W_]+|[\s\W_]+$")
+
+
+def _connective_link_type(
+    connective: str, aliases: Mapping[str, frozenset[str]]
+) -> str | None:
+    """Resolve a normalized connective only when one link type carries it."""
+    stripped = _CONNECTIVE_EDGE_RE.sub("", connective)
+    link_types = aliases.get(" ".join(stripped.casefold().split()), frozenset())
+    # An alias carried by multiple types is real ambiguity, not grounds to guess.
+    return next(iter(link_types)) if len(link_types) == 1 else None
+
+
+#: Cut kinds whose connective is never a left→right relation, whatever alias a
+#: curator registers for it. A conditional runs the other way and its relation
+#: is already proposed with the right orientation; coordination is not a
+#: relation at all.
+_UNTYPED_CUT_KINDS = frozenset({"conditional", "coordination"})
+
+
+def _cut_link_type(
+    cut: _PendingCut, aliases: Mapping[str, frozenset[str]]
+) -> str | None:
+    """Resolve a cut's connective to the one link type its aliases name."""
+    if cut.kind in _UNTYPED_CUT_KINDS:
+        return None
+    return _connective_link_type(cut.connective, aliases)
+
+
+def _resolve_cuts(
+    pending: list[_PendingCut],
+    indices: dict[int, int],
+    aliases: Mapping[str, frozenset[str]] | None,
+) -> list[Cut]:
     """Resolve surviving pending cut references to public fragment indices."""
+    aliases = aliases or {}
     cuts = [
         Cut(
             item.kind,
@@ -817,6 +855,7 @@ def _resolve_cuts(pending: list[_PendingCut], indices: dict[int, int]) -> list[C
             item.span,
             indices[id(item.left)],
             indices[id(item.right)],
+            _cut_link_type(item, aliases),
         )
         for item in pending
         if id(item.left) in indices and id(item.right) in indices
@@ -838,7 +877,9 @@ def _resolve_proposals(
     return proposals
 
 
-def segment(text: str) -> Segmentation:
+def segment(
+    text: str, *, aliases: Mapping[str, frozenset[str]] | None = None
+) -> Segmentation:
     """Segment raw text into atomic claims, conditions, cuts, and proposals.
 
     Preserve original offsets through block and sentence splitting, recursively
@@ -846,7 +887,8 @@ def segment(text: str) -> Segmentation:
     leaves for unsplit atomicity cues, and number retained fragments in reading
     order. Causal clauses are cut without ``requires`` proposals. A projected
     subject is copied only into surface text; its fragment span remains the raw
-    conjunct's source material.
+    conjunct's source material. Resolve cut connectives carried by exactly one
+    supplied alias to that link type.
     """
     if not text.strip():
         return Segmentation([], [], [])
@@ -860,6 +902,6 @@ def segment(text: str) -> Segmentation:
     fragments, indices = _fragments(leaves)
     return Segmentation(
         fragments,
-        _resolve_cuts(pending_cuts, indices),
+        _resolve_cuts(pending_cuts, indices, aliases),
         _resolve_proposals(pending_proposals, indices),
     )

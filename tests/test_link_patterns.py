@@ -70,6 +70,69 @@ def test_find_cues_empty_and_ordered_by_start():
     assert cues[-1].pattern == "triggers-produces"
 
 
+def test_empty_aliases_preserve_all_templated_pattern_defaults():
+    examples = (
+        ("The threshold is configured on company", "capability"),
+        ("The threshold can be toggled per company", "capability"),
+        ("Score difference between base and adjustment", "rule"),
+        ("Retry budget limits dispatch attempts", "rule"),
+        ("The account is read-only", "state"),
+        ("The request is routed through the proxy", "event"),
+    )
+
+    for text, kind in examples:
+        assert find_cues(text, kind) == find_cues(text, kind, aliases={})
+
+
+def test_configures_aliases_replace_packaged_cues():
+    aliases = {"configures": ("tuned", "configured")}
+
+    tuned = find_cues(
+        "The score threshold can be tuned on a job profile",
+        "capability",
+        aliases=aliases,
+    )
+    configured = find_cues(
+        "The score threshold can be configured on a job profile",
+        "capability",
+        aliases=aliases,
+    )
+    toggled = find_cues(
+        "The score threshold can be toggled on a job profile",
+        "capability",
+        aliases=aliases,
+    )
+
+    tuned_capability = next(
+        cue for cue in tuned if cue.pattern == "configures-capability"
+    )
+    assert tuned_capability.cue == "can be tuned on"
+    assert tuned_capability.target_text == "a job profile"
+    assert any(cue.pattern == "configures-capability" for cue in configured)
+    assert not any(cue.pattern == "configures-capability" for cue in toggled)
+
+
+def test_aliases_do_not_affect_non_templated_patterns():
+    text = "A login triggers an audit"
+
+    assert find_cues(text, "event", aliases={"triggers": ("kicks off",)}) == find_cues(
+        text, "event"
+    )
+
+
+def test_link_type_alias_fires_in_each_templated_frame():
+    aliases = {"restricts": ("throttles", "quarantined")}
+
+    limits = find_cues("The importer throttles nightly syncs", "rule", aliases)
+    state = find_cues("The account is quarantined", "state", aliases)
+
+    limits_match = next(cue for cue in limits if cue.pattern == "restricts-limits")
+    state_match = next(cue for cue in state if cue.pattern == "restricts-state")
+    assert limits_match.cue == "throttles"
+    assert limits_match.target_text == "nightly syncs"
+    assert state_match.cue == "is quarantined"
+
+
 def test_pattern_registry_has_unique_names_flags_and_seeded_types():
     patterns = all_patterns()
 

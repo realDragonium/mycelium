@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -46,6 +47,10 @@ class SubstrateView(Protocol):
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         """Return link types the ontology admits from a source kind to a target."""
+        ...
+
+    def aliases_by_type(self) -> Mapping[str, Sequence[str]]:
+        """Cue phrasings accepted for each link type, longest first."""
         ...
 
 
