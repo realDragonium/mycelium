@@ -21,7 +21,7 @@ import sqlite3
 import sys
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Literal, NotRequired, TypedDict
@@ -48,6 +48,7 @@ from .app_context import AppContext
 from .connect import draft as connect_draft
 from .connect import pipeline as connect_pipeline
 from .connect.draft import BatchInput
+from .connect.extract import ExtractedItem, FlagInput, extract, violations_detail
 from .connect.funnel import BatchStatement
 from .connect.proposals import Proposal, ProposalSet, proposals_from
 from .connect.substrate import HintedView, LiveSubstrate
@@ -3174,9 +3175,10 @@ def _assemble_connected_draft(
     proposal_set: ProposalSet,
     title: str | None,
     text_of: Callable[[str], str | None],
+    flags: Sequence[FlagInput] = (),
 ) -> tuple[str | None, dict[str, int], dict[str, Any] | None]:
     """Write a non-empty connected batch and summarize its open draft."""
-    if not batch:
+    if not batch and not flags:
         counts = {"links": 0, "merges": 0, "conflicts": 0}
         return None, counts, None
 
@@ -3190,6 +3192,7 @@ def _assemble_connected_draft(
         created_by=_actor_id(),
         title=title,
         session_id=None,
+        flags=flags,
     )
     summary = connect_draft.summarize(_drafts_db(), draft_id)
     counts = {
@@ -3197,8 +3200,113 @@ def _assemble_connected_draft(
         "merges": summary["merges"],
         "conflicts": summary["conflicts"],
     }
-    op_count = 1 + counts["links"] + counts["merges"] + counts["conflicts"]
+    op_count = (
+        (1 if batch else 0)
+        + counts["links"]
+        + counts["merges"]
+        + counts["conflicts"]
+        + summary["flags"]
+    )
     return draft_id, counts, {"status": "open", "op_count": op_count}
+
+
+@dataclass
+class _ConnectedRun:
+    plan: _BatchPlan
+    new_of: dict[int, int]
+    pipeline_result: connect_pipeline.PipelineResult
+    proposal_set: ProposalSet
+    text_of: Callable[[str], str | None]
+    unresolved_hints: list[str]
+    flags: list[FlagInput]
+    draft_id: str | None
+    counts: dict[str, int]
+    draft: dict[str, Any] | None
+
+
+def _run_connected(
+    statements: list[ConnectedStatementSpec],
+    *,
+    title: str | None,
+    pre_rejected: set[int] | None = None,
+    flags: Sequence[FlagInput] = (),
+    flags_from_plan: Callable[[_BatchPlan], list[FlagInput]] | None = None,
+) -> _ConnectedRun:
+    """Plan, connect, and draft one batch of connected statement specs."""
+    plan = _plan_batch(statements, pre_rejected=pre_rejected)
+    combined_flags = list(flags)
+    if flags_from_plan is not None:
+        combined_flags.extend(flags_from_plan(plan))
+    combined_flags.sort(key=lambda flag: flag.fragment_index)
+
+    accepted, new_of, batch_inputs, batch = _prepare_connected_batch(statements, plan)
+    hints, unresolved_hints = _connected_hints(statements, accepted)
+    text_of = _connected_text_reader()
+    view = HintedView(LiveSubstrate(), hints)
+    pipeline_result = connect_pipeline.run(batch, view, text_of=text_of)
+    proposal_set = proposals_from(
+        funnel=pipeline_result.funnel,
+        links=pipeline_result.link_proposals,
+        verdicts=pipeline_result.verdicts,
+    )
+    draft_id, counts, draft = _assemble_connected_draft(
+        batch_inputs,
+        proposal_set,
+        title,
+        text_of,
+        flags=combined_flags,
+    )
+    return _ConnectedRun(
+        plan=plan,
+        new_of=new_of,
+        pipeline_result=pipeline_result,
+        proposal_set=proposal_set,
+        text_of=text_of,
+        unresolved_hints=unresolved_hints,
+        flags=combined_flags,
+        draft_id=draft_id,
+        counts=counts,
+        draft=draft,
+    )
+
+
+def _connected_response(
+    statements: list[ConnectedStatementSpec],
+    run: _ConnectedRun,
+    unsupported: set[int],
+) -> dict[str, Any]:
+    """Render the established connected-batch response shape."""
+    proposals = run.proposal_set.proposals
+    return {
+        "draft_id": run.draft_id,
+        "results": _connected_results(statements, run.plan, run.new_of, unsupported),
+        "proposals": run.counts,
+        "links": [
+            _connected_link(proposal)
+            for proposal in proposals
+            if proposal.kind == "link"
+        ],
+        "merges": [
+            _connected_merge(proposal, run.text_of)
+            for proposal in proposals
+            if proposal.kind == "merge"
+        ],
+        "conflicts": [
+            _connected_conflict(proposal, run.text_of)
+            for proposal in proposals
+            if proposal.kind == "conflict"
+        ],
+        "related": _connected_related(
+            run.pipeline_result, run.proposal_set, run.text_of
+        ),
+        "dropped_merges": [
+            _connected_merge(proposal, run.text_of)
+            for proposal in run.proposal_set.dropped_merges
+        ],
+        "unresolved_hints": run.unresolved_hints,
+        "nli": run.pipeline_result.nli,
+        "draft": run.draft,
+    }
 
 
 def _empty_connected_batch() -> dict[str, Any]:
@@ -3312,51 +3420,167 @@ def submit_connected_batch(
         return _empty_connected_batch()
 
     unsupported = _items_with_incoming_links(statements)
-    plan = _plan_batch(statements, pre_rejected=unsupported)
-    accepted, new_of, batch_inputs, batch = _prepare_connected_batch(statements, plan)
-    hints, unresolved_hints = _connected_hints(statements, accepted)
-    text_of = _connected_text_reader()
-    view = HintedView(LiveSubstrate(), hints)
-    pipeline_result = connect_pipeline.run(
-        batch,
-        view,
-        text_of=text_of,
-    )
-    proposal_set = proposals_from(
-        funnel=pipeline_result.funnel,
-        links=pipeline_result.link_proposals,
-        verdicts=pipeline_result.verdicts,
-    )
-    draft_id, counts, draft = _assemble_connected_draft(
-        batch_inputs, proposal_set, title, text_of
-    )
-    proposals = proposal_set.proposals
+    run = _run_connected(statements, title=title, pre_rejected=unsupported)
+    return _connected_response(statements, run, unsupported)
+
+
+def _ingest_specs(
+    items: list[ExtractedItem], condition_links: list[tuple[int, int]]
+) -> list[ConnectedStatementSpec]:
+    """Build connected specs with the segmenter's conditional links."""
+    specs: list[ConnectedStatementSpec] = [
+        {"kind": item.kind, "text": item.text} for item in items
+    ]
+    for claim_position, condition_position in condition_links:
+        specs[claim_position].setdefault("links", []).append(
+            {
+                "to_id": f"@{condition_position}",
+                "link_type": "requires",
+            }
+        )
+    return specs
+
+
+def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[FlagInput]:
+    """Turn planner rejections into source-addressed curator flags."""
+    flags: list[FlagInput] = []
+    for index, item in enumerate(items):
+        if index not in plan.rejected:
+            continue
+        if plan.item_errors[index]:
+            reason = "flip"
+            detail = "; ".join(plan.item_errors[index])
+        elif index in plan.direct_rejected:
+            reason = "phrasing"
+            detail = violations_detail(plan.item_violations[index])
+        else:
+            reason = "depends_on_rejected"
+            dependencies = ", ".join(
+                str(items[dependency].fragment_index)
+                for dependency in plan.cascade_reasons[index]
+            )
+            detail = f"depends on rejected fragment(s) {dependencies}"
+        flags.append(
+            FlagInput(
+                fragment_index=item.fragment_index,
+                text=item.text,
+                reason=reason,
+                detail=detail,
+                sentence=item.sentence,
+                span=item.span,
+            )
+        )
+    return flags
+
+
+def _empty_ingest_text() -> dict[str, Any]:
+    """Extend the shared empty connected response with extraction fields."""
     return {
-        "draft_id": draft_id,
-        "results": _connected_results(statements, plan, new_of, unsupported),
-        "proposals": counts,
-        "links": [
-            _connected_link(proposal)
-            for proposal in proposals
-            if proposal.kind == "link"
+        **_empty_connected_batch(),
+        "fragments": {"total": 0, "resolved": 0, "flagged": 0},
+        "items": [],
+        "flags": [],
+        "condition_links": 0,
+    }
+
+
+@tool
+def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
+    """Turn raw or lightly structured prose into one open, unapplied draft.
+
+    Give it a paragraph, a few sentences, or a bullet list. It splits on the
+    phrasing catalog's own atomicity cues — semicolons, compound phrases,
+    conditionals, and conservative verb coordination — instead of rejecting
+    compound input. Every surviving fragment then faces the same catalog
+    validation as any other write.
+
+    A kind comes from phrasing shape matching, never a guess. A fragment whose
+    shape is ambiguous or matches nothing, or that is still compound after the
+    split, becomes a **`flag` op** in the draft: a TODO for whoever reads it. A
+    fragment that classifies but then trips the catalog becomes a flag too.
+
+    A conditional opener proposes a `requires` link from the claim to the
+    condition. No other relation is inferred. This uses no LLM, does not rewrite
+    your words, and never guesses kinds. For input too messy for these rules,
+    extract statements yourself (or with the `ingest` tool) and call
+    `submit_connected_batch`.
+
+    Flag ops do not replay: `apply_draft` skips them. Resolve a flag by rewriting
+    that fragment yourself and then `discard_draft_op`-ing the flag.
+
+    Returns:
+        ```
+        {
+          "draft_id": "drf_..." | null,
+          "fragments": {"total": 0, "resolved": 0, "flagged": 0},
+          "items": [
+            {"batch_index": 0, "fragment_index": 0, "kind": "event",
+             "text": "...", "sentence": 0, "note": "..."}
+          ],
+          "flags": [
+            {"fragment_index": 1, "reason": "unmatched", "text": "..."}
+          ],
+          "condition_links": 0,
+          "results": [...],
+          "proposals": {"links": 0, "merges": 0, "conflicts": 0},
+          "links": [...], "merges": [...], "conflicts": [...],
+          "related": [...], "dropped_merges": [...],
+          "unresolved_hints": [...],
+          "nli": "ran" | "unavailable",
+          "draft": {"status": "open", "op_count": 0, "flags": 0} | null
+        }
+        ```
+    """
+    extraction = extract(text)
+    if not extraction.items and not extraction.flags:
+        return _empty_ingest_text()
+
+    specs = _ingest_specs(extraction.items, extraction.condition_links)
+    run = _run_connected(
+        specs,
+        title=title,
+        flags=extraction.flags,
+        flags_from_plan=lambda plan: _ingest_plan_flags(extraction.items, plan),
+    )
+    connected = _connected_response(specs, run, set())
+    accepted_items: list[dict[str, Any]] = []
+    for index, item in enumerate(extraction.items):
+        if index not in run.new_of:
+            continue
+        rendered: dict[str, Any] = {
+            "batch_index": run.new_of[index],
+            "fragment_index": item.fragment_index,
+            "kind": item.kind,
+            "text": item.text,
+            "sentence": item.sentence,
+        }
+        if item.note:
+            rendered["note"] = item.note
+        accepted_items.append(rendered)
+
+    total = len(extraction.items) + len(extraction.flags)
+    condition_links = sum(
+        claim_position in run.new_of
+        for claim_position, _condition_position in extraction.condition_links
+    )
+    draft = None if run.draft is None else {**run.draft, "flags": len(run.flags)}
+    return {
+        **connected,
+        "fragments": {
+            "total": total,
+            "resolved": len(run.new_of),
+            "flagged": len(run.flags),
+        },
+        "items": accepted_items,
+        "flags": [
+            {
+                "fragment_index": flag.fragment_index,
+                "reason": flag.reason,
+                "text": flag.text,
+            }
+            for flag in run.flags
         ],
-        "merges": [
-            _connected_merge(proposal, text_of)
-            for proposal in proposals
-            if proposal.kind == "merge"
-        ],
-        "conflicts": [
-            _connected_conflict(proposal, text_of)
-            for proposal in proposals
-            if proposal.kind == "conflict"
-        ],
-        "related": _connected_related(pipeline_result, proposal_set, text_of),
-        "dropped_merges": [
-            _connected_merge(proposal, text_of)
-            for proposal in proposal_set.dropped_merges
-        ],
-        "unresolved_hints": unresolved_hints,
-        "nli": pipeline_result.nli,
+        "condition_links": condition_links,
         "draft": draft,
     }
 
@@ -5378,8 +5602,12 @@ def _replay_draft_op(
     results_by_seq: dict[int, Any],
 ) -> dict[str, Any]:
     """Resolve and replay one draft operation with contextual errors."""
+    from . import drafts_store
+
     kind = op["kind"]
     seq = op["seq"]
+    if kind in drafts_store.NON_REPLAYING_OP_KINDS:
+        return {"seq": seq, "kind": kind, "skipped": kind}
     wrapper = tools_by_name.get(kind)
     if wrapper is None:
         # The tool was removed since this op was queued — notably
@@ -5417,6 +5645,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     curator's principal already in the contextvar (so the role gate
     passes naturally). All-or-nothing: a single op raising halts replay
     and surfaces the error. Successful replay marks the draft `approved`.
+    A non-replaying op kind such as `flag` is skipped with its own marker.
 
     Returns `{applied: int, results: [...]}`. On failure, raises with
     the seq/kind that exploded.
