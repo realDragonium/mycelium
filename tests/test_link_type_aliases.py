@@ -1,3 +1,6 @@
+import logging
+import threading
+
 import numpy as np
 import pytest
 
@@ -179,3 +182,43 @@ def test_failed_drain_reopens_its_claimed_jobs(fresh_conn, monkeypatch):
 
     alias_worker._reopen_claimed(fresh_conn)
     assert store.count_open_alias_embeddings(fresh_conn) == open_before
+
+
+def test_stop_keeps_a_slow_worker_and_start_refuses_a_second(
+    tmp_path, monkeypatch, caplog
+):
+    """A join that times out must not orphan the running worker.
+
+    Clearing `_thread` there would let the next `start` run a second worker
+    beside the first; both reset claims on the same queue.
+    """
+    conn = store.connect(tmp_path / "mycelium.db")
+    store.migrate(conn)
+    conn.close()
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_drain(_conn, *, chunk: int = alias_worker.CHUNK) -> int:
+        entered.set()
+        release.wait(10.0)
+        return 0
+
+    monkeypatch.setattr(alias_worker, "drain", blocking_drain)
+    try:
+        alias_worker.start(tmp_path)
+        worker = alias_worker._thread
+        assert entered.wait(10.0)
+
+        with caplog.at_level(logging.WARNING, logger="mycelium.alias_worker"):
+            alias_worker.stop(timeout=0.05)
+        assert "did not stop" in caplog.text
+        assert alias_worker._thread is worker
+        assert worker.is_alive()
+
+        alias_worker.start(tmp_path)
+        assert alias_worker._thread is worker
+    finally:
+        release.set()
+        alias_worker.stop(timeout=10.0)
+    assert alias_worker._thread is None

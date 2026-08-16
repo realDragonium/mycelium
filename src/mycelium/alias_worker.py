@@ -78,10 +78,18 @@ def start(data_dir: Path | str, *, poll_interval: float = 2.0) -> None:
 
 
 def stop(timeout: float = 5.0) -> None:
-    """Signal the worker to exit and join it."""
+    """Signal the worker to exit and join it.
+
+    Keeps the reference when the join times out: dropping it would let the
+    next `start` run a second worker alongside a drain that is merely slow,
+    and two workers reset each other's claims on the same queue.
+    """
     global _thread
     _stop.set()
     _wake.set()
     if _thread is not None:
         _thread.join(timeout)
+        if _thread.is_alive():
+            logger.warning("alias worker did not stop within %.1fs", timeout)
+            return
         _thread = None
