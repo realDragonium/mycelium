@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS draft_ops (
     seq          INTEGER NOT NULL,
     kind         TEXT NOT NULL,
     payload_json TEXT NOT NULL,
+    provenance_json TEXT,
     created_at   TEXT NOT NULL,
     created_by   TEXT,
     UNIQUE (draft_id, seq)
@@ -113,6 +114,11 @@ def reset() -> None:
 
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DRAFTS_SCHEMA)
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(draft_ops)").fetchall()
+    }
+    if "provenance_json" not in columns:
+        conn.execute("ALTER TABLE draft_ops ADD COLUMN provenance_json TEXT")
     conn.commit()
 
 
@@ -220,6 +226,7 @@ def add_op(
     kind: str,
     payload: dict,
     created_by: str | None,
+    provenance: dict | None = None,
 ) -> int:
     """Append an op to a draft; returns the new seq number. Caller must
     have already verified the draft is open — this function does not
@@ -232,9 +239,18 @@ def add_op(
     op_id = "op_" + _uuid.uuid4().hex[:12]
     conn.execute(
         "INSERT INTO draft_ops (id, draft_id, seq, kind, payload_json, "
-        "                       created_at, created_by) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (op_id, draft_id, seq, kind, _json.dumps(payload), _now(), created_by),
+        "                       provenance_json, created_at, created_by) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            op_id,
+            draft_id,
+            seq,
+            kind,
+            _json.dumps(payload),
+            _json.dumps(provenance) if provenance is not None else None,
+            _now(),
+            created_by,
+        ),
     )
     return seq
 
@@ -309,6 +325,11 @@ def serialize_op(row: sqlite3.Row) -> dict:
         "seq": row["seq"],
         "kind": row["kind"],
         "payload": _json.loads(row["payload_json"]),
+        "provenance": (
+            _json.loads(row["provenance_json"])
+            if row["provenance_json"] is not None
+            else None
+        ),
         "created_at": row["created_at"],
         "created_by": row["created_by"],
     }
