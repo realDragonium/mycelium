@@ -106,6 +106,25 @@ def test_statements_sharing_entities_deduplicates_aliases_and_chunks():
     assert store.statements_sharing_entities(conn, []) == []
 
 
+def test_live_substrate_reads_kind_link_matrix(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch):
+        view = LiveSubstrate()
+
+        known = view.admissible_link_types("event", "state")
+        glossary_types = {
+            row["link_type"]
+            for row in store.list_statement_link_type_glossary(server._db())
+        }
+        vocabulary = frozenset(
+            glossary_types | set(store.list_link_types(server._db()))
+        )
+
+        assert known
+        assert "establishes" in known
+        assert "teaches" not in known
+        assert view.admissible_link_types("widget", "state") == vocabulary
+
+
 def test_statements_sharing_entities_never_scans_the_mention_table():
     """The funnel runs this lookup once per entity-bearing batch item, so a
     plan that scans every materialized mention would make ingest cost

@@ -44,6 +44,10 @@ class SubstrateView(Protocol):
 
     def kind_of(self, statement_id: str) -> str | None: ...
 
+    def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
+        """Return link types the ontology admits from a source kind to a target."""
+        ...
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -54,6 +58,7 @@ class Candidate:
     via: frozenset[str]
     shared_entities: frozenset[str]
     relation: str
+    link_types: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,8 @@ def _rank(
             if kind == statement.kind and score >= duplicate_threshold
             else "related"
         )
+        # The downstream rule engine always reads cues from the batch source text.
+        link_types = view.admissible_link_types(statement.kind, kind)
         candidates.append(
             Candidate(
                 new_index=statement.index,
@@ -130,6 +137,7 @@ def _rank(
                 via=via,
                 shared_entities=shared_entities,
                 relation=relation,
+                link_types=link_types,
             )
         )
     candidates.sort(key=lambda candidate: (-candidate.score, candidate.statement_id))
@@ -191,3 +199,8 @@ def candidates_for(result: FunnelResult, new_index: int) -> list[Candidate]:
     return [
         candidate for candidate in result.candidates if candidate.new_index == new_index
     ]
+
+
+def link_typable(result: FunnelResult) -> list[Candidate]:
+    """Return the candidates the matrix leaves a link-type shortlist for."""
+    return [candidate for candidate in result.candidates if candidate.link_types]

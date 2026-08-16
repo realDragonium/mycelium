@@ -1,6 +1,8 @@
-"""Direction checks for statement links."""
+"""Direction rules and kind-compatibility derivation for statement links."""
 
 from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
 
 KindSet = frozenset[str] | None
 
@@ -24,6 +26,24 @@ def _satisfies(kinds: tuple[KindSet, KindSet], from_kind: str, to_kind: str) -> 
     source_kinds, target_kinds = kinds
     return (source_kinds is None or from_kind in source_kinds) and (
         target_kinds is None or to_kind in target_kinds
+    )
+
+
+def derive_kind_link_matrix(
+    kinds: Iterable[str],
+    link_types: Iterable[str],
+    direction: Mapping[str, tuple[KindSet, KindSet]] = LINK_DIRECTION,
+) -> frozenset[tuple[str, str, str]]:
+    """Derive every kind pair and link type admitted by the direction rules."""
+    kind_set = frozenset(kinds)
+    link_type_set = frozenset(link_types)
+    return frozenset(
+        (from_kind, to_kind, link_type)
+        for from_kind in kind_set
+        for to_kind in kind_set
+        for link_type in link_type_set
+        if link_type not in direction
+        or _satisfies(direction[link_type], from_kind, to_kind)
     )
 
 

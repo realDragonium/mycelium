@@ -24,13 +24,14 @@ def _as_cosine(value: float) -> float:
 class LiveSubstrate:
     """Expose the running substrate through the funnel's view.
 
-    One instance is meant to serve one batch. Its lazily built name index is a snapshot
-    taken on first use and would become stale as names change in a long-lived instance.
+    One instance is meant to serve one batch. Its lazily built name index and matrix
+    lookups are snapshots that would become stale in a long-lived instance.
     """
 
     def __init__(self, server_module: ModuleType | None = None) -> None:
         self._server = server_module or importlib.import_module("mycelium.server")
         self._names: dict[str, list[mentions.IndexedName]] | None = None
+        self._admissible_link_types: dict[tuple[str, str], frozenset[str]] = {}
 
     def _name_index(self) -> dict[str, list[mentions.IndexedName]]:
         if self._names is None:
@@ -92,3 +93,12 @@ class LiveSubstrate:
         """Return the current kind of a statement that still exists."""
         statement = store.get_statement(self._server._db(), statement_id)
         return None if statement is None else statement["kind"]
+
+    def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
+        """Return link types the ontology admits from a source kind to a target."""
+        key = (from_kind, to_kind)
+        if key not in self._admissible_link_types:
+            self._admissible_link_types[key] = store.admissible_link_types(
+                self._server._db(), from_kind, to_kind
+            )
+        return self._admissible_link_types[key]

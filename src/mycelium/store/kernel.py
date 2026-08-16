@@ -385,6 +385,19 @@ CREATE TABLE IF NOT EXISTS entity_link_type_glossary (
     updated_by  TEXT
 );
 
+-- Instance configuration: which link types are admissible between a
+-- source kind and a target kind. Seeded once from the ontology (kinds
+-- × link types, pruned by link_rules.LINK_DIRECTION) when the table is
+-- empty; edits persist because a non-empty table is never re-seeded.
+CREATE TABLE IF NOT EXISTS kind_link_matrix (
+    from_kind  TEXT NOT NULL,
+    to_kind    TEXT NOT NULL,
+    link_type  TEXT NOT NULL,
+    created_at TEXT,
+    created_by TEXT,
+    PRIMARY KEY (from_kind, to_kind, link_type)
+);
+
 -- Note: authentication tables (users, mcp_tokens, invites,
 -- oauth_clients, oauth_codes) live in a SEPARATE SQLite file managed
 -- by `auth_store.py`. The split lets you swap the substrate DB
@@ -590,13 +603,14 @@ def migrate(conn: sqlite3.Connection) -> None:
     run the versioned migration runner, which catches up legacy DBs and
     fast-forwards fresh ones. See `mycelium.migrations` for details."""
     from .. import migrations
-    from . import glossary
+    from . import glossary, kind_link_matrix
 
     conn.executescript(SCHEMA)
     migrations.apply_migrations(conn)
     if has_history(conn):
         conn.executescript(HISTORY_SCHEMA)
     glossary.seed_glossaries(conn)
+    kind_link_matrix.seed_kind_link_matrix(conn)
     conn.commit()
 
 
