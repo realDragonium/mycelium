@@ -31,6 +31,17 @@ dependencies = [
     "uvicorn>=0.46.0",
 ]
 
+[project.optional-dependencies]
+# NLI classification (mycelium.connect.nli) is opt-in: the checkpoint and CPU
+# torch are ~1 GB, and every path that uses it degrades to "no label" without
+# it. `uv sync --extra nli` to enable.
+nli = [
+    "protobuf>=4",
+    "sentencepiece>=0.2.0",
+    "torch>=2.3",
+    "transformers>=4.44",
+]
+
 [project.scripts]
 mycelium = "mycelium.__main__:main"
 mycelium-http = "mycelium.http:main"
@@ -46,6 +57,16 @@ dev = [
     # act, and the reformat belongs in the same commit.
     "ruff==0.15.20",
 ]
+
+[tool.uv.sources]
+# Without this the nli extra resolves to the CUDA build: multiple GB of wheels
+# for a CPU-only inference path.
+torch = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
