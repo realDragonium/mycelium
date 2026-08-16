@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Mapping
 from types import ModuleType
 
 import numpy as np
 
 from mycelium import mentions, store
+
+from .funnel import SubstrateView
 
 
 def _as_cosine(value: float) -> float:
@@ -19,6 +22,47 @@ def _as_cosine(value: float) -> float:
     number in [-1, 1].
     """
     return max(-1.0, min(1.0, value))
+
+
+class HintedView:
+    """Union agent-supplied entity hints into the wrapped view's mention derivation."""
+
+    def __init__(
+        self, view: SubstrateView, hints: Mapping[str, frozenset[str]]
+    ) -> None:
+        self._view = view
+        # Hints are request-scoped and never written to the mentions table.
+        self._hints = hints
+
+    def embed(self, text: str) -> list[float]:
+        """Delegate text embedding to the wrapped view."""
+        return self._view.embed(text)
+
+    def neighbours(self, vec: list[float], k: int) -> list[tuple[str, float]]:
+        """Delegate neighbour discovery to the wrapped view."""
+        return self._view.neighbours(vec, k)
+
+    def similarity(self, vec: list[float], statement_id: str) -> float | None:
+        """Delegate statement similarity to the wrapped view."""
+        return self._view.similarity(vec, statement_id)
+
+    def entities_in(self, text: str) -> frozenset[str]:
+        """Widen derived entities with request-scoped hints for exact text."""
+        return self._view.entities_in(text) | self._hints.get(text, frozenset())
+
+    def statements_sharing(
+        self, entity_ids: frozenset[str]
+    ) -> dict[str, frozenset[str]]:
+        """Delegate shared-entity discovery to the wrapped view."""
+        return self._view.statements_sharing(entity_ids)
+
+    def kind_of(self, statement_id: str) -> str | None:
+        """Delegate statement-kind lookup to the wrapped view."""
+        return self._view.kind_of(statement_id)
+
+    def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
+        """Delegate link-type admission to the wrapped view."""
+        return self._view.admissible_link_types(from_kind, to_kind)
 
 
 class LiveSubstrate:

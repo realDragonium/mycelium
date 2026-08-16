@@ -60,6 +60,15 @@ def _resolve_model_name(configured_name: str | None) -> str:
     return model_name() if configured_name is None else configured_name
 
 
+def _torch():
+    """Import torch, reporting an unusable installation as unavailable."""
+    try:
+        import torch  # local import: heavy optional nli dependency
+    except (ImportError, OSError) as error:
+        raise NliUnavailable(f"torch could not be imported: {error}") from error
+    return torch
+
+
 def _within_unit_range(value: float) -> bool:
     """Return whether a confidence is finite and between 0.0 and 1.0."""
     return math.isfinite(value) and 0.0 <= value <= 1.0
@@ -107,40 +116,54 @@ class TransformersNli:
         # tokenizer and label map are already published to other threads.
         if self._transformer is not None:
             return
-
-        from transformers import (  # local import: heavy optional nli dependency
-            AutoModelForSequenceClassification,
-            AutoTokenizer,
-        )
-
+        # Concurrent tool calls reach this before the first load finishes; the
+        # checkpoint is ~1GB, so a second in-flight load is a second copy in
+        # memory and a second download.
         with self._load_lock:
-            if self._transformer is not None:
-                return
+            if self._transformer is None:
+                self._load_checkpoint()
+
+    def _load_checkpoint(self) -> None:
+        """Fetch and validate the checkpoint, reporting any failure as unavailable."""
+        try:
+            from transformers import (  # local import: heavy optional nli dependency
+                AutoModelForSequenceClassification,
+                AutoTokenizer,
+            )
+
             tokenizer = AutoTokenizer.from_pretrained(self._model_name)
             transformer = AutoModelForSequenceClassification.from_pretrained(
                 self._model_name
             )
-            transformer.eval()
-            id2label = {
-                int(label_id): str(label).strip().lower()
-                for label_id, label in transformer.config.id2label.items()
-            }
-            if set(id2label.values()) != set(LABELS):
-                raise NliUnavailable(
-                    f"checkpoint {self._model_name!r} reports labels "
-                    f"{sorted(id2label.values())}, expected {sorted(LABELS)}"
-                )
-            self._tokenizer = tokenizer
-            self._id2label = id2label
-            self._transformer = transformer
+        except (ImportError, OSError) as error:
+            # Callers degrade on NliUnavailable and only on that, so a missing
+            # package, an absent checkpoint and a failed download must arrive
+            # as one kind of failure.
+            raise NliUnavailable(
+                f"checkpoint {self._model_name!r} could not be loaded: {error}"
+            ) from error
+        transformer.eval()
+        id2label = {
+            int(label_id): str(label).strip().lower()
+            for label_id, label in transformer.config.id2label.items()
+        }
+        if set(id2label.values()) != set(LABELS):
+            raise NliUnavailable(
+                f"checkpoint {self._model_name!r} reports labels "
+                f"{sorted(id2label.values())}, expected {sorted(LABELS)}"
+            )
+        self._tokenizer = tokenizer
+        self._id2label = id2label
+        # Assigned last: `_load` reads this field outside the lock as the
+        # "fully loaded" flag, so every other field must be set first.
+        self._transformer = transformer
 
     def classify(self, pairs: list[tuple[str, str]]) -> list[NliLabel]:
         """Classify premise and hypothesis pairs in input order."""
         if not pairs:
             return []
 
-        import torch  # local import: heavy optional nli dependency
-
+        torch = _torch()
         self._load()
         labels: list[NliLabel] = []
         for start in range(0, len(pairs), self._batch_size):
@@ -169,14 +192,16 @@ class TransformersNli:
 
 
 _model: TransformersNli | None = None
+_model_lock = threading.Lock()
 
 
 def default_model() -> TransformersNli:
     """Return the process-wide default NLI model."""
     global _model
-    if _model is None:
-        _model = TransformersNli()
-    return _model
+    with _model_lock:
+        if _model is None:
+            _model = TransformersNli()
+        return _model
 
 
 @dataclass(frozen=True)

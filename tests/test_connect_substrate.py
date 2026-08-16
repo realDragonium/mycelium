@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from mycelium import embed, server, store
 from mycelium.connect.funnel import BatchStatement, find_candidates
-from mycelium.connect.substrate import LiveSubstrate
+from mycelium.connect.substrate import HintedView, LiveSubstrate
 
 
 def word_embed(text: str) -> list[float]:
@@ -144,3 +144,48 @@ def test_statements_sharing_entities_never_scans_the_mention_table():
     steps = [row["detail"] for row in plan]
     assert any("names_entity" in step for step in steps), steps
     assert not any(step.startswith("SCAN") for step in steps), steps
+
+
+def test_hinted_view_widens_funnel_entity_candidates_without_persisting():
+    text = "the account accepts a recovery code"
+
+    class FakeView:
+        def embed(self, value: str) -> list[float]:
+            return [1.0]
+
+        def neighbours(self, vec: list[float], k: int) -> list[tuple[str, float]]:
+            return []
+
+        def similarity(self, vec: list[float], statement_id: str) -> float | None:
+            return 0.7 if statement_id == "stm_x" else None
+
+        def entities_in(self, value: str) -> frozenset[str]:
+            return frozenset()
+
+        def statements_sharing(
+            self, entity_ids: frozenset[str]
+        ) -> dict[str, frozenset[str]]:
+            if entity_ids == frozenset({"e"}):
+                return {"stm_x": frozenset({"e"})}
+            return {}
+
+        def kind_of(self, statement_id: str) -> str | None:
+            return "state" if statement_id == "stm_x" else None
+
+        def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
+            return frozenset({"requires"})
+
+    batch = [BatchStatement(0, "event", text)]
+    base = FakeView()
+
+    assert find_candidates(batch, base).candidates == []
+
+    hinted = HintedView(base, {text: frozenset({"e"})})
+    candidates = find_candidates(batch, hinted).candidates
+
+    assert len(candidates) == 1
+    assert candidates[0].new_index == 0
+    assert candidates[0].statement_id == "stm_x"
+    assert candidates[0].score == 0.7
+    assert candidates[0].via == frozenset({"mention"})
+    assert candidates[0].shared_entities == frozenset({"e"})

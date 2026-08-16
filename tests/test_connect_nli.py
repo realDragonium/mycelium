@@ -286,3 +286,23 @@ def test_real_nli_model_classifies_representative_pairs():
         "neutral",
     ]
     assert all(0.0 <= result.confidence <= 1.0 for result in results)
+
+
+def test_unloadable_checkpoint_is_reported_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A checkpoint that cannot be loaded must reach callers as NliUnavailable."""
+    original_find_spec = importlib.util.find_spec
+
+    def installed_nli_packages(name: str):
+        if name in {"transformers", "torch"}:
+            return object()
+        return original_find_spec(name)
+
+    monkeypatch.setattr(importlib.util, "find_spec", installed_nli_packages)
+    # An absolute path is resolved locally, so the load fails without a network
+    # call whether or not the optional packages are actually installed.
+    monkeypatch.setenv("MYCELIUM_NLI_MODEL", "/nonexistent/nli-checkpoint")
+
+    with pytest.raises(NliUnavailable):
+        TransformersNli()._load()
