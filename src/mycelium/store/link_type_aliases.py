@@ -24,8 +24,13 @@ def normalize_alias(alias: str) -> str:
 
 # Keep the canonical surface form of each type, the exact cue phrasings the
 # shipped lexical patterns accept today, and a few unambiguous synonyms.
-# Conditional subordinators (`if`, `when`, `unless`, …) and coordinator `and`
-# are absent: their cuts run right→left or express no relation, not left→right.
+# Two omissions are deliberate, not gaps. Conditional subordinators (`if`,
+# `when`, `unless`, …) and the coordinator `and` are absent: their cuts run
+# right→left or express no relation, and the segmenter links left→right. And
+# the vocabulary of a deliberately UNSHIPPED pattern is absent (`blocks`,
+# `prevents`, `suppresses`, `capped`, `bounded` for `restricts`; `combines`,
+# `aggregates` for `composes`) — two shipped templates take a bare cue slot, so
+# seeding those words would ship the phrasings the hit-rate report rejected.
 _ALIAS_SEED: dict[str, tuple[str, ...]] = {
     "contains": ("contains", "includes", "comprises", "consists of", "is made up of"),
     "triggers": ("triggers", "fires", "kicks off", "causes", "results in", "leads to"),

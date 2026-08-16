@@ -1,9 +1,11 @@
 """Background worker that drains durable link-type alias embedding jobs.
 
 Alias writes enqueue work in the same transaction as the vocabulary change.
-This worker embeds those rows on its own thread and SQLite connection, one
-transactional chunk at a time. A failed chunk rolls back for retry, and startup
-unclaims jobs that a previously interrupted worker may have stranded.
+This worker embeds those rows on its own thread and SQLite connection, in
+chunks. A chunk claims, then embeds OUTSIDE any transaction, then writes: the
+embedding round trip must not hold the single writer. Startup unclaims jobs a
+previously interrupted worker stranded mid-chunk, so delivery is at-least-once
+and re-embedding is idempotent.
 """
 
 from __future__ import annotations

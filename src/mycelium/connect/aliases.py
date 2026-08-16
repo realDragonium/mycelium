@@ -35,27 +35,36 @@ def drain_alias_embeddings(
     embed_text: Callable[[str], list[float]] = embed.embed,
     chunk: int = 50,
 ) -> int:
-    """Drain alias embedding jobs in transactional chunks."""
+    """Drain alias embedding jobs, embedding between short write transactions."""
     total = 0
     while True:
         with store.transaction(conn):
             rows = store.claim_alias_embeddings(conn, chunk)
-            if not rows:
-                return total
+            # Deletion can race an already-claimed job; the queue row is still
+            # finished below, so the durable queue keeps no work with no target.
+            live = [
+                row
+                for row in rows
+                if store.link_type_alias_exists(conn, row["link_type"], row["alias"])
+            ]
+        if not rows:
+            return total
 
-            for row in rows:
-                # Deletion can race an already-claimed job; finishing it keeps
-                # the durable queue from retaining work with no target row.
-                if not store.link_type_alias_exists(
-                    conn, row["link_type"], row["alias"]
-                ):
-                    continue
-                vector = embed_text(carrier_text(row["alias"]))
-                blob = np.asarray(vector, dtype=np.float32).tobytes()
+        # Embedding is a network round trip per alias and must not hold the
+        # single writer. The claim above is what makes that safe: a crash here
+        # leaves the rows claimed, and `reset_claimed_alias_embeddings` re-opens
+        # them on the next worker start.
+        blobs = [
+            np.asarray(
+                embed_text(carrier_text(row["alias"])), dtype=np.float32
+            ).tobytes()
+            for row in live
+        ]
+        with store.transaction(conn):
+            for row, blob in zip(live, blobs, strict=True):
                 store.set_alias_embedding(conn, row["link_type"], row["alias"], blob)
-                total += 1
-
             store.finish_alias_embeddings(conn, [row["id"] for row in rows])
+        total += len(live)
 
 
 def alias_vectors(conn: sqlite3.Connection) -> list[AliasVector]:
