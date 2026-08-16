@@ -6,13 +6,21 @@ nothing is dropped and no link retains an unresolved endpoint.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from typing import Any
 
-from mycelium import phrasing
+from mycelium import phrasing, phrasing_cues
 
 from . import shapes
-from .segment import Segmentation, segment
+from .cue_gate import ABSORBING_DECISIONS, CueResolution
+from .segment import (
+    UNTYPED_CUT_KINDS,
+    Cut,
+    Segmentation,
+    connective_cue,
+    segment,
+)
 
 
 @dataclass(frozen=True)
@@ -33,6 +41,7 @@ class FlagInput:
     detail: str
     sentence: int
     span: tuple[int, int]
+    provenance: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +50,10 @@ class Extraction:
     flags: list[FlagInput]
     condition_links: list[tuple[int, int]]
     cut_links: list[tuple[int, int, str]]
+    cue_resolutions: list[CueResolution] = field(default_factory=list)
+    #: (left, right, link_type, cue) for every edge the gate typed, so a caller
+    #: can tell which cue an edge came from when the edge is later rejected.
+    cue_links: list[tuple[int, int, str, str]] = field(default_factory=list)
 
 
 FLAG_SOURCES = {
@@ -50,7 +63,17 @@ FLAG_SOURCES = {
     "phrasing": "phrasing",
     "flip": "planner",
     "depends_on_rejected": "planner",
+    "cue": "cue-gate",
 }
+
+#: Connectives that are never a cue candidate however they are segmented: the
+#: bare coordinator expresses no relation, and a conditional or causal opener
+#: already has its orientation decided by the condition proposal.
+_NEVER_A_CUE = (
+    frozenset({"and"})
+    | {opener.casefold() for opener in phrasing_cues.SUBORDINATOR_STRIP}
+    | {word.casefold() for word in phrasing_cues.CAUSAL_SCONJ}
+)
 
 
 def violations_detail(violations: list[dict]) -> str:
@@ -96,8 +119,111 @@ def _cut_links(
     return links
 
 
+def _cue_candidates(
+    segmentation: Segmentation,
+    aliases: Mapping[str, frozenset[str]],
+    item_position: dict[int, int],
+    condition_pairs: set[tuple[int, int]],
+) -> list[tuple[Cut, str]]:
+    """Pair each cut that could carry an unknown cue with the cue it carries."""
+    candidates: list[tuple[Cut, str]] = []
+    for cut in segmentation.cuts:
+        if cut.link_type is not None or cut.kind in UNTYPED_CUT_KINDS:
+            continue
+        left = item_position.get(cut.left)
+        right = item_position.get(cut.right)
+        # No typeable edge, nothing to type: an endpoint the pipeline could not
+        # classify is already its own flag, and a cue read off it would teach
+        # the vocabulary from material nothing else trusted.
+        if left is None or right is None or (left, right) in condition_pairs:
+            continue
+        cue = connective_cue(cut.connective)
+        if not cue or cue in _NEVER_A_CUE:
+            continue
+        # A cue the alias table already carries is either resolved upstream or
+        # ambiguous across types, and ambiguity is not grounds to guess.
+        if cue in aliases:
+            continue
+        candidates.append((cut, cue))
+    return candidates
+
+
+def _resolve_cues(
+    candidates: list[tuple[Cut, str]],
+    resolve: Callable[[str], CueResolution],
+) -> dict[str, CueResolution]:
+    """Resolve each distinct cue once, in first-appearance order."""
+    resolutions: dict[str, CueResolution] = {}
+    for _cut, cue in candidates:
+        if cue not in resolutions:
+            resolutions[cue] = resolve(cue)
+    return resolutions
+
+
+def _cue_detail(resolution: CueResolution) -> str:
+    """Render an unresolved cue and what it was nearest to."""
+    nearest = ", ".join(
+        f"{link_type} ({alias}) {score:.2f}"
+        for link_type, alias, score in resolution.candidates
+    )
+    return f'unknown connective "{resolution.cue}"' + (
+        f"; nearest: {nearest}" if nearest else "; no alias embeddings to compare"
+    )
+
+
+def _gate_cuts(
+    segmentation: Segmentation,
+    aliases: Mapping[str, frozenset[str]],
+    item_position: dict[int, int],
+    condition_links: list[tuple[int, int]],
+    resolve: Callable[[str], CueResolution],
+) -> tuple[list[tuple[int, int, str, str]], list[FlagInput], list[CueResolution]]:
+    """Apply cue decisions to unresolved cuts and render curator flags."""
+    condition_pairs = set(condition_links)
+    candidates = _cue_candidates(segmentation, aliases, item_position, condition_pairs)
+    resolutions = _resolve_cues(candidates, resolve)
+    fragments = {fragment.index: fragment for fragment in segmentation.fragments}
+    links: list[tuple[int, int, str, str]] = []
+    flags: list[FlagInput] = []
+    for cut, cue in candidates:
+        resolution = resolutions[cue]
+        if resolution.decision in ABSORBING_DECISIONS:
+            links.append(
+                (
+                    item_position[cut.left],
+                    item_position[cut.right],
+                    resolution.link_type,
+                    cue,
+                )
+            )
+            continue
+
+        fragment = fragments[cut.left]
+        flags.append(
+            FlagInput(
+                fragment_index=cut.left,
+                text=fragment.text,
+                reason="cue",
+                detail=_cue_detail(resolution),
+                sentence=fragment.sentence,
+                span=cut.span,
+                provenance={
+                    "cue": resolution.cue,
+                    "decision": resolution.decision,
+                    "candidates": [
+                        list(candidate) for candidate in resolution.candidates
+                    ],
+                },
+            )
+        )
+    return links, flags, list(resolutions.values())
+
+
 def extract(
-    text: str, *, aliases: Mapping[str, frozenset[str]] | None = None
+    text: str,
+    *,
+    aliases: Mapping[str, frozenset[str]] | None = None,
+    resolve_cue: Callable[[str], CueResolution] | None = None,
 ) -> Extraction:
     """Extract classified items and explicit flags from raw prose."""
     segmentation = segment(text, aliases=aliases)
@@ -178,9 +304,22 @@ def extract(
                     flags[flagged], detail=f"{flags[flagged].detail} — {note}"
                 )
 
+    cut_links = _cut_links(segmentation, item_position, condition_links)
+    cue_resolutions: list[CueResolution] = []
+    cue_links: list[tuple[int, int, str, str]] = []
+    if resolve_cue is not None:
+        cue_links, cue_flags, cue_resolutions = _gate_cuts(
+            segmentation,
+            aliases or {},
+            item_position,
+            condition_links,
+            resolve_cue,
+        )
+        cut_links.extend(
+            (left, right, link_type) for left, right, link_type, _cue in cue_links
+        )
+        flags.extend(cue_flags)
+
     return Extraction(
-        items,
-        flags,
-        condition_links,
-        _cut_links(segmentation, item_position, condition_links),
+        items, flags, condition_links, cut_links, cue_resolutions, cue_links
     )

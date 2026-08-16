@@ -305,3 +305,18 @@ def count_open_alias_embeddings(conn: sqlite3.Connection) -> int:
             "SELECT COUNT(*) FROM link_type_alias_embed_queue WHERE claimed_at IS NULL"
         ).fetchone()[0]
     )
+
+
+def complete_alias_vectors(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """List every alias vector, or none while any alias is still unembedded.
+
+    One statement, so an alias committed between a separate completeness check
+    and the read it guards cannot slip past as a complete set.
+    """
+    rows = conn.execute(
+        "SELECT link_type, alias, embedding FROM link_type_aliases "
+        "ORDER BY link_type, alias"
+    ).fetchall()
+    if any(row["embedding"] is None for row in rows):
+        return []
+    return rows
