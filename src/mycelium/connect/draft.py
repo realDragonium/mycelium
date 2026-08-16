@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from mycelium import drafts_store, store
 
+from .cue_gate import ABSORBING_DECISIONS, CueResolution
 from .extract import FLAG_SOURCES, FlagInput
 from .proposals import Proposal
 
@@ -108,6 +109,7 @@ def assemble_draft(
     title: str | None = None,
     session_id: str | None = None,
     flags: Sequence[FlagInput] = (),
+    cues: Sequence[CueResolution] = (),
 ) -> str:
     """Write a connected batch and its proposals into one open draft."""
     with store.transaction(conn):
@@ -138,6 +140,28 @@ def assemble_draft(
                     provenance=proposal.provenance,
                     created_by=created_by,
                 )
+        # Replay is what writes an alias, so a rejected draft never teaches the
+        # vocabulary.
+        for resolution in cues:
+            if resolution.decision not in ABSORBING_DECISIONS:
+                continue
+            drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="upsert_link_type_alias",
+                payload={
+                    "link_type": resolution.link_type,
+                    "alias": resolution.cue,
+                    "provenance": resolution.decision,
+                    "score": resolution.score,
+                },
+                provenance={
+                    "source": "cue-gate",
+                    "cue": resolution.cue,
+                    "candidates": [list(c) for c in resolution.candidates],
+                },
+                created_by=created_by,
+            )
         for flag in flags:
             drafts_store.add_op(
                 conn,
@@ -151,6 +175,7 @@ def assemble_draft(
                     "span": list(flag.span),
                 },
                 provenance={
+                    **(flag.provenance or {}),
                     "source": FLAG_SOURCES[flag.reason],
                     "reason": flag.reason,
                     "fragment_index": flag.fragment_index,
@@ -167,6 +192,7 @@ def summarize(conn: sqlite3.Connection, draft_id: str) -> dict:
     merges = 0
     conflicts = 0
     flags = 0
+    aliases = 0
     for op in drafts_store.list_ops(conn, draft_id):
         kind = op["kind"]
         if kind == "upsert_statements":
@@ -181,6 +207,8 @@ def summarize(conn: sqlite3.Connection, draft_id: str) -> dict:
             conflicts += 1
         elif kind == "flag":
             flags += 1
+        elif kind == "upsert_link_type_alias":
+            aliases += 1
     return {
         "draft_id": draft_id,
         "statements": statements,
@@ -188,4 +216,5 @@ def summarize(conn: sqlite3.Connection, draft_id: str) -> dict:
         "merges": merges,
         "conflicts": conflicts,
         "flags": flags,
+        "aliases": aliases,
     }

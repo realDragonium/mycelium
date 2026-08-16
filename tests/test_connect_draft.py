@@ -158,6 +158,7 @@ def test_assemble_and_apply_transfers_links_and_records_proposals(
             "merges": 1,
             "conflicts": 1,
             "flags": 0,
+            "aliases": 0,
         }
 
         applied = server.apply_draft(draft_id)

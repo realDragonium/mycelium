@@ -45,8 +45,11 @@ from . import (
     when_expression,
 )
 from .app_context import AppContext
+from .connect import aliases as connect_aliases
+from .connect import cue_gate
 from .connect import draft as connect_draft
 from .connect import pipeline as connect_pipeline
+from .connect.cue_gate import ABSORBING_DECISIONS, CueResolution
 from .connect.draft import BatchInput
 from .connect.extract import ExtractedItem, FlagInput, extract, violations_detail
 from .connect.funnel import BatchStatement
@@ -2966,9 +2969,14 @@ def _assemble_connected_draft(
     title: str | None,
     text_of: Callable[[str], str | None],
     flags: Sequence[FlagInput] = (),
+    cues: Sequence[CueResolution] = (),
 ) -> tuple[str | None, dict[str, int], dict[str, Any] | None]:
     """Write a non-empty connected batch and summarize its open draft."""
-    if not batch and not flags:
+    if (
+        not batch
+        and not flags
+        and not any(c.decision in ABSORBING_DECISIONS for c in cues)
+    ):
         counts = {"links": 0, "merges": 0, "conflicts": 0}
         return None, counts, None
 
@@ -2983,6 +2991,7 @@ def _assemble_connected_draft(
         title=title,
         session_id=None,
         flags=flags,
+        cues=cues,
     )
     summary = connect_draft.summarize(_drafts_db(), draft_id)
     counts = {
@@ -2996,6 +3005,7 @@ def _assemble_connected_draft(
         + counts["merges"]
         + counts["conflicts"]
         + summary["flags"]
+        + summary["aliases"]
     )
     return draft_id, counts, {"status": "open", "op_count": op_count}
 
@@ -3009,6 +3019,7 @@ class _ConnectedRun:
     text_of: Callable[[str], str | None]
     unresolved_hints: list[str]
     flags: list[FlagInput]
+    cues: list[CueResolution]
     draft_id: str | None
     counts: dict[str, int]
     draft: dict[str, Any] | None
@@ -3020,6 +3031,7 @@ def _run_connected(
     title: str | None,
     pre_rejected: set[int] | None = None,
     flags: Sequence[FlagInput] = (),
+    cues: Sequence[CueResolution] = (),
     flags_from_plan: Callable[[_BatchPlan], list[FlagInput]] | None = None,
 ) -> _ConnectedRun:
     """Plan, connect, and draft one batch of connected statement specs."""
@@ -3045,6 +3057,7 @@ def _run_connected(
         title,
         text_of,
         flags=combined_flags,
+        cues=cues,
     )
     return _ConnectedRun(
         plan=plan,
@@ -3054,6 +3067,7 @@ def _run_connected(
         text_of=text_of,
         unresolved_hints=unresolved_hints,
         flags=combined_flags,
+        cues=list(cues),
         draft_id=draft_id,
         counts=counts,
         draft=draft,
@@ -3272,6 +3286,42 @@ def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[Fla
     return flags
 
 
+def _cue_resolver() -> Callable[[str], cue_gate.CueResolution]:
+    """Bind the configured mode and the stored alias vectors into one resolver."""
+    mode = cue_gate.resolution_mode()
+    vectors = () if mode == "strict" else connect_aliases.alias_vectors(_db())
+    return lambda cue: cue_gate.resolve_cue(
+        cue,
+        vectors,
+        embed_text=embed.embed,
+        mode=mode,
+    )
+
+
+def _cue_response(
+    cues: Sequence[CueResolution],
+) -> tuple[dict[str, int], list[dict[str, Any]]]:
+    """Render cue-resolution counts and stable decision records."""
+    counts = {"auto": 0, "low_confidence": 0, "unresolved": 0, "strict": 0}
+    rendered: list[dict[str, Any]] = []
+    for resolution in cues:
+        if resolution.decision == "auto:low-confidence":
+            counts["low_confidence"] += 1
+        else:
+            counts[resolution.decision] += 1
+        rendered.append(
+            {
+                "cue": resolution.cue,
+                "decision": resolution.decision,
+                "link_type": resolution.link_type,
+                "alias": resolution.alias,
+                "score": resolution.score,
+                "candidates": [list(candidate) for candidate in resolution.candidates],
+            }
+        )
+    return counts, rendered
+
+
 def _empty_ingest_text() -> dict[str, Any]:
     """Extend the shared empty connected response with extraction fields."""
     return {
@@ -3280,6 +3330,8 @@ def _empty_ingest_text() -> dict[str, Any]:
         "items": [],
         "flags": [],
         "condition_links": 0,
+        "cues": {"auto": 0, "low_confidence": 0, "unresolved": 0, "strict": 0},
+        "cue_resolutions": [],
     }
 
 
@@ -3305,6 +3357,15 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
     too messy for these rules, extract statements yourself (or with the `ingest`
     tool) and call `submit_connected_batch`.
 
+    A cut whose connective matches no registered alias goes to the embedding
+    gate: the cue is compared against every alias embedding, and a clear enough
+    winner types the link and queues the cue as a new alias of that type — an
+    `upsert_link_type_alias` op in the same draft, so approving the draft is what
+    teaches the vocabulary and rejecting it teaches nothing. A cue nothing is
+    close to becomes a `flag` op carrying the cue and its nearest types; it never
+    creates a link type. Set `MYCELIUM_CUE_RESOLUTION=strict` to flag every
+    unknown cue instead of resolving it.
+
     Flag ops do not replay: `apply_draft` skips them. Resolve a flag by rewriting
     that fragment yourself and then `discard_draft_op`-ing the flag.
 
@@ -3321,6 +3382,12 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
             {"fragment_index": 1, "reason": "unmatched", "text": "..."}
           ],
           "condition_links": 0,
+          "cues": {"auto": 0, "low_confidence": 0,
+                   "unresolved": 0, "strict": 0},
+          "cue_resolutions": [
+            {"cue": "...", "decision": "auto", "link_type": "...",
+             "alias": "...", "score": 0.0, "candidates": [["...", "...", 0.0]]}
+          ],
           "results": [...],
           "proposals": {"links": 0, "merges": 0, "conflicts": 0},
           "links": [...], "merges": [...], "conflicts": [...],
@@ -3331,7 +3398,11 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
         }
         ```
     """
-    extraction = extract(text, aliases=store.alias_lookup(_db()))
+    extraction = extract(
+        text,
+        aliases=store.alias_lookup(_db()),
+        resolve_cue=_cue_resolver(),
+    )
     if not extraction.items and not extraction.flags:
         return _empty_ingest_text()
 
@@ -3342,6 +3413,7 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
         specs,
         title=title,
         flags=extraction.flags,
+        cues=extraction.cue_resolutions,
         flags_from_plan=lambda plan: _ingest_plan_flags(extraction.items, plan),
     )
     connected = _connected_response(specs, run, set())
@@ -3360,18 +3432,24 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
             rendered["note"] = item.note
         accepted_items.append(rendered)
 
-    total = len(extraction.items) + len(extraction.flags)
+    # A cue flag addresses a connective, so it never changes fragment counts.
+    extraction_fragment_flags = [
+        flag for flag in extraction.flags if flag.reason != "cue"
+    ]
+    fragment_flags = [flag for flag in run.flags if flag.reason != "cue"]
+    total = len(extraction.items) + len(extraction_fragment_flags)
     condition_links = sum(
         claim_position in run.new_of
         for claim_position, _condition_position in extraction.condition_links
     )
     draft = None if run.draft is None else {**run.draft, "flags": len(run.flags)}
+    cues, cue_resolutions = _cue_response(run.cues)
     return {
         **connected,
         "fragments": {
             "total": total,
             "resolved": len(run.new_of),
-            "flagged": len(run.flags),
+            "flagged": len(fragment_flags),
         },
         "items": accepted_items,
         "flags": [
@@ -3383,6 +3461,8 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
             for flag in run.flags
         ],
         "condition_links": condition_links,
+        "cues": cues,
+        "cue_resolutions": cue_resolutions,
         "draft": draft,
     }
 
@@ -4878,8 +4958,19 @@ def delete_link_type(link_type: str) -> dict[str, str]:
     return {"link_type": link_type}
 
 
+#: Provenance values a caller may assert. `seed` is the migration's own tag and
+#: is not assertable; a curator re-asserting an auto alias overwrites it, which
+#: is how a reviewed alias stops being an automatic one.
+ALIAS_PROVENANCE = ("curator", "auto", "auto:low-confidence")
+
+
 @tool
-def upsert_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
+def upsert_link_type_alias(
+    link_type: str,
+    alias: str,
+    provenance: str = "curator",
+    score: float | None = None,
+) -> dict[str, Any]:
     """Create or update a cue-matcher phrasing for a canonical link type.
 
     The alias is a phrasing the cue matcher will accept for this link type;
@@ -4887,24 +4978,46 @@ def upsert_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
     registered under more than one type. An alias ambiguous that way is not
     resolved by the segmenter.
 
+    The alias set records where a phrasing came from: `curator` for a
+    hand-authored one, or `auto`/`auto:low-confidence` with the deciding cosine
+    for one the ingest gate absorbed; a later curator write overwrites both
+    fields.
+
     Embedding runs in the background, so `list_link_type_aliases` may briefly
-    show `embedded: false`. Returns `{link_type, alias, created}` with the
-    normalized alias and whether this call created it.
+    show `embedded: false`. Returns
+    `{link_type, alias, provenance, score, created}` with the normalized alias
+    and whether this call created it.
     """
     if not link_type or not link_type.strip():
         raise ValueError("link_type cannot be empty")
     if not alias or not alias.strip():
         raise ValueError("alias cannot be empty")
+    if provenance not in ALIAS_PROVENANCE:
+        raise ValueError(
+            f"provenance must be one of {', '.join(ALIAS_PROVENANCE)}: {provenance!r}"
+        )
+    if score is not None and not -1.0 <= float(score) <= 1.0:
+        raise ValueError(f"score must be a cosine in [-1, 1]: {score!r}")
     normalized = store.normalize_alias(alias)
     with store.transaction(_db()):
         created = store.upsert_link_type_alias(
-            _db(), link_type, normalized, provenance="curator"
+            _db(),
+            link_type,
+            normalized,
+            provenance=provenance,
+            score=score,
         )
 
     from . import alias_worker  # local import: avoid loading worker machinery eagerly
 
     alias_worker.wake()
-    return {"link_type": link_type, "alias": normalized, "created": created}
+    return {
+        "link_type": link_type,
+        "alias": normalized,
+        "provenance": provenance,
+        "score": score,
+        "created": created,
+    }
 
 
 @tool

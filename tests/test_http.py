@@ -104,6 +104,8 @@ def test_link_type_alias_tools_are_registered_and_reachable(tmp_path, monkeypatc
         assert created.json() == {
             "link_type": "triggers",
             "alias": "sparks immediately",
+            "provenance": "curator",
+            "score": None,
             "created": True,
         }
 

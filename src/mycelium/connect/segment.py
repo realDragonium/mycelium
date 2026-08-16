@@ -815,12 +815,17 @@ def _fragments(leaves: list[_Piece]) -> tuple[list[Fragment], dict[int, int]]:
 _CONNECTIVE_EDGE_RE = re.compile(r"^[\s\W_]+|[\s\W_]+$")
 
 
+def connective_cue(connective: str) -> str:
+    """Reduce a raw connective slice to the alias-shaped cue it carries."""
+    stripped = _CONNECTIVE_EDGE_RE.sub("", connective)
+    return " ".join(stripped.casefold().split())
+
+
 def _connective_link_type(
     connective: str, aliases: Mapping[str, frozenset[str]]
 ) -> str | None:
     """Resolve a normalized connective only when one link type carries it."""
-    stripped = _CONNECTIVE_EDGE_RE.sub("", connective)
-    link_types = aliases.get(" ".join(stripped.casefold().split()), frozenset())
+    link_types = aliases.get(connective_cue(connective), frozenset())
     # An alias carried by multiple types is real ambiguity, not grounds to guess.
     return next(iter(link_types)) if len(link_types) == 1 else None
 
@@ -829,14 +834,14 @@ def _connective_link_type(
 #: curator registers for it. A conditional runs the other way and its relation
 #: is already proposed with the right orientation; coordination is not a
 #: relation at all.
-_UNTYPED_CUT_KINDS = frozenset({"conditional", "coordination"})
+UNTYPED_CUT_KINDS = frozenset({"conditional", "coordination"})
 
 
 def _cut_link_type(
     cut: _PendingCut, aliases: Mapping[str, frozenset[str]]
 ) -> str | None:
     """Resolve a cut's connective to the one link type its aliases name."""
-    if cut.kind in _UNTYPED_CUT_KINDS:
+    if cut.kind in UNTYPED_CUT_KINDS:
         return None
     return _connective_link_type(cut.connective, aliases)
 
