@@ -60,15 +60,23 @@ def _seed_vectors(
     alias_vectors: dict[str, tuple[str, list[float]]],
     cue_vectors: dict[str, list[float]],
 ) -> None:
-    """Store selected alias vectors and fake cue-carrier embeddings."""
-    with store.transaction(server._db()):
+    """Replace the alias table with exactly these embedded aliases.
+
+    The gate refuses a half-embedded alias set, so the seeded rows the
+    background worker never drained here have to go.
+    """
+    conn = server._db()
+    with store.transaction(conn):
+        conn.execute("DELETE FROM link_type_aliases")
         for alias, (link_type, vector) in alias_vectors.items():
+            store.upsert_link_type_alias(conn, link_type, alias, provenance="seed")
             store.set_alias_embedding(
-                server._db(),
+                conn,
                 link_type,
                 alias,
                 np.asarray(vector, dtype=np.float32).tobytes(),
             )
+        conn.execute("DELETE FROM link_type_alias_embed_queue")
 
     carriers = {
         connect_aliases.carrier_text(cue): vector for cue, vector in cue_vectors.items()
@@ -493,3 +501,27 @@ def test_draft_op_count_includes_alias_op(tmp_path, monkeypatch):
         ops = _draft_ops(response["draft_id"])
         assert any(op["kind"] == "upsert_link_type_alias" for op in ops)
         assert response["draft"]["op_count"] == len(ops)
+
+
+def test_half_embedded_alias_set_flags_instead_of_guessing(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_CUE_RESOLUTION", "open")
+    with _app(tmp_path, monkeypatch):
+        _seed_vectors(
+            monkeypatch,
+            {"then": ("proceeds", [1.0, 0.0])},
+            {"and also": [1.0, 0.0]},
+        )
+        # One alias still waiting on the worker is enough: its type could have
+        # been the runner-up that made this decision low-confidence.
+        with store.transaction(server._db()):
+            store.upsert_link_type_alias(server._db(), "contains", "includes")
+
+        response = server.ingest_text(
+            "The invite is created and also the reminder is scheduled"
+        )
+
+        ops = _draft_ops(response["draft_id"])
+        assert not any(op["kind"] == "upsert_link_type_alias" for op in ops)
+        flag = next(op for op in ops if op["kind"] == "flag")
+        assert json.loads(flag["payload_json"])["reason"] == "cue"
+        assert response["cues"]["unresolved"] == 1

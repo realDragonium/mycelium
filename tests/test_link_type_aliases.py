@@ -345,3 +345,16 @@ def test_tool_requires_a_score_for_automatic_provenance(
                 "then after",
                 provenance=provenance,
             )
+
+
+def test_unembedded_alias_count_falls_to_zero_on_drain(fresh_conn, monkeypatch):
+    seeded = len(store.list_link_type_aliases(fresh_conn))
+    assert store.count_unembedded_aliases(fresh_conn) == seeded
+
+    aliases.drain_alias_embeddings(
+        fresh_conn,
+        embed_text=lambda text: [float(len(text))] * 4,
+        chunk=200,
+    )
+
+    assert store.count_unembedded_aliases(fresh_conn) == 0

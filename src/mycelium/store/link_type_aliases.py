@@ -305,3 +305,12 @@ def count_open_alias_embeddings(conn: sqlite3.Connection) -> int:
             "SELECT COUNT(*) FROM link_type_alias_embed_queue WHERE claimed_at IS NULL"
         ).fetchone()[0]
     )
+
+
+def count_unembedded_aliases(conn: sqlite3.Connection) -> int:
+    """Count aliases still waiting for their carrier embedding."""
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) FROM link_type_aliases WHERE embedding IS NULL"
+        ).fetchone()[0]
+    )

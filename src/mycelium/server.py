@@ -3286,6 +3286,17 @@ def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[Fla
     return flags
 
 
+def _alias_comparison_set() -> list[connect_aliases.AliasVector]:
+    """Load the alias vectors only while the alias set is fully embedded."""
+    # A half-drained queue hides rivals: a type whose other aliases are not
+    # embedded yet looks like it has no runner-up, and the gate would absorb
+    # confidently against a comparison set that is merely unfinished. An empty
+    # set resolves every cue as unresolved, which flags instead of guessing.
+    if store.count_unembedded_aliases(_db()):
+        return []
+    return connect_aliases.alias_vectors(_db())
+
+
 def _cue_resolver() -> Callable[[str], cue_gate.CueResolution]:
     """Bind the configured mode and the stored alias vectors into one resolver."""
     mode = cue_gate.resolution_mode()
@@ -3295,7 +3306,7 @@ def _cue_resolver() -> Callable[[str], cue_gate.CueResolution]:
 
     def resolve(cue: str) -> cue_gate.CueResolution:
         if mode != "strict" and not loaded:
-            loaded.append(connect_aliases.alias_vectors(_db()))
+            loaded.append(_alias_comparison_set())
         return cue_gate.resolve_cue(
             cue,
             loaded[0] if loaded else (),
