@@ -36,7 +36,7 @@ def run(
 ) -> PipelineResult:
     """Run candidate, rule, and optional NLI discovery without writing."""
     funnel = find_candidates(batch, view)
-    link_proposals = propose_links(batch, funnel, view)
+    link_proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type())
     try:
         model = nli_model if nli_model is not None else nli.default_model()
         verdicts = nli.classify_candidates(

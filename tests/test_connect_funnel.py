@@ -25,6 +25,7 @@ class FakeView:
         self.sharing: dict[str, frozenset[str]] = {}
         self.kinds: dict[str, str] = {}
         self.link_types_by_kind_pair: dict[tuple[str, str], frozenset[str]] = {}
+        self.aliases: dict[str, tuple[str, ...]] = {}
         self.allow_all_link_types = allow_all_link_types
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
@@ -59,6 +60,9 @@ class FakeView:
         return self.link_types_by_kind_pair.get(
             (from_kind, to_kind), self.allow_all_link_types
         )
+
+    def aliases_by_type(self) -> dict[str, tuple[str, ...]]:
+        return self.aliases
 
 
 def test_unions_vector_and_mention_routes_before_thresholding():

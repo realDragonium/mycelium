@@ -1,11 +1,15 @@
 """Lexical link patterns shared by auto-linking and offline evaluation.
 
-Unknown statement kinds deliberately receive only the common pattern catalog.
+Unknown statement kinds deliberately receive only the common pattern catalog. Aliases
+belong to a link type, so every shipped template of that type accepts all of them; an
+alias registered for one frame can therefore fire in another. This cross-frame reach
+is the accepted cost of typing aliases rather than patterns.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 
@@ -16,6 +20,8 @@ class Pattern:
     name: str
     link_type: str
     regex: re.Pattern[str]
+    template: str | None = None
+    default_cues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -33,6 +39,23 @@ class CueMatch:
 def _pattern(name: str, link_type: str, regex: str) -> Pattern:
     """Compile one case-insensitive pattern definition."""
     return Pattern(name, link_type, re.compile(regex, re.IGNORECASE))
+
+
+def _alternation(cues: tuple[str, ...]) -> str:
+    """Build a deterministic escaped alternation with longer cues first."""
+    ordered = sorted(set(cues), key=lambda cue: (-len(cue), cue))
+    return "(?:" + "|".join(re.escape(cue) for cue in ordered) + ")"
+
+
+def _templated(
+    name: str, link_type: str, template: str, cues: tuple[str, ...]
+) -> Pattern:
+    """Compile and retain one alias-aware pattern definition."""
+    regex = re.compile(template.format(cue=_alternation(cues)), re.IGNORECASE)
+    return Pattern(name, link_type, regex, template, cues)
+
+
+_TEMPLATED_REGEXES: dict[tuple[str, tuple[str, ...]], re.Pattern[str]] = {}
 
 
 COMMON_PATTERNS: tuple[Pattern, ...] = (
@@ -69,10 +92,11 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
         "configures",
         r"\b(?P<cue>configures?)\b\s*(?P<target>.+)",
     ),
-    _pattern(
+    _templated(
         "configures-configured-on",
         "configures",
-        r"\b(?P<cue>(?:is|are|can be) configured (?:on|for|via|in|per|at))\b\s*(?P<target>.+)",
+        r"\b(?P<cue>(?:is|are|can be) {cue} (?:on|for|via|in|per|at))\b\s*(?P<target>.+)",
+        ("configured",),
     ),
     _pattern(
         "configures-parameterises",
@@ -84,7 +108,12 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
         "restricts",
         r"\b(?P<cue>restricts?)\b\s*(?P<target>.+)",
     ),
-    _pattern("restricts-limits", "restricts", r"\b(?P<cue>limits?)\b\s*(?P<target>.+)"),
+    _templated(
+        "restricts-limits",
+        "restricts",
+        r"\b(?P<cue>{cue})\b\s*(?P<target>.+)",
+        ("limit", "limits"),
+    ),
     _pattern(
         "restricts-limited-to",
         "restricts",
@@ -170,10 +199,11 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
         "proceeds",
         r"\b(?P<cue>(?:is|are) followed by)\b\s*(?P<target>.+)",
     ),
-    _pattern(
+    _templated(
         "proceeds-redirected",
         "proceeds",
-        r"\b(?P<cue>(?:is|are) (?:redirected|routed|forwarded|returned) (?:to|through))\b\s*(?P<target>.+)",
+        r"\b(?P<cue>(?:is|are) {cue} (?:to|through))\b\s*(?P<target>.+)",
+        ("redirected", "routed", "forwarded", "returned"),
     ),
     _pattern(
         "replaces-verb",
@@ -252,10 +282,11 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "valued-by",
             r"\b(?P<cue>(?:is|are) (?:derived|computed|calculated) (?:from|by|as))\b\s*(?P<target>.+)",
         ),
-        _pattern(
+        _templated(
             "restricts-state",
             "restricts",
-            r"\b(?P<cue>(?:is|are) (?:disabled|locked|frozen|suspended|read-only))\b\s*(?P<target>.+)?",
+            r"\b(?P<cue>(?:is|are) {cue})\b\s*(?P<target>.+)?",
+            ("disabled", "locked", "frozen", "suspended", "read-only"),
         ),
         _pattern(
             "enables-state",
@@ -269,10 +300,11 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "governed-by",
             r"\b(?P<cue>according to|as defined by|following the|under the)\b\s*(?P<target>.+)",
         ),
-        _pattern(
+        _templated(
             "configures-capability",
             "configures",
-            r"\b(?P<cue>can be (?:configured|set|adjusted|customi[sz]ed|toggled) (?:on|for|via|per|at|in))\b\s*(?P<target>.+)",
+            r"\b(?P<cue>can be {cue} (?:on|for|via|per|at|in))\b\s*(?P<target>.+)",
+            ("configured", "set", "adjusted", "customised", "customized", "toggled"),
         ),
         _pattern(
             "varies-by-capability",
@@ -291,10 +323,23 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
         ),
     ),
     "rule": (
-        _pattern(
+        _templated(
             "composes-formula",
             "composes",
-            r"\b(?P<cue>equals?|plus|minus|multiplied by|divided by|times|sum of|product of|difference (?:of|between))\b\s*(?P<target>.+)",
+            r"\b(?P<cue>{cue})\b\s*(?P<target>.+)",
+            (
+                "equal",
+                "equals",
+                "plus",
+                "minus",
+                "multiplied by",
+                "divided by",
+                "times",
+                "sum of",
+                "product of",
+                "difference of",
+                "difference between",
+            ),
         ),
         _pattern(
             "composes-determined-by",
@@ -399,11 +444,37 @@ def patterns_for(kind: str) -> tuple[Pattern, ...]:
     return COMMON_PATTERNS + KIND_PATTERNS.get(kind, ())
 
 
-def find_cues(text: str, kind: str) -> list[CueMatch]:
+def _regex_for(
+    pattern: Pattern, aliases: Mapping[str, Sequence[str]] | None
+) -> re.Pattern[str]:
+    """Resolve a pattern's regex against the supplied alias vocabulary.
+
+    A pattern with no template, or a link type the caller supplied no aliases
+    for, keeps its packaged default cues.
+    """
+    if pattern.template is None or aliases is None:
+        return pattern.regex
+    cues = aliases.get(pattern.link_type)
+    if not cues:
+        return pattern.regex
+    key = (pattern.name, tuple(cues))
+    # Compiling per call would pay the regex compiler once per statement.
+    if key not in _TEMPLATED_REGEXES:
+        _TEMPLATED_REGEXES[key] = re.compile(
+            pattern.template.format(cue=_alternation(key[1])), re.IGNORECASE
+        )
+    return _TEMPLATED_REGEXES[key]
+
+
+def find_cues(
+    text: str,
+    kind: str,
+    aliases: Mapping[str, Sequence[str]] | None = None,
+) -> list[CueMatch]:
     """Find every applicable cue in text in stable source order."""
     cues: list[CueMatch] = []
     for pattern in patterns_for(kind):
-        for match in pattern.regex.finditer(text):
+        for match in _regex_for(pattern, aliases).finditer(text):
             groups = match.groupdict()
             cue = groups.get("cue") or match.group(0)
             target = groups.get("target")

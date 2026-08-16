@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import ModuleType
 
 import numpy as np
@@ -64,6 +64,10 @@ class HintedView:
         """Delegate link-type admission to the wrapped view."""
         return self._view.admissible_link_types(from_kind, to_kind)
 
+    def aliases_by_type(self) -> Mapping[str, Sequence[str]]:
+        """Delegate cue phrasing lookup to the wrapped view."""
+        return self._view.aliases_by_type()
+
 
 class LiveSubstrate:
     """Expose the running substrate through the funnel's view.
@@ -76,6 +80,7 @@ class LiveSubstrate:
         self._server = server_module or importlib.import_module("mycelium.server")
         self._names: dict[str, list[mentions.IndexedName]] | None = None
         self._admissible_link_types: dict[tuple[str, str], frozenset[str]] = {}
+        self._aliases_by_type: dict[str, tuple[str, ...]] | None = None
 
     def _name_index(self) -> dict[str, list[mentions.IndexedName]]:
         if self._names is None:
@@ -146,3 +151,9 @@ class LiveSubstrate:
                 self._server._db(), from_kind, to_kind
             )
         return self._admissible_link_types[key]
+
+    def aliases_by_type(self) -> dict[str, tuple[str, ...]]:
+        """Return the snapshot of accepted cue phrasings grouped by link type."""
+        if self._aliases_by_type is None:
+            self._aliases_by_type = store.aliases_by_type(self._server._db())
+        return self._aliases_by_type

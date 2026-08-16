@@ -7,7 +7,7 @@ not a selector on its own; embeddings rank only candidates that pass that filter
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -75,11 +75,12 @@ def shipped_cues(
     text: str,
     kind: str,
     shipped: Mapping[str, frozenset[str] | None] = SHIPPED_PATTERNS,
+    aliases: Mapping[str, Sequence[str]] | None = None,
 ) -> list[CueMatch]:
     """Find cues admitted by the shipped pattern and kind selection."""
     return [
         cue
-        for cue in find_cues(text, kind)
+        for cue in find_cues(text, kind, aliases)
         if cue.pattern in shipped
         and (shipped[cue.pattern] is None or kind in shipped[cue.pattern])
     ]
@@ -232,6 +233,7 @@ def propose_links(
     view: SubstrateView,
     *,
     shipped: Mapping[str, frozenset[str] | None] = SHIPPED_PATTERNS,
+    aliases: Mapping[str, Sequence[str]] | None = None,
     resolve_threshold: float = RESOLVE_THRESHOLD,
     unanchored_threshold: float = RESOLVE_THRESHOLD_UNANCHORED,
     k: int = TARGET_NEIGHBOURS_K,
@@ -247,7 +249,7 @@ def propose_links(
     ] = {}
     proposals: dict[tuple[int, str, str], LinkProposal] = {}
     for statement in batch:
-        for cue in shipped_cues(statement.text, statement.kind, shipped):
+        for cue in shipped_cues(statement.text, statement.kind, shipped, aliases):
             if not cue.target_text:
                 continue
             if cue.target_text not in phrase_cache:

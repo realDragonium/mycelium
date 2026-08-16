@@ -26,6 +26,7 @@ class FakeView:
         self.sharing: dict[str, frozenset[str]] = {}
         self.kinds: dict[str, str] = {}
         self.link_types_by_kind_pair: dict[tuple[str, str], frozenset[str]] = {}
+        self.aliases: dict[str, tuple[str, ...]] = {}
         self.allow_all_link_types = allow_all_link_types
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
@@ -62,6 +63,9 @@ class FakeView:
         return self.link_types_by_kind_pair.get(
             (from_kind, to_kind), self.allow_all_link_types
         )
+
+    def aliases_by_type(self) -> dict[str, tuple[str, ...]]:
+        return self.aliases
 
 
 _RULE_LINK_TYPES = frozenset({"configures", "restricts", "composes", "proceeds"})
@@ -252,6 +256,44 @@ def test_shipped_cues_filters_pattern_membership_and_kind_restriction():
     assert len(cues) == 1
     assert cues[0].pattern == "restricts-limits"
     assert cues[0].cue == "limits"
+
+
+def test_shipped_cues_admits_alias_without_widening_kind_policy():
+    aliases = {"configures": ("tuned",)}
+    text = "The score is tuned on a job profile"
+
+    cues = shipped_cues(text, "capability", aliases=aliases)
+
+    assert [cue.pattern for cue in cues] == ["configures-configured-on"]
+    assert cues[0].cue == "is tuned on"
+    assert shipped_cues(text, "rule", aliases=aliases) == []
+
+
+def test_propose_links_uses_alias_cue_end_to_end():
+    view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
+    phrase = "dispatch attempts"
+    view.embeddings_by_text[phrase] = [1.0, 0.0]
+    batch = [
+        BatchStatement(0, "rule", "Retry budget throttles dispatch attempts"),
+        BatchStatement(1, "property", "Dispatch attempt allowance"),
+    ]
+    funnel = _funnel(
+        {
+            0: ([0.0, 1.0], frozenset()),
+            1: ([0.8, 0.6], frozenset()),
+        }
+    )
+
+    assert propose_links(batch, funnel, view) == []
+
+    proposals = propose_links(
+        batch, funnel, view, aliases={"restricts": ("throttles",)}
+    )
+
+    assert len(proposals) == 1
+    assert proposals[0].pattern == "restricts-limits"
+    assert proposals[0].cue == "throttles"
+    assert proposals[0].target == "@1"
 
 
 def test_targetless_shipped_cue_proposes_nothing():
