@@ -398,6 +398,37 @@ CREATE TABLE IF NOT EXISTS kind_link_matrix (
     PRIMARY KEY (from_kind, to_kind, link_type)
 );
 
+-- Link-type aliases are the vocabulary layer beneath cue matching; the
+-- substrate only ever stores the canonical `link_type`. The same alias may
+-- legitimately belong to two types: that ambiguity is real and a later stage
+-- gates on it, so identity is the (link_type, alias) pair. Alias text is stored
+-- casefolded, stripped, and with internal whitespace collapsed.
+--
+-- Embeddings use a carrier template rather than the bare alias because a
+-- sentence encoder represents bare connector words noisily. `provenance` and
+-- `score` are present from the start so automatic alias absorption will not
+-- require a later schema migration.
+CREATE TABLE IF NOT EXISTS link_type_aliases (
+    link_type   TEXT NOT NULL,
+    alias       TEXT NOT NULL,
+    embedding   BLOB,
+    provenance  TEXT NOT NULL DEFAULT 'seed',
+    score       REAL,
+    created_at  TEXT,
+    created_by  TEXT,
+    PRIMARY KEY (link_type, alias)
+);
+
+CREATE TABLE IF NOT EXISTS link_type_alias_embed_queue (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    link_type   TEXT NOT NULL,
+    alias       TEXT NOT NULL,
+    enqueued_at TEXT NOT NULL,
+    claimed_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS link_type_alias_embed_queue_open
+    ON link_type_alias_embed_queue (id) WHERE claimed_at IS NULL;
+
 -- Note: authentication tables (users, mcp_tokens, invites,
 -- oauth_clients, oauth_codes) live in a SEPARATE SQLite file managed
 -- by `auth_store.py`. The split lets you swap the substrate DB
@@ -603,7 +634,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     run the versioned migration runner, which catches up legacy DBs and
     fast-forwards fresh ones. See `mycelium.migrations` for details."""
     from .. import migrations
-    from . import glossary, kind_link_matrix
+    from . import glossary, kind_link_matrix, link_type_aliases
 
     conn.executescript(SCHEMA)
     migrations.apply_migrations(conn)
@@ -611,6 +642,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn.executescript(HISTORY_SCHEMA)
     glossary.seed_glossaries(conn)
     kind_link_matrix.seed_kind_link_matrix(conn)
+    link_type_aliases.seed_link_type_aliases(conn)
     conn.commit()
 
 

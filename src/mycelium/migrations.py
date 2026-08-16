@@ -602,6 +602,17 @@ def _migration_v7_kind_link_matrix(conn: sqlite3.Connection) -> None:
     pass
 
 
+def _migration_v8_link_type_aliases(conn: sqlite3.Connection) -> None:
+    """Create the `link_type_aliases` and embedding queue tables.
+
+    Like v7, a pure version bump: the CREATE TABLEs live in `SCHEMA` and
+    `store.migrate()` runs SCHEMA before the runner, so the tables already
+    exist on legacy and fresh DBs alike. Seeding is deliberately not done
+    here — `store.link_type_aliases.seed_link_type_aliases` runs after the
+    glossaries, and only while the table is empty."""
+    pass
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -613,6 +624,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (5, _migration_v5_derived_mentions),
     (6, _migration_v6_nocase_names),
     (7, _migration_v7_kind_link_matrix),
+    (8, _migration_v8_link_type_aliases),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

@@ -1029,15 +1029,15 @@ def init(data_dir: Path) -> None:
         layout_baker=baker,
     )
 
-    # Start the async mention-recompute worker on its own thread+connection
-    # (transport-agnostic: both stdio and HTTP funnel through init). Guarded
-    # by an env flag so the test suite — which would otherwise spawn a thread
-    # per TestClient lifecycle and race the assertions — can drain the queue
-    # synchronously via `mention_worker.drain` instead.
+    # Start background queue workers on their own threads and connections
+    # (transport-agnostic: both stdio and HTTP funnel through init). The flag is
+    # the test suite's single "background workers off" switch, not a per-worker
+    # knob, so tests can drain either queue synchronously without thread races.
     if os.environ.get("MYCELIUM_DISABLE_MENTION_WORKER") != "1":
-        from . import mention_worker
+        from . import alias_worker, mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
+        alias_worker.start(data_dir)
 
 
 def _seeded_prompt_texts() -> tuple[tuple[str, str, Any], ...]:
@@ -4864,6 +4864,72 @@ def delete_link_type(link_type: str) -> dict[str, str]:
     with store.transaction(_db()):
         store.delete_statement_link_type_glossary(_db(), link_type)
     return {"link_type": link_type}
+
+
+@tool
+def upsert_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
+    """Create or update a cue-matcher phrasing for a canonical link type.
+
+    The alias is a phrasing the cue matcher will accept for this link type;
+    links still store the canonical `link_type`. The same alias may be
+    registered under more than one type. An alias ambiguous that way is not
+    resolved by the segmenter.
+
+    Embedding runs in the background, so `list_link_type_aliases` may briefly
+    show `embedded: false`. Returns `{link_type, alias, created}` with the
+    normalized alias and whether this call created it.
+    """
+    if not link_type or not link_type.strip():
+        raise ValueError("link_type cannot be empty")
+    if not alias or not alias.strip():
+        raise ValueError("alias cannot be empty")
+    normalized = store.normalize_alias(alias)
+    with store.transaction(_db()):
+        created = store.upsert_link_type_alias(
+            _db(), link_type, normalized, provenance="curator"
+        )
+
+    from . import alias_worker  # local import: avoid loading worker machinery eagerly
+
+    alias_worker.wake()
+    return {"link_type": link_type, "alias": normalized, "created": created}
+
+
+@tool
+def delete_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
+    """Delete one cue-matcher phrasing from a canonical link type.
+
+    Reach for this to retire vocabulary without changing links already stored
+    under the canonical type. Idempotent. Returns `{link_type, alias, deleted}`
+    with the normalized alias.
+    """
+    normalized = store.normalize_alias(alias)
+    with store.transaction(_db()):
+        deleted = store.delete_link_type_alias(_db(), link_type, normalized)
+    return {"link_type": link_type, "alias": normalized, "deleted": deleted}
+
+
+@tool
+def list_link_type_aliases(
+    link_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """List cue-matcher phrasings, optionally for one canonical link type.
+
+    Reach for this to inspect accepted vocabulary and whether its background
+    embedding is ready. Returns
+    `[{link_type, alias, provenance, score, embedded}]`; hand-authored and
+    seeded aliases have `score: null`.
+    """
+    return [
+        {
+            "link_type": row["link_type"],
+            "alias": row["alias"],
+            "provenance": row["provenance"],
+            "score": row["score"],
+            "embedded": bool(row["embedded"]),
+        }
+        for row in store.list_link_type_aliases(_db(), link_type)
+    ]
 
 
 @tool
