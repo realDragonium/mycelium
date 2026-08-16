@@ -132,3 +132,45 @@ def test_audit_filters_and_orders_aliases(tmp_path, monkeypatch, capsys):
     assert {row["provenance"] for row in all_rows} >= {"curator", "seed"}
     stdout = capsys.readouterr().out
     assert f"Scanned {total} aliases; 3 automatic (1 low-confidence)" in stdout
+
+
+def test_formula_leading_alias_is_quoted(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    conn = store.connect(data_dir / "mycelium.db")
+    store.migrate(conn)
+    with store.transaction(conn):
+        store.upsert_link_type_alias(
+            conn,
+            "audit",
+            "=1+1",
+            provenance="auto",
+            score=0.5,
+        )
+        store.upsert_link_type_alias(
+            conn,
+            "audit",
+            "@cmd",
+            provenance="auto",
+            score=0.6,
+        )
+        store.upsert_link_type_alias(
+            conn,
+            "audit",
+            "plain cue",
+            provenance="auto",
+            score=0.7,
+        )
+    conn.close()
+    script = _audit_script()
+
+    out = tmp_path / "formula.csv"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(_SCRIPT), "--data-dir", str(data_dir), "--out", str(out)],
+    )
+    assert script.main() == 0
+
+    assert [row["alias"] for row in _read_csv(out)] == ["'=1+1", "'@cmd", "plain cue"]
+    assert ",'=1+1," in out.read_text(encoding="utf-8")

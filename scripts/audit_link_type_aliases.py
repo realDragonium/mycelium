@@ -3,7 +3,9 @@
 The report puts low-confidence and low-scoring decisions first so a reviewer
 can quickly find direction-blind cue-resolution misroutes.
 
-Columns: `link_type, alias, provenance, score, created_at, created_by`.
+Columns: `link_type, alias, provenance, score, created_at, created_by`. A cell
+whose text a spreadsheet would evaluate as a formula is written with a leading
+apostrophe, because alias text comes from ingested prose.
 
 Usage:
     uv run python scripts/audit_link_type_aliases.py [--data-dir PATH]
@@ -21,10 +23,13 @@ import csv
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from mycelium import store
 
 _AUTOMATIC_PROVENANCE = ("auto", "auto:low-confidence")
+# A leading one of these makes a spreadsheet evaluate the cell as a formula.
+_FORMULA_LEAD = ("=", "+", "-", "@", "\t", "\r")
 _COLUMNS = [
     "link_type",
     "alias",
@@ -33,6 +38,14 @@ _COLUMNS = [
     "created_at",
     "created_by",
 ]
+
+
+def _csv_cell(value: Any) -> Any:
+    """Quote a cell a spreadsheet would otherwise read as a formula."""
+    # Alias text comes from ingested prose, not from the operator running this.
+    if isinstance(value, str) and value[:1] in _FORMULA_LEAD:
+        return f"'{value}"
+    return value
 
 
 def _audit(conn, *, include_all: bool) -> tuple[int, int, int, list[dict]]:
@@ -94,7 +107,9 @@ def main() -> int:
     with args.out.open("w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=_COLUMNS)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            {column: _csv_cell(value) for column, value in row.items()} for row in rows
+        )
 
     print(
         f"Scanned {total} aliases; {automatic} automatic "
