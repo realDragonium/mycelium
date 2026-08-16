@@ -3215,9 +3215,11 @@ def submit_connected_batch(
 
 
 def _ingest_specs(
-    items: list[ExtractedItem], condition_links: list[tuple[int, int]]
+    items: list[ExtractedItem],
+    condition_links: list[tuple[int, int]],
+    cut_links: list[tuple[int, int, str]],
 ) -> list[ConnectedStatementSpec]:
-    """Build connected specs with the segmenter's conditional links."""
+    """Build connected specs with the segmenter's conditional and cut links."""
     specs: list[ConnectedStatementSpec] = [
         {"kind": item.kind, "text": item.text} for item in items
     ]
@@ -3226,6 +3228,13 @@ def _ingest_specs(
             {
                 "to_id": f"@{condition_position}",
                 "link_type": "requires",
+            }
+        )
+    for source_position, target_position, link_type in cut_links:
+        specs[source_position].setdefault("links", []).append(
+            {
+                "to_id": f"@{target_position}",
+                "link_type": link_type,
             }
         )
     return specs
@@ -3290,10 +3299,11 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
     fragment that classifies but then trips the catalog becomes a flag too.
 
     A conditional opener proposes a `requires` link from the claim to the
-    condition. No other relation is inferred. This uses no LLM, does not rewrite
-    your words, and never guesses kinds. For input too messy for these rules,
-    extract statements yourself (or with the `ingest` tool) and call
-    `submit_connected_batch`.
+    condition. A cut whose connective is a registered alias of exactly one link
+    type also proposes that link, left to right; nothing else is inferred. This
+    uses no LLM, does not rewrite your words, and never guesses kinds. For input
+    too messy for these rules, extract statements yourself (or with the `ingest`
+    tool) and call `submit_connected_batch`.
 
     Flag ops do not replay: `apply_draft` skips them. Resolve a flag by rewriting
     that fragment yourself and then `discard_draft_op`-ing the flag.
@@ -3321,11 +3331,13 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
         }
         ```
     """
-    extraction = extract(text)
+    extraction = extract(text, aliases=store.alias_lookup(_db()))
     if not extraction.items and not extraction.flags:
         return _empty_ingest_text()
 
-    specs = _ingest_specs(extraction.items, extraction.condition_links)
+    specs = _ingest_specs(
+        extraction.items, extraction.condition_links, extraction.cut_links
+    )
     run = _run_connected(
         specs,
         title=title,

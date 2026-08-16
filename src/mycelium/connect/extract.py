@@ -1,17 +1,18 @@
-"""Turn raw prose into classified items plus flags.
+"""Turn raw prose into classified items, cut links, and flags.
 
 An unresolved fragment becomes a flag rather than a guessed statement, so
-nothing is dropped.
+nothing is dropped and no link retains an unresolved endpoint.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from mycelium import phrasing
 
 from . import shapes
-from .segment import segment
+from .segment import Segmentation, segment
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class Extraction:
     items: list[ExtractedItem]
     flags: list[FlagInput]
     condition_links: list[tuple[int, int]]
+    cut_links: list[tuple[int, int, str]]
 
 
 FLAG_SOURCES = {
@@ -72,9 +74,33 @@ def _classification_detail(classification: shapes.Classification) -> str:
     )
 
 
-def extract(text: str) -> Extraction:
+def _cut_links(
+    segmentation: Segmentation,
+    item_position: dict[int, int],
+    condition_links: list[tuple[int, int]],
+) -> list[tuple[int, int, str]]:
+    """Collect resolved cut links whose endpoints both classified as items."""
+    links: list[tuple[int, int, str]] = []
+    condition_pairs = set(condition_links)
+    for cut in segmentation.cuts:
+        if cut.link_type is None:
+            continue
+        left = item_position.get(cut.left)
+        right = item_position.get(cut.right)
+        # A missing endpoint is already visible to the curator as a flag.
+        if left is None or right is None:
+            continue
+        if (left, right) in condition_pairs:
+            continue
+        links.append((left, right, cut.link_type))
+    return links
+
+
+def extract(
+    text: str, *, aliases: Mapping[str, frozenset[str]] | None = None
+) -> Extraction:
     """Extract classified items and explicit flags from raw prose."""
-    segmentation = segment(text)
+    segmentation = segment(text, aliases=aliases)
     items: list[ExtractedItem] = []
     flags: list[FlagInput] = []
     item_position: dict[int, int] = {}
@@ -152,4 +178,9 @@ def extract(text: str) -> Extraction:
                     flags[flagged], detail=f"{flags[flagged].detail} — {note}"
                 )
 
-    return Extraction(items, flags, condition_links)
+    return Extraction(
+        items,
+        flags,
+        condition_links,
+        _cut_links(segmentation, item_position, condition_links),
+    )
