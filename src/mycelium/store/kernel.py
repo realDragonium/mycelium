@@ -239,6 +239,10 @@ CREATE TABLE IF NOT EXISTS statement_mentions (
     PRIMARY KEY (statement_id, name_id)
 );
 CREATE INDEX IF NOT EXISTS statement_mentions_name ON statement_mentions (name_id);
+-- Without this, an entity-filtered mention lookup scans every
+-- statement_mentions row and resolves each name by primary key; with it
+-- the planner drives from the (much smaller) name side instead.
+CREATE INDEX IF NOT EXISTS names_entity ON names (entity_id);
 
 -- Statement-to-statement directed edges. The `when_hash` column is the
 -- SHA-256 hex of the canonicalized when expression, or the literal

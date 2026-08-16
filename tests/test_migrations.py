@@ -427,3 +427,18 @@ def test_v6_description_adoption_on_absorb():
         ).fetchone()["description"]
         == "rich description from the duplicate"
     )
+
+
+def test_v6_rebuild_keeps_the_name_entity_index():
+    """The rebuild drops `names` with its indexes and SCHEMA has already run
+    for this open, so an upgrading DB would otherwise lose `names_entity` —
+    and with it the index the shared-mention lookup plans against."""
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    _downgrade_names_to_case_sensitive(conn)
+
+    migrations.apply_migrations(conn)
+
+    assert conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'names_entity'"
+    ).fetchone()
