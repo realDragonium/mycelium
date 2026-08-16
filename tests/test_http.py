@@ -3,7 +3,7 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, mention_worker, server, store
+from mycelium import alias_worker, embed, mention_worker, server, store
 from mycelium.http import _history_target_id
 
 
@@ -112,13 +112,19 @@ def test_link_type_alias_tools_are_registered_and_reachable(tmp_path, monkeypatc
         listed = client.post("/list-link-type-aliases", json={"link_type": "triggers"})
         assert listed.status_code == 200
         row = next(row for row in listed.json() if row["alias"] == "sparks immediately")
-        assert row == {
+        assert {k: v for k, v in row.items() if k != "embedded"} == {
             "link_type": "triggers",
             "alias": "sparks immediately",
             "provenance": "curator",
             "score": None,
-            "embedded": False,
         }
+
+        # `embedded` reports a worker outcome, so assert it against a drain
+        # this test performed rather than against whichever thread won a race.
+        alias_worker.drain(store.substrate_connection())
+        listed = client.post("/list-link-type-aliases", json={"link_type": "triggers"})
+        row = next(row for row in listed.json() if row["alias"] == "sparks immediately")
+        assert row["embedded"] is True
 
         deleted = client.post(
             "/delete-link-type-alias",

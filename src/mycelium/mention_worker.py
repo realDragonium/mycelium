@@ -123,10 +123,17 @@ def start(data_dir: Path | str, *, poll_interval: float = 2.0) -> None:
 
 def stop(timeout: float = 5.0) -> None:
     """Signal the worker to exit and join it. Mostly for clean test
-    teardown; in production the daemon thread dies with the process."""
+    teardown; in production the daemon thread dies with the process.
+
+    Keeps the reference when the join times out, so the next `start` can
+    tell a slow worker from an absent one and refuse a second thread on the
+    same queue."""
     global _thread
     _stop.set()
     _wake.set()
     if _thread is not None:
         _thread.join(timeout)
+        if _thread.is_alive():
+            logger.warning("mention worker did not stop within %.1fs", timeout)
+            return
         _thread = None
