@@ -429,3 +429,22 @@ def test_all_cut_spans_round_trip_to_connectives():
 def test_empty_and_whitespace_only_input_return_empty_segmentation():
     for source in ("", " \n\t "):
         assert seg.segment(source) == seg.Segmentation([], [], [])
+
+
+def test_conditional_cut_ignores_a_registered_alias():
+    result = seg.segment(
+        "When the flag is set, the job runs",
+        aliases={"when": frozenset({"requires"})},
+    )
+
+    assert result.cuts[0].link_type is None
+    assert result.proposals
+
+
+def test_coordination_cut_ignores_a_registered_alias():
+    result = seg.segment(
+        "The user logs in and receives a token",
+        aliases={"and": frozenset({"proceeds"})},
+    )
+
+    assert result.cuts[0].link_type is None

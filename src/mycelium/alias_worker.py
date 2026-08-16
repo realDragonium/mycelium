@@ -31,6 +31,19 @@ def drain(conn, *, chunk: int = CHUNK) -> int:
     return aliases.drain_alias_embeddings(conn, embed_text=embed.embed, chunk=chunk)
 
 
+def _reopen_claimed(conn) -> None:
+    """Un-claim every claimed job so a failed chunk is retried, not stranded.
+
+    Safe because this worker is the only claimant and holds no chunk when it
+    runs — a drain either finished its chunk or raised out of it.
+    """
+    try:
+        with store.transaction(conn):
+            store.reset_claimed_alias_embeddings(conn)
+    except Exception:
+        logger.exception("could not re-open claimed alias embedding jobs")
+
+
 def wake() -> None:
     """Nudge the worker to drain now, or the next periodic tick if stopped."""
     _wake.set()
@@ -48,12 +61,15 @@ def start(data_dir: Path | str, *, poll_interval: float = 2.0) -> None:
 
     def _run() -> None:
         conn = store.connect(db_path, history_path=history_path)
-        store.reset_claimed_alias_embeddings(conn)
+        _reopen_claimed(conn)
         while not _stop.is_set():
             try:
                 drain(conn)
             except Exception:  # never let the thread die on one bad drain
                 logger.exception("alias embedding drain failed")
+                # The failed chunk is already committed as claimed, so without
+                # this an unreachable embedder strands its work until restart.
+                _reopen_claimed(conn)
             _wake.wait(poll_interval)
             _wake.clear()
 

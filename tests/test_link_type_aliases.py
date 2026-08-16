@@ -164,3 +164,18 @@ def test_alias_worker_drain_uses_embed_client(fresh_conn, monkeypatch):
     assert alias_worker.drain(fresh_conn, chunk=9) == expected
     assert len(seen) == expected
     assert store.count_open_alias_embeddings(fresh_conn) == 0
+
+
+def test_failed_drain_reopens_its_claimed_jobs(fresh_conn, monkeypatch):
+    def unavailable_embed(text: str) -> list[float]:
+        raise RuntimeError("ollama is down")
+
+    monkeypatch.setattr(embed, "embed", unavailable_embed)
+    open_before = store.count_open_alias_embeddings(fresh_conn)
+
+    with pytest.raises(RuntimeError):
+        alias_worker.drain(fresh_conn, chunk=5)
+    assert store.count_open_alias_embeddings(fresh_conn) < open_before
+
+    alias_worker._reopen_claimed(fresh_conn)
+    assert store.count_open_alias_embeddings(fresh_conn) == open_before
