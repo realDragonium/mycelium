@@ -127,6 +127,7 @@ def test_happy_path_writes_connected_items_and_flags(tmp_path, monkeypatch):
             "status": "open",
             "op_count": 1 + proposal_count + 2,
             "flags": 2,
+            "aliases": 0,
         }
 
         draft = server.get_draft(response["draft_id"])
@@ -501,6 +502,7 @@ def test_draft_op_count_includes_alias_op(tmp_path, monkeypatch):
         ops = _draft_ops(response["draft_id"])
         assert any(op["kind"] == "upsert_link_type_alias" for op in ops)
         assert response["draft"]["op_count"] == len(ops)
+        assert response["draft"]["aliases"] == 1
 
 
 def test_half_embedded_alias_set_flags_instead_of_guessing(tmp_path, monkeypatch):
@@ -544,3 +546,5 @@ def test_rejected_edge_does_not_absorb_its_cue(tmp_path, monkeypatch):
         assert any(flag["reason"] == "phrasing" for flag in response["flags"])
         ops = _draft_ops(response["draft_id"])
         assert not any(op["kind"] == "upsert_link_type_alias" for op in ops)
+        # A decision counted under `cues` is not an absorption in the draft.
+        assert response["draft"]["aliases"] == 0

@@ -3405,6 +3405,11 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
     creates a link type. Set `MYCELIUM_CUE_RESOLUTION=strict` to flag every
     unknown cue instead of resolving it.
 
+    A decision is not an absorption: `cues` and `cue_resolutions` report every
+    decision the gate made, while a cue whose statements were all rejected in
+    planning writes no alias op. So `cues.auto` can exceed the alias ops in the
+    draft; `draft.aliases` is the count that were actually queued.
+
     Flag ops do not replay: `apply_draft` skips them. Resolve a flag by rewriting
     that fragment yourself and then `discard_draft_op`-ing the flag.
 
@@ -3421,6 +3426,7 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
             {"fragment_index": 1, "reason": "unmatched", "text": "..."}
           ],
           "condition_links": 0,
+          # every gate decision, absorbed or not
           "cues": {"auto": 0, "low_confidence": 0,
                    "unresolved": 0, "strict": 0},
           "cue_resolutions": [
@@ -3433,7 +3439,8 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
           "related": [...], "dropped_merges": [...],
           "unresolved_hints": [...],
           "nli": "ran" | "unavailable",
-          "draft": {"status": "open", "op_count": 0, "flags": 0} | null
+          "draft": {"status": "open", "op_count": 0, "flags": 0,
+                    "aliases": 0} | null
         }
         ```
     """
@@ -3481,9 +3488,17 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
         claim_position in run.new_of
         for claim_position, _condition_position in extraction.condition_links
     )
-    draft = None if run.draft is None else {**run.draft, "flags": len(run.flags)}
     # The response reports every decision the gate made; the draft carries only
-    # the absorptions whose edge survived.
+    # the absorptions whose edge survived, so the two counts can differ.
+    draft = (
+        None
+        if run.draft is None
+        else {
+            **run.draft,
+            "flags": len(run.flags),
+            "aliases": sum(c.decision in ABSORBING_DECISIONS for c in run.cues),
+        }
+    )
     cues, cue_resolutions = _cue_response(extraction.cue_resolutions)
     return {
         **connected,
