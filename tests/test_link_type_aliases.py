@@ -1,7 +1,20 @@
+"""Test alias persistence, embedding, and curator-facing tool validation."""
+
+from __future__ import annotations
+
 import numpy as np
 import pytest
+from fastapi.testclient import TestClient
 
-from mycelium import alias_worker, embed, migrations, store
+from mycelium import (
+    alias_worker,
+    auth_store,
+    drafts_store,
+    embed,
+    migrations,
+    server,
+    store,
+)
 from mycelium.connect import aliases
 
 
@@ -10,6 +23,21 @@ def fresh_conn():
     conn = store.connect(":memory:")
     store.migrate(conn)
     return conn
+
+
+def _app(tmp_path, monkeypatch):
+    """Build an isolated server with a fake embedding client."""
+    monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MYCELIUM_AUTH", "off")
+    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
+    store.reset_substrate()
+    auth_store.reset()
+    drafts_store.reset()
+    server._ctx = None
+    monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)
+    from mycelium.http import app  # local import: avoid the server/http cycle
+
+    return TestClient(app)
 
 
 def test_migrate_seeds_once_without_resurrecting_deleted_alias(fresh_conn):
@@ -179,3 +207,85 @@ def test_failed_drain_reopens_its_claimed_jobs(fresh_conn, monkeypatch):
 
     alias_worker._reopen_claimed(fresh_conn)
     assert store.count_open_alias_embeddings(fresh_conn) == open_before
+
+
+def test_tool_stores_automatic_provenance_and_score(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        result = server.upsert_link_type_alias(
+            "proceeds",
+            "then after",
+            provenance="auto",
+            score=0.83,
+        )
+
+        assert result == {
+            "link_type": "proceeds",
+            "alias": "then after",
+            "provenance": "auto",
+            "score": 0.83,
+            "created": True,
+        }
+        row = next(
+            row
+            for row in store.list_link_type_aliases(server._db(), "proceeds")
+            if row["alias"] == "then after"
+        )
+        assert row["provenance"] == "auto"
+        assert row["score"] == 0.83
+
+
+@pytest.mark.parametrize("provenance", ["seed", "whatever"])
+def test_tool_rejects_unassertable_provenance(tmp_path, monkeypatch, provenance):
+    with _app(tmp_path, monkeypatch):
+        with pytest.raises(ValueError):
+            server.upsert_link_type_alias(
+                "proceeds",
+                "then after",
+                provenance=provenance,
+            )
+
+
+@pytest.mark.parametrize("score", [1.5, -2.0])
+def test_tool_rejects_score_outside_cosine_range(tmp_path, monkeypatch, score):
+    with _app(tmp_path, monkeypatch):
+        with pytest.raises(ValueError):
+            server.upsert_link_type_alias(
+                "proceeds",
+                "then after",
+                provenance="auto",
+                score=score,
+            )
+
+
+def test_tool_accepts_none_score(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        result = server.upsert_link_type_alias(
+            "proceeds",
+            "then after",
+            score=None,
+        )
+
+        assert result["score"] is None
+
+
+def test_curator_reassertion_retags_automatic_alias(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        server.upsert_link_type_alias(
+            "proceeds",
+            "then after",
+            provenance="auto",
+            score=0.83,
+        )
+
+        result = server.upsert_link_type_alias("proceeds", "then after")
+
+        assert result["created"] is False
+        assert result["provenance"] == "curator"
+        assert result["score"] is None
+        row = next(
+            row
+            for row in store.list_link_type_aliases(server._db(), "proceeds")
+            if row["alias"] == "then after"
+        )
+        assert row["provenance"] == "curator"
+        assert row["score"] is None
