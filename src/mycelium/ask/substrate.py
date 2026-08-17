@@ -32,6 +32,7 @@ _NON_READ_READER_TOOLS = frozenset(
         "get_documentation_run",  # documentation run state, not the substrate
         "list_generated_documents",  # generated projections, not the substrate
         "get_generated_document",  # generated document state, not the substrate
+        "list_documentation_destinations",  # deployment config, not the substrate
     }
 )
 

@@ -614,9 +614,62 @@ def test_migrate_adds_review_to_an_existing_table_and_is_idempotent(tmp_path):
     }
     rows = docs_store.list_documents(conn)
     assert "review" in columns
+    assert {
+        "delivery_destination",
+        "delivery_path",
+        "delivery_reference",
+        "delivery_content_revision",
+    } <= columns
     assert len(rows) == 1
     assert rows[0]["id"] == "gdc_old"
-    assert docs_store.serialize_document(rows[0])["review"] == {}
+    document = docs_store.serialize_document(rows[0])
+    assert document["review"] == {}
+    assert document["delivery_destination"] is None
+    assert document["delivery_path"] is None
+    assert document["delivery_reference"] is None
+    assert document["delivery_content_revision"] is None
+
+
+def test_record_delivery_updates_only_the_delivery_columns(tmp_path):
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="topic",
+        title="Topic",
+        body="Body",
+        statement_ids=["stm_1"],
+    )
+    before = dict(docs_store.get_document(conn, document_id))
+
+    docs_store.record_delivery(
+        conn,
+        document_id,
+        destination="knowledge-base",
+        path="docs/topic.md",
+        reference="https://github.com/acme/docs/pull/17",
+        content_revision="abc123",
+    )
+
+    after = dict(docs_store.get_document(conn, document_id))
+    changed = {key for key in after if after[key] != before[key]}
+    assert changed == {
+        "delivery_destination",
+        "delivery_path",
+        "delivery_reference",
+        "delivery_content_revision",
+    }
+    document = docs_store.serialize_document(docs_store.get_document(conn, document_id))
+    assert document["delivery_destination"] == "knowledge-base"
+    assert document["delivery_path"] == "docs/topic.md"
+    assert document["delivery_reference"] == "https://github.com/acme/docs/pull/17"
+    assert document["delivery_content_revision"] == "abc123"
+    summary = docs_store.serialize_document_summary(
+        docs_store.get_document(conn, document_id)
+    )
+    assert summary["delivery_destination"] == "knowledge-base"
+    assert summary["delivery_path"] == "docs/topic.md"
+    assert summary["delivery_reference"] == "https://github.com/acme/docs/pull/17"
+    assert summary["delivery_content_revision"] == "abc123"
 
 
 def test_upsert_document_updates_same_slug_in_place(tmp_path):
@@ -1027,6 +1080,7 @@ def test_documentation_tools_are_registered_with_reader_role():
         "get_documentation_run",
         "list_generated_documents",
         "get_generated_document",
+        "list_documentation_destinations",
     }
     wrappers = {function.__name__: function for function in server.TOOLS}
 
@@ -1046,6 +1100,7 @@ def test_documentation_tools_are_excluded_from_live_substrate_discovery():
         "get_documentation_run",
         "list_generated_documents",
         "get_generated_document",
+        "list_documentation_destinations",
     }
 
     discovered = {spec.name for spec in InProcessSubstrate().tool_specs()}
