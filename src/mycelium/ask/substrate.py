@@ -28,15 +28,17 @@ from pydantic import create_model
 #: Some are not reads at all: `report_knowledge_gap` writes a record despite its
 #: role, and `ask` is this tool itself.
 #:
-#: The rest are genuine reads of something other than the substrate. They return
-#: this instance's own bookkeeping: what its runs did, what a drafter is holding,
-#: how it is configured. That is a record of what Mycelium has done rather than
-#: the knowledge it holds, and the inner loop is answering from knowledge.
+#: The rest read something real, but not the thing a loop reasons from. They
+#: return facts about this Mycelium instance: what its runs did, what a drafter
+#: is holding, how it is configured, where it reads and writes.
 #:
-#: The test for a new reader tool, so the next one needs no judgement call:
-#: would what it returns still exist if the substrate were empty? If yes, it
-#: belongs here. Run rows, drafts and prompt rows all survive an empty
-#: substrate; a statement, an entity or a link does not.
+#: The test for a new reader tool, so the next one needs no judgement call: does
+#: what it returns describe the domain the substrate is about, or does it
+#: describe this instance? Statements, entities and links describe the domain,
+#: and so does the vocabulary they are written in, which is why the link type
+#: and statement kind readers stay offered even though seeding leaves them
+#: populated on an empty substrate. A run row, a draft, a prompt row and a
+#: configured source describe the instance.
 _NON_READ_READER_TOOLS = frozenset(
     {
         "report_knowledge_gap",  # role=reader but WRITES a knowledge-gap record

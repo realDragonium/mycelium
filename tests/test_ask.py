@@ -771,42 +771,42 @@ def test_existing_read_primitives_and_writes_untouched():
     assert "report_knowledge_gap" not in inner
 
 
-def test_the_inner_loop_is_offered_no_reader_over_this_instances_bookkeeping():
-    """Run history, drafts and prompt configuration are reader-role and are not
-    substrate reads, whichever subsystem registered them.
+def test_the_inner_loop_is_offered_exactly_the_domain_readers():
+    """Every reader tool describes the domain the substrate is about.
 
-    Live discovery rather than the denylist, with real substrate reads as a
-    positive control, so this fails when a tool is offered rather than merely
-    restating the set it is excluded by.
+    Asserted as an exact set, not as a disjointness: a new reader-role tool
+    lands in live discovery automatically, so an exact set is what forces
+    someone to decide which side it belongs on. A test that only checked the
+    known bookkeeping tools were absent would stay green while the next one
+    walked in.
+
+    The vocabulary readers are offered. Seeding leaves link types and statement
+    kinds populated on an empty substrate, but they describe how the domain is
+    written down rather than describing this instance, and the ingest and
+    research doctrines name them.
     """
     from mycelium import server
     from mycelium.ask.substrate import InProcessSubstrate
 
-    bookkeeping = {
-        "list_research_runs",
-        "get_research_run",
-        "list_research_sources",
-        "list_documentation_runs",
-        "get_documentation_run",
-        "list_generated_documents",
-        "get_generated_document",
-        "list_my_drafts",
-        "get_draft",
-        "get_prompt_text",
-        "list_prompt_texts",
-        "list_prompt_text_versions",
-    }
-
     discovered = {spec.name for spec in InProcessSubstrate(server).tool_specs()}
 
-    assert bookkeeping.isdisjoint(discovered)
-    assert {
-        "search_statements",
-        "get_statements",
-        "survey_statements",
-        "list_statements",
+    assert discovered == {
+        "discover_facts",
+        "find_duplicates",
+        "find_entity_duplicates",
         "get_entity",
-    } <= discovered
+        "get_statements",
+        "grep_statements",
+        "list_entities",
+        "list_entity_link_types",
+        "list_link_type_aliases",
+        "list_link_types",
+        "list_statement_kinds",
+        "list_statements",
+        "search_entities",
+        "search_statements",
+        "survey_statements",
+    }
 
 
 # --------------------------------------------------------------------------- #
