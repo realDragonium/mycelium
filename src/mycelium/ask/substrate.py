@@ -18,12 +18,13 @@ from typing import Any, Callable, Protocol
 
 from pydantic import create_model
 
-#: Reader-role tools that are NOT side-effect-free substrate reads, so they must
-#: not be offered to the inner model. This is a *denylist* (not an allowlist):
-#: any new read primitive is auto-discovered and exposed without editing this
-#: set — which is what keeps the "discover, don't hardcode" guarantee.
 #: Reader-role tools the inner model loop is not offered, for one of two
 #: reasons.
+#:
+#: This is a denylist, not an allowlist: a new read primitive is auto-discovered
+#: and offered without editing this set, which is what keeps the "discover,
+#: don't hardcode" guarantee. The cost is that a tool belonging here arrives
+#: offered, so `tests/test_ask.py` pins the offered set exactly.
 #:
 #: Some are not reads at all: `report_knowledge_gap` writes a record despite its
 #: role, and `ask` is this tool itself.
