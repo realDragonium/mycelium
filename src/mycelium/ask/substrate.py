@@ -22,16 +22,37 @@ from pydantic import create_model
 #: not be offered to the inner model. This is a *denylist* (not an allowlist):
 #: any new read primitive is auto-discovered and exposed without editing this
 #: set — which is what keeps the "discover, don't hardcode" guarantee.
+#: Reader-role tools the inner model loop is not offered, for one of two
+#: reasons.
+#:
+#: Some are not reads at all: `report_knowledge_gap` writes a record despite its
+#: role, and `ask` is this tool itself.
+#:
+#: The rest are genuine reads of something other than the substrate. They return
+#: this instance's own bookkeeping: what its runs did, what a drafter is holding,
+#: how it is configured. That is a record of what Mycelium has done rather than
+#: the knowledge it holds, and the inner loop is answering from knowledge.
+#:
+#: The test for a new reader tool, so the next one needs no judgement call:
+#: would what it returns still exist if the substrate were empty? If yes, it
+#: belongs here. Run rows, drafts and prompt rows all survive an empty
+#: substrate; a statement, an entity or a link does not.
 _NON_READ_READER_TOOLS = frozenset(
     {
         "report_knowledge_gap",  # role=reader but WRITES a knowledge-gap record
-        "ask",  # this tool itself — avoid recursion
-        "list_my_drafts",  # draft-session state, not the substrate
-        "get_draft",  # draft-session state, not the substrate
-        "list_documentation_runs",  # documentation history, not the substrate
-        "get_documentation_run",  # documentation run state, not the substrate
-        "list_generated_documents",  # generated projections, not the substrate
-        "get_generated_document",  # generated document state, not the substrate
+        "ask",  # this tool itself, avoiding recursion
+        "list_my_drafts",  # draft-session state
+        "get_draft",  # draft-session state
+        "list_documentation_runs",  # documentation run history
+        "get_documentation_run",  # documentation run state
+        "list_generated_documents",  # generated projections
+        "get_generated_document",  # generated document state
+        "list_research_runs",  # research run history
+        "get_research_run",  # research run state
+        "list_research_sources",  # deployment configuration
+        "list_prompt_texts",  # prompt configuration
+        "get_prompt_text",  # prompt configuration
+        "list_prompt_text_versions",  # prompt configuration history
     }
 )
 
