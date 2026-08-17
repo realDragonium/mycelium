@@ -132,15 +132,13 @@ def _clarify_input(**over):
     return data
 
 
-def _run(responses, results=None, **config_over):
+def _run(responses, results=None, *, question="why does it retry?", **config_over):
     client = FakeAnthropic(responses)
     substrate = FakeSubstrate(
         results or {"survey_statements": [{"id": "stm_1", "text": "x"}]}
     )
     cfg = AskConfig(thinking=True, trace_log_path=None, **config_over)
-    result = run_ask(
-        "why does it retry?", client=client, substrate=substrate, config=cfg
-    )
+    result = run_ask(question, client=client, substrate=substrate, config=cfg)
     return result, client, substrate
 
 
@@ -469,6 +467,43 @@ def test_fallback_provenance_excludes_recon_ids_not_rendered_to_model():
 
     assert isinstance(result, Answered)
     assert hidden_id not in result.provenance
+
+
+def test_fallback_provenance_excludes_an_unrendered_recon_id_named_in_the_question():
+    """Question text cannot vouch for a structurally collected recon id."""
+    hidden_id = "stm_ghost_in_question"
+    results = {"survey_statements": {"id": hidden_id, "text": "not rendered"}}
+
+    result, _client, _sub = _run(
+        [],
+        results=results,
+        question=f"What does {hidden_id} say?",
+        op_cap=1,
+    )
+
+    assert isinstance(result, Answered)
+    assert hidden_id not in result.provenance
+
+
+def test_fallback_provenance_excludes_a_recon_link_target_that_was_not_read():
+    """A rendered link target is not provenance until its statement is read."""
+    read_id = "stm_recon_hit"
+    linked_id = "stm_link_target"
+    results = {
+        "survey_statements": [
+            {
+                "id": read_id,
+                "text": "The visible recon statement",
+                "links": [{"link_type": "requires", "to_id": linked_id}],
+            }
+        ]
+    }
+
+    result, _client, _sub = _run([], results=results, op_cap=1)
+
+    assert isinstance(result, Answered)
+    assert read_id in result.provenance
+    assert linked_id not in result.provenance
 
 
 def test_trace_record_is_complete():

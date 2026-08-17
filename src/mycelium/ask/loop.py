@@ -117,12 +117,15 @@ class _RunContext:
 
 
 def _note_collected_ids(result: Any, sent: str, collected_ids: set[str]) -> None:
-    """Record structural statement ids that appeared whole in model-visible text.
+    """Record which statements this read actually put in front of the model.
 
-    Tool serialization can truncate at its character cap, and recon formatting can
-    omit result shapes entirely. Matching whole identities against the exact text
-    sent prevents both unseen ids and longer ids sharing a prefix from vouching for
-    fallback provenance.
+    Two filters matter. The structural one (`_collect_ids`) takes only `id` keys,
+    so a link's `to_id`, a pointer to something not fetched, is not counted as
+    read. The second is an identity test over the text actually sent, because tool
+    serialization can truncate large results and recon formatting can omit result
+    shapes entirely. An id absent from that text never reached the model. A
+    substring test is wrong because a longer id sharing its prefix could vouch for
+    one that was cut, letting guessed provenance pass the fallback gate.
     """
     seen: set[str] = set()
     _collect_ids(result, seen)
@@ -151,7 +154,7 @@ def _execute(
     initial_message = prompts.initial_user_message(
         question, recon, quick=not config.enforce_floor
     )
-    _note_collected_ids(recon, initial_message, collected_ids)
+    _note_collected_ids(recon, prompts.format_recon(recon), collected_ids)
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": initial_message}]
 
