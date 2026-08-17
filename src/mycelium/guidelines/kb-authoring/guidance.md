@@ -108,9 +108,8 @@ named for the document type it produces.
 | Explanation | `kb-authoring/explanation` |
 | Troubleshooting | `kb-authoring/troubleshooting` |
 
-Load the row for the type you settled on in Step 0 — fetching it yourself is
-`get_prompt_text("guideline-set", "kb-authoring/tutorial")` — and write the document
-using it as the starting point.
+The row for the type you settled on in Step 0 is already in front of you. Write
+the document using it as the starting point.
 
 Rules that apply to all types when filling in the template:
 

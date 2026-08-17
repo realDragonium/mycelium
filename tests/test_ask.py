@@ -806,6 +806,44 @@ def test_existing_read_primitives_and_writes_untouched():
     assert "report_knowledge_gap" not in inner
 
 
+def test_the_inner_loop_is_offered_exactly_the_domain_readers():
+    """Every reader tool describes the domain the substrate is about.
+
+    Asserted as an exact set, not as a disjointness: a new reader-role tool
+    lands in live discovery automatically, so an exact set is what forces
+    someone to decide which side it belongs on. A test that only checked the
+    known bookkeeping tools were absent would stay green while the next one
+    walked in.
+
+    The vocabulary readers are offered. Seeding leaves link types and statement
+    kinds populated on an empty substrate, but they describe how the domain is
+    written down rather than describing this instance, and the ingest and
+    research doctrines name them.
+    """
+    from mycelium import server
+    from mycelium.ask.substrate import InProcessSubstrate
+
+    discovered = {spec.name for spec in InProcessSubstrate(server).tool_specs()}
+
+    assert discovered == {
+        "discover_facts",
+        "find_duplicates",
+        "find_entity_duplicates",
+        "get_entity",
+        "get_statements",
+        "grep_statements",
+        "list_entities",
+        "list_entity_link_types",
+        "list_link_type_aliases",
+        "list_link_types",
+        "list_statement_kinds",
+        "list_statements",
+        "search_entities",
+        "search_statements",
+        "survey_statements",
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Caching + parallel tool use (latency wins)
 # --------------------------------------------------------------------------- #
