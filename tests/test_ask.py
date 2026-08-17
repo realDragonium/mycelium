@@ -771,6 +771,44 @@ def test_existing_read_primitives_and_writes_untouched():
     assert "report_knowledge_gap" not in inner
 
 
+def test_the_inner_loop_is_offered_no_reader_over_this_instances_bookkeeping():
+    """Run history, drafts and prompt configuration are reader-role and are not
+    substrate reads, whichever subsystem registered them.
+
+    Live discovery rather than the denylist, with real substrate reads as a
+    positive control, so this fails when a tool is offered rather than merely
+    restating the set it is excluded by.
+    """
+    from mycelium import server
+    from mycelium.ask.substrate import InProcessSubstrate
+
+    bookkeeping = {
+        "list_research_runs",
+        "get_research_run",
+        "list_research_sources",
+        "list_documentation_runs",
+        "get_documentation_run",
+        "list_generated_documents",
+        "get_generated_document",
+        "list_my_drafts",
+        "get_draft",
+        "get_prompt_text",
+        "list_prompt_texts",
+        "list_prompt_text_versions",
+    }
+
+    discovered = {spec.name for spec in InProcessSubstrate(server).tool_specs()}
+
+    assert bookkeeping.isdisjoint(discovered)
+    assert {
+        "search_statements",
+        "get_statements",
+        "survey_statements",
+        "list_statements",
+        "get_entity",
+    } <= discovered
+
+
 # --------------------------------------------------------------------------- #
 # Caching + parallel tool use (latency wins)
 # --------------------------------------------------------------------------- #
