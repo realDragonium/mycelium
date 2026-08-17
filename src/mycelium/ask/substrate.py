@@ -50,6 +50,7 @@ _NON_READ_READER_TOOLS = frozenset(
         "get_documentation_run",  # documentation run state
         "list_generated_documents",  # generated projections
         "get_generated_document",  # generated document state
+        "list_documentation_destinations",  # deployment configuration
         "list_research_runs",  # research run history
         "get_research_run",  # research run state
         "list_research_sources",  # deployment configuration
