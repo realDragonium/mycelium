@@ -176,7 +176,7 @@ function IngestSurface() {
       {outcome && outcome.kind === 'error' && <div className="ingest-error">{outcome.message}</div>}
 
       <div className="ingest-field">
-        <textarea value={source} onChange={e => setSource(e.target.value)} spellCheck={false}
+        <textarea value={source} onChange={e => setSource(e.target.value)} spellCheck={false} disabled={busy}
           placeholder={mode === 'rules' ? 'Paste sentences or short bullets — one claim per clause splits best. Conditionals, "and", "and then", and lists are cut on the catalog\'s own cues…' : 'Paste raw text here — the more context, the richer the extracted draft…'} />
         <div className="ingest-foot">
           <span className="if-meta"><b>{source.trim() ? source.trim().split(/\s+/).length : 0}</b> words · <b>{source.length}</b> chars</span>
