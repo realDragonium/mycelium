@@ -303,6 +303,11 @@
     // returns { outcome:'draft_created', draft_id, ops, flagged, ... } or
     // { outcome:'nothing_to_ingest', reason }. Caller routes to the draft.
     ingest: (text) => post('/ingest', { text }),
+    // Deterministic split-and-link (milestones 4-5): segments raw text on
+    // catalog cues, classifies kinds by phrasing shape, runs the connection
+    // pipeline, and leaves ONE open draft (statements + proposals + `flag`
+    // ops). Synchronous (a few seconds); returns the summary incl. draft_id.
+    ingestText: (text, title) => post('/ingest-text', title ? { text, title } : { text }),
     research: {
       start: (topic, source) => post('/start-research', source ? { topic, source } : { topic }),
       list: () => get('/list-research-runs').then(r => (r && r.runs) || []),
