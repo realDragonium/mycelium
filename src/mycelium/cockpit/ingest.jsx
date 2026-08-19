@@ -10,7 +10,7 @@ const SOURCE_TYPES = [
   { k: 'transcript', label: 'Transcript', glyph: 'interp' },
   { k: 'code', label: 'Codebase', glyph: 'trace' },
 ];
-const MODES = [
+const INGEST_MODES = [
   { k: 'librarian', label: 'Librarian', sub: 'LLM extraction' },
   { k: 'rules', label: 'Rules', sub: 'split & link' },
 ];
@@ -34,12 +34,15 @@ function IngestSurface() {
   const [outcome, setOutcome] = useStateIg(null);      // null | { kind:'nothing', reason } | { kind:'error', message }
   const timers = useRefIg([]);
   const alive = useRefIg(true);
+  const runId = useRefIg(0);                           // bumps per run; a response from an older run is ignored
+  const busy = phase === 'processing' || phase === 'rules-busy';
   const clear = () => { timers.current.forEach(clearTimeout); timers.current.forEach(clearInterval); timers.current = []; };
 
   useEffectIg(() => () => { alive.current = false; }, []);
 
   const startExtract = () => {
-    if (!source.trim()) return;
+    if (!source.trim() || busy) return;
+    const mine = ++runId.current;
     setPhase('processing'); setActiveIdx(0); setElapsed(0); setOutcome(null);
     const t0 = Date.now();
     // Real elapsed timer.
@@ -51,7 +54,7 @@ function IngestSurface() {
     timers.current.push(cycle);
 
     Myc.ingest(source).then((res) => {
-      if (!alive.current) return;
+      if (!alive.current || mine !== runId.current) return;
       clear();
       if (res && res.outcome === 'draft_created') {
         router.go({ view: 'draft', id: res.draft_id });
@@ -60,7 +63,7 @@ function IngestSurface() {
       // nothing_to_ingest — the substrate found nothing worth a draft.
       setOutcome({ kind: 'nothing', reason: (res && res.reason) || 'The librarian found nothing worth drafting from this text.' });
     }).catch((err) => {
-      if (!alive.current) return;
+      if (!alive.current || mine !== runId.current) return;
       clear();
       const msg = err && err.status === 403
         ? 'You need drafter/writer access to ingest.'
@@ -70,20 +73,24 @@ function IngestSurface() {
   };
 
   const startRules = () => {
-    if (!source.trim()) return;
+    if (!source.trim() || busy) return;
+    const mine = ++runId.current;
     setPhase('rules-busy'); setOutcome(null); setRulesOut(null);
     Myc.ingestText(source).then(async (res) => {
-      if (!alive.current) return;
+      // The server created the draft whether or not this screen is still mounted;
+      // the global Drafts list/badge is cached at mount, so refresh it regardless.
+      if (res && res.draft_id && typeof refreshDrafts === 'function') refreshDrafts();
+      if (!alive.current || mine !== runId.current) return;
       // The draft is the record: input-derived links (requires from a
       // when-clause, proceeds from an "and then" cut) live only on its batch op.
       let draft = null;
       if (res && res.draft_id) {
         try { const d = await Myc.drafts.get(res.draft_id); draft = d && d.draft; } catch (e) { /* summary still renders */ }
       }
-      if (!alive.current) return;
+      if (!alive.current || mine !== runId.current) return;
       setRulesOut({ res, draft }); setPhase('rules-result');
     }).catch((err) => {
-      if (!alive.current) return;
+      if (!alive.current || mine !== runId.current) return;
       const msg = err && err.status === 403 ? 'You need drafter/writer access to ingest.' : (err && err.message) || 'Split & link failed.';
       setOutcome({ kind: 'error', message: msg }); setPhase('compose');
     });
@@ -147,9 +154,9 @@ function IngestSurface() {
   return (
     <main className="page"><div className="ingest-stage">
       <div className="crumbs"><a onClick={() => router.go({ view: 'landing' })}>~</a><span className="sep">/</span><span>ingest</span></div>
-      <div className="ingest-mode">
-        {MODES.map(m => (
-          <button key={m.k} className={`im-opt${mode === m.k ? ' on' : ''}`} onClick={() => { setMode(m.k); setOutcome(null); }}>
+      <div className="ingest-mode" role="radiogroup" aria-label="Ingest mode">
+        {INGEST_MODES.map(m => (
+          <button key={m.k} role="radio" aria-checked={mode === m.k} disabled={busy} className={`im-opt${mode === m.k ? ' on' : ''}`} onClick={() => { if (busy) return; setMode(m.k); setOutcome(null); }}>
             <span className="im-l">{m.label}</span><span className="im-s">{m.sub}</span>
           </button>
         ))}
@@ -175,8 +182,8 @@ function IngestSurface() {
           <span className="if-meta"><b>{source.trim() ? source.trim().split(/\s+/).length : 0}</b> words · <b>{source.length}</b> chars</span>
           <span className="if-spacer" />
           {mode === 'rules'
-            ? <button className="btn extract" disabled={!source.trim() || phase === 'rules-busy'} onClick={startRules}><I.ingest width="15" height="15" />{phase === 'rules-busy' ? 'Splitting & linking…' : 'Split & link to draft'}</button>
-            : <button className="btn extract" disabled={!source.trim()} onClick={startExtract}><I.ask width="15" height="15" />Extract to draft</button>}
+            ? <button className="btn extract" disabled={!source.trim() || busy} onClick={startRules}><I.ingest width="15" height="15" />{phase === 'rules-busy' ? 'Splitting & linking…' : 'Split & link to draft'}</button>
+            : <button className="btn extract" disabled={!source.trim() || busy} onClick={startExtract}><I.ask width="15" height="15" />Extract to draft</button>}
         </div>
       </div>
       {mode === 'rules'
@@ -218,12 +225,16 @@ function RulesResult({ res, draft, onOpen, onAgain }) {
   const frags = res.fragments || { total: 0, resolved: 0, flagged: 0 };
   const props = res.proposals || {};
   const cues = res.cues || {};
-  const cueByPos = {};
-  (res.cue_resolutions || []).forEach(c => { cueByPos[c.cue] = c; });
   const conn = rrConnections(res, draft);
   const byFrag = {};
-  (res.items || []).forEach(it => { byFrag[it.fragment_index] = { item: it }; });
-  (res.flags || []).forEach(f => { byFrag[f.fragment_index] = { flag: f }; });
+  (res.items || []).forEach(it => { byFrag[it.fragment_index] = { item: it, notes: [] }; });
+  // A cue flag annotates a connective next to an accepted fragment; it must not
+  // replace that fragment's row. Only fragment-level flags become rows.
+  (res.flags || []).forEach(f => {
+    const cur = byFrag[f.fragment_index];
+    if (f.reason === 'cue' || (cur && cur.item)) { if (cur) cur.notes.push(f); else byFrag[f.fragment_index] = { flag: f, notes: [] }; }
+    else byFrag[f.fragment_index] = { flag: f, notes: [] };
+  });
   const rows = Object.keys(byFrag).map(Number).sort((a, b) => a - b).map(fi => ({ fi, ...byFrag[fi] }));
   const textLinks = Object.values(conn).flat().filter(c => c.kind === 'text').length;
   const cueTotal = (cues.auto || 0) + (cues.low_confidence || 0) + (cues.unresolved || 0) + (cues.strict || 0);
@@ -246,16 +257,15 @@ function RulesResult({ res, draft, onOpen, onAgain }) {
               const it = r.item, fl = r.flag;
               const bi = it ? it.batch_index : null;
               const cs = it ? (conn[bi] || []) : [];
-              const cue = Object.values(cueByPos).find(c => c.link_type && cs.some(x => x.label.startsWith(c.link_type + ' →')));
               return (
                 <tr key={r.fi} className={fl ? 'flagged' : ''}>
                   <td className="n">{it ? `#${bi}` : `f${r.fi}`}</td>
-                  <td>{it ? <span className="rr-kind">{it.kind}</span> : <span className="rr-kind flag">flag · {fl.reason}</span>}</td>
+                  <td>{it ? <span className="rr-kind">{it.kind}</span> : <span className="rr-kind is-flag">flag · {fl.reason}</span>}</td>
                   <td className="t">{(it || fl).text}{it && it.note ? <div className="rr-note">{it.note}</div> : null}</td>
                   <td className="c">
                     {fl ? <span className="rr-why">{fl.reason === 'unmatched' ? 'no phrasing shape matched' : fl.reason === 'ambiguous' ? 'several kinds matched' : fl.reason === 'unsplit' ? 'compound remnant the segmenter could not split' : fl.reason}</span> : null}
                     {cs.map((c, i) => <div key={i} className={`rr-link ${c.kind}`}><b>{c.label}</b>{c.note ? <span className="rr-note"> {c.note}</span> : null}</div>)}
-                    {it && cue ? <div className="rr-note">cue "{cue.cue}" → {cue.link_type} · {cue.decision} · {rrPct(cue.score)}</div> : null}
+                    {(r.notes || []).map((f, i) => <div key={`n${i}`} className="rr-why">unknown connective after this fragment — see connectives below</div>)}
                   </td>
                 </tr>
               );
@@ -263,6 +273,14 @@ function RulesResult({ res, draft, onOpen, onAgain }) {
           </tbody>
         </table>
       )}
+      {(res.cue_resolutions || []).length ? (
+        <div className="rr-cues">
+          <span className="k">unknown connectives</span>
+          {(res.cue_resolutions || []).map((c, i) => (
+            <span key={i} className={`rr-cue ${c.decision}`}>"{c.cue}" → {c.link_type || 'no type'} · {c.decision}{typeof c.score === 'number' ? ` · ${rrPct(c.score)}` : ''}</span>
+          ))}
+        </div>
+      ) : null}
       <div className="rr-foot">
         <span className="if-meta">
           {res.draft_id ? <>draft <b>{res.draft_id}</b> · {res.draft && res.draft.status} · {res.draft && res.draft.op_count} ops{res.draft && res.draft.flags ? ` (${res.draft.flags} flags` : ''}{res.draft && res.draft.aliases ? `${res.draft.flags ? ', ' : ' ('}${res.draft.aliases} alias absorption)` : (res.draft && res.draft.flags ? ')' : '')}</> : 'no draft created'}
