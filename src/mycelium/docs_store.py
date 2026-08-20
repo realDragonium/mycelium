@@ -69,6 +69,10 @@ CREATE TABLE IF NOT EXISTS generated_documents (
     body          TEXT NOT NULL,
     statement_ids TEXT NOT NULL DEFAULT '[]',
     review        TEXT NOT NULL DEFAULT '{}',
+    delivery_destination TEXT,
+    delivery_path        TEXT,
+    delivery_reference   TEXT,
+    delivery_content_revision TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     last_run_id   TEXT
@@ -97,6 +101,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DOCUMENTATION_RUNS_SCHEMA)
     conn.executescript(GENERATED_DOCUMENTS_SCHEMA)
     _add_generated_document_review(conn)
+    _add_generated_document_delivery(conn)
     _rekey_generated_documents(conn)
     conn.commit()
 
@@ -119,6 +124,27 @@ def _add_generated_document_review(conn: sqlite3.Connection) -> None:
             "ALTER TABLE generated_documents "
             "ADD COLUMN review TEXT NOT NULL DEFAULT '{}'"
         )
+
+
+def _add_generated_document_delivery(conn: sqlite3.Connection) -> None:
+    """Add delivery fields to a DB created before delivery was available.
+
+    Rows written before the upgrade read as null in every field: the document
+    has no recorded destination. Each column is added independently so startup
+    remains idempotent after an interrupted schema migration.
+    """
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(generated_documents)")
+    }
+    delivery_columns = (
+        "delivery_destination",
+        "delivery_path",
+        "delivery_reference",
+        "delivery_content_revision",
+    )
+    for column in delivery_columns:
+        if column not in columns:
+            conn.execute(f"ALTER TABLE generated_documents ADD COLUMN {column} TEXT")
 
 
 def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
@@ -161,6 +187,10 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
                 body          TEXT NOT NULL,
                 statement_ids TEXT NOT NULL DEFAULT '[]',
                 review        TEXT NOT NULL DEFAULT '{}',
+                delivery_destination TEXT,
+                delivery_path        TEXT,
+                delivery_reference   TEXT,
+                delivery_content_revision TEXT,
                 created_at    TEXT NOT NULL,
                 updated_at    TEXT NOT NULL,
                 last_run_id   TEXT
@@ -171,10 +201,13 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
             """
             INSERT INTO generated_documents_rekeyed
                 (id, slug, title, guideline_set, document_type, body,
-                 statement_ids, review, created_at, updated_at, last_run_id)
+                statement_ids, review, delivery_destination, delivery_path,
+                delivery_reference, delivery_content_revision, created_at,
+                updated_at, last_run_id)
             SELECT id, slug, title, COALESCE(guideline_set, ''),
                    COALESCE(document_type, ''), body, statement_ids, review,
-                   created_at, updated_at, last_run_id
+                   delivery_destination, delivery_path, delivery_reference,
+                   delivery_content_revision, created_at, updated_at, last_run_id
             FROM generated_documents
             """
         )
@@ -567,6 +600,29 @@ def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | No
     ).fetchone()
 
 
+def record_delivery(
+    conn: sqlite3.Connection,
+    document_id: str,
+    *,
+    destination: str,
+    path: str,
+    reference: str,
+    content_revision: str,
+) -> None:
+    """Record a completed delivery without accepting or rewriting content."""
+    cursor = conn.execute(
+        "UPDATE generated_documents SET delivery_destination = ?, "
+        "delivery_path = ?, delivery_reference = ?, "
+        "delivery_content_revision = ? "
+        "WHERE id = ?",
+        (destination, path, reference, content_revision, document_id),
+    )
+    if cursor.rowcount != 1:
+        conn.rollback()
+        raise ValueError(f"generated document not found: {document_id}")
+    conn.commit()
+
+
 def get_document_by_slug(
     conn: sqlite3.Connection,
     slug: str,
@@ -624,6 +680,10 @@ def serialize_document(row: sqlite3.Row) -> dict:
         "body": row["body"],
         "statement_ids": _statement_ids(row),
         "review": _review(row),
+        "delivery_destination": row["delivery_destination"],
+        "delivery_path": row["delivery_path"],
+        "delivery_reference": row["delivery_reference"],
+        "delivery_content_revision": row["delivery_content_revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_run_id": row["last_run_id"],
@@ -645,6 +705,10 @@ def serialize_document_summary(row: sqlite3.Row) -> dict:
         "chars": len(row["body"]),
         "statement_ids": _statement_ids(row),
         "review": _review(row),
+        "delivery_destination": row["delivery_destination"],
+        "delivery_path": row["delivery_path"],
+        "delivery_reference": row["delivery_reference"],
+        "delivery_content_revision": row["delivery_content_revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_run_id": row["last_run_id"],
