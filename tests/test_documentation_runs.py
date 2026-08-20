@@ -308,8 +308,38 @@ def test_upsert_document_refuses_to_replace_another_runs_body(tmp_path):
     assert document["statement_ids"] == ["stm_sso"]
 
 
-def test_upsert_document_allows_the_same_run_to_rewrite_its_own_page(tmp_path):
-    """A run may refine the page it already owns without declaring an update."""
+def test_upsert_document_refuses_a_borrowed_last_run_id(tmp_path):
+    """A stored run id is not evidence that the caller read the stored body."""
+    conn = _conn(tmp_path)
+    first_body = "# Getting started with SSO\n"
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=first_body,
+        run_id="drn_first",
+    )
+
+    with pytest.raises(ValueError):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Junk",
+            run_id="drn_first",
+        )
+
+    document = docs_store.get_document(conn, document_id)
+    assert document["body"] == first_body
+    assert document["last_run_id"] == "drn_first"
+
+
+def test_upsert_document_requires_compare_and_swap_for_same_run_rewrites(tmp_path):
+    """A run changing a stored body must prove it read that exact body."""
     conn = _conn(tmp_path)
     first_id = docs_store.upsert_document(
         conn,
@@ -321,6 +351,19 @@ def test_upsert_document_allows_the_same_run_to_rewrite_its_own_page(tmp_path):
         run_id="drn_first",
     )
 
+    with pytest.raises(ValueError, match="updates"):
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Second body",
+            run_id="drn_first",
+        )
+
+    assert docs_store.get_document(conn, first_id)["body"] == "First body"
+
     second_id = docs_store.upsert_document(
         conn,
         slug="getting-started",
@@ -329,6 +372,8 @@ def test_upsert_document_allows_the_same_run_to_rewrite_its_own_page(tmp_path):
         document_type="how-to",
         body="Second body",
         run_id="drn_first",
+        updates=first_id,
+        replacing=docs_store.body_digest("First body"),
     )
 
     assert second_id == first_id
@@ -418,6 +463,8 @@ def test_upsert_document_refuses_to_replace_a_body_the_caller_never_saw(tmp_path
         document_type="how-to",
         body=body_b,
         run_id="drn_owner",
+        updates=document_id,
+        replacing=replacing,
     )
 
     with pytest.raises(ValueError) as exc_info:
@@ -439,6 +486,42 @@ def test_upsert_document_refuses_to_replace_a_body_the_caller_never_saw(tmp_path
     document = docs_store.get_document(conn, document_id)
     assert document["body"] == body_b
     assert document["last_run_id"] == "drn_owner"
+
+
+def test_upsert_document_refusal_withholds_the_stored_digest(tmp_path):
+    """A refusal that named the stored digest would hand over the evidence.
+
+    The digest is admissible as proof of reading only while it cannot be
+    obtained any other way, so a caller that guesses wrong learns that it was
+    wrong and nothing more.
+    """
+    conn = _conn(tmp_path)
+    body = "# The body a guessing caller never read\n"
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="getting-started",
+        title="Getting Started",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        body=body,
+        run_id="drn_owner",
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        docs_store.upsert_document(
+            conn,
+            slug="getting-started",
+            title="Getting Started",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+            body="Junk",
+            run_id="drn_guesser",
+            updates=document_id,
+            replacing="0" * 64,
+        )
+
+    assert docs_store.body_digest(body) not in str(exc_info.value)
+    assert docs_store.get_document(conn, document_id)["body"] == body
 
 
 def test_upsert_document_refuses_a_replacement_that_states_no_expectation(tmp_path):
@@ -668,6 +751,8 @@ def test_upsert_document_preserves_fields_a_later_write_omits(tmp_path):
         guideline_set="kb-authoring",
         document_type="how-to",
         run_id="drn_1",
+        updates=first_id,
+        replacing=docs_store.body_digest("First"),
     )
     document = docs_store.serialize_document(docs_store.get_document(conn, second_id))
 
@@ -878,7 +963,7 @@ def test_upsert_document_rejects_blank_slug_and_title(tmp_path):
         docs_store.upsert_document(conn, slug="topic", title="  ", body="Body")
 
 
-def test_serialize_document_summary_omits_body(tmp_path):
+def test_serialize_document_summary_omits_body_and_last_run_id(tmp_path):
     conn = _conn(tmp_path)
     document_id = docs_store.upsert_document(
         conn,
@@ -887,6 +972,7 @@ def test_serialize_document_summary_omits_body(tmp_path):
         body="four",
         statement_ids=["stm_1"],
         review={"passed": True, "attempts": 1},
+        run_id="drn_1",
     )
 
     summary = docs_store.serialize_document_summary(
@@ -894,6 +980,7 @@ def test_serialize_document_summary_omits_body(tmp_path):
     )
 
     assert "body" not in summary
+    assert "last_run_id" not in summary
     assert summary["chars"] == 4
     assert summary["statement_ids"] == ["stm_1"]
     assert summary["review"] == {"passed": True, "attempts": 1}

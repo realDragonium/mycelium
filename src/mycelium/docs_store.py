@@ -20,7 +20,7 @@ kinds of page routinely choose the same ordinary title. A run whose document
 row is absent reads as `document_written`, not `document_superseded`, because
 nothing replaced it and its `document_id` simply resolves to nothing. Even the
 triple cannot distinguish unrelated same-titled pages within one kind, so a
-write that would replace another run's body is refused rather than merged;
+write that would replace a stored body is refused rather than merged;
 replacement is something a caller requests explicitly with `updates=` naming
 the document and `replacing=` naming the body it expects to replace. A mistaken
 match therefore cannot destroy a body the caller never saw. The refused run
@@ -403,9 +403,8 @@ def _write_refusal(
 
     The identity rule in one place, decided from values rather than from the
     database, so what counts as losing a body reads as one thing. A caller
-    that named this document, a body already identical, and the run that
-    currently owns the row are the three ways a write may replace what is
-    there.
+    that named this document with a matching body expectation, a body already
+    identical, and a new identity are the three ways a write may land.
     """
     guideline_set, document_type, slug = identity
     where = (
@@ -431,25 +430,25 @@ def _write_refusal(
             f"{where} resolved to {resolved}"
         )
     if updates is not None and existing is not None:
-        stored = body_digest(existing["body"])
-        if replacing != stored:
+        # Naming the stored digest here would hand over the very evidence the
+        # check exists to demand, so a refusal says only that the expectation
+        # is wrong. The document's body is the one place to obtain it.
+        if replacing != body_digest(existing["body"]):
             return (
-                f"document write refused: document {document_id!r} expected body "
-                f"digest {replacing!r}, but the stored body has digest {stored!r}; "
-                "the stored body has changed since the caller read it"
+                f"document write refused: document {document_id!r} does not hold "
+                f"the body digest {replacing!r} the write expected; read the "
+                "document and retry with the digest of what is stored"
             )
-    # Digest expectations are scoped to deliberate updates. Same-run rewrites
-    # wrote the current body, and identical bodies replace nothing.
+    # New identities lose nothing, deliberate updates passed the digest check
+    # above, and identical bodies replace nothing.
     if existing is None or updates == document_id or existing["body"] == body:
         return None
-    if run_id is not None and run_id == existing["last_run_id"]:
-        return None
     return (
-        "document write refused because it would replace another run's body: "
+        "document write refused because it would replace a stored body: "
         f"existing document {document_id!r} at identity {where} has "
         f"last_run_id={existing['last_run_id']!r}; the attempting run has "
         f"run_id={run_id!r}. To deliberately replace it, pass "
-        f"updates={document_id!r}"
+        f"updates={document_id!r} and replacing=body_digest(stored_body)"
     )
 
 
@@ -477,9 +476,10 @@ def upsert_document(
 
     A finer title-derived key still collapses unrelated pages that happen to
     share a title, so replacing another run's body is refused rather than
-    merged. Identical bodies and same-run rewrites remain safe. For a deliberate
-    replacement, `updates` says which document and `replacing` says which body;
-    the write is refused if the stored body has moved on since the caller read it.
+    merged. New documents and identical bodies need no replacement authority.
+    For every deliberate replacement, `updates` says which document and
+    `replacing` says which body; the write is refused if the stored body has
+    moved on since the caller read it.
     """
     slug = slug.strip()
     title = title.strip()
@@ -631,10 +631,12 @@ def serialize_document(row: sqlite3.Row) -> dict:
 
 
 def serialize_document_summary(row: sqlite3.Row) -> dict:
-    """Return the listing shape: everything but the body.
+    """Return the body-less listing shape.
 
     Generated documents can run to kilobytes, and a caller listing them wants
-    to know what exists before fetching one body in full.
+    to know what exists before fetching one body in full. Run ownership is
+    omitted because it does not authorize a replacement; a caller that intends
+    to replace a document fetches the body needed for its digest expectation.
     """
     return {
         "id": row["id"],
@@ -647,5 +649,4 @@ def serialize_document_summary(row: sqlite3.Row) -> dict:
         "review": _review(row),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
-        "last_run_id": row["last_run_id"],
     }
