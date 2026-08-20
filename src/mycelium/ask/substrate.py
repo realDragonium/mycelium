@@ -18,20 +18,44 @@ from typing import Any, Callable, Protocol
 
 from pydantic import create_model
 
-#: Reader-role tools that are NOT side-effect-free substrate reads, so they must
-#: not be offered to the inner model. This is a *denylist* (not an allowlist):
-#: any new read primitive is auto-discovered and exposed without editing this
-#: set — which is what keeps the "discover, don't hardcode" guarantee.
+#: Reader-role tools the inner model loop is not offered, for one of two
+#: reasons.
+#:
+#: This is a denylist, not an allowlist: a new read primitive is auto-discovered
+#: and offered without editing this set, which is what keeps the "discover,
+#: don't hardcode" guarantee. The cost is that a tool belonging here arrives
+#: offered, so `tests/test_ask.py` pins the offered set exactly.
+#:
+#: Some are not reads at all: `report_knowledge_gap` writes a record despite its
+#: role, and `ask` is this tool itself.
+#:
+#: The rest read something real, but not the thing a loop reasons from. They
+#: return facts about this Mycelium instance: what its runs did, what a drafter
+#: is holding, how it is configured, where it reads and writes.
+#:
+#: The test for a new reader tool, so the next one needs no judgement call: does
+#: what it returns describe the domain the substrate is about, or does it
+#: describe this instance? Statements, entities and links describe the domain,
+#: and so does the vocabulary they are written in, which is why the link type
+#: and statement kind readers stay offered even though seeding leaves them
+#: populated on an empty substrate. A run row, a draft, a prompt row and a
+#: configured source describe the instance.
 _NON_READ_READER_TOOLS = frozenset(
     {
         "report_knowledge_gap",  # role=reader but WRITES a knowledge-gap record
-        "ask",  # this tool itself — avoid recursion
-        "list_my_drafts",  # draft-session state, not the substrate
-        "get_draft",  # draft-session state, not the substrate
-        "list_documentation_runs",  # documentation history, not the substrate
-        "get_documentation_run",  # documentation run state, not the substrate
-        "list_generated_documents",  # generated projections, not the substrate
-        "get_generated_document",  # generated document state, not the substrate
+        "ask",  # this tool itself, avoiding recursion
+        "list_my_drafts",  # draft-session state
+        "get_draft",  # draft-session state
+        "list_documentation_runs",  # documentation run history
+        "get_documentation_run",  # documentation run state
+        "list_generated_documents",  # generated projections
+        "get_generated_document",  # generated document state
+        "list_research_runs",  # research run history
+        "get_research_run",  # research run state
+        "list_research_sources",  # deployment configuration
+        "list_prompt_texts",  # prompt configuration
+        "get_prompt_text",  # prompt configuration
+        "list_prompt_text_versions",  # prompt configuration history
     }
 )
 
