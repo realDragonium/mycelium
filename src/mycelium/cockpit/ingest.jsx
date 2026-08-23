@@ -214,7 +214,10 @@ function rrConnections(res, draft) {
   }));
   (res.links || []).forEach(l => {
     const t = typeof l.target === 'string' && l.target.startsWith('@') ? posOf(l.target.slice(1)) : 'existing';
-    add(l.batch_index, { kind: 'rule', label: `${l.link_type} → ${t}`, note: `${l.pattern} · "${l.cue}" · ${rrPct(l.score)}` });
+    // An inverted link runs target → this statement: the cue named the
+    // relation from the far side, so the arrow points back at us.
+    const label = l.inverted ? `${t} ${l.link_type} → this` : `${l.link_type} → ${t}`;
+    add(l.batch_index, { kind: 'rule', label, note: `${l.pattern} · "${l.cue}" · ${rrPct(l.score)}` });
   });
   (res.merges || []).forEach(m => add(m.batch_index, { kind: 'merge', label: 'merge → existing', note: `"${(m.into_text || '').slice(0, 60)}" · ${rrPct(m.score)}${m.nli ? ' · NLI ↔' : ''}` }));
   (res.conflicts || []).forEach(c => add(c.batch_index, { kind: 'conflict', label: 'conflict ↔ existing', note: `"${(c.text || '').slice(0, 60)}" · NLI ${rrPct(c.nli && c.nli.forward && c.nli.forward.confidence)}` }));

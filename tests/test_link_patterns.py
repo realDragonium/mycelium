@@ -47,6 +47,23 @@ def test_find_cues_captures_rule_formula_targets():
     assert "valued-by-equals" in by_pattern
 
 
+def test_part_of_frame_is_inverted_and_composed_of_is_not():
+    # "X is a part of Y" names the relation from the far side: Y contains X.
+    cues = find_cues("The purge schedule is a part of the retention policy", "state")
+    part_of = next(cue for cue in cues if cue.pattern == "contains-part-of")
+    assert (part_of.link_type, part_of.inverted, part_of.target_text) == (
+        "contains",
+        True,
+        "the retention policy",
+    )
+
+    # "X is composed of Y" keeps the carrier as the container: X contains Y.
+    composed = find_cues("The bundle is composed of three modules", "state")
+    assert [(cue.pattern, cue.inverted) for cue in composed] == [
+        ("contains-composed-of", False)
+    ]
+
+
 def test_find_cues_obeys_kind_scope_and_unknown_kind_baseline():
     text = "A login attempt is rejected on an unrecognized account"
 
@@ -178,6 +195,26 @@ def test_measure_reports_hits_pairs_precision_and_no_ground_truth():
     assert report["by_pattern"]["triggers-verb"]["statement_precision"] == 1.0
     assert report["by_link_type"]["accepts"]["links"] == 0
     assert report["by_link_type"]["accepts"]["hit_rate"] is None
+
+
+def test_measure_scores_inverted_cue_evidence_on_the_incoming_edge():
+    statements = [
+        Stmt("stm_child", "state", "The schedule is a part of the retention policy"),
+        Stmt("stm_parent", "rule", "The retention policy applies"),
+    ]
+    links = [Link("stm_parent", "stm_child", "contains")]
+    mentions = {"stm_child": {"ent_policy"}, "stm_parent": {"ent_policy"}}
+
+    report = measure_link_patterns.measure(statements, links, mentions, ["contains"])
+
+    # The only cue sits on the child, but the edge it evidences is incoming.
+    assert report["totals"]["hits"] == 1
+    assert report["by_link_type"]["contains"]["true_fires"] == 1
+    assert report["by_link_type"]["contains"]["false_fires"] == 0
+    row = report["by_pattern"]["contains-part-of"]
+    assert row["statements_with_type_link"] == 1
+    assert row["statement_precision"] == 1.0
+    assert row["link_hits"] == 1
 
 
 def test_load_snapshot_filters_entity_targets_and_keeps_external_statements(tmp_path):

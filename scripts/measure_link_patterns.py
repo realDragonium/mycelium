@@ -103,8 +103,15 @@ def measure(
         statement.id: find_cues(statement.text, statement.kind)
         for statement in statements
     }
-    cue_types = {
-        statement_id: {cue.link_type for cue in cues}
+    # An inverted cue evidences an incoming edge, so hits split by direction:
+    # a link counts when its source carries a plain cue of its type, or its
+    # target carries an inverted one.
+    outgoing_cue_types = {
+        statement_id: {cue.link_type for cue in cues if not cue.inverted}
+        for statement_id, cues in cues_by_statement.items()
+    }
+    incoming_cue_types = {
+        statement_id: {cue.link_type for cue in cues if cue.inverted}
         for statement_id, cues in cues_by_statement.items()
     }
     cue_patterns = {
@@ -112,16 +119,19 @@ def measure(
         for statement_id, cues in cues_by_statement.items()
     }
 
+    def cued(link: Link) -> bool:
+        return link.link_type in outgoing_cue_types.get(
+            link.from_id, set()
+        ) or link.link_type in incoming_cue_types.get(link.to_id, set())
+
     eligible_links = [link for link in links if link.link_type in vocabulary_set]
-    link_hits = [
-        link
-        for link in eligible_links
-        if link.link_type in cue_types.get(link.from_id, set())
-    ]
+    link_hits = [link for link in eligible_links if cued(link)]
     actual_link_triples = {(link.from_id, link.to_id, link.link_type) for link in links}
     outgoing_types: dict[str, set[str]] = defaultdict(set)
+    incoming_types: dict[str, set[str]] = defaultdict(set)
     for link in links:
         outgoing_types[link.from_id].add(link.link_type)
+        incoming_types[link.to_id].add(link.link_type)
 
     by_link_type = {link_type: _link_row() for link_type in vocabulary_types}
     for link in eligible_links:
@@ -134,9 +144,15 @@ def measure(
     pair_fires_by_pattern: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
     for statement in statements:
         for candidate_id in candidates[statement.id]:
-            for link_type in cue_types[statement.id] & vocabulary_set:
+            for link_type in outgoing_cue_types[statement.id] & vocabulary_set:
                 pair_fires_by_type[link_type].add(
                     (statement.id, candidate_id, link_type)
+                )
+            # An inverted cue fires the pair the other way round: the edge it
+            # evidences would run candidate -> carrier.
+            for link_type in incoming_cue_types[statement.id] & vocabulary_set:
+                pair_fires_by_type[link_type].add(
+                    (candidate_id, statement.id, link_type)
                 )
             for pattern_name in cue_patterns[statement.id]:
                 pair_fires_by_pattern[pattern_name].add(
@@ -166,14 +182,14 @@ def measure(
             continue
         row = by_kind[statement.kind]
         row["links"] += 1
-        if link.link_type in cue_types.get(link.from_id, set()):
+        if cued(link):
             row["hits"] += 1
         kind_types = by_kind_and_type.setdefault(statement.kind, {})
         type_row = kind_types.setdefault(
             link.link_type, {"links": 0, "hits": 0, "hit_rate": None}
         )
         type_row["links"] += 1
-        if link.link_type in cue_types.get(link.from_id, set()):
+        if cued(link):
             type_row["hits"] += 1
     for row in by_kind.values():
         row["hit_rate"] = _rate(int(row["hits"]), int(row["links"]))
@@ -190,19 +206,28 @@ def measure(
             for statement_id, pattern_names in cue_patterns.items()
             if pattern.name in pattern_names
         }
+        # An inverted pattern's ground truth is the incoming edge: the cue
+        # carrier sits on the receiving end of the link it evidences.
+        types_of = incoming_types if pattern.inverted else outgoing_types
         statements_with_link = sum(
-            pattern.link_type in outgoing_types[statement_id]
+            pattern.link_type in types_of[statement_id]
             for statement_id in fired_statements
         )
         pattern_link_hits = sum(
             link.link_type == pattern.link_type
-            and pattern.name in cue_patterns.get(link.from_id, set())
+            and pattern.name
+            in cue_patterns.get(link.to_id if pattern.inverted else link.from_id, set())
             for link in eligible_links
         )
         fires = pair_fires_by_pattern[pattern.name]
         true_fires = sum(
-            (from_id, to_id, pattern.link_type) in actual_link_triples
-            for from_id, to_id, _ in fires
+            (
+                (candidate_id, carrier_id, pattern.link_type)
+                if pattern.inverted
+                else (carrier_id, candidate_id, pattern.link_type)
+            )
+            in actual_link_triples
+            for carrier_id, candidate_id, _ in fires
         )
         false_fires = len(fires) - true_fires
         by_pattern[pattern.name] = {

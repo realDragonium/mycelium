@@ -113,6 +113,60 @@ def test_shipped_anchored_cue_resolves_to_batch_sibling_and_records_exact_cue():
     ]
 
 
+def test_inverted_frame_proposes_the_resolved_target_as_source():
+    view = FakeView(allow_all_link_types=frozenset({"contains"}))
+    view.embeddings_by_text["the retention policy"] = [1.0, 0.0]
+    view.neighbours_by_vector[(1.0, 0.0)] = [("s-policy", 0.9)]
+    view.kinds["s-policy"] = "rule"
+    batch = [
+        BatchStatement(
+            0, "state", "The purge schedule is a part of the retention policy"
+        )
+    ]
+    funnel = _funnel({0: ([0.0, 1.0], frozenset())})
+
+    proposals = propose_links(batch, funnel, view)
+
+    assert proposals == [
+        LinkProposal(
+            new_index=0,
+            target="s-policy",
+            link_type="contains",
+            pattern="contains-part-of",
+            cue="is a part of",
+            target_text="the retention policy",
+            score=0.9,
+            anchored=False,
+            inverted=True,
+        )
+    ]
+
+
+def test_inverted_frame_checks_the_matrix_from_the_target_side():
+    batch = [
+        BatchStatement(
+            0, "state", "The purge schedule is a part of the retention policy"
+        )
+    ]
+
+    def view_admitting(pair: tuple[str, str]) -> FakeView:
+        view = FakeView(allow_all_link_types=frozenset())
+        view.link_types_by_kind_pair[pair] = frozenset({"contains"})
+        view.embeddings_by_text["the retention policy"] = [1.0, 0.0]
+        view.neighbours_by_vector[(1.0, 0.0)] = [("s-policy", 0.9)]
+        view.kinds["s-policy"] = "rule"
+        return view
+
+    funnel = _funnel({0: ([0.0, 1.0], frozenset())})
+
+    # The resolved target is the edge's source, so rule -> state must admit it.
+    admitted = propose_links(batch, funnel, view_admitting(("rule", "state")))
+    assert [proposal.target for proposal in admitted] == ["s-policy"]
+
+    # The statement's own side admitting the type is not enough when inverted.
+    assert propose_links(batch, funnel, view_admitting(("state", "rule"))) == []
+
+
 def test_missing_batch_mention_falls_through_to_anchored_substrate_candidate():
     view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
     phrase = "the dispatch attempts"

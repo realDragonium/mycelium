@@ -167,6 +167,37 @@ def test_registered_cut_alias_adds_left_to_right_draft_link(tmp_path, monkeypatc
         assert statements[0]["links"] == [{"to_id": "@1", "link_type": "proceeds"}]
 
 
+def test_inverted_frame_links_existing_parent_to_new_child(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        parent_id = _statement("rule", "The retention policy applies")
+
+        response = server.ingest_text(
+            "The purge schedule is a part of the retention policy."
+        )
+
+        # The cue names the relation from the far side, so the existing parent
+        # is the source of the proposed edge.
+        (link,) = response["links"]
+        assert link["target"] == parent_id
+        assert (link["link_type"], link["cue"], link["inverted"]) == (
+            "contains",
+            "is a part of",
+            True,
+        )
+        draft = server.get_draft(response["draft_id"])
+        link_op = next(op for op in draft["ops"] if op["kind"] == "add_links")
+        assert link_op["payload"]["links"] == [
+            {"from_id": parent_id, "to_id": "@1:0", "link_type": "contains"}
+        ]
+
+        applied = server.apply_draft(response["draft_id"])
+
+        child_id = applied["results"][0]["result"]["results"][0]["statement_id"]
+        assert store.get_links(server._db(), parent_id) == [
+            (child_id, "contains", None)
+        ]
+
+
 def test_apply_draft_skips_flags_and_creates_condition_link(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch):
         response = server.ingest_text(TEXT)
