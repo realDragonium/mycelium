@@ -3427,7 +3427,8 @@ def submit_connected_batch(
           "links": [
             {"batch_index": 0, "target": "@1" | "stm_...",
              "link_type": "...", "cue": "...", "pattern": "...",
-             "score": 0.0}
+             "score": 0.0,
+             "inverted": true}  # only when the edge runs target -> batch_index
           ],
           "merges": [
             {"batch_index": 0, "into": "stm_...", "into_text": "...",
