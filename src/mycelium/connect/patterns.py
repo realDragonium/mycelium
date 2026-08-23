@@ -15,13 +15,20 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Pattern:
-    """Describe one stable lexical cue for a proposed link type."""
+    """Describe one stable lexical cue for a proposed link type.
+
+    An inverted pattern names the relation from the far side: the statement
+    carrying the cue is the link's *target*, and whatever the target phrase
+    resolves to is the *source* ("X is a part of Y" means Y contains X). The
+    cue decides the direction, not which statement happens to be new.
+    """
 
     name: str
     link_type: str
     regex: re.Pattern[str]
     template: str | None = None
     default_cues: tuple[str, ...] = ()
+    inverted: bool = False
 
 
 @dataclass(frozen=True)
@@ -34,11 +41,14 @@ class CueMatch:
     target_text: str | None
     start: int
     end: int
+    inverted: bool = False
 
 
-def _pattern(name: str, link_type: str, regex: str) -> Pattern:
+def _pattern(
+    name: str, link_type: str, regex: str, *, inverted: bool = False
+) -> Pattern:
     """Compile one case-insensitive pattern definition."""
-    return Pattern(name, link_type, re.compile(regex, re.IGNORECASE))
+    return Pattern(name, link_type, re.compile(regex, re.IGNORECASE), inverted=inverted)
 
 
 def _alternation(cues: tuple[str, ...]) -> str:
@@ -188,6 +198,14 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
         "contains-consists-of",
         "contains",
         r"\b(?P<cue>consists? of)\b\s*(?P<target>.+)",
+    ),
+    # The inverse frame: the cue carrier is the contained side, so the resolved
+    # target is the source of the `contains` edge.
+    _pattern(
+        "contains-part-of",
+        "contains",
+        r"\b(?P<cue>(?:is|are) (?:a )?part of)\b\s*(?P<target>.+)",
+        inverted=True,
     ),
     _pattern(
         "proceeds-verb",
@@ -487,6 +505,7 @@ def find_cues(
                     target_text=target_text,
                     start=match.start(),
                     end=match.end(),
+                    inverted=pattern.inverted,
                 )
             )
     return sorted(cues, key=lambda cue: (cue.start, cue.pattern))

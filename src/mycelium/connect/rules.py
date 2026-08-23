@@ -45,12 +45,21 @@ SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
     # statements each — too thin; composes-determined-by (27.3%) and composes-combines
     # (22.2%) miss the precision criterion, as do all 0%-precision patterns and every
     # pattern whose link type has no ground truth in this snapshot.
+    # Shipped outside the report (2026-08-20): the frame postdates the measured
+    # catalog, so it has no ground truth either way. It exists so "X is a part
+    # of Y" yields the edge the words state — Y contains X — rather than none.
+    "contains-part-of": None,
 }
 
 
 @dataclass(frozen=True)
 class LinkProposal:
-    """Describe one typed link inferred from a lexical cue."""
+    """Describe one typed link inferred from a lexical cue.
+
+    The edge normally runs new statement -> target. An inverted proposal runs
+    target -> new statement: the cue named the relation from the far side, so
+    the resolved target is the link's source.
+    """
 
     new_index: int
     target: str
@@ -60,6 +69,7 @@ class LinkProposal:
     target_text: str | None
     score: float
     anchored: bool
+    inverted: bool = False
 
 
 class _Resolved(NamedTuple):
@@ -216,13 +226,24 @@ def _resolve_in_substrate(
 
 def _pick(
     candidates: list[_Resolved],
-    source_kind: str,
+    statement_kind: str,
     link_type: str,
     view: SubstrateView,
+    *,
+    inverted: bool,
 ) -> _Resolved | None:
-    """Pick the best candidate whose kind pair admits the proposed type."""
+    """Pick the best candidate whose kind pair admits the proposed type.
+
+    The matrix is directional, so an inverted cue checks candidate -> statement:
+    the resolved candidate is the edge's source there.
+    """
     for candidate in candidates:
-        if link_type in view.admissible_link_types(source_kind, candidate.kind):
+        from_kind, to_kind = (
+            (candidate.kind, statement_kind)
+            if inverted
+            else (statement_kind, candidate.kind)
+        )
+        if link_type in view.admissible_link_types(from_kind, to_kind):
             return candidate
     return None
 
@@ -247,7 +268,7 @@ def propose_links(
     phrase_cache: dict[
         str, tuple[frozenset[str], list[float], dict[str, frozenset[str]]]
     ] = {}
-    proposals: dict[tuple[int, str, str], LinkProposal] = {}
+    proposals: dict[tuple[int, str, str, bool], LinkProposal] = {}
     for statement in batch:
         for cue in shipped_cues(statement.text, statement.kind, shipped, aliases):
             if not cue.target_text:
@@ -284,7 +305,9 @@ def propose_links(
                     unanchored_threshold,
                     k,
                 )
-            winner = _pick(candidates, statement.kind, cue.link_type, view)
+            winner = _pick(
+                candidates, statement.kind, cue.link_type, view, inverted=cue.inverted
+            )
             if winner is None:
                 continue
             # Keep the no-self-link invariant explicit at the emission boundary.
@@ -299,8 +322,14 @@ def propose_links(
                 target_text=cue.target_text,
                 score=winner.score,
                 anchored=bool(winner.shared),
+                inverted=cue.inverted,
             )
-            key = (proposal.new_index, proposal.target, proposal.link_type)
+            key = (
+                proposal.new_index,
+                proposal.target,
+                proposal.link_type,
+                proposal.inverted,
+            )
             previous = proposals.get(key)
             if previous is None or proposal.score > previous.score:
                 proposals[key] = proposal

@@ -3121,7 +3121,7 @@ def _proposal_nli(proposal: Proposal) -> dict[str, Any] | None:
 def _connected_link(proposal: Proposal) -> dict[str, Any]:
     """Render a rule link proposal for the tool response."""
     provenance = proposal.provenance
-    return {
+    rendered = {
         "batch_index": proposal.new_index,
         "target": proposal.target,
         "link_type": proposal.link_type,
@@ -3129,6 +3129,11 @@ def _connected_link(proposal: Proposal) -> dict[str, Any]:
         "pattern": provenance["pattern"],
         "score": provenance["score"],
     }
+    # Marked only when the edge runs target -> new statement, so existing
+    # consumers keep reading the plain shape as source -> target.
+    if proposal.inverted:
+        rendered["inverted"] = True
+    return rendered
 
 
 def _connected_merge(
@@ -3369,7 +3374,10 @@ def submit_connected_batch(
 
     Three things get proposed. **Typed links**, where an explicit relational
     cue in your own text resolves to a sibling in this batch or to an
-    existing statement and the two kinds admit that link type. **Merge
+    existing statement and the two kinds admit that link type. The cue also
+    decides the direction: a frame that names the relation from the far side
+    ("X is a part of Y") proposes the edge running from the resolved target to
+    the new statement, marked `"inverted": true` in `links`. **Merge
     candidates**, from embedding similarity — turned into a real verdict by
     bidirectional entailment when the `nli` extra is installed. **Contradiction
     flags**, filed as knowledge gaps, where your text and an existing
@@ -3419,7 +3427,8 @@ def submit_connected_batch(
           "links": [
             {"batch_index": 0, "target": "@1" | "stm_...",
              "link_type": "...", "cue": "...", "pattern": "...",
-             "score": 0.0}
+             "score": 0.0,
+             "inverted": true}  # only when the edge runs target -> batch_index
           ],
           "merges": [
             {"batch_index": 0, "into": "stm_...", "into_text": "...",

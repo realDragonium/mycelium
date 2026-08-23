@@ -20,6 +20,9 @@ class Proposal:
     target: str
     link_type: str | None
     provenance: dict[str, Any]
+    #: Link proposals only: the edge runs target -> new statement, because the
+    #: cue named the relation from the far side.
+    inverted: bool = False
 
 
 @dataclass(frozen=True)
@@ -46,27 +49,31 @@ def _label_provenance(verdict: PairVerdict) -> dict[str, Any]:
 
 def _link_proposals(links: list[LinkProposal]) -> list[Proposal]:
     """Deduplicate rule proposals while preserving their ranked order."""
-    seen: set[tuple[int, str, str]] = set()
+    seen: set[tuple[int, str, str, bool]] = set()
     proposals: list[Proposal] = []
     for link in links:
-        key = (link.new_index, link.target, link.link_type)
+        key = (link.new_index, link.target, link.link_type, link.inverted)
         if key in seen:
             continue
         seen.add(key)
+        provenance = {
+            "source": "rule",
+            "pattern": link.pattern,
+            "cue": link.cue,
+            "target_text": link.target_text,
+            "score": link.score,
+            "link_type": link.link_type,
+        }
+        if link.inverted:
+            provenance["inverted"] = True
         proposals.append(
             Proposal(
                 kind="link",
                 new_index=link.new_index,
                 target=link.target,
                 link_type=link.link_type,
-                provenance={
-                    "source": "rule",
-                    "pattern": link.pattern,
-                    "cue": link.cue,
-                    "target_text": link.target_text,
-                    "score": link.score,
-                    "link_type": link.link_type,
-                },
+                provenance=provenance,
+                inverted=link.inverted,
             )
         )
     return proposals

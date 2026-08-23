@@ -183,6 +183,30 @@ def test_link_deduplication_preserves_distinct_types_and_provenance():
     }
 
 
+def test_inverted_link_keeps_its_direction_and_marks_provenance():
+    inverted = LinkProposal(
+        new_index=0,
+        target="stm_parent",
+        link_type="contains",
+        pattern="contains-part-of",
+        cue="is a part of",
+        target_text="the retention policy",
+        score=0.88,
+        anchored=False,
+        inverted=True,
+    )
+
+    result = proposals_from(funnel=_funnel(), links=[inverted], verdicts=None)
+
+    proposal = result.proposals[0]
+    assert proposal.inverted is True
+    assert proposal.provenance["inverted"] is True
+    # A plain proposal's provenance stays free of the marker.
+    plain = proposals_from(funnel=_funnel(), links=[_link()], verdicts=None)
+    assert plain.proposals[0].inverted is False
+    assert "inverted" not in plain.proposals[0].provenance
+
+
 def test_proposals_are_ordered_links_then_merges_then_conflicts():
     result = proposals_from(
         funnel=_funnel(),

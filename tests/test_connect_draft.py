@@ -317,6 +317,25 @@ def test_proposal_refs_name_the_batch_operations_seq():
     assert payload["links"][0]["from_id"] == "@7:0"
 
 
+def test_inverted_link_proposal_writes_the_target_as_source():
+    proposal = Proposal(
+        kind="link",
+        new_index=0,
+        target="st_parent",
+        link_type="contains",
+        provenance={"source": "rule", "inverted": True},
+        inverted=True,
+    )
+    batch = [BatchInput(kind="state", text="the child names its parent")]
+
+    kind, payload = _proposal_op(proposal, batch, lambda _: None, 7)
+
+    assert kind == "add_links"
+    assert payload["links"] == [
+        {"from_id": "st_parent", "to_id": "@7:0", "link_type": "contains"}
+    ]
+
+
 def test_sibling_reference_is_rewritten_onto_the_batch_operations_seq():
     proposal = Proposal(
         kind="merge",
