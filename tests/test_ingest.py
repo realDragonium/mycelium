@@ -718,7 +718,7 @@ def test_unprocessed_ledger_rows_become_gaps():
 
 # (a) genuinely-new text -> DraftCreated with upsert_statement/upsert_entity/
 #     add_links ops + non-empty rationales.
-def test_a_genuinely_new_text_creates_draft_with_entity_statement_and_links():
+def test_a_genuinely_new_text_creates_draft_with_entities_statements_and_links():
     emit = _emit_input(
         ops=[
             _op(
@@ -1416,6 +1416,44 @@ def test_t11_add_entity_links_with_wrong_edge_keys_is_flagged():
     assert isinstance(result, DraftCreated)
     assert result.ops == []
     assert any("add_entity_links" in f for f in result.flagged)
+    assert emitter.queued == []
+
+
+def test_t11_add_links_with_entity_endpoint_is_dropped_and_flagged():
+    emit = _emit_input(
+        ops=[
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        {
+                            "from_id": "ent_1",
+                            "to_id": "stm_1",
+                            "link_type": "performs",
+                        }
+                    ]
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "entity edge",
+                "refinement",
+                matched=["ent_1"],
+                considered=["stm_1"],
+            )
+        ],
+        flagged=["a real contradiction keeping the draft alive"],
+    )
+    responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+    result, _client, _sub, emitter = _run(responses)
+
+    assert isinstance(result, DraftCreated)
+    assert result.ops == []
+    assert any(
+        "entity endpoint" in flag and "statement↔statement only" in flag
+        for flag in result.flagged
+    )
     assert emitter.queued == []
 
 

@@ -383,6 +383,72 @@ def test_import_skips_legacy_annotation_records(tmp_path, caplog):
         backup.import_substrate(bad_archive, tmp_path / "dst2")
 
 
+def test_import_accepts_legacy_when_node_link_kind(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    ids = _seed_substrate(src)
+
+    conn = store.connect(src / "mycelium.db")
+    statement_link_id = conn.execute("SELECT link_id FROM statement_links").fetchone()[
+        "link_id"
+    ]
+    conn.close()
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _append_legacy_when_nodes(work: Path) -> None:
+        rows = [
+            {
+                "_kind": "when_node",
+                "node_id": 901,
+                "link_id": statement_link_id,
+                "link_kind": "statement",
+                "parent_id": None,
+                "op": None,
+                "statement_id": ids["statements"][0],
+                "child_index": 0,
+            },
+            {
+                "_kind": "when_node",
+                "node_id": 902,
+                "link_id": statement_link_id,
+                "link_kind": "entity_statement",
+                "parent_id": None,
+                "op": None,
+                "statement_id": ids["statements"][1],
+                "child_index": 0,
+            },
+        ]
+        with (work / "data.jsonl").open("a", encoding="utf-8") as fp:
+            for row in rows:
+                fp.write(json.dumps(row) + "\n")
+
+    legacy_archive = _repack(
+        archive,
+        tmp_path / "legacy-work",
+        tmp_path / "legacy.tar.gz",
+        _append_legacy_when_nodes,
+    )
+    dst = tmp_path / "dst"
+    backup.import_substrate(legacy_archive, dst)
+
+    conn = store.connect(dst / "mycelium.db")
+    rows = conn.execute(
+        "SELECT node_id, link_id, statement_id, child_index "
+        "FROM when_nodes ORDER BY node_id"
+    ).fetchall()
+    conn.close()
+    assert [dict(row) for row in rows] == [
+        {
+            "node_id": 901,
+            "link_id": statement_link_id,
+            "statement_id": ids["statements"][0],
+            "child_index": 0,
+        }
+    ]
+
+
 # --- tampered archives ------------------------------------------------------
 
 # A record's column names reach the INSERT as statement text, where a bound

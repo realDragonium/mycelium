@@ -460,3 +460,91 @@ def test_v7_carries_a_pre_matrix_db_forward_without_reseeding():
     assert store.admissible_link_types(conn, "event", "state") == frozenset(
         {"triggers"}
     )
+
+
+def test_v9_drops_entity_statement_links_and_rebuilds_when_nodes():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+
+    # Replace the current when-node table with the v8 ownership shape.
+    conn.execute("DROP TRIGGER statement_links_delete_cascade_when")
+    conn.execute("DROP TABLE when_nodes")
+    conn.execute("""
+        CREATE TABLE entity_statement_links (
+            link_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_id    TEXT NOT NULL REFERENCES entities(id),
+            statement_id TEXT NOT NULL REFERENCES statements(id),
+            direction    TEXT NOT NULL CHECK (direction IN ('es', 'se')),
+            link_type    TEXT NOT NULL,
+            when_hash    TEXT NOT NULL,
+            created_at   TEXT,
+            created_by   TEXT,
+            UNIQUE (entity_id, statement_id, direction, link_type, when_hash)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE when_nodes (
+            node_id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            link_id      INTEGER NOT NULL,
+            link_kind    TEXT NOT NULL,
+            parent_id    INTEGER REFERENCES when_nodes(node_id) ON DELETE CASCADE,
+            op           TEXT,
+            statement_id TEXT REFERENCES statements(id) ON DELETE RESTRICT,
+            child_index  INTEGER NOT NULL,
+            CHECK ((op IS NULL) <> (statement_id IS NULL)),
+            CHECK (op IS NULL OR op IN ('and', 'or', 'not')),
+            CHECK (link_kind IN ('statement', 'entity_statement'))
+        )
+    """)
+    entity_id = store.create_entity(conn, None)
+    source_id = store.create_statement(conn, "event", "the workflow starts")
+    target_id = store.create_statement(conn, "state", "the workflow is active")
+    statement_link_id = conn.execute(
+        "INSERT INTO statement_links "
+        "(from_statement_id, to_statement_id, link_type, when_hash) "
+        "VALUES (?, ?, 'triggers', 'legacy-statement')",
+        (source_id, target_id),
+    ).lastrowid
+    entity_link_id = conn.execute(
+        "INSERT INTO entity_statement_links "
+        "(entity_id, statement_id, direction, link_type, when_hash) "
+        "VALUES (?, ?, 'es', 'performs', 'legacy-entity-statement')",
+        (entity_id, target_id),
+    ).lastrowid
+    assert statement_link_id is not None
+    assert entity_link_id is not None
+    conn.execute(
+        "INSERT INTO when_nodes "
+        "(node_id, link_id, link_kind, parent_id, op, statement_id, child_index) "
+        "VALUES (901, ?, 'statement', NULL, NULL, ?, 0)",
+        (statement_link_id, target_id),
+    )
+    conn.execute(
+        "INSERT INTO when_nodes "
+        "(node_id, link_id, link_kind, parent_id, op, statement_id, child_index) "
+        "VALUES (902, ?, 'entity_statement', NULL, NULL, ?, 0)",
+        (entity_link_id, target_id),
+    )
+    conn.execute("PRAGMA user_version = 8")
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    assert _user_version(conn) == migrations.CURRENT_VERSION
+    assert (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'entity_statement_links'"
+        ).fetchone()
+        is None
+    )
+    assert not _has_column(conn, "when_nodes", "link_kind")
+    assert [
+        (row["node_id"], row["link_id"])
+        for row in conn.execute(
+            "SELECT node_id, link_id FROM when_nodes ORDER BY node_id"
+        )
+    ] == [(901, statement_link_id)]
+
+    conn.execute("DELETE FROM statement_links WHERE link_id = ?", (statement_link_id,))
+    assert conn.execute("SELECT COUNT(*) FROM when_nodes").fetchone()[0] == 0

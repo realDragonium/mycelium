@@ -1,6 +1,7 @@
 import zlib
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import alias_worker, embed, mention_worker, server, store
@@ -501,6 +502,58 @@ def test_add_and_remove_links_bulk(tmp_path, monkeypatch):
         # empty list short-circuits cleanly
         assert client.post("/add-links", json={"links": []}).json() == {"inserted": 0}
         assert client.post("/remove-links", json={"links": []}).json() == {"removed": 0}
+
+
+def test_add_links_rejects_entity_to_statement_edge():
+    with pytest.raises(ValueError, match="statement↔statement only"):
+        server.add_links(
+            links=[
+                {
+                    "from_id": "ent_source",
+                    "to_id": "stm_target",
+                    "link_type": "performs",
+                }
+            ]
+        )
+
+
+def test_add_links_rejects_statement_to_entity_edge():
+    with pytest.raises(ValueError, match="statement↔statement only"):
+        server.add_links(
+            links=[
+                {
+                    "from_id": "stm_source",
+                    "to_id": "ent_target",
+                    "link_type": "produces",
+                }
+            ]
+        )
+
+
+def test_remove_links_rejects_entity_endpoint():
+    with pytest.raises(ValueError, match="statement↔statement only"):
+        server.remove_links(
+            links=[
+                {
+                    "from_id": "ent_source",
+                    "to_id": "stm_target",
+                    "link_type": "performs",
+                }
+            ]
+        )
+
+
+def test_add_links_rejects_entity_to_entity_edge_with_tool_pointer():
+    with pytest.raises(ValueError, match="use add_entity_links instead"):
+        server.add_links(
+            links=[
+                {
+                    "from_id": "ent_source",
+                    "to_id": "ent_target",
+                    "link_type": "contains",
+                }
+            ]
+        )
 
 
 def test_upsert_statement_with_incoming_links(tmp_path, monkeypatch):
@@ -1752,7 +1805,6 @@ def test_delete_statement_cascades_mentions_and_links(tmp_path, monkeypatch):
             "incoming_links_removed": 1,  # parent --contains--> target
             "outgoing_links_removed": 1,  # target --triggers--> child
             "when_references_removed": 1,  # x --triggers (when target)--> y
-            "entity_statement_links_removed": 0,  # none were created
         }
 
         # Statement is gone — reported as missing, not raised
@@ -2498,7 +2550,6 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
             "mentions_removed": 2,  # one text-derived mention per statement
             "outgoing_entity_links_removed": 1,
             "incoming_entity_links_removed": 1,
-            "entity_statement_links_removed": 0,  # none were created
         }
 
         # Entity is gone.
@@ -2956,19 +3007,6 @@ def test_history_target_id_rebuilds_link_composite():
             {"from_id": "stm_a", "to_id": "stm_b", "link_type": "triggers"},
         )
         == "stm_a|stm_b|triggers"
-    )
-    assert (
-        _history_target_id(
-            "entity_statement_link",
-            "7",
-            {
-                "entity_id": "ent_x",
-                "statement_id": "stm_y",
-                "direction": "es",
-                "link_type": "about",
-            },
-        )
-        == "ent_x|stm_y|es|about"
     )
 
 
