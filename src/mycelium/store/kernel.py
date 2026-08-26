@@ -414,6 +414,9 @@ CREATE TABLE IF NOT EXISTS link_type_aliases (
     embedding   BLOB,
     provenance  TEXT NOT NULL DEFAULT 'seed',
     score       REAL,
+    -- 'forward' reads the edge off the alias left to right ("A contains B");
+    -- 'reverse' aliases name the relation from the far side ("A is part of B").
+    direction   TEXT NOT NULL DEFAULT 'forward',
     created_at  TEXT,
     created_by  TEXT,
     PRIMARY KEY (link_type, alias)

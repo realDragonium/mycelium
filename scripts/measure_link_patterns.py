@@ -103,15 +103,15 @@ def measure(
         statement.id: find_cues(statement.text, statement.kind)
         for statement in statements
     }
-    # An inverted cue evidences an incoming edge, so hits split by direction:
-    # a link counts when its source carries a plain cue of its type, or its
-    # target carries an inverted one.
+    # A from-capturing cue evidences an incoming edge, so hits split by the
+    # phrase role: a link counts when its source carries a to-role cue of its
+    # type, or its target carries a from-role one.
     outgoing_cue_types = {
-        statement_id: {cue.link_type for cue in cues if not cue.inverted}
+        statement_id: {cue.link_type for cue in cues if cue.phrase_role == "to"}
         for statement_id, cues in cues_by_statement.items()
     }
     incoming_cue_types = {
-        statement_id: {cue.link_type for cue in cues if cue.inverted}
+        statement_id: {cue.link_type for cue in cues if cue.phrase_role == "from"}
         for statement_id, cues in cues_by_statement.items()
     }
     cue_patterns = {
@@ -148,7 +148,7 @@ def measure(
                 pair_fires_by_type[link_type].add(
                     (statement.id, candidate_id, link_type)
                 )
-            # An inverted cue fires the pair the other way round: the edge it
+            # A from-role cue fires the pair the other way round: the edge it
             # evidences would run candidate -> carrier.
             for link_type in incoming_cue_types[statement.id] & vocabulary_set:
                 pair_fires_by_type[link_type].add(
@@ -206,9 +206,10 @@ def measure(
             for statement_id, pattern_names in cue_patterns.items()
             if pattern.name in pattern_names
         }
-        # An inverted pattern's ground truth is the incoming edge: the cue
-        # carrier sits on the receiving end of the link it evidences.
-        types_of = incoming_types if pattern.inverted else outgoing_types
+        # A from-capturing pattern's ground truth is the incoming edge: the
+        # cue carrier sits on the receiving end of the link it evidences.
+        inverted = pattern.phrase_role == "from"
+        types_of = incoming_types if inverted else outgoing_types
         statements_with_link = sum(
             pattern.link_type in types_of[statement_id]
             for statement_id in fired_statements
@@ -216,14 +217,14 @@ def measure(
         pattern_link_hits = sum(
             link.link_type == pattern.link_type
             and pattern.name
-            in cue_patterns.get(link.to_id if pattern.inverted else link.from_id, set())
+            in cue_patterns.get(link.to_id if inverted else link.from_id, set())
             for link in eligible_links
         )
         fires = pair_fires_by_pattern[pattern.name]
         true_fires = sum(
             (
                 (candidate_id, carrier_id, pattern.link_type)
-                if pattern.inverted
+                if inverted
                 else (carrier_id, candidate_id, pattern.link_type)
             )
             in actual_link_triples
@@ -482,12 +483,12 @@ def _show_cues(statements: list[Stmt], limit: int) -> None:
     for statement in statements:
         for cue in find_cues(statement.text, statement.kind):
             if shown[cue.pattern] < limit:
-                samples.append((cue.pattern, cue.cue, cue.target_text or ""))
+                samples.append((cue.pattern, cue.cue, cue.phrase or ""))
                 shown[cue.pattern] += 1
     if samples:
         print("Cue samples:")
-        for pattern_name, cue_text, target_text in sorted(samples):
-            print(f"{pattern_name}: [{cue_text}] -> {target_text}")
+        for pattern_name, cue_text, phrase in sorted(samples):
+            print(f"{pattern_name}: [{cue_text}] -> {phrase}")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -27,6 +27,7 @@ class AliasVector:
     link_type: str
     alias: str
     vector: np.ndarray
+    direction: store.Direction = "forward"
 
 
 def drain_alias_embeddings(
@@ -73,6 +74,7 @@ def _vectors_of(rows: list) -> list[AliasVector]:
         AliasVector(
             link_type=row["link_type"],
             alias=row["alias"],
+            direction=row["direction"],
             vector=np.frombuffer(row["embedding"], dtype=np.float32),
         )
         for row in rows

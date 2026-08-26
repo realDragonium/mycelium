@@ -24,16 +24,15 @@ from mycelium.connect import extract as ex
 from mycelium.connect.cue_gate import CueResolution
 from mycelium.connect.funnel import BatchStatement, find_candidates
 from mycelium.connect.rules import propose_links
-from mycelium.store.link_type_aliases import _ALIAS_SEED
+from mycelium.store.link_type_aliases import seed_rows
 
 
-def _seeded_aliases() -> dict[str, frozenset[str]]:
+def _seeded_aliases() -> dict[str, frozenset[tuple[str, str]]]:
     """Invert the seed exactly as `store.alias_lookup` reads it back."""
-    lookup: dict[str, set[str]] = {}
-    for link_type, aliases in _ALIAS_SEED.items():
-        for alias in aliases:
-            lookup.setdefault(alias, set()).add(link_type)
-    return {alias: frozenset(types) for alias, types in lookup.items()}
+    lookup: dict[str, set[tuple[str, str]]] = {}
+    for link_type, alias, direction in seed_rows():
+        lookup.setdefault(alias, set()).add((link_type, direction))
+    return {alias: frozenset(pairs) for alias, pairs in lookup.items()}
 
 
 SEEDED_ALIASES = _seeded_aliases()
@@ -125,7 +124,8 @@ GOLDEN: dict[str, Golden] = {
         ),
     ),
     # -- typed cuts: a connective that is a seeded alias of exactly one link
-    #    type links left to right.
+    #    type links in the alias's registered direction (forward = left to
+    #    right).
     "and-then-proceeds": Golden(
         "The draft is created and then an embedding is queued.",
         statements=(
@@ -350,12 +350,17 @@ class WordOverlapView:
         return stored[0] if stored else None
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
-        return frozenset(_ALIAS_SEED)
+        return frozenset(link_type for link_type, _alias, _dir in seed_rows())
 
     def aliases_by_type(self) -> dict[str, tuple[str, ...]]:
+        # Cue slots take forward aliases only, mirroring store.aliases_by_type.
+        grouped: dict[str, list[str]] = {}
+        for link_type, alias, direction in seed_rows():
+            if direction == "forward":
+                grouped.setdefault(link_type, []).append(alias)
         return {
             link_type: tuple(sorted(aliases, key=lambda alias: (-len(alias), alias)))
-            for link_type, aliases in _ALIAS_SEED.items()
+            for link_type, aliases in grouped.items()
         }
 
 
@@ -503,19 +508,11 @@ def test_golden_substrate_linking(case: SubstrateGolden) -> None:
         == case.candidates
     )
 
-    # An inverted proposal's cue named the relation from the far side, so the
-    # resolved target renders in the source slot and the new statement in the
-    # target slot — the same swap `_proposal_op` applies to the draft op.
+    # Proposals carry explicit edge refs; render each endpoint by its text
+    # when it is a batch statement so the case reads as prose.
     def edge(proposal) -> tuple[str, str, str, str]:
-        if proposal.inverted:
-            return (
-                target_name(proposal.target),
-                proposal.link_type,
-                texts[proposal.new_index],
-                proposal.cue,
-            )
         return (
-            texts[proposal.new_index],
+            target_name(proposal.source),
             proposal.link_type,
             target_name(proposal.target),
             proposal.cue,

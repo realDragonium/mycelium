@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
+from typing import Literal
 
 from . import kernel
 from .kernel import _now
@@ -32,7 +33,14 @@ def normalize_alias(alias: str) -> str:
 # `aggregates` for `composes`) — two shipped templates take a bare cue slot, so
 # seeding those words would ship the phrasings the hit-rate report rejected.
 _ALIAS_SEED: dict[str, tuple[str, ...]] = {
-    "contains": ("contains", "includes", "comprises", "consists of", "is made up of"),
+    "contains": (
+        "contains",
+        "includes",
+        "comprises",
+        "consists of",
+        "is made up of",
+        "is part of",
+    ),
     "triggers": ("triggers", "fires", "kicks off", "causes", "results in", "leads to"),
     "establishes": ("establishes", "marks", "sets", "becomes", "transitions to"),
     "enables": ("enables", "unlocks", "allows", "permits", "makes available"),
@@ -109,29 +117,64 @@ _ALIAS_SEED: dict[str, tuple[str, ...]] = {
     "resolves": ("resolves", "fixes", "to fix"),
 }
 
+DIRECTIONS = ("forward", "reverse")
+Direction = Literal["forward", "reverse"]
+
+#: Aliases whose English reads the edge from the far side: "A is required for
+#: B" means B requires A. Cut typing and the cue gate orient edges by this.
+_REVERSE_SEED: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("requires", "is required for"),
+        ("cases", "is one of"),
+        ("contains", "is part of"),
+    }
+)
+
+
+def _validate_direction(direction: str) -> str:
+    if direction not in DIRECTIONS:
+        raise ValueError(f"direction must be one of {', '.join(DIRECTIONS)}")
+    return direction
+
+
+def seed_rows() -> list[tuple[str, str, str]]:
+    """Flatten the seed into (link_type, alias, direction) rows.
+
+    The single source for what a fresh vocabulary contains; seeding, the v9
+    migration, and tests all read the same rows.
+    """
+    return [
+        (
+            link_type,
+            alias,
+            "reverse" if (link_type, alias) in _REVERSE_SEED else "forward",
+        )
+        for link_type, aliases in _ALIAS_SEED.items()
+        for alias in aliases
+    ]
+
 
 def seed_link_type_aliases(conn: sqlite3.Connection) -> int:
     """Seed aliases and embedding jobs when the alias table is empty."""
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is not None:
         return 0
 
-    rows = [
-        (link_type, alias)
-        for link_type, aliases in _ALIAS_SEED.items()
-        for alias in aliases
-    ]
+    rows = seed_rows()
     now = _now()
     actor = kernel.get_actor()
     conn.executemany(
         "INSERT INTO link_type_aliases "
-        "(link_type, alias, provenance, created_at, created_by) "
-        "VALUES (?, ?, 'seed', ?, ?)",
-        ((link_type, alias, now, actor) for link_type, alias in rows),
+        "(link_type, alias, provenance, direction, created_at, created_by) "
+        "VALUES (?, ?, 'seed', ?, ?, ?)",
+        (
+            (link_type, alias, direction, now, actor)
+            for link_type, alias, direction in rows
+        ),
     )
     conn.executemany(
         "INSERT INTO link_type_alias_embed_queue "
         "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
-        ((link_type, alias, now) for link_type, alias in rows),
+        ((link_type, alias, now) for link_type, alias, _direction in rows),
     )
     return len(rows)
 
@@ -141,8 +184,8 @@ def list_link_type_aliases(
 ) -> list[sqlite3.Row]:
     """List aliases and embedding status in stable type and alias order."""
     sql = (
-        "SELECT link_type, alias, provenance, score, created_at, created_by, "
-        "embedding IS NOT NULL AS embedded FROM link_type_aliases"
+        "SELECT link_type, alias, provenance, score, direction, created_at, "
+        "created_by, embedding IS NOT NULL AS embedded FROM link_type_aliases"
     )
     params: tuple[str, ...] = ()
     if link_type is not None:
@@ -158,10 +201,12 @@ def upsert_link_type_alias(
     *,
     provenance: str = "curator",
     score: float | None = None,
+    direction: str = "forward",
 ) -> bool:
-    """Create an alias or update its provenance and score."""
+    """Create an alias or update its provenance, score, and direction."""
     if not link_type or not link_type.strip():
         raise ValueError("link_type cannot be empty")
+    _validate_direction(direction)
     alias = normalize_alias(alias)
     created = (
         conn.execute(
@@ -172,11 +217,12 @@ def upsert_link_type_alias(
     )
     conn.execute(
         "INSERT INTO link_type_aliases "
-        "(link_type, alias, provenance, score, created_at, created_by) "
-        "VALUES (?, ?, ?, ?, ?, ?) "
+        "(link_type, alias, provenance, score, direction, created_at, created_by) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(link_type, alias) DO UPDATE SET "
-        "provenance = excluded.provenance, score = excluded.score",
-        (link_type, alias, provenance, score, _now(), kernel.get_actor()),
+        "provenance = excluded.provenance, score = excluded.score, "
+        "direction = excluded.direction",
+        (link_type, alias, provenance, score, direction, _now(), kernel.get_actor()),
     )
     # An existing alias has unchanged carrier text, so its stored vector stands.
     if created:
@@ -214,20 +260,29 @@ def link_type_alias_exists(
     )
 
 
-def alias_lookup(conn: sqlite3.Connection) -> dict[str, frozenset[str]]:
-    """Map each alias to every canonical link type that carries it."""
-    lookup: dict[str, set[str]] = {}
+def alias_lookup(conn: sqlite3.Connection) -> dict[str, frozenset[tuple[str, str]]]:
+    """Map each alias to every (link type, direction) pair that carries it."""
+    lookup: dict[str, set[tuple[str, str]]] = {}
     for row in conn.execute(
-        "SELECT link_type, alias FROM link_type_aliases ORDER BY alias, link_type"
+        "SELECT link_type, alias, direction FROM link_type_aliases "
+        "ORDER BY alias, link_type"
     ):
-        lookup.setdefault(row["alias"], set()).add(row["link_type"])
-    return {alias: frozenset(link_types) for alias, link_types in lookup.items()}
+        lookup.setdefault(row["alias"], set()).add((row["link_type"], row["direction"]))
+    return {alias: frozenset(pairs) for alias, pairs in lookup.items()}
 
 
 def aliases_by_type(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]:
-    """Group aliases by link type, longest first so regex alternatives win."""
+    """Group cue-slot aliases by link type, longest first so regex wins.
+
+    Only forward aliases ride templated frames: every shipped template's
+    captured phrase fills the `to` slot, so splicing a far-side alias into
+    one would fire it with the wrong geometry. A far-side frame gets its own
+    pattern (like `contains-part-of`) rather than a cue slot.
+    """
     grouped: dict[str, list[str]] = {}
-    for row in conn.execute("SELECT link_type, alias FROM link_type_aliases"):
+    for row in conn.execute(
+        "SELECT link_type, alias FROM link_type_aliases WHERE direction = 'forward'"
+    ):
         grouped.setdefault(row["link_type"], []).append(row["alias"])
     return {
         link_type: tuple(sorted(aliases, key=lambda alias: (-len(alias), alias)))
@@ -248,7 +303,7 @@ def set_alias_embedding(
 def alias_vectors(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """List aliases carrying embeddings in stable type and alias order."""
     return conn.execute(
-        "SELECT link_type, alias, embedding FROM link_type_aliases "
+        "SELECT link_type, alias, embedding, direction FROM link_type_aliases "
         "WHERE embedding IS NOT NULL ORDER BY link_type, alias"
     ).fetchall()
 
@@ -314,7 +369,7 @@ def complete_alias_vectors(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     and the read it guards cannot slip past as a complete set.
     """
     rows = conn.execute(
-        "SELECT link_type, alias, embedding FROM link_type_aliases "
+        "SELECT link_type, alias, embedding, direction FROM link_type_aliases "
         "ORDER BY link_type, alias"
     ).fetchall()
     if any(row["embedding"] is None for row in rows):

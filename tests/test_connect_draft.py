@@ -84,10 +84,11 @@ def _proposals(x_id: str, y_id: str) -> list[Proposal]:
                 "source": "rule",
                 "pattern": "requires-verb",
                 "cue": "requires",
-                "target_text": "the account remains locked",
+                "phrase": "the account remains locked",
                 "score": 0.82,
                 "link_type": "requires",
             },
+            source="@0",
         ),
         Proposal(
             kind="merge",
@@ -284,10 +285,11 @@ def test_unresolvable_draft_reference_rolls_back_every_statement(tmp_path, monke
                     "source": "rule",
                     "pattern": "requires-must-have",
                     "cue": "must",
-                    "target_text": "verify email",
+                    "phrase": "verify email",
                     "score": 0.8,
                     "link_type": "requires",
                 },
+                source="@1",
             )
         ]
         draft_id = assemble_draft(
@@ -317,14 +319,14 @@ def test_proposal_refs_name_the_batch_operations_seq():
     assert payload["links"][0]["from_id"] == "@7:0"
 
 
-def test_inverted_link_proposal_writes_the_target_as_source():
+def test_far_side_link_proposal_writes_the_resolved_parent_as_source():
     proposal = Proposal(
         kind="link",
         new_index=0,
-        target="st_parent",
+        target="@0",
         link_type="contains",
-        provenance={"source": "rule", "inverted": True},
-        inverted=True,
+        provenance={"source": "rule"},
+        source="st_parent",
     )
     batch = [BatchInput(kind="state", text="the child names its parent")]
 

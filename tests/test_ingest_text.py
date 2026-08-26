@@ -167,7 +167,7 @@ def test_registered_cut_alias_adds_left_to_right_draft_link(tmp_path, monkeypatc
         assert statements[0]["links"] == [{"to_id": "@1", "link_type": "proceeds"}]
 
 
-def test_inverted_frame_links_existing_parent_to_new_child(tmp_path, monkeypatch):
+def test_far_side_frame_links_existing_parent_to_new_child(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch):
         parent_id = _statement("rule", "The retention policy applies")
 
@@ -176,14 +176,10 @@ def test_inverted_frame_links_existing_parent_to_new_child(tmp_path, monkeypatch
         )
 
         # The cue names the relation from the far side, so the existing parent
-        # is the source of the proposed edge.
+        # is the source of the proposed edge and the new child its target.
         (link,) = response["links"]
-        assert link["target"] == parent_id
-        assert (link["link_type"], link["cue"], link["inverted"]) == (
-            "contains",
-            "is a part of",
-            True,
-        )
+        assert (link["source"], link["target"]) == (parent_id, "@0")
+        assert (link["link_type"], link["cue"]) == ("contains", "is a part of")
         draft = server.get_draft(response["draft_id"])
         link_op = next(op for op in draft["ops"] if op["kind"] == "add_links")
         assert link_op["payload"]["links"] == [
@@ -347,6 +343,7 @@ def test_auto_absorption_rides_draft_without_teaching_store(tmp_path, monkeypatc
             "alias": "and also",
             "provenance": "auto",
             "score": 1.0,
+            "direction": "forward",
         }
         provenance = json.loads(alias_ops[0]["provenance_json"])
         assert provenance["source"] == "cue-gate"
@@ -360,6 +357,7 @@ def test_auto_absorption_rides_draft_without_teaching_store(tmp_path, monkeypatc
             "auto": 1,
             "low_confidence": 0,
             "unresolved": 0,
+            "direction_conflict": 0,
             "strict": 0,
         }
         resolution = response["cue_resolutions"][0]
@@ -464,6 +462,7 @@ def test_strict_mode_flags_without_embedding_or_alias_op(tmp_path, monkeypatch):
             "auto": 0,
             "low_confidence": 0,
             "unresolved": 0,
+            "direction_conflict": 0,
             "strict": 1,
         }
 

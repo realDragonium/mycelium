@@ -56,20 +56,21 @@ SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
 class LinkProposal:
     """Describe one typed link inferred from a lexical cue.
 
-    The edge normally runs new statement -> target. An inverted proposal runs
-    target -> new statement: the cue named the relation from the far side, so
-    the resolved target is the link's source.
+    `source` and `target` are edge endpoint refs — "@n" for a batch statement
+    or an existing statement id. One of them is always the cue carrier
+    (`@new_index`); which one is decided by the frame's phrase role, so the
+    words carry the direction.
     """
 
     new_index: int
+    source: str
     target: str
     link_type: str
     pattern: str
     cue: str
-    target_text: str | None
+    phrase: str | None
     score: float
     anchored: bool
-    inverted: bool = False
 
 
 class _Resolved(NamedTuple):
@@ -230,17 +231,17 @@ def _pick(
     link_type: str,
     view: SubstrateView,
     *,
-    inverted: bool,
+    phrase_role: str,
 ) -> _Resolved | None:
     """Pick the best candidate whose kind pair admits the proposed type.
 
-    The matrix is directional, so an inverted cue checks candidate -> statement:
-    the resolved candidate is the edge's source there.
+    The matrix is directional: the resolved candidate fills the frame's
+    phrase slot, so it is the edge's source when that slot is "from".
     """
     for candidate in candidates:
         from_kind, to_kind = (
             (candidate.kind, statement_kind)
-            if inverted
+            if phrase_role == "from"
             else (statement_kind, candidate.kind)
         )
         if link_type in view.admissible_link_types(from_kind, to_kind):
@@ -268,22 +269,22 @@ def propose_links(
     phrase_cache: dict[
         str, tuple[frozenset[str], list[float], dict[str, frozenset[str]]]
     ] = {}
-    proposals: dict[tuple[int, str, str, bool], LinkProposal] = {}
+    proposals: dict[tuple[str, str, str], LinkProposal] = {}
     for statement in batch:
         for cue in shipped_cues(statement.text, statement.kind, shipped, aliases):
-            if not cue.target_text:
+            if not cue.phrase:
                 continue
-            if cue.target_text not in phrase_cache:
-                phrase_entities = view.entities_in(cue.target_text)
+            if cue.phrase not in phrase_cache:
+                phrase_entities = view.entities_in(cue.phrase)
                 sharing = (
                     view.statements_sharing(phrase_entities) if phrase_entities else {}
                 )
-                phrase_cache[cue.target_text] = (
+                phrase_cache[cue.phrase] = (
                     phrase_entities,
-                    view.embed(cue.target_text),
+                    view.embed(cue.phrase),
                     sharing,
                 )
-            phrase_entities, phrase_vec, sharing = phrase_cache[cue.target_text]
+            phrase_entities, phrase_vec, sharing = phrase_cache[cue.phrase]
             candidates = _resolve_in_batch(
                 statement,
                 batch,
@@ -306,30 +307,37 @@ def propose_links(
                     k,
                 )
             winner = _pick(
-                candidates, statement.kind, cue.link_type, view, inverted=cue.inverted
+                candidates,
+                statement.kind,
+                cue.link_type,
+                view,
+                phrase_role=cue.phrase_role,
             )
             if winner is None:
                 continue
             # Keep the no-self-link invariant explicit at the emission boundary.
             if winner.target == f"@{statement.index}":
                 continue
+            carrier = f"@{statement.index}"
+            source, target = (
+                (winner.target, carrier)
+                if cue.phrase_role == "from"
+                else (carrier, winner.target)
+            )
             proposal = LinkProposal(
                 new_index=statement.index,
-                target=winner.target,
+                source=source,
+                target=target,
                 link_type=cue.link_type,
                 pattern=cue.pattern,
                 cue=cue.cue,
-                target_text=cue.target_text,
+                phrase=cue.phrase,
                 score=winner.score,
                 anchored=bool(winner.shared),
-                inverted=cue.inverted,
             )
-            key = (
-                proposal.new_index,
-                proposal.target,
-                proposal.link_type,
-                proposal.inverted,
-            )
+            # Edge identity ignores which sibling carried the cue, so the
+            # same edge found from both ends keeps only the higher score.
+            key = (source, target, proposal.link_type)
             previous = proposals.get(key)
             if previous is None or proposal.score > previous.score:
                 proposals[key] = proposal

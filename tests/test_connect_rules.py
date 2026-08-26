@@ -102,18 +102,19 @@ def test_shipped_anchored_cue_resolves_to_batch_sibling_and_records_exact_cue():
     assert proposals == [
         LinkProposal(
             new_index=4,
+            source="@4",
             target="@1",
             link_type="configures",
             pattern="configures-capability",
             cue="can be set per",
-            target_text="company",
+            phrase="company",
             score=0.8,
             anchored=True,
         )
     ]
 
 
-def test_inverted_frame_proposes_the_resolved_target_as_source():
+def test_far_side_frame_puts_the_resolved_phrase_in_the_source_slot():
     view = FakeView(allow_all_link_types=frozenset({"contains"}))
     view.embeddings_by_text["the retention policy"] = [1.0, 0.0]
     view.neighbours_by_vector[(1.0, 0.0)] = [("s-policy", 0.9)]
@@ -130,19 +131,45 @@ def test_inverted_frame_proposes_the_resolved_target_as_source():
     assert proposals == [
         LinkProposal(
             new_index=0,
-            target="s-policy",
+            source="s-policy",
+            target="@0",
             link_type="contains",
             pattern="contains-part-of",
             cue="is a part of",
-            target_text="the retention policy",
+            phrase="the retention policy",
             score=0.9,
             anchored=False,
-            inverted=True,
         )
     ]
 
 
-def test_inverted_frame_checks_the_matrix_from_the_target_side():
+def test_both_directions_of_one_link_type_read_off_the_words():
+    """The same `contains` vocabulary works both ways round.
+
+    "X contains Y" puts the carrier in the source slot; "X is a part of Y"
+    puts the resolved phrase there. Same batch position, same link type,
+    opposite edges — decided entirely by the frame that matched.
+    """
+    shipped = {"contains-verb": None, "contains-part-of": None}
+
+    def run(text: str) -> LinkProposal:
+        view = FakeView(allow_all_link_types=frozenset({"contains"}))
+        view.embeddings_by_text["the retention policy"] = [1.0, 0.0]
+        view.neighbours_by_vector[(1.0, 0.0)] = [("s-policy", 0.9)]
+        view.kinds["s-policy"] = "rule"
+        batch = [BatchStatement(0, "state", text)]
+        funnel = _funnel({0: ([0.0, 1.0], frozenset())})
+        (proposal,) = propose_links(batch, funnel, view, shipped=shipped)
+        return proposal
+
+    outward = run("The archive contains the retention policy")
+    assert (outward.source, outward.target) == ("@0", "s-policy")
+
+    inward = run("The archive is a part of the retention policy")
+    assert (inward.source, inward.target) == ("s-policy", "@0")
+
+
+def test_far_side_frame_checks_the_matrix_from_the_phrase_side():
     batch = [
         BatchStatement(
             0, "state", "The purge schedule is a part of the retention policy"
@@ -159,11 +186,11 @@ def test_inverted_frame_checks_the_matrix_from_the_target_side():
 
     funnel = _funnel({0: ([0.0, 1.0], frozenset())})
 
-    # The resolved target is the edge's source, so rule -> state must admit it.
+    # The resolved phrase is the edge's source, so rule -> state must admit it.
     admitted = propose_links(batch, funnel, view_admitting(("rule", "state")))
-    assert [proposal.target for proposal in admitted] == ["s-policy"]
+    assert [proposal.source for proposal in admitted] == ["s-policy"]
 
-    # The statement's own side admitting the type is not enough when inverted.
+    # The carrier's own side admitting the type is not enough for this frame.
     assert propose_links(batch, funnel, view_admitting(("state", "rule"))) == []
 
 
@@ -358,7 +385,7 @@ def test_targetless_shipped_cue_proposes_nothing():
     # Pin the branch under test: a cue does fire, and it carries no target phrase.
     cues = shipped_cues(text, "state")
     assert [cue.pattern for cue in cues] == ["restricts-state"]
-    assert all(cue.target_text is None for cue in cues)
+    assert all(cue.phrase is None for cue in cues)
 
     assert propose_links(batch, _funnel({}), view) == []
     assert view.embed_calls == Counter()

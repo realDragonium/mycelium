@@ -47,11 +47,12 @@ def _verdict(
 def _link(link_type: str = "requires", *, score: float = 0.81) -> LinkProposal:
     return LinkProposal(
         new_index=0,
+        source="@0",
         target="stm_target",
         link_type=link_type,
         pattern="requires-verb",
         cue="requires",
-        target_text="the session timeout duration",
+        phrase="the session timeout duration",
         score=score,
         anchored=True,
     )
@@ -177,34 +178,34 @@ def test_link_deduplication_preserves_distinct_types_and_provenance():
         "source": "rule",
         "pattern": "requires-verb",
         "cue": "requires",
-        "target_text": "the session timeout duration",
+        "phrase": "the session timeout duration",
         "score": 0.81,
         "link_type": "requires",
     }
 
 
-def test_inverted_link_keeps_its_direction_and_marks_provenance():
-    inverted = LinkProposal(
+def test_link_proposal_keeps_its_edge_geometry():
+    far_side = LinkProposal(
         new_index=0,
-        target="stm_parent",
+        source="stm_parent",
+        target="@0",
         link_type="contains",
         pattern="contains-part-of",
         cue="is a part of",
-        target_text="the retention policy",
+        phrase="the retention policy",
         score=0.88,
         anchored=False,
-        inverted=True,
     )
 
-    result = proposals_from(funnel=_funnel(), links=[inverted], verdicts=None)
+    result = proposals_from(funnel=_funnel(), links=[far_side], verdicts=None)
 
     proposal = result.proposals[0]
-    assert proposal.inverted is True
-    assert proposal.provenance["inverted"] is True
-    # A plain proposal's provenance stays free of the marker.
+    assert (proposal.source, proposal.target) == ("stm_parent", "@0")
     plain = proposals_from(funnel=_funnel(), links=[_link()], verdicts=None)
-    assert plain.proposals[0].inverted is False
-    assert "inverted" not in plain.proposals[0].provenance
+    assert (plain.proposals[0].source, plain.proposals[0].target) == (
+        "@0",
+        "stm_target",
+    )
 
 
 def test_proposals_are_ordered_links_then_merges_then_conflicts():

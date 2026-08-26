@@ -89,7 +89,7 @@ def test_flag_sources_cover_every_emitted_reason():
 def test_resolved_cut_produces_left_to_right_item_link():
     result = ex.extract(
         "The invite is created and then the reminder is scheduled",
-        aliases={"and then": frozenset({"proceeds"})},
+        aliases={"and then": frozenset({("proceeds", "forward")})},
     )
 
     assert [item.text for item in result.items] == [
@@ -97,6 +97,21 @@ def test_resolved_cut_produces_left_to_right_item_link():
         "the reminder is scheduled",
     ]
     assert result.cut_links == [(0, 1, "proceeds")]
+
+
+def test_cut_alias_direction_orients_the_link_both_ways():
+    text = "The invite is created and then the reminder is scheduled"
+
+    forward = ex.extract(
+        text, aliases={"and then": frozenset({("proceeds", "forward")})}
+    )
+    assert forward.cut_links == [(0, 1, "proceeds")]
+
+    # A far-side alias on the same cut reads the edge the other way round.
+    reverse = ex.extract(
+        text, aliases={"and then": frozenset({("proceeds", "reverse")})}
+    )
+    assert reverse.cut_links == [(1, 0, "proceeds")]
 
 
 def test_cut_without_aliases_produces_no_link():
@@ -108,7 +123,7 @@ def test_cut_without_aliases_produces_no_link():
 def test_cut_with_unclassified_endpoint_produces_only_a_flag():
     result = ex.extract(
         "The invite is created and then the user logs in",
-        aliases={"and then": frozenset({"proceeds"})},
+        aliases={"and then": frozenset({("proceeds", "forward")})},
     )
 
     assert result.cut_links == []
@@ -302,7 +317,7 @@ def test_registered_ambiguous_cue_is_not_guessed():
 
     result = ex.extract(
         "The invite is created and also the reminder is scheduled",
-        aliases={"and also": frozenset({"proceeds", "next"})},
+        aliases={"and also": frozenset({("proceeds", "forward"), ("next", "forward")})},
         resolve_cue=reject,
     )
 

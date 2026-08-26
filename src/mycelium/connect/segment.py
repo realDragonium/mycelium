@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from mycelium import phrasing, phrasing_cues
 
@@ -50,6 +50,9 @@ class Cut:
     left: int
     right: int
     link_type: str | None = None
+    #: The typing alias's direction, verbatim: "forward" links left to right,
+    #: "reverse" names the relation from the far side and links right to left.
+    link_direction: Literal["forward", "reverse"] = "forward"
 
 
 @dataclass(frozen=True)
@@ -822,12 +825,20 @@ def connective_cue(connective: str) -> str:
 
 
 def _connective_link_type(
-    connective: str, aliases: Mapping[str, frozenset[str]]
-) -> str | None:
-    """Resolve a normalized connective only when one link type carries it."""
-    link_types = aliases.get(connective_cue(connective), frozenset())
-    # An alias carried by multiple types is real ambiguity, not grounds to guess.
-    return next(iter(link_types)) if len(link_types) == 1 else None
+    connective: str, aliases: Mapping[str, frozenset[tuple[str, str]]]
+) -> tuple[str, str] | None:
+    """Resolve a normalized connective only when one link type carries it.
+
+    Returns the (link type, direction) pair; an alias carried by multiple
+    types is real ambiguity, not grounds to guess.
+    """
+    pairs = aliases.get(connective_cue(connective), frozenset())
+    # More than one pair is real ambiguity either way: several types, or one
+    # type claimed in both directions by a hand-built mapping (the store's
+    # primary key makes that impossible, but this layer takes any Mapping).
+    if len(pairs) != 1:
+        return None
+    return next(iter(pairs))
 
 
 #: Cut kinds whose connective is never a left→right relation, whatever alias a
@@ -838,9 +849,9 @@ UNTYPED_CUT_KINDS = frozenset({"conditional", "coordination"})
 
 
 def _cut_link_type(
-    cut: _PendingCut, aliases: Mapping[str, frozenset[str]]
-) -> str | None:
-    """Resolve a cut's connective to the one link type its aliases name."""
+    cut: _PendingCut, aliases: Mapping[str, frozenset[tuple[str, str]]]
+) -> tuple[str, str] | None:
+    """Resolve a cut's connective to the one typed pair its aliases name."""
     if cut.kind in UNTYPED_CUT_KINDS:
         return None
     return _connective_link_type(cut.connective, aliases)
@@ -849,7 +860,7 @@ def _cut_link_type(
 def _resolve_cuts(
     pending: list[_PendingCut],
     indices: dict[int, int],
-    aliases: Mapping[str, frozenset[str]] | None,
+    aliases: Mapping[str, frozenset[tuple[str, str]]] | None,
 ) -> list[Cut]:
     """Resolve surviving pending cut references to public fragment indices."""
     aliases = aliases or {}
@@ -860,7 +871,7 @@ def _resolve_cuts(
             item.span,
             indices[id(item.left)],
             indices[id(item.right)],
-            _cut_link_type(item, aliases),
+            *(_cut_link_type(item, aliases) or (None, "forward")),
         )
         for item in pending
         if id(item.left) in indices and id(item.right) in indices
@@ -883,7 +894,7 @@ def _resolve_proposals(
 
 
 def segment(
-    text: str, *, aliases: Mapping[str, frozenset[str]] | None = None
+    text: str, *, aliases: Mapping[str, frozenset[tuple[str, str]]] | None = None
 ) -> Segmentation:
     """Segment raw text into atomic claims, conditions, cuts, and proposals.
 

@@ -613,6 +613,54 @@ def _migration_v8_link_type_aliases(conn: sqlite3.Connection) -> None:
     pass
 
 
+def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
+    """Add the `direction` column and align the seeded far-side aliases.
+
+    Fresh DBs get the column from SCHEMA and their directions from seeding, so
+    an empty or missing table is left alone. On an already-seeded DB every
+    `_REVERSE_SEED` row is flipped regardless of provenance — before v9 the
+    column did not exist, so no stored direction was ever a curator's choice —
+    and a reverse alias the old seed lacked ("is part of") is inserted with an
+    embedding job, since seeding never runs again on a non-empty table.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(link_type_aliases)")}
+    if not columns:
+        return
+    if "direction" not in columns:
+        conn.execute(
+            "ALTER TABLE link_type_aliases "
+            "ADD COLUMN direction TEXT NOT NULL DEFAULT 'forward'"
+        )
+    if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
+        return
+
+    from mycelium.store.link_type_aliases import _REVERSE_SEED, _now
+
+    # The one reverse alias the pre-v9 seed never carried; an absent row for
+    # any other pair means a curator deleted it, which stands.
+    new_in_v9 = {("contains", "is part of")}
+    now = _now()
+    for link_type, alias in sorted(_REVERSE_SEED):
+        updated = conn.execute(
+            "UPDATE link_type_aliases SET direction = 'reverse' "
+            "WHERE link_type = ? AND alias = ?",
+            (link_type, alias),
+        ).rowcount
+        if updated or (link_type, alias) not in new_in_v9:
+            continue
+        conn.execute(
+            "INSERT INTO link_type_aliases "
+            "(link_type, alias, provenance, direction, created_at) "
+            "VALUES (?, ?, 'seed', 'reverse', ?)",
+            (link_type, alias, now),
+        )
+        conn.execute(
+            "INSERT INTO link_type_alias_embed_queue "
+            "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
+            (link_type, alias, now),
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -625,6 +673,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (6, _migration_v6_nocase_names),
     (7, _migration_v7_kind_link_matrix),
     (8, _migration_v8_link_type_aliases),
+    (9, _migration_v9_alias_direction),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -717,8 +766,9 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
 
     The sentinel checks one column added in a representative past
     migration — `entities.created_at` (v1), `when_nodes.link_kind` (v3),
-    `names.generated_from_name_id` (v5), and the NOCASE collation on
-    `names.text` (v6). A fresh DB will have all of them (created in one
+    `names.generated_from_name_id` (v5), the NOCASE collation on
+    `names.text` (v6), and `link_type_aliases.direction` (v9). A fresh DB
+    will have all of them (created in one
     shot by `SCHEMA`). A legacy DB at any prior version will be missing
     at least one (CREATE TABLE IF NOT EXISTS leaves existing tables
     untouched, so columns added by ALTER TABLE in past migrations are
@@ -744,4 +794,5 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
         and _has("when_nodes", "link_kind")
         and _has("names", "generated_from_name_id")
         and "NOCASE" in _table_sql("names").upper()
+        and _has("link_type_aliases", "direction")
     )

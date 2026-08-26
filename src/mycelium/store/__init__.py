@@ -83,6 +83,8 @@ from .kind_link_matrix import (
     set_admissible,
 )
 from .link_type_aliases import (
+    DIRECTIONS,
+    Direction,
     alias_lookup,
     alias_vectors,
     aliases_by_type,
@@ -314,6 +316,8 @@ __all__ = [
     "seed_glossaries",
     "seed_kind_link_matrix",
     "seed_link_type_aliases",
+    "DIRECTIONS",
+    "Direction",
     "set_actor",
     "set_admissible",
     "set_alias_embedding",

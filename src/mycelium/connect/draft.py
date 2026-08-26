@@ -75,26 +75,27 @@ def _proposal_op(
     batch_seq: int,
 ) -> tuple[str, dict]:
     """Map one proposal to an existing replayable tool operation."""
-    source = f"@{batch_seq}:{proposal.new_index}"
+    carrier = f"@{batch_seq}:{proposal.new_index}"
     target = _draft_ref(proposal.target, batch_seq)
     if proposal.kind == "link":
-        # An inverted proposal's cue named the relation from the far side, so
-        # the resolved target is the edge's source.
-        from_id, to_id = (target, source) if proposal.inverted else (source, target)
+        # The proposal already carries the edge geometry; both endpoints may
+        # be batch refs, so each goes through the same rewrite.
+        if proposal.source is None:
+            raise ValueError(f"link proposal {proposal.link_type!r} has no source ref")
         return (
             "add_links",
             {
                 "links": [
                     {
-                        "from_id": from_id,
-                        "to_id": to_id,
+                        "from_id": _draft_ref(proposal.source, batch_seq),
+                        "to_id": target,
                         "link_type": proposal.link_type,
                     }
                 ]
             },
         )
     if proposal.kind == "merge":
-        return "merge_statements", {"from_id": source, "into_id": target}
+        return "merge_statements", {"from_id": carrier, "into_id": target}
     if proposal.kind == "conflict":
         return "report_knowledge_gap", {
             "text": _conflict_text(proposal, batch, text_of)
@@ -148,6 +149,10 @@ def assemble_draft(
         for resolution in cues:
             if resolution.decision not in ABSORBING_DECISIONS:
                 continue
+            if resolution.direction is None:
+                raise ValueError(
+                    f"absorbing cue {resolution.cue!r} carries no direction"
+                )
             drafts_store.add_op(
                 conn,
                 draft_id=draft_id,
@@ -157,6 +162,10 @@ def assemble_draft(
                     "alias": resolution.cue,
                     "provenance": resolution.decision,
                     "score": resolution.score,
+                    # An absorbing resolution always carries its direction; a
+                    # silent forward default here would teach a far-side cue
+                    # backwards, the exact bug this field exists to prevent.
+                    "direction": resolution.direction,
                 },
                 provenance={
                     "source": "cue-gate",
