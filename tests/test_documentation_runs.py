@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from mycelium import docs_store, drafts_store, server
+from mycelium import auth, docs_store, drafts_store, server
 from mycelium.ask.substrate import InProcessSubstrate
 
 
@@ -1270,4 +1270,24 @@ def test_a_run_with_no_draft_reports_none(tmp_path):
     assert detail["draft_body"] is None
     assert (
         docs_store.serialize_run(docs_store.get_run(conn, run_id))["draft_chars"] == 0
+    )
+
+
+def test_a_refused_draft_is_gated_exactly_where_its_source_material_is():
+    """The floor under a refused draft, and why it sits no higher.
+
+    A draft is a recombination of substrate statements, so gating it above
+    `get_statements` would protect nothing: the same caller can read every
+    statement the draft was built from, and every document that passed review.
+    What must hold is that the role below reader cannot reach one.
+    """
+    required = auth.required_role_for("get_documentation_run")
+    assert required == auth.required_role_for("get_statements")
+    assert required == auth.required_role_for("get_generated_document")
+
+    assert not auth.principal_satisfies(
+        auth.Principal(id="t", name="t", role="asker", type="human"), required
+    )
+    assert auth.principal_satisfies(
+        auth.Principal(id="t", name="t", role="reader", type="human"), required
     )

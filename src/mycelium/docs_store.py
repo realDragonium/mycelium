@@ -425,6 +425,14 @@ def serialize_run_detail(row: sqlite3.Row) -> dict:
     Split from `serialize_run` for the reason the document shapes are split: a
     draft runs to kilobytes, and a caller listing runs wants to know what
     happened rather than to receive every document that was turned down.
+
+    A refused draft holds the exposure violation that refused it, so gating it
+    above a reader looks prudent and protects nothing. The draft is built from
+    substrate statements, and `get_statements` is a reader tool; documents that
+    passed review are reader-visible too. The exposure boundary is what may be
+    published outside, not what a reader of this instance may see, and raising
+    the gate here would put refused text further out of reach than both the
+    statements it came from and the documents that passed.
     """
     return {
         **serialize_run(row),
