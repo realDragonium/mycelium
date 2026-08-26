@@ -766,8 +766,9 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
 
     The sentinel checks one column added in a representative past
     migration — `entities.created_at` (v1), `when_nodes.link_kind` (v3),
-    `names.generated_from_name_id` (v5), and the NOCASE collation on
-    `names.text` (v6). A fresh DB will have all of them (created in one
+    `names.generated_from_name_id` (v5), the NOCASE collation on
+    `names.text` (v6), and `link_type_aliases.direction` (v9). A fresh DB
+    will have all of them (created in one
     shot by `SCHEMA`). A legacy DB at any prior version will be missing
     at least one (CREATE TABLE IF NOT EXISTS leaves existing tables
     untouched, so columns added by ALTER TABLE in past migrations are
@@ -793,4 +794,5 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
         and _has("when_nodes", "link_kind")
         and _has("names", "generated_from_name_id")
         and "NOCASE" in _table_sql("names").upper()
+        and _has("link_type_aliases", "direction")
     )

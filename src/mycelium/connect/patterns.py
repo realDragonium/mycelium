@@ -89,10 +89,12 @@ _TEMPLATED_REGEXES: dict[tuple[str, tuple[str, ...]], re.Pattern[str]] = {}
 
 COMMON_PATTERNS: tuple[Pattern, ...] = (
     _pattern("requires-verb", "requires", r"\b(?P<cue>requires?)\b\s*(?P<to>.+)"),
+    # "A is required for B" names the relation from the far side: B requires
+    # A, so the captured phrase is the edge's source.
     _pattern(
         "requires-required",
         "requires",
-        r"\b(?P<cue>(?:is|are) required (?:for|to|by))\b\s*(?P<to>.+)",
+        r"\b(?P<cue>(?:is|are) required (?:for|to|by))\b\s*(?P<from>.+)",
     ),
     _pattern("requires-needs", "requires", r"\b(?P<cue>needs?)\b\s*(?P<to>.+)"),
     _pattern(
@@ -402,10 +404,17 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "valued-by",
             r"\b(?P<cue>equals?)\b\s*(?P<to>.+)",
         ),
+        # "A is one of B": the enumerating parent B is the edge's source.
         _pattern(
             "cases-one-of",
             "cases",
-            r"\b(?P<cue>(?:is|are) (?:one of|either|any of)|one of:)\s*(?P<to>.+)",
+            r"\b(?P<cue>(?:is|are) one of|one of:)\s*(?P<from>.+)",
+        ),
+        # "A is either X or Y": the carrier enumerates its own values.
+        _pattern(
+            "cases-either",
+            "cases",
+            r"\b(?P<cue>(?:is|are) (?:either|any of))\b\s*(?P<to>.+)",
         ),
         _pattern(
             "cases-level-for",
