@@ -1329,6 +1329,9 @@ def test_a_finding_rejects_the_document_whatever_the_label_says(kb_set):
 
     assert isinstance(result, NothingWritten)
     assert result.review.conformance.status == "fail"
+    # The retry fired and the second review rejected too, so this covers the
+    # path that actually spends the run rather than a first-round refusal.
+    assert result.review.attempts == 2
 
 
 def test_a_pass_carrying_only_blank_findings_stays_a_pass(kb_set):
