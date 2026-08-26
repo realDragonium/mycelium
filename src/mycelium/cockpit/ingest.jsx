@@ -213,10 +213,12 @@ function rrConnections(res, draft) {
     add(i, { kind: 'text', label: `${l.link_type} → ${t}` });
   }));
   (res.links || []).forEach(l => {
-    const t = typeof l.target === 'string' && l.target.startsWith('@') ? posOf(l.target.slice(1)) : 'existing';
-    // An inverted link runs target → this statement: the cue named the
-    // relation from the far side, so the arrow points back at us.
-    const label = l.inverted ? `${t} ${l.link_type} → this` : `${l.link_type} → ${t}`;
+    // source/target are edge refs; the cue carrier is whichever is "@batch_index".
+    const name = (ref) => ref === `@${l.batch_index}` ? 'this'
+      : (typeof ref === 'string' && ref.startsWith('@') ? posOf(ref.slice(1)) : 'existing');
+    const label = name(l.source) === 'this'
+      ? `${l.link_type} → ${name(l.target)}`
+      : `${name(l.source)} ${l.link_type} → this`;
     add(l.batch_index, { kind: 'rule', label, note: `${l.pattern} · "${l.cue}" · ${rrPct(l.score)}` });
   });
   (res.merges || []).forEach(m => add(m.batch_index, { kind: 'merge', label: 'merge → existing', note: `"${(m.into_text || '').slice(0, 60)}" · ${rrPct(m.score)}${m.nli ? ' · NLI ↔' : ''}` }));

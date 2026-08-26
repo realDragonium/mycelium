@@ -613,6 +613,35 @@ def _migration_v8_link_type_aliases(conn: sqlite3.Connection) -> None:
     pass
 
 
+def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
+    """Add the `direction` column to `link_type_aliases` on legacy DBs.
+
+    Fresh DBs get the column from SCHEMA; ALTER only runs when it is missing.
+    Seeded far-side aliases are flipped to `reverse` so cut typing and the cue
+    gate stop reading them left to right; the literals mirror
+    `store.link_type_aliases._REVERSE_SEED`."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(link_type_aliases)")}
+    if not columns:
+        # A pre-v8 DB has no alias table yet; SCHEMA creates it with the
+        # column, and the seed writes directions itself.
+        return
+    if "direction" not in columns:
+        conn.execute(
+            "ALTER TABLE link_type_aliases "
+            "ADD COLUMN direction TEXT NOT NULL DEFAULT 'forward'"
+        )
+    for link_type, alias in (
+        ("requires", "is required for"),
+        ("cases", "is one of"),
+        ("contains", "is part of"),
+    ):
+        conn.execute(
+            "UPDATE link_type_aliases SET direction = 'reverse' "
+            "WHERE link_type = ? AND alias = ? AND provenance = 'seed'",
+            (link_type, alias),
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -625,6 +654,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (6, _migration_v6_nocase_names),
     (7, _migration_v7_kind_link_matrix),
     (8, _migration_v8_link_type_aliases),
+    (9, _migration_v9_alias_direction),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

@@ -102,7 +102,9 @@ def test_alias_lookup_and_longest_first_grouping(fresh_conn):
     store.upsert_link_type_alias(fresh_conn, "ordering", "equal a")
     store.upsert_link_type_alias(fresh_conn, "ordering", "equal b")
 
-    assert store.alias_lookup(fresh_conn)["shared cue"] == frozenset({"alpha", "beta"})
+    assert store.alias_lookup(fresh_conn)["shared cue"] == frozenset(
+        {("alpha", "forward"), ("beta", "forward")}
+    )
     assert store.aliases_by_type(fresh_conn)["ordering"] == (
         "a much longer cue",
         "equal a",
@@ -119,8 +121,8 @@ def test_list_aliases_filters_and_exposes_embedding_state(fresh_conn):
 
 
 def test_migrate_sets_alias_schema_version(fresh_conn):
-    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 8
-    assert migrations.CURRENT_VERSION == 8
+    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 9
+    assert migrations.CURRENT_VERSION == 9
 
 
 def test_carrier_embedding_drain_round_trips_and_skips_deleted_target(fresh_conn):
@@ -266,6 +268,7 @@ def test_tool_stores_automatic_provenance_and_score(tmp_path, monkeypatch):
             "alias": "then after",
             "provenance": "auto",
             "score": 0.83,
+            "direction": "forward",
             "created": True,
         }
         row = next(

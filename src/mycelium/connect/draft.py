@@ -78,16 +78,15 @@ def _proposal_op(
     source = f"@{batch_seq}:{proposal.new_index}"
     target = _draft_ref(proposal.target, batch_seq)
     if proposal.kind == "link":
-        # An inverted proposal's cue named the relation from the far side, so
-        # the resolved target is the edge's source.
-        from_id, to_id = (target, source) if proposal.inverted else (source, target)
+        # The proposal already carries the edge geometry; both endpoints may
+        # be batch refs, so each goes through the same rewrite.
         return (
             "add_links",
             {
                 "links": [
                     {
-                        "from_id": from_id,
-                        "to_id": to_id,
+                        "from_id": _draft_ref(proposal.source or "", batch_seq),
+                        "to_id": target,
                         "link_type": proposal.link_type,
                     }
                 ]
@@ -157,6 +156,7 @@ def assemble_draft(
                     "alias": resolution.cue,
                     "provenance": resolution.decision,
                     "score": resolution.score,
+                    "direction": resolution.direction or "forward",
                 },
                 provenance={
                     "source": "cue-gate",

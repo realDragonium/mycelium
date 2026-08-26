@@ -106,6 +106,7 @@ def test_link_type_alias_tools_are_registered_and_reachable(tmp_path, monkeypatc
             "alias": "sparks immediately",
             "provenance": "curator",
             "score": None,
+            "direction": "forward",
             "created": True,
         }
 
@@ -117,6 +118,7 @@ def test_link_type_alias_tools_are_registered_and_reachable(tmp_path, monkeypatc
             "alias": "sparks immediately",
             "provenance": "curator",
             "score": None,
+            "direction": "forward",
         }
 
         # `embedded` reports a worker outcome, so assert it against a drain

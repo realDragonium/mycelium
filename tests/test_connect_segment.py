@@ -240,7 +240,7 @@ def test_compound_phrase_isolated_verbatim():
 
 def test_comma_then_cut_resolves_only_with_aliases():
     source = "The invite is sent, then a reminder is scheduled"
-    aliases = {"then": frozenset({"proceeds"})}
+    aliases = {"then": frozenset({("proceeds", "forward")})}
 
     resolved = seg.segment(source, aliases=aliases)
     unresolved = seg.segment(source)
@@ -259,7 +259,7 @@ def test_coordination_cut_is_absent_from_seeded_aliases():
 
 
 def test_ambiguous_connective_alias_resolves_to_nothing():
-    aliases = {"then": frozenset({"proceeds", "next"})}
+    aliases = {"then": frozenset({("proceeds", "forward"), ("next", "forward")})}
     result = seg.segment(
         "The invite is sent, then a reminder is scheduled", aliases=aliases
     )
@@ -434,7 +434,7 @@ def test_empty_and_whitespace_only_input_return_empty_segmentation():
 def test_conditional_cut_ignores_a_registered_alias():
     result = seg.segment(
         "When the flag is set, the job runs",
-        aliases={"when": frozenset({"requires"})},
+        aliases={"when": frozenset({("requires", "forward")})},
     )
 
     assert result.cuts[0].link_type is None
@@ -444,7 +444,7 @@ def test_conditional_cut_ignores_a_registered_alias():
 def test_coordination_cut_ignores_a_registered_alias():
     result = seg.segment(
         "The user logs in and receives a token",
-        aliases={"and": frozenset({"proceeds"})},
+        aliases={"and": frozenset({("proceeds", "forward")})},
     )
 
     assert result.cuts[0].link_type is None

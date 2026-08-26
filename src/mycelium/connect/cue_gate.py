@@ -35,6 +35,10 @@ class CueResolution:
     alias: str | None
     score: float | None
     candidates: tuple[tuple[str, str, float], ...]
+    #: How the absorbed cue reads the edge, inherited from the nearest alias
+    #: of the winning type: "forward" (left to right) or "reverse". None when
+    #: nothing was absorbed.
+    direction: str | None = None
 
 
 def _validate_mode(value: str) -> str:
@@ -85,11 +89,18 @@ def resolve_cue(
         return CueResolution(cue, "unresolved", None, None, None, ())
 
     vector = embed_text(carrier_text(cue))
-    ranked = _best_per_type(nearest_aliases(vector, vectors, k=len(vectors)))
+    all_ranked = nearest_aliases(vector, vectors, k=len(vectors))
+    ranked = _best_per_type(all_ranked)
     candidates = tuple(ranked[:k])
     best_type, best_alias, best_score = ranked[0]
     second = ranked[1][2] if len(ranked) > 1 else None
     if best_score < threshold:
+        return CueResolution(cue, "unresolved", None, None, None, candidates)
+
+    direction = _inherited_direction(all_ranked, vectors, best_type, best_score, margin)
+    if direction is None:
+        # The winning type's near aliases disagree on which way the edge
+        # reads; similarity cannot break that tie, so nothing is absorbed.
         return CueResolution(cue, "unresolved", None, None, None, candidates)
 
     decision = (
@@ -104,4 +115,36 @@ def resolve_cue(
         best_alias,
         best_score,
         candidates,
+        direction,
     )
+
+
+def _inherited_direction(
+    ranked: list[tuple[str, str, float]],
+    vectors: Sequence[AliasVector],
+    link_type: str,
+    best_score: float,
+    margin: float,
+) -> str | None:
+    """Read the direction off the winning type's nearest alias.
+
+    Embedding similarity is direction-blind, so the direction is inherited
+    from the lexicon: the nearest same-type alias supplies it, and a same-type
+    rival within the margin that reads the other way makes the inheritance
+    unjustifiable — the caller flags instead.
+    """
+    direction_of = {
+        (vector.link_type, vector.alias): vector.direction for vector in vectors
+    }
+    same_type = [
+        (alias, score)
+        for candidate_type, alias, score in ranked
+        if candidate_type == link_type
+    ]
+    winner = direction_of[(link_type, same_type[0][0])]
+    for alias, score in same_type[1:]:
+        if best_score - score >= margin:
+            break
+        if direction_of[(link_type, alias)] != winner:
+            return None
+    return winner

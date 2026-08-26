@@ -89,6 +89,7 @@ def test_audit_filters_and_orders_aliases(tmp_path, monkeypatch, capsys):
         "alias",
         "provenance",
         "score",
+        "direction",
         "created_at",
         "created_by",
     ]

@@ -115,13 +115,14 @@ def _cut_links(
             continue
         if (left, right) in condition_pairs:
             continue
-        links.append((left, right, cut.link_type))
+        source, target = (right, left) if cut.link_source == "right" else (left, right)
+        links.append((source, target, cut.link_type))
     return links
 
 
 def _cue_candidates(
     segmentation: Segmentation,
-    aliases: Mapping[str, frozenset[str]],
+    aliases: Mapping[str, frozenset[tuple[str, str]]],
     item_position: dict[int, int],
     condition_pairs: set[tuple[int, int]],
 ) -> list[tuple[Cut, str]]:
@@ -173,7 +174,7 @@ def _cue_detail(resolution: CueResolution) -> str:
 
 def _gate_cuts(
     segmentation: Segmentation,
-    aliases: Mapping[str, frozenset[str]],
+    aliases: Mapping[str, frozenset[tuple[str, str]]],
     item_position: dict[int, int],
     condition_links: list[tuple[int, int]],
     resolve: Callable[[str], CueResolution],
@@ -188,14 +189,11 @@ def _gate_cuts(
     for cut, cue in candidates:
         resolution = resolutions[cue]
         if resolution.decision in ABSORBING_DECISIONS:
-            links.append(
-                (
-                    item_position[cut.left],
-                    item_position[cut.right],
-                    resolution.link_type,
-                    cue,
-                )
+            left, right = item_position[cut.left], item_position[cut.right]
+            source, target = (
+                (right, left) if resolution.direction == "reverse" else (left, right)
             )
+            links.append((source, target, resolution.link_type, cue))
             continue
 
         fragment = fragments[cut.left]
@@ -222,7 +220,7 @@ def _gate_cuts(
 def extract(
     text: str,
     *,
-    aliases: Mapping[str, frozenset[str]] | None = None,
+    aliases: Mapping[str, frozenset[tuple[str, str]]] | None = None,
     resolve_cue: Callable[[str], CueResolution] | None = None,
 ) -> Extraction:
     """Extract classified items and explicit flags from raw prose."""

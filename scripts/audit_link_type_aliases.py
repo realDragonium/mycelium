@@ -35,6 +35,7 @@ _COLUMNS = [
     "alias",
     "provenance",
     "score",
+    "direction",
     "created_at",
     "created_by",
 ]

@@ -43,24 +43,25 @@ def test_find_cues_captures_rule_formula_targets():
     by_pattern = {cue.pattern: cue for cue in cues}
 
     assert by_pattern["composes-formula"].cue == "equals"
-    assert by_pattern["composes-formula"].target_text.startswith("the sum of")
+    assert by_pattern["composes-formula"].phrase.startswith("the sum of")
     assert "valued-by-equals" in by_pattern
 
 
-def test_part_of_frame_is_inverted_and_composed_of_is_not():
-    # "X is a part of Y" names the relation from the far side: Y contains X.
+def test_part_of_captures_the_from_slot_and_composed_of_the_to_slot():
+    # "X is a part of Y" names the relation from the far side: Y contains X,
+    # so the captured phrase fills the edge's `from` slot.
     cues = find_cues("The purge schedule is a part of the retention policy", "state")
     part_of = next(cue for cue in cues if cue.pattern == "contains-part-of")
-    assert (part_of.link_type, part_of.inverted, part_of.target_text) == (
+    assert (part_of.link_type, part_of.phrase_role, part_of.phrase) == (
         "contains",
-        True,
+        "from",
         "the retention policy",
     )
 
     # "X is composed of Y" keeps the carrier as the container: X contains Y.
     composed = find_cues("The bundle is composed of three modules", "state")
-    assert [(cue.pattern, cue.inverted) for cue in composed] == [
-        ("contains-composed-of", False)
+    assert [(cue.pattern, cue.phrase_role) for cue in composed] == [
+        ("contains-composed-of", "to")
     ]
 
 
@@ -70,7 +71,7 @@ def test_find_cues_obeys_kind_scope_and_unknown_kind_baseline():
     event_cues = find_cues(text, "event")
 
     match = next(cue for cue in event_cues if cue.pattern == "requires-on-condition")
-    assert match.target_text == "an unrecognized account"
+    assert match.phrase == "an unrecognized account"
     assert "requires-on-condition" not in {
         cue.pattern for cue in find_cues(text, "rule")
     }
@@ -124,7 +125,7 @@ def test_configures_aliases_replace_packaged_cues():
         cue for cue in tuned if cue.pattern == "configures-capability"
     )
     assert tuned_capability.cue == "can be tuned on"
-    assert tuned_capability.target_text == "a job profile"
+    assert tuned_capability.phrase == "a job profile"
     assert any(cue.pattern == "configures-capability" for cue in configured)
     assert not any(cue.pattern == "configures-capability" for cue in toggled)
 
@@ -146,7 +147,7 @@ def test_link_type_alias_fires_in_each_templated_frame():
     limits_match = next(cue for cue in limits if cue.pattern == "restricts-limits")
     state_match = next(cue for cue in state if cue.pattern == "restricts-state")
     assert limits_match.cue == "throttles"
-    assert limits_match.target_text == "nightly syncs"
+    assert limits_match.phrase == "nightly syncs"
     assert state_match.cue == "is quarantined"
 
 

@@ -50,6 +50,9 @@ class Cut:
     left: int
     right: int
     link_type: str | None = None
+    #: Which fragment is the typed edge's source. A forward-reading alias
+    #: ("and then") links left to right; a far-side alias links right to left.
+    link_source: str = "left"
 
 
 @dataclass(frozen=True)
@@ -822,12 +825,17 @@ def connective_cue(connective: str) -> str:
 
 
 def _connective_link_type(
-    connective: str, aliases: Mapping[str, frozenset[str]]
-) -> str | None:
-    """Resolve a normalized connective only when one link type carries it."""
-    link_types = aliases.get(connective_cue(connective), frozenset())
-    # An alias carried by multiple types is real ambiguity, not grounds to guess.
-    return next(iter(link_types)) if len(link_types) == 1 else None
+    connective: str, aliases: Mapping[str, frozenset[tuple[str, str]]]
+) -> tuple[str, str] | None:
+    """Resolve a normalized connective only when one link type carries it.
+
+    Returns the (link type, direction) pair; an alias carried by multiple
+    types is real ambiguity, not grounds to guess.
+    """
+    pairs = aliases.get(connective_cue(connective), frozenset())
+    if len({link_type for link_type, _direction in pairs}) != 1:
+        return None
+    return next(iter(pairs))
 
 
 #: Cut kinds whose connective is never a left→right relation, whatever alias a
@@ -838,9 +846,9 @@ UNTYPED_CUT_KINDS = frozenset({"conditional", "coordination"})
 
 
 def _cut_link_type(
-    cut: _PendingCut, aliases: Mapping[str, frozenset[str]]
-) -> str | None:
-    """Resolve a cut's connective to the one link type its aliases name."""
+    cut: _PendingCut, aliases: Mapping[str, frozenset[tuple[str, str]]]
+) -> tuple[str, str] | None:
+    """Resolve a cut's connective to the one typed pair its aliases name."""
     if cut.kind in UNTYPED_CUT_KINDS:
         return None
     return _connective_link_type(cut.connective, aliases)
@@ -849,22 +857,27 @@ def _cut_link_type(
 def _resolve_cuts(
     pending: list[_PendingCut],
     indices: dict[int, int],
-    aliases: Mapping[str, frozenset[str]] | None,
+    aliases: Mapping[str, frozenset[tuple[str, str]]] | None,
 ) -> list[Cut]:
     """Resolve surviving pending cut references to public fragment indices."""
     aliases = aliases or {}
-    cuts = [
-        Cut(
-            item.kind,
-            item.connective,
-            item.span,
-            indices[id(item.left)],
-            indices[id(item.right)],
-            _cut_link_type(item, aliases),
+    cuts = []
+    for item in pending:
+        if id(item.left) not in indices or id(item.right) not in indices:
+            continue
+        typed = _cut_link_type(item, aliases)
+        link_type, direction = typed if typed else (None, "forward")
+        cuts.append(
+            Cut(
+                item.kind,
+                item.connective,
+                item.span,
+                indices[id(item.left)],
+                indices[id(item.right)],
+                link_type,
+                "right" if direction == "reverse" else "left",
+            )
         )
-        for item in pending
-        if id(item.left) in indices and id(item.right) in indices
-    ]
     return sorted(cuts, key=lambda item: item.span)
 
 
@@ -883,7 +896,7 @@ def _resolve_proposals(
 
 
 def segment(
-    text: str, *, aliases: Mapping[str, frozenset[str]] | None = None
+    text: str, *, aliases: Mapping[str, frozenset[tuple[str, str]]] | None = None
 ) -> Segmentation:
     """Segment raw text into atomic claims, conditions, cuts, and proposals.
 

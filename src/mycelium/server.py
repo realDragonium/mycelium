@@ -3119,21 +3119,22 @@ def _proposal_nli(proposal: Proposal) -> dict[str, Any] | None:
 
 
 def _connected_link(proposal: Proposal) -> dict[str, Any]:
-    """Render a rule link proposal for the tool response."""
+    """Render a rule link proposal for the tool response.
+
+    `source` and `target` are the edge's endpoints as refs ("@N" or an
+    existing statement id); the cue carrier is whichever of them is
+    `@batch_index`. The frame's words decided that geometry.
+    """
     provenance = proposal.provenance
-    rendered = {
+    return {
         "batch_index": proposal.new_index,
+        "source": proposal.source,
         "target": proposal.target,
         "link_type": proposal.link_type,
         "cue": provenance["cue"],
         "pattern": provenance["pattern"],
         "score": provenance["score"],
     }
-    # Marked only when the edge runs target -> new statement, so existing
-    # consumers keep reading the plain shape as source -> target.
-    if proposal.inverted:
-        rendered["inverted"] = True
-    return rendered
 
 
 def _connected_merge(
@@ -3375,9 +3376,9 @@ def submit_connected_batch(
     Three things get proposed. **Typed links**, where an explicit relational
     cue in your own text resolves to a sibling in this batch or to an
     existing statement and the two kinds admit that link type. The cue also
-    decides the direction: a frame that names the relation from the far side
-    ("X is a part of Y") proposes the edge running from the resolved target to
-    the new statement, marked `"inverted": true` in `links`. **Merge
+    decides the direction: each `links` entry carries explicit `source` and
+    `target` refs, so "X is a part of Y" proposes the resolved container as
+    the edge's source and the new statement as its target. **Merge
     candidates**, from embedding similarity — turned into a real verdict by
     bidirectional entailment when the `nli` extra is installed. **Contradiction
     flags**, filed as knowledge gaps, where your text and an existing
@@ -3425,10 +3426,9 @@ def submit_connected_batch(
           ],
           "proposals": {"links": 0, "merges": 0, "conflicts": 0},
           "links": [
-            {"batch_index": 0, "target": "@1" | "stm_...",
-             "link_type": "...", "cue": "...", "pattern": "...",
-             "score": 0.0,
-             "inverted": true}  # only when the edge runs target -> batch_index
+            {"batch_index": 0, "source": "@0" | "stm_...",
+             "target": "@1" | "stm_...", "link_type": "...",
+             "cue": "...", "pattern": "...", "score": 0.0}
           ],
           "merges": [
             {"batch_index": 0, "into": "stm_...", "into_text": "...",
@@ -3610,7 +3610,9 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
 
     A conditional opener proposes a `requires` link from the claim to the
     condition. A cut whose connective is a registered alias of exactly one link
-    type also proposes that link, left to right; nothing else is inferred. This
+    type also proposes that link, oriented by the alias's registered direction
+    (forward reads left to right; a far-side phrasing like "is part of" reads
+    the other way); nothing else is inferred. This
     uses no LLM, does not rewrite your words, and never guesses kinds. For input
     too messy for these rules, extract statements yourself (or with the `ingest`
     tool) and call `submit_connected_batch`.
@@ -5245,6 +5247,7 @@ def upsert_link_type_alias(
     alias: str,
     provenance: str = "curator",
     score: float | None = None,
+    direction: str = "forward",
 ) -> dict[str, Any]:
     """Create or update a cue-matcher phrasing for a canonical link type.
 
@@ -5253,6 +5256,10 @@ def upsert_link_type_alias(
     registered under more than one type. An alias ambiguous that way is not
     resolved by the segmenter.
 
+    `direction` says how the phrasing reads the edge: `forward` runs it left
+    to right off the alias ("A contains B"), `reverse` names the relation
+    from the far side ("A is part of B" puts B on the edge's source side).
+
     The alias set records where a phrasing came from: `curator` for a
     hand-authored one, or `auto`/`auto:low-confidence` with the deciding cosine
     for one the ingest gate absorbed; a later curator write overwrites both
@@ -5260,8 +5267,8 @@ def upsert_link_type_alias(
 
     Embedding runs in the background, so `list_link_type_aliases` may briefly
     show `embedded: false`. Returns
-    `{link_type, alias, provenance, score, created}` with the normalized alias
-    and whether this call created it.
+    `{link_type, alias, provenance, score, direction, created}` with the
+    normalized alias and whether this call created it.
     """
     if not link_type or not link_type.strip():
         raise ValueError("link_type cannot be empty")
@@ -5277,6 +5284,10 @@ def upsert_link_type_alias(
     # provenance tag exists for.
     if provenance in ABSORBING_DECISIONS and score is None:
         raise ValueError(f"provenance {provenance!r} requires a score")
+    if direction not in store.DIRECTIONS:
+        raise ValueError(
+            f"direction must be one of {', '.join(store.DIRECTIONS)}: {direction!r}"
+        )
     normalized = store.normalize_alias(alias)
     with store.transaction(_db()):
         created = store.upsert_link_type_alias(
@@ -5285,6 +5296,7 @@ def upsert_link_type_alias(
             normalized,
             provenance=provenance,
             score=score,
+            direction=direction,
         )
 
     from . import alias_worker  # local import: avoid loading worker machinery eagerly
@@ -5295,6 +5307,7 @@ def upsert_link_type_alias(
         "alias": normalized,
         "provenance": provenance,
         "score": score,
+        "direction": direction,
         "created": created,
     }
 
@@ -5321,8 +5334,8 @@ def list_link_type_aliases(
 
     Reach for this to inspect accepted vocabulary and whether its background
     embedding is ready. Returns
-    `[{link_type, alias, provenance, score, embedded}]`; hand-authored and
-    seeded aliases have `score: null`.
+    `[{link_type, alias, provenance, score, direction, embedded}]`;
+    hand-authored and seeded aliases have `score: null`.
     """
     return [
         {
@@ -5330,6 +5343,7 @@ def list_link_type_aliases(
             "alias": row["alias"],
             "provenance": row["provenance"],
             "score": row["score"],
+            "direction": row["direction"],
             "embedded": bool(row["embedded"]),
         }
         for row in store.list_link_type_aliases(_db(), link_type)
