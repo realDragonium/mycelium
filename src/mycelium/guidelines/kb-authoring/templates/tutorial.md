@@ -64,5 +64,9 @@ You just {recap the outcome in plain language}. That's the core loop — everyth
 
 ## What's next
 
+<!-- Link only articles that exist. If none do, delete this whole section:
+a link whose path is still a placeholder points nowhere, and an empty
+section is worse than no section. -->
+
 - [How to {related task}]({path}) — when you're ready to {scenario}
 - [How {concept} works]({path}) — if you want to understand what just happened
