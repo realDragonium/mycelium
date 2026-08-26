@@ -833,7 +833,10 @@ def _connective_link_type(
     types is real ambiguity, not grounds to guess.
     """
     pairs = aliases.get(connective_cue(connective), frozenset())
-    if len({link_type for link_type, _direction in pairs}) != 1:
+    # More than one pair is real ambiguity either way: several types, or one
+    # type claimed in both directions by a hand-built mapping (the store's
+    # primary key makes that impossible, but this layer takes any Mapping).
+    if len(pairs) != 1:
         return None
     return next(iter(pairs))
 

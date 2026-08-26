@@ -142,8 +142,10 @@ def test_migration_v9_backfills_legacy_alias_tables():
         "INSERT INTO link_type_aliases (link_type, alias, provenance) "
         "VALUES ('requires', 'is required for', 'curator')"
     )
+    # "is one of" was deliberately deleted by a curator on this DB: the
+    # migration must not resurrect it.
     conn.execute(
-        "INSERT INTO link_type_aliases (link_type, alias) VALUES ('cases', 'is one of')"
+        "INSERT INTO link_type_aliases (link_type, alias) VALUES ('cases', 'either')"
     )
 
     migrations._migration_v9_alias_direction(conn)
@@ -155,7 +157,7 @@ def test_migration_v9_backfills_legacy_alias_tables():
         )
     }
     assert rows[("requires", "is required for")] == "reverse"
-    assert rows[("cases", "is one of")] == "reverse"
+    assert ("cases", "is one of") not in rows
     # The alias the old seed lacked is inserted with an embedding job, since
     # seeding never runs again on a non-empty table.
     assert rows[("contains", "is part of")] == "reverse"

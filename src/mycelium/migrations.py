@@ -636,6 +636,9 @@ def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
 
     from mycelium.store.link_type_aliases import _REVERSE_SEED, _now
 
+    # The one reverse alias the pre-v9 seed never carried; an absent row for
+    # any other pair means a curator deleted it, which stands.
+    new_in_v9 = {("contains", "is part of")}
     now = _now()
     for link_type, alias in sorted(_REVERSE_SEED):
         updated = conn.execute(
@@ -643,7 +646,7 @@ def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
             "WHERE link_type = ? AND alias = ?",
             (link_type, alias),
         ).rowcount
-        if updated:
+        if updated or (link_type, alias) not in new_in_v9:
             continue
         conn.execute(
             "INSERT INTO link_type_aliases "
