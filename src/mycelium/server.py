@@ -4213,7 +4213,8 @@ def _split_edges(
         elif fk == "entity" and tk == "entity":
             raise ValueError(
                 f"entity↔entity edge {link['from_id']!r} → {link['to_id']!r} is not "
-                "supported by add_links/remove_links; use add_entity_links instead"
+                "supported by add_links/remove_links; use "
+                "add_entity_links/remove_entity_links instead"
             )
         else:
             raise ValueError(

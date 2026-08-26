@@ -544,7 +544,7 @@ def test_remove_links_rejects_entity_endpoint():
 
 
 def test_add_links_rejects_entity_to_entity_edge_with_tool_pointer():
-    with pytest.raises(ValueError, match="use add_entity_links instead"):
+    with pytest.raises(ValueError, match="use add_entity_links/remove_entity_links"):
         server.add_links(
             links=[
                 {

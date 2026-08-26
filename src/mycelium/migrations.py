@@ -631,6 +631,11 @@ def _migration_v9_drop_entity_statement_links(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TRIGGER IF EXISTS statement_links_delete_cascade_when")
 
     if has_link_kind:
+        # The pragma is a no-op inside a transaction, and the deletes above
+        # opened one — commit first, as `_v6_rebuild_names_nocase` does. Safe:
+        # if the rebuild then fails, `user_version` is still 8 and re-running
+        # v9 finds nothing left to delete and retries the rebuild.
+        conn.commit()
         conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute("DROP TABLE IF EXISTS when_nodes_new")
         try:
@@ -661,6 +666,12 @@ def _migration_v9_drop_entity_statement_links(conn: sqlite3.Connection) -> None:
                 "CREATE INDEX IF NOT EXISTS when_nodes_statement_id "
                 "ON when_nodes (statement_id)"
             )
+            # Commit again before re-enabling enforcement, or that pragma
+            # is swallowed by the rebuild's open transaction too.
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
         finally:
             conn.execute("PRAGMA foreign_keys = ON")
 

@@ -288,14 +288,15 @@ frontier of `when` leaves) should batch them in a single call rather
 than loop. A single lookup is just `get_statements([id])`.
 
 Returns `{statements: [{id, kind, text, mentions, links,
-incoming_links, when_references}, ...]}` in the same order
+incoming_links, when_references}, ...], missing}` in the same order
 as the input ids, where `mentions` is `[{name_id, name, entity_id}]`,
 `links` is the outgoing edges this statement owns, and `incoming_links`
 is `[{from_id, link_type}]` listing every statement that points at this
-one. Raises ValueError if `ids` is empty or if any id is unknown (no
-partial results). Used by callers that already have ids in hand (from a
-search hit's links field, an entity mention chain, etc.) and want the
-full hydrated records.
+one. Unknown ids don't raise — they are listed in `missing` and the
+known ones still hydrate; an empty `ids` just returns empty lists. Used
+by callers that already have ids in hand (from a search hit's links
+field, an entity mention chain, etc.) and want the full hydrated
+records.
 
 ### get_entity
 
