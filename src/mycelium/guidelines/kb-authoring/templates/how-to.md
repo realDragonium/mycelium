@@ -44,9 +44,17 @@ Reader knows what they want and has basic competence. Get them there.
 
 ## Troubleshooting
 
+<!-- Link only articles that exist. If none do, delete this whole section:
+a link whose path is still a placeholder points nowhere, and an empty
+section is worse than no section. -->
+
 If you hit issues, see [Troubleshooting: {topic}]({path}).
 
 ## Related
+
+<!-- Link only articles that exist. If none do, delete this whole section:
+a link whose path is still a placeholder points nowhere, and an empty
+section is worse than no section. -->
 
 - [Reference: {settings/fields used}]({path})
 - [How {concept} works]({path})

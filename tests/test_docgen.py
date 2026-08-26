@@ -1292,6 +1292,48 @@ def test_a_finding_that_names_nothing_is_treated_as_a_bare_fail(kb_set, blank):
     ] == []
 
 
+def test_a_finding_rejects_the_document_whatever_the_label_says(kb_set):
+    """A reviewer that reasons in the findings list throws the document away.
+
+    The label is not the verdict: a check carrying real findings fails even when
+    the reviewer marked it a pass. That coupling is what the review protocol
+    warns about, so it is pinned here. A reviewer noting what it examined and
+    accepted spends the run exactly as a real defect would.
+    """
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(
+                status="pass",
+                findings=[
+                    {
+                        "where": "SCIM deprovisioning",
+                        "problem": "The document abstracts this correctly. No finding on this point.",
+                    }
+                ],
+            ),
+            _emit(),
+            _review_fail(
+                status="pass",
+                findings=[
+                    {
+                        "where": "SCIM deprovisioning",
+                        "problem": "The document abstracts this correctly. No finding on this point.",
+                    }
+                ],
+            ),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, NothingWritten)
+    assert result.review.conformance.status == "fail"
+    # The retry fired and the second review rejected too, so this covers the
+    # path that actually spends the run rather than a first-round refusal.
+    assert result.review.attempts == 2
+
+
 def test_a_pass_carrying_only_blank_findings_stays_a_pass(kb_set):
     """Blank findings are not evidence, so they cannot flip a pass to a fail
     the way real findings do."""

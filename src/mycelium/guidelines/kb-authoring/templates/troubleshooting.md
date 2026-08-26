@@ -70,5 +70,9 @@ Still seeing the issue? Find your symptom below.
 
 ## Related
 
+<!-- Link only articles that exist. If none do, delete this whole section:
+a link whose path is still a placeholder points nowhere, and an empty
+section is worse than no section. -->
+
 - [How to {related task}]({path})
 - [How {concept} works]({path})

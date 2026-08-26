@@ -52,5 +52,9 @@ Dry, accurate, complete, structured. Optimize for lookup, not reading.
 
 ## Related
 
+<!-- Link only articles that exist. If none do, delete this whole section:
+a link whose path is still a placeholder points nowhere, and an empty
+section is worse than no section. -->
+
 - [How to configure {area}]({path})
 - [How {concept} works]({path})

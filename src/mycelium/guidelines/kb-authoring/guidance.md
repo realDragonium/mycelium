@@ -119,9 +119,20 @@ Rules that apply to all types when filling in the template:
   "simply", no "just", no fake enthusiasm.
 - **One doc = one type.** If writing tempts you to mix steps with conceptual explanation,
   split and link.
-- **Frontmatter** — fill all fields; do not leave placeholders in the final output.
+- **Frontmatter** — fill every field you have a source for, and never leave a
+  placeholder in the final output. Two fields have no source in the substrate;
+  both are covered below.
 - **last_updated** — use today's date (YYYY-MM-DD format).
-- **related** — populate with slugs/paths to docs that pair well with this one.
+- **owner** — leave it blank. Ownership is who is accountable for keeping the
+  page current, which is a fact about the team rather than about the product, so
+  the substrate does not hold it and you cannot know it. A human fills it when
+  the page is adopted. Never guess a team or a person: a name here reads as
+  though someone agreed to maintain this, and nobody has.
+- **related** — list slugs/paths to docs that pair well with this one, and leave
+  it `[]` when there are none yet. The cross-link sections in the body follow the
+  same rule: link real articles, and delete the section when there are none. A
+  link whose path is still `{path}` points nowhere, and a section saying no
+  articles exist is not a section.
 - **Remove HTML comments** (`<!-- … -->`) before saving — they are authoring notes, not
   reader content.
 
@@ -142,7 +153,8 @@ Rules that apply to all types when filling in the template:
 - [ ] Template type matches what the reader actually needs right now
 - [ ] Every non-trivial fact traces to a substrate statement or carries a confidence marker
 - [ ] No placeholder text (`{…}`) left in the saved file
-- [ ] Frontmatter is fully populated (`title`, `type`, `audience`, `last_updated`, `owner`, `related`)
+- [ ] Frontmatter carries every field with a source (`title`, `type`, `audience`, `last_updated`), `related` lists only articles that exist, and `owner` is blank
+- [ ] Cross-link sections either link real articles or are deleted
 - [ ] Tone: second person, active voice, no "simply" / "just"
 - [ ] Tutorial/how-to: one action per numbered step
 - [ ] Reference: tables used for structured data; prose only in `Notes` and section preambles

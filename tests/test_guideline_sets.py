@@ -252,6 +252,40 @@ def test_stored_guidance_addresses_a_run_that_has_only_the_store():
     assert "Use this skill" not in guidance
 
 
+def test_every_cross_link_section_may_be_deleted():
+    """A section that links other articles is optional, and says so.
+
+    A run writing the first document into an empty knowledge base has nothing
+    to link to. Left mandatory, such a section can only be satisfied by a link
+    whose path is still a placeholder, which the same guidance forbids, so the
+    document cannot pass however it is written. Every `{path}` in a template
+    therefore sits under a heading the writer is told it may delete.
+    """
+    seed = _seed_script()
+    conn = _conn()
+    seed.seed(conn, guidelines.read_rows())
+
+    non_types = {guidelines.row_name(slot) for slot in guidelines.NON_TYPE_SLOTS}
+    templates = [
+        r
+        for r in prompt_store.list_current(conn, "guideline-set")
+        if r["name"] not in non_types
+    ]
+    assert templates, "no template rows were seeded"
+
+    for row in templates:
+        text = prompt_store.latest_text(conn, "guideline-set", row["name"])
+        sections = re.split(r"^## ", text, flags=re.M)[1:]
+        for section in sections:
+            if "{path}" not in section:
+                continue
+            heading = section.splitlines()[0].strip()
+            assert "delete this whole section" in section, (
+                f"{row['name']} section {heading!r} links other articles "
+                "but does not tell the writer it may be deleted"
+            )
+
+
 def test_reseeding_unchanged_sources_appends_nothing():
     """The append-only store makes this the whole idempotency story: the
     seed compares against the latest version and writes no second one."""

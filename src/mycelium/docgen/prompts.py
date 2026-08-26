@@ -144,8 +144,16 @@ Every finding names WHERE — a section heading or a quoted phrase — and WHAT 
 failed. A finding the writer cannot locate cannot be fixed. Fail only on \
 something you can point at; unease is not a finding.
 
-Report no findings on a check that passes. Passing a document you have doubts \
-about is a decision; padding the findings list to look diligent sends a \
+THE FINDINGS LIST IS NOT A NOTEPAD. Anything you put in it rejects this \
+document, whatever status you set alongside it: findings are the evidence and \
+the label is not, so a check carrying findings fails. Write a finding ONLY for \
+something that must change. Never record what you examined and accepted, why a \
+borderline case is acceptable, or that a check turned up nothing — a line \
+saying "this passes" or "no finding on this point" throws the document away as \
+surely as a real defect does.
+
+A check with nothing to fix reports zero findings. Passing a document you have \
+doubts about is a decision; padding the findings list to look diligent sends a \
 correct document back for no reason and spends the run's one retry.
 
 Call `record_review` exactly once."""
