@@ -1292,6 +1292,41 @@ def test_a_finding_that_names_nothing_is_treated_as_a_bare_fail(kb_set, blank):
     ] == []
 
 
+def test_a_refused_draft_survives_on_the_result(kb_set):
+    """The reviewer refusing a document is not a reason to destroy it.
+
+    Nothing publishes a stored document by itself, so refusing to keep the text
+    prevents no exposure and leaves findings quoting a document nobody can read.
+    The draft travels with the refusal so a person can judge it and fix it.
+    """
+    client = FakeAnthropic(
+        [
+            _emit(),
+            _review_fail(findings=[{"where": "Steps", "problem": "names Auth0"}]),
+            _emit(),
+            _review_fail(findings=[{"where": "Steps", "problem": "names Auth0"}]),
+        ]
+    )
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, NothingWritten)
+    assert result.title == "Configuring single sign-on"
+    assert result.body == "# Configuring single sign-on\n\nDo the thing.\n"
+
+
+def test_a_run_that_wrote_nothing_carries_no_draft(kb_set):
+    """A refusal before any document exists has no text to keep, and the shape
+    must not imply otherwise."""
+    client = FakeAnthropic([_emit(statement_ids=[])])
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, NothingWritten)
+    assert result.title is None
+    assert result.body is None
+
+
 def test_a_finding_rejects_the_document_whatever_the_label_says(kb_set):
     """A reviewer that reasons in the findings list throws the document away.
 

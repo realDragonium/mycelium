@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from mycelium import docs_store, drafts_store, server
+from mycelium import auth, docs_store, drafts_store, server
 from mycelium.ask.substrate import InProcessSubstrate
 
 
@@ -1224,3 +1224,70 @@ def test_documentation_tools_round_trip_rows_and_missing_ids(
         match="generated document not found: gdc_missing",
     ):
         server.get_generated_document("gdc_missing")
+
+
+def test_a_refused_draft_is_kept_on_its_run_and_out_of_the_listing(tmp_path):
+    """The draft belongs to the attempt, not to the document registry.
+
+    Reading it needs the run by id. The listing shape stays body-less for the
+    reason the document listing does: a refused draft runs to kilobytes and a
+    caller listing runs wants to know what happened, not to be handed every
+    document that was ever turned down.
+    """
+    conn = _conn(tmp_path)
+    run_id = docs_store.create_run(conn, prompt="sso", created_by="u1")
+    docs_store.mark_started(conn, run_id)
+    docs_store.finish_run(
+        conn,
+        run_id,
+        outcome="nothing_written",
+        error="the document failed review: exposure: Steps - names Auth0",
+        draft_title="Configuring single sign-on",
+        draft_body="# Configuring single sign-on\n\nProvision an Auth0 organization.\n",
+    )
+
+    detail = docs_store.serialize_run_detail(docs_store.get_run(conn, run_id))
+    assert detail["draft_title"] == "Configuring single sign-on"
+    assert "Auth0" in detail["draft_body"]
+
+    listed = docs_store.serialize_run(docs_store.get_run(conn, run_id))
+    assert "draft_body" not in listed
+    assert listed["draft_chars"] == len(detail["draft_body"])
+
+    assert docs_store.list_documents(conn) == []
+
+
+def test_a_run_with_no_draft_reports_none(tmp_path):
+    """A refusal with no document written has no text, and says so rather than
+    reporting an empty one."""
+    conn = _conn(tmp_path)
+    run_id = docs_store.create_run(conn, prompt="sso", created_by="u1")
+    docs_store.mark_started(conn, run_id)
+    docs_store.finish_run(conn, run_id, outcome="nothing_written", error="no ids")
+
+    detail = docs_store.serialize_run_detail(docs_store.get_run(conn, run_id))
+    assert detail["draft_title"] is None
+    assert detail["draft_body"] is None
+    assert (
+        docs_store.serialize_run(docs_store.get_run(conn, run_id))["draft_chars"] == 0
+    )
+
+
+def test_a_refused_draft_is_gated_exactly_where_its_source_material_is():
+    """The floor under a refused draft, and why it sits no higher.
+
+    A draft is a recombination of substrate statements, so gating it above
+    `get_statements` would protect nothing: the same caller can read every
+    statement the draft was built from, and every document that passed review.
+    What must hold is that the role below reader cannot reach one.
+    """
+    required = auth.required_role_for("get_documentation_run")
+    assert required == auth.required_role_for("get_statements")
+    assert required == auth.required_role_for("get_generated_document")
+
+    assert not auth.principal_satisfies(
+        auth.Principal(id="t", name="t", role="asker", type="human"), required
+    )
+    assert auth.principal_satisfies(
+        auth.Principal(id="t", name="t", role="reader", type="human"), required
+    )

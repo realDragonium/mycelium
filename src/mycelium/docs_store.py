@@ -53,7 +53,9 @@ CREATE TABLE IF NOT EXISTS documentation_runs (
     finished_at   TEXT,
     outcome       TEXT CHECK (outcome IN ('document_written', 'nothing_written', 'failed')),
     document_id   TEXT,
-    error         TEXT
+    error         TEXT,
+    draft_title   TEXT,
+    draft_body    TEXT
 );
 CREATE INDEX IF NOT EXISTS documentation_runs_created ON documentation_runs (created_at);
 CREATE INDEX IF NOT EXISTS documentation_runs_active ON documentation_runs (started_at) WHERE finished_at IS NULL;
@@ -96,9 +98,26 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DOCUMENTATION_RUNS_SCHEMA)
     conn.executescript(GENERATED_DOCUMENTS_SCHEMA)
+    _add_refused_draft_columns(conn)
     _add_generated_document_review(conn)
     _rekey_generated_documents(conn)
     conn.commit()
+
+
+def _add_refused_draft_columns(conn: sqlite3.Connection) -> None:
+    """Add the refused-draft columns to a DB created before they existed.
+
+    The schema script only runs CREATE TABLE IF NOT EXISTS, so an existing
+    drafts DB keeps its old column set. Runs finished before the upgrade read
+    as having no draft, which is what they are: their text was discarded and
+    cannot be recovered.
+    """
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    for column in ("draft_title", "draft_body"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE documentation_runs ADD COLUMN {column} TEXT")
 
 
 def _add_generated_document_review(conn: sqlite3.Connection) -> None:
@@ -305,14 +324,23 @@ def finish_run(
     outcome: str,
     document_id: str | None = None,
     error: str | None = None,
+    draft_title: str | None = None,
+    draft_body: str | None = None,
 ) -> None:
+    """Close a run, keeping the text of a draft the review gate turned down.
+
+    The draft lands here rather than in `generated_documents` because it is a
+    record of the attempt, not a document. Nothing that serves documents to a
+    reader can reach it, which is what makes keeping refused text safe.
+    """
     if outcome not in OUTCOMES:
         raise ValueError(f"invalid outcome: {outcome}")
     conn.execute(
         "UPDATE documentation_runs "
-        "SET finished_at = ?, outcome = ?, document_id = ?, error = ? "
+        "SET finished_at = ?, outcome = ?, document_id = ?, error = ?, "
+        "draft_title = ?, draft_body = ? "
         "WHERE id = ? AND finished_at IS NULL",
-        (_now(), outcome, document_id, error, run_id),
+        (_now(), outcome, document_id, error, draft_title, draft_body, run_id),
     )
     conn.commit()
 
@@ -387,6 +415,29 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "document_id": row["document_id"],
         "document_superseded": _document_superseded(row),
         "error": row["error"],
+        "draft_chars": len(row["draft_body"] or ""),
+    }
+
+
+def serialize_run_detail(row: sqlite3.Row) -> dict:
+    """The listing shape plus the refused draft itself.
+
+    Split from `serialize_run` for the reason the document shapes are split: a
+    draft runs to kilobytes, and a caller listing runs wants to know what
+    happened rather than to receive every document that was turned down.
+
+    A refused draft holds the exposure violation that refused it, so gating it
+    above a reader looks prudent and protects nothing. The draft is built from
+    substrate statements, and `get_statements` is a reader tool; documents that
+    passed review are reader-visible too. The exposure boundary is what may be
+    published outside, not what a reader of this instance may see, and raising
+    the gate here would put refused text further out of reach than both the
+    statements it came from and the documents that passed.
+    """
+    return {
+        **serialize_run(row),
+        "draft_title": row["draft_title"],
+        "draft_body": row["draft_body"],
     }
 
 

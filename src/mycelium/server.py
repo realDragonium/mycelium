@@ -2237,6 +2237,9 @@ def list_documentation_runs() -> dict[str, Any]:
     stored `outcome` remains `document_written`; the matching
     `document_superseded` boolean stays as explanatory detail.
 
+    Each row carries `draft_chars` rather than the draft itself; fetch one run
+    with get_documentation_run to read the text a refused run wrote.
+
     Returns {"runs": [run rows]}."""
     from . import docs_store
 
@@ -2255,13 +2258,17 @@ def get_documentation_run(run_id: str) -> dict[str, Any]:
     while its stored outcome remains `document_written`; the boolean stays as
     explanatory detail.
 
+    A run the review gate turned down carries the draft it refused, as
+    `draft_title` and `draft_body`, so the findings can be read against the
+    text they quote. Both are null when no document was written.
+
     Returns the serialized run row. Raises for an unknown run_id."""
     from . import docs_store
 
     row = docs_store.get_run(_drafts_db(), run_id)
     if row is None:
         raise ValueError(f"documentation run not found: {run_id}")
-    return docs_store.serialize_run(row)
+    return docs_store.serialize_run_detail(row)
 
 
 @tool
