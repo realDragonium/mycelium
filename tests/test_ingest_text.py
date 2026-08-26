@@ -357,6 +357,7 @@ def test_auto_absorption_rides_draft_without_teaching_store(tmp_path, monkeypatc
             "auto": 1,
             "low_confidence": 0,
             "unresolved": 0,
+            "direction_conflict": 0,
             "strict": 0,
         }
         resolution = response["cue_resolutions"][0]
@@ -461,6 +462,7 @@ def test_strict_mode_flags_without_embedding_or_alias_op(tmp_path, monkeypatch):
             "auto": 0,
             "low_confidence": 0,
             "unresolved": 0,
+            "direction_conflict": 0,
             "strict": 1,
         }
 

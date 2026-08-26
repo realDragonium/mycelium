@@ -124,7 +124,7 @@ def test_direction_conflict_inside_margin_stays_unresolved(monkeypatch):
         embed_text=_fake_embed({carrier_text("belongs to"): _vec(1.0, 0.0, 0.0)}),
     )
 
-    assert result.decision == "unresolved"
+    assert result.decision == "direction-conflict"
     assert result.link_type is None
     assert result.direction is None
 

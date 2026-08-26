@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 
 import numpy as np
@@ -118,6 +119,83 @@ def test_list_aliases_filters_and_exposes_embedding_state(fresh_conn):
     assert rows
     assert {row["link_type"] for row in rows} == {"proceeds"}
     assert all(row["embedded"] == 0 for row in rows)
+
+
+def test_migration_v9_backfills_legacy_alias_tables():
+    """A v8 table gets the column, every reverse flip, and the missing alias."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE link_type_aliases (
+            link_type TEXT NOT NULL, alias TEXT NOT NULL, embedding BLOB,
+            provenance TEXT NOT NULL DEFAULT 'seed', score REAL,
+            created_at TEXT, created_by TEXT, PRIMARY KEY (link_type, alias));
+        CREATE TABLE link_type_alias_embed_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, link_type TEXT NOT NULL,
+            alias TEXT NOT NULL, enqueued_at TEXT, claimed_at TEXT);
+        """
+    )
+    # A curator once re-upserted this seed row: provenance is no longer
+    # 'seed', but no direction on v8 was ever a curator's choice.
+    conn.execute(
+        "INSERT INTO link_type_aliases (link_type, alias, provenance) "
+        "VALUES ('requires', 'is required for', 'curator')"
+    )
+    conn.execute(
+        "INSERT INTO link_type_aliases (link_type, alias) VALUES ('cases', 'is one of')"
+    )
+
+    migrations._migration_v9_alias_direction(conn)
+
+    rows = {
+        (row["link_type"], row["alias"]): row["direction"]
+        for row in conn.execute(
+            "SELECT link_type, alias, direction FROM link_type_aliases"
+        )
+    }
+    assert rows[("requires", "is required for")] == "reverse"
+    assert rows[("cases", "is one of")] == "reverse"
+    # The alias the old seed lacked is inserted with an embedding job, since
+    # seeding never runs again on a non-empty table.
+    assert rows[("contains", "is part of")] == "reverse"
+    queued = conn.execute(
+        "SELECT link_type, alias FROM link_type_alias_embed_queue"
+    ).fetchall()
+    assert [(row["link_type"], row["alias"]) for row in queued] == [
+        ("contains", "is part of")
+    ]
+
+
+def test_migration_v9_leaves_an_unseeded_table_for_seeding():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE link_type_aliases (
+            link_type TEXT NOT NULL, alias TEXT NOT NULL, embedding BLOB,
+            provenance TEXT NOT NULL DEFAULT 'seed', score REAL,
+            created_at TEXT, created_by TEXT, PRIMARY KEY (link_type, alias));
+        """
+    )
+
+    migrations._migration_v9_alias_direction(conn)
+
+    # Inserting into an empty table would stop seed_link_type_aliases from
+    # ever running, leaving a one-alias vocabulary.
+    assert conn.execute("SELECT COUNT(*) FROM link_type_aliases").fetchone()[0] == 0
+
+
+def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
+    store.upsert_link_type_alias(
+        fresh_conn, "contains", "belongs to", direction="reverse"
+    )
+
+    grouped = store.aliases_by_type(fresh_conn)
+
+    assert "belongs to" not in grouped.get("contains", ())
+    assert "is part of" not in grouped.get("contains", ())
+    assert "includes" in grouped["contains"]
 
 
 def test_migrate_sets_alias_schema_version(fresh_conn):

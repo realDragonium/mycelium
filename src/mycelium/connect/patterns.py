@@ -11,6 +11,9 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
+
+PhraseRole = Literal["from", "to"]
 
 
 @dataclass(frozen=True)
@@ -30,8 +33,17 @@ class Pattern:
     template: str | None = None
     default_cues: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        # Both factories funnel through here, so a template with a stale or
+        # typo'd group name fails at import instead of silently never firing.
+        groups = self.regex.groupindex
+        if "cue" not in groups or ("from" in groups) == ("to" in groups):
+            raise ValueError(
+                f"pattern {self.name} must capture `cue` and one of from/to"
+            )
+
     @property
-    def phrase_role(self) -> str:
+    def phrase_role(self) -> PhraseRole:
         """The edge slot the captured phrase fills: "from" or "to"."""
         return "from" if "from" in self.regex.groupindex else "to"
 
@@ -50,16 +62,12 @@ class CueMatch:
     phrase: str | None
     start: int
     end: int
-    phrase_role: str = "to"
+    phrase_role: PhraseRole = "to"
 
 
 def _pattern(name: str, link_type: str, regex: str) -> Pattern:
     """Compile one case-insensitive pattern definition."""
-    compiled = re.compile(regex, re.IGNORECASE)
-    groups = compiled.groupindex
-    if "cue" not in groups or ("from" in groups) == ("to" in groups):
-        raise ValueError(f"pattern {name} must capture `cue` and one of from/to")
-    return Pattern(name, link_type, compiled)
+    return Pattern(name, link_type, re.compile(regex, re.IGNORECASE))
 
 
 def _alternation(cues: tuple[str, ...]) -> str:

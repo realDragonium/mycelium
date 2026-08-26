@@ -36,9 +36,8 @@ class CueResolution:
     score: float | None
     candidates: tuple[tuple[str, str, float], ...]
     #: How the absorbed cue reads the edge, inherited from the nearest alias
-    #: of the winning type: "forward" (left to right) or "reverse". None when
-    #: nothing was absorbed.
-    direction: str | None = None
+    #: of the winning type. None when nothing was absorbed.
+    direction: store.Direction | None = None
 
 
 def _validate_mode(value: str) -> str:
@@ -100,8 +99,9 @@ def resolve_cue(
     direction = _inherited_direction(all_ranked, vectors, best_type, best_score, margin)
     if direction is None:
         # The winning type's near aliases disagree on which way the edge
-        # reads; similarity cannot break that tie, so nothing is absorbed.
-        return CueResolution(cue, "unresolved", None, None, None, candidates)
+        # reads; similarity cannot break that tie, so nothing is absorbed and
+        # the distinct decision keeps this separable from a genuine miss.
+        return CueResolution(cue, "direction-conflict", None, None, None, candidates)
 
     decision = (
         "auto"
@@ -125,7 +125,7 @@ def _inherited_direction(
     link_type: str,
     best_score: float,
     margin: float,
-) -> str | None:
+) -> store.Direction | None:
     """Read the direction off the winning type's nearest alias.
 
     Embedding similarity is direction-blind, so the direction is inherited

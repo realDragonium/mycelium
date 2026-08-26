@@ -269,7 +269,7 @@ def propose_links(
     phrase_cache: dict[
         str, tuple[frozenset[str], list[float], dict[str, frozenset[str]]]
     ] = {}
-    proposals: dict[tuple[int, str, str, str], LinkProposal] = {}
+    proposals: dict[tuple[str, str, str], LinkProposal] = {}
     for statement in batch:
         for cue in shipped_cues(statement.text, statement.kind, shipped, aliases):
             if not cue.phrase:
@@ -335,7 +335,9 @@ def propose_links(
                 score=winner.score,
                 anchored=bool(winner.shared),
             )
-            key = (proposal.new_index, source, target, proposal.link_type)
+            # Edge identity ignores which sibling carried the cue, so the
+            # same edge found from both ends keeps only the higher score.
+            key = (source, target, proposal.link_type)
             previous = proposals.get(key)
             if previous is None or proposal.score > previous.score:
                 proposals[key] = proposal

@@ -614,31 +614,47 @@ def _migration_v8_link_type_aliases(conn: sqlite3.Connection) -> None:
 
 
 def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
-    """Add the `direction` column to `link_type_aliases` on legacy DBs.
+    """Add the `direction` column and align the seeded far-side aliases.
 
-    Fresh DBs get the column from SCHEMA; ALTER only runs when it is missing.
-    Seeded far-side aliases are flipped to `reverse` so cut typing and the cue
-    gate stop reading them left to right; the literals mirror
-    `store.link_type_aliases._REVERSE_SEED`."""
+    Fresh DBs get the column from SCHEMA and their directions from seeding, so
+    an empty or missing table is left alone. On an already-seeded DB every
+    `_REVERSE_SEED` row is flipped regardless of provenance — before v9 the
+    column did not exist, so no stored direction was ever a curator's choice —
+    and a reverse alias the old seed lacked ("is part of") is inserted with an
+    embedding job, since seeding never runs again on a non-empty table.
+    """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(link_type_aliases)")}
     if not columns:
-        # A pre-v8 DB has no alias table yet; SCHEMA creates it with the
-        # column, and the seed writes directions itself.
         return
     if "direction" not in columns:
         conn.execute(
             "ALTER TABLE link_type_aliases "
             "ADD COLUMN direction TEXT NOT NULL DEFAULT 'forward'"
         )
-    for link_type, alias in (
-        ("requires", "is required for"),
-        ("cases", "is one of"),
-        ("contains", "is part of"),
-    ):
-        conn.execute(
+    if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
+        return
+
+    from mycelium.store.link_type_aliases import _REVERSE_SEED, _now
+
+    now = _now()
+    for link_type, alias in sorted(_REVERSE_SEED):
+        updated = conn.execute(
             "UPDATE link_type_aliases SET direction = 'reverse' "
-            "WHERE link_type = ? AND alias = ? AND provenance = 'seed'",
+            "WHERE link_type = ? AND alias = ?",
             (link_type, alias),
+        ).rowcount
+        if updated:
+            continue
+        conn.execute(
+            "INSERT INTO link_type_aliases "
+            "(link_type, alias, provenance, direction, created_at) "
+            "VALUES (?, ?, 'seed', 'reverse', ?)",
+            (link_type, alias, now),
+        )
+        conn.execute(
+            "INSERT INTO link_type_alias_embed_queue "
+            "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
+            (link_type, alias, now),
         )
 
 

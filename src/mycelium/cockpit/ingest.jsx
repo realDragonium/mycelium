@@ -213,12 +213,11 @@ function rrConnections(res, draft) {
     add(i, { kind: 'text', label: `${l.link_type} → ${t}` });
   }));
   (res.links || []).forEach(l => {
-    // source/target are edge refs; the cue carrier is whichever is "@batch_index".
+    // source/target are edge refs; render both symmetrically so the label
+    // stays honest even for an edge that doesn't touch this statement.
     const name = (ref) => ref === `@${l.batch_index}` ? 'this'
       : (typeof ref === 'string' && ref.startsWith('@') ? posOf(ref.slice(1)) : 'existing');
-    const label = name(l.source) === 'this'
-      ? `${l.link_type} → ${name(l.target)}`
-      : `${name(l.source)} ${l.link_type} → this`;
+    const label = `${name(l.source)} ${l.link_type} → ${name(l.target)}`;
     add(l.batch_index, { kind: 'rule', label, note: `${l.pattern} · "${l.cue}" · ${rrPct(l.score)}` });
   });
   (res.merges || []).forEach(m => add(m.batch_index, { kind: 'merge', label: 'merge → existing', note: `"${(m.into_text || '').slice(0, 60)}" · ${rrPct(m.score)}${m.nli ? ' · NLI ↔' : ''}` }));
@@ -242,7 +241,7 @@ function RulesResult({ res, draft, onOpen, onAgain }) {
   });
   const rows = Object.keys(byFrag).map(Number).sort((a, b) => a - b).map(fi => ({ fi, ...byFrag[fi] }));
   const textLinks = Object.values(conn).flat().filter(c => c.kind === 'text').length;
-  const cueTotal = (cues.auto || 0) + (cues.low_confidence || 0) + (cues.unresolved || 0) + (cues.strict || 0);
+  const cueTotal = (cues.auto || 0) + (cues.low_confidence || 0) + (cues.unresolved || 0) + (cues.direction_conflict || 0) + (cues.strict || 0);
   const noDraft = !res.draft_id;
   return (
     <div className="rr">
@@ -252,7 +251,7 @@ function RulesResult({ res, draft, onOpen, onAgain }) {
         <div><span className="k">flagged</span><span className={`v${frags.flagged ? ' warn' : ''}`}>{frags.flagged}</span></div>
         <div><span className="k">links</span><span className="v">{textLinks + (props.links || 0)}<small>{textLinks} text · {props.links || 0} rule</small></span></div>
         <div><span className="k">merges · conflicts</span><span className="v">{props.merges || 0} · {props.conflicts || 0}</span></div>
-        <div><span className="k">unknown cues</span><span className="v">{cueTotal}<small>{cues.auto ? `${cues.auto} auto ` : ''}{cues.low_confidence ? `${cues.low_confidence} low-conf ` : ''}{cues.unresolved ? `${cues.unresolved} flagged` : ''}</small></span></div>
+        <div><span className="k">unknown cues</span><span className="v">{cueTotal}<small>{cues.auto ? `${cues.auto} auto ` : ''}{cues.low_confidence ? `${cues.low_confidence} low-conf ` : ''}{cues.unresolved ? `${cues.unresolved} flagged ` : ''}{cues.direction_conflict ? `${cues.direction_conflict} direction` : ''}</small></span></div>
       </div>
       {noDraft ? <EmptyState title="Nothing to draft" blurb="No fragment resolved into a statement and nothing was flagged — the text produced no draft." /> : (
         <table className="rr-table">

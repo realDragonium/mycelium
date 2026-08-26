@@ -27,7 +27,7 @@ class AliasVector:
     link_type: str
     alias: str
     vector: np.ndarray
-    direction: str = "forward"
+    direction: store.Direction = "forward"
 
 
 def drain_alias_embeddings(

@@ -115,7 +115,9 @@ def _cut_links(
             continue
         if (left, right) in condition_pairs:
             continue
-        source, target = (right, left) if cut.link_source == "right" else (left, right)
+        source, target = (
+            (right, left) if cut.link_direction == "reverse" else (left, right)
+        )
         links.append((source, target, cut.link_type))
     return links
 
@@ -167,7 +169,16 @@ def _cue_detail(resolution: CueResolution) -> str:
         f"{link_type} ({alias}) {score:.2f}"
         for link_type, alias, score in resolution.candidates
     )
-    return f'unknown connective "{resolution.cue}"' + (
+    if resolution.decision == "direction-conflict":
+        # A high score with no absorption reads as a threshold problem unless
+        # the flag says the real open question is which way the edge runs.
+        lead = (
+            f'connective "{resolution.cue}" matched aliases reading both ways; '
+            "direction is the open question"
+        )
+    else:
+        lead = f'unknown connective "{resolution.cue}"'
+    return lead + (
         f"; nearest: {nearest}" if nearest else "; no alias embeddings to compare"
     )
 

@@ -3169,9 +3169,13 @@ def _connected_related(
     text_of: Callable[[str], str | None],
 ) -> list[dict[str, Any]]:
     """Render candidates that produced neither kept nor dropped proposals."""
+    # A link proposal names the candidate on either end, so both endpoints
+    # suppress; merges and conflicts only ever carry it in `target`.
     proposed = {
-        (proposal.new_index, proposal.target)
+        (proposal.new_index, endpoint)
         for proposal in proposal_set.proposals + proposal_set.dropped_merges
+        for endpoint in (proposal.target, proposal.source)
+        if endpoint is not None
     }
     return [
         {
@@ -3560,11 +3564,19 @@ def _cue_response(
     cues: Sequence[CueResolution],
 ) -> tuple[dict[str, int], list[dict[str, Any]]]:
     """Render cue-resolution counts and stable decision records."""
-    counts = {"auto": 0, "low_confidence": 0, "unresolved": 0, "strict": 0}
+    counts = {
+        "auto": 0,
+        "low_confidence": 0,
+        "unresolved": 0,
+        "direction_conflict": 0,
+        "strict": 0,
+    }
     rendered: list[dict[str, Any]] = []
     for resolution in cues:
         if resolution.decision == "auto:low-confidence":
             counts["low_confidence"] += 1
+        elif resolution.decision == "direction-conflict":
+            counts["direction_conflict"] += 1
         else:
             counts[resolution.decision] += 1
         rendered.append(
@@ -3588,7 +3600,13 @@ def _empty_ingest_text() -> dict[str, Any]:
         "items": [],
         "flags": [],
         "condition_links": 0,
-        "cues": {"auto": 0, "low_confidence": 0, "unresolved": 0, "strict": 0},
+        "cues": {
+            "auto": 0,
+            "low_confidence": 0,
+            "unresolved": 0,
+            "direction_conflict": 0,
+            "strict": 0,
+        },
         "cue_resolutions": [],
     }
 
@@ -3648,8 +3666,8 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
           ],
           "condition_links": 0,
           # every gate decision, absorbed or not
-          "cues": {"auto": 0, "low_confidence": 0,
-                   "unresolved": 0, "strict": 0},
+          "cues": {"auto": 0, "low_confidence": 0, "unresolved": 0,
+                   "direction_conflict": 0, "strict": 0},
           "cue_resolutions": [
             {"cue": "...", "decision": "auto", "link_type": "...",
              "alias": "...", "score": 0.0, "candidates": [["...", "...", 0.0]]}
@@ -5284,10 +5302,6 @@ def upsert_link_type_alias(
     # provenance tag exists for.
     if provenance in ABSORBING_DECISIONS and score is None:
         raise ValueError(f"provenance {provenance!r} requires a score")
-    if direction not in store.DIRECTIONS:
-        raise ValueError(
-            f"direction must be one of {', '.join(store.DIRECTIONS)}: {direction!r}"
-        )
     normalized = store.normalize_alias(alias)
     with store.transaction(_db()):
         created = store.upsert_link_type_alias(

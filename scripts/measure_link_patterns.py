@@ -103,9 +103,9 @@ def measure(
         statement.id: find_cues(statement.text, statement.kind)
         for statement in statements
     }
-    # An inverted cue evidences an incoming edge, so hits split by direction:
-    # a link counts when its source carries a plain cue of its type, or its
-    # target carries an inverted one.
+    # A from-capturing cue evidences an incoming edge, so hits split by the
+    # phrase role: a link counts when its source carries a to-role cue of its
+    # type, or its target carries a from-role one.
     outgoing_cue_types = {
         statement_id: {cue.link_type for cue in cues if cue.phrase_role == "to"}
         for statement_id, cues in cues_by_statement.items()
@@ -148,7 +148,7 @@ def measure(
                 pair_fires_by_type[link_type].add(
                     (statement.id, candidate_id, link_type)
                 )
-            # An inverted cue fires the pair the other way round: the edge it
+            # A from-role cue fires the pair the other way round: the edge it
             # evidences would run candidate -> carrier.
             for link_type in incoming_cue_types[statement.id] & vocabulary_set:
                 pair_fires_by_type[link_type].add(

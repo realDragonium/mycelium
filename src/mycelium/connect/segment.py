@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from mycelium import phrasing, phrasing_cues
 
@@ -50,9 +50,9 @@ class Cut:
     left: int
     right: int
     link_type: str | None = None
-    #: Which fragment is the typed edge's source. A forward-reading alias
-    #: ("and then") links left to right; a far-side alias links right to left.
-    link_source: str = "left"
+    #: The typing alias's direction, verbatim: "forward" links left to right,
+    #: "reverse" names the relation from the far side and links right to left.
+    link_direction: Literal["forward", "reverse"] = "forward"
 
 
 @dataclass(frozen=True)
@@ -861,23 +861,18 @@ def _resolve_cuts(
 ) -> list[Cut]:
     """Resolve surviving pending cut references to public fragment indices."""
     aliases = aliases or {}
-    cuts = []
-    for item in pending:
-        if id(item.left) not in indices or id(item.right) not in indices:
-            continue
-        typed = _cut_link_type(item, aliases)
-        link_type, direction = typed if typed else (None, "forward")
-        cuts.append(
-            Cut(
-                item.kind,
-                item.connective,
-                item.span,
-                indices[id(item.left)],
-                indices[id(item.right)],
-                link_type,
-                "right" if direction == "reverse" else "left",
-            )
+    cuts = [
+        Cut(
+            item.kind,
+            item.connective,
+            item.span,
+            indices[id(item.left)],
+            indices[id(item.right)],
+            *(_cut_link_type(item, aliases) or (None, "forward")),
         )
+        for item in pending
+        if id(item.left) in indices and id(item.right) in indices
+    ]
     return sorted(cuts, key=lambda item: item.span)
 
 

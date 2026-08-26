@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable
+from typing import Literal
 
 from . import kernel
 from .kernel import _now
@@ -117,6 +118,7 @@ _ALIAS_SEED: dict[str, tuple[str, ...]] = {
 }
 
 DIRECTIONS = ("forward", "reverse")
+Direction = Literal["forward", "reverse"]
 
 #: Aliases whose English reads the edge from the far side: "A is required for
 #: B" means B requires A. Cut typing and the cue gate orient edges by this.
@@ -135,16 +137,29 @@ def _validate_direction(direction: str) -> str:
     return direction
 
 
+def seed_rows() -> list[tuple[str, str, str]]:
+    """Flatten the seed into (link_type, alias, direction) rows.
+
+    The single source for what a fresh vocabulary contains; seeding, the v9
+    migration, and tests all read the same rows.
+    """
+    return [
+        (
+            link_type,
+            alias,
+            "reverse" if (link_type, alias) in _REVERSE_SEED else "forward",
+        )
+        for link_type, aliases in _ALIAS_SEED.items()
+        for alias in aliases
+    ]
+
+
 def seed_link_type_aliases(conn: sqlite3.Connection) -> int:
     """Seed aliases and embedding jobs when the alias table is empty."""
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is not None:
         return 0
 
-    rows = [
-        (link_type, alias)
-        for link_type, aliases in _ALIAS_SEED.items()
-        for alias in aliases
-    ]
+    rows = seed_rows()
     now = _now()
     actor = kernel.get_actor()
     conn.executemany(
@@ -152,20 +167,14 @@ def seed_link_type_aliases(conn: sqlite3.Connection) -> int:
         "(link_type, alias, provenance, direction, created_at, created_by) "
         "VALUES (?, ?, 'seed', ?, ?, ?)",
         (
-            (
-                link_type,
-                alias,
-                "reverse" if (link_type, alias) in _REVERSE_SEED else "forward",
-                now,
-                actor,
-            )
-            for link_type, alias in rows
+            (link_type, alias, direction, now, actor)
+            for link_type, alias, direction in rows
         ),
     )
     conn.executemany(
         "INSERT INTO link_type_alias_embed_queue "
         "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
-        ((link_type, alias, now) for link_type, alias in rows),
+        ((link_type, alias, now) for link_type, alias, _direction in rows),
     )
     return len(rows)
 
@@ -263,9 +272,17 @@ def alias_lookup(conn: sqlite3.Connection) -> dict[str, frozenset[tuple[str, str
 
 
 def aliases_by_type(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]:
-    """Group aliases by link type, longest first so regex alternatives win."""
+    """Group cue-slot aliases by link type, longest first so regex wins.
+
+    Only forward aliases ride templated frames: every shipped template's
+    captured phrase fills the `to` slot, so splicing a far-side alias into
+    one would fire it with the wrong geometry. A far-side frame gets its own
+    pattern (like `contains-part-of`) rather than a cue slot.
+    """
     grouped: dict[str, list[str]] = {}
-    for row in conn.execute("SELECT link_type, alias FROM link_type_aliases"):
+    for row in conn.execute(
+        "SELECT link_type, alias FROM link_type_aliases WHERE direction = 'forward'"
+    ):
         grouped.setdefault(row["link_type"], []).append(row["alias"])
     return {
         link_type: tuple(sorted(aliases, key=lambda alias: (-len(alias), alias)))
