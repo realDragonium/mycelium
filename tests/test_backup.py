@@ -398,6 +398,10 @@ def test_import_accepts_legacy_when_node_link_kind(tmp_path):
     backup.export_substrate(src, archive)
 
     def _append_legacy_when_nodes(work: Path) -> None:
+        manifest_path = work / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["schema_version"] = 8
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         rows = [
             {
                 "_kind": "when_node",

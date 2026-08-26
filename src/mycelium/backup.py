@@ -69,6 +69,13 @@ _LEGACY_ANNOTATION_KINDS: frozenset[str] = frozenset(
 # Sourced from the migration runner so the two stay in lock-step.
 SCHEMA_VERSION = migrations.CURRENT_VERSION
 
+# Oldest archive schema the importer still restores. v8 archives differ
+# from v9 only by the `link_kind` discriminator on when-node rows, which
+# `_load_data_jsonl` strips (entity↔statement rows are dropped — v9
+# removed their table, and v8 exports never carried the link rows
+# themselves). Anything older predates shapes the loader handles.
+_MIN_ARCHIVE_SCHEMA_VERSION = 8
+
 # The editable prompt texts, alongside the substrate in the data dir.
 PROMPTS_DB_NAME = "mycelium-prompts.db"
 
@@ -348,10 +355,16 @@ def import_substrate(
         if not manifest_path.exists():
             raise ValueError("archive has no manifest.json — not a mycelium export")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("schema_version") != SCHEMA_VERSION:
+        archive_version = manifest.get("schema_version")
+        if (
+            not isinstance(archive_version, int)
+            or archive_version < _MIN_ARCHIVE_SCHEMA_VERSION
+            or archive_version > SCHEMA_VERSION
+        ):
             raise ValueError(
-                f"archive schema_version {manifest.get('schema_version')!r} "
-                f"unsupported (this build expects {SCHEMA_VERSION})"
+                f"archive schema_version {archive_version!r} unsupported "
+                f"(this build accepts {_MIN_ARCHIVE_SCHEMA_VERSION}"
+                f"..{SCHEMA_VERSION})"
             )
 
         # Restore relational data into a fresh DB. History DB is only
