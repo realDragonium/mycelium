@@ -148,6 +148,8 @@ def _execute_run(
     outcome = "failed"
     document_id = None
     error = None
+    draft_title = None
+    draft_body = None
 
     try:
         # Inside the try: a failed connect must still reach the finally-side
@@ -223,6 +225,10 @@ def _execute_run(
             # Keeping the reason verbatim is how a rejected document's review
             # findings reach the run row; a bare status would discard them.
             error = payload.get("reason")
+            # The findings quote a document, so the document is kept beside
+            # them. Present only when one was written and refused.
+            draft_title = payload.get("title")
+            draft_body = payload.get("body")
     except Exception as exc:
         logger.exception("documentation run failed: %s", run_id)
         outcome = "failed"
@@ -241,6 +247,8 @@ def _execute_run(
                 outcome=outcome,
                 document_id=document_id,
                 error=error,
+                draft_title=draft_title,
+                draft_body=draft_body,
             )
         except Exception:  # noqa: BLE001
             logger.exception("could not finalize documentation run %s", run_id)

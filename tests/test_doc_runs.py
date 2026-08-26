@@ -912,3 +912,34 @@ def test_a_drafter_is_refused_and_a_writer_is_not(_stores):
         assert server.request_documentation("p")["created_by"] == "w"
     finally:
         auth.current_principal.reset(token)
+
+
+def test_a_refused_draft_reaches_the_run_row_but_not_the_registry(tmp_path):
+    """The executor keeps the text the reviewer turned down.
+
+    It lands on the run, beside the findings that quote it, and nowhere a
+    reader of documents can reach. Without this the findings cite a document
+    that no longer exists and the only way forward is another paid run.
+    """
+    conn = _conn(tmp_path)
+
+    run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: {
+            "outcome": "nothing_written",
+            "reason": "the document failed review: exposure: Steps - names Auth0",
+            "title": "Configuring single sign-on",
+            "body": "# Configuring single sign-on\n\nProvision an Auth0 organization.\n",
+        },
+    )
+    doc_runs.wait_all()
+
+    row = docs_store.get_run(conn, run_id)
+    assert row["outcome"] == "nothing_written"
+    assert row["document_id"] is None
+    assert docs_store.list_documents(conn) == []
+
+    detail = docs_store.serialize_run_detail(row)
+    assert detail["draft_title"] == "Configuring single sign-on"
+    assert "Provision an Auth0 organization." in detail["draft_body"]

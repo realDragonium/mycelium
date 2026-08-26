@@ -675,7 +675,9 @@ def _handle_emit(
             ctx.emit_blocks = 0
             ctx.malformed_retries = 0
             return None
-        return _nothing(ctx, _review_refusal_reason(review), review=review)
+        return _nothing(
+            ctx, _review_refusal_reason(review), review=review, title=title, body=body
+        )
     return DocumentWritten(
         slug=_slug(title),
         title=title,
@@ -858,7 +860,12 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> DocgenResult:
 
 
 def _nothing(
-    ctx: _RunContext, reason: str, *, review: ReviewRecord | None = None
+    ctx: _RunContext,
+    reason: str,
+    *,
+    review: ReviewRecord | None = None,
+    title: str | None = None,
+    body: str | None = None,
 ) -> NothingWritten:
     carried_review = review if review is not None else ctx.review
     return NothingWritten(
@@ -866,6 +873,8 @@ def _nothing(
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
         review=carried_review,
+        title=title,
+        body=body,
         gaps=list(ctx.gaps),
         trace=_build_trace(ctx, "nothing_written", cited=[]),
     )

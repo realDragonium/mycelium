@@ -87,6 +87,12 @@ class NothingWritten(BaseModel):
     document_type: str | None = None
     #: Present only when a written document reached and failed the review gate.
     review: ReviewRecord | None = None
+    #: The refused draft, present only when one was written and the gate turned
+    #: it down. Nothing publishes a stored document on its own, so keeping the
+    #: text costs no exposure and is what lets a person judge the refusal
+    #: instead of paying for another run to see a different document.
+    title: str | None = None
+    body: str | None = None
     gaps: list[str] = Field(default_factory=list)
     trace: dict = Field(default_factory=dict)
 
