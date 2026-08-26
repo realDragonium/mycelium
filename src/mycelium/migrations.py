@@ -83,10 +83,11 @@ def _migration_v2_when_not_op(conn: sqlite3.Connection) -> None:
         return
 
     conn.execute("PRAGMA foreign_keys = OFF")
-    # SCHEMA may have already created triggers that reference
-    # `when_nodes`. SQLite resolves trigger bodies against the live
-    # schema, so dropping the table out from under them fails. Drop
-    # the triggers first; v3 (or the next SCHEMA run) recreates them.
+    # A past build's SCHEMA may have already created triggers that
+    # reference `when_nodes`. SQLite resolves trigger bodies against the
+    # live schema, so dropping the table out from under them fails. Drop
+    # the triggers first; a later migration (or SCHEMA run) recreates
+    # what the current schema still wants.
     conn.execute("DROP TRIGGER IF EXISTS statement_links_delete_cascade_when")
     conn.execute("DROP TRIGGER IF EXISTS entity_statement_links_delete_cascade_when")
     # Defensive: a previous half-applied migration may have left the
@@ -613,6 +614,66 @@ def _migration_v8_link_type_aliases(conn: sqlite3.Connection) -> None:
     pass
 
 
+def _migration_v9_drop_entity_statement_links(conn: sqlite3.Connection) -> None:
+    """Restore a single owner for when-trees after mixed endpoint links
+    proved to blur the boundary between entities and authored statements."""
+    conn.execute("DROP TRIGGER IF EXISTS entity_statement_links_delete_cascade_when")
+
+    wn = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='when_nodes'"
+    ).fetchone()
+    when_nodes_sql = (wn["sql"] or "") if wn is not None else ""
+    has_link_kind = "link_kind" in when_nodes_sql
+    if has_link_kind:
+        conn.execute("DELETE FROM when_nodes WHERE link_kind = 'entity_statement'")
+
+    conn.execute("DROP TABLE IF EXISTS entity_statement_links")
+    conn.execute("DROP TRIGGER IF EXISTS statement_links_delete_cascade_when")
+
+    if has_link_kind:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("DROP TABLE IF EXISTS when_nodes_new")
+        try:
+            conn.execute("""
+                CREATE TABLE when_nodes_new (
+                    node_id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                    link_id     INTEGER NOT NULL,
+                    parent_id   INTEGER REFERENCES when_nodes_new(node_id)
+                                ON DELETE CASCADE,
+                    op          TEXT,
+                    statement_id TEXT REFERENCES statements(id) ON DELETE RESTRICT,
+                    child_index INTEGER NOT NULL,
+                    CHECK ((op IS NULL) <> (statement_id IS NULL)),
+                    CHECK (op IS NULL OR op IN ('and', 'or', 'not'))
+                )
+            """)
+            conn.execute(
+                "INSERT INTO when_nodes_new "
+                "(node_id, link_id, parent_id, op, statement_id, child_index) "
+                "SELECT node_id, link_id, parent_id, op, statement_id, child_index "
+                "FROM when_nodes"
+            )
+            conn.execute("DROP TABLE when_nodes")
+            conn.execute("ALTER TABLE when_nodes_new RENAME TO when_nodes")
+            conn.execute("DROP INDEX IF EXISTS when_nodes_link_id")
+            conn.execute("CREATE INDEX when_nodes_link_id ON when_nodes (link_id)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS when_nodes_statement_id "
+                "ON when_nodes (statement_id)"
+            )
+        finally:
+            conn.execute("PRAGMA foreign_keys = ON")
+
+    if _has_table(conn, "statement_links") and _has_table(conn, "when_nodes"):
+        conn.execute("""
+            CREATE TRIGGER statement_links_delete_cascade_when
+            AFTER DELETE ON statement_links
+            BEGIN
+                DELETE FROM when_nodes WHERE link_id = OLD.link_id;
+            END
+        """)
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -625,6 +686,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (6, _migration_v6_nocase_names),
     (7, _migration_v7_kind_link_matrix),
     (8, _migration_v8_link_type_aliases),
+    (9, _migration_v9_drop_entity_statement_links),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -710,21 +772,21 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
     latest SCHEMA, so all current columns already exist) from a legacy
     DB that predates `user_version` tracking.
 
-    We probe one sentinel column from the latest schema: if it's
-    present, every other current-version column is present too (they
-    were all added by the same SCHEMA statement). If not, the DB is a
-    legacy shape that needs migrations.
+    We probe representative features from the latest schema. If they all
+    match, every other current-version feature is present too because they
+    were created by the same SCHEMA statement. Otherwise the DB is a legacy
+    shape that needs migrations.
 
-    The sentinel checks one column added in a representative past
-    migration — `entities.created_at` (v1), `when_nodes.link_kind` (v3),
-    `names.generated_from_name_id` (v5), and the NOCASE collation on
-    `names.text` (v6). A fresh DB will have all of them (created in one
-    shot by `SCHEMA`). A legacy DB at any prior version will be missing
-    at least one (CREATE TABLE IF NOT EXISTS leaves existing tables
-    untouched, so columns added by ALTER TABLE in past migrations are
-    absent until the runner adds them; tables introduced by later
-    migrations are present only on fresh DBs or on legacy DBs that have
-    already been migrated past them)."""
+    The sentinels cover representative past migrations:
+    `entities.created_at` (v1), the absence of `when_nodes.link_kind`
+    after v9 dropped it, `names.generated_from_name_id` (v5), and the
+    NOCASE collation on `names.text` (v6). A fresh DB will satisfy all
+    of them (created in one shot by `SCHEMA`). A legacy DB at any prior
+    version will fail at least one (CREATE TABLE IF NOT EXISTS leaves
+    existing tables untouched, so columns added by ALTER TABLE in past
+    migrations are absent until the runner adds them; tables introduced
+    by later migrations are present only on fresh DBs or on legacy DBs
+    that have already been migrated past them)."""
 
     def _has(table: str, column: str) -> bool:
         return any(
@@ -741,7 +803,7 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
 
     return (
         _has("entities", "created_at")
-        and _has("when_nodes", "link_kind")
+        and not _has("when_nodes", "link_kind")
         and _has("names", "generated_from_name_id")
         and "NOCASE" in _table_sql("names").upper()
     )

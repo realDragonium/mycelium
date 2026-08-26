@@ -624,7 +624,8 @@ def _normalize_and_check(
     - upsert_statements: statements must be a non-empty list of items each with
       kind & text; normalize each item's missing links to [] and drop any
       proposed mentions.
-    - add_links: links must be a non-empty list of {from_id, to_id, link_type}.
+    - add_links: links must be a non-empty list of statement↔statement
+      {from_id, to_id, link_type} edges.
     - add_entity_links: links must be a non-empty list of
       {from_entity_id, to_entity_id, link_type} (NOT from_id/to_id).
     """
@@ -670,6 +671,19 @@ def _normalize_and_check(
         if offending is not None:
             flagged.append(f"op[{idx}] (add_links) dropped: {offending}")
             return payload, rationale, True
+        links = payload.get("links")
+        assert isinstance(links, list)
+        for j, edge in enumerate(links):
+            from_id = edge["from_id"]
+            to_id = edge["to_id"]
+            if (isinstance(from_id, str) and from_id.startswith("ent_")) or (
+                isinstance(to_id, str) and to_id.startswith("ent_")
+            ):
+                flagged.append(
+                    f"op[{idx}] (add_links) dropped: links[{j}] has an entity "
+                    "endpoint; add_links is statement↔statement only"
+                )
+                return payload, rationale, True
         return payload, rationale, False
 
     if kind == "add_entity_links":

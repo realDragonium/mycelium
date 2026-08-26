@@ -612,7 +612,6 @@ _ALLOWED_KINDS = {
     "name",
     "statement_link",
     "entity_link",
-    "entity_statement_link",
 }
 
 
@@ -623,8 +622,8 @@ def _csv_set(raw: str | None, allowed: set[str]) -> set[str]:
     return parts & allowed
 
 
-# The audit log addresses `statement_link` / `entity_statement_link` rows by
-# their numeric `link_id`, keeping the endpoints in the before/after payload.
+# The audit log addresses `statement_link` rows by their numeric `link_id`,
+# keeping the endpoints in the before/after payload.
 # The activity feed (and the UI's `describeTarget`) instead address links by a
 # pipe-delimited composite of their endpoints. `entity_link` already records
 # that composite as its target_id, so it needs no rebuild. Fields here mirror
@@ -632,7 +631,6 @@ def _csv_set(raw: str | None, allowed: set[str]) -> set[str]:
 # `store/entity_links.py`.
 _LINK_TARGET_FIELDS = {
     "statement_link": ("from_id", "to_id", "link_type"),
-    "entity_statement_link": ("entity_id", "statement_id", "direction", "link_type"),
 }
 
 

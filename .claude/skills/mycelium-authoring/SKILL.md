@@ -179,8 +179,10 @@ An edge holds unconditionally by default. When it only fires under a preconditio
 
 ### Which tool, and isolation
 
-- **statement↔statement** and **entity↔statement** edges → `add_links` (`{from_id, to_id, link_type, when?}`; routed by id prefix).
+- **statement↔statement** edges → `add_links` (`{from_id, to_id, link_type, when?}`; statement ids only — an entity endpoint is rejected).
 - **entity↔entity** structural edges → `add_entity_links` (separate vocabulary, no `when`).
+
+There is no entity↔statement link kind: a statement attaches to an entity by listing it in `mentions`, never by an edge.
 
 A statement with **no** incoming and **no** outgoing links is almost always wrong — either unwired or shouldn't exist. The one exception: a `state` used only as a `when` leaf is intentionally link-free; do **not** add `enables` to "fix" it.
 

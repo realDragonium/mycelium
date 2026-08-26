@@ -9,7 +9,7 @@ const PAGE_SIZE = 50;
 const OP_OPTIONS = ['create', 'update', 'link', 'attach'];
 const KIND_OPTIONS = [
   'entity', 'statement', 'name',
-  'statement_link', 'entity_link', 'entity_statement_link',
+  'statement_link', 'entity_link',
 ];
 
 function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '' }) {
@@ -240,17 +240,6 @@ function describeTarget(ev) {
       </span>
     );
   }
-  if (k === 'entity_statement_link') {
-    const [eid, bid, dir, type] = id.split('|');
-    const [left, right] = dir === 'es' ? [eid, bid] : [bid, eid];
-    return (
-      <span style={{fontFamily:'var(--mono)', fontSize:11}}>
-        <span className="row-id">{left}</span>
-        {' '}<span style={{color:'var(--accent)'}}>—{type || '?'}→</span>{' '}
-        <span className="row-id">{right}</span>
-      </span>
-    );
-  }
   return <span className="row-id">{id}</span>;
 }
 
@@ -329,12 +318,6 @@ function buildContextGraph(event, idx, data) {
   } else if (k === 'entity_link') {
     const [from, to, type] = id.split('|');
     anchors = [resolveAnchor('entity', from), resolveAnchor('entity', to)];
-    anchorEdge = { linkType: type };
-  } else if (k === 'entity_statement_link') {
-    const [eid, bid, dir, type] = id.split('|');
-    const a = resolveAnchor('entity', eid);
-    const b = resolveAnchor('statement', bid);
-    anchors = dir === 'es' ? [a, b] : [b, a];
     anchorEdge = { linkType: type };
   }
 
@@ -532,7 +515,7 @@ function MiniGraph({ model, router }) {
 }
 
 // Cache link-type descriptions across renders. Fetches from the substrate
-// glossary (statement_link / entity_link / entity_statement_link types).
+// glossary (statement_link / entity_link types).
 function useLinkTypeDescriptions() {
   const [map, setMap] = useStateAct(() => window.__MYC_LINK_TYPE_DESC || {});
   useEffectAct(() => {

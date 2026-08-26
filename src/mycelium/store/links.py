@@ -211,17 +211,13 @@ def get_incoming_links(
 def links_referencing_statement(
     conn: sqlite3.Connection,
     statement_id: str,
-    *,
-    link_kind: str = "statement",
 ) -> list[int]:
     """Every link_id whose when-tree mentions `statement_id` as a leaf,
-    scoped to one link table (default: statement_links). Indexed lookup
-    against `when_nodes(link_kind, statement_id)`. Used by cascade
-    detection and by rewrite-on-merge."""
+    using the `when_nodes.statement_id` index. Used by cascade detection
+    and by rewrite-on-merge."""
     rows = conn.execute(
-        "SELECT DISTINCT link_id FROM when_nodes "
-        "WHERE statement_id = ? AND link_kind = ?",
-        (statement_id, link_kind),
+        "SELECT DISTINCT link_id FROM when_nodes WHERE statement_id = ?",
+        (statement_id,),
     ).fetchall()
     return [r["link_id"] for r in rows]
 
@@ -234,15 +230,13 @@ def get_when_references(
     `[(from_statement_id, to_statement_id, link_type, when_tree)]`.
 
     Empty list when the statement is not used as a condition anywhere.
-    Entity-statement edges that condition on this statement surface via
-    `get_entity_statement_when_references` instead.
     """
     rows = conn.execute(
         "SELECT DISTINCT sl.link_id, sl.from_statement_id, "
         "       sl.to_statement_id, sl.link_type "
         "FROM when_nodes wn "
         "JOIN statement_links sl ON sl.link_id = wn.link_id "
-        "WHERE wn.statement_id = ? AND wn.link_kind = 'statement'",
+        "WHERE wn.statement_id = ?",
         (statement_id,),
     ).fetchall()
     return [
@@ -345,7 +339,7 @@ def _move_link_endpoint(
     )
     if rewrite_when_leaves is not None:
         conn.execute(
-            "DELETE FROM when_nodes WHERE link_id = ? AND link_kind = 'statement'",
+            "DELETE FROM when_nodes WHERE link_id = ?",
             (link_id,),
         )
         if canonical is not None:
@@ -446,18 +440,15 @@ def rewrite_when_references(
 
 def delete_links_touching_statement(
     conn: sqlite3.Connection, statement_id: str
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int]:
     """Remove every link that touches `statement_id` so the statement can be
     deleted under FK enforcement, returning
-    `(outgoing_removed, incoming_removed, when_removed, entity_statement_removed)`.
+    `(outgoing_removed, incoming_removed, when_removed)`.
 
     Order matters: outgoing `statement_links` are dropped before incoming so
     a self-loop is counted exactly once. Conditional links whose when-tree
-    references the statement — both `statement_links` and
-    `entity_statement_links` — are then dropped by link_id (their `when_nodes`
-    rows cascade via trigger), and entity↔statement edges with the statement
-    as an endpoint go too. `entity_statement_removed` sums the endpoint and
-    when-tree removals."""
+    references the statement are then dropped by link_id; their `when_nodes`
+    rows cascade via trigger."""
     outgoing_removed = conn.execute(
         "DELETE FROM statement_links WHERE from_statement_id = ?", (statement_id,)
     ).rowcount
@@ -469,16 +460,7 @@ def delete_links_touching_statement(
         when_removed += conn.execute(
             "DELETE FROM statement_links WHERE link_id = ?", (lid,)
         ).rowcount
-    es_removed = conn.execute(
-        "DELETE FROM entity_statement_links WHERE statement_id = ?", (statement_id,)
-    ).rowcount
-    for lid in links_referencing_statement(
-        conn, statement_id, link_kind="entity_statement"
-    ):
-        es_removed += conn.execute(
-            "DELETE FROM entity_statement_links WHERE link_id = ?", (lid,)
-        ).rowcount
-    return outgoing_removed, incoming_removed, when_removed, es_removed
+    return outgoing_removed, incoming_removed, when_removed
 
 
 def delete_statement(conn: sqlite3.Connection, statement_id: str) -> None:

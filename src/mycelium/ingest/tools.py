@@ -75,7 +75,7 @@ _EMIT_SCHEMA: dict[str, Any] = {
                             "an object. Omit keys you are not setting (do not "
                             "send null). Edge key names DIFFER by op: add_links "
                             'edges are {"from_id", "to_id", "link_type", "when"?} '
-                            "(statement<->statement); add_entity_links edges are "
+                            "(statement<->statement only); add_entity_links edges are "
                             '{"from_entity_id", "to_entity_id", "link_type"} '
                             "(entity<->entity) — do not mix the two."
                         ),

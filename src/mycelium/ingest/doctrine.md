@@ -117,8 +117,8 @@ Y" — you have it backwards, and the link belongs on the other statement. A few
 types read against intuition (priority chains, prerequisites); when the
 direction is not obvious, **read the type's description from `list_link_types()`**
 rather than guessing. The link vocabularies (`list_link_types()` for
-statement↔statement and entity↔statement edges, `list_entity_link_types()` for
-entity↔entity edges) are provided at the start of the session — choose an
+statement↔statement edges, `list_entity_link_types()` for entity↔entity
+edges) are provided at the start of the session — choose an
 existing type that fits, and propose a new one only when nothing returned does.
 
 ## Topology over connectivity

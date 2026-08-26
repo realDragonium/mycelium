@@ -151,11 +151,6 @@ _ACTIVITY_UNION = """
            from_entity_id || '|' || to_entity_id || '|' || link_type,
            created_by
       FROM entity_links WHERE created_at IS NOT NULL
-    UNION ALL
-    SELECT created_at, 'link', 'entity_statement_link',
-           entity_id || '|' || statement_id || '|' || direction || '|' || link_type,
-           created_by
-      FROM entity_statement_links WHERE created_at IS NOT NULL
 """
 
 

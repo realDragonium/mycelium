@@ -752,7 +752,7 @@ class LinkSpec(TypedDict):
 
 
 class IncomingLinkSpec(TypedDict):
-    """An incoming typed edge from an existing source to this statement.
+    """An incoming typed edge from an existing statement to this statement.
 
     Used inside `upsert_statement` for the `incoming_links` parameter so a
     new child statement can be wired in under existing parents in a single
@@ -770,16 +770,9 @@ class IncomingLinkSpec(TypedDict):
 class EdgeSpec(TypedDict):
     """A typed edge with both endpoints addressed.
 
-    Used by `add_links` and `remove_links`. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination — the substrate
-    routes statement↔statement edges to `statement_links` and any edge
-    touching an entity to `entity_statement_links` (which also accepts a
-    `when` condition with the same grammar). Externally, callers see a
-    single uniform link API; the distinction is internal storage only.
-
-    Entity↔entity edges are **not** handled here — those live in their
-    own vocabulary and are managed by `add_entity_links` /
-    `remove_entity_links`.
+    Used by `add_links` and `remove_links`. Both endpoints must be
+    statements (`stm_…`). Entity↔entity edges use `add_entity_links` /
+    `remove_entity_links`; mixed entity↔statement edges are unsupported.
 
     `when` is an optional condition expression; see `LinkSpec`. Identity
     on read/delete is by canonicalized hash, so the literal shape sent
@@ -1373,10 +1366,8 @@ def _link_dict(
     """Build the response dict for an edge, omitting `when` when None so
     unconditional edges keep the simpler shape callers expect.
 
-    The endpoint field is the generic `from_id` / `to_id` — values may
-    be statement ids (`stm_…`) or entity ids (`ent_…`); the caller
-    distinguishes by the id prefix. This is the uniform link shape used
-    on hydration output."""
+    The endpoint field is `from_id` / `to_id`, and its value is a
+    statement id (`stm_…`)."""
     out: dict[str, Any] = {"link_type": link_type}
     if to_id is not None:
         out["to_id"] = to_id
@@ -1516,14 +1507,6 @@ def _hydrate_statement(statement_id: str, score: float | None) -> dict[str, Any]
         _link_dict(to_id=to_id, link_type=lt, when=when)
         for to_id, lt, when in store.get_links(_db(), statement_id)
     ]
-    # Mix in entity-endpoint edges where the statement is the source
-    # (direction='se'). Externally indistinguishable from statement→statement
-    # edges — caller reads the id prefix on `to_id` to know the kind.
-    es_outgoing, _ = store.get_entity_statement_links_for_statement(_db(), statement_id)
-    links.extend(
-        _link_dict(to_id=ent_id, link_type=lt, when=when)
-        for ent_id, lt, when in es_outgoing
-    )
     out: dict[str, Any] = {
         "id": row["id"],
         "kind": row["kind"],
@@ -1567,46 +1550,12 @@ def _hydrate_statement_full(
         _link_dict(from_id=from_id, link_type=lt, when=when)
         for from_id, lt, when in store.get_incoming_links(_db(), statement_id)
     ]
-    # Entity→statement edges pointing at this statement (direction='es').
-    _, es_incoming = store.get_entity_statement_links_for_statement(_db(), statement_id)
-    incoming.extend(
-        _link_dict(from_id=ent_id, link_type=lt, when=when)
-        for ent_id, lt, when in es_incoming
-    )
-
     when_refs: list[dict[str, Any]] = [
         {"from_id": from_id, "to_id": to_id, "link_type": lt, "when": when_tree}
         for from_id, to_id, lt, when_tree in store.get_when_references(
             _db(), statement_id
         )
     ]
-    # Entity↔statement edges that condition on this statement.
-    for (
-        ent_id,
-        stmt_id,
-        direction,
-        lt,
-        when_tree,
-    ) in store.get_entity_statement_when_references(_db(), statement_id):
-        if direction == "es":
-            when_refs.append(
-                {
-                    "from_id": ent_id,
-                    "to_id": stmt_id,
-                    "link_type": lt,
-                    "when": when_tree,
-                }
-            )
-        else:
-            when_refs.append(
-                {
-                    "from_id": stmt_id,
-                    "to_id": ent_id,
-                    "link_type": lt,
-                    "when": when_tree,
-                }
-            )
-
     if reverse_cap is not None and len(incoming) > reverse_cap:
         out["incoming_links_truncated"] = len(incoming)
         incoming = incoming[:reverse_cap]
@@ -3923,9 +3872,6 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
         # Required before deleting the source: FK enforcement otherwise
         # blocks the delete.
         store.rewrite_entity_link_endpoints(_db(), from_entity_id, into_entity_id)
-        # Mixed entity↔statement edges anchored on the source entity move
-        # onto the target; UNIQUE collisions drop the rewriting row.
-        store.rewrite_entity_statement_endpoints(_db(), from_entity_id, into_entity_id)
         store.delete_entity(_db(), from_entity_id)
         affected: list[str] = []
         for nid in moved_name_ids:
@@ -4077,12 +4023,6 @@ def delete_entity(id: str) -> dict[str, Any]:
         outgoing_entity_links_removed, incoming_entity_links_removed = (
             store.delete_entity_links_touching(_db(), id)
         )
-        # Mixed entity↔statement edges touching this entity must also go;
-        # the cascade trigger on entity_statement_links cleans up their
-        # when_nodes rows.
-        entity_statement_links_removed = store.delete_entity_statement_links_for_entity(
-            _db(), id
-        )
         store.delete_entity(_db(), id)
         store.enqueue_recompute_statements(_db(), affected)
     _baker().schedule_rebake()
@@ -4092,7 +4032,6 @@ def delete_entity(id: str) -> dict[str, Any]:
         "mentions_removed": mentions_removed,
         "outgoing_entity_links_removed": outgoing_entity_links_removed,
         "incoming_entity_links_removed": incoming_entity_links_removed,
-        "entity_statement_links_removed": entity_statement_links_removed,
     }
 
 
@@ -4163,15 +4102,8 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
         incoming_moved = store.merge_incoming_links_into(_db(), from_id, into_id)
         # Any remaining links that referenced the source as a `when` condition
         # need their reference rewritten to the target before deleting the
-        # source, otherwise FK enforcement blocks the delete. Both link kinds
-        # are handled — statement_links and entity_statement_links.
+        # source, otherwise FK enforcement blocks the delete.
         store.rewrite_when_references(_db(), from_id, into_id)
-        store.rewrite_entity_statement_when_references(_db(), from_id, into_id)
-        # Entity↔statement edges whose endpoint is the source statement need to
-        # move onto the target — UPDATE in place with collision detection, then
-        # drop any rows a UNIQUE collision left pointing at the source so it can
-        # be deleted.
-        store.move_entity_statement_endpoints(_db(), from_id, into_id)
 
         vector_id = store.get_vector_id(_db(), from_id)
         if vector_id is not None:
@@ -4228,15 +4160,13 @@ def delete_statement(id: str) -> dict[str, Any]:
 
     # Order matters under FK enforcement: drop everything that points AT this
     # statement before dropping the statement itself. This removes outgoing
-    # and incoming statement_links, any statement_links / entity_statement_links
-    # whose when-tree references it, and entity↔statement edges with it as an
-    # endpoint (see the helper for the exact ordering and counting rules).
+    # and incoming statement_links plus any statement_links whose when-tree
+    # references it (see the helper for the exact ordering and counting rules).
     with store.transaction(_db()):
         (
             outgoing_removed,
             incoming_removed,
             when_removed,
-            entity_statement_links_removed,
         ) = store.delete_links_touching_statement(_db(), id)
         mentions_removed = store.clear_derived_for_statement(_db(), id)
 
@@ -4252,13 +4182,11 @@ def delete_statement(id: str) -> dict[str, Any]:
         "incoming_links_removed": incoming_removed,
         "outgoing_links_removed": outgoing_removed,
         "when_references_removed": when_removed,
-        "entity_statement_links_removed": entity_statement_links_removed,
     }
 
 
 def _id_kind(id: str) -> str:
-    """Classify an endpoint id by its prefix. Used by `add_links` /
-    `remove_links` to route to the right link table."""
+    """Classify an endpoint id by its statement or entity prefix."""
     if id.startswith("stm_"):
         return "statement"
     if id.startswith("ent_"):
@@ -4270,50 +4198,40 @@ def _id_kind(id: str) -> str:
 
 def _split_edges(
     links: list[EdgeSpec],
-) -> tuple[
-    list[tuple[str, str, str, dict[str, Any] | None]],
-    list[tuple[str, str, str, str, dict[str, Any] | None]],
-]:
-    """Partition `links` into statement↔statement and entity↔statement
-    tuples. Raises ValueError on entity↔entity edges (those belong on
-    `add_entity_links`) and on unknown id prefixes."""
+) -> list[tuple[str, str, str, dict[str, Any] | None]]:
+    """Convert statement↔statement edges to store tuples.
+
+    Raises ValueError on every entity endpoint and on unknown id prefixes.
+    Entity↔entity edges belong on `add_entity_links`."""
     stmt_edges: list[tuple[str, str, str, dict[str, Any] | None]] = []
-    es_edges: list[tuple[str, str, str, str, dict[str, Any] | None]] = []
     for link in links:
         fk = _id_kind(link["from_id"])
         tk = _id_kind(link["to_id"])
         when = link.get("when")
         if fk == "statement" and tk == "statement":
             stmt_edges.append((link["from_id"], link["to_id"], link["link_type"], when))
-        elif fk == "entity" and tk == "statement":
-            es_edges.append(
-                (link["from_id"], link["to_id"], "es", link["link_type"], when)
-            )
-        elif fk == "statement" and tk == "entity":
-            es_edges.append(
-                (link["to_id"], link["from_id"], "se", link["link_type"], when)
-            )
-        else:  # entity → entity
+        elif fk == "entity" and tk == "entity":
             raise ValueError(
                 f"entity↔entity edge {link['from_id']!r} → {link['to_id']!r} is not "
                 "supported by add_links/remove_links; use add_entity_links instead"
             )
-    return stmt_edges, es_edges
+        else:
+            raise ValueError(
+                f"entity↔statement edge {link['from_id']!r} → "
+                f"{link['to_id']!r} is not supported: add_links/remove_links "
+                "handle statement↔statement only"
+            )
+    return stmt_edges
 
 
 def _validate_edge_endpoints(links: list[EdgeSpec]) -> dict[str, sqlite3.Row]:
-    """Validate every referenced id exists across both kinds — statement and
-    entity endpoints plus every `statement_id` leaf inside any `when` tree.
+    """Validate every endpoint and `when` leaf references a statement that exists.
+
     Raises ValueError on any unknown id. Returns the fetched statement rows
     keyed by id for downstream kind lookups."""
     needed_statements: set[str] = set()
-    needed_entities: set[str] = set()
     for link in links:
-        for endpoint in (link["from_id"], link["to_id"]):
-            if _id_kind(endpoint) == "statement":
-                needed_statements.add(endpoint)
-            else:
-                needed_entities.add(endpoint)
+        needed_statements.update((link["from_id"], link["to_id"]))
         if "when" in link:
             when_expression.validate(link["when"])
             needed_statements.update(when_expression.leaves(link["when"]))
@@ -4323,17 +4241,15 @@ def _validate_edge_endpoints(links: list[EdgeSpec]) -> dict[str, sqlite3.Row]:
         if row is None:
             raise ValueError(f"statement {sid!r} does not exist")
         statement_rows[sid] = row
-    for eid in needed_entities:
-        if store.get_entity_by_id(_db(), eid) is None:
-            raise ValueError(f"entity {eid!r} does not exist")
     return statement_rows
 
 
 @tool
 def add_links(links: list[EdgeSpec]) -> dict[str, int]:
-    """Insert one or more typed edges. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination except
-    entity↔entity (use `add_entity_links` for those).
+    """Insert one or more typed statement↔statement edges.
+
+    Both endpoints must be statement ids (`stm_…`). Every edge with an
+    entity endpoint is rejected; entity↔entity edges use `add_entity_links`.
 
     Direction note: source is the bigger/earlier/wrapping/primary side;
     target is the smaller/later/contained/dependent side. Before
@@ -4349,8 +4265,7 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     passed. Validates that every `from_id`, `to_id`, and every
     `statement_id` leaf inside any `when` tree exists before mutating;
     raises ValueError on any unknown id. `when` leaves are always
-    statement ids (an entity has no notion of "holding") — same grammar
-    as statement-link `when` expressions.
+    statement ids, using the statement-link `when` grammar.
 
     No re-embedding is performed — this is the cheap path for adding
     relationships between existing nodes. To add a single edge, pass a
@@ -4359,17 +4274,12 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     if not links:
         return {"inserted": 0}
 
-    stmt_edges, es_edges = _split_edges(links)
+    stmt_edges = _split_edges(links)
 
     statement_rows = _validate_edge_endpoints(links)
 
     flip_edges: list[tuple[str, str, str, str, str, str]] = []
     for i, link in enumerate(links):
-        if (
-            _id_kind(link["from_id"]) != "statement"
-            or _id_kind(link["to_id"]) != "statement"
-        ):
-            continue
         from_kind = statement_rows[link["from_id"]]["kind"]
         to_kind = statement_rows[link["to_id"]]["kind"]
         flip_edges.append(
@@ -4388,20 +4298,16 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
 
     inserted = 0
     with store.transaction(_db()):
-        if stmt_edges:
-            inserted += store.insert_links(_db(), stmt_edges)
-        if es_edges:
-            inserted += store.insert_entity_statement_links(_db(), es_edges)
-    if es_edges:
-        _baker().schedule_rebake()
+        inserted = store.insert_links(_db(), stmt_edges)
     return {"inserted": inserted}
 
 
 @tool
 def remove_links(links: list[EdgeSpec]) -> dict[str, int]:
-    """Remove one or more typed edges. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination except
-    entity↔entity (use `remove_entity_links` for those).
+    """Remove one or more typed statement↔statement edges.
+
+    Both endpoints must be statement ids (`stm_…`). Every edge with an
+    entity endpoint is rejected; entity↔entity edges use `remove_entity_links`.
 
     Match is by canonicalized when expression — the literal shape sent
     here doesn't have to match what was originally sent to `add_links`,
@@ -4415,16 +4321,11 @@ def remove_links(links: list[EdgeSpec]) -> dict[str, int]:
     if not links:
         return {"removed": 0}
 
-    stmt_edges, es_edges = _split_edges(links)
+    stmt_edges = _split_edges(links)
 
     removed = 0
     with store.transaction(_db()):
-        if stmt_edges:
-            removed += store.delete_links(_db(), stmt_edges)
-        if es_edges:
-            removed += store.delete_entity_statement_links(_db(), es_edges)
-    if es_edges:
-        _baker().schedule_rebake()
+        removed = store.delete_links(_db(), stmt_edges)
     return {"removed": removed}
 
 
@@ -4441,15 +4342,13 @@ def get_statements(ids: list[str]) -> dict[str, Any]:
     incoming_links, when_references}, ...]}`. `mentions` is `[{name_id,
     name, entity_id}]`. `links` is the outgoing edges this statement
     owns; `incoming_links` is `[{from_id, link_type}]` listing every
-    node that points at this one. Endpoint values (`to_id` on `links`,
-    `from_id` on `incoming_links`) may be statement ids (`stm_…`) or
-    entity ids (`ent_…`) — the substrate doesn't surface a separate
-    flavor for entity-endpoint edges.
+    statement that points at this one. Endpoint values (`to_id` on `links`,
+    `from_id` on `incoming_links`) are statement ids (`stm_…`).
 
     `when_references` is `[{from_id, to_id, link_type, when}]` —
-    every edge in the graph (statement↔statement or entity↔statement)
-    whose `when` condition mentions THIS statement as a leaf. Use it
-    to answer "what does this state gate?" Condition states often
+    every statement↔statement edge whose `when` condition mentions THIS
+    statement as a leaf. Use it to answer "what does this state gate?"
+    Condition states often
     have no outgoing links of their own (intentionally — see authoring
     §9); `when_references` is how you trace forward from them anyway.
 
@@ -4488,20 +4387,14 @@ def get_statements(ids: list[str]) -> dict[str, Any]:
 
 @tool
 def get_entity(id: str) -> dict[str, Any]:
-    """Fetch one entity by its id, hydrated with names and every kind
-    of link this entity participates in.
+    """Fetch one entity by its id, hydrated with names and entity links.
 
-    Returns `{id, description, names, links, incoming_links,
-    statement_links, incoming_statement_links}`:
+    Returns `{id, description, names, links, incoming_links}`:
 
     - `names` is `[{id, text}]` sorted alphabetically.
     - `links` / `incoming_links` are the entity↔entity edges
       (`[{to_entity_id|from_entity_id, link_type}]`). Separate
       vocabulary from statement links; see `list_entity_link_types`.
-    - `statement_links` / `incoming_statement_links` are mixed
-      entity↔statement edges (`[{to_id|from_id, link_type, when?}]`).
-      They share the statement link-type vocabulary and `when` grammar
-      with `add_links` / `remove_links`.
 
     Use `search_statements` with the `mentions` filter to find
     statements that mention this entity by name.
@@ -4516,7 +4409,6 @@ def get_entity(id: str) -> dict[str, Any]:
         return {"id": id, "missing": [id]}
     outgoing = store.get_entity_links_outgoing(_db(), id)
     incoming = store.get_entity_links_incoming(_db(), id)
-    es_outgoing, es_incoming = store.get_entity_statement_links_for_entity(_db(), id)
     return {
         "id": row["id"],
         "missing": [],
@@ -4532,17 +4424,6 @@ def get_entity(id: str) -> dict[str, Any]:
         "links": [{"to_entity_id": to_id, "link_type": lt} for (to_id, lt) in outgoing],
         "incoming_links": [
             {"from_entity_id": from_id, "link_type": lt} for (from_id, lt) in incoming
-        ],
-        # Mixed entity↔statement edges. Separate from `links` /
-        # `incoming_links` (which carry the entity↔entity vocabulary
-        # and lack `when` semantics) because the systems are distinct.
-        "statement_links": [
-            _link_dict(to_id=stmt_id, link_type=lt, when=when)
-            for stmt_id, lt, when in es_outgoing
-        ],
-        "incoming_statement_links": [
-            _link_dict(from_id=stmt_id, link_type=lt, when=when)
-            for stmt_id, lt, when in es_incoming
         ],
     }
 

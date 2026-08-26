@@ -28,8 +28,8 @@ to use types coherently and adds new vocabulary as the data forces it.
 ## Data model
 
 The substrate stores three record kinds (entities, names, statements)
-and three link kinds (statement↔statement, entity↔entity,
-entity↔statement). That is the whole substrate.
+and two link kinds (statement↔statement, entity↔entity). That is the
+whole substrate.
 
 An **entity** is a record holding an opaque id and a description. Entities
 are the nouns of the domain — features, concepts, capabilities, surfaces.
@@ -110,8 +110,8 @@ cascading away with the link.
 Propositions that hold *about* a statement or entity — permissions,
 invariants, properties, compliance facts — are not a separate
 primitive. They are statements like any other (`kind='rule'`,
-`kind='property'`, …), connected to the statements and entities they
-govern via ordinary typed links. (An earlier annotation subsystem
+`kind='property'`, …), connected to the statements they govern via
+ordinary typed links and to entities through their `mentions`. (An earlier annotation subsystem
 covered this ground; it was deprecated and removed. Legacy databases
 may still carry its inert tables.)
 
@@ -291,25 +291,21 @@ Returns `{statements: [{id, kind, text, mentions, links,
 incoming_links, when_references}, ...]}` in the same order
 as the input ids, where `mentions` is `[{name_id, name, entity_id}]`,
 `links` is the outgoing edges this statement owns, and `incoming_links`
-is `[{from_id, link_type}]` listing every node that points at this one
-(statement *or* entity — the substrate treats them uniformly on
-hydration). Raises ValueError if `ids` is empty or if any id is unknown (no
+is `[{from_id, link_type}]` listing every statement that points at this
+one. Raises ValueError if `ids` is empty or if any id is unknown (no
 partial results). Used by callers that already have ids in hand (from a
 search hit's links field, an entity mention chain, etc.) and want the
 full hydrated records.
 
 ### get_entity
 
-`get_entity(id)` returns one entity hydrated with its names and every
-kind of link it participates in: `{id, description, names: [{id, text}],
-links, incoming_links, statement_links, incoming_statement_links}`.
-`links` / `incoming_links` are the entity↔entity edges (separate
-vocabulary, see `list_entity_link_types`). `statement_links` /
-`incoming_statement_links` are mixed entity↔statement edges with the
-same `{to_id|from_id, link_type, when?}` shape that `add_links`
-produces. Raises ValueError on unknown id. To find statements that
-mention an entity by name (rather than via a direct edge), use
-`search_statements` with the `mentions` filter.
+`get_entity(id)` returns one entity hydrated with its names and its
+entity↔entity edges: `{id, description, names: [{id, text}], links,
+incoming_links}`. `links` / `incoming_links` carry the entity↔entity
+vocabulary (see `list_entity_link_types`). Raises ValueError on unknown
+id. To find statements about an entity, use `search_statements` with
+the `mentions` filter — statements attach to entities through mentions,
+not through direct edges.
 
 ### list_entities and list_statements
 
@@ -424,13 +420,11 @@ ValueError on unknown id.
 ### add_links
 
 `add_links(links)` accepts a list of `{from_id, to_id, link_type,
-when?}` items and inserts each as an edge. Endpoints may be statement
-ids (`stm_…`) or entity ids (`ent_…`) in any combination — except
-entity↔entity, which has its own vocabulary and lives behind
-`add_entity_links`. Statement↔statement edges land in `statement_links`;
-any edge touching an entity lands in `entity_statement_links`.
-Externally the caller sees a single uniform link API; the routing is
-internal storage.
+when?}` items and inserts each as an edge. Endpoints are statement ids
+(`stm_…`) only — an edge with an entity endpoint is rejected with a
+ValueError. Entity↔entity edges have their own vocabulary and live
+behind `add_entity_links`; there is no entity↔statement link kind
+(statements attach to entities through mentions).
 
 The operation is bulk-by-default — passing a single edge is just a
 one-element list — and idempotent: pre-existing rows are silently
@@ -442,9 +436,7 @@ canonicalization collapses equivalent when-trees to one row.
 Before mutating, the call validates that every referenced id (every
 endpoint, plus every `statement_id` leaf inside any `when` tree) exists
 in the substrate. If any is unknown the call raises `ValueError` and
-inserts nothing, so a typo cannot half-apply a bulk insert. `when`
-leaves are always statement ids — an entity has no notion of
-"holding" — and the grammar is identical across both link kinds.
+inserts nothing, so a typo cannot half-apply a bulk insert.
 
 No embedding work is performed — this is the cheap path for adding
 relationships between nodes that already exist. By contrast,

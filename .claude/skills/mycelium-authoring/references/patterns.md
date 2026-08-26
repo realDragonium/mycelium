@@ -26,7 +26,7 @@ These produce a **valid graph that is wrong**. No rejection fires; the error is 
 
 - **Config + effect** — a configured value (`state`) must link to the `event` it changes. The knob alone is an orphan no consumer can interpret. Not rejected — just useless in isolation.
 
-- **Entity data shape** — to document required vs. optional fields at the entity level, add `requires`/`accepts` edges from the entity to the `property` records (and a config `state` if the configured condition must gate other edges via `when`). Neither is forced; absence is silent.
+- **Entity data shape** — to document required vs. optional fields, add `requires`/`accepts` edges from the consuming statement (the event or capability that reads them) to the `property` records; each property is anchored to its entity by `mentions` (and add a config `state` if the configured condition must gate other edges via `when`). Neither is forced; absence is silent.
 
 - **Temporal / provider variation** — reify the date or provider as a `state` and link the override (`replaces` / `restricts`). A merged *"sometimes X"* statement is valid and wrong.
 

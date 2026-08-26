@@ -452,6 +452,13 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
             if kind in _LEGACY_ANNOTATION_KINDS:
                 legacy_skipped += 1
                 continue
+            # Old archives carry a `link_kind` discriminator on when-node
+            # rows; the entity_statement kind lost its table, so those rows
+            # are dropped and the key is stripped from the rest.
+            if kind == "when_node":
+                if row.get("link_kind") == "entity_statement":
+                    continue
+                row.pop("link_kind", None)
             table = _KIND_TO_TABLE.get(kind)
             if table is None:
                 raise ValueError(f"unknown record kind in archive: {kind!r}")
