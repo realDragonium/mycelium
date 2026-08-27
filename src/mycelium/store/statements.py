@@ -37,6 +37,22 @@ def get_statement(conn: sqlite3.Connection, statement_id: str) -> sqlite3.Row | 
     ).fetchone()
 
 
+def get_statement_kinds(
+    conn: sqlite3.Connection, statement_ids: Sequence[str]
+) -> dict[str, str]:
+    """Return kinds for the requested statements that still exist."""
+    kinds: dict[str, str] = {}
+    for offset in range(0, len(statement_ids), 500):
+        chunk = statement_ids[offset : offset + 500]
+        placeholders = ", ".join("?" for _statement_id in chunk)
+        rows = conn.execute(
+            f"SELECT id, kind FROM statements WHERE id IN ({placeholders})",
+            tuple(chunk),
+        )
+        kinds.update((str(row["id"]), str(row["kind"])) for row in rows)
+    return kinds
+
+
 def update_statement(
     conn: sqlite3.Connection, statement_id: str, kind: str, text: str
 ) -> None:

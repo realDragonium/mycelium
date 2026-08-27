@@ -63,8 +63,12 @@ class FakeView:
             if shared & entity_ids
         }
 
-    def kind_of(self, statement_id: str) -> str | None:
-        return self.kinds.get(statement_id)
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        return {
+            statement_id: self.kinds[statement_id]
+            for statement_id in statement_ids
+            if statement_id in self.kinds
+        }
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         return self.link_types_by_kind_pair.get(

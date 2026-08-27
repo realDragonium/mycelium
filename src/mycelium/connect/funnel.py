@@ -45,7 +45,9 @@ class SubstrateView(Protocol):
         """statement_id -> the subset of entity_ids it mentions; {} for empty input."""
         ...
 
-    def kind_of(self, statement_id: str) -> str | None: ...
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        """Kinds per statement id, omitting statements that no longer exist."""
+        ...
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         """Return link types the ontology admits from a source kind to a target."""
@@ -122,11 +124,15 @@ def _rank(
     max_candidates: int,
 ) -> list[Candidate]:
     """Threshold, classify, rank, and cap candidates for one statement."""
+    thresholded = [
+        (statement_id, score, via, shared_entities)
+        for statement_id, (score, via, shared_entities) in raw.items()
+        if score >= related_threshold
+    ]
+    kinds = view.kinds_of(tuple(item[0] for item in thresholded))
     candidates: list[Candidate] = []
-    for statement_id, (score, via, shared_entities) in raw.items():
-        if score < related_threshold:
-            continue
-        kind = view.kind_of(statement_id)
+    for statement_id, score, via, shared_entities in thresholded:
+        kind = kinds.get(statement_id)
         if kind is None:
             continue
         relation = (

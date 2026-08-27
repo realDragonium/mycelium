@@ -31,6 +31,7 @@ class FakeView:
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
         self.similarity_calls: list[tuple[str, ...]] = []
+        self.kinds_of_calls: list[tuple[str, ...]] = []
 
     def embed(self, text: str) -> list[float]:
         self.embed_calls[text] += 1
@@ -63,8 +64,13 @@ class FakeView:
             if shared & entity_ids
         }
 
-    def kind_of(self, statement_id: str) -> str | None:
-        return self.kinds.get(statement_id)
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        self.kinds_of_calls.append(tuple(statement_ids))
+        return {
+            statement_id: self.kinds[statement_id]
+            for statement_id in statement_ids
+            if statement_id in self.kinds
+        }
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         return self.link_types_by_kind_pair.get(
@@ -508,6 +514,7 @@ def test_anchored_fan_out_scores_all_sharing_ids_in_one_batched_call():
 
     assert len(view.similarity_calls) == 1
     assert set(view.similarity_calls[0]) == set(popular)
+    assert view.kinds_of_calls == [tuple(popular)]
     assert len(proposals) == 1
     assert proposals[0].target == "stm_58"
     assert proposals[0].score == 0.99

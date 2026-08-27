@@ -58,9 +58,9 @@ class HintedView:
         """Delegate shared-entity discovery to the wrapped view."""
         return self._view.statements_sharing(entity_ids)
 
-    def kind_of(self, statement_id: str) -> str | None:
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
         """Delegate statement-kind lookup to the wrapped view."""
-        return self._view.kind_of(statement_id)
+        return self._view.kinds_of(statement_ids)
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         """Delegate link-type admission to the wrapped view."""
@@ -150,10 +150,9 @@ class LiveSubstrate:
             statement_id: frozenset(shared) for statement_id, shared in grouped.items()
         }
 
-    def kind_of(self, statement_id: str) -> str | None:
-        """Return the current kind of a statement that still exists."""
-        statement = store.get_statement(self._server._db(), statement_id)
-        return None if statement is None else statement["kind"]
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        """Return current kinds for statements that still exist."""
+        return store.get_statement_kinds(self._server._db(), statement_ids)
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         """Return link types the ontology admits from a source kind to a target."""

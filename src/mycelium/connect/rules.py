@@ -168,8 +168,8 @@ def _resolve_in_substrate(
 ) -> list[_Resolved]:
     """Union and rank eligible substrate targets for one target phrase.
 
-    Similarity for candidates outside the neighbour result is fetched in one batch,
-    so anchored recall is uncapped without increasing substrate round trips.
+    Similarities and kinds are fetched in batches, so anchored recall stays uncapped
+    without per-candidate substrate round trips.
     """
     neighbour_scores = dict(view.neighbours(phrase_vec, k))
     candidate_ids = (
@@ -184,7 +184,7 @@ def _resolve_in_substrate(
     similarity_scores = (
         view.similarity(phrase_vec, sorted(unscored_ids)) if unscored_ids else {}
     )
-    resolved: list[_Resolved] = []
+    eligible: list[tuple[str, float, frozenset[str]]] = []
     for statement_id in candidate_ids:
         score = neighbour_scores.get(statement_id)
         if score is None:
@@ -200,9 +200,13 @@ def _resolve_in_substrate(
             unanchored_threshold,
         ):
             continue
-        kind = view.kind_of(statement_id)
-        if kind is not None:
-            resolved.append(_Resolved(statement_id, score, shared, kind))
+        eligible.append((statement_id, score, shared))
+    kinds = view.kinds_of(sorted(statement_id for statement_id, _, _ in eligible))
+    resolved = [
+        _Resolved(statement_id, score, shared, kinds[statement_id])
+        for statement_id, score, shared in eligible
+        if statement_id in kinds
+    ]
     resolved.sort(key=lambda candidate: (-candidate.score, candidate.target))
     return resolved
 

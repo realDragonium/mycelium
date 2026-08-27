@@ -71,8 +71,8 @@ def test_live_substrate_wires_embeddings_index_mentions_and_store(
             mentioning: frozenset({entity_id})
         }
         assert view.statements_sharing(frozenset()) == {}
-        assert view.kind_of(statement_a) == "event"
-        assert view.kind_of("nope") is None
+        assert view.kinds_of([statement_a, "nope"]) == {statement_a: "event"}
+        assert view.kinds_of([]) == {}
 
         result = find_candidates(
             [BatchStatement(0, "event", "a user submits the login form")],
@@ -178,8 +178,12 @@ def test_hinted_view_widens_funnel_entity_candidates_without_persisting():
                 return {"stm_x": frozenset({"e"})}
             return {}
 
-        def kind_of(self, statement_id: str) -> str | None:
-            return "state" if statement_id == "stm_x" else None
+        def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+            return {
+                statement_id: "state"
+                for statement_id in statement_ids
+                if statement_id == "stm_x"
+            }
 
         def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
             return frozenset({"requires"})

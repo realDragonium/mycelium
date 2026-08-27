@@ -1,12 +1,12 @@
 """Measure lexical link-pattern hit and false-fire rates without storing text.
 
-A hit means an existing link (S -> T, type L) has a cue of type L in the
-source statement. A pair fire is a unique (S, C, L) proposed by a cue where S
-and another statement C share an entity mention; it is true when that exact
-link exists and false otherwise. Statement-level precision for a pattern is
-the fraction of statements it matches that have any outgoing link of its type.
-Statements without mentions produce no pairs. Vocabulary types with no links
-have no ground truth rather than a zero-percent hit rate.
+A hit means an existing link (S -> T, type L) has a matching to-role cue on S
+or from-role cue on T. A pair fire is a unique directed pair and link type
+proposed by a cue between statements sharing an entity mention; it is true when
+that exact link exists and false otherwise. Statement-level precision checks
+outgoing links for to-role cue carriers and incoming links for from-role cue
+carriers. Statements without mentions produce no pairs. Vocabulary types with
+no links have no ground truth rather than a zero-percent hit rate.
 
 Usage:
     uv run python scripts/measure_link_patterns.py --data-dir PATH
@@ -383,21 +383,22 @@ def render_markdown(report: dict, *, source_label: str) -> str:
             "## How to read",
             "",
             (
-                "A **hit** is an existing link whose type is proposed by a cue in "
-                "its source statement. The target does not affect hit detection."
+                "A **hit** is an existing link whose source carries a to-role cue "
+                "of its type or whose target carries a from-role cue of its type."
             ),
             "",
             (
-                "A **pair fire** is a unique source, candidate, and link-type triple "
-                "where the source has that cue and both statements mention at least "
-                "one shared entity. It is true when the exact directed link exists "
-                "and false otherwise. Statements without mentions produce no pairs."
+                "A **pair fire** is a unique directed pair and link-type triple "
+                "proposed by a cue between statements that share an entity mention. "
+                "It is true when the exact directed link exists and false otherwise. "
+                "Statements without mentions produce no pairs."
             ),
             "",
             (
                 "**Statement precision** is the fraction of statements matched by a "
-                "pattern that have at least one outgoing link of that pattern's type, "
-                "regardless of target. Vocabulary types with zero links have no ground "
+                "pattern that have a link of that pattern's type: outgoing for to-role "
+                "cue carriers and incoming for from-role cue carriers, regardless of "
+                "the other endpoint. Vocabulary types with zero links have no ground "
                 "truth rather than a zero-percent hit rate."
             ),
             "",

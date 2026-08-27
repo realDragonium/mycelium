@@ -219,8 +219,8 @@ non-selector at 99%+ false pair fires everywhere.
 
 ## How to read
 
-A **hit** is an existing link whose type is proposed by a cue in its source statement. The target does not affect hit detection.
+A **hit** is an existing link whose source carries a to-role cue of its type or whose target carries a from-role cue of its type.
 
-A **pair fire** is a unique source, candidate, and link-type triple where the source has that cue and both statements mention at least one shared entity. It is true when the exact directed link exists and false otherwise. Statements without mentions produce no pairs.
+A **pair fire** is a unique directed pair and link-type triple proposed by a cue between statements that share an entity mention. It is true when the exact directed link exists and false otherwise. Statements without mentions produce no pairs.
 
-**Statement precision** is the fraction of statements matched by a pattern that have at least one outgoing link of that pattern's type, regardless of target. Vocabulary types with zero links have no ground truth rather than a zero-percent hit rate.
+**Statement precision** is the fraction of statements matched by a pattern that have a link of that pattern's type: outgoing for to-role cue carriers and incoming for from-role cue carriers, regardless of the other endpoint. Vocabulary types with zero links have no ground truth rather than a zero-percent hit rate.

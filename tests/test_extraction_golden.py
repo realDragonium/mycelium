@@ -351,9 +351,12 @@ class WordOverlapView:
     ) -> dict[str, frozenset[str]]:
         return {}
 
-    def kind_of(self, statement_id: str) -> str | None:
-        stored = self.existing.get(statement_id)
-        return stored[0] if stored else None
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        return {
+            statement_id: self.existing[statement_id][0]
+            for statement_id in statement_ids
+            if statement_id in self.existing
+        }
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         return frozenset(link_type for link_type, _alias, _dir in seed_rows())
