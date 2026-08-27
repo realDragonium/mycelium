@@ -6006,8 +6006,14 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     restored = False
     try:
         with store.transaction(_db()):
-            _idx().save(index_snapshot_path)
-            _name_idx().save(name_index_snapshot_path)
+            try:
+                _idx().save(index_snapshot_path)
+                _name_idx().save(name_index_snapshot_path)
+            except BaseException:
+                for _, snapshot_path, _ in snapshots:
+                    with contextlib.suppress(OSError):
+                        snapshot_path.unlink(missing_ok=True)
+                raise
             snapshots_taken = True
             try:
                 for op in ops:
@@ -6021,6 +6027,10 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
             # A failed commit leaves the connection's transaction open, so a
             # new transaction block could commit the replay it should recover.
             with store.write_lock():
+                # Roll back before restoring so no writer can interleave or
+                # later commit the failed replay's pending rows.
+                with contextlib.suppress(sqlite3.Error):
+                    _db().rollback()
                 _restore_index_snapshots(snapshots)
         raise
 
