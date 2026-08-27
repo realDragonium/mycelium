@@ -1198,6 +1198,30 @@ def _persist_name_index() -> None:
     _name_idx().save(_name_idx_path())
 
 
+def _restore_index_snapshots(
+    snapshots: tuple[tuple[vector.Index, Path, Path], ...],
+) -> None:
+    """Best-effort restore each index without hiding the replay failure.
+
+    Restore indexes independently so one damaged snapshot cannot prevent the
+    other from recovering. Keep any snapshot whose restore, persistence, or
+    cleanup fails so an operator still has the recovery artifact.
+    """
+    for index, snapshot_path, live_path in snapshots:
+        try:
+            index.restore(snapshot_path)
+            index.save(live_path)
+            snapshot_path.unlink(missing_ok=True)
+        except Exception:
+            logger.exception(
+                "failed to restore vector index %s from %s; "
+                "snapshot kept at %s for operator recovery",
+                live_path,
+                snapshot_path,
+                snapshot_path,
+            )
+
+
 def _index_name(name_id: str, text: str) -> None:
     """Embed `text` and register the vector under `name_id`. Used on
     name creation."""
@@ -5959,27 +5983,31 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     name_index_snapshot_path = _name_idx_path().with_name(
         _name_idx_path().name + ".pre-apply"
     )
-    _idx().save(index_snapshot_path)
-    try:
-        _name_idx().save(name_index_snapshot_path)
+    snapshots = (
+        (_idx(), index_snapshot_path, _idx_path()),
+        (_name_idx(), name_index_snapshot_path, _name_idx_path()),
+    )
 
-        # All-or-nothing replay: one transaction owns every op's substrate
-        # writes. Each replayed tool opens its own `transaction(_db())`, which
-        # joins this outer one (reentrant), so a single op raising rolls the
-        # whole draft back.
+    # All-or-nothing replay: one transaction owns every op's substrate
+    # writes. Each replayed tool opens its own `transaction(_db())`, which
+    # joins this outer one (reentrant), so a single op raising rolls the
+    # whole draft back. Snapshot and recovery run under the same process-wide
+    # write lock, serializing them against every index mutation.
+    with store.transaction(_db()):
+        _idx().save(index_snapshot_path)
+        _name_idx().save(name_index_snapshot_path)
         try:
-            with store.transaction(_db()):
-                for op in ops:
-                    results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
-        except Exception:
-            _idx().restore(index_snapshot_path)
-            _name_idx().restore(name_index_snapshot_path)
-            _persist_index()
-            _persist_name_index()
+            for op in ops:
+                results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
+        except BaseException:
+            _restore_index_snapshots(snapshots)
             raise
-    finally:
-        index_snapshot_path.unlink(missing_ok=True)
-        name_index_snapshot_path.unlink(missing_ok=True)
+
+        # Snapshot cleanup is best-effort: it must not turn a successful
+        # replay into a failure.
+        for _, snapshot_path, _ in snapshots:
+            with contextlib.suppress(OSError):
+                snapshot_path.unlink(missing_ok=True)
     return {"applied": len(results), "results": results}
 
 
