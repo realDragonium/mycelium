@@ -41,6 +41,16 @@ four largest types (`contains` 0/487, `triggers` 3/331, `requires` 0/170,
 `governed-by` 0/104) carry almost none; shared-entity mention alone stays a
 non-selector at 99%+ false pair fires everywhere.
 
+## Decisions taken after this measurement
+
+The tables above measure the pre-decision pattern set. On these numbers,
+`restricts-limits` was restricted to `rule`, the seeded `restricts` vocabulary
+was kept (the exposure is fixed at the pattern, not the words), `proceeds-then`
+stays unshipped with its `proceeds`-vs-`triggers` mapping recorded as
+undecidable on this corpus, and `governed-by-phrase` will not ship for lack of
+any lexical surface. See `SHIPPED_PATTERNS` in `src/mycelium/connect/rules.py`
+for the per-pattern rationale.
+
 ## Totals
 
 | Statements | Links | Links in vocabulary | Hits | Links outside vocabulary |
