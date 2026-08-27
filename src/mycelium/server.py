@@ -3398,7 +3398,8 @@ def submit_connected_batch(
     bidirectional entailment when the `nli` extra is installed. **Contradiction
     flags**, filed as knowledge gaps, where your text and an existing
     statement can't both hold. A contradiction only becomes a conflict when
-    the statements share a mentioned entity; suppressed contradictions are
+    the statements share an entity, mentioned in the text or asserted via
+    `mention_hints`; suppressed contradictions are
     counted in `suppressed_conflicts`, and the candidate still surfaces under
     `related` unless another proposal already names it.
 
