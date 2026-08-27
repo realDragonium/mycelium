@@ -393,9 +393,13 @@ def import_substrate(
         try:
             store.migrate(conn)  # DDL + seed; owns its own commit
             with store.transaction(conn):
-                aliases_restored = _clear_archived_ontology_tables(conn, row_counts)
-                _load_data_jsonl(conn, staging / "data.jsonl")
-                if aliases_restored:
+                cleared_tables = _clear_archived_ontology_tables(conn, row_counts)
+                cleared_tables |= _load_data_jsonl(
+                    conn,
+                    staging / "data.jsonl",
+                    already_cleared=cleared_tables,
+                )
+                if "link_type_aliases" in cleared_tables:
                     conn.execute(
                         "INSERT INTO link_type_alias_embed_queue "
                         "(link_type, alias, enqueued_at) "
@@ -432,16 +436,15 @@ def import_substrate(
 
 def _clear_archived_ontology_tables(
     conn: sqlite3.Connection, row_counts: dict[str, Any]
-) -> bool:
+) -> frozenset[str]:
     covered_tables = tuple(
         table for table in _ONTOLOGY_CONFIG_TABLES if table in row_counts
     )
     for table in covered_tables:
         conn.execute(f"DELETE FROM {table}")
-    aliases_restored = "link_type_aliases" in covered_tables
-    if aliases_restored:
+    if "link_type_aliases" in covered_tables:
         conn.execute("DELETE FROM link_type_alias_embed_queue")
-    return aliases_restored
+    return frozenset(covered_tables)
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
@@ -487,10 +490,16 @@ def _insert_archived_row(
     )
 
 
-def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
+def _load_data_jsonl(
+    conn: sqlite3.Connection,
+    path: Path,
+    *,
+    already_cleared: frozenset[str],
+) -> frozenset[str]:
     """Stream the JSONL back into the freshly-migrated DB. Each line
     becomes an INSERT into the table its `_kind` resolves to."""
     legacy_skipped = 0
+    lazily_cleared: set[str] = set()
     columns = {t: _table_columns(conn, t) for t in _KIND_TO_TABLE.values()}
     with path.open("r", encoding="utf-8") as fp:
         for line in fp:
@@ -505,6 +514,17 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
             table = _KIND_TO_TABLE.get(kind)
             if table is None:
                 raise ValueError(f"unknown record kind in archive: {kind!r}")
+            if (
+                table in _ONTOLOGY_CONFIG_TABLES
+                and table not in already_cleared
+                and table not in lazily_cleared
+            ):
+                # Records are authoritative too, so stripped manifests cannot
+                # leave seeds that collide with archived rows.
+                conn.execute(f"DELETE FROM {table}")
+                if table == "link_type_aliases":
+                    conn.execute("DELETE FROM link_type_alias_embed_queue")
+                lazily_cleared.add(table)
             if table == "link_type_aliases" and "direction" not in row:
                 raise ValueError(
                     "data.jsonl link_type_alias record has no direction; "
@@ -525,6 +545,7 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
             "skipped %d legacy annotation record(s) from pre-removal archive",
             legacy_skipped,
         )
+    return frozenset(lazily_cleared)
 
 
 def _restore_prompts(prompts_db_path: Path, path: Path) -> None:

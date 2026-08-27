@@ -435,6 +435,62 @@ def test_import_legacy_archive_without_config_tables_keeps_seeds(tmp_path):
         assert _row_count(dst, table) > 0, table
 
 
+def test_import_survives_manifest_stripped_of_config_row_counts(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    conn = store.connect(src / "mycelium.db")
+    store.migrate(conn)
+    with store.transaction(conn):
+        store.upsert_statement_kind_glossary(
+            conn, "event", "stripped manifest description", None
+        )
+    conn.close()
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+    config_tables = (
+        "statement_kind_glossary",
+        "statement_link_type_glossary",
+        "entity_link_type_glossary",
+        "kind_link_matrix",
+        "link_type_aliases",
+    )
+
+    def _strip_config_row_counts(work: Path) -> None:
+        manifest_path = work / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for table in config_tables:
+            del manifest["row_counts"][table]
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    stripped_archive = _repack(
+        archive,
+        tmp_path / "work",
+        tmp_path / "stripped.tar.gz",
+        _strip_config_row_counts,
+    )
+    dst = tmp_path / "dst"
+    backup.import_substrate(stripped_archive, dst)
+
+    conn = store.connect(dst / "mycelium.db")
+    try:
+        row = store.get_statement_kind_glossary(conn, "event")
+        assert row["description"] == "stripped manifest description"
+        assert _row_count(dst, "link_type_aliases") == _row_count(
+            src, "link_type_aliases"
+        )
+        queued_null_alias = conn.execute(
+            "SELECT 1 FROM link_type_aliases AS aliases "
+            "JOIN link_type_alias_embed_queue AS queue "
+            "ON queue.link_type = aliases.link_type "
+            "AND queue.alias = aliases.alias "
+            "WHERE aliases.embedding IS NULL LIMIT 1"
+        ).fetchone()
+        assert queued_null_alias is not None
+    finally:
+        conn.close()
+
+
 def test_round_trip_preserves_history(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
