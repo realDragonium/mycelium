@@ -96,6 +96,27 @@ def test_zero_candidates_never_touches_default_model(
     assert result.nli_pairs == NliPairs(classified=0, skipped=0, budget=400)
 
 
+def test_unresolvable_candidates_never_touch_default_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail() -> None:
+        raise AssertionError("default model must not be touched")
+
+    monkeypatch.delenv("MYCELIUM_NLI_MAX_PAIRS", raising=False)
+    monkeypatch.setattr(pipeline.nli, "default_model", fail)
+
+    result = pipeline.run(
+        [BatchStatement(0, "event", "new")],
+        FakeView([("missing-first", 0.9), ("missing-second", 0.8)]),
+        text_of=lambda statement_id: None,
+    )
+
+    assert result.nli == "nothing_to_classify"
+    assert result.nli_reason is None
+    assert result.verdicts == []
+    assert result.nli_pairs == NliPairs(classified=0, skipped=0, budget=400)
+
+
 def test_pair_budget_classifies_ranked_prefix_and_preserves_skipped_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -170,7 +191,17 @@ def test_pair_counts_exclude_candidate_with_unresolvable_text(
     )
 
     assert result.nli == "ran"
-    assert result.nli_pairs == NliPairs(classified=2, skipped=2, budget=4)
-    assert model.calls == [[("new", "existing text"), ("existing text", "new")]]
+    assert result.nli_pairs == NliPairs(classified=4, skipped=0, budget=4)
+    assert model.calls == [
+        [
+            ("new", "existing text"),
+            ("existing text", "new"),
+            ("new", "skipped text"),
+            ("skipped text", "new"),
+        ]
+    ]
     assert result.verdicts is not None
-    assert [verdict.statement_id for verdict in result.verdicts] == ["classified"]
+    assert [verdict.statement_id for verdict in result.verdicts] == [
+        "classified",
+        "budget-skipped",
+    ]

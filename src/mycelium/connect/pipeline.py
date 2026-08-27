@@ -51,7 +51,14 @@ def run(
     funnel = find_candidates(batch, view)
     link_proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type())
     pair_budget = nli.max_pairs()
-    if not funnel.candidates:
+    # Resolve text before budgeting so each candidate counted here costs two pairs.
+    # The request-scoped reader is memoized, so classify_candidates can read it again.
+    resolvable_candidates = [
+        candidate
+        for candidate in funnel.candidates
+        if text_of(candidate.statement_id) is not None
+    ]
+    if not resolvable_candidates:
         return PipelineResult(
             funnel,
             link_proposals,
@@ -62,8 +69,8 @@ def run(
         )
 
     candidate_limit = pair_budget // 2
-    classified_candidates = funnel.candidates[:candidate_limit]
-    skipped_pairs = 2 * (len(funnel.candidates) - len(classified_candidates))
+    classified_candidates = resolvable_candidates[:candidate_limit]
+    skipped_pairs = 2 * (len(resolvable_candidates) - len(classified_candidates))
     try:
         model = nli_model if nli_model is not None else nli.default_model()
         verdicts = nli.classify_candidates(
@@ -83,8 +90,6 @@ def run(
             reason,
             NliPairs(classified=0, skipped=0, budget=pair_budget),
         )
-    # Budget slots consumed by text-unresolvable candidates are neither classified
-    # nor counted as budget-skipped; that is accepted.
     classified_pairs = 2 * len(verdicts)
     return PipelineResult(
         funnel,
