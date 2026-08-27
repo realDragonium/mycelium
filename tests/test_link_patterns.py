@@ -186,6 +186,7 @@ def test_measure_reports_hits_pairs_precision_and_no_ground_truth():
         links,
         mentions,
         ["accepts", "composes", "requires", "triggers"],
+        aliases={},
     )
 
     assert report["totals"]["hits"] == 2
@@ -206,7 +207,9 @@ def test_measure_scores_inverted_cue_evidence_on_the_incoming_edge():
     links = [Link("stm_parent", "stm_child", "contains")]
     mentions = {"stm_child": {"ent_policy"}, "stm_parent": {"ent_policy"}}
 
-    report = measure_link_patterns.measure(statements, links, mentions, ["contains"])
+    report = measure_link_patterns.measure(
+        statements, links, mentions, ["contains"], aliases={}
+    )
 
     # The only cue sits on the child, but the edge it evidences is incoming.
     assert report["totals"]["hits"] == 1
@@ -251,8 +254,8 @@ def test_load_snapshot_filters_entity_targets_and_keeps_external_statements(tmp_
         "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
     )
 
-    statements, links, mentions, vocabulary = measure_link_patterns.load_snapshot(
-        snapshot
+    statements, links, mentions, vocabulary, aliases = (
+        measure_link_patterns.load_snapshot(snapshot)
     )
 
     assert len(statements) == 3
@@ -260,6 +263,7 @@ def test_load_snapshot_filters_entity_targets_and_keeps_external_statements(tmp_
     assert {link.to_id for link in links} == {"stm_2", "stm_missing"}
     assert mentions["stm_1"] == {"ent_1"}
     assert vocabulary == ["requires", "triggers"]
+    assert aliases == store.seed_aliases_by_type()
 
 
 def test_render_markdown_never_contains_statement_text():
@@ -268,6 +272,7 @@ def test_render_markdown_never_contains_statement_text():
         [],
         {},
         ["accepts"],
+        aliases={},
     )
 
     markdown = measure_link_patterns.render_markdown(report, source_label="fixture")

@@ -24,6 +24,7 @@ import argparse
 import json
 import sys
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -94,13 +95,14 @@ def measure(
     links: list[Link],
     mentions: dict[str, set[str]],
     vocabulary: list[str],
+    aliases: Mapping[str, Sequence[str]],
 ) -> dict:
     """Return link-pattern measurements as plain report data."""
     vocabulary_set = set(vocabulary)
     vocabulary_types = sorted(vocabulary_set)
     statement_by_id = {statement.id: statement for statement in statements}
     cues_by_statement = {
-        statement.id: find_cues(statement.text, statement.kind)
+        statement.id: find_cues(statement.text, statement.kind, aliases)
         for statement in statements
     }
     # A from-capturing cue evidences an incoming edge, so hits split by the
@@ -406,7 +408,13 @@ def render_markdown(report: dict, *, source_label: str) -> str:
 
 def load_snapshot(
     path: Path,
-) -> tuple[list[Stmt], list[Link], dict[str, set[str]], list[str]]:
+) -> tuple[
+    list[Stmt],
+    list[Link],
+    dict[str, set[str]],
+    list[str],
+    dict[str, tuple[str, ...]],
+]:
     """Load the evaluator's plain data from a get_statements JSONL export."""
     statements: list[Stmt] = []
     links: list[Link] = []
@@ -432,12 +440,18 @@ def load_snapshot(
                 if link.get("to_id", "").startswith("stm_")
             )
     vocabulary = sorted({link.link_type for link in links})
-    return statements, links, mentions, vocabulary
+    return statements, links, mentions, vocabulary, store.seed_aliases_by_type()
 
 
 def load_store(
     data_dir: Path,
-) -> tuple[list[Stmt], list[Link], dict[str, set[str]], list[str]]:
+) -> tuple[
+    list[Stmt],
+    list[Link],
+    dict[str, set[str]],
+    list[str],
+    dict[str, tuple[str, ...]],
+]:
     """Load evaluator data from an existing Mycelium data directory."""
     conn = store.connect(data_dir / "mycelium.db")
     try:
@@ -469,19 +483,29 @@ def load_store(
             row["link_type"] for row in store.list_statement_link_type_glossary(conn)
         }
         vocabulary = sorted(materialized | glossary)
-        return statements, links, dict(mentions), vocabulary
+        return (
+            statements,
+            links,
+            dict(mentions),
+            vocabulary,
+            store.aliases_by_type(conn),
+        )
     finally:
         conn.close()
 
 
-def _show_cues(statements: list[Stmt], limit: int) -> None:
+def _show_cues(
+    statements: list[Stmt],
+    limit: int,
+    aliases: Mapping[str, Sequence[str]],
+) -> None:
     """Print at most the requested number of matched cue texts per pattern."""
     if limit <= 0:
         return
     shown: dict[str, int] = defaultdict(int)
     samples: list[tuple[str, str, str]] = []
     for statement in statements:
-        for cue in find_cues(statement.text, statement.kind):
+        for cue in find_cues(statement.text, statement.kind, aliases):
             if shown[cue.pattern] < limit:
                 samples.append((cue.pattern, cue.cue, cue.phrase or ""))
                 shown[cue.pattern] += 1
@@ -523,17 +547,17 @@ def main(argv: list[str] | None = None) -> int:
         if not db_path.exists():
             print(f"database not found: {db_path}", file=sys.stderr)
             return 1
-        statements, links, mentions, vocabulary = load_store(args.data_dir)
+        statements, links, mentions, vocabulary, aliases = load_store(args.data_dir)
     else:
-        statements, links, mentions, vocabulary = load_snapshot(args.snapshot)
+        statements, links, mentions, vocabulary, aliases = load_snapshot(args.snapshot)
 
-    report = measure(statements, links, mentions, vocabulary)
+    report = measure(statements, links, mentions, vocabulary, aliases)
     source_label = args.label if args.label is not None else str(source_path)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         render_markdown(report, source_label=source_label), encoding="utf-8"
     )
-    _show_cues(statements, args.show_cues)
+    _show_cues(statements, args.show_cues, aliases)
     totals = report["totals"]
     rate = totals["hit_rate"] or 0.0
     print(
