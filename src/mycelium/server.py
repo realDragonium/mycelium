@@ -21,6 +21,7 @@ import sqlite3
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -5956,7 +5957,7 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     in seq order; each op invokes its matching MCP tool wrapper with the
     curator's principal already in the contextvar (so the role gate
     passes naturally). All-or-nothing: a single op raising halts replay
-    and surfaces the error. Successful replay marks the draft `approved`.
+    and surfaces the error. The caller records approval after a successful replay.
     A non-replaying op kind such as `flag` is skipped with its own marker.
 
     Returns `{applied: int, results: [...]}`. On failure, raises with
@@ -5979,9 +5980,12 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     results_by_seq: dict[int, Any] = {}
 
-    index_snapshot_path = _idx_path().with_name(_idx_path().name + ".pre-apply")
+    snapshot_id = uuid.uuid4().hex
+    index_snapshot_path = _idx_path().with_name(
+        _idx_path().name + ".pre-apply-" + snapshot_id
+    )
     name_index_snapshot_path = _name_idx_path().with_name(
-        _name_idx_path().name + ".pre-apply"
+        _name_idx_path().name + ".pre-apply-" + snapshot_id
     )
     snapshots = (
         (_idx(), index_snapshot_path, _idx_path()),
@@ -5991,23 +5995,33 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     # All-or-nothing replay: one transaction owns every op's substrate
     # writes. Each replayed tool opens its own `transaction(_db())`, which
     # joins this outer one (reentrant), so a single op raising rolls the
-    # whole draft back. Snapshot and recovery run under the same process-wide
-    # write lock, serializing them against every index mutation.
-    with store.transaction(_db()):
-        _idx().save(index_snapshot_path)
-        _name_idx().save(name_index_snapshot_path)
-        try:
-            for op in ops:
-                results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
-        except BaseException:
+    # whole draft back. Per-attempt paths preserve recovery artifacts across
+    # retries; the write lock serializes snapshot and recovery against index
+    # mutations in this process.
+    snapshots_taken = False
+    restored = False
+    try:
+        with store.transaction(_db()):
+            _idx().save(index_snapshot_path)
+            _name_idx().save(name_index_snapshot_path)
+            snapshots_taken = True
+            try:
+                for op in ops:
+                    results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
+            except BaseException:
+                restored = True
+                _restore_index_snapshots(snapshots)
+                raise
+    except BaseException:
+        if snapshots_taken and not restored:
+            # A failed commit leaves the connection's transaction open, so a
+            # new transaction block could commit the replay it should recover.
             _restore_index_snapshots(snapshots)
-            raise
+        raise
 
-        # Snapshot cleanup is best-effort: it must not turn a successful
-        # replay into a failure.
-        for _, snapshot_path, _ in snapshots:
-            with contextlib.suppress(OSError):
-                snapshot_path.unlink(missing_ok=True)
+    for _, snapshot_path, _ in snapshots:
+        with contextlib.suppress(OSError):
+            snapshot_path.unlink(missing_ok=True)
     return {"applied": len(results), "results": results}
 
 

@@ -272,10 +272,7 @@ def test_approve_failure_restores_vector_indexes(tmp_path, monkeypatch):
         name_index_path = tmp_path / "mycelium-names.vec"
         assert vector.Index.load(index_path).ids() == statement_ids_before
         assert vector.Index.load(name_index_path).ids() == name_ids_before
-        assert not index_path.with_name(index_path.name + ".pre-apply").exists()
-        assert not name_index_path.with_name(
-            name_index_path.name + ".pre-apply"
-        ).exists()
+        assert list(tmp_path.glob("*.pre-apply*")) == []
 
 
 def test_list_drafts_endpoint_returns_counts(tmp_path, monkeypatch):
