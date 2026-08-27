@@ -3488,18 +3488,18 @@ def submit_connected_batch(
 
 def _ingest_specs(
     items: list[ExtractedItem],
-    condition_links: list[tuple[int, int]],
+    condition_links: list[tuple[int, int, str]],
     cut_links: list[tuple[int, int, str]],
 ) -> list[ConnectedStatementSpec]:
     """Build connected specs with the segmenter's conditional and cut links."""
     specs: list[ConnectedStatementSpec] = [
         {"kind": item.kind, "text": item.text} for item in items
     ]
-    for claim_position, condition_position in condition_links:
+    for claim_position, condition_position, link_type in condition_links:
         specs[claim_position].setdefault("links", []).append(
             {
                 "to_id": f"@{condition_position}",
-                "link_type": "requires",
+                "link_type": link_type,
             }
         )
     for source_position, target_position, link_type in cut_links:
@@ -3648,8 +3648,10 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
 
     A kind comes from phrasing shape matching, never a guess. A fragment whose
     shape is ambiguous or matches nothing, or that is still compound after the
-    split, becomes a **`flag` op** in the draft: a TODO for whoever reads it. A
-    fragment that classifies but then trips the catalog becomes a flag too.
+    split, becomes a **`flag` op** in the draft: a TODO for whoever reads it.
+    A kind-independent catalog refusal before classification has reason
+    `rejected`; a classified statement refused during planning has reason
+    `phrasing`.
 
     A conditional opener proposes a `requires` link from the claim to the
     condition. A cut whose connective is a registered alias of exactly one link
@@ -3750,7 +3752,9 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
     total = len(extraction.items) + len(extraction_fragment_flags)
     condition_links = sum(
         claim_position in run.new_of
-        for claim_position, _condition_position in extraction.condition_links
+        for claim_position, _condition_position, _link_type in (
+            extraction.condition_links
+        )
     )
     # The response reports every decision the gate made; the draft carries only
     # the absorptions whose edge survived, so the two counts can differ.
@@ -5960,8 +5964,8 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     and surfaces the error. The caller records approval after a successful replay.
     A non-replaying op kind such as `flag` is skipped with its own marker.
 
-    Returns `{applied: int, results: [...]}`. On failure, raises with
-    the seq/kind that exploded.
+    Returns `{applied: int, skipped: int, results: [...]}`. On failure,
+    raises with the seq/kind that exploded.
     """
     from . import drafts_store
 
@@ -6023,7 +6027,11 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     for _, snapshot_path, _ in snapshots:
         with contextlib.suppress(OSError):
             snapshot_path.unlink(missing_ok=True)
-    return {"applied": len(results), "results": results}
+    return {
+        "applied": sum("result" in item for item in results),
+        "skipped": sum("skipped" in item for item in results),
+        "results": results,
+    }
 
 
 def run() -> None:

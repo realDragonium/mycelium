@@ -54,8 +54,8 @@ def _observed_links(result: ex.Extraction) -> tuple[tuple[str, str, str], ...]:
     """Render condition and cut links the way `_ingest_specs` types them."""
     texts = [item.text for item in result.items]
     links = [
-        (texts[claim], "requires", texts[condition])
-        for claim, condition in result.condition_links
+        (texts[claim], link_type, texts[condition])
+        for claim, condition, link_type in result.condition_links
     ]
     links += [
         (texts[left], link_type, texts[right])
@@ -134,13 +134,16 @@ GOLDEN: dict[str, Golden] = {
         ),
         links=(("The draft is created", "proceeds", "an embedding is queued"),),
     ),
-    # ", then" cuts, but spaCy never parses the right clause as verb
-    # coordination, so the remnant cannot be shown to stand alone and flags
-    # instead of linking. Conservative by design; a better parse would lift it.
-    "comma-then-flags-remnant": Golden(
+    # spaCy does not parse ", then" as verb coordination, but the right side's
+    # stand-alone parse proves it is a whole clause, so the conservative check
+    # lifts the remnant and preserves the typed link.
+    "comma-then-proceeds": Golden(
         "The draft is created, then an embedding is queued.",
-        statements=(("event", "The draft is created"),),
-        flags=(("unsplit", "an embedding is queued"),),
+        statements=(
+            ("event", "The draft is created"),
+            ("event", "an embedding is queued"),
+        ),
+        links=(("The draft is created", "proceeds", "an embedding is queued"),),
     ),
     # -- flags: nothing is dropped and nothing is guessed.
     "unmatched-verb": Golden(

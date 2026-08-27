@@ -1,16 +1,22 @@
 """Deterministically segment raw prose on the phrasing catalog's atomicity cues.
 
 The segmenter preserves raw offsets while splitting blocks and spaCy sentences,
-then recursively applies semicolon, compound-phrase, conditional, and conservative
-verb-coordination cuts in that order. Conditional clauses become condition
-fragments and propose a claim ``requires`` condition relation; causal
+then recursively applies semicolon, compound-phrase, conditional or comma-splice,
+and conservative verb-coordination cuts in that order. Conditional clauses become
+condition fragments and propose a claim ``requires`` condition relation; causal
 subordinators still cut but do not propose that relation. Final leaves are cleaned,
-numbered in reading order, and checked again with the atomicity-only catalog so
-compound remnants are marked rather than guessed.
+their newline-bearing whitespace is collapsed, and they are numbered in reading
+order and checked again with the atomicity-only catalog so compound remnants are
+marked rather than guessed.
+
+Finite opener-less comma splices retain claim roles on both sides because the
+comma states no relation. Rare inverted conditionals are therefore under-labelled
+as claims rather than over-claimed as conditions.
 
 Coordination may project a shared subject into a subject-less conjunct. That
 fragment's span still covers only its original conjunct, so its surface text is
-deliberately not an exact substring of the source.
+deliberately not an exact substring of the source. Newline-normalized fragments
+similarly retain the envelope of their raw source material.
 """
 
 from __future__ import annotations
@@ -60,6 +66,7 @@ class ConditionProposal:
     claim: int
     condition: int
     cue: str
+    link_type: str = "requires"
 
 
 @dataclass(frozen=True)
@@ -115,6 +122,17 @@ _COMPOUND_PATTERNS = tuple(
 _SINGLE_WORD_SUBORDINATORS = frozenset(
     opener for opener in phrasing_cues.SUBORDINATOR_STRIP if " " not in opener
 )
+_TRAILING_MULTIWORD_SUBORDINATOR_RE = re.compile(
+    r"(?<=\s)(?:"
+    + "|".join(
+        r"\s+".join(re.escape(word) for word in opener.split())
+        for opener in phrasing_cues.SUBORDINATOR_STRIP
+        if " " in opener
+    )
+    + r")(?=\s)",
+    re.IGNORECASE,
+)
+_LEAF_WHITESPACE_RE = re.compile(r"\s+")
 _MAX_CUT_DEPTH = 10
 
 
@@ -122,7 +140,7 @@ def _parse(text: str, parses: _Parses) -> "Doc":
     """Parse a working text, reusing this segmentation's earlier parse."""
     doc = parses.get(text)
     if doc is None:
-        doc = phrasing._get_nlp()(text)
+        doc = phrasing.get_nlp()(text)
         parses[text] = doc
     return doc
 
@@ -250,6 +268,25 @@ def _clean_piece(piece: _Piece) -> _Piece:
     return _subpiece(piece, start, end)
 
 
+def _normalize_leaf_newlines(piece: _Piece) -> _Piece:
+    """Collapse internal newline-bearing whitespace without drifting origins."""
+    text_parts: list[str] = []
+    origins: list[int | None] = []
+    cursor = 0
+    for match in _LEAF_WHITESPACE_RE.finditer(piece.text):
+        if "\n" not in match.group():
+            continue
+        text_parts.extend((piece.text[cursor : match.start()], " "))
+        origins.extend(piece.origins[cursor : match.start()])
+        origins.append(piece.origins[match.start()])
+        cursor = match.end()
+    if cursor == 0:
+        return piece
+    text_parts.append(piece.text[cursor:])
+    origins.extend(piece.origins[cursor:])
+    return replace(piece, text="".join(text_parts), origins=origins)
+
+
 def _span(piece: _Piece) -> tuple[int, int] | None:
     """Return the original envelope of a piece's retained material."""
     origins = [origin for origin in piece.origins if origin is not None]
@@ -354,9 +391,9 @@ def _cut_compound_phrases(piece: _Piece, parses: _Parses) -> _Split | None:
     if coordinated:
         head, conjunct = coordinated
         right = _project_subject(piece, head, conjunct, right)
-    else:
-        # No parsed coordination behind the phrase: the remnant is cut but
-        # cannot be shown to stand alone, so it flags.
+    elif not _stands_alone(right, parses):
+        # A parse miss is safe to lift only when the remnant independently
+        # demonstrates that it is a whole statement.
         right = replace(right, flagged=True)
     return _split(
         piece,
@@ -493,8 +530,29 @@ def _is_finite_clause_token(token) -> bool:
     )
 
 
-def _conditional_fronted(piece: _Piece, doc) -> _Split | None:
-    """Cut an unlisted fronted clause without proposing a condition relation."""
+def _stands_alone(piece: _Piece, parses: _Parses) -> bool:
+    """Recover a whole-clause reading hidden by the full-sentence parse.
+
+    Verb/noun homographs such as "runs" can be mistagged beside a multiword
+    opener. The stand-alone parse must carry an explicit subject so promoting
+    a remnant cannot invent the missing half of a statement.
+    """
+    cleaned = _clean_piece(piece)
+    if not cleaned.text:
+        return False
+    return any(
+        token.pos_ in ("VERB", "AUX")
+        and any(child.dep_ in ("nsubj", "nsubjpass") for child in token.children)
+        for token in _parse(cleaned.text, parses)
+    )
+
+
+def _cut_comma_splice(piece: _Piece, doc) -> _Split | None:
+    """Cut a finite opener-less comma splice without inferring clause roles.
+
+    A rare inverted conditional is deliberately under-labelled as two claims:
+    a bare comma is not enough evidence to assert a condition.
+    """
     comma = piece.text.find(",")
     if comma < 0 or any(_advcl_cue(token) for token in doc):
         return None
@@ -507,17 +565,15 @@ def _conditional_fronted(piece: _Piece, doc) -> _Split | None:
     connective_end = comma + 1
     while connective_end < len(piece.text) and piece.text[connective_end].isspace():
         connective_end += 1
-    condition = _trim_piece(_subpiece(piece, 0, comma, role="condition"))
-    claim = _trim_piece(_subpiece(piece, connective_end, len(piece.text), role="claim"))
+    left = _trim_piece(_subpiece(piece, 0, comma, role="claim"))
+    right = _trim_piece(_subpiece(piece, connective_end, len(piece.text), role="claim"))
     return _split(
         piece,
-        kind="conditional",
+        kind="comma-splice",
         connective_start=comma,
         connective_end=connective_end,
-        left=condition,
-        right=claim,
-        claim_side="right",
-        condition_side="left",
+        left=left,
+        right=right,
     )
 
 
@@ -595,16 +651,51 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
     return None
 
 
+def _conditional_trailing_multiword(
+    piece: _Piece, doc, parses: _Parses
+) -> _Split | None:
+    """Cut a trailing catalog opener when spaCy misses its clause shape."""
+    for match in _TRAILING_MULTIWORD_SUBORDINATOR_RE.finditer(piece.text):
+        left = _trim_piece(_subpiece(piece, 0, match.start(), role="claim"))
+        right = _trim_piece(
+            _subpiece(piece, match.end(), len(piece.text), role="condition")
+        )
+        has_left_clause = any(
+            token.idx < match.start() and _is_finite_clause_token(token)
+            for token in doc
+        ) or _stands_alone(left, parses)
+        has_right_clause = any(
+            token.idx >= match.end() and _is_finite_clause_token(token) for token in doc
+        ) or _stands_alone(right, parses)
+        if not has_left_clause or not has_right_clause:
+            continue
+        return _split(
+            piece,
+            kind="conditional",
+            connective_start=match.start(),
+            connective_end=match.end(),
+            left=left,
+            right=right,
+            claim_side="left",
+            condition_side="right",
+            cue=match.group(),
+        )
+    return None
+
+
 def _cut_conditional(piece: _Piece, parses: _Parses) -> _Split | None:
-    """Apply initial, finite-fronted, then parsed advcl conditional rules."""
+    """Apply initial, comma-splice, parsed, then textual conditional rules."""
     doc = _parse(piece.text, parses)
     initial = _conditional_initial(piece, doc)
     if initial:
         return initial
-    fronted = _conditional_fronted(piece, doc)
-    if fronted:
-        return fronted
-    return _conditional_advcl(piece, doc)
+    comma_splice = _cut_comma_splice(piece, doc)
+    if comma_splice:
+        return comma_splice
+    advcl = _conditional_advcl(piece, doc)
+    if advcl:
+        return advcl
+    return _conditional_trailing_multiword(piece, doc, parses)
 
 
 def _project_subject(piece: _Piece, head, conjunct, right: _Piece) -> _Piece:
@@ -783,17 +874,23 @@ def _descend(
     return left_leaves + right_leaves
 
 
-def _mark_unsplit(text: str) -> bool:
+def _mark_unsplit(text: str, parses: _Parses) -> bool:
     """Mark a leaf mechanically when any atomicity detector still fires."""
-    return bool(phrasing.atomicity_violations(text))
+    return bool(
+        phrasing.atomicity_violations(
+            text, parse=lambda normalized: _parse(normalized, parses)
+        )
+    )
 
 
-def _fragments(leaves: list[_Piece]) -> tuple[list[Fragment], dict[int, int]]:
+def _fragments(
+    leaves: list[_Piece], parses: _Parses
+) -> tuple[list[Fragment], dict[int, int]]:
     """Clean, drop, number, and mark final leaf fragments."""
     fragments: list[Fragment] = []
     indices: dict[int, int] = {}
     for piece in leaves:
-        cleaned = _clean_piece(piece)
+        cleaned = _normalize_leaf_newlines(_clean_piece(piece))
         raw_span = _span(cleaned)
         if not cleaned.text or raw_span is None:
             continue
@@ -806,7 +903,7 @@ def _fragments(leaves: list[_Piece]) -> tuple[list[Fragment], dict[int, int]]:
                 piece.role,
                 raw_span,
                 piece.sentence,
-                piece.flagged or _mark_unsplit(cleaned.text),
+                piece.flagged or _mark_unsplit(cleaned.text, parses),
                 piece.subject_copied,
             )
         )
@@ -844,8 +941,8 @@ def _connective_link_type(
 #: Cut kinds whose connective is never a left→right relation, whatever alias a
 #: curator registers for it. A conditional runs the other way and its relation
 #: is already proposed with the right orientation; coordination is not a
-#: relation at all.
-UNTYPED_CUT_KINDS = frozenset({"conditional", "coordination"})
+#: relation at all. A comma splice's bare comma expresses no typed relation.
+UNTYPED_CUT_KINDS = frozenset({"conditional", "coordination", "comma-splice"})
 
 
 def _cut_link_type(
@@ -901,7 +998,8 @@ def segment(
     Preserve original offsets through block and sentence splitting, recursively
     cut each sentence in catalog order, assign conditional roles, re-check final
     leaves for unsplit atomicity cues, and number retained fragments in reading
-    order. Causal clauses are cut without ``requires`` proposals. A projected
+    order. Conditional proposals carry their relation type, which defaults to
+    ``requires``; causal clauses are cut without proposals. A projected
     subject is copied only into surface text; its fragment span remains the raw
     conjunct's source material. Resolve cut connectives carried by exactly one
     supplied alias to that link type.
@@ -915,7 +1013,7 @@ def segment(
     for sentence in _sentences(text, _blocks(text), parses):
         leaves.extend(_descend(sentence, pending_cuts, pending_proposals, parses))
     leaves.sort(key=lambda piece: _span(piece) or (len(text), len(text)))
-    fragments, indices = _fragments(leaves)
+    fragments, indices = _fragments(leaves, parses)
     return Segmentation(
         fragments,
         _resolve_cuts(pending_cuts, indices, aliases),

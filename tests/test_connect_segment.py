@@ -60,6 +60,43 @@ def test_trailing_once_condition_uses_strip_table_vocabulary():
     assert result.proposals == [seg.ConditionProposal(claim=0, condition=1, cue="once")]
 
 
+def test_trailing_multiword_condition_uses_textual_fallback():
+    result = seg.segment("The job runs as soon as the flag is set")
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("The job runs", "claim"),
+        ("the flag is set", "condition"),
+    ]
+    assert len(result.cuts) == 1
+    assert result.cuts[0].kind == "conditional"
+    assert result.cuts[0].connective == "as soon as"
+    assert result.proposals == [
+        seg.ConditionProposal(claim=0, condition=1, cue="as soon as")
+    ]
+
+
+def test_trailing_provided_that_condition_uses_textual_fallback():
+    result = seg.segment("The job runs provided that the flag is set")
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("The job runs", "claim"),
+        ("the flag is set", "condition"),
+    ]
+    assert result.cuts[0].connective == "provided that"
+    assert result.proposals == [
+        seg.ConditionProposal(claim=0, condition=1, cue="provided that")
+    ]
+
+
+def test_comparative_multiword_opener_without_right_clause_is_not_cut():
+    source = "The timeout is as long as the interval"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [source]
+    assert result.cuts == []
+    assert result.proposals == []
+
+
 def test_if_then_conditional_outranks_the_phrase_cut():
     result = seg.segment("If the flag is set, then the job runs")
 
@@ -94,11 +131,12 @@ def test_causal_clause_cuts_without_requires_proposal():
     assert result.cuts[0].connective == "Because"
 
 
-def test_unlisted_fronted_condition_keeps_opener_verbatim():
+def test_openerless_comma_splice_keeps_both_sides_as_claims():
     result = seg.segment("Given the flag is set, the job runs")
 
     assert fragment_texts(result) == ["Given the flag is set", "the job runs"]
-    assert [item.role for item in result.fragments] == ["condition", "claim"]
+    assert [item.role for item in result.fragments] == ["claim", "claim"]
+    assert result.cuts[0].kind == "comma-splice"
     assert result.proposals == []
 
 
@@ -129,7 +167,7 @@ def test_multiword_initial_opener_survives_parse_boundary():
     ]
 
 
-def test_unlisted_fronted_clause_proposes_nothing():
+def test_nonfinite_fronted_clause_is_left_whole():
     result = seg.segment("As discussed yesterday, the service restarts")
 
     assert fragment_texts(result) == ["As discussed yesterday, the service restarts"]
@@ -238,6 +276,23 @@ def test_compound_phrase_isolated_verbatim():
     assert result.cuts[0].connective == "and then"
 
 
+def test_comma_then_promotes_a_standalone_clause():
+    result = seg.segment("The draft is created, then an embedding is queued.")
+
+    assert fragment_texts(result) == [
+        "The draft is created",
+        "an embedding is queued",
+    ]
+    assert [fragment.unsplit for fragment in result.fragments] == [False, False]
+
+
+def test_comma_then_keeps_a_subjectless_remnant_flagged():
+    result = seg.segment("The draft is created, then queued.")
+
+    assert fragment_texts(result) == ["The draft is created", "queued"]
+    assert result.fragments[1].unsplit is True
+
+
 def test_comma_then_cut_resolves_only_with_aliases():
     source = "The invite is sent, then a reminder is scheduled"
     aliases = {"then": frozenset({("proceeds", "forward")})}
@@ -310,6 +365,19 @@ def test_wrapped_list_line_extends_its_list_item():
     assert "after approval" in result.fragments[0].text
 
 
+def test_wrapped_list_item_normalizes_newlines_only_in_final_fragments():
+    source = "- The draft is created and an\n  embedding is queued.\n"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [
+        "The draft is created",
+        "an embedding is queued",
+    ]
+    assert all("\n" not in fragment.text for fragment in result.fragments)
+    raw = source[result.fragments[1].span[0] : result.fragments[1].span[1]]
+    assert raw == "an\n  embedding is queued"
+
+
 def test_fragment_spans_match_their_retained_surface_text():
     sources = (
         "The job runs.",
@@ -355,21 +423,21 @@ def test_case_folding_expansion_cannot_forge_a_strip_table_opener():
     result = seg.segment("as soon aß the flag is set, the job runs")
 
     assert [(item.text, item.role) for item in result.fragments] == [
-        ("as soon aß the flag is set", "condition"),
+        ("as soon aß the flag is set", "claim"),
         ("the job runs", "claim"),
     ]
     assert result.proposals == []
 
 
 def test_each_working_text_is_parsed_once_per_segmentation(monkeypatch):
-    nlp = phrasing._get_nlp()
+    nlp = phrasing.get_nlp()
     parsed: list[str] = []
 
     def counting(text):
         parsed.append(text)
         return nlp(text)
 
-    monkeypatch.setattr(phrasing, "_get_nlp", lambda: counting)
+    monkeypatch.setattr(phrasing, "get_nlp", lambda: counting)
     source = "The service starts and records the time when the token expires"
     seg.segment(source)
 

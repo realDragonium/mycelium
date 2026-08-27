@@ -97,6 +97,7 @@ SUBORDINATOR_STRIP: tuple[str, ...] = (
     "on",
 )
 
-# Causal, not conditional: they mark a compound sentence and therefore a cut,
-# but the relation they express is not a precondition, so no requires-proposal.
+# Confirmed in DRA-390: causal subordinators mark explanation, not a stated
+# requirement. They still cause a cut, but proposing `requires` would invent a
+# potentially false causal or legal relation.
 CAUSAL_SCONJ = frozenset({"since", "because", "though"})

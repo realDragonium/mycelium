@@ -61,6 +61,7 @@ text via a per-character position map.
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Callable
 from typing import TYPE_CHECKING, TypedDict
 
 from mycelium import phrasing_cues
@@ -209,7 +210,8 @@ _MODEL_NAME = "en_core_web_sm"
 _nlp: "Language | None" = None
 
 
-def _get_nlp() -> "Language":
+def get_nlp() -> "Language":
+    """Return the shared lazily loaded spaCy pipeline."""
     global _nlp
     if _nlp is None:
         try:
@@ -787,18 +789,31 @@ def _atomicity_checks(
     return violations
 
 
-def atomicity_violations(text: str) -> list[Violation]:
+def atomicity_violations(
+    text: str, *, parse: Callable[[str], "Doc"] | None = None
+) -> list[Violation]:
     """Run only the four atomicity detectors against `text`.
 
     Check compound clauses, semicolons, compound phrases, and precondition
-    subordinators.
+    subordinators. Use an injected parser when supplied.
     """
     normalized, pos_map = normalize_with_map(text)
     if not normalized.strip():
         return []
 
-    doc = _get_nlp()(normalized)
+    doc = parse(normalized) if parse is not None else get_nlp()(normalized)
     violations = _atomicity_checks(doc, normalized, text, pos_map)
+    violations.sort(key=lambda violation: violation["position"])
+    return violations
+
+
+def hidden_event_state_violations(text: str) -> list[Violation]:
+    """Run only the hidden event/state detector against `text`."""
+    normalized, pos_map = normalize_with_map(text)
+    if not normalized.strip():
+        return []
+
+    violations = _check_hidden_event_state(normalized, text, pos_map)
     violations.sort(key=lambda violation: violation["position"])
     return violations
 
@@ -832,7 +847,7 @@ def check(text: str, kind: str = "event") -> list[Violation]:
     if not normalized.strip():
         return []
 
-    nlp = _get_nlp()
+    nlp = get_nlp()
     doc = nlp(normalized)
 
     violations: list[Violation] = []
