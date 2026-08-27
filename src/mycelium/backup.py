@@ -372,10 +372,19 @@ def import_substrate(
         if not manifest_path.exists():
             raise ValueError("archive has no manifest.json — not a mycelium export")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("schema_version") != SCHEMA_VERSION:
+        archive_schema_version = manifest.get("schema_version")
+        if not isinstance(archive_schema_version, int) or isinstance(
+            archive_schema_version, bool
+        ):
             raise ValueError(
-                f"archive schema_version {manifest.get('schema_version')!r} "
-                f"unsupported (this build expects {SCHEMA_VERSION})"
+                f"archive schema_version {archive_schema_version!r} unsupported "
+                "(not a valid mycelium export)"
+            )
+        if archive_schema_version > SCHEMA_VERSION:
+            raise ValueError(
+                f"archive schema_version {archive_schema_version} is newer than "
+                f"this build's schema_version {SCHEMA_VERSION}; this build is too "
+                "old for the archive"
             )
         row_counts = manifest.get("row_counts")
         if not isinstance(row_counts, dict):

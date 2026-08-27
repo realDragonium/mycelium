@@ -435,6 +435,55 @@ def test_import_legacy_archive_without_config_tables_keeps_seeds(tmp_path):
         assert _row_count(dst, table) > 0, table
 
 
+def test_import_accepts_older_schema_version_archive(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+    config_tables = (
+        "statement_kind_glossary",
+        "statement_link_type_glossary",
+        "entity_link_type_glossary",
+        "kind_link_matrix",
+        "link_type_aliases",
+    )
+    config_kinds = {
+        "statement_kind_glossary_entry",
+        "statement_link_type_glossary_entry",
+        "entity_link_type_glossary_entry",
+        "kind_link_matrix_entry",
+        "link_type_alias",
+    }
+
+    def _make_older(work: Path) -> None:
+        data_path = work / "data.jsonl"
+        kept_lines = [
+            line
+            for line in data_path.read_text(encoding="utf-8").splitlines()
+            if json.loads(line)["_kind"] not in config_kinds
+        ]
+        data_path.write_text("\n".join(kept_lines) + "\n", encoding="utf-8")
+
+        manifest_path = work / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for table in config_tables:
+            del manifest["row_counts"][table]
+        manifest["schema_version"] = backup.SCHEMA_VERSION - 1
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    older_archive = _repack(
+        archive, tmp_path / "work", tmp_path / "older.tar.gz", _make_older
+    )
+    dst = tmp_path / "dst"
+    backup.import_substrate(older_archive, dst)
+
+    assert _row_count(dst, "statements") == _row_count(src, "statements")
+    for table in config_tables:
+        assert _row_count(dst, table) > 0, table
+
+
 def test_import_survives_manifest_stripped_of_config_row_counts(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
@@ -573,7 +622,7 @@ def test_import_round_trip_with_no_history(tmp_path):
     assert _row_count(dst, "statements") == _row_count(src, "statements")
 
 
-def test_import_rejects_wrong_schema_version(tmp_path):
+def test_import_rejects_newer_schema_version(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     _seed_substrate(src)
@@ -581,26 +630,50 @@ def test_import_rejects_wrong_schema_version(tmp_path):
     archive = tmp_path / "snap.tar.gz"
     backup.export_substrate(src, archive)
 
-    # Rewrite manifest to claim a future schema_version.
-    import shutil
+    def _claim_newer_version(work: Path) -> None:
+        manifest_path = work / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["schema_version"] = 999
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    tampered = tmp_path / "tampered.tar.gz"
-    work = tmp_path / "work"
-    work.mkdir()
-    with tarfile.open(archive, "r:gz") as tar:
-        tar.extractall(work, filter="data")
-    manifest = json.loads((work / "manifest.json").read_text())
-    manifest["schema_version"] = 999
-    (work / "manifest.json").write_text(json.dumps(manifest))
-    with tarfile.open(tampered, "w:gz") as tar:
-        for item in sorted(work.rglob("*")):
-            if item.is_file():
-                tar.add(item, arcname=str(item.relative_to(work)))
-    shutil.rmtree(work)
+    tampered = _repack(
+        archive,
+        tmp_path / "work",
+        tmp_path / "tampered.tar.gz",
+        _claim_newer_version,
+    )
 
     dst = tmp_path / "dst"
-    with pytest.raises(ValueError, match="schema_version"):
+    with pytest.raises(
+        ValueError,
+        match=rf"schema_version 999.*schema_version {backup.SCHEMA_VERSION}.*too old",
+    ):
         backup.import_substrate(tampered, dst)
+
+
+def test_import_rejects_non_int_schema_version(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _set_string_version(work: Path) -> None:
+        manifest_path = work / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["schema_version"] = str(backup.SCHEMA_VERSION)
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    tampered = _repack(
+        archive,
+        tmp_path / "work",
+        tmp_path / "tampered.tar.gz",
+        _set_string_version,
+    )
+
+    with pytest.raises(ValueError, match=r"schema_version .*unsupported"):
+        backup.import_substrate(tampered, tmp_path / "dst")
 
 
 def test_import_skips_legacy_annotation_records(tmp_path, caplog):
