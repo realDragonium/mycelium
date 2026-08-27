@@ -146,6 +146,7 @@ def _multiword_subordinator_re(
 _ALL_TRAILING_MULTIWORD_SUBORDINATOR_RE = _multiword_subordinator_re()
 _TRAILING_MULTIWORD_SUBORDINATOR_RE = _multiword_subordinator_re(_COMPARATIVE_OPENERS)
 _LEAF_WHITESPACE_RE = re.compile(r"\s+")
+_WH_TAGS = frozenset({"WRB", "WP", "WDT", "WP$"})
 _MAX_CUT_DEPTH = 10
 
 
@@ -550,15 +551,15 @@ def _stands_alone(piece: _Piece, parses: _Parses) -> bool:
     opener. Requiring the stand-alone parse's root, rather than any embedded
     verb, prevents a relative clause inside a noun phrase from promoting the
     phrase as a whole statement. A subordinating marker on that root proves the
-    clause still depends on missing matrix material.
+    clause still depends on missing matrix material, as does a leading wh-word.
     """
     cleaned = _clean_piece(piece)
     if not cleaned.text:
         return False
-    root = next(
-        (token for token in _parse(cleaned.text, parses) if token.dep_ == "ROOT"),
-        None,
-    )
+    doc = _parse(cleaned.text, parses)
+    if len(doc) > 0 and doc[0].tag_ in _WH_TAGS:
+        return False
+    root = next((token for token in doc if token.dep_ == "ROOT"), None)
     return (
         root is not None
         and root.pos_ in ("VERB", "AUX")
@@ -677,7 +678,7 @@ def _conditional_trailing_multiword(piece: _Piece, parses: _Parses) -> _Split | 
     Each side must parse independently with a subject-bearing VERB/AUX root.
     """
     for match in _TRAILING_MULTIWORD_SUBORDINATOR_RE.finditer(piece.text):
-        left = _trim_piece(_subpiece(piece, 0, match.start(), role="claim"))
+        left = _trim_piece(_subpiece(piece, 0, match.start(), role=piece.role))
         right = _trim_piece(
             _subpiece(piece, match.end(), len(piece.text), role="condition")
         )
@@ -699,8 +700,13 @@ def _conditional_trailing_multiword(piece: _Piece, parses: _Parses) -> _Split | 
 
 def _has_uncut_trailing_opener(piece: _Piece, parses: _Parses) -> bool:
     """Report a surviving multiword opener between two whole clauses."""
-    for match in _ALL_TRAILING_MULTIWORD_SUBORDINATOR_RE.finditer(piece.text):
-        left = _trim_piece(_subpiece(piece, 0, match.start(), role="claim"))
+    # Bound parser work on untrusted input; normal prose has one or two matches.
+    for index, match in enumerate(
+        _ALL_TRAILING_MULTIWORD_SUBORDINATOR_RE.finditer(piece.text)
+    ):
+        if index >= 8:
+            break
+        left = _trim_piece(_subpiece(piece, 0, match.start(), role=piece.role))
         right = _trim_piece(
             _subpiece(piece, match.end(), len(piece.text), role="condition")
         )

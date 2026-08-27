@@ -89,6 +89,22 @@ def test_trailing_provided_that_condition_uses_textual_fallback():
     ]
 
 
+def test_nested_trailing_multiword_condition_preserves_the_outer_condition():
+    result = seg.segment(
+        "The job runs when the request arrives as soon as the flag is set"
+    )
+
+    assert fragment_texts(result) == [
+        "The job runs",
+        "the request arrives",
+        "the flag is set",
+    ]
+    assert result.proposals == [
+        seg.ConditionProposal(claim=1, condition=2, cue="as soon as"),
+        seg.ConditionProposal(claim=0, condition=1, cue="when"),
+    ]
+
+
 def test_trailing_multiword_requires_whole_statements_on_both_sides():
     source = "Reports that the system can send as soon as the flag is set"
     result = seg.segment(source)
@@ -350,6 +366,16 @@ def test_comma_then_keeps_a_subordinate_clause_remnant_flagged():
     assert fragment_texts(result) == [
         "The draft is created",
         "although the request arrives",
+    ]
+    assert result.fragments[1].unsplit is True
+
+
+def test_comma_then_keeps_a_wh_clause_remnant_flagged():
+    result = seg.segment("The draft is created, then why the request arrives.")
+
+    assert fragment_texts(result) == [
+        "The draft is created",
+        "why the request arrives",
     ]
     assert result.fragments[1].unsplit is True
 
