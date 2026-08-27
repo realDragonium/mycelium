@@ -372,6 +372,10 @@ def import_substrate(
         if not manifest_path.exists():
             raise ValueError("archive has no manifest.json — not a mycelium export")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError(
+                "archive manifest must be a JSON object — not a mycelium export"
+            )
         archive_schema_version = manifest.get("schema_version")
         if not isinstance(archive_schema_version, int) or isinstance(
             archive_schema_version, bool

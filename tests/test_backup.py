@@ -651,6 +651,28 @@ def test_import_rejects_newer_schema_version(tmp_path):
         backup.import_substrate(tampered, dst)
 
 
+def test_import_rejects_non_object_manifest(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _write_array_manifest(work: Path) -> None:
+        (work / "manifest.json").write_text(json.dumps([]), encoding="utf-8")
+
+    tampered = _repack(
+        archive,
+        tmp_path / "work",
+        tmp_path / "tampered.tar.gz",
+        _write_array_manifest,
+    )
+
+    with pytest.raises(ValueError, match="manifest"):
+        backup.import_substrate(tampered, tmp_path / "dst")
+
+
 @pytest.mark.parametrize(
     "invalid_schema_version", [str(backup.SCHEMA_VERSION), True, None]
 )
