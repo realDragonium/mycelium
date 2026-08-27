@@ -38,6 +38,7 @@ with default steering beats one that doesn't come back.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import shutil
@@ -84,6 +85,19 @@ _DATA_TABLES: tuple[str, ...] = (
     "statement_links",
     "when_nodes",
     "entity_links",
+    "statement_kind_glossary",
+    "statement_link_type_glossary",
+    "entity_link_type_glossary",
+    "kind_link_matrix",
+    "link_type_aliases",
+)
+
+_ONTOLOGY_CONFIG_TABLES: tuple[str, ...] = (
+    "statement_kind_glossary",
+    "statement_link_type_glossary",
+    "entity_link_type_glossary",
+    "kind_link_matrix",
+    "link_type_aliases",
 )
 
 # *_vector_ids are gated on --include-vectors. When vectors aren't
@@ -113,6 +127,11 @@ _TABLE_TO_KIND: dict[str, str] = {
     "statement_links": "statement_link",
     "when_nodes": "when_node",
     "entity_links": "entity_link",
+    "statement_kind_glossary": "statement_kind_glossary_entry",
+    "statement_link_type_glossary": "statement_link_type_glossary_entry",
+    "entity_link_type_glossary": "entity_link_type_glossary_entry",
+    "kind_link_matrix": "kind_link_matrix_entry",
+    "link_type_aliases": "link_type_alias",
     "statement_vector_ids": "statement_vector_id",
     "name_vector_ids": "name_vector_id",
 }
@@ -209,7 +228,12 @@ def _write_tables(
         for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid"):
             payload: dict[str, Any] = {"_kind": kind}
             for col in row.keys():
-                payload[col] = row[col]
+                value = row[col]
+                payload[col] = (
+                    {"$b64": base64.b64encode(value).decode("ascii")}
+                    if isinstance(value, bytes)
+                    else value
+                )
             fp.write(json.dumps(payload) + "\n")
             count += 1
         row_counts[table] = count
@@ -366,7 +390,18 @@ def import_substrate(
         try:
             store.migrate(conn)  # DDL + seed; owns its own commit
             with store.transaction(conn):
+                aliases_restored = _clear_archived_ontology_tables(
+                    conn, manifest["row_counts"]
+                )
                 _load_data_jsonl(conn, staging / "data.jsonl")
+                if aliases_restored:
+                    conn.execute(
+                        "INSERT INTO link_type_alias_embed_queue "
+                        "(link_type, alias, enqueued_at) "
+                        "SELECT link_type, alias, ? FROM link_type_aliases "
+                        "WHERE embedding IS NULL",
+                        (_now_iso(),),
+                    )
                 if history_db_path is not None and (staging / "history.jsonl").exists():
                     _load_history_jsonl(conn, staging / "history.jsonl")
         finally:
@@ -392,6 +427,20 @@ def import_substrate(
                     shutil.copy2(src, data_dir / vf)
 
         return manifest
+
+
+def _clear_archived_ontology_tables(
+    conn: sqlite3.Connection, row_counts: dict[str, Any]
+) -> bool:
+    covered_tables = tuple(
+        table for table in _ONTOLOGY_CONFIG_TABLES if table in row_counts
+    )
+    for table in covered_tables:
+        conn.execute(f"DELETE FROM {table}")
+    aliases_restored = "link_type_aliases" in covered_tables
+    if aliases_restored:
+        conn.execute("DELETE FROM link_type_alias_embed_queue")
+    return aliases_restored
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:
@@ -455,6 +504,9 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
             table = _KIND_TO_TABLE.get(kind)
             if table is None:
                 raise ValueError(f"unknown record kind in archive: {kind!r}")
+            for column, value in row.items():
+                if isinstance(value, dict) and set(value) == {"$b64"}:
+                    row[column] = base64.b64decode(value["$b64"], validate=True)
             _insert_archived_row(
                 conn,
                 row,
