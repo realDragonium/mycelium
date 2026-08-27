@@ -30,6 +30,7 @@ class Proposal:
 class ProposalSet:
     proposals: list[Proposal]
     dropped_merges: list[Proposal]
+    suppressed_conflicts: int = 0
 
 
 def _label_provenance(verdict: PairVerdict) -> dict[str, Any]:
@@ -79,7 +80,7 @@ def _link_proposals(links: list[LinkProposal]) -> list[Proposal]:
 
 def _machine_proposals(
     funnel: FunnelResult, verdicts: list[PairVerdict] | None
-) -> tuple[list[Proposal], list[Proposal]]:
+) -> tuple[list[Proposal], list[Proposal], int]:
     """Build merge and conflict proposals from the available machine pass."""
     if verdicts is None:
         merges = [
@@ -93,12 +94,22 @@ def _machine_proposals(
             for candidate in funnel.candidates
             if candidate.relation == "duplicate"
         ]
-        return merges, []
+        return merges, [], 0
 
+    shared_entities = {
+        (candidate.new_index, candidate.statement_id): candidate.shared_entities
+        for candidate in funnel.candidates
+    }
     merges: list[Proposal] = []
     conflicts: list[Proposal] = []
+    suppressed_conflicts = 0
     for verdict in verdicts:
         if verdict.verdict not in {"duplicate", "contradiction"}:
+            continue
+        if verdict.verdict == "contradiction" and not shared_entities.get(
+            (verdict.new_index, verdict.statement_id)
+        ):
+            suppressed_conflicts += 1
             continue
         proposal = Proposal(
             kind="merge" if verdict.verdict == "duplicate" else "conflict",
@@ -111,7 +122,7 @@ def _machine_proposals(
             merges.append(proposal)
         else:
             conflicts.append(proposal)
-    return merges, conflicts
+    return merges, conflicts, suppressed_conflicts
 
 
 def _merge_rank(proposal: Proposal) -> tuple[float, float, str]:
@@ -151,6 +162,12 @@ def proposals_from(
 ) -> ProposalSet:
     """Normalize rule, similarity, and NLI outputs into ordered proposals."""
     link_proposals = _link_proposals(links)
-    merge_candidates, conflicts = _machine_proposals(funnel, verdicts)
+    merge_candidates, conflicts, suppressed_conflicts = _machine_proposals(
+        funnel, verdicts
+    )
     merges, dropped_merges = _select_merges(merge_candidates)
-    return ProposalSet(link_proposals + merges + conflicts, dropped_merges)
+    return ProposalSet(
+        link_proposals + merges + conflicts,
+        dropped_merges,
+        suppressed_conflicts,
+    )

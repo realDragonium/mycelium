@@ -255,6 +255,7 @@ def test_nli_unavailable_keeps_similarity_only_merge(tmp_path, monkeypatch):
     text = "service returns the cached response"
     with _app(tmp_path, monkeypatch):
         existing_id = _statement("event", text)
+        monkeypatch.delenv("MYCELIUM_NLI_MAX_PAIRS", raising=False)
         monkeypatch.setattr(
             "mycelium.connect.nli.default_model", _raise_nli_unavailable
         )
@@ -262,6 +263,12 @@ def test_nli_unavailable_keeps_similarity_only_merge(tmp_path, monkeypatch):
         response = server.submit_connected_batch([{"kind": "event", "text": text}])
 
         assert response["nli"] == "unavailable"
+        assert response["nli_reason"] == "nli extra disabled for this test"
+        assert response["nli_pairs"] == {
+            "classified": 0,
+            "skipped": 0,
+            "budget": 400,
+        }
         assert response["proposals"] == {"links": 0, "merges": 1, "conflicts": 0}
         assert len(response["merges"]) == 1
         merge = response["merges"][0]
@@ -289,9 +296,11 @@ class FakeNli:
 def test_nli_proposals_include_directional_evidence(
     tmp_path, monkeypatch, label, proposal_key
 ):
-    text = "service returns the cached response"
+    text = "service returns the cached response for Company"
     with _app(tmp_path, monkeypatch):
+        _company_entity()
         existing_id = _statement("event", text)
+        monkeypatch.delenv("MYCELIUM_NLI_MAX_PAIRS", raising=False)
         monkeypatch.setattr(
             "mycelium.connect.nli.default_model", lambda: FakeNli(label)
         )
@@ -299,6 +308,13 @@ def test_nli_proposals_include_directional_evidence(
         response = server.submit_connected_batch([{"kind": "event", "text": text}])
 
         assert response["nli"] == "ran"
+        assert response["nli_reason"] is None
+        assert response["nli_pairs"] == {
+            "classified": 2,
+            "skipped": 0,
+            "budget": 400,
+        }
+        assert response["suppressed_conflicts"] == 0
         assert len(response[proposal_key]) == 1
         proposal = response[proposal_key][0]
         target_key = "into" if proposal_key == "merges" else "statement_id"
@@ -307,6 +323,50 @@ def test_nli_proposals_include_directional_evidence(
             "forward": {"label": label, "confidence": 0.9},
             "backward": {"label": label, "confidence": 0.9},
         }
+
+
+def test_nli_contradiction_without_shared_entity_is_related(tmp_path, monkeypatch):
+    existing_text = "the request is rejected"
+    new_text = "An assessment invite is sent to the participant"
+
+    def unrelated_embed(text: str) -> list[float]:
+        vector = [0.0] * 768
+        if text == existing_text:
+            vector[0] = 1.0
+        elif text == new_text:
+            vector[0] = 0.61
+            vector[1] = 0.7924
+        else:
+            return _word_embed(text)
+        return vector
+
+    with _app(tmp_path, monkeypatch):
+        monkeypatch.setattr("mycelium.embed.embed", unrelated_embed)
+        existing_id = _statement("event", existing_text)
+        monkeypatch.delenv("MYCELIUM_NLI_MAX_PAIRS", raising=False)
+        monkeypatch.setattr(
+            "mycelium.connect.nli.default_model",
+            lambda: FakeNli("contradiction"),
+        )
+
+        response = server.submit_connected_batch(
+            [
+                {
+                    "kind": "event",
+                    "text": new_text,
+                    "allow_phrasing_violations": True,
+                }
+            ]
+        )
+
+        assert response["conflicts"] == []
+        assert response["suppressed_conflicts"] == 1
+        assert len(response["related"]) == 1
+        related = response["related"][0]
+        assert related["batch_index"] == 0
+        assert related["statement_id"] == existing_id
+        assert related["text"] == existing_text
+        assert 0.60 <= related["score"] <= 0.62
 
 
 def test_http_transport_and_mcp_registration(tmp_path, monkeypatch):
@@ -329,10 +389,13 @@ def test_http_transport_and_mcp_registration(tmp_path, monkeypatch):
             "links",
             "merges",
             "conflicts",
+            "suppressed_conflicts",
             "related",
             "dropped_merges",
             "unresolved_hints",
             "nli",
+            "nli_reason",
+            "nli_pairs",
             "draft",
         }
         assert body["results"] == [{"accepted": True, "batch_index": 0}]
@@ -427,9 +490,12 @@ def test_empty_batch_returns_early(tmp_path, monkeypatch):
             "links": [],
             "merges": [],
             "conflicts": [],
+            "suppressed_conflicts": 0,
             "related": [],
             "dropped_merges": [],
             "unresolved_hints": [],
-            "nli": "unavailable",
+            "nli": "nothing_to_classify",
+            "nli_reason": None,
+            "nli_pairs": {"classified": 0, "skipped": 0, "budget": 0},
             "draft": None,
         }
