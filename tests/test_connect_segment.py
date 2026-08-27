@@ -73,6 +73,7 @@ def test_trailing_multiword_condition_uses_textual_fallback():
     assert result.proposals == [
         seg.ConditionProposal(claim=0, condition=1, cue="as soon as")
     ]
+    assert [fragment.unsplit for fragment in result.fragments] == [False, False]
 
 
 def test_trailing_provided_that_condition_uses_textual_fallback():
@@ -104,6 +105,7 @@ def test_comparative_multiword_opener_without_right_clause_is_not_cut():
     assert fragment_texts(result) == [source]
     assert result.cuts == []
     assert result.proposals == []
+    assert result.fragments[0].unsplit is False
 
 
 def test_comparative_multiword_opener_with_right_clause_is_not_cut():
@@ -113,6 +115,7 @@ def test_comparative_multiword_opener_with_right_clause_is_not_cut():
     assert fragment_texts(result) == [source]
     assert result.cuts == []
     assert result.proposals == []
+    assert result.fragments[0].unsplit is True
 
 
 def test_comparative_under_lexical_verb_is_not_cut():
@@ -122,17 +125,19 @@ def test_comparative_under_lexical_verb_is_not_cut():
     assert fragment_texts(result) == [source]
     assert result.cuts == []
     assert result.proposals == []
+    assert result.fragments[0].unsplit is True
 
 
-def test_trailing_as_long_as_condition_is_deliberately_not_cut():
+def test_trailing_as_long_as_condition_is_flagged_instead_of_cut():
     # Precision wins: the trailing conditional is indistinguishable from a
-    # lexical-verb comparison, so leaving it whole is safer than inventing a link.
+    # lexical-verb comparison, so leave it whole and flag instead of inventing a link.
     source = "The job runs as long as the flag is set"
     result = seg.segment(source)
 
     assert fragment_texts(result) == [source]
     assert result.cuts == []
     assert result.proposals == []
+    assert result.fragments[0].unsplit is True
 
 
 def test_if_then_conditional_outranks_the_phrase_cut():
@@ -203,6 +208,7 @@ def test_multiword_initial_opener_survives_parse_boundary():
     assert result.proposals == [
         seg.ConditionProposal(claim=1, condition=0, cue="As soon as")
     ]
+    assert [fragment.unsplit for fragment in result.fragments] == [False, False]
 
 
 def test_nonfinite_fronted_clause_is_left_whole():
@@ -324,10 +330,27 @@ def test_comma_then_promotes_a_standalone_clause():
     assert [fragment.unsplit for fragment in result.fragments] == [False, False]
 
 
+def test_comma_then_promotes_a_standalone_copular_clause():
+    result = seg.segment("The draft is created, then the queue is empty.")
+
+    assert fragment_texts(result) == ["The draft is created", "the queue is empty"]
+    assert [fragment.unsplit for fragment in result.fragments] == [False, False]
+
+
 def test_comma_then_keeps_a_subjectless_remnant_flagged():
     result = seg.segment("The draft is created, then queued.")
 
     assert fragment_texts(result) == ["The draft is created", "queued"]
+    assert result.fragments[1].unsplit is True
+
+
+def test_comma_then_keeps_a_subordinate_clause_remnant_flagged():
+    result = seg.segment("The draft is created, then although the request arrives.")
+
+    assert fragment_texts(result) == [
+        "The draft is created",
+        "although the request arrives",
+    ]
     assert result.fragments[1].unsplit is True
 
 

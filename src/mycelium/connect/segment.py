@@ -123,19 +123,28 @@ _SINGLE_WORD_SUBORDINATORS = frozenset(
     opener for opener in phrasing_cues.SUBORDINATOR_STRIP if " " not in opener
 )
 # Trailing "as long as" is comparative-homonymous under lexical predicates.
-# A missed cut flags honestly; a wrong cut invents a relation. Sentence-initial
-# "As long as" still cuts through `_conditional_initial`.
+# It is excluded from the fallback cut so a comparison cannot invent a relation;
+# the all-opener leaf check below flags an unresolved two-clause reading instead.
+# Sentence-initial "As long as" still cuts through `_conditional_initial`.
 _COMPARATIVE_OPENERS = frozenset({"as long as"})
-_TRAILING_MULTIWORD_SUBORDINATOR_RE = re.compile(
-    r"(?<=\s)(?:"
-    + "|".join(
+
+
+def _multiword_subordinator_re(
+    excluded: frozenset[str] = frozenset(),
+) -> re.Pattern[str]:
+    """Build a whitespace-tolerant regex from the multiword opener table."""
+    alternatives = (
         r"\s+".join(re.escape(word) for word in opener.split())
         for opener in phrasing_cues.SUBORDINATOR_STRIP
-        if " " in opener and opener.casefold() not in _COMPARATIVE_OPENERS
+        if " " in opener and opener.casefold() not in excluded
     )
-    + r")(?=\s)",
-    re.IGNORECASE,
-)
+    return re.compile(
+        r"(?<=\s)(?:" + "|".join(alternatives) + r")(?=\s)", re.IGNORECASE
+    )
+
+
+_ALL_TRAILING_MULTIWORD_SUBORDINATOR_RE = _multiword_subordinator_re()
+_TRAILING_MULTIWORD_SUBORDINATOR_RE = _multiword_subordinator_re(_COMPARATIVE_OPENERS)
 _LEAF_WHITESPACE_RE = re.compile(r"\s+")
 _MAX_CUT_DEPTH = 10
 
@@ -540,7 +549,8 @@ def _stands_alone(piece: _Piece, parses: _Parses) -> bool:
     Verb/noun homographs such as "runs" can be mistagged beside a multiword
     opener. Requiring the stand-alone parse's root, rather than any embedded
     verb, prevents a relative clause inside a noun phrase from promoting the
-    phrase as a whole statement.
+    phrase as a whole statement. A subordinating marker on that root proves the
+    clause still depends on missing matrix material.
     """
     cleaned = _clean_piece(piece)
     if not cleaned.text:
@@ -553,6 +563,7 @@ def _stands_alone(piece: _Piece, parses: _Parses) -> bool:
         root is not None
         and root.pos_ in ("VERB", "AUX")
         and any(child.dep_ in ("nsubj", "nsubjpass") for child in root.children)
+        and not any(child.dep_ == "mark" for child in root.children)
     )
 
 
@@ -684,6 +695,18 @@ def _conditional_trailing_multiword(piece: _Piece, parses: _Parses) -> _Split | 
             cue=match.group(),
         )
     return None
+
+
+def _has_uncut_trailing_opener(piece: _Piece, parses: _Parses) -> bool:
+    """Report a surviving multiword opener between two whole clauses."""
+    for match in _ALL_TRAILING_MULTIWORD_SUBORDINATOR_RE.finditer(piece.text):
+        left = _trim_piece(_subpiece(piece, 0, match.start(), role="claim"))
+        right = _trim_piece(
+            _subpiece(piece, match.end(), len(piece.text), role="condition")
+        )
+        if _stands_alone(left, parses) and _stands_alone(right, parses):
+            return True
+    return False
 
 
 def _cut_conditional(piece: _Piece, parses: _Parses) -> _Split | None:
@@ -906,7 +929,9 @@ def _fragments(
                 piece.role,
                 raw_span,
                 piece.sentence,
-                piece.flagged or _mark_unsplit(cleaned.text, parses),
+                piece.flagged
+                or _has_uncut_trailing_opener(cleaned, parses)
+                or _mark_unsplit(cleaned.text, parses),
                 piece.subject_copied,
             )
         )
