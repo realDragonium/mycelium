@@ -6017,6 +6017,10 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
             # A failed commit leaves the connection's transaction open, so a
             # new transaction block could commit the replay it should recover.
             with store.write_lock():
+                # Roll back before restoring so no writer can interleave or
+                # later commit the failed replay's pending rows.
+                with contextlib.suppress(sqlite3.Error):
+                    _db().rollback()
                 _restore_index_snapshots(snapshots)
         raise
 
