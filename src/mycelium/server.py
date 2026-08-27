@@ -5996,8 +5996,8 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     # writes. Each replayed tool opens its own `transaction(_db())`, which
     # joins this outer one (reentrant), so a single op raising rolls the
     # whole draft back. Per-attempt paths preserve recovery artifacts across
-    # retries; the write lock serializes snapshot and recovery against index
-    # mutations in this process.
+    # retries; the write lock serializes snapshots and both recovery paths
+    # against index mutations in this process.
     snapshots_taken = False
     restored = False
     try:
@@ -6016,7 +6016,8 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
         if snapshots_taken and not restored:
             # A failed commit leaves the connection's transaction open, so a
             # new transaction block could commit the replay it should recover.
-            _restore_index_snapshots(snapshots)
+            with store.write_lock():
+                _restore_index_snapshots(snapshots)
         raise
 
     for _, snapshot_path, _ in snapshots:

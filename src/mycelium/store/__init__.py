@@ -74,6 +74,7 @@ from .kernel import (
     substrate_connection,
     transaction,
     use_substrate_connection,
+    write_lock,
 )
 from .kind_link_matrix import (
     admissible_link_types,
@@ -339,4 +340,5 @@ __all__ = [
     "upsert_statement_kind_glossary",
     "upsert_statement_link_type_glossary",
     "use_substrate_connection",
+    "write_lock",
 ]
