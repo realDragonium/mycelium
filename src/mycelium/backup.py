@@ -377,6 +377,9 @@ def import_substrate(
                 f"archive schema_version {manifest.get('schema_version')!r} "
                 f"unsupported (this build expects {SCHEMA_VERSION})"
             )
+        row_counts = manifest.get("row_counts")
+        if not isinstance(row_counts, dict):
+            row_counts = {}
 
         # Restore relational data into a fresh DB. History DB is only
         # attached when the archive carries one — keeps the import side
@@ -390,9 +393,7 @@ def import_substrate(
         try:
             store.migrate(conn)  # DDL + seed; owns its own commit
             with store.transaction(conn):
-                aliases_restored = _clear_archived_ontology_tables(
-                    conn, manifest["row_counts"]
-                )
+                aliases_restored = _clear_archived_ontology_tables(conn, row_counts)
                 _load_data_jsonl(conn, staging / "data.jsonl")
                 if aliases_restored:
                     conn.execute(
@@ -504,6 +505,11 @@ def _load_data_jsonl(conn: sqlite3.Connection, path: Path) -> None:
             table = _KIND_TO_TABLE.get(kind)
             if table is None:
                 raise ValueError(f"unknown record kind in archive: {kind!r}")
+            if table == "link_type_aliases" and "direction" not in row:
+                raise ValueError(
+                    "data.jsonl link_type_alias record has no direction; "
+                    "direction is archived data and may not be defaulted"
+                )
             for column, value in row.items():
                 if isinstance(value, dict) and set(value) == {"$b64"}:
                     row[column] = base64.b64decode(value["$b64"], validate=True)

@@ -290,6 +290,56 @@ def test_round_trip_preserves_ontology_config(tmp_path):
     assert _row_count(dst, "link_type_aliases") == _row_count(src, "link_type_aliases")
 
 
+def test_import_refuses_alias_record_without_direction(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    conn = store.connect(src / "mycelium.db")
+    store.migrate(conn)
+    conn.close()
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def _remove_direction(work: Path) -> None:
+        data_path = work / "data.jsonl"
+        lines = data_path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            record = json.loads(line)
+            if record["_kind"] == "link_type_alias":
+                del record["direction"]
+                lines[index] = json.dumps(record)
+                break
+        else:
+            raise AssertionError("export contains no link_type_alias record")
+        data_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    tampered = _repack(
+        archive, tmp_path / "work", tmp_path / "tampered.tar.gz", _remove_direction
+    )
+
+    with pytest.raises(ValueError, match="direction"):
+        backup.import_substrate(tampered, tmp_path / "dst")
+
+
+def test_round_trip_restores_emptied_config_table(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    conn = store.connect(src / "mycelium.db")
+    store.migrate(conn)
+    with store.transaction(conn):
+        conn.execute("DELETE FROM entity_link_type_glossary")
+    conn.close()
+
+    archive = tmp_path / "snap.tar.gz"
+    manifest = backup.export_substrate(src, archive)
+    assert manifest["row_counts"]["entity_link_type_glossary"] == 0
+
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+
+    assert _row_count(dst, "entity_link_type_glossary") == 0
+
+
 def test_round_trip_preserves_alias_embedding_blob(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
