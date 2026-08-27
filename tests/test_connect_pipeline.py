@@ -75,6 +75,34 @@ def test_unavailable_nli_reports_reason_and_warning(
     assert "NLI unavailable: checkpoint is offline" in caplog.text
 
 
+def test_unavailable_nli_reports_pairs_skipped_by_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnavailableNli:
+        def classify(self, pairs: list[tuple[str, str]]) -> list[NliLabel]:
+            raise NliUnavailable("checkpoint is offline")
+
+    monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", "2")
+    view = FakeView(
+        [
+            ("first", 0.9),
+            ("second", 0.8),
+            ("third", 0.7),
+        ]
+    )
+
+    result = pipeline.run(
+        [BatchStatement(0, "event", "new")],
+        view,
+        text_of=lambda statement_id: f"{statement_id} text",
+        nli_model=UnavailableNli(),
+    )
+
+    assert result.nli == "unavailable"
+    assert result.nli_reason == "checkpoint is offline"
+    assert result.nli_pairs == NliPairs(classified=0, skipped=4, budget=2)
+
+
 def test_zero_candidates_never_touches_default_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

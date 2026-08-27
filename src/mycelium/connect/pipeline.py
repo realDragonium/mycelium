@@ -88,7 +88,7 @@ def run(
             None,
             "unavailable",
             reason,
-            NliPairs(classified=0, skipped=0, budget=pair_budget),
+            NliPairs(classified=0, skipped=skipped_pairs, budget=pair_budget),
         )
     classified_pairs = 2 * len(verdicts)
     return PipelineResult(
