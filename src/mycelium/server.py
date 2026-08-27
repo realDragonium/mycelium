@@ -5955,13 +5955,31 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     results_by_seq: dict[int, Any] = {}
 
-    # All-or-nothing replay: one transaction owns every op's substrate
-    # writes. Each replayed tool opens its own `transaction(_db())`, which
-    # joins this outer one (reentrant), so a single op raising rolls the
-    # whole draft back.
-    with store.transaction(_db()):
-        for op in ops:
-            results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
+    index_snapshot_path = _idx_path().with_name(_idx_path().name + ".pre-apply")
+    name_index_snapshot_path = _name_idx_path().with_name(
+        _name_idx_path().name + ".pre-apply"
+    )
+    _idx().save(index_snapshot_path)
+    try:
+        _name_idx().save(name_index_snapshot_path)
+
+        # All-or-nothing replay: one transaction owns every op's substrate
+        # writes. Each replayed tool opens its own `transaction(_db())`, which
+        # joins this outer one (reentrant), so a single op raising rolls the
+        # whole draft back.
+        try:
+            with store.transaction(_db()):
+                for op in ops:
+                    results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
+        except Exception:
+            _idx().restore(index_snapshot_path)
+            _name_idx().restore(name_index_snapshot_path)
+            _persist_index()
+            _persist_name_index()
+            raise
+    finally:
+        index_snapshot_path.unlink(missing_ok=True)
+        name_index_snapshot_path.unlink(missing_ok=True)
     return {"applied": len(results), "results": results}
 
 
