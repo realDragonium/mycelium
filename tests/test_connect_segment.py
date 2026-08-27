@@ -88,6 +88,15 @@ def test_trailing_provided_that_condition_uses_textual_fallback():
     ]
 
 
+def test_trailing_multiword_requires_whole_statements_on_both_sides():
+    source = "Reports that the system can send as soon as the flag is set"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [source]
+    assert result.cuts == []
+    assert result.proposals == []
+
+
 def test_comparative_multiword_opener_without_right_clause_is_not_cut():
     source = "The timeout is as long as the interval"
     result = seg.segment(source)
@@ -99,6 +108,26 @@ def test_comparative_multiword_opener_without_right_clause_is_not_cut():
 
 def test_comparative_multiword_opener_with_right_clause_is_not_cut():
     source = "The cable is as long as the room is wide"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [source]
+    assert result.cuts == []
+    assert result.proposals == []
+
+
+def test_comparative_under_lexical_verb_is_not_cut():
+    source = "The cable stretches as long as the room is wide"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [source]
+    assert result.cuts == []
+    assert result.proposals == []
+
+
+def test_trailing_as_long_as_condition_is_deliberately_not_cut():
+    # Precision wins: the trailing conditional is indistinguishable from a
+    # lexical-verb comparison, so leaving it whole is safer than inventing a link.
+    source = "The job runs as long as the flag is set"
     result = seg.segment(source)
 
     assert fragment_texts(result) == [source]

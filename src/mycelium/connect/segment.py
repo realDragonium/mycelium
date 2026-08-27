@@ -122,12 +122,16 @@ _COMPOUND_PATTERNS = tuple(
 _SINGLE_WORD_SUBORDINATORS = frozenset(
     opener for opener in phrasing_cues.SUBORDINATOR_STRIP if " " not in opener
 )
+# Trailing "as long as" is comparative-homonymous under lexical predicates.
+# A missed cut flags honestly; a wrong cut invents a relation. Sentence-initial
+# "As long as" still cuts through `_conditional_initial`.
+_COMPARATIVE_OPENERS = frozenset({"as long as"})
 _TRAILING_MULTIWORD_SUBORDINATOR_RE = re.compile(
     r"(?<=\s)(?:"
     + "|".join(
         r"\s+".join(re.escape(word) for word in opener.split())
         for opener in phrasing_cues.SUBORDINATOR_STRIP
-        if " " in opener
+        if " " in opener and opener.casefold() not in _COMPARATIVE_OPENERS
     )
     + r")(?=\s)",
     re.IGNORECASE,
@@ -656,30 +660,17 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
     return None
 
 
-def _conditional_trailing_multiword(
-    piece: _Piece, doc, parses: _Parses
-) -> _Split | None:
-    """Cut a trailing catalog opener when spaCy misses its clause shape."""
+def _conditional_trailing_multiword(piece: _Piece, parses: _Parses) -> _Split | None:
+    """Cut a missed trailing opener when both sides stand alone as clauses.
+
+    Each side must parse independently with a subject-bearing VERB/AUX root.
+    """
     for match in _TRAILING_MULTIWORD_SUBORDINATOR_RE.finditer(piece.text):
-        opener_token = next(
-            (token for token in doc if token.idx == match.start()), None
-        )
-        # Veto only: a parse mistake here may prevent a cut, but must never let
-        # a degree comparison invent a condition relation.
-        if opener_token is not None and opener_token.head.dep_ == "acomp":
-            continue
         left = _trim_piece(_subpiece(piece, 0, match.start(), role="claim"))
         right = _trim_piece(
             _subpiece(piece, match.end(), len(piece.text), role="condition")
         )
-        has_left_clause = any(
-            token.idx < match.start() and _is_finite_clause_token(token)
-            for token in doc
-        ) or _stands_alone(left, parses)
-        has_right_clause = any(
-            token.idx >= match.end() and _is_finite_clause_token(token) for token in doc
-        ) or _stands_alone(right, parses)
-        if not has_left_clause or not has_right_clause:
+        if not _stands_alone(left, parses) or not _stands_alone(right, parses):
             continue
         return _split(
             piece,
@@ -707,7 +698,7 @@ def _cut_conditional(piece: _Piece, parses: _Parses) -> _Split | None:
     advcl = _conditional_advcl(piece, doc)
     if advcl:
         return advcl
-    return _conditional_trailing_multiword(piece, doc, parses)
+    return _conditional_trailing_multiword(piece, parses)
 
 
 def _project_subject(piece: _Piece, head, conjunct, right: _Piece) -> _Piece:
