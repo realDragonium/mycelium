@@ -227,6 +227,12 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
         "contains",
         r"\b(?P<cue>(?:is|are) (?:a )?part of)\b\s*(?P<from>.+)",
     ),
+    # The captured phrase is the owner/container, so it fills the `from` slot.
+    _pattern(
+        "contains-belongs-to",
+        "contains",
+        r"\b(?P<cue>belongs? to|(?:is|are) owned by)\b\s*(?P<from>.+)",
+    ),
     _pattern(
         "proceeds-verb",
         "proceeds",

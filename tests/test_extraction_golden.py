@@ -467,10 +467,36 @@ SUBSTRATE_GOLDEN: dict[str, SubstrateGolden] = {
             ),
         ),
     ),
-    # An unshipped frame proposes nothing, whatever direction it would carry:
-    # "according to" belongs to `governed-by-phrase`, which is in the pattern
-    # catalog but not in SHIPPED_PATTERNS (the 1.0 report had no ground truth
-    # for it). The funnel still reports the pair as related.
+    "belongs-to-existing-owner-is-the-link-source": SubstrateGolden(
+        "The nightly automated purge schedule belongs to the retention policy.",
+        existing=(("s-policy", "rule", "The retention policy applies"),),
+        proposals=(
+            (
+                "s-policy",
+                "contains",
+                "The nightly automated purge schedule belongs to the retention policy",
+                "belongs to",
+            ),
+        ),
+    ),
+    "owned-by-existing-owner-is-the-link-source": SubstrateGolden(
+        "The monthly archive schedule remains a record that is owned by the "
+        "retention policy.",
+        existing=(("s-policy", "rule", "The retention policy applies"),),
+        proposals=(
+            (
+                "s-policy",
+                "contains",
+                "The monthly archive schedule remains a record that is owned by the "
+                "retention policy",
+                "is owned by",
+            ),
+        ),
+    ),
+    # The alias-aware 2026-08-27 measurement found zero governed-by-phrase
+    # fires across all 1644 statements and no usable lexical surface on any of
+    # the 104 governed-by link endpoints, so this no-link is deliberate. The
+    # funnel still reports the pair as related.
     "parent-frame-not-shipped": SubstrateGolden(
         "The retention window is purged according to the retention policy.",
         existing=(

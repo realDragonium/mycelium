@@ -192,6 +192,91 @@ def test_migration_v9_leaves_an_unseeded_table_for_seeding():
     assert conn.execute("SELECT COUNT(*) FROM link_type_aliases").fetchone()[0] == 0
 
 
+def _v9_alias_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(
+        """
+        CREATE TABLE link_type_aliases (
+            link_type TEXT NOT NULL, alias TEXT NOT NULL, embedding BLOB,
+            provenance TEXT NOT NULL DEFAULT 'seed', score REAL,
+            direction TEXT NOT NULL DEFAULT 'forward',
+            created_at TEXT, created_by TEXT, PRIMARY KEY (link_type, alias));
+        CREATE TABLE link_type_alias_embed_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, link_type TEXT NOT NULL,
+            alias TEXT NOT NULL, enqueued_at TEXT, claimed_at TEXT);
+        """
+    )
+    return conn
+
+
+def test_migration_v10_adds_only_missing_belongs_to_aliases():
+    seeded = _v9_alias_conn()
+    seeded.execute(
+        "INSERT INTO link_type_aliases (link_type, alias) "
+        "VALUES ('contains', 'includes')"
+    )
+
+    migrations._migration_v10_belongs_to_aliases(seeded)
+
+    rows = seeded.execute(
+        "SELECT link_type, alias, provenance, direction, created_at "
+        "FROM link_type_aliases WHERE alias IN ('belongs to', 'is owned by') "
+        "ORDER BY alias"
+    ).fetchall()
+    assert [
+        (row["link_type"], row["alias"], row["provenance"], row["direction"])
+        for row in rows
+    ] == [
+        ("contains", "belongs to", "seed", "reverse"),
+        ("contains", "is owned by", "seed", "reverse"),
+    ]
+    assert all(row["created_at"] for row in rows)
+    assert [
+        (row["link_type"], row["alias"])
+        for row in seeded.execute(
+            "SELECT link_type, alias FROM link_type_alias_embed_queue ORDER BY alias"
+        )
+    ] == [
+        ("contains", "belongs to"),
+        ("contains", "is owned by"),
+    ]
+
+    absorbed = _v9_alias_conn()
+    absorbed.execute(
+        "INSERT INTO link_type_aliases "
+        "(link_type, alias, provenance, score, direction, created_at, created_by) "
+        "VALUES ('contains', 'includes', 'seed', NULL, 'forward', NULL, NULL), "
+        "('contains', 'belongs to', 'auto', 0.91, 'forward', 'chosen-at', 'curator')"
+    )
+    absorbed.execute(
+        "INSERT INTO link_type_alias_embed_queue "
+        "(link_type, alias, enqueued_at) "
+        "VALUES ('contains', 'belongs to', 'chosen-at')"
+    )
+
+    migrations._migration_v10_belongs_to_aliases(absorbed)
+
+    existing = absorbed.execute(
+        "SELECT provenance, score, direction, created_at, created_by "
+        "FROM link_type_aliases "
+        "WHERE link_type = 'contains' AND alias = 'belongs to'"
+    ).fetchone()
+    assert tuple(existing) == ("auto", 0.91, "forward", "chosen-at", "curator")
+    queued = absorbed.execute(
+        "SELECT alias FROM link_type_alias_embed_queue ORDER BY id"
+    ).fetchall()
+    assert [row["alias"] for row in queued] == ["belongs to", "is owned by"]
+
+    empty = _v9_alias_conn()
+    migrations._migration_v10_belongs_to_aliases(empty)
+    assert empty.execute("SELECT COUNT(*) FROM link_type_aliases").fetchone()[0] == 0
+    assert (
+        empty.execute("SELECT COUNT(*) FROM link_type_alias_embed_queue").fetchone()[0]
+        == 0
+    )
+
+
 def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
     store.upsert_link_type_alias(
         fresh_conn, "contains", "belongs to", direction="reverse"
@@ -205,8 +290,8 @@ def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
 
 
 def test_migrate_sets_alias_schema_version(fresh_conn):
-    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 9
-    assert migrations.CURRENT_VERSION == 9
+    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert migrations.CURRENT_VERSION == 10
 
 
 def test_carrier_embedding_drain_round_trips_and_skips_deleted_target(fresh_conn):

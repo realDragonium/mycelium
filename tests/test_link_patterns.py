@@ -11,11 +11,13 @@ from pathlib import Path
 from mycelium import store
 from mycelium.connect.patterns import (
     COMMON_PATTERNS,
+    KIND_PATTERNS,
     all_patterns,
     find_cues,
     patterns_for,
 )
 from mycelium.store.glossary import _STATEMENT_LINK_TYPE_SEED
+from mycelium.store.link_type_aliases import seed_aliases_by_type, seed_rows
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "measure_link_patterns.py"
 
@@ -63,6 +65,23 @@ def test_part_of_captures_the_from_slot_and_composed_of_the_to_slot():
     assert [(cue.pattern, cue.phrase_role) for cue in composed] == [
         ("contains-composed-of", "to")
     ]
+
+
+def test_belongs_to_captures_the_owner_from_slot():
+    examples = (
+        ("The purge schedule belongs to the retention policy", "belongs to"),
+        ("The archive schedule is owned by the retention policy", "is owned by"),
+    )
+
+    for text, expected_cue in examples:
+        cues = find_cues(text, "state")
+        match = next(cue for cue in cues if cue.pattern == "contains-belongs-to")
+        assert (match.cue, match.link_type, match.phrase_role, match.phrase) == (
+            expected_cue,
+            "contains",
+            "from",
+            "the retention policy",
+        )
 
 
 def test_find_cues_obeys_kind_scope_and_unknown_kind_baseline():
@@ -157,6 +176,35 @@ def test_pattern_registry_has_unique_names_flags_and_seeded_types():
     assert len({pattern.name for pattern in patterns}) == len(patterns)
     assert all(pattern.regex.flags & re.IGNORECASE for pattern in patterns)
     assert {pattern.link_type for pattern in patterns} <= set(_STATEMENT_LINK_TYPE_SEED)
+
+
+def test_seeded_alias_directions_agree_with_every_frame_geometry():
+    aliases = seed_aliases_by_type()
+    kinds = (*KIND_PATTERNS, "generic")
+    agreements: set[tuple[str, str]] = set()
+
+    for pattern in all_patterns():
+        for link_type, alias, direction in seed_rows():
+            if link_type != pattern.link_type:
+                continue
+            text = f"X {alias} Y"
+            for kind in kinds:
+                for cue in find_cues(text, kind, aliases):
+                    if (
+                        cue.pattern != pattern.name
+                        or cue.cue.casefold() != alias.casefold()
+                    ):
+                        continue
+                    assert (pattern.phrase_role == "from") == (direction == "reverse")
+                    agreements.add((pattern.name, alias))
+
+    assert {
+        ("contains-part-of", "is part of"),
+        ("requires-required", "is required for"),
+        ("cases-one-of", "is one of"),
+        ("contains-belongs-to", "belongs to"),
+        ("contains-belongs-to", "is owned by"),
+    } <= agreements
 
 
 def test_measure_reports_hits_pairs_precision_and_no_ground_truth():
