@@ -827,8 +827,8 @@ class ConnectedStatementSpec(TypedDict):
     are always outgoing from this statement, so `incoming_links` is omitted —
     an item that sends one is rejected rather than losing the edge silently.
     `mention_hints` names texts the agent asserts this statement is about. They
-    only widen candidate discovery for this call and are never written to the
-    substrate.
+    widen candidate discovery for this call, count as shared entities for the
+    conflict gate, and are never written to the substrate.
     """
 
     kind: str
