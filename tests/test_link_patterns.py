@@ -297,3 +297,68 @@ def test_data_dir_cli_writes_report(tmp_path):
 
     assert result == 0
     assert output.exists()
+
+
+def test_snapshot_cli_uses_supplied_aliases(tmp_path: Path):
+    snapshot = tmp_path / "snapshot.jsonl"
+    records = [
+        {
+            "id": "stm_1",
+            "kind": "rule",
+            "text": "The importer throttles nightly syncs",
+            "mentions": [],
+            "links": [{"to_id": "stm_2", "link_type": "restricts", "when": None}],
+        },
+        {
+            "id": "stm_2",
+            "kind": "event",
+            "text": "Nightly syncs run",
+            "mentions": [],
+            "links": [],
+        },
+    ]
+    snapshot.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text(
+        json.dumps({"restricts": ["limit", "throttles"]}), encoding="utf-8"
+    )
+    output = tmp_path / "report.md"
+
+    result = measure_link_patterns.main(
+        [
+            "--snapshot",
+            str(snapshot),
+            "--aliases",
+            str(aliases),
+            "--out",
+            str(output),
+        ]
+    )
+
+    assert result == 0
+    assert "| restricts | 1/1 (100.0%) |" in output.read_text(encoding="utf-8")
+
+
+def test_aliases_with_data_dir_is_rejected(tmp_path: Path):
+    conn = store.connect(tmp_path / "mycelium.db")
+    store.migrate(conn)
+    conn.close()
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text("{}", encoding="utf-8")
+    output = tmp_path / "report.md"
+
+    result = measure_link_patterns.main(
+        [
+            "--data-dir",
+            str(tmp_path),
+            "--aliases",
+            str(aliases),
+            "--out",
+            str(output),
+        ]
+    )
+
+    assert result == 1
+    assert not output.exists()
