@@ -205,6 +205,54 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
         ("contains-belongs-to", "belongs to"),
         ("contains-belongs-to", "is owned by"),
     } <= agreements
+    # A frame whose phrasing never equals a seeded alias has no seeded direction
+    # to agree with, so the sweep binds exactly the frames pinned here.
+    assert {name for name, _alias in agreements} == frozenset(
+        {
+            "requires-verb",
+            "requires-required",
+            "requires-needs",
+            "requires-must-have",
+            "accepts-verb",
+            "accepts-optional",
+            "accepts-may-provide",
+            "configures-verb",
+            "restricts-verb",
+            "restricts-limits",
+            "enables-verb",
+            "enables-allows",
+            "triggers-verb",
+            "triggers-causes",
+            "establishes-verb",
+            "establishes-becomes",
+            "contains-verb",
+            "contains-composed-of",
+            "contains-consists-of",
+            "contains-part-of",
+            "contains-belongs-to",
+            "proceeds-verb",
+            "proceeds-followed-by",
+            "replaces-verb",
+            "replaces-instead-of",
+            "supersedes-verb",
+            "governed-by-phrase",
+            "varies-by-verb",
+            "varies-by-depends",
+            "fallback-to-verb",
+            "proceeds-then",
+            "valued-by-state",
+            "governed-by-capability",
+            "composes-formula",
+            "valued-by-derived",
+            "valued-by-determined",
+            "cases-one-of",
+            "fallback-to-defaults",
+            "teaches-how-to",
+            "resolves-fix",
+            "confirms-if",
+            "violates-missing",
+        }
+    )
 
 
 def test_measure_reports_hits_pairs_precision_and_no_ground_truth():
