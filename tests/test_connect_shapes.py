@@ -64,6 +64,7 @@ def test_state_passive_shape():
 
 def test_state_perfect_shape():
     _assert_assigned_shape("The invite has expired", "state", "state-perfect")
+    _assert_assigned_shape("The record has unlocked", "state", "state-perfect")
     # An unlisted participle is novel event vocabulary, not a state by default.
     assert classify("The reviewer has approved the request").status == "unmatched"
 

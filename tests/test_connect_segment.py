@@ -97,6 +97,15 @@ def test_comparative_multiword_opener_without_right_clause_is_not_cut():
     assert result.proposals == []
 
 
+def test_comparative_multiword_opener_with_right_clause_is_not_cut():
+    source = "The cable is as long as the room is wide"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [source]
+    assert result.cuts == []
+    assert result.proposals == []
+
+
 def test_if_then_conditional_outranks_the_phrase_cut():
     result = seg.segment("If the flag is set, then the job runs")
 
@@ -293,6 +302,16 @@ def test_comma_then_keeps_a_subjectless_remnant_flagged():
     assert result.fragments[1].unsplit is True
 
 
+def test_comma_then_keeps_a_noun_phrase_with_relative_clause_flagged():
+    result = seg.segment("The draft is created, then the report that the user sent.")
+
+    assert fragment_texts(result) == [
+        "The draft is created",
+        "the report that the user sent",
+    ]
+    assert result.fragments[1].unsplit is True
+
+
 def test_comma_then_cut_resolves_only_with_aliases():
     source = "The invite is sent, then a reminder is scheduled"
     aliases = {"then": frozenset({("proceeds", "forward")})}
@@ -376,6 +395,17 @@ def test_wrapped_list_item_normalizes_newlines_only_in_final_fragments():
     assert all("\n" not in fragment.text for fragment in result.fragments)
     raw = source[result.fragments[1].span[0] : result.fragments[1].span[1]]
     assert raw == "an\n  embedding is queued"
+
+
+def test_wrapped_list_item_normalizes_carriage_return_newlines():
+    source = "- The draft is created and an\r  embedding is queued.\r"
+    result = seg.segment(source)
+
+    assert fragment_texts(result) == [
+        "The draft is created",
+        "an embedding is queued",
+    ]
+    assert all("\r" not in fragment.text for fragment in result.fragments)
 
 
 def test_fragment_spans_match_their_retained_surface_text():

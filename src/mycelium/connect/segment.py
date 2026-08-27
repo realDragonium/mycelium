@@ -274,7 +274,7 @@ def _normalize_leaf_newlines(piece: _Piece) -> _Piece:
     origins: list[int | None] = []
     cursor = 0
     for match in _LEAF_WHITESPACE_RE.finditer(piece.text):
-        if "\n" not in match.group():
+        if "\n" not in match.group() and "\r" not in match.group():
             continue
         text_parts.extend((piece.text[cursor : match.start()], " "))
         origins.extend(piece.origins[cursor : match.start()])
@@ -531,19 +531,24 @@ def _is_finite_clause_token(token) -> bool:
 
 
 def _stands_alone(piece: _Piece, parses: _Parses) -> bool:
-    """Recover a whole-clause reading hidden by the full-sentence parse.
+    """Require a finite, explicitly subject-bearing root clause.
 
     Verb/noun homographs such as "runs" can be mistagged beside a multiword
-    opener. The stand-alone parse must carry an explicit subject so promoting
-    a remnant cannot invent the missing half of a statement.
+    opener. Requiring the stand-alone parse's root, rather than any embedded
+    verb, prevents a relative clause inside a noun phrase from promoting the
+    phrase as a whole statement.
     """
     cleaned = _clean_piece(piece)
     if not cleaned.text:
         return False
-    return any(
-        token.pos_ in ("VERB", "AUX")
-        and any(child.dep_ in ("nsubj", "nsubjpass") for child in token.children)
-        for token in _parse(cleaned.text, parses)
+    root = next(
+        (token for token in _parse(cleaned.text, parses) if token.dep_ == "ROOT"),
+        None,
+    )
+    return (
+        root is not None
+        and root.pos_ in ("VERB", "AUX")
+        and any(child.dep_ in ("nsubj", "nsubjpass") for child in root.children)
     )
 
 
@@ -656,6 +661,13 @@ def _conditional_trailing_multiword(
 ) -> _Split | None:
     """Cut a trailing catalog opener when spaCy misses its clause shape."""
     for match in _TRAILING_MULTIWORD_SUBORDINATOR_RE.finditer(piece.text):
+        opener_token = next(
+            (token for token in doc if token.idx == match.start()), None
+        )
+        # Veto only: a parse mistake here may prevent a cut, but must never let
+        # a degree comparison invent a condition relation.
+        if opener_token is not None and opener_token.head.dep_ == "acomp":
+            continue
         left = _trim_piece(_subpiece(piece, 0, match.start(), role="claim"))
         right = _trim_piece(
             _subpiece(piece, match.end(), len(piece.text), role="condition")

@@ -47,6 +47,7 @@ STATE_PARTICIPLES = frozenset(
         "register",
         "restrict",
         "set",
+        "unlock",
     }
 )
 EVENT_PARTICIPLES = frozenset(
