@@ -651,7 +651,10 @@ def test_import_rejects_newer_schema_version(tmp_path):
         backup.import_substrate(tampered, dst)
 
 
-def test_import_rejects_non_int_schema_version(tmp_path):
+@pytest.mark.parametrize(
+    "invalid_schema_version", [str(backup.SCHEMA_VERSION), True, None]
+)
+def test_import_rejects_invalid_schema_version(tmp_path, invalid_schema_version):
     src = tmp_path / "src"
     src.mkdir()
     _seed_substrate(src)
@@ -659,17 +662,20 @@ def test_import_rejects_non_int_schema_version(tmp_path):
     archive = tmp_path / "snap.tar.gz"
     backup.export_substrate(src, archive)
 
-    def _set_string_version(work: Path) -> None:
+    def _set_invalid_version(work: Path) -> None:
         manifest_path = work / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        manifest["schema_version"] = str(backup.SCHEMA_VERSION)
+        if invalid_schema_version is None:
+            del manifest["schema_version"]
+        else:
+            manifest["schema_version"] = invalid_schema_version
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     tampered = _repack(
         archive,
         tmp_path / "work",
         tmp_path / "tampered.tar.gz",
-        _set_string_version,
+        _set_invalid_version,
     )
 
     with pytest.raises(ValueError, match=r"schema_version .*unsupported"):
