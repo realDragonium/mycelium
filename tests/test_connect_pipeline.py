@@ -142,3 +142,35 @@ def test_pair_budget_classifies_ranked_prefix_and_preserves_skipped_candidates(
         for candidate in result.funnel.candidates
         if candidate.statement_id not in verdict_ids
     ] == ["second", "third", "fourth"]
+
+
+def test_pair_counts_exclude_candidate_with_unresolvable_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", "4")
+    monkeypatch.delenv("MYCELIUM_NLI_CONFIDENCE", raising=False)
+    model = FakeNli()
+    view = FakeView(
+        [
+            ("missing", 0.9),
+            ("classified", 0.8),
+            ("budget-skipped", 0.7),
+        ]
+    )
+    existing_text = {
+        "classified": "existing text",
+        "budget-skipped": "skipped text",
+    }
+
+    result = pipeline.run(
+        [BatchStatement(0, "event", "new")],
+        view,
+        text_of=existing_text.get,
+        nli_model=model,
+    )
+
+    assert result.nli == "ran"
+    assert result.nli_pairs == NliPairs(classified=2, skipped=2, budget=4)
+    assert model.calls == [[("new", "existing text"), ("existing text", "new")]]
+    assert result.verdicts is not None
+    assert [verdict.statement_id for verdict in result.verdicts] == ["classified"]

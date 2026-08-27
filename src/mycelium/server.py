@@ -3399,7 +3399,8 @@ def submit_connected_batch(
     flags**, filed as knowledge gaps, where your text and an existing
     statement can't both hold. A contradiction only becomes a conflict when
     the statements share a mentioned entity; suppressed contradictions are
-    counted in `suppressed_conflicts` and still listed under `related`.
+    counted in `suppressed_conflicts`, and the candidate still surfaces under
+    `related` unless another proposal already names it.
 
     What it will not do is infer a relation the text doesn't state: emergent
     behaviour and cross-feature interaction are still yours to author in

@@ -63,10 +63,14 @@ def max_pairs() -> int:
         resolved = int(configured)
     except (TypeError, ValueError) as error:
         raise ValueError(
-            f"NLI max pairs {configured!r} is not a positive integer"
+            f"NLI max pairs {configured!r} must be an integer of at least 2 "
+            "because each candidate costs two pairs"
         ) from error
-    if resolved <= 0:
-        raise ValueError(f"NLI max pairs {resolved!r} is not a positive integer")
+    if resolved < 2:
+        raise ValueError(
+            f"NLI max pairs {resolved!r} must be an integer of at least 2 "
+            "because each candidate costs two pairs"
+        )
     return resolved
 
 
@@ -289,8 +293,8 @@ def classify_candidates(
     """Classify funnel candidates as duplicate, contradiction, or related.
 
     Only confident bidirectional same-kind entailment proposes a duplicate;
-    confident contradiction in either direction proposes a conflict. All other
-    results are demoted to related candidates.
+    confident contradiction in either direction yields a contradiction verdict.
+    All other results are demoted to related candidates.
     """
     resolved_threshold = _resolve_threshold(threshold)
     statements = {statement.index: statement for statement in batch}

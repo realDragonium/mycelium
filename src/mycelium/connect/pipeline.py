@@ -83,9 +83,9 @@ def run(
             reason,
             NliPairs(classified=0, skipped=0, budget=pair_budget),
         )
-    # This records submitted work; classify_candidates may omit pairs whose
-    # existing statement text cannot be resolved.
-    classified_pairs = 2 * len(classified_candidates)
+    # Budget slots consumed by text-unresolvable candidates are neither classified
+    # nor counted as budget-skipped; that is accepted.
+    classified_pairs = 2 * len(verdicts)
     return PipelineResult(
         funnel,
         link_proposals,

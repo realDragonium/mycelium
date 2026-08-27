@@ -270,15 +270,20 @@ def test_max_pairs_defaults_and_honours_environment(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", "24")
     assert max_pairs() == 24
 
+    monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", "2")
+    assert max_pairs() == 2
 
-@pytest.mark.parametrize("configured", ["0", "-1", "not-an-integer"])
-def test_max_pairs_rejects_non_positive_and_non_integer_values(
+
+@pytest.mark.parametrize("configured", ["1", "0", "-1", "not-an-integer"])
+def test_max_pairs_rejects_values_below_two_and_non_integer_values(
     monkeypatch: pytest.MonkeyPatch,
     configured: str,
 ):
     monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", configured)
 
-    with pytest.raises(ValueError, match="not a positive integer"):
+    with pytest.raises(
+        ValueError, match="at least 2 because each candidate costs two pairs"
+    ):
         max_pairs()
 
 
