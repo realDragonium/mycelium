@@ -42,9 +42,11 @@ class HintedView:
         """Delegate neighbour discovery to the wrapped view."""
         return self._view.neighbours(vec, k)
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
         """Delegate statement similarity to the wrapped view."""
-        return self._view.similarity(vec, statement_id)
+        return self._view.similarity(vec, statement_ids)
 
     def entities_in(self, text: str) -> frozenset[str]:
         """Widen derived entities with request-scoped hints for exact text."""
@@ -101,23 +103,33 @@ class LiveSubstrate:
                 resolved.append((statement_id, _as_cosine(1.0 - distance)))
         return resolved
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
-        """Compute cosine similarity to a statement's indexed vector."""
-        vector_id = store.get_vector_id(self._server._db(), statement_id)
-        if vector_id is None:
-            return None
-        stored = self._server._idx().get_vector(vector_id)
-        if stored is None:
-            return None
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
+        """Compute cosine similarity to each available indexed vector."""
+        vector_ids = store.get_vector_ids(self._server._db(), statement_ids)
         query_array = np.asarray(vec, dtype=np.float32)
-        stored_array = np.asarray(stored, dtype=np.float32)
         query_norm = float(np.linalg.norm(query_array))
-        stored_norm = float(np.linalg.norm(stored_array))
-        if query_norm == 0 or stored_norm == 0:
-            return None
-        return _as_cosine(
-            float(np.dot(query_array / query_norm, stored_array / stored_norm))
-        )
+        if query_norm == 0:
+            return {}
+        normalized_query = query_array / query_norm
+        scores: dict[str, float] = {}
+        index = self._server._idx()
+        for statement_id in statement_ids:
+            vector_id = vector_ids.get(statement_id)
+            if vector_id is None:
+                continue
+            stored = index.get_vector(vector_id)
+            if stored is None:
+                continue
+            stored_array = np.asarray(stored, dtype=np.float32)
+            stored_norm = float(np.linalg.norm(stored_array))
+            if stored_norm == 0:
+                continue
+            scores[statement_id] = _as_cosine(
+                float(np.dot(normalized_query, stored_array / stored_norm))
+            )
+        return scores
 
     def entities_in(self, text: str) -> frozenset[str]:
         """Derive the entity identities mentioned by text."""

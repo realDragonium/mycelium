@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 
 import pytest
 
@@ -29,6 +30,7 @@ class FakeView:
         self.allow_all_link_types = allow_all_link_types
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
+        self.similarity_calls: list[tuple[str, ...]] = []
 
     def embed(self, text: str) -> list[float]:
         self.embed_calls[text] += 1
@@ -37,8 +39,16 @@ class FakeView:
     def neighbours(self, vec: list[float], k: int) -> list[tuple[str, float]]:
         return self.neighbours_by_vector.get(tuple(vec), [])[:k]
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
-        return self.similarities.get(statement_id)
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
+        self.similarity_calls.append(tuple(statement_ids))
+        scores: dict[str, float] = {}
+        for statement_id in statement_ids:
+            score = self.similarities.get(statement_id)
+            if score is not None:
+                scores[statement_id] = score
+        return scores
 
     def entities_in(self, text: str) -> frozenset[str]:
         return self.entities_by_text.get(text, frozenset())
@@ -100,6 +110,8 @@ def test_unions_vector_and_mention_routes_before_thresholding():
     assert by_id["both"].via == frozenset({"vector", "mention"})
     assert by_id["both"].score == 0.9
     assert by_id["both"].shared_entities == frozenset({"entity"})
+    assert len(view.similarity_calls) == 1
+    assert set(view.similarity_calls[0]) == {"mention", "both", "low-mention"}
 
 
 def test_duplicate_flag_requires_same_kind_and_high_score():

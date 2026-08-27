@@ -23,9 +23,6 @@ from .patterns import CueMatch, find_cues
 RESOLVE_THRESHOLD = RELATED_THRESHOLD
 RESOLVE_THRESHOLD_UNANCHORED = 0.75
 TARGET_NEIGHBOURS_K = 10
-#: Most anchored substrate ids scored by an individual `similarity` call per cue
-#: phrase. One popular entity must not drive hundreds of round trips per cue.
-TARGET_SHARING_CAP = 50
 
 #: The instance's shipped rule set — pattern name -> kinds it may fire for
 #: (None = any kind). Derived from docs/reports/2026-08-15-link-pattern-hit-rate.md;
@@ -158,25 +155,6 @@ def _resolve_in_batch(
     ]
 
 
-def _anchored_ids(
-    sharing: dict[str, frozenset[str]],
-    already_scored: set[str],
-    cap: int,
-) -> list[str]:
-    """Take the best-anchored ids a separate similarity call still has to score.
-
-    A phrase naming a popular entity shares with unboundedly many statements, and
-    each one outside the neighbour result costs its own substrate round trip; the
-    cap keeps that per-cue cost flat. Ids the neighbour query already scored are
-    free, so they do not count against it.
-    """
-    unscored = [
-        statement_id for statement_id in sharing if statement_id not in already_scored
-    ]
-    unscored.sort(key=lambda statement_id: (-len(sharing[statement_id]), statement_id))
-    return unscored[:cap]
-
-
 def _resolve_in_substrate(
     statement: BatchStatement,
     funnel: FunnelResult,
@@ -190,23 +168,27 @@ def _resolve_in_substrate(
 ) -> list[_Resolved]:
     """Union and rank eligible substrate targets for one target phrase.
 
-    The anchored fan-out is capped at `TARGET_SHARING_CAP`, so one popular entity
-    cannot drive hundreds of similarity round trips for a single cue.
+    Similarity for candidates outside the neighbour result is fetched in one batch,
+    so anchored recall is uncapped without increasing substrate round trips.
     """
     neighbour_scores = dict(view.neighbours(phrase_vec, k))
     candidate_ids = (
         set(neighbour_scores)
-        | set(_anchored_ids(sharing, set(neighbour_scores), TARGET_SHARING_CAP))
+        | set(sharing)
         | {
             candidate.statement_id
             for candidate in candidates_for(funnel, statement.index)
         }
     )
+    unscored_ids = candidate_ids - set(neighbour_scores)
+    similarity_scores = (
+        view.similarity(phrase_vec, sorted(unscored_ids)) if unscored_ids else {}
+    )
     resolved: list[_Resolved] = []
     for statement_id in candidate_ids:
         score = neighbour_scores.get(statement_id)
         if score is None:
-            score = view.similarity(phrase_vec, statement_id)
+            score = similarity_scores.get(statement_id)
         if score is None:
             continue
         shared = phrase_entities & sharing.get(statement_id, frozenset())

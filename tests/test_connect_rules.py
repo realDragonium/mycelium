@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Sequence
 
 import pytest
 
 from mycelium.connect.funnel import BatchStatement, Candidate, FunnelResult
 from mycelium.connect.rules import (
-    TARGET_SHARING_CAP,
     LinkProposal,
     _cosine,
     propose_links,
@@ -30,7 +30,7 @@ class FakeView:
         self.allow_all_link_types = allow_all_link_types
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
-        self.similarity_calls: list[str] = []
+        self.similarity_calls: list[tuple[str, ...]] = []
 
     def embed(self, text: str) -> list[float]:
         self.embed_calls[text] += 1
@@ -39,9 +39,16 @@ class FakeView:
     def neighbours(self, vec: list[float], k: int) -> list[tuple[str, float]]:
         return self.neighbours_by_vector.get(tuple(vec), [])[:k]
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
-        self.similarity_calls.append(statement_id)
-        return self.similarities.get(statement_id)
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
+        self.similarity_calls.append(tuple(statement_ids))
+        scores: dict[str, float] = {}
+        for statement_id in statement_ids:
+            score = self.similarities.get(statement_id)
+            if score is not None:
+                scores[statement_id] = score
+        return scores
 
     def entities_in(self, text: str) -> frozenset[str]:
         return self.entities_by_text.get(text, frozenset())
@@ -482,7 +489,7 @@ def test_cosine_rejects_mismatched_embedding_dimensions():
         _cosine([1.0, 0.0, 0.0], [1.0, 0.0])
 
 
-def test_anchored_substrate_fan_out_is_capped_per_cue_phrase():
+def test_anchored_fan_out_scores_all_sharing_ids_in_one_batched_call():
     view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
     phrase = "the dispatch attempts"
     view.embeddings_by_text[phrase] = [1.0, 0.0]
@@ -492,17 +499,15 @@ def test_anchored_substrate_fan_out_is_capped_per_cue_phrase():
         view.sharing[statement_id] = frozenset({"ent_dispatch"})
         view.similarities[statement_id] = 0.7
         view.kinds[statement_id] = "property"
-    # Two shared entities outrank one, so this id survives the cap despite sorting last.
     view.sharing["stm_59"] = frozenset({"ent_dispatch", "ent_retry"})
     view.similarities["stm_59"] = 0.9
-    # The best score of all, but it falls outside the cap and is never scored.
     view.similarities["stm_58"] = 0.99
     batch = [BatchStatement(0, "rule", "Retry budget limits the dispatch attempts")]
 
     proposals = propose_links(batch, _funnel({}), view)
 
-    assert len(view.similarity_calls) == TARGET_SHARING_CAP
-    assert set(view.similarity_calls) == {"stm_59"} | set(popular[:49])
+    assert len(view.similarity_calls) == 1
+    assert set(view.similarity_calls[0]) == set(popular)
     assert len(proposals) == 1
-    assert proposals[0].target == "stm_59"
-    assert proposals[0].score == 0.9
+    assert proposals[0].target == "stm_58"
+    assert proposals[0].score == 0.99

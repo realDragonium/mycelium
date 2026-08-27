@@ -29,8 +29,10 @@ class SubstrateView(Protocol):
         """(statement_id, cosine similarity), best first, unresolvable ids dropped."""
         ...
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
-        """Cosine similarity to the statement's stored vector; None if it has none."""
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
+        """Cosine per statement id, omitting ids without stored vectors."""
         ...
 
     def entities_in(self, text: str) -> frozenset[str]:
@@ -88,8 +90,9 @@ def _score_candidates(
         for statement_id, score in view.neighbours(vec, k)
     }
     sharing = view.statements_sharing(entity_ids) if entity_ids else {}
+    mention_scores = view.similarity(vec, tuple(sharing)) if sharing else {}
     for statement_id, shared_entities in sharing.items():
-        mention_score = view.similarity(vec, statement_id)
+        mention_score = mention_scores.get(statement_id)
         if mention_score is None:
             continue
         previous = scored.get(statement_id)
