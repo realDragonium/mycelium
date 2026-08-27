@@ -6002,8 +6002,14 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     restored = False
     try:
         with store.transaction(_db()):
-            _idx().save(index_snapshot_path)
-            _name_idx().save(name_index_snapshot_path)
+            try:
+                _idx().save(index_snapshot_path)
+                _name_idx().save(name_index_snapshot_path)
+            except BaseException:
+                for _, snapshot_path, _ in snapshots:
+                    with contextlib.suppress(OSError):
+                        snapshot_path.unlink(missing_ok=True)
+                raise
             snapshots_taken = True
             try:
                 for op in ops:
