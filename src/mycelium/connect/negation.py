@@ -85,10 +85,18 @@ def negated_phrase_root(doc: "Doc", span: tuple[int, int]) -> str | None:
 def negated_connective(cue: str) -> str | None:
     """Return a whole-token negator found inside connective text."""
     doc = phrasing.get_nlp()(cue)
-    for token in doc:
+    for index, token in enumerate(doc):
+        lemma = token.lemma_.casefold()
+        # "No more/fewer/less than" expresses a bound rather than denial.
+        if (
+            lemma == "no"
+            and index + 1 < len(doc)
+            and doc[index + 1].lemma_.casefold() in {"more", "few", "fewer", "less"}
+        ):
+            continue
         if (
             token.dep_ == "neg"
-            or token.lemma_.casefold() in {"not", "never"}
+            or lemma in {"no", "not", "never"}
             or token.text.casefold() == "n't"
         ):
             return token.text
