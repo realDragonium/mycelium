@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 import pytest
 
@@ -21,8 +22,10 @@ class FakeView:
     def neighbours(self, vec: list[float], k: int) -> list[tuple[str, float]]:
         return self._neighbours[:k]
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
-        return None
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
+        return {}
 
     def entities_in(self, text: str) -> frozenset[str]:
         return frozenset()
@@ -32,8 +35,12 @@ class FakeView:
     ) -> dict[str, frozenset[str]]:
         return {}
 
-    def kind_of(self, statement_id: str) -> str | None:
-        return self._kinds.get(statement_id)
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        return {
+            statement_id: self._kinds[statement_id]
+            for statement_id in statement_ids
+            if statement_id in self._kinds
+        }
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         return frozenset()
