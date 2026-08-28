@@ -276,10 +276,19 @@ function DraftGraph({ ops }) {
 // which stage refused it.
 //
 // The enum is the word the API, the logs and `FLAG_SOURCES` use, so it stays
-// on screen; the sentence beside it is the part a curator can act on. The
-// stage label mirrors `FLAG_SOURCES` in connect/extract.py — an op carrying a
-// reason this table has not learned falls back to its own `provenance.source`
-// rather than inventing an explanation.
+// on screen; the sentence beside it is the part a curator can act on.
+//
+// The stage label names, in an operator's words, the stage that RAISED the
+// flag. That is usually a rewording of `FLAG_SOURCES` in connect/extract.py,
+// but deliberately not always: `FLAG_SOURCES['phrasing']` records the
+// phrasing catalog, because the catalog is what refused the wording — yet the
+// flag is raised by the planner (`_ingest_plan_flags` in server.py) against a
+// statement it had already classified. The label follows the raiser, so a
+// curator reading it knows which stage to go and look at; the sentence still
+// names the catalog as the thing that objected.
+//
+// An op carrying a reason this table has not learned falls back to its own
+// `provenance.source` rather than inventing an explanation.
 const _FLAG_REASONS = {
   unsplit: ['segmenter', 'A compound the segmenter could not cut into separate statements.'],
   rejected: ['phrasing catalog', 'The wording was refused before the fragment was classified.'],

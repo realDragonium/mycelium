@@ -700,3 +700,17 @@ def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
         stage, explanation = parts
         assert stage.strip(), f"{reason} names no stage"
         assert explanation.strip().endswith("."), f"{reason} has no explaining sentence"
+
+
+def test_flag_reason_lookup_is_guarded_against_inherited_properties():
+    """`_FLAG_REASONS[reason]` on its own reaches Object.prototype, so a flag
+    whose reason is `constructor` or `toString` resolves to an inherited member
+    and renders a blank stage with a blank explanation — worse than the enum,
+    because it looks like the pipeline said nothing. Only the own-property
+    guard keeps that off the review surface, and no JS test runner exists here
+    to catch it if the guard is dropped."""
+    lookup = re.search(r"const known = (.*?);\n", _DRAFTS_JSX.read_text(), re.S)
+    assert lookup is not None, "could not find the _FLAG_REASONS lookup"
+    assert "hasOwnProperty.call(_FLAG_REASONS" in lookup.group(1), (
+        "the flag-reason lookup must be own-property guarded"
+    )
