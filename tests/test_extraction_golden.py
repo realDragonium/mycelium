@@ -518,6 +518,26 @@ SUBSTRATE_GOLDEN: dict[str, SubstrateGolden] = {
             ),
         ),
     ),
+    "cases-level-existing-parent-is-the-link-source": SubstrateGolden(
+        "The escalation priority is high for the incident severity policy.",
+        existing=(("s-policy", "rule", "The incident severity policy applies"),),
+        candidates=(
+            (
+                "The escalation priority is high for the incident severity policy",
+                "related",
+                "s-policy",
+                0.645,
+            ),
+        ),
+        proposals=(
+            (
+                "s-policy",
+                "cases",
+                "The escalation priority is high for the incident severity policy",
+                "is high for",
+            ),
+        ),
+    ),
     # The alias-aware 2026-08-27 measurement found zero governed-by-phrase
     # fires across all 1644 statements and no usable lexical surface on any of
     # the 104 governed-by link endpoints, so this no-link is deliberate. The

@@ -448,10 +448,14 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "cases",
             r"\b(?P<cue>(?:is|are) (?:either|any of))\b\s*(?P<to>.+)",
         ),
+        # The level sits on the enumerated value and the phrase after "for" is the
+        # enumerating parent, so the phrase fills the `from` slot. "for" names that
+        # parent; a `when`/`if` clause is a condition, not a `cases` source, and those
+        # arms fired on zero statements in the measured snapshot.
         _pattern(
             "cases-level-for",
             "cases",
-            r"\b(?P<cue>(?:is|are) (?:low|medium|high|extra high|none|positive|negative) (?:for|when|if))\b\s*(?P<to>.+)",
+            r"\b(?P<cue>(?:is|are) (?:low|medium|high|extra high|none|positive|negative) for)\b\s*(?P<from>.+)",
         ),
         _pattern(
             "cases-enumeration",

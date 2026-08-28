@@ -103,12 +103,10 @@ def _proposals_for(
     phrase: str,
     *,
     shipped: dict[str, frozenset[str] | None] | None = None,
+    allow: frozenset[str] | None = None,
 ) -> RuleProposals:
-    view = FakeView(
-        allow_all_link_types=frozenset(
-            {"composes", "contains", "restricts", "triggers"}
-        )
-    )
+    default_allow = frozenset({"composes", "contains", "restricts", "triggers"})
+    view = FakeView(allow_all_link_types=default_allow if allow is None else allow)
     view.embeddings_by_text[phrase] = [1.0, 0.0]
     batch = [
         BatchStatement(0, kind, text),
@@ -157,6 +155,38 @@ def test_negated_from_role_is_suppressed_and_affirmative_keeps_source_slot():
 
     affirmative = _proposals_for(
         "The report belongs to the archive", "state", "the archive"
+    )
+    assert len(affirmative.links) == 1
+    assert affirmative.links[0].source == "@1"
+    assert affirmative.links[0].target == "@0"
+
+
+def test_negated_cases_level_is_suppressed_and_affirmative_keeps_source_slot():
+    # The frame's cue is contiguous, so "is not high for" never matches and
+    # verb negation cannot reach it; the enumerating parent it captures can
+    # still be denied nominally.
+    negated = _proposals_for(
+        "The escalation priority is high for no severity policy",
+        "rule",
+        "no severity policy",
+    )
+
+    assert negated.links == []
+    assert negated.suppressed_negations == [
+        SuppressedNegation(
+            new_index=0,
+            pattern="cases-level-for",
+            cue="is high for",
+            phrase="no severity policy",
+            negator="no",
+        )
+    ]
+
+    affirmative = _proposals_for(
+        "The escalation priority is high for the severity policy",
+        "rule",
+        "the severity policy",
+        allow=frozenset({"cases"}),
     )
     assert len(affirmative.links) == 1
     assert affirmative.links[0].source == "@1"

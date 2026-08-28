@@ -372,6 +372,94 @@ def test_migration_v11_adds_only_missing_passive_by_aliases():
     )
 
 
+def test_migration_v12_adds_only_missing_cases_level_aliases():
+    seeded = _v9_alias_conn()
+    seeded.execute(
+        "INSERT INTO link_type_aliases (link_type, alias) "
+        "VALUES ('contains', 'includes')"
+    )
+
+    migrations._migration_v12_cases_level_aliases(seeded)
+
+    rows = seeded.execute(
+        "SELECT link_type, alias, provenance, direction, created_at "
+        "FROM link_type_aliases "
+        "WHERE alias IN ('is low for', 'is medium for', 'is high for', "
+        "'is extra high for', 'is none for', 'is positive for', "
+        "'is negative for') ORDER BY alias"
+    ).fetchall()
+    assert [
+        (row["link_type"], row["alias"], row["provenance"], row["direction"])
+        for row in rows
+    ] == [
+        ("cases", "is extra high for", "seed", "reverse"),
+        ("cases", "is high for", "seed", "reverse"),
+        ("cases", "is low for", "seed", "reverse"),
+        ("cases", "is medium for", "seed", "reverse"),
+        ("cases", "is negative for", "seed", "reverse"),
+        ("cases", "is none for", "seed", "reverse"),
+        ("cases", "is positive for", "seed", "reverse"),
+    ]
+    assert all(row["created_at"] for row in rows)
+    assert [
+        (row["link_type"], row["alias"])
+        for row in seeded.execute(
+            "SELECT link_type, alias FROM link_type_alias_embed_queue ORDER BY alias"
+        )
+    ] == [
+        ("cases", "is extra high for"),
+        ("cases", "is high for"),
+        ("cases", "is low for"),
+        ("cases", "is medium for"),
+        ("cases", "is negative for"),
+        ("cases", "is none for"),
+        ("cases", "is positive for"),
+    ]
+
+    absorbed = _v9_alias_conn()
+    absorbed.execute(
+        "INSERT INTO link_type_aliases "
+        "(link_type, alias, provenance, score, direction, created_at, created_by) "
+        "VALUES ('contains', 'includes', 'seed', NULL, 'forward', NULL, NULL), "
+        "('cases', 'is high for', 'auto', 0.91, 'forward', "
+        "'chosen-at', 'curator')"
+    )
+    absorbed.execute(
+        "INSERT INTO link_type_alias_embed_queue "
+        "(link_type, alias, enqueued_at) "
+        "VALUES ('cases', 'is high for', 'chosen-at')"
+    )
+
+    migrations._migration_v12_cases_level_aliases(absorbed)
+
+    existing = absorbed.execute(
+        "SELECT provenance, score, direction, created_at, created_by "
+        "FROM link_type_aliases "
+        "WHERE link_type = 'cases' AND alias = 'is high for'"
+    ).fetchone()
+    assert tuple(existing) == ("auto", 0.91, "forward", "chosen-at", "curator")
+    queued = absorbed.execute(
+        "SELECT link_type, alias FROM link_type_alias_embed_queue ORDER BY id"
+    ).fetchall()
+    assert [(row["link_type"], row["alias"]) for row in queued] == [
+        ("cases", "is high for"),
+        ("cases", "is low for"),
+        ("cases", "is medium for"),
+        ("cases", "is extra high for"),
+        ("cases", "is none for"),
+        ("cases", "is positive for"),
+        ("cases", "is negative for"),
+    ]
+
+    empty = _v9_alias_conn()
+    migrations._migration_v12_cases_level_aliases(empty)
+    assert empty.execute("SELECT COUNT(*) FROM link_type_aliases").fetchone()[0] == 0
+    assert (
+        empty.execute("SELECT COUNT(*) FROM link_type_alias_embed_queue").fetchone()[0]
+        == 0
+    )
+
+
 def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
     store.upsert_link_type_alias(
         fresh_conn, "contains", "belongs to", direction="reverse"
@@ -385,8 +473,8 @@ def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
 
 
 def test_migrate_sets_alias_schema_version(fresh_conn):
-    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 11
-    assert migrations.CURRENT_VERSION == 11
+    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 12
+    assert migrations.CURRENT_VERSION == 12
 
 
 def test_carrier_embedding_drain_round_trips_and_skips_deleted_target(fresh_conn):
