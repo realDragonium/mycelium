@@ -1259,6 +1259,23 @@ def _clear_dirty_marker(index_path: Path) -> None:
     _dirty_marker_path(index_path).unlink(missing_ok=True)
 
 
+def _fsync_and_clear_marker(index_path: Path, *, keep_marker: bool) -> None:
+    """Post-commit marker teardown for one index; never raises.
+
+    `keep_marker=True` preserves a marker inherited from an earlier failed
+    write (sticky until startup reconciliation)."""
+    try:
+        _fsync_file(index_path)
+        if not keep_marker:
+            _clear_dirty_marker(index_path)
+    except OSError:
+        logger.warning(
+            "could not fsync %s or clear its dirty marker; next startup will rebuild",
+            index_path,
+            exc_info=True,
+        )
+
+
 @contextlib.contextmanager
 def _persisted_index_write(
     *, statements: bool = False, names: bool = False
@@ -1296,15 +1313,20 @@ def _persisted_index_write(
                 _persist_name_index()
         # The outer transaction committed; still under the reentrant lock so
         # no other writer can interleave between commit and marker clear.
+        # Best-effort from here: the write succeeded the moment commit
+        # returned, so a failed fsync or marker unlink must not surface as a
+        # failed operation (apply_draft would wrongly restore pre-apply
+        # indexes over a committed replay). A kept marker just means the next
+        # startup rebuilds.
         if outermost:
             if statements:
-                _fsync_file(_idx_path())
-                if not statement_marker_preexisting:
-                    _clear_dirty_marker(_idx_path())
+                _fsync_and_clear_marker(
+                    _idx_path(), keep_marker=statement_marker_preexisting
+                )
             if names:
-                _fsync_file(_name_idx_path())
-                if not name_marker_preexisting:
-                    _clear_dirty_marker(_name_idx_path())
+                _fsync_and_clear_marker(
+                    _name_idx_path(), keep_marker=name_marker_preexisting
+                )
 
 
 def _restore_index_snapshots(

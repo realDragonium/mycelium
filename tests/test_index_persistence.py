@@ -192,7 +192,11 @@ def test_draft_replay_clears_markers_only_after_outermost_commit(
     persist_positions = [i for i, event in enumerate(events) if event[0] == "persist"]
     clear_positions = [i for i, event in enumerate(events) if event[0] == "clear"]
     assert len(commit_positions) == 1
-    assert persist_positions
+    # The pre-apply snapshot saves also count as persist events, so require
+    # the LIVE .vec files explicitly or the assertion passes vacuously.
+    persisted_files = {event[1] for event in events if event[0] == "persist"}
+    assert server._idx_path().name in persisted_files
+    assert server._name_idx_path().name in persisted_files
     assert all(position < commit_positions[0] for position in persist_positions)
     assert clear_positions
     assert all(position > commit_positions[0] for position in clear_positions)
