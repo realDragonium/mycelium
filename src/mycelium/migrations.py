@@ -719,7 +719,12 @@ def _migration_v11_passive_by_aliases(conn: sqlite3.Connection) -> None:
         ("restricts", "is limited by"),
         ("restricts", "is bounded by"),
         ("restricts", "is locked by"),
+        ("restricts", "is capped by"),
+        ("restricts", "is disabled by"),
+        ("restricts", "is frozen by"),
+        ("restricts", "is suspended by"),
         ("enables", "is enabled by"),
+        ("enables", "is unlocked by"),
     ):
         exists = conn.execute(
             "SELECT 1 FROM link_type_aliases WHERE link_type = ? AND alias = ?",

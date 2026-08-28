@@ -98,6 +98,25 @@ def test_passive_locked_by_captures_the_restrictor_from_slot():
     assert not any(cue.pattern == "restricts-state" for cue in cues)
 
 
+def test_overlapping_state_aliases_cannot_backtrack_around_the_by_guard():
+    aliases = {"restricts": ("locked down", "locked")}
+
+    passive = find_cues(
+        "The vault is locked down by the policy", "state", aliases=aliases
+    )
+    assert not any(cue.pattern == "restricts-state" for cue in passive)
+    by_match = next(cue for cue in passive if cue.pattern == "restricts-state-by")
+    assert (by_match.cue, by_match.phrase, by_match.phrase_role) == (
+        "is locked down by",
+        "the policy",
+        "from",
+    )
+
+    plain = find_cues("The vault is locked down", "state", aliases=aliases)
+    plain_match = next(cue for cue in plain if cue.pattern == "restricts-state")
+    assert (plain_match.cue, plain_match.phrase_role) == ("is locked down", "to")
+
+
 def test_limited_by_and_limited_to_capture_opposite_slots():
     limited_by = find_cues("The retry budget is limited by the daily quota", "property")
     by_match = next(cue for cue in limited_by if cue.pattern == "restricts-limited-by")
@@ -266,9 +285,11 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
         ("contains-belongs-to", "belongs to"),
         ("contains-belongs-to", "is owned by"),
         ("restricts-state-by", "is locked by"),
+        ("restricts-state-by", "is disabled by"),
         ("restricts-limited-by", "is limited by"),
         ("restricts-limited-by", "is bounded by"),
         ("enables-state-by", "is enabled by"),
+        ("enables-state-by", "is unlocked by"),
     } <= agreements
     # A frame whose phrasing never equals a seeded alias has no seeded direction
     # to agree with, so the sweep binds exactly the frames pinned here.

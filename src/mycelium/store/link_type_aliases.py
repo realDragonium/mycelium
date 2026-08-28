@@ -54,6 +54,7 @@ _ALIAS_SEED: dict[str, tuple[str, ...]] = {
         "permits",
         "makes available",
         "is enabled by",
+        "is unlocked by",
     ),
     "requires": ("requires", "needs", "must have", "is required for"),
     "accepts": ("accepts", "optionally", "may include", "may provide"),
@@ -86,6 +87,10 @@ _ALIAS_SEED: dict[str, tuple[str, ...]] = {
         "is limited by",
         "is bounded by",
         "is locked by",
+        "is capped by",
+        "is disabled by",
+        "is frozen by",
+        "is suspended by",
     ),
     "proceeds": (
         "proceeds to",
@@ -146,7 +151,12 @@ _REVERSE_SEED: frozenset[tuple[str, str]] = frozenset(
         ("restricts", "is limited by"),
         ("restricts", "is bounded by"),
         ("restricts", "is locked by"),
+        ("restricts", "is capped by"),
+        ("restricts", "is disabled by"),
+        ("restricts", "is frozen by"),
+        ("restricts", "is suspended by"),
         ("enables", "is enabled by"),
+        ("enables", "is unlocked by"),
     }
 )
 

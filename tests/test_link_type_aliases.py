@@ -290,16 +290,22 @@ def test_migration_v11_adds_only_missing_passive_by_aliases():
         "SELECT link_type, alias, provenance, direction, created_at "
         "FROM link_type_aliases "
         "WHERE alias IN ('is limited by', 'is bounded by', 'is locked by', "
-        "'is enabled by') ORDER BY link_type, alias"
+        "'is capped by', 'is disabled by', 'is frozen by', 'is suspended by', "
+        "'is enabled by', 'is unlocked by') ORDER BY link_type, alias"
     ).fetchall()
     assert [
         (row["link_type"], row["alias"], row["provenance"], row["direction"])
         for row in rows
     ] == [
         ("enables", "is enabled by", "seed", "reverse"),
+        ("enables", "is unlocked by", "seed", "reverse"),
         ("restricts", "is bounded by", "seed", "reverse"),
+        ("restricts", "is capped by", "seed", "reverse"),
+        ("restricts", "is disabled by", "seed", "reverse"),
+        ("restricts", "is frozen by", "seed", "reverse"),
         ("restricts", "is limited by", "seed", "reverse"),
         ("restricts", "is locked by", "seed", "reverse"),
+        ("restricts", "is suspended by", "seed", "reverse"),
     ]
     assert all(row["created_at"] for row in rows)
     assert [
@@ -310,9 +316,14 @@ def test_migration_v11_adds_only_missing_passive_by_aliases():
         )
     ] == [
         ("enables", "is enabled by"),
+        ("enables", "is unlocked by"),
         ("restricts", "is bounded by"),
+        ("restricts", "is capped by"),
+        ("restricts", "is disabled by"),
+        ("restricts", "is frozen by"),
         ("restricts", "is limited by"),
         ("restricts", "is locked by"),
+        ("restricts", "is suspended by"),
     ]
 
     absorbed = _v9_alias_conn()
@@ -344,7 +355,12 @@ def test_migration_v11_adds_only_missing_passive_by_aliases():
         ("restricts", "is locked by"),
         ("restricts", "is limited by"),
         ("restricts", "is bounded by"),
+        ("restricts", "is capped by"),
+        ("restricts", "is disabled by"),
+        ("restricts", "is frozen by"),
+        ("restricts", "is suspended by"),
         ("enables", "is enabled by"),
+        ("enables", "is unlocked by"),
     ]
 
     empty = _v9_alias_conn()
