@@ -281,12 +281,13 @@ def seed_glossaries(conn: sqlite3.Connection, tables: frozenset[str]) -> None:
     Existing tables remain authoritative across restarts, so curator edits and
     deletions survive. Seed entries added in later releases are not added to an
     existing DB, matching the other DB-backed configuration tables.
+    `INSERT OR IGNORE` makes a concurrent first-start seed replay a no-op.
     """
     now = _now()
     if "statement_kind_glossary" in tables:
         for kind, (description, when_to_use) in _STATEMENT_KIND_SEED.items():
             conn.execute(
-                "INSERT INTO statement_kind_glossary "
+                "INSERT OR IGNORE INTO statement_kind_glossary "
                 "(kind, description, when_to_use, created_at, created_by) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (kind, description, when_to_use, now, kernel.get_actor()),
@@ -294,7 +295,7 @@ def seed_glossaries(conn: sqlite3.Connection, tables: frozenset[str]) -> None:
     if "statement_link_type_glossary" in tables:
         for link_type, description in _STATEMENT_LINK_TYPE_SEED.items():
             conn.execute(
-                "INSERT INTO statement_link_type_glossary "
+                "INSERT OR IGNORE INTO statement_link_type_glossary "
                 "(link_type, description, created_at, created_by) "
                 "VALUES (?, ?, ?, ?)",
                 (link_type, description, now, kernel.get_actor()),
@@ -302,7 +303,7 @@ def seed_glossaries(conn: sqlite3.Connection, tables: frozenset[str]) -> None:
     if "entity_link_type_glossary" in tables:
         for link_type, description in _ENTITY_LINK_TYPE_SEED.items():
             conn.execute(
-                "INSERT INTO entity_link_type_glossary "
+                "INSERT OR IGNORE INTO entity_link_type_glossary "
                 "(link_type, description, created_at, created_by) "
                 "VALUES (?, ?, ?, ?)",
                 (link_type, description, now, kernel.get_actor()),

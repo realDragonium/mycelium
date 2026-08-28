@@ -178,7 +178,37 @@ def _record(
     )
 
 
-SCHEMA = """
+GLOSSARY_TABLE_DDL: dict[str, str] = {
+    "statement_kind_glossary": """CREATE TABLE IF NOT EXISTS statement_kind_glossary (
+    kind        TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    when_to_use TEXT,
+    created_at  TEXT,
+    updated_at  TEXT,
+    created_by  TEXT,
+    updated_by  TEXT
+);""",
+    "statement_link_type_glossary": """CREATE TABLE IF NOT EXISTS statement_link_type_glossary (
+    link_type   TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    created_at  TEXT,
+    updated_at  TEXT,
+    created_by  TEXT,
+    updated_by  TEXT
+);""",
+    "entity_link_type_glossary": """CREATE TABLE IF NOT EXISTS entity_link_type_glossary (
+    link_type   TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    created_at  TEXT,
+    updated_at  TEXT,
+    created_by  TEXT,
+    updated_by  TEXT
+);""",
+}
+
+
+SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS entities (
     id          TEXT PRIMARY KEY,
     description TEXT,
@@ -370,31 +400,9 @@ END;
 -- definitions can be updated without a redeploy. Each table is seeded
 -- from its packaged defaults only when that table is created; after that,
 -- the DB is authoritative and curator changes survive restarts.
-CREATE TABLE IF NOT EXISTS statement_kind_glossary (
-    kind        TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    when_to_use TEXT,
-    created_at  TEXT,
-    updated_at  TEXT,
-    created_by  TEXT,
-    updated_by  TEXT
-);
-CREATE TABLE IF NOT EXISTS statement_link_type_glossary (
-    link_type   TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    created_at  TEXT,
-    updated_at  TEXT,
-    created_by  TEXT,
-    updated_by  TEXT
-);
-CREATE TABLE IF NOT EXISTS entity_link_type_glossary (
-    link_type   TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    created_at  TEXT,
-    updated_at  TEXT,
-    created_by  TEXT,
-    updated_by  TEXT
-);
+"""
+    + "\n".join(GLOSSARY_TABLE_DDL.values())
+    + """
 
 -- Instance configuration: which link types are admissible between a
 -- source kind and a target kind. Seeded once from the ontology (kinds
@@ -531,6 +539,7 @@ CREATE INDEX IF NOT EXISTS pending_mentions_statement
 CREATE INDEX IF NOT EXISTS pending_mentions_name
     ON pending_mentions (name_id);
 """
+)
 
 
 def connect(
@@ -643,34 +652,39 @@ CREATE INDEX IF NOT EXISTS history.history_actor
 def migrate(conn: sqlite3.Connection) -> None:
     """Bring the substrate's schema up to the latest version.
 
-    Two-step: first apply `SCHEMA` (CREATE TABLE IF NOT EXISTS, which
-    fully creates a fresh DB but is a no-op on existing tables); then
-    run the versioned migration runner, which catches up legacy DBs and
-    fast-forwards fresh ones. See `mycelium.migrations` for details."""
+    First create and seed missing glossary tables atomically, then apply
+    `SCHEMA` (CREATE TABLE IF NOT EXISTS, which fully creates a fresh DB but is
+    a no-op on existing tables). Finally, run the versioned migration runner,
+    which catches up legacy DBs and fast-forwards fresh ones. See
+    `mycelium.migrations` for details."""
     from .. import migrations
     from . import glossary, kind_link_matrix, link_type_aliases
 
-    glossary_tables = frozenset(
-        (
-            "statement_kind_glossary",
-            "statement_link_type_glossary",
-            "entity_link_type_glossary",
-        )
-    )
     new_glossary_tables = frozenset(
         table
-        for table in glossary_tables
+        for table in GLOSSARY_TABLE_DDL
         if conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
             (table,),
         ).fetchone()
         is None
     )
+    if new_glossary_tables:
+        # Close any pending implicit transaction, as executescript did here.
+        conn.commit()
+        # sqlite3's legacy mode autocommits bare DDL, so BEGIN IMMEDIATE makes
+        # create + seed atomic and serializes concurrent first starts.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for table in new_glossary_tables:
+                conn.execute(GLOSSARY_TABLE_DDL[table])
+            glossary.seed_glossaries(conn, new_glossary_tables)
+        except BaseException:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
     conn.executescript(SCHEMA)
-    # Seed and commit before migrations so a failure cannot leave new glossary
-    # tables existing but unseeded on retry.
-    glossary.seed_glossaries(conn, new_glossary_tables)
-    conn.commit()
     migrations.apply_migrations(conn)
     if has_history(conn):
         conn.executescript(HISTORY_SCHEMA)
