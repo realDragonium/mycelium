@@ -73,6 +73,25 @@ def test_adjectival_event_participles_are_ambiguous():
         } <= {match.shape for match in result.matches}
 
 
+def test_passive_ownership_composes_with_ambiguous_event_participle_flagging():
+    """Keep the two participle judgements independent of each other.
+
+    "owned" must not join the ADJ-participle flagging, or a real relation
+    would flag; and adding it to STATE_PARTICIPLES must not stop genuine
+    event vocabulary from flagging.
+    """
+    assert {"own", "owned"}.isdisjoint(shapes.AMBIGUOUS_EVENT_PARTICIPLES)
+
+    ownership = classify("The audit log is owned by the compliance charter")
+    assert ownership.status == "assigned"
+    assert ownership.kind == "state"
+
+    for text in ("The statement is upserted", "The invite is resent"):
+        result = classify(text)
+        assert result.status == "ambiguous"
+        assert result.kind is None
+
+
 def test_ambiguous_event_participle_entries_are_reachable_and_compete():
     """Keep every curated entry reachable without silently guessing event.
 
@@ -96,6 +115,13 @@ def test_ambiguous_event_participle_entries_are_reachable_and_compete():
 
 def test_state_passive_shape():
     _assert_assigned_shape("Auto result sharing is enabled", "state", "state-passive")
+
+
+def test_passive_ownership_is_a_state():
+    # This was unmatched before DRA-427.
+    _assert_assigned_shape(
+        "The audit log is owned by the compliance charter", "state", "state-passive"
+    )
 
 
 def test_state_perfect_shape():
