@@ -336,11 +336,11 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "valued-by",
             r"\b(?P<cue>(?:is|are) (?:derived|computed|calculated) (?:from|by|as))\b\s*(?P<to>.+)",
         ),
-        # Commit the alias so it cannot be retried around the `by` guard.
+        # Commit a boundary-valid alias so it cannot be retried around the `by` guard.
         _templated(
             "restricts-state",
             "restricts",
-            r"\b(?P<cue>(?:is|are) (?>{cue}))\b(?!\s+by\b)\s*(?P<to>.+)?",
+            r"\b(?P<cue>(?:is|are) (?>{cue}\b))(?!\s+by\b)\s*(?P<to>.+)?",
             ("disabled", "locked", "frozen", "suspended", "read-only"),
         ),
         # The passive agent is the restrictor, so it fills the `from` slot.

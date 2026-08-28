@@ -116,6 +116,17 @@ def test_overlapping_state_aliases_cannot_backtrack_around_the_by_guard():
     plain_match = next(cue for cue in plain if cue.pattern == "restricts-state")
     assert (plain_match.cue, plain_match.phrase_role) == ("is locked down", "to")
 
+    boundary_aliases = {"restricts": ("disabled on", "disabled")}
+    boundary = find_cues(
+        "The job is disabled once the quota empties", "state", aliases=boundary_aliases
+    )
+    boundary_match = next(cue for cue in boundary if cue.pattern == "restricts-state")
+    assert (boundary_match.cue, boundary_match.phrase, boundary_match.phrase_role) == (
+        "is disabled",
+        "once the quota empties",
+        "to",
+    )
+
 
 def test_limited_by_and_limited_to_capture_opposite_slots():
     limited_by = find_cues("The retry budget is limited by the daily quota", "property")
@@ -286,8 +297,11 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
         ("contains-belongs-to", "is owned by"),
         ("restricts-state-by", "is locked by"),
         ("restricts-state-by", "is disabled by"),
+        ("restricts-state-by", "is frozen by"),
+        ("restricts-state-by", "is suspended by"),
         ("restricts-limited-by", "is limited by"),
         ("restricts-limited-by", "is bounded by"),
+        ("restricts-limited-by", "is capped by"),
         ("enables-state-by", "is enabled by"),
         ("enables-state-by", "is unlocked by"),
     } <= agreements
