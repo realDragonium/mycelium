@@ -1004,6 +1004,7 @@ def init(data_dir: Path) -> None:
                 "rebuilding statement vector index: dirty marker indicates a "
                 "crash before the index was persisted"
             )
+        _write_dirty_marker(index_path)
         index = vector.Index.empty()
         _rebuild_vector_index(
             index,
@@ -1014,6 +1015,7 @@ def init(data_dir: Path) -> None:
             label="statement",
         )
         index.save(index_path)
+        _fsync_file(index_path)
         _clear_dirty_marker(index_path)
 
     name_index_path = data_dir / "mycelium-names.vec"
@@ -1031,15 +1033,19 @@ def init(data_dir: Path) -> None:
         ]
         if stranded:
             logger.info("pruning %d stranded name vector(s)", len(stranded))
+            _write_dirty_marker(name_index_path)
             for vid in stranded:
                 name_index.delete(vid)
             name_index.save(name_index_path)
+            _fsync_file(name_index_path)
+            _clear_dirty_marker(name_index_path)
     else:
         if name_index_dirty:
             logger.warning(
                 "rebuilding name vector index: dirty marker indicates a crash "
                 "before the index was persisted"
             )
+        _write_dirty_marker(name_index_path)
         name_index = vector.Index.empty()
         _rebuild_vector_index(
             name_index,
@@ -1050,6 +1056,7 @@ def init(data_dir: Path) -> None:
             label="name",
         )
         name_index.save(name_index_path)
+        _fsync_file(name_index_path)
         _clear_dirty_marker(name_index_path)
 
     _ctx = AppContext(
@@ -1217,6 +1224,20 @@ def _dirty_marker_path(index_path: Path) -> Path:
     return index_path.with_name(index_path.name + ".dirty")
 
 
+def _fsync_file(path: Path) -> None:
+    file_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(file_fd)
+    finally:
+        os.close(file_fd)
+
+    parent_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
 def _write_dirty_marker(index_path: Path) -> None:
     marker_path = _dirty_marker_path(index_path)
     marker_fd = os.open(marker_path, os.O_CREAT | os.O_WRONLY)
@@ -1245,13 +1266,15 @@ def _persisted_index_write(
 
     This is the persist-inside-lock guarantee apply_draft got in DRA-373. A
     dirty marker covers the window from the first index mutation through a
-    successful persist and commit, so a hard crash triggers a startup rebuild.
-    The marker is cleared only after COMMIT, not merely after persistence: if
-    commit fails, DRA-418 rolls the DB back and the next startup heals the
-    divergent index.
+    successful persist and outermost commit, so a hard crash triggers a startup
+    rebuild. Nested writes persist but leave marker ownership to the outer
+    transaction, which clears only after its real COMMIT. If commit fails,
+    DRA-418 rolls the DB back and the next startup heals the divergent index.
     """
     with store.write_lock():
-        with store.transaction(_db()):
+        conn = _db()
+        outermost = not store.in_transaction(conn)
+        with store.transaction(conn):
             if statements:
                 _write_dirty_marker(_idx_path())
             if names:
@@ -1261,12 +1284,15 @@ def _persisted_index_write(
                 _persist_index()
             if names:
                 _persist_name_index()
-        # transaction committed; still under the reentrant lock so no other
-        # writer can interleave between commit and marker clear
-        if statements:
-            _clear_dirty_marker(_idx_path())
-        if names:
-            _clear_dirty_marker(_name_idx_path())
+        # The outer transaction committed; still under the reentrant lock so
+        # no other writer can interleave between commit and marker clear.
+        if outermost:
+            if statements:
+                _fsync_file(_idx_path())
+                _clear_dirty_marker(_idx_path())
+            if names:
+                _fsync_file(_name_idx_path())
+                _clear_dirty_marker(_name_idx_path())
 
 
 def _restore_index_snapshots(
@@ -1280,8 +1306,10 @@ def _restore_index_snapshots(
     """
     for index, snapshot_path, live_path in snapshots:
         try:
+            _write_dirty_marker(live_path)
             index.restore(snapshot_path)
             index.save(live_path)
+            _fsync_file(live_path)
             snapshot_path.unlink(missing_ok=True)
             _clear_dirty_marker(live_path)
         except Exception:
@@ -2436,7 +2464,7 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     new entity AND a name pointing at it.
     """
     existing = store.get_name_by_text(_db(), name)
-    with _persisted_index_write(names=True):
+    with _persisted_index_write(names=existing is None):
         if existing is not None:
             store.update_entity_description(_db(), existing["entity_id"], description)
             return {"entity_id": existing["entity_id"]}
@@ -6097,11 +6125,13 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     # joins this outer one (reentrant), so a single op raising rolls the
     # whole draft back. Per-attempt paths preserve recovery artifacts across
     # retries; the write lock serializes snapshots and both recovery paths
-    # against index mutations in this process.
+    # against index mutations in this process. The persisted-write wrapper
+    # marks both indexes before the snapshots and clears them only after the
+    # outer replay commit, so a hard crash mid-replay rebuilds both on startup.
     snapshots_taken = False
     restored = False
     try:
-        with store.transaction(_db()):
+        with _persisted_index_write(statements=True, names=True):
             try:
                 _idx().save(index_snapshot_path)
                 _name_idx().save(name_index_snapshot_path)

@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from mycelium import embed, phrasing, server, store, vector
+from mycelium import auth, embed, phrasing, server, store, vector
 
 
 def _embed(text: str) -> list[float]:
@@ -114,12 +114,94 @@ def test_index_persists_before_outermost_commit(
     assert_persisted(statement_path)
 
     entity_id = server.upsert_entity("reviewer", "a reviewer")["entity_id"]
+    assert_persisted(name_path)
+
+    server.upsert_entity("reviewer", "an updated reviewer")
+    assert all(event[0] != "persist" for event in events)
+    assert not server._dirty_marker_path(name_path).exists()
     events.clear()
+
     name_id = server.upsert_name("assessor", entity_id)["name_id"]
     assert_persisted(name_path)
 
     server.rename_name(name_id, "evaluator")
     assert_persisted(name_path)
+
+
+def test_draft_replay_clears_markers_only_after_outermost_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init(tmp_path, monkeypatch)
+    drafter = auth.Principal(id="drafter", name="Drafter", role="drafter", type="human")
+    principal_token = auth.current_principal.set(drafter)
+    session_token = auth.current_session_id.set("index-persistence")
+    try:
+        receipt = server.upsert_entity(name="reviewer", description="a reviewer")
+        server.upsert_statement(kind="state", text="the reviewer is ready", links=[])
+    finally:
+        auth.current_session_id.reset(session_token)
+        auth.current_principal.reset(principal_token)
+
+    events: list[tuple[str, str | None]] = []
+    transaction_depth = 0
+    original_transaction = store.transaction
+    original_save = vector.Index.save
+    original_clear_dirty_marker = server._clear_dirty_marker
+
+    @contextlib.contextmanager
+    def tracked_transaction(
+        conn: sqlite3.Connection,
+    ) -> Iterator[sqlite3.Connection]:
+        nonlocal transaction_depth
+        outermost = transaction_depth == 0
+        transaction_depth += 1
+        try:
+            with original_transaction(conn) as transaction_conn:
+                yield transaction_conn
+            if outermost:
+                events.append(("commit", None))
+        finally:
+            transaction_depth -= 1
+
+    def tracked_save(index: vector.Index, path: Path) -> None:
+        if index is server._idx():
+            live_path = server._idx_path()
+        elif index is server._name_idx():
+            live_path = server._name_idx_path()
+        else:
+            raise AssertionError("unexpected index")
+        assert server._dirty_marker_path(live_path).exists()
+        events.append(("persist", path.name))
+        original_save(index, path)
+
+    def tracked_clear_dirty_marker(index_path: Path) -> None:
+        events.append(("clear", index_path.name))
+        original_clear_dirty_marker(index_path)
+
+    monkeypatch.setattr(store, "transaction", tracked_transaction)
+    monkeypatch.setattr(vector.Index, "save", tracked_save)
+    monkeypatch.setattr(server, "_clear_dirty_marker", tracked_clear_dirty_marker)
+
+    curator_token = auth.current_principal.set(auth.LOCAL_ADMIN)
+    try:
+        server.apply_draft(receipt["draft_id"])
+    finally:
+        auth.current_principal.reset(curator_token)
+
+    commit_positions = [i for i, event in enumerate(events) if event[0] == "commit"]
+    persist_positions = [i for i, event in enumerate(events) if event[0] == "persist"]
+    clear_positions = [i for i, event in enumerate(events) if event[0] == "clear"]
+    assert len(commit_positions) == 1
+    assert persist_positions
+    assert all(position < commit_positions[0] for position in persist_positions)
+    assert clear_positions
+    assert all(position > commit_positions[0] for position in clear_positions)
+    assert {event[1] for event in events if event[0] == "clear"} == {
+        server._idx_path().name,
+        server._name_idx_path().name,
+    }
+    assert not server._dirty_marker_path(server._idx_path()).exists()
+    assert not server._dirty_marker_path(server._name_idx_path()).exists()
 
 
 def test_startup_rebuilds_dirty_indexes(
