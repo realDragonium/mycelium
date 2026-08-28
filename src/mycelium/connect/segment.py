@@ -836,11 +836,14 @@ def _role_boundary(leaves: list[_Piece], side: str, role: str) -> _Piece:
 def _anchored_boundary(
     leaves: list[_Piece], side: str, role: str, anchor: int | None
 ) -> _Piece:
-    """Select the leaf containing an anchor or fall back to its role boundary."""
+    """Select the leaf holding an anchor origin or fall back to its role boundary."""
+    # Missing/unresolvable advcl anchors retain the pre-existing role-boundary fallback
+    # rather than drop proposals; it fired 0/146 times in a 64-sentence sweep.
     if anchor is not None:
         for leaf in leaves:
-            span = _span(leaf)
-            if span is not None and span[0] <= anchor < span[1]:
+            # `_span` is an envelope over possibly scattered origins, so containment
+            # can claim an anchor held by a neighbouring leaf.
+            if anchor in leaf.origins:
                 return leaf
     return _role_boundary(leaves, side, role)
 

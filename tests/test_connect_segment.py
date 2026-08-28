@@ -179,6 +179,23 @@ def test_nested_advcl_conditions_govern_adjacent_clause_pairs():
     ]
 
 
+def test_anchored_boundary_ignores_a_scattered_leafs_envelope():
+    a = seg._Piece(
+        text="leaf A",
+        origins=[*range(100, 110), *range(120, 130)],
+        role="claim",
+        sentence=0,
+    )
+    b = seg._Piece(
+        text="leaf B",
+        origins=list(range(110, 120)),
+        role="claim",
+        sentence=0,
+    )
+
+    assert seg._anchored_boundary([a, b], "left", "claim", 115) is b
+
+
 def test_nested_causal_advcl_preserves_the_outer_condition():
     result = seg.segment("The export runs if the flag is set because the job started.")
 
