@@ -124,8 +124,9 @@ EVENT_PARTICIPLES = frozenset(
 # and an event reading was intended. Legitimate adjectival states such as
 # "open", "empty", and "closed" must never be added, so this is curated rather
 # than accepting any participle-looking ADJ. To extend it, add the word and
-# confirm the reachability test below still passes. ``un``-prefixed participles
-# such as "unlinked" stay out because their negative-state reading is plausible.
+# confirm test_ambiguous_event_participle_entries_are_reachable_and_compete
+# still passes. ``un``-prefixed participles such as "unlinked" stay out because
+# their negative-state reading is plausible.
 AMBIGUOUS_EVENT_PARTICIPLES = frozenset({"resent", "upserted"})
 RULE_PARTICIPLES = frozenset(
     {
