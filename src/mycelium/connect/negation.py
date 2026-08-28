@@ -87,13 +87,18 @@ def negated_connective(cue: str) -> str | None:
     doc = phrasing.get_nlp()(cue)
     for index, token in enumerate(doc):
         lemma = token.lemma_.casefold()
-        # "No more/fewer/less than" expresses a bound rather than denial.
-        if (
-            lemma == "no"
-            and index + 1 < len(doc)
-            and doc[index + 1].lemma_.casefold() in {"more", "few", "fewer", "less"}
-        ):
-            continue
+        # "No more/fewer/less than" names a bound and "no matter" a concession,
+        # not denial; bare "no more" stays denial, so the bound needs its "than".
+        if lemma == "no" and index + 1 < len(doc):
+            following = doc[index + 1].lemma_.casefold()
+            if following == "matter":
+                continue
+            if (
+                following in {"more", "few", "fewer", "less"}
+                and index + 2 < len(doc)
+                and doc[index + 2].lemma_.casefold() == "than"
+            ):
+                continue
         if (
             token.dep_ == "neg"
             or lemma in {"no", "not", "never"}

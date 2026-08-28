@@ -88,6 +88,8 @@ def test_standalone_no_cue_is_flagged_without_calling_resolver():
 def test_connective_quantifier_is_not_negated_but_no_longer_is():
     assert negated_connective("no more than") is None
     assert negated_connective("no fewer than") is None
+    assert negated_connective("no matter how") is None
+    assert negated_connective("no more")
     assert negated_connective("no longer")
 
 
