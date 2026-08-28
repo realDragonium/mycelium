@@ -700,6 +700,46 @@ def _migration_v10_belongs_to_aliases(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v11_passive_by_aliases(conn: sqlite3.Connection) -> None:
+    """Add passive-agent aliases to an already-seeded vocabulary.
+
+    Fresh or unseeded DBs are left for normal seeding. Existing rows are left
+    entirely alone because direction and provenance may be curator choices.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(link_type_aliases)")}
+    if not columns:
+        return
+    if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
+        return
+
+    from mycelium.store.link_type_aliases import _now
+
+    now = _now()
+    for link_type, alias in (
+        ("restricts", "is limited by"),
+        ("restricts", "is bounded by"),
+        ("restricts", "is locked by"),
+        ("enables", "is enabled by"),
+    ):
+        exists = conn.execute(
+            "SELECT 1 FROM link_type_aliases WHERE link_type = ? AND alias = ?",
+            (link_type, alias),
+        ).fetchone()
+        if exists is not None:
+            continue
+        conn.execute(
+            "INSERT INTO link_type_aliases "
+            "(link_type, alias, provenance, direction, created_at) "
+            "VALUES (?, ?, 'seed', 'reverse', ?)",
+            (link_type, alias, now),
+        )
+        conn.execute(
+            "INSERT INTO link_type_alias_embed_queue "
+            "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
+            (link_type, alias, now),
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -714,6 +754,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (8, _migration_v8_link_type_aliases),
     (9, _migration_v9_alias_direction),
     (10, _migration_v10_belongs_to_aliases),
+    (11, _migration_v11_passive_by_aliases),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

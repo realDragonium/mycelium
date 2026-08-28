@@ -148,7 +148,13 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
     _pattern(
         "restricts-limited-to",
         "restricts",
-        r"\b(?P<cue>(?:is|are) (?:limited|capped|bounded) (?:to|by|at|between))\b\s*(?P<to>.+)",
+        r"\b(?P<cue>(?:is|are) (?:limited|capped|bounded) (?:to|at|between))\b\s*(?P<to>.+)",
+    ),
+    # The passive agent is the restrictor, so it fills the `from` slot.
+    _pattern(
+        "restricts-limited-by",
+        "restricts",
+        r"\b(?P<cue>(?:is|are) (?:limited|capped|bounded) by)\b\s*(?P<from>.+)",
     ),
     _pattern(
         "restricts-blocks",
@@ -193,12 +199,12 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
     _pattern(
         "establishes-marks",
         "establishes",
-        r"\b(?P<cue>marks?|flags?)\b\s*(?P<to>.+)\s+\bas\b",
+        r"\b(?P<cue>marks?|flags?)\b\s+.+?\s+\bas\b\s*(?P<to>.+)",
     ),
     _pattern(
         "establishes-moves-into",
         "establishes",
-        r"\b(?P<cue>moves?|puts?|places?)\b\s*(?P<to>.+)\s+\b(?:in|into|to)\b",
+        r"\b(?P<cue>moves?|puts?|places?)\b\s+.+?\s+\b(?:in|into|to)\b\s*(?P<to>.+)",
     ),
     _pattern(
         "establishes-becomes",
@@ -329,13 +335,26 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
         _templated(
             "restricts-state",
             "restricts",
-            r"\b(?P<cue>(?:is|are) {cue})\b\s*(?P<to>.+)?",
+            r"\b(?P<cue>(?:is|are) {cue})\b(?!\s+by\b)\s*(?P<to>.+)?",
+            ("disabled", "locked", "frozen", "suspended", "read-only"),
+        ),
+        # The passive agent is the restrictor, so it fills the `from` slot.
+        _templated(
+            "restricts-state-by",
+            "restricts",
+            r"\b(?P<cue>(?:is|are) {cue} by)\b\s*(?P<from>.+)",
             ("disabled", "locked", "frozen", "suspended", "read-only"),
         ),
         _pattern(
             "enables-state",
             "enables",
-            r"\b(?P<cue>(?:is|are) (?:enabled|active|unlocked|available))\b\s*(?P<to>.+)?",
+            r"\b(?P<cue>(?:is|are) (?:enabled|active|unlocked|available))\b(?!\s+by\b)\s*(?P<to>.+)?",
+        ),
+        # "active by" and "available by" do not name passive agents.
+        _pattern(
+            "enables-state-by",
+            "enables",
+            r"\b(?P<cue>(?:is|are) (?:enabled|unlocked) by)\b\s*(?P<from>.+)",
         ),
     ),
     "capability": (
@@ -440,7 +459,7 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
         _pattern(
             "restricts-bounds",
             "restricts",
-            r"\b(?P<cue>at most|at least|no more than|no fewer than|(?:is|are) bounded (?:between|by)|(?:is|are) capped at)\b\s*(?P<to>.+)",
+            r"\b(?P<cue>at most|at least|no more than|no fewer than|(?:is|are) bounded between|(?:is|are) capped at)\b\s*(?P<to>.+)",
         ),
         _pattern(
             "requires-applies-when",
