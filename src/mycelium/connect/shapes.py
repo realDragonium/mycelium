@@ -3,6 +3,10 @@
 Participle lexicons are separate allow-lists because ``X is <participle>`` is
 shared by events, states, and rules. Unknown participles must remain unmatched
 so precision degrades gracefully on vocabulary the lexicons have never seen.
+Entries must be lemmas the parser actually emits in that shape's frame;
+lemmatizer quirks make some vocabulary unreachable. Noun/verb homographs can
+also defeat a shape entirely: "The nightly backup runs" parses "runs" as a noun
+and intentionally remains unmatched rather than guessed.
 """
 
 from __future__ import annotations
@@ -40,7 +44,6 @@ STATE_PARTICIPLES = frozenset(
         "lock",
         "match",
         "populate",
-        "prefill",
         "register",
         "restrict",
         "set",
@@ -60,7 +63,6 @@ EVENT_PARTICIPLES = frozenset(
         "decode",
         "delete",
         "deliver",
-        "deprovision",
         "dispatch",
         "download",
         "email",
@@ -94,14 +96,12 @@ EVENT_PARTICIPLES = frozenset(
         "remove",
         "rename",
         "request",
-        "resend",
         "reset",
         "restore",
         "retrieve",
         "retry",
         "return",
         "revoke",
-        "route",
         "save",
         "schedule",
         "send",
@@ -110,10 +110,8 @@ EVENT_PARTICIPLES = frozenset(
         "sync",
         "synchronize",
         "trigger",
-        "unlink",
         "update",
         "upload",
-        "upsert",
         "validate",
         "verify",
         "write",
@@ -160,7 +158,7 @@ RULE_VERBS = frozenset(
 # Present-perfect participles that leave a condition behind rather than
 # report an occurrence — the positive evidence `state-perfect` needs.
 PERFECT_STATE_PARTICIPLES = frozenset(
-    {"elapse", "end", "expire", "fail", "finish", "lapse", "stop", "timeout"}
+    {"elapse", "end", "expire", "fail", "finish", "lapse", "stop"}
 )
 
 LEVEL_LEMMAS = frozenset({"low", "medium", "high"})
@@ -668,7 +666,7 @@ def match_shapes(text: str) -> list[ShapeMatch]:
         return []
 
     # Do not normalize: original capitalization distinguishes imperatives and values.
-    doc = phrasing._get_nlp()(stripped)
+    doc = phrasing.get_nlp()(stripped)
     root = _root(doc)
     # Every detector reads the root, so a second coordinated predicate ("… is
     # sent and … is enabled") would be classified by its first clause alone.

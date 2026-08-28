@@ -48,7 +48,7 @@ class FlagInput:
 class Extraction:
     items: list[ExtractedItem]
     flags: list[FlagInput]
-    condition_links: list[tuple[int, int]]
+    condition_links: list[tuple[int, int, str]]
     cut_links: list[tuple[int, int, str]]
     cue_resolutions: list[CueResolution] = field(default_factory=list)
     #: (left, right, link_type, cue) for every edge the gate typed, so a caller
@@ -60,6 +60,9 @@ FLAG_SOURCES = {
     "unsplit": "segmenter",
     "ambiguous": "shapes",
     "unmatched": "shapes",
+    # `rejected` is pre-classification; `phrasing` is a planner rejection of
+    # an already classified statement. Both originate in the phrasing catalog.
+    "rejected": "phrasing",
     "phrasing": "phrasing",
     "flip": "planner",
     "depends_on_rejected": "planner",
@@ -100,11 +103,13 @@ def _classification_detail(classification: shapes.Classification) -> str:
 def _cut_links(
     segmentation: Segmentation,
     item_position: dict[int, int],
-    condition_links: list[tuple[int, int]],
+    condition_links: list[tuple[int, int, str]],
 ) -> list[tuple[int, int, str]]:
     """Collect resolved cut links whose endpoints both classified as items."""
     links: list[tuple[int, int, str]] = []
-    condition_pairs = set(condition_links)
+    condition_pairs = {
+        (claim, condition) for claim, condition, _link_type in condition_links
+    }
     for cut in segmentation.cuts:
         if cut.link_type is None:
             continue
@@ -187,11 +192,13 @@ def _gate_cuts(
     segmentation: Segmentation,
     aliases: Mapping[str, frozenset[tuple[str, str]]],
     item_position: dict[int, int],
-    condition_links: list[tuple[int, int]],
+    condition_links: list[tuple[int, int, str]],
     resolve: Callable[[str], CueResolution],
 ) -> tuple[list[tuple[int, int, str, str]], list[FlagInput], list[CueResolution]]:
     """Apply cue decisions to unresolved cuts and render curator flags."""
-    condition_pairs = set(condition_links)
+    condition_pairs = {
+        (claim, condition) for claim, condition, _link_type in condition_links
+    }
     candidates = _cue_candidates(segmentation, aliases, item_position, condition_pairs)
     resolutions = _resolve_cues(candidates, resolve)
     fragments = {fragment.index: fragment for fragment in segmentation.fragments}
@@ -256,6 +263,21 @@ def extract(
             )
             continue
 
+        rejections = phrasing.hidden_event_state_violations(fragment.text)
+        if rejections:
+            flag_position[fragment.index] = len(flags)
+            flags.append(
+                FlagInput(
+                    fragment_index=fragment.index,
+                    text=fragment.text,
+                    reason="rejected",
+                    detail=violations_detail(rejections),
+                    sentence=fragment.sentence,
+                    span=fragment.span,
+                )
+            )
+            continue
+
         classification = shapes.classify(fragment.text)
         if classification.kind is not None:
             item_position[fragment.index] = len(items)
@@ -288,16 +310,16 @@ def extract(
             )
         )
 
-    condition_links: list[tuple[int, int]] = []
+    condition_links: list[tuple[int, int, str]] = []
     for proposal in segmentation.proposals:
         claim_item = item_position.get(proposal.claim)
         condition_item = item_position.get(proposal.condition)
         if claim_item is not None and condition_item is not None:
-            condition_links.append((claim_item, condition_item))
+            condition_links.append((claim_item, condition_item, proposal.link_type))
             continue
 
         note = (
-            f"dropped requires link: claim fragment {proposal.claim} "
+            f"dropped {proposal.link_type} link: claim fragment {proposal.claim} "
             f"→ condition fragment {proposal.condition}"
         )
         for fragment_index, position in (

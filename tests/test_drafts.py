@@ -146,6 +146,14 @@ def test_submit_then_approve_replays_to_substrate(tmp_path, monkeypatch):
         finally:
             _restore(tokens)
         draft_id = r["draft_id"]
+        with store.transaction(server._drafts_db()):
+            flag_seq = drafts_store.add_op(
+                server._drafts_db(),
+                draft_id=draft_id,
+                kind="flag",
+                payload={"reason": "unmatched"},
+                created_by="d1",
+            )
 
         # Submit, then approve via HTTP (curator path = local-admin here).
         sub = client.post(f"/api/drafts/{draft_id}/submit")
@@ -155,6 +163,12 @@ def test_submit_then_approve_replays_to_substrate(tmp_path, monkeypatch):
         assert appr.status_code == 200, appr.text
         body = appr.json()
         assert body["applied"] == 2
+        assert body["skipped"] == 1
+        assert body["results"][-1] == {
+            "seq": flag_seq,
+            "kind": "flag",
+            "skipped": "flag",
+        }
 
         # Both entities now exist in the substrate.
         rows = (

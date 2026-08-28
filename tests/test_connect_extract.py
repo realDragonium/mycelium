@@ -29,7 +29,7 @@ def test_extracts_the_measured_paragraph():
         (4, "unmatched"),
         (5, "unmatched"),
     ]
-    assert result.condition_links == [(1, 0)]
+    assert result.condition_links == [(1, 0, "requires")]
 
 
 def test_empty_and_whitespace_only_text():
@@ -48,6 +48,24 @@ def test_unsplit_fragment_is_flagged_without_classification():
         (1, "unsplit"),
     ]
     assert result.flags[1].detail
+
+
+def test_hidden_transition_is_rejected_before_classification():
+    result = ex.extract("The status becomes active")
+
+    assert result.items == []
+    assert len(result.flags) == 1
+    assert result.flags[0].reason == "rejected"
+    assert "hidden_event_state" in result.flags[0].detail
+
+
+def test_hidden_event_and_state_is_not_accepted_as_a_state_item():
+    result = ex.extract("The flag is set to true")
+
+    assert result.items == []
+    assert len(result.flags) == 1
+    assert result.flags[0].reason == "rejected"
+    assert "hidden_event_state" in result.flags[0].detail
 
 
 def test_dropped_condition_link_is_recorded_on_both_surviving_records():
@@ -80,6 +98,7 @@ def test_flag_sources_cover_every_emitted_reason():
         "unsplit",
         "ambiguous",
         "unmatched",
+        "rejected",
         "phrasing",
         "flip",
         "depends_on_rejected",
@@ -262,7 +281,7 @@ def test_conditional_opener_is_never_retyped():
         resolve_cue=reject,
     )
 
-    assert result.condition_links == [(1, 0)]
+    assert result.condition_links == [(1, 0, "requires")]
     assert result.cue_resolutions == []
 
 

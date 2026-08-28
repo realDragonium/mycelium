@@ -142,7 +142,7 @@ class Decomposer(Protocol):
     plain functions — no class hierarchy. `decompose` below is the v1
     default. A richer linguistic decomposer (e.g. spaCy noun-chunking via
     the `en_core_web_sm` model already loaded for phrasing validation in
-    `phrasing._get_nlp`) can be swapped in later if traces show the cheap
+    `phrasing.get_nlp`) can be swapped in later if traces show the cheap
     clause split misses parts — without touching `survey_statements`.
     """
 
