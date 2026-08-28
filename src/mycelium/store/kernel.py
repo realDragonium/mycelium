@@ -660,15 +660,18 @@ def migrate(conn: sqlite3.Connection) -> None:
     from .. import migrations
     from . import glossary, kind_link_matrix, link_type_aliases
 
-    new_glossary_tables = frozenset(
-        table
-        for table in GLOSSARY_TABLE_DDL
-        if conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table,),
-        ).fetchone()
-        is None
-    )
+    def absent_glossary_tables() -> frozenset[str]:
+        return frozenset(
+            table
+            for table in GLOSSARY_TABLE_DDL
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            is None
+        )
+
+    new_glossary_tables = absent_glossary_tables()
     if new_glossary_tables:
         # Close any pending implicit transaction, as executescript did here.
         conn.commit()
@@ -676,9 +679,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         # create + seed atomic and serializes concurrent first starts.
         conn.execute("BEGIN IMMEDIATE")
         try:
-            for table in new_glossary_tables:
-                conn.execute(GLOSSARY_TABLE_DDL[table])
-            glossary.seed_glossaries(conn, new_glossary_tables)
+            # This recheck makes the gate authoritative: a racer that lost the
+            # create race must not re-seed tables that now exist.
+            new_glossary_tables = absent_glossary_tables()
+            if new_glossary_tables:
+                for table in new_glossary_tables:
+                    conn.execute(GLOSSARY_TABLE_DDL[table])
+                glossary.seed_glossaries(conn, new_glossary_tables)
         except BaseException:
             conn.rollback()
             raise
