@@ -44,6 +44,9 @@ STATE_PARTICIPLES = frozenset(
         "hide",
         "lock",
         "match",
+        # "own" is stative, so its passive states a relation and cannot report
+        # an occurrence, unlike dynamic participles such as "create".
+        "own",
         "populate",
         "register",
         "restrict",
