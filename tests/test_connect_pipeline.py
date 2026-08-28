@@ -78,6 +78,7 @@ def test_unavailable_nli_reports_reason_and_warning(
 
     assert result.nli == "unavailable"
     assert result.nli_reason == "checkpoint is offline"
+    assert result.suppressed_negations == []
     assert result.nli_pairs == NliPairs(classified=0, skipped=0, budget=400)
     assert "NLI unavailable: checkpoint is offline" in caplog.text
 
@@ -128,6 +129,7 @@ def test_zero_candidates_never_touches_default_model(
     assert result.nli == "nothing_to_classify"
     assert result.nli_reason is None
     assert result.verdicts == []
+    assert result.suppressed_negations == []
     assert result.nli_pairs == NliPairs(classified=0, skipped=0, budget=400)
 
 
@@ -182,6 +184,7 @@ def test_pair_budget_classifies_ranked_prefix_and_preserves_skipped_candidates(
 
     assert result.nli == "ran"
     assert result.nli_reason is None
+    assert result.suppressed_negations == []
     assert result.nli_pairs == NliPairs(classified=2, skipped=6, budget=2)
     assert model.calls == [[("new", "first text"), ("first text", "new")]]
     assert [candidate.statement_id for candidate in result.funnel.candidates] == [

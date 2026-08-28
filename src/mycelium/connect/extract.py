@@ -12,7 +12,7 @@ from typing import Any
 
 from mycelium import phrasing, phrasing_cues
 
-from . import shapes
+from . import negation, shapes
 from .cue_gate import ABSORBING_DECISIONS, CueResolution
 from .segment import (
     UNTYPED_CUT_KINDS,
@@ -181,6 +181,11 @@ def _cue_detail(resolution: CueResolution) -> str:
             f'connective "{resolution.cue}" matched aliases reading both ways; '
             "direction is the open question"
         )
+    elif resolution.decision == "negated":
+        lead = (
+            f'connective "{resolution.cue}" is negated; '
+            "the words deny the relation, so no edge is proposed"
+        )
     else:
         lead = f'unknown connective "{resolution.cue}"'
     return lead + (
@@ -200,7 +205,21 @@ def _gate_cuts(
         (claim, condition) for claim, condition, _link_type in condition_links
     }
     candidates = _cue_candidates(segmentation, aliases, item_position, condition_pairs)
-    resolutions = _resolve_cues(candidates, resolve)
+    checked: set[str] = set()
+    negated: dict[str, CueResolution] = {}
+    resolvable: list[tuple[Cut, str]] = []
+    for cut, cue in candidates:
+        if cue not in checked:
+            checked.add(cue)
+            if negation.negated_connective(cue) is not None:
+                negated[cue] = CueResolution(cue, "negated", None, None, None, ())
+        if cue not in negated:
+            resolvable.append((cut, cue))
+    resolved = _resolve_cues(resolvable, resolve)
+    resolutions: dict[str, CueResolution] = {}
+    for _cut, cue in candidates:
+        if cue not in resolutions:
+            resolutions[cue] = negated.get(cue) or resolved[cue]
     fragments = {fragment.index: fragment for fragment in segmentation.fragments}
     links: list[tuple[int, int, str, str]] = []
     flags: list[FlagInput] = []

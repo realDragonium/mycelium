@@ -548,7 +548,7 @@ def test_golden_substrate_linking(case: SubstrateGolden) -> None:
     ]
     view = WordOverlapView(case.existing)
     funnel = find_candidates(batch, view)
-    proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type())
+    proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type()).links
 
     texts = [item.text for item in extraction.items]
 

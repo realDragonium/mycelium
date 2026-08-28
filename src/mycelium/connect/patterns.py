@@ -63,6 +63,8 @@ class CueMatch:
     start: int
     end: int
     phrase_role: PhraseRole = "to"
+    cue_span: tuple[int, int] | None = None
+    phrase_span: tuple[int, int] | None = None
 
 
 def _pattern(name: str, link_type: str, regex: str) -> Pattern:
@@ -557,6 +559,7 @@ def find_cues(
                 if pattern.phrase_role == "from"
                 else groups.get("to")
             )
+            role = pattern.phrase_role
             phrase = captured.strip() if captured and captured.strip() else None
             cues.append(
                 CueMatch(
@@ -566,7 +569,9 @@ def find_cues(
                     phrase=phrase,
                     start=match.start(),
                     end=match.end(),
-                    phrase_role=pattern.phrase_role,
+                    phrase_role=role,
+                    cue_span=match.span("cue"),
+                    phrase_span=match.span(role) if phrase is not None else None,
                 )
             )
     return sorted(cues, key=lambda cue: (cue.start, cue.pattern))

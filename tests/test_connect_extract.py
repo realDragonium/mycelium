@@ -7,12 +7,74 @@ from __future__ import annotations
 
 from mycelium.connect import extract as ex
 from mycelium.connect.cue_gate import CueResolution
+from mycelium.connect.segment import Cut, Fragment, Segmentation
 
 TEXT = """When the invite is sent, a reminder is scheduled. Notification cadence can be configured on Company.
 
 - Click Save to apply the change.
 - The user logs in and receives a token.
 - Blue widgets."""
+
+
+def _cue_segmentation(cue: str) -> Segmentation:
+    return Segmentation(
+        fragments=[
+            Fragment(0, "The invite is created", "claim", (0, 21), 0, False, False),
+            Fragment(
+                1,
+                "the reminder is scheduled",
+                "claim",
+                (32, 57),
+                0,
+                False,
+                False,
+            ),
+        ],
+        cuts=[Cut("compound-phrase", cue, (22, 31), 0, 1)],
+        proposals=[],
+    )
+
+
+def test_negated_cue_is_flagged_without_calling_resolver():
+    def reject(cue: str) -> CueResolution:
+        raise AssertionError(f"unexpected cue: {cue!r}")
+
+    links, flags, resolutions = ex._gate_cuts(
+        _cue_segmentation("but never"),
+        aliases={},
+        item_position={0: 0, 1: 1},
+        condition_links=[],
+        resolve=reject,
+    )
+
+    assert links == []
+    assert resolutions == [CueResolution("but never", "negated", None, None, None, ())]
+    assert len(flags) == 1
+    assert flags[0].reason == "cue"
+    assert "the words deny the relation" in flags[0].detail
+    assert flags[0].provenance == {
+        "cue": "but never",
+        "decision": "negated",
+        "candidates": [],
+    }
+
+
+def test_negation_substring_cue_reaches_resolver():
+    calls: list[str] = []
+
+    def resolve(cue: str) -> CueResolution:
+        calls.append(cue)
+        return CueResolution(cue, "unresolved", None, None, None, ())
+
+    ex._gate_cuts(
+        _cue_segmentation("nevertheless"),
+        aliases={},
+        item_position={0: 0, 1: 1},
+        condition_links=[],
+        resolve=resolve,
+    )
+
+    assert calls == ["nevertheless"]
 
 
 def test_extracts_the_measured_paragraph():

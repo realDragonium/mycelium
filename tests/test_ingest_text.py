@@ -279,6 +279,7 @@ def test_empty_text_returns_the_empty_response(tmp_path, monkeypatch):
                 "budget": 0,
             }
             assert response["suppressed_conflicts"] == 0
+            assert response["suppressed_negations"] == 0
 
 
 def test_discard_draft_op_strikes_a_flag(tmp_path, monkeypatch):
@@ -365,6 +366,7 @@ def test_auto_absorption_rides_draft_without_teaching_store(tmp_path, monkeypatc
             "low_confidence": 0,
             "unresolved": 0,
             "direction_conflict": 0,
+            "negated": 0,
             "strict": 0,
         }
         resolution = response["cue_resolutions"][0]
@@ -470,6 +472,7 @@ def test_strict_mode_flags_without_embedding_or_alias_op(tmp_path, monkeypatch):
             "low_confidence": 0,
             "unresolved": 0,
             "direction_conflict": 0,
+            "negated": 0,
             "strict": 1,
         }
 
