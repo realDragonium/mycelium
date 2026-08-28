@@ -105,6 +105,106 @@ def test_nested_trailing_multiword_condition_preserves_the_outer_condition():
     ]
 
 
+def test_nested_as_soon_as_condition_binds_when_to_its_governing_clause():
+    result = seg.segment(
+        "The export runs as soon as the flag is set when the job starts."
+    )
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("The export runs", "claim"),
+        ("the flag is set", "condition"),
+        ("the job starts", "condition"),
+    ]
+    assert [(item.connective, item.left, item.right) for item in result.cuts] == [
+        ("as soon as", 0, 1),
+        ("when", 1, 2),
+    ]
+    assert result.proposals == [
+        seg.ConditionProposal(claim=0, condition=1, cue="as soon as"),
+        seg.ConditionProposal(claim=1, condition=2, cue="when"),
+    ]
+
+
+def test_nested_provided_that_condition_binds_when_to_its_governing_clause():
+    result = seg.segment(
+        "The export runs provided that the flag is set when the job starts."
+    )
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("The export runs", "claim"),
+        ("the flag is set", "condition"),
+        ("the job starts", "condition"),
+    ]
+    assert [(item.connective, item.left, item.right) for item in result.cuts] == [
+        ("provided that", 0, 1),
+        ("when", 1, 2),
+    ]
+    assert result.proposals == [
+        seg.ConditionProposal(claim=0, condition=1, cue="provided that"),
+        seg.ConditionProposal(claim=1, condition=2, cue="when"),
+    ]
+
+
+def test_nested_advcl_condition_preserves_the_outer_condition():
+    result = seg.segment("The export runs if the flag is set when the job starts.")
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("The export runs", "claim"),
+        ("the flag is set", "condition"),
+        ("the job starts", "condition"),
+    ]
+    assert [(item.connective, item.left, item.right) for item in result.cuts] == [
+        ("if", 0, 1),
+        ("when", 1, 2),
+    ]
+    assert result.proposals == [
+        seg.ConditionProposal(claim=1, condition=2, cue="when"),
+        seg.ConditionProposal(claim=0, condition=1, cue="if"),
+    ]
+
+
+def test_nested_advcl_conditions_govern_adjacent_clause_pairs():
+    result = seg.segment(
+        "The reminder is sent when the invite is accepted when the user is active."
+    )
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("The reminder is sent", "claim"),
+        ("the invite is accepted", "condition"),
+        ("the user is active", "condition"),
+    ]
+    assert result.proposals == [
+        seg.ConditionProposal(claim=1, condition=2, cue="when"),
+        seg.ConditionProposal(claim=0, condition=1, cue="when"),
+    ]
+
+
+def test_nested_causal_advcl_preserves_the_outer_condition():
+    result = seg.segment("The export runs if the flag is set because the job started.")
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("The export runs", "claim"),
+        ("the flag is set", "condition"),
+        ("because the job started", "condition"),
+    ]
+    assert [item.connective for item in result.cuts] == ["if", "because"]
+    assert result.proposals == [seg.ConditionProposal(claim=0, condition=1, cue="if")]
+
+
+def test_initial_condition_with_nested_claim_condition_is_unchanged():
+    result = seg.segment("If the flag is set, the export runs when the job starts.")
+
+    assert [(item.text, item.role) for item in result.fragments] == [
+        ("the flag is set", "condition"),
+        ("the export runs", "claim"),
+        ("the job starts", "condition"),
+    ]
+    assert result.proposals == [
+        seg.ConditionProposal(claim=1, condition=2, cue="when"),
+        seg.ConditionProposal(claim=1, condition=0, cue="If"),
+    ]
+
+
 def test_trailing_multiword_requires_whole_statements_on_both_sides():
     source = "Reports that the system can send as soon as the flag is set"
     result = seg.segment(source)

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Literal
 from mycelium import phrasing, phrasing_cues
 
 if TYPE_CHECKING:
-    from spacy.tokens import Doc
+    from spacy.tokens import Doc, Token
 
 # Parses of the working texts seen in one `segment` call, keyed by text. The
 # cutter chain re-runs at every recursion level, so without it a document-sized
@@ -96,6 +96,8 @@ class _Split:
     claim_side: str | None = None
     condition_side: str | None = None
     cue: str | None = None
+    claim_anchor: int | None = None
+    condition_anchor: int | None = None
 
 
 @dataclass(frozen=True)
@@ -338,6 +340,8 @@ def _split(
     claim_side: str | None = None,
     condition_side: str | None = None,
     cue: str | None = None,
+    claim_anchor: int | None = None,
+    condition_anchor: int | None = None,
 ) -> _Split | None:
     """Build a split only when both sides and its raw connective survive."""
     raw_connective = _connective(piece, connective_start, connective_end)
@@ -353,6 +357,8 @@ def _split(
         claim_side,
         condition_side,
         cue,
+        claim_anchor,
+        condition_anchor,
     )
 
 
@@ -631,6 +637,13 @@ def _is_contiguous(tokens: list) -> bool:
     )
 
 
+def _token_anchor(piece: _Piece, token: "Token") -> int | None:
+    """Map a parsed token to its original source offset."""
+    if token.idx < 0 or token.idx >= len(piece.origins):
+        return None
+    return piece.origins[token.idx]
+
+
 def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
     """Cut a parsed adverbial clause and suppress causal proposals."""
     for token in doc:
@@ -645,7 +658,7 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
         # invent a surface form and stretch the span over the removed clause.
         if not _is_contiguous(claim_tokens):
             continue
-        claim = _trim_piece(_piece_from_tokens(piece, claim_tokens, role="claim"))
+        claim = _trim_piece(_piece_from_tokens(piece, claim_tokens, role=piece.role))
         if not _usable(claim):
             continue
         condition_span = _span(condition)
@@ -668,6 +681,8 @@ def _conditional_advcl(piece: _Piece, doc) -> _Split | None:
             claim_side="right" if condition_first else "left",
             condition_side="left" if condition_first else "right",
             cue=proposal_cue,
+            claim_anchor=_token_anchor(piece, token.head),
+            condition_anchor=_token_anchor(piece, token),
         )
     return None
 
@@ -818,6 +833,18 @@ def _role_boundary(leaves: list[_Piece], side: str, role: str) -> _Piece:
     return _boundary(candidates or leaves, side)
 
 
+def _anchored_boundary(
+    leaves: list[_Piece], side: str, role: str, anchor: int | None
+) -> _Piece:
+    """Select the leaf containing an anchor or fall back to its role boundary."""
+    if anchor is not None:
+        for leaf in leaves:
+            span = _span(leaf)
+            if span is not None and span[0] <= anchor < span[1]:
+                return leaf
+    return _role_boundary(leaves, side, role)
+
+
 def _record_proposal(
     split: _Split,
     left_leaves: list[_Piece],
@@ -828,9 +855,17 @@ def _record_proposal(
     if not split.cue or not split.claim_side or not split.condition_side:
         return
     leaves = {"left": left_leaves, "right": right_leaves}
-    claim = _role_boundary(leaves[split.claim_side], split.claim_side, "claim")
-    condition = _role_boundary(
-        leaves[split.condition_side], split.condition_side, "condition"
+    claim = _anchored_boundary(
+        leaves[split.claim_side],
+        split.claim_side,
+        "claim",
+        split.claim_anchor,
+    )
+    condition = _anchored_boundary(
+        leaves[split.condition_side],
+        split.condition_side,
+        "condition",
+        split.condition_anchor,
     )
     proposals.append(_PendingProposal(claim, condition, split.cue))
 
@@ -841,13 +876,17 @@ def _cut_boundaries(
     """Select reading-order leaves immediately represented by a split."""
     if split.claim_side == "left":
         return (
-            _role_boundary(left_leaves, "left", "claim"),
-            _role_boundary(right_leaves, "right", "condition"),
+            _anchored_boundary(left_leaves, "left", "claim", split.claim_anchor),
+            _anchored_boundary(
+                right_leaves, "right", "condition", split.condition_anchor
+            ),
         )
     if split.condition_side == "left":
         return (
-            _role_boundary(left_leaves, "left", "condition"),
-            _role_boundary(right_leaves, "right", "claim"),
+            _anchored_boundary(
+                left_leaves, "left", "condition", split.condition_anchor
+            ),
+            _anchored_boundary(right_leaves, "right", "claim", split.claim_anchor),
         )
     return left_leaves[-1], right_leaves[0]
 
