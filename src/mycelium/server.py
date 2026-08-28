@@ -1006,14 +1006,15 @@ def init(data_dir: Path) -> None:
             )
         _write_dirty_marker(index_path)
         index = vector.Index.empty()
-        _rebuild_vector_index(
-            index,
-            store.all_statements_with_text(_db()),
-            store.get_vector_id,
-            store.next_vector_id,
-            store.set_vector_id,
-            label="statement",
-        )
+        with store.transaction(_db()):
+            _rebuild_vector_index(
+                index,
+                store.all_statements_with_text(_db()),
+                store.get_vector_id,
+                store.next_vector_id,
+                store.set_vector_id,
+                label="statement",
+            )
         index.save(index_path)
         _fsync_file(index_path)
         _clear_dirty_marker(index_path)
@@ -1047,14 +1048,15 @@ def init(data_dir: Path) -> None:
             )
         _write_dirty_marker(name_index_path)
         name_index = vector.Index.empty()
-        _rebuild_vector_index(
-            name_index,
-            store.list_all_names(_db()),
-            store.get_name_vector_id,
-            store.next_name_vector_id,
-            store.set_name_vector_id,
-            label="name",
-        )
+        with store.transaction(_db()):
+            _rebuild_vector_index(
+                name_index,
+                store.list_all_names(_db()),
+                store.get_name_vector_id,
+                store.next_name_vector_id,
+                store.set_name_vector_id,
+                label="name",
+            )
         name_index.save(name_index_path)
         _fsync_file(name_index_path)
         _clear_dirty_marker(name_index_path)
@@ -1268,12 +1270,20 @@ def _persisted_index_write(
     dirty marker covers the window from the first index mutation through a
     successful persist and outermost commit, so a hard crash triggers a startup
     rebuild. Nested writes persist but leave marker ownership to the outer
-    transaction, which clears only after its real COMMIT. If commit fails,
-    DRA-418 rolls the DB back and the next startup heals the divergent index.
+    transaction, which clears only after its real COMMIT. A marker inherited
+    from an earlier failed write is sticky: later writes may persist and commit,
+    but only startup reconciliation clears it. If commit fails, DRA-418 rolls
+    the DB back and the next startup heals the divergent index.
     """
     with store.write_lock():
         conn = _db()
         outermost = not store.in_transaction(conn)
+        statement_marker_preexisting = (
+            outermost and statements and _dirty_marker_path(_idx_path()).exists()
+        )
+        name_marker_preexisting = (
+            outermost and names and _dirty_marker_path(_name_idx_path()).exists()
+        )
         with store.transaction(conn):
             if statements:
                 _write_dirty_marker(_idx_path())
@@ -1289,10 +1299,12 @@ def _persisted_index_write(
         if outermost:
             if statements:
                 _fsync_file(_idx_path())
-                _clear_dirty_marker(_idx_path())
+                if not statement_marker_preexisting:
+                    _clear_dirty_marker(_idx_path())
             if names:
                 _fsync_file(_name_idx_path())
-                _clear_dirty_marker(_name_idx_path())
+                if not name_marker_preexisting:
+                    _clear_dirty_marker(_name_idx_path())
 
 
 def _restore_index_snapshots(
@@ -1301,8 +1313,10 @@ def _restore_index_snapshots(
     """Best-effort restore each index without hiding the replay failure.
 
     Restore indexes independently so one damaged snapshot cannot prevent the
-    other from recovering. Keep any snapshot whose restore, persistence, or
-    cleanup fails so an operator still has the recovery artifact.
+    other from recovering. Keep every dirty marker set so startup rebuilds both
+    indexes after a failed apply, and keep any snapshot whose restore,
+    persistence, or cleanup fails so an operator still has the recovery
+    artifact.
     """
     for index, snapshot_path, live_path in snapshots:
         try:
@@ -1311,7 +1325,6 @@ def _restore_index_snapshots(
             index.save(live_path)
             _fsync_file(live_path)
             snapshot_path.unlink(missing_ok=True)
-            _clear_dirty_marker(live_path)
         except Exception:
             logger.exception(
                 "failed to restore vector index %s from %s; "
@@ -6126,8 +6139,9 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     # whole draft back. Per-attempt paths preserve recovery artifacts across
     # retries; the write lock serializes snapshots and both recovery paths
     # against index mutations in this process. The persisted-write wrapper
-    # marks both indexes before the snapshots and clears them only after the
-    # outer replay commit, so a hard crash mid-replay rebuilds both on startup.
+    # marks both indexes before the snapshots. A successful replay clears them
+    # only after the outer commit; a failed replay leaves them for startup to
+    # rebuild even when its best-effort snapshot restore succeeds.
     snapshots_taken = False
     restored = False
     try:

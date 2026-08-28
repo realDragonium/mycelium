@@ -241,7 +241,7 @@ def test_startup_rebuilds_dirty_indexes(
     )
 
 
-def test_persist_failure_leaves_marker_and_restart_rebuilds(
+def test_persist_failure_marker_stays_sticky_until_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _init(tmp_path, monkeypatch)
@@ -270,11 +270,70 @@ def test_persist_failure_leaves_marker_and_restart_rebuilds(
     assert store.get_statement(store.substrate_connection(), created_ids[0]) is None
 
     monkeypatch.setattr(vector.Index, "save", original_save)
+    successful_id = server.upsert_statement(
+        kind="state", text="the later write succeeds", links=[]
+    )["statement_id"]
+
+    assert len(created_ids) == 2
+    assert server._dirty_marker_path(server._idx_path()).exists()
+    assert store.get_statement(store.substrate_connection(), successful_id) is not None
+
     _restart(tmp_path)
 
     assert not server._dirty_marker_path(server._idx_path()).exists()
     assert store.get_statement(store.substrate_connection(), created_ids[0]) is None
-    assert server._idx().search(_embed("write is pending"), k=1) == []
+    assert store.get_statement(store.substrate_connection(), successful_id) is not None
+    hits = server.search_statements("the later write succeeds", limit=5, name_boost=0.0)
+    assert successful_id in {hit["id"] for hit in hits}
+
+
+def test_failed_draft_replay_leaves_markers_until_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init(tmp_path, monkeypatch)
+    drafter = auth.Principal(id="drafter", name="Drafter", role="drafter", type="human")
+    principal_token = auth.current_principal.set(drafter)
+    session_token = auth.current_session_id.set("failed-index-replay")
+    try:
+        receipt = server.upsert_entity(
+            name="Replay Fixture", description="created only during replay"
+        )
+        server.upsert_statement(
+            kind="state",
+            text="the replay references a missing statement",
+            links=[
+                {
+                    "to_id": "stm_nonexistent",
+                    "link_type": "depends_on",
+                }
+            ],
+        )
+    finally:
+        auth.current_session_id.reset(session_token)
+        auth.current_principal.reset(principal_token)
+
+    curator_token = auth.current_principal.set(auth.LOCAL_ADMIN)
+    try:
+        with pytest.raises(RuntimeError, match="failed during replay"):
+            server.apply_draft(receipt["draft_id"])
+    finally:
+        auth.current_principal.reset(curator_token)
+
+    assert server._dirty_marker_path(server._idx_path()).exists()
+    assert server._dirty_marker_path(server._name_idx_path()).exists()
+    assert store.all_statements_with_text(store.substrate_connection()) == []
+    assert store.list_all_names(store.substrate_connection()) == []
+    assert server._idx().ids() == []
+    assert server._name_idx().ids() == []
+
+    _restart(tmp_path)
+
+    assert not server._dirty_marker_path(server._idx_path()).exists()
+    assert not server._dirty_marker_path(server._name_idx_path()).exists()
+    assert store.all_statements_with_text(store.substrate_connection()) == []
+    assert store.list_all_names(store.substrate_connection()) == []
+    assert server._idx().ids() == []
+    assert server._name_idx().ids() == []
 
 
 def test_kind_only_patch_does_not_mark_or_persist(
