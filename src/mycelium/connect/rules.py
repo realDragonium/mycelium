@@ -9,7 +9,9 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import TYPE_CHECKING, NamedTuple
+
+from mycelium import phrasing
 
 from .funnel import (
     RELATED_THRESHOLD,
@@ -18,7 +20,11 @@ from .funnel import (
     SubstrateView,
     candidates_for,
 )
+from .negation import negated_phrase_root, negated_verb
 from .patterns import CueMatch, find_cues
+
+if TYPE_CHECKING:
+    from spacy.tokens import Doc
 
 RESOLVE_THRESHOLD = RELATED_THRESHOLD
 RESOLVE_THRESHOLD_UNANCHORED = 0.75
@@ -86,6 +92,21 @@ class LinkProposal:
     phrase: str | None
     score: float
     anchored: bool
+
+
+@dataclass(frozen=True)
+class SuppressedNegation:
+    new_index: int
+    pattern: str
+    cue: str
+    phrase: str | None
+    negator: str
+
+
+@dataclass(frozen=True)
+class RuleProposals:
+    links: list[LinkProposal]
+    suppressed_negations: list[SuppressedNegation]
 
 
 class _Resolved(NamedTuple):
@@ -263,21 +284,48 @@ def propose_links(
     resolve_threshold: float = RESOLVE_THRESHOLD,
     unanchored_threshold: float = RESOLVE_THRESHOLD_UNANCHORED,
     k: int = TARGET_NEIGHBOURS_K,
-) -> list[LinkProposal]:
+) -> RuleProposals:
     """Resolve shipped lexical cues batch-first and propose admissible links.
 
-    Each nonblank target phrase is embedded and mention-resolved once. Eligible batch
-    siblings are ranked before the compatibility matrix is applied. The substrate is
-    consulted when the batch yields no admissible target, so an admissible sibling wins
-    the tier rather than one that merely resolved.
+    Each nonblank, unsuppressed target phrase is embedded and mention-resolved once.
+    Eligible batch siblings are ranked before the compatibility matrix is applied. The
+    substrate is consulted when the batch yields no admissible target, so an admissible
+    sibling wins the tier rather than one that merely resolved.
+
+    Negated matches are suppressed and reported because a link the words deny must
+    not be proposed.
     """
     phrase_cache: dict[
         str, tuple[frozenset[str], list[float], dict[str, frozenset[str]]]
     ] = {}
     proposals: dict[tuple[str, str, str], LinkProposal] = {}
+    suppressed_negations: list[SuppressedNegation] = []
+    docs: dict[int, "Doc"] = {}
     for statement in batch:
         for cue in shipped_cues(statement.text, statement.kind, shipped, aliases):
             if not cue.phrase:
+                continue
+            doc = docs.get(statement.index)
+            if doc is None:
+                doc = phrasing.get_nlp()(statement.text)
+                docs[statement.index] = doc
+            negator = (
+                negated_verb(doc, cue.cue_span) if cue.cue_span is not None else None
+            ) or (
+                negated_phrase_root(doc, cue.phrase_span)
+                if cue.phrase_span is not None
+                else None
+            )
+            if negator is not None:
+                suppressed_negations.append(
+                    SuppressedNegation(
+                        new_index=statement.index,
+                        pattern=cue.pattern,
+                        cue=cue.cue,
+                        phrase=cue.phrase,
+                        negator=negator,
+                    )
+                )
                 continue
             if cue.phrase not in phrase_cache:
                 phrase_entities = view.entities_in(cue.phrase)
@@ -353,4 +401,4 @@ def propose_links(
             previous = proposals.get(key)
             if previous is None or proposal.score > previous.score:
                 proposals[key] = proposal
-    return list(proposals.values())
+    return RuleProposals(list(proposals.values()), suppressed_negations)

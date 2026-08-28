@@ -9,6 +9,7 @@ from mycelium.connect import pipeline
 from mycelium.connect.funnel import BatchStatement
 from mycelium.connect.nli import NliLabel, NliUnavailable
 from mycelium.connect.pipeline import NliPairs
+from mycelium.connect.rules import SuppressedNegation
 
 
 class FakeView:
@@ -58,6 +59,31 @@ class FakeNli:
         return [NliLabel("neutral", 1.0) for _ in pairs]
 
 
+def test_negated_statement_reports_suppression_without_link_proposal() -> None:
+    result = pipeline.run(
+        [
+            BatchStatement(
+                0,
+                "state",
+                "The report does not belong to the archive",
+            )
+        ],
+        FakeView([]),
+        text_of=lambda statement_id: None,
+    )
+
+    assert result.link_proposals == []
+    assert result.suppressed_negations == [
+        SuppressedNegation(
+            new_index=0,
+            pattern="contains-belongs-to",
+            cue="belong to",
+            phrase="the archive",
+            negator="not",
+        )
+    ]
+
+
 def test_unavailable_nli_reports_reason_and_warning(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -78,6 +104,7 @@ def test_unavailable_nli_reports_reason_and_warning(
 
     assert result.nli == "unavailable"
     assert result.nli_reason == "checkpoint is offline"
+    assert result.suppressed_negations == []
     assert result.nli_pairs == NliPairs(classified=0, skipped=0, budget=400)
     assert "NLI unavailable: checkpoint is offline" in caplog.text
 
@@ -128,6 +155,7 @@ def test_zero_candidates_never_touches_default_model(
     assert result.nli == "nothing_to_classify"
     assert result.nli_reason is None
     assert result.verdicts == []
+    assert result.suppressed_negations == []
     assert result.nli_pairs == NliPairs(classified=0, skipped=0, budget=400)
 
 
@@ -182,6 +210,7 @@ def test_pair_budget_classifies_ranked_prefix_and_preserves_skipped_candidates(
 
     assert result.nli == "ran"
     assert result.nli_reason is None
+    assert result.suppressed_negations == []
     assert result.nli_pairs == NliPairs(classified=2, skipped=6, budget=2)
     assert model.calls == [[("new", "first text"), ("first text", "new")]]
     assert [candidate.statement_id for candidate in result.funnel.candidates] == [

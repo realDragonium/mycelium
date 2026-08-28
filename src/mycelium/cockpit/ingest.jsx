@@ -241,7 +241,7 @@ function RulesResult({ res, draft, onOpen, onAgain }) {
   });
   const rows = Object.keys(byFrag).map(Number).sort((a, b) => a - b).map(fi => ({ fi, ...byFrag[fi] }));
   const textLinks = Object.values(conn).flat().filter(c => c.kind === 'text').length;
-  const cueTotal = (cues.auto || 0) + (cues.low_confidence || 0) + (cues.unresolved || 0) + (cues.direction_conflict || 0) + (cues.strict || 0);
+  const cueTotal = (cues.auto || 0) + (cues.low_confidence || 0) + (cues.unresolved || 0) + (cues.direction_conflict || 0) + (cues.negated || 0) + (cues.strict || 0);
   const noDraft = !res.draft_id;
   return (
     <div className="rr">
@@ -250,8 +250,8 @@ function RulesResult({ res, draft, onOpen, onAgain }) {
         <div><span className="k">statements</span><span className="v">{frags.resolved}</span></div>
         <div><span className="k">flagged</span><span className={`v${frags.flagged ? ' warn' : ''}`}>{frags.flagged}</span></div>
         <div><span className="k">links</span><span className="v">{textLinks + (props.links || 0)}<small>{textLinks} text · {props.links || 0} rule</small></span></div>
-        <div><span className="k">merges · conflicts</span><span className="v">{props.merges || 0} · {props.conflicts || 0}</span></div>
-        <div><span className="k">unknown cues</span><span className="v">{cueTotal}<small>{cues.auto ? `${cues.auto} auto ` : ''}{cues.low_confidence ? `${cues.low_confidence} low-conf ` : ''}{cues.unresolved ? `${cues.unresolved} flagged ` : ''}{cues.direction_conflict ? `${cues.direction_conflict} direction` : ''}</small></span></div>
+        <div><span className="k">merges · conflicts</span><span className="v">{props.merges || 0} · {props.conflicts || 0}<small>{res.suppressed_negations ? `${res.suppressed_negations} negated ` : ''}{res.suppressed_conflicts ? `${res.suppressed_conflicts} suppressed` : ''}</small></span></div>
+        <div><span className="k">unknown cues</span><span className="v">{cueTotal}<small>{cues.auto ? `${cues.auto} auto ` : ''}{cues.low_confidence ? `${cues.low_confidence} low-conf ` : ''}{cues.unresolved ? `${cues.unresolved} flagged ` : ''}{cues.direction_conflict ? `${cues.direction_conflict} direction ` : ''}{cues.negated ? `${cues.negated} negated` : ''}</small></span></div>
       </div>
       {noDraft ? <EmptyState title="Nothing to draft" blurb="No fragment resolved into a statement and nothing was flagged — the text produced no draft." /> : (
         <table className="rr-table">
