@@ -105,6 +105,11 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
             _txn_depth[id(conn)] = depth
 
 
+def in_transaction(conn: sqlite3.Connection) -> bool:
+    """Whether `conn` is nested, for replay-aware persistence wrappers."""
+    return _txn_depth.get(id(conn), 0) > 0
+
+
 @contextmanager
 def write_lock() -> Iterator[None]:
     """Serialize index recovery without changing transaction state.
