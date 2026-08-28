@@ -70,6 +70,10 @@ SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
     # it has no ground truth either way and the next run scores it. "X belongs
     # to Y" yields Y contains X rather than no edge.
     "contains-belongs-to": None,
+    # The alias-aware 2026-08-27 run scored this 0/19 as a to-role frame, but
+    # all 19 fires (all `rule`) carry an incoming `cases` link, so read from-role
+    # it is 19/19; see docs/reports/2026-08-27-link-pattern-hit-rate.md.
+    "cases-level-for": frozenset({"rule"}),
 }
 
 

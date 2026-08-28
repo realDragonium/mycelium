@@ -745,6 +745,51 @@ def _migration_v11_passive_by_aliases(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v12_cases_level_aliases(conn: sqlite3.Connection) -> None:
+    """Add cases-level aliases to an already-seeded vocabulary.
+
+    The from-role `cases` frame ships with these reverse phrasings, and seeding
+    never runs again on a non-empty table. Fresh or unseeded DBs are left for
+    normal seeding. Existing rows are left entirely alone because direction and
+    provenance may be curator choices.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(link_type_aliases)")}
+    if not columns:
+        return
+    if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
+        return
+
+    from mycelium.store.link_type_aliases import _now
+
+    now = _now()
+    for link_type, alias in (
+        ("cases", "is low for"),
+        ("cases", "is medium for"),
+        ("cases", "is high for"),
+        ("cases", "is extra high for"),
+        ("cases", "is none for"),
+        ("cases", "is positive for"),
+        ("cases", "is negative for"),
+    ):
+        exists = conn.execute(
+            "SELECT 1 FROM link_type_aliases WHERE link_type = ? AND alias = ?",
+            (link_type, alias),
+        ).fetchone()
+        if exists is not None:
+            continue
+        conn.execute(
+            "INSERT INTO link_type_aliases "
+            "(link_type, alias, provenance, direction, created_at) "
+            "VALUES (?, ?, 'seed', 'reverse', ?)",
+            (link_type, alias, now),
+        )
+        conn.execute(
+            "INSERT INTO link_type_alias_embed_queue "
+            "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
+            (link_type, alias, now),
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -760,6 +805,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (9, _migration_v9_alias_direction),
     (10, _migration_v10_belongs_to_aliases),
     (11, _migration_v11_passive_by_aliases),
+    (12, _migration_v12_cases_level_aliases),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
