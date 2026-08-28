@@ -294,7 +294,11 @@ const _FLAG_REASONS = {
 
 function FlagEntry({ op, first }) {
   const p = op.payload || {};
-  const known = _FLAG_REASONS[p.reason];
+  // Own-property only: a reason of 'constructor' or 'toString' would
+  // otherwise find an inherited member and render an empty stage.
+  const known = Object.prototype.hasOwnProperty.call(_FLAG_REASONS, p.reason)
+    ? _FLAG_REASONS[p.reason]
+    : null;
   const stage = known ? known[0] : ((op.provenance || {}).source || 'pipeline');
   const explanation = known ? known[1] : 'This stage refused the fragment; see the detail below.';
   return (

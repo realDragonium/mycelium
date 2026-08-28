@@ -652,9 +652,10 @@ _DRAFTS_JSX = Path(__file__).resolve().parents[1] / "src/mycelium/ui/drafts.jsx"
 
 def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypatch):
     """The drafts UI lists each flag beside the graph from `text`, `reason` and
-    `detail` on the op. Nothing else on the draft surface reads those three, so
-    this goes through the real writer: renaming one in `assemble_draft` has to
-    fail here rather than only in a browser."""
+    `detail` on the op. The queued-op rows below it only dump the payload
+    generically, so these three names are load-bearing for review and nowhere
+    else. Going through the real writer makes renaming one fail here rather
+    than only in a browser."""
     client = _app(tmp_path, monkeypatch)
     with client:
         flags = extract.extract("The status becomes active").flags
@@ -680,8 +681,9 @@ def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypa
 
 def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
     """Every reason the pipeline can emit gets a stage and a sentence in the
-    drafts UI. A reason added to FLAG_SOURCES without both falls back to the
-    bare enum — the unreadable review surface this list replaced."""
+    drafts UI. A reason added to FLAG_SOURCES without both falls back to its
+    provenance source and a generic line, which names the stage but cannot say
+    what that stage actually refused."""
     table = re.search(
         r"const _FLAG_REASONS = \{(.*?)\n\};", _DRAFTS_JSX.read_text(), re.S
     )
