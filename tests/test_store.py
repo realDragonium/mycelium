@@ -1,3 +1,7 @@
+import sqlite3
+
+import pytest
+
 from mycelium import store
 
 
@@ -5,6 +9,38 @@ def fresh_conn():
     conn = store.connect(":memory:")
     store.migrate(conn)
     return conn
+
+
+def test_commit_failure_rolls_back_and_connection_remains_usable():
+    class FlakyCommitConnection(sqlite3.Connection):
+        fail_commits = False
+
+        def commit(self) -> None:
+            if FlakyCommitConnection.fail_commits:
+                raise sqlite3.OperationalError("injected commit failure")
+            super().commit()
+
+    conn = sqlite3.connect(":memory:", factory=FlakyCommitConnection)
+    conn.row_factory = sqlite3.Row
+    store.migrate(conn)
+
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="injected commit failure"):
+            with store.transaction(conn):
+                doomed_id = store.create_entity(conn, "doomed")
+                FlakyCommitConnection.fail_commits = True
+    finally:
+        FlakyCommitConnection.fail_commits = False
+
+    assert conn.in_transaction is False
+    assert store.get_entity_by_id(conn, doomed_id) is None
+    assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
+
+    with store.transaction(conn):
+        persisted_id = store.create_entity(conn, "persisted")
+
+    assert conn.in_transaction is False
+    assert store.get_entity_by_id(conn, persisted_id) is not None
 
 
 def test_entity_and_name_roundtrip():

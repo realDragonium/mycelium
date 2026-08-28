@@ -18,7 +18,7 @@ import json
 import sqlite3
 import threading
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterator
@@ -95,7 +95,12 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
             raise
         else:
             if depth == 0:
-                conn.commit()
+                try:
+                    conn.commit()
+                except BaseException:
+                    with suppress(BaseException):
+                        conn.rollback()
+                    raise
         finally:
             _txn_depth[id(conn)] = depth
 
