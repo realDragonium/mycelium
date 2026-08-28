@@ -28,6 +28,7 @@ from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store, vector
 from mycelium.connect import extract
+from mycelium.connect.draft import BatchInput, assemble_draft
 
 
 def _reset_server() -> None:
@@ -652,47 +653,48 @@ _DRAFTS_JSX = Path(__file__).resolve().parents[1] / "src/mycelium/ui/drafts.jsx"
 def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypatch):
     """The drafts UI lists each flag beside the graph from `text`, `reason` and
     `detail` on the op. Nothing else on the draft surface reads those three, so
-    dropping one from the payload would break review and stay green here."""
+    this goes through the real writer: renaming one in `assemble_draft` has to
+    fail here rather than only in a browser."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        conn = server._drafts_db()
-        with store.transaction(conn):
-            draft_id = drafts_store.create_draft(
-                conn, created_by="d1", session_id=None, title="flagged"
-            )
-            for flag in extract.extract("The status becomes active").flags:
-                drafts_store.add_op(
-                    conn,
-                    draft_id=draft_id,
-                    kind="flag",
-                    payload={
-                        "text": flag.text,
-                        "reason": flag.reason,
-                        "detail": flag.detail,
-                        "sentence": flag.sentence,
-                        "span": list(flag.span),
-                    },
-                    provenance={"source": extract.FLAG_SOURCES[flag.reason]},
-                    created_by="d1",
-                )
+        flags = extract.extract("The status becomes active").flags
+        assert flags, "expected the phrasing catalog to refuse this wording"
+        draft_id = assemble_draft(
+            server._drafts_db(),
+            batch=[BatchInput(kind="event", text="the exporter uploads the report")],
+            proposals=[],
+            text_of=lambda _id: None,
+            created_by="d1",
+            flags=flags,
+        )
 
         r = client.get(f"/api/drafts/{draft_id}")
         assert r.status_code == 200, r.text
-        flags = [op for op in r.json()["draft"]["ops"] if op["kind"] == "flag"]
-        assert len(flags) == 1
-        assert flags[0]["payload"]["text"] == "The status becomes active"
-        assert flags[0]["payload"]["reason"] == "rejected"
-        assert flags[0]["payload"]["detail"]
-        assert flags[0]["provenance"]["source"] == "phrasing"
+        flag_ops = [op for op in r.json()["draft"]["ops"] if op["kind"] == "flag"]
+        assert len(flag_ops) == 1
+        assert flag_ops[0]["payload"]["text"] == "The status becomes active"
+        assert flag_ops[0]["payload"]["reason"] == "rejected"
+        assert flag_ops[0]["payload"]["detail"]
+        assert flag_ops[0]["provenance"]["source"] == "phrasing"
 
 
 def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
     """Every reason the pipeline can emit gets a stage and a sentence in the
-    drafts UI. A reason added to FLAG_SOURCES without an entry here falls back
-    to the bare enum — the unreadable review surface this list replaced."""
+    drafts UI. A reason added to FLAG_SOURCES without both falls back to the
+    bare enum — the unreadable review surface this list replaced."""
     table = re.search(
         r"const _FLAG_REASONS = \{(.*?)\n\};", _DRAFTS_JSX.read_text(), re.S
     )
     assert table is not None, "could not find _FLAG_REASONS in ui/drafts.jsx"
-    explained = set(re.findall(r"^  (\w+):", table.group(1), re.M))
-    assert extract.FLAG_SOURCES.keys() <= explained
+    explained = {
+        reason: re.findall(r"'([^']*)'", value)
+        for reason, value in re.findall(r"^  (\w+): \[(.+)\],$", table.group(1), re.M)
+    }
+
+    assert extract.FLAG_SOURCES.keys() <= explained.keys()
+    for reason in extract.FLAG_SOURCES:
+        parts = explained[reason]
+        assert len(parts) == 2, f"{reason} needs a stage and an explanation"
+        stage, explanation = parts
+        assert stage.strip(), f"{reason} names no stage"
+        assert explanation.strip().endswith("."), f"{reason} has no explaining sentence"

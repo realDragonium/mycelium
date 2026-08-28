@@ -598,6 +598,8 @@ function DraftDetail({ draftId, onBack }) {
   // horizontal padding on each side. The graph card itself caps at the
   // size-derived maxWidth and centers within this container, so smaller
   // sizes still look balanced rather than left-aligned in dead space.
+  // Both tiers are already clamped by `main.page`'s 1440px max-width, so the
+  // largest graph sizes never reach the width named here.
   const WIDE = 1768;
   return (
     <main className="page">
