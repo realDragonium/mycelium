@@ -23,13 +23,11 @@ from .patterns import CueMatch, find_cues
 RESOLVE_THRESHOLD = RELATED_THRESHOLD
 RESOLVE_THRESHOLD_UNANCHORED = 0.75
 TARGET_NEIGHBOURS_K = 10
-#: Most anchored substrate ids scored by an individual `similarity` call per cue
-#: phrase. One popular entity must not drive hundreds of round trips per cue.
-TARGET_SHARING_CAP = 50
 
 #: The instance's shipped rule set — pattern name -> kinds it may fire for
-#: (None = any kind). Derived from docs/reports/2026-08-15-link-pattern-hit-rate.md;
-#: see that file's "Reading the result".
+#: (None = any kind). Derived from the original selection in
+#: docs/reports/2026-08-15-link-pattern-hit-rate.md and revised by the alias-aware
+#: docs/reports/2026-08-27-link-pattern-hit-rate.md run.
 SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
     # Selection criterion (from the report's by-pattern table): statement precision
     # >= 50% with >= 3 statements fired, OR precision >= 30% with >= 4 link hits;
@@ -38,11 +36,18 @@ SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
     # 33/86 (38.4%) overall, but the signal is the capability subset; elsewhere ~12%.
     "configures-configured-on": frozenset({"capability"}),
     "composes-formula": frozenset({"rule"}),  # 6/12 (50.0%), 21 link hits
-    "restricts-limits": None,  # 2/2 (100.0%), 8 link hits
+    # Alias-aware restricts-limits: 2/2 -> 6/9 (66.7%), 8 -> 12 link hits, once
+    # seeded restricts vocabulary reached the bare slot; rule 2/2, state 4/5,
+    # capability 0/2. Its state fires duplicate restricts-state-covered statements.
+    # Bare disabled / locked / frozen / read-only / limit stays for restricts-state's
+    # framed slot; restricts-limits' rule restriction makes them inert outside rule on
+    # the bare slot.
+    "restricts-limits": frozenset({"rule"}),
     "restricts-state": frozenset({"state"}),  # 5/6 (83.3%)
     "proceeds-redirected": frozenset({"event"}),  # 3/9 (33.3%), 4 link hits
-    # Not shipped: establishes-event-state (1/2) and proceeds-then (1/2) fire on two
-    # statements each — too thin; composes-determined-by (27.3%) and composes-combines
+    # Not shipped: establishes-event-state (1/2) is too thin; proceeds-then is
+    # undecidable between proceeds and triggers (2 event fires: 1 outgoing proceeds,
+    # 1 outgoing triggers); composes-determined-by (27.3%) and composes-combines
     # (22.2%) miss the precision criterion, as do all 0%-precision patterns and every
     # pattern whose link type has no ground truth in this snapshot.
     # Shipped outside the report (2026-08-20): the frame postdates the measured
@@ -158,25 +163,6 @@ def _resolve_in_batch(
     ]
 
 
-def _anchored_ids(
-    sharing: dict[str, frozenset[str]],
-    already_scored: set[str],
-    cap: int,
-) -> list[str]:
-    """Take the best-anchored ids a separate similarity call still has to score.
-
-    A phrase naming a popular entity shares with unboundedly many statements, and
-    each one outside the neighbour result costs its own substrate round trip; the
-    cap keeps that per-cue cost flat. Ids the neighbour query already scored are
-    free, so they do not count against it.
-    """
-    unscored = [
-        statement_id for statement_id in sharing if statement_id not in already_scored
-    ]
-    unscored.sort(key=lambda statement_id: (-len(sharing[statement_id]), statement_id))
-    return unscored[:cap]
-
-
 def _resolve_in_substrate(
     statement: BatchStatement,
     funnel: FunnelResult,
@@ -190,23 +176,27 @@ def _resolve_in_substrate(
 ) -> list[_Resolved]:
     """Union and rank eligible substrate targets for one target phrase.
 
-    The anchored fan-out is capped at `TARGET_SHARING_CAP`, so one popular entity
-    cannot drive hundreds of similarity round trips for a single cue.
+    Similarities and kinds are fetched in batches, so anchored recall stays uncapped
+    without per-candidate substrate round trips.
     """
     neighbour_scores = dict(view.neighbours(phrase_vec, k))
     candidate_ids = (
         set(neighbour_scores)
-        | set(_anchored_ids(sharing, set(neighbour_scores), TARGET_SHARING_CAP))
+        | set(sharing)
         | {
             candidate.statement_id
             for candidate in candidates_for(funnel, statement.index)
         }
     )
-    resolved: list[_Resolved] = []
+    unscored_ids = candidate_ids - set(neighbour_scores)
+    similarity_scores = (
+        view.similarity(phrase_vec, sorted(unscored_ids)) if unscored_ids else {}
+    )
+    eligible: list[tuple[str, float, frozenset[str]]] = []
     for statement_id in candidate_ids:
         score = neighbour_scores.get(statement_id)
         if score is None:
-            score = view.similarity(phrase_vec, statement_id)
+            score = similarity_scores.get(statement_id)
         if score is None:
             continue
         shared = phrase_entities & sharing.get(statement_id, frozenset())
@@ -218,9 +208,13 @@ def _resolve_in_substrate(
             unanchored_threshold,
         ):
             continue
-        kind = view.kind_of(statement_id)
-        if kind is not None:
-            resolved.append(_Resolved(statement_id, score, shared, kind))
+        eligible.append((statement_id, score, shared))
+    kinds = view.kinds_of(sorted(statement_id for statement_id, _, _ in eligible))
+    resolved = [
+        _Resolved(statement_id, score, shared, kinds[statement_id])
+        for statement_id, score, shared in eligible
+        if statement_id in kinds
+    ]
     resolved.sort(key=lambda candidate: (-candidate.score, candidate.target))
     return resolved
 
@@ -264,7 +258,8 @@ def propose_links(
 
     Each nonblank target phrase is embedded and mention-resolved once. Eligible batch
     siblings are ranked before the compatibility matrix is applied. The substrate is
-    consulted only when the batch has no eligible target at all.
+    consulted when the batch yields no admissible target, so an admissible sibling wins
+    the tier rather than one that merely resolved.
     """
     phrase_cache: dict[
         str, tuple[frozenset[str], list[float], dict[str, frozenset[str]]]
@@ -285,7 +280,7 @@ def propose_links(
                     sharing,
                 )
             phrase_entities, phrase_vec, sharing = phrase_cache[cue.phrase]
-            candidates = _resolve_in_batch(
+            batch_candidates = _resolve_in_batch(
                 statement,
                 batch,
                 funnel,
@@ -294,8 +289,15 @@ def propose_links(
                 resolve_threshold,
                 unanchored_threshold,
             )
-            if not candidates:
-                candidates = _resolve_in_substrate(
+            winner = _pick(
+                batch_candidates,
+                statement.kind,
+                cue.link_type,
+                view,
+                phrase_role=cue.phrase_role,
+            )
+            if winner is None:
+                substrate_candidates = _resolve_in_substrate(
                     statement,
                     funnel,
                     view,
@@ -306,13 +308,13 @@ def propose_links(
                     unanchored_threshold,
                     k,
                 )
-            winner = _pick(
-                candidates,
-                statement.kind,
-                cue.link_type,
-                view,
-                phrase_role=cue.phrase_role,
-            )
+                winner = _pick(
+                    substrate_candidates,
+                    statement.kind,
+                    cue.link_type,
+                    view,
+                    phrase_role=cue.phrase_role,
+                )
             if winner is None:
                 continue
             # Keep the no-self-link invariant explicit at the emission boundary.

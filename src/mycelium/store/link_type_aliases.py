@@ -154,6 +154,24 @@ def seed_rows() -> list[tuple[str, str, str]]:
     ]
 
 
+def _group_forward_aliases(
+    rows: Iterable[tuple[str, str, str]],
+) -> dict[str, tuple[str, ...]]:
+    grouped: dict[str, list[str]] = {}
+    for link_type, alias, direction in rows:
+        if direction == "forward":
+            grouped.setdefault(link_type, []).append(alias)
+    return {
+        link_type: tuple(sorted(aliases, key=lambda alias: (-len(alias), alias)))
+        for link_type, aliases in grouped.items()
+    }
+
+
+def seed_aliases_by_type() -> dict[str, tuple[str, ...]]:
+    """Group the forward aliases available on a fresh install by link type."""
+    return _group_forward_aliases(seed_rows())
+
+
 def seed_link_type_aliases(conn: sqlite3.Connection) -> int:
     """Seed aliases and embedding jobs when the alias table is empty."""
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is not None:
@@ -279,15 +297,13 @@ def aliases_by_type(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]:
     one would fire it with the wrong geometry. A far-side frame gets its own
     pattern (like `contains-part-of`) rather than a cue slot.
     """
-    grouped: dict[str, list[str]] = {}
-    for row in conn.execute(
-        "SELECT link_type, alias FROM link_type_aliases WHERE direction = 'forward'"
-    ):
-        grouped.setdefault(row["link_type"], []).append(row["alias"])
-    return {
-        link_type: tuple(sorted(aliases, key=lambda alias: (-len(alias), alias)))
-        for link_type, aliases in grouped.items()
-    }
+    rows = (
+        (row["link_type"], row["alias"], row["direction"])
+        for row in conn.execute(
+            "SELECT link_type, alias, direction FROM link_type_aliases"
+        )
+    )
+    return _group_forward_aliases(rows)
 
 
 def set_alias_embedding(

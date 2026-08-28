@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from collections.abc import Sequence
 
 from . import kernel
 from .kernel import _now, _record, _row_dict
@@ -34,6 +35,22 @@ def get_statement(conn: sqlite3.Connection, statement_id: str) -> sqlite3.Row | 
         "FROM statements WHERE id = ?",
         (statement_id,),
     ).fetchone()
+
+
+def get_statement_kinds(
+    conn: sqlite3.Connection, statement_ids: Sequence[str]
+) -> dict[str, str]:
+    """Return kinds for the requested statements that still exist."""
+    kinds: dict[str, str] = {}
+    for offset in range(0, len(statement_ids), 500):
+        chunk = statement_ids[offset : offset + 500]
+        placeholders = ", ".join("?" for _statement_id in chunk)
+        rows = conn.execute(
+            f"SELECT id, kind FROM statements WHERE id IN ({placeholders})",
+            tuple(chunk),
+        )
+        kinds.update((str(row["id"]), str(row["kind"])) for row in rows)
+    return kinds
 
 
 def update_statement(
@@ -119,6 +136,23 @@ def get_vector_id(conn: sqlite3.Connection, statement_id: str) -> int | None:
         (statement_id,),
     ).fetchone()
     return int(row["vector_id"]) if row else None
+
+
+def get_vector_ids(
+    conn: sqlite3.Connection, statement_ids: Sequence[str]
+) -> dict[str, int]:
+    """Return stored vector ids for the requested statement ids."""
+    vector_ids: dict[str, int] = {}
+    for offset in range(0, len(statement_ids), 500):
+        chunk = statement_ids[offset : offset + 500]
+        placeholders = ", ".join("?" for _statement_id in chunk)
+        rows = conn.execute(
+            "SELECT statement_id, vector_id FROM statement_vector_ids "
+            f"WHERE statement_id IN ({placeholders})",
+            tuple(chunk),
+        )
+        vector_ids.update((row["statement_id"], int(row["vector_id"])) for row in rows)
+    return vector_ids
 
 
 def get_statement_id_by_vector_id(

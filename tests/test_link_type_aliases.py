@@ -114,6 +114,10 @@ def test_alias_lookup_and_longest_first_grouping(fresh_conn):
     )
 
 
+def test_seed_aliases_match_fresh_install(fresh_conn):
+    assert store.seed_aliases_by_type() == store.aliases_by_type(fresh_conn)
+
+
 def test_list_aliases_filters_and_exposes_embedding_state(fresh_conn):
     rows = store.list_link_type_aliases(fresh_conn, "proceeds")
     assert rows

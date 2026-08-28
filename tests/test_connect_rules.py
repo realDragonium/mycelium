@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import math
 from collections import Counter
+from collections.abc import Sequence
 
 import pytest
 
 from mycelium.connect.funnel import BatchStatement, Candidate, FunnelResult
 from mycelium.connect.rules import (
-    TARGET_SHARING_CAP,
     LinkProposal,
     _cosine,
     propose_links,
@@ -30,7 +30,8 @@ class FakeView:
         self.allow_all_link_types = allow_all_link_types
         self.embed_calls: Counter[str] = Counter()
         self.sharing_calls = 0
-        self.similarity_calls: list[str] = []
+        self.similarity_calls: list[tuple[str, ...]] = []
+        self.kinds_of_calls: list[tuple[str, ...]] = []
 
     def embed(self, text: str) -> list[float]:
         self.embed_calls[text] += 1
@@ -39,9 +40,16 @@ class FakeView:
     def neighbours(self, vec: list[float], k: int) -> list[tuple[str, float]]:
         return self.neighbours_by_vector.get(tuple(vec), [])[:k]
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
-        self.similarity_calls.append(statement_id)
-        return self.similarities.get(statement_id)
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
+        self.similarity_calls.append(tuple(statement_ids))
+        scores: dict[str, float] = {}
+        for statement_id in statement_ids:
+            score = self.similarities.get(statement_id)
+            if score is not None:
+                scores[statement_id] = score
+        return scores
 
     def entities_in(self, text: str) -> frozenset[str]:
         return self.entities_by_text.get(text, frozenset())
@@ -56,8 +64,13 @@ class FakeView:
             if shared & entity_ids
         }
 
-    def kind_of(self, statement_id: str) -> str | None:
-        return self.kinds.get(statement_id)
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        self.kinds_of_calls.append(tuple(statement_ids))
+        return {
+            statement_id: self.kinds[statement_id]
+            for statement_id in statement_ids
+            if statement_id in self.kinds
+        }
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         return self.link_types_by_kind_pair.get(
@@ -276,7 +289,7 @@ def test_unnamed_phrase_uses_stronger_embedding_threshold_without_anchor():
     assert propose_links(batch, low_funnel, low_view) == []
 
 
-def test_matrix_rejects_link_and_inadmissible_batch_does_not_fall_through():
+def test_matrix_rejected_batch_sibling_falls_through_to_substrate():
     view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
     phrase = "the dispatch attempts"
     view.embeddings_by_text[phrase] = [1.0, 0.0]
@@ -296,7 +309,40 @@ def test_matrix_rejects_link_and_inadmissible_batch_does_not_fall_through():
         }
     )
 
-    assert propose_links(batch, funnel, view) == []
+    proposals = propose_links(batch, funnel, view)
+
+    assert len(proposals) == 1
+    assert proposals[0].source == "@0"
+    assert proposals[0].target == "stm_dispatch"
+    assert proposals[0].link_type == "restricts"
+    assert proposals[0].score == 0.95
+
+
+def test_admissible_batch_sibling_wins_without_substrate_scoring():
+    view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
+    phrase = "the dispatch attempts"
+    view.embeddings_by_text[phrase] = [1.0, 0.0]
+    view.entities_by_text[phrase] = frozenset({"ent_dispatch"})
+    view.sharing["stm_dispatch"] = frozenset({"ent_dispatch"})
+    view.similarities["stm_dispatch"] = 0.95
+    view.kinds["stm_dispatch"] = "property"
+    batch = [
+        BatchStatement(0, "rule", "Retry budget limits the dispatch attempts"),
+        BatchStatement(1, "property", "Dispatch attempt allowance"),
+    ]
+    funnel = _funnel(
+        {
+            0: ([0.0, 1.0], frozenset()),
+            1: ([0.8, 0.6], frozenset({"ent_dispatch"})),
+        }
+    )
+
+    proposals = propose_links(batch, funnel, view)
+
+    assert len(proposals) == 1
+    assert proposals[0].target == "@1"
+    assert proposals[0].score == 0.8
+    assert view.similarity_calls == []
 
 
 def test_matrix_skips_best_candidate_and_selects_next_admissible_candidate():
@@ -329,11 +375,10 @@ def test_matrix_skips_best_candidate_and_selects_next_admissible_candidate():
 def test_shipped_cues_filters_pattern_membership_and_kind_restriction():
     assert shipped_cues("A login triggers an audit", "event") == []
 
-    shipped = {"restricts-limits": frozenset({"rule"})}
     text = "Retry budget limits the dispatch attempts"
 
-    assert shipped_cues(text, "event", shipped) == []
-    cues = shipped_cues(text, "rule", shipped)
+    assert shipped_cues(text, "event") == []
+    cues = shipped_cues(text, "rule")
     assert len(cues) == 1
     assert cues[0].pattern == "restricts-limits"
     assert cues[0].cue == "limits"
@@ -482,7 +527,7 @@ def test_cosine_rejects_mismatched_embedding_dimensions():
         _cosine([1.0, 0.0, 0.0], [1.0, 0.0])
 
 
-def test_anchored_substrate_fan_out_is_capped_per_cue_phrase():
+def test_anchored_fan_out_scores_all_sharing_ids_in_one_batched_call():
     view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
     phrase = "the dispatch attempts"
     view.embeddings_by_text[phrase] = [1.0, 0.0]
@@ -492,17 +537,16 @@ def test_anchored_substrate_fan_out_is_capped_per_cue_phrase():
         view.sharing[statement_id] = frozenset({"ent_dispatch"})
         view.similarities[statement_id] = 0.7
         view.kinds[statement_id] = "property"
-    # Two shared entities outrank one, so this id survives the cap despite sorting last.
     view.sharing["stm_59"] = frozenset({"ent_dispatch", "ent_retry"})
     view.similarities["stm_59"] = 0.9
-    # The best score of all, but it falls outside the cap and is never scored.
     view.similarities["stm_58"] = 0.99
     batch = [BatchStatement(0, "rule", "Retry budget limits the dispatch attempts")]
 
     proposals = propose_links(batch, _funnel({}), view)
 
-    assert len(view.similarity_calls) == TARGET_SHARING_CAP
-    assert set(view.similarity_calls) == {"stm_59"} | set(popular[:49])
+    assert len(view.similarity_calls) == 1
+    assert set(view.similarity_calls[0]) == set(popular)
+    assert view.kinds_of_calls == [tuple(popular)]
     assert len(proposals) == 1
-    assert proposals[0].target == "stm_59"
-    assert proposals[0].score == 0.9
+    assert proposals[0].target == "stm_58"
+    assert proposals[0].score == 0.99

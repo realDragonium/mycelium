@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import zlib
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pytest
@@ -336,9 +337,14 @@ class WordOverlapView:
         )
         return [(statement_id, score) for score, statement_id in scored[:k]]
 
-    def similarity(self, vec: list[float], statement_id: str) -> float | None:
-        stored = self.existing.get(statement_id)
-        return _cosine(vec, stored[2]) if stored else None
+    def similarity(
+        self, vec: list[float], statement_ids: Sequence[str]
+    ) -> dict[str, float]:
+        return {
+            statement_id: _cosine(vec, self.existing[statement_id][2])
+            for statement_id in statement_ids
+            if statement_id in self.existing
+        }
 
     def entities_in(self, text: str) -> frozenset[str]:
         return frozenset()
@@ -348,9 +354,12 @@ class WordOverlapView:
     ) -> dict[str, frozenset[str]]:
         return {}
 
-    def kind_of(self, statement_id: str) -> str | None:
-        stored = self.existing.get(statement_id)
-        return stored[0] if stored else None
+    def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+        return {
+            statement_id: self.existing[statement_id][0]
+            for statement_id in statement_ids
+            if statement_id in self.existing
+        }
 
     def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
         return frozenset(link_type for link_type, _alias, _dir in seed_rows())

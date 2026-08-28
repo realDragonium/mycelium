@@ -1,21 +1,23 @@
 """Measure lexical link-pattern hit and false-fire rates without storing text.
 
-A hit means an existing link (S -> T, type L) has a cue of type L in the
-source statement. A pair fire is a unique (S, C, L) proposed by a cue where S
-and another statement C share an entity mention; it is true when that exact
-link exists and false otherwise. Statement-level precision for a pattern is
-the fraction of statements it matches that have any outgoing link of its type.
-Statements without mentions produce no pairs. Vocabulary types with no links
-have no ground truth rather than a zero-percent hit rate.
+A hit means an existing link (S -> T, type L) has a matching to-role cue on S
+or from-role cue on T. A pair fire is a unique directed pair and link type
+proposed by a cue between statements sharing an entity mention; it is true when
+that exact link exists and false otherwise. Statement-level precision checks
+outgoing links for to-role cue carriers and incoming links for from-role cue
+carriers. Statements without mentions produce no pairs. Vocabulary types with
+no links have no ground truth rather than a zero-percent hit rate.
 
 Usage:
     uv run python scripts/measure_link_patterns.py --data-dir PATH
         [--out PATH] [--label TEXT] [--show-cues N]
     uv run python scripts/measure_link_patterns.py --snapshot FILE.jsonl
-        [--out PATH] [--label TEXT] [--show-cues N]
+        [--aliases FILE.json] [--out PATH] [--label TEXT] [--show-cues N]
 
 The Markdown report contains counts only. `--show-cues` may print matched cue
 text to stdout, but statement text is never included in the report.
+Without `--aliases`, snapshot measurement models a fresh install's seeded
+vocabulary.
 """
 
 from __future__ import annotations
@@ -24,12 +26,14 @@ import argparse
 import json
 import sys
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from mycelium import store
 from mycelium.connect.patterns import all_patterns, find_cues
+from mycelium.store.link_type_aliases import _group_forward_aliases
 
 
 @dataclass(frozen=True)
@@ -94,13 +98,14 @@ def measure(
     links: list[Link],
     mentions: dict[str, set[str]],
     vocabulary: list[str],
+    aliases: Mapping[str, Sequence[str]],
 ) -> dict:
     """Return link-pattern measurements as plain report data."""
     vocabulary_set = set(vocabulary)
     vocabulary_types = sorted(vocabulary_set)
     statement_by_id = {statement.id: statement for statement in statements}
     cues_by_statement = {
-        statement.id: find_cues(statement.text, statement.kind)
+        statement.id: find_cues(statement.text, statement.kind, aliases)
         for statement in statements
     }
     # A from-capturing cue evidences an incoming edge, so hits split by the
@@ -381,21 +386,22 @@ def render_markdown(report: dict, *, source_label: str) -> str:
             "## How to read",
             "",
             (
-                "A **hit** is an existing link whose type is proposed by a cue in "
-                "its source statement. The target does not affect hit detection."
+                "A **hit** is an existing link whose source carries a to-role cue "
+                "of its type or whose target carries a from-role cue of its type."
             ),
             "",
             (
-                "A **pair fire** is a unique source, candidate, and link-type triple "
-                "where the source has that cue and both statements mention at least "
-                "one shared entity. It is true when the exact directed link exists "
-                "and false otherwise. Statements without mentions produce no pairs."
+                "A **pair fire** is a unique directed pair and link-type triple "
+                "proposed by a cue between statements that share an entity mention. "
+                "It is true when the exact directed link exists and false otherwise. "
+                "Statements without mentions produce no pairs."
             ),
             "",
             (
                 "**Statement precision** is the fraction of statements matched by a "
-                "pattern that have at least one outgoing link of that pattern's type, "
-                "regardless of target. Vocabulary types with zero links have no ground "
+                "pattern that have a link of that pattern's type: outgoing for to-role "
+                "cue carriers and incoming for from-role cue carriers, regardless of "
+                "the other endpoint. Vocabulary types with zero links have no ground "
                 "truth rather than a zero-percent hit rate."
             ),
             "",
@@ -406,7 +412,13 @@ def render_markdown(report: dict, *, source_label: str) -> str:
 
 def load_snapshot(
     path: Path,
-) -> tuple[list[Stmt], list[Link], dict[str, set[str]], list[str]]:
+) -> tuple[
+    list[Stmt],
+    list[Link],
+    dict[str, set[str]],
+    list[str],
+    dict[str, tuple[str, ...]],
+]:
     """Load the evaluator's plain data from a get_statements JSONL export."""
     statements: list[Stmt] = []
     links: list[Link] = []
@@ -432,12 +444,42 @@ def load_snapshot(
                 if link.get("to_id", "").startswith("stm_")
             )
     vocabulary = sorted({link.link_type for link in links})
-    return statements, links, mentions, vocabulary
+    return statements, links, mentions, vocabulary, store.seed_aliases_by_type()
+
+
+def load_aliases(path: Path) -> dict[str, tuple[str, ...]]:
+    """Load and order forward aliases from an instance alias export."""
+    try:
+        raw_payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid aliases JSON: {error}")
+    if not isinstance(raw_payload, dict):
+        raise ValueError(
+            "aliases must be a JSON object mapping link types to lists of strings"
+        )
+
+    payload = cast(dict[object, object], raw_payload)
+    rows: list[tuple[str, str, str]] = []
+    for link_type, raw_aliases in payload.items():
+        if not isinstance(link_type, str):
+            raise ValueError("alias link types must be strings")
+        if not isinstance(raw_aliases, list) or not all(
+            isinstance(alias, str) for alias in raw_aliases
+        ):
+            raise ValueError(f"aliases for {link_type!r} must be a list of strings")
+        rows.extend((link_type, alias, "forward") for alias in raw_aliases)
+    return _group_forward_aliases(rows)
 
 
 def load_store(
     data_dir: Path,
-) -> tuple[list[Stmt], list[Link], dict[str, set[str]], list[str]]:
+) -> tuple[
+    list[Stmt],
+    list[Link],
+    dict[str, set[str]],
+    list[str],
+    dict[str, tuple[str, ...]],
+]:
     """Load evaluator data from an existing Mycelium data directory."""
     conn = store.connect(data_dir / "mycelium.db")
     try:
@@ -469,19 +511,29 @@ def load_store(
             row["link_type"] for row in store.list_statement_link_type_glossary(conn)
         }
         vocabulary = sorted(materialized | glossary)
-        return statements, links, dict(mentions), vocabulary
+        return (
+            statements,
+            links,
+            dict(mentions),
+            vocabulary,
+            store.aliases_by_type(conn),
+        )
     finally:
         conn.close()
 
 
-def _show_cues(statements: list[Stmt], limit: int) -> None:
+def _show_cues(
+    statements: list[Stmt],
+    limit: int,
+    aliases: Mapping[str, Sequence[str]],
+) -> None:
     """Print at most the requested number of matched cue texts per pattern."""
     if limit <= 0:
         return
     shown: dict[str, int] = defaultdict(int)
     samples: list[tuple[str, str, str]] = []
     for statement in statements:
-        for cue in find_cues(statement.text, statement.kind):
+        for cue in find_cues(statement.text, statement.kind, aliases):
             if shown[cue.pattern] < limit:
                 samples.append((cue.pattern, cue.cue, cue.phrase or ""))
                 shown[cue.pattern] += 1
@@ -500,6 +552,11 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--data-dir", type=Path, help="Mycelium data directory")
     source.add_argument("--snapshot", type=Path, help="get_statements JSONL export")
     parser.add_argument(
+        "--aliases",
+        type=Path,
+        help="Instance forward-alias JSON export (snapshot only)",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=Path("link_pattern_report.md"),
@@ -517,23 +574,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.data_dir is not None and args.aliases is not None:
+        print("--aliases cannot be used with --data-dir", file=sys.stderr)
+        return 1
+
     source_path = args.data_dir if args.data_dir is not None else args.snapshot
     if args.data_dir is not None:
         db_path = args.data_dir / "mycelium.db"
         if not db_path.exists():
             print(f"database not found: {db_path}", file=sys.stderr)
             return 1
-        statements, links, mentions, vocabulary = load_store(args.data_dir)
+        statements, links, mentions, vocabulary, aliases = load_store(args.data_dir)
     else:
-        statements, links, mentions, vocabulary = load_snapshot(args.snapshot)
+        statements, links, mentions, vocabulary, aliases = load_snapshot(args.snapshot)
+        if args.aliases is not None:
+            try:
+                aliases = load_aliases(args.aliases)
+            except (OSError, ValueError) as error:
+                print(f"could not load aliases: {error}", file=sys.stderr)
+                return 1
 
-    report = measure(statements, links, mentions, vocabulary)
+    report = measure(statements, links, mentions, vocabulary, aliases)
     source_label = args.label if args.label is not None else str(source_path)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(
         render_markdown(report, source_label=source_label), encoding="utf-8"
     )
-    _show_cues(statements, args.show_cues)
+    _show_cues(statements, args.show_cues, aliases)
     totals = report["totals"]
     rate = totals["hit_rate"] or 0.0
     print(

@@ -186,6 +186,7 @@ def test_measure_reports_hits_pairs_precision_and_no_ground_truth():
         links,
         mentions,
         ["accepts", "composes", "requires", "triggers"],
+        aliases={},
     )
 
     assert report["totals"]["hits"] == 2
@@ -206,7 +207,9 @@ def test_measure_scores_inverted_cue_evidence_on_the_incoming_edge():
     links = [Link("stm_parent", "stm_child", "contains")]
     mentions = {"stm_child": {"ent_policy"}, "stm_parent": {"ent_policy"}}
 
-    report = measure_link_patterns.measure(statements, links, mentions, ["contains"])
+    report = measure_link_patterns.measure(
+        statements, links, mentions, ["contains"], aliases={}
+    )
 
     # The only cue sits on the child, but the edge it evidences is incoming.
     assert report["totals"]["hits"] == 1
@@ -251,8 +254,8 @@ def test_load_snapshot_filters_entity_targets_and_keeps_external_statements(tmp_
         "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
     )
 
-    statements, links, mentions, vocabulary = measure_link_patterns.load_snapshot(
-        snapshot
+    statements, links, mentions, vocabulary, aliases = (
+        measure_link_patterns.load_snapshot(snapshot)
     )
 
     assert len(statements) == 3
@@ -260,6 +263,7 @@ def test_load_snapshot_filters_entity_targets_and_keeps_external_statements(tmp_
     assert {link.to_id for link in links} == {"stm_2", "stm_missing"}
     assert mentions["stm_1"] == {"ent_1"}
     assert vocabulary == ["requires", "triggers"]
+    assert aliases == store.seed_aliases_by_type()
 
 
 def test_render_markdown_never_contains_statement_text():
@@ -268,6 +272,7 @@ def test_render_markdown_never_contains_statement_text():
         [],
         {},
         ["accepts"],
+        aliases={},
     )
 
     markdown = measure_link_patterns.render_markdown(report, source_label="fixture")
@@ -292,3 +297,68 @@ def test_data_dir_cli_writes_report(tmp_path):
 
     assert result == 0
     assert output.exists()
+
+
+def test_snapshot_cli_uses_supplied_aliases(tmp_path: Path):
+    snapshot = tmp_path / "snapshot.jsonl"
+    records = [
+        {
+            "id": "stm_1",
+            "kind": "rule",
+            "text": "The importer throttles nightly syncs",
+            "mentions": [],
+            "links": [{"to_id": "stm_2", "link_type": "restricts", "when": None}],
+        },
+        {
+            "id": "stm_2",
+            "kind": "event",
+            "text": "Nightly syncs run",
+            "mentions": [],
+            "links": [],
+        },
+    ]
+    snapshot.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text(
+        json.dumps({"restricts": ["limit", "throttles"]}), encoding="utf-8"
+    )
+    output = tmp_path / "report.md"
+
+    result = measure_link_patterns.main(
+        [
+            "--snapshot",
+            str(snapshot),
+            "--aliases",
+            str(aliases),
+            "--out",
+            str(output),
+        ]
+    )
+
+    assert result == 0
+    assert "| restricts | 1/1 (100.0%) |" in output.read_text(encoding="utf-8")
+
+
+def test_aliases_with_data_dir_is_rejected(tmp_path: Path):
+    conn = store.connect(tmp_path / "mycelium.db")
+    store.migrate(conn)
+    conn.close()
+    aliases = tmp_path / "aliases.json"
+    aliases.write_text("{}", encoding="utf-8")
+    output = tmp_path / "report.md"
+
+    result = measure_link_patterns.main(
+        [
+            "--data-dir",
+            str(tmp_path),
+            "--aliases",
+            str(aliases),
+            "--out",
+            str(output),
+        ]
+    )
+
+    assert result == 1
+    assert not output.exists()

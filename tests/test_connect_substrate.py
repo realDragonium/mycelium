@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zlib
+from collections.abc import Sequence
 
 import numpy as np
 import pytest
@@ -59,10 +60,9 @@ def test_live_substrate_wires_embeddings_index_mentions_and_store(
             (score for _, score in neighbours), reverse=True
         )
         neighbour_score = dict(neighbours)[statement_a]
-        assert view.similarity(vec, statement_a) == pytest.approx(
-            neighbour_score, abs=1e-6
-        )
-        assert view.similarity(vec, "no-vector") is None
+        similarities = view.similarity(vec, [statement_a, "no-vector"])
+        assert similarities[statement_a] == pytest.approx(neighbour_score, abs=1e-6)
+        assert "no-vector" not in similarities
 
         assert entity_id in view.entities_in(
             "a request reaches the Cobalt Orchard account"
@@ -71,8 +71,8 @@ def test_live_substrate_wires_embeddings_index_mentions_and_store(
             mentioning: frozenset({entity_id})
         }
         assert view.statements_sharing(frozenset()) == {}
-        assert view.kind_of(statement_a) == "event"
-        assert view.kind_of("nope") is None
+        assert view.kinds_of([statement_a, "nope"]) == {statement_a: "event"}
+        assert view.kinds_of([]) == {}
 
         result = find_candidates(
             [BatchStatement(0, "event", "a user submits the login form")],
@@ -159,8 +159,14 @@ def test_hinted_view_widens_funnel_entity_candidates_without_persisting():
         def neighbours(self, vec: list[float], k: int) -> list[tuple[str, float]]:
             return []
 
-        def similarity(self, vec: list[float], statement_id: str) -> float | None:
-            return 0.7 if statement_id == "stm_x" else None
+        def similarity(
+            self, vec: list[float], statement_ids: Sequence[str]
+        ) -> dict[str, float]:
+            return {
+                statement_id: 0.7
+                for statement_id in statement_ids
+                if statement_id == "stm_x"
+            }
 
         def entities_in(self, value: str) -> frozenset[str]:
             return frozenset()
@@ -172,8 +178,12 @@ def test_hinted_view_widens_funnel_entity_candidates_without_persisting():
                 return {"stm_x": frozenset({"e"})}
             return {}
 
-        def kind_of(self, statement_id: str) -> str | None:
-            return "state" if statement_id == "stm_x" else None
+        def kinds_of(self, statement_ids: Sequence[str]) -> dict[str, str]:
+            return {
+                statement_id: "state"
+                for statement_id in statement_ids
+                if statement_id == "stm_x"
+            }
 
         def admissible_link_types(self, from_kind: str, to_kind: str) -> frozenset[str]:
             return frozenset({"requires"})
