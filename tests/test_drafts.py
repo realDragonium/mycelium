@@ -19,6 +19,7 @@ play); we set the drafter principal directly via contextvar where
 needed — that's the same path the streamable-HTTP transport uses.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -26,6 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store, vector
+from mycelium.connect import extract
 
 
 def _reset_server() -> None:
@@ -642,3 +644,55 @@ def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
         "statements": [{"links": [{"to_id": "@2"}]}],
         "proposal": {"from_id": "stm_created"},
     }
+
+
+_DRAFTS_JSX = Path(__file__).resolve().parents[1] / "src/mycelium/ui/drafts.jsx"
+
+
+def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypatch):
+    """The drafts UI lists each flag beside the graph from `text`, `reason` and
+    `detail` on the op. Nothing else on the draft surface reads those three, so
+    dropping one from the payload would break review and stay green here."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        conn = server._drafts_db()
+        with store.transaction(conn):
+            draft_id = drafts_store.create_draft(
+                conn, created_by="d1", session_id=None, title="flagged"
+            )
+            for flag in extract.extract("The status becomes active").flags:
+                drafts_store.add_op(
+                    conn,
+                    draft_id=draft_id,
+                    kind="flag",
+                    payload={
+                        "text": flag.text,
+                        "reason": flag.reason,
+                        "detail": flag.detail,
+                        "sentence": flag.sentence,
+                        "span": list(flag.span),
+                    },
+                    provenance={"source": extract.FLAG_SOURCES[flag.reason]},
+                    created_by="d1",
+                )
+
+        r = client.get(f"/api/drafts/{draft_id}")
+        assert r.status_code == 200, r.text
+        flags = [op for op in r.json()["draft"]["ops"] if op["kind"] == "flag"]
+        assert len(flags) == 1
+        assert flags[0]["payload"]["text"] == "The status becomes active"
+        assert flags[0]["payload"]["reason"] == "rejected"
+        assert flags[0]["payload"]["detail"]
+        assert flags[0]["provenance"]["source"] == "phrasing"
+
+
+def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
+    """Every reason the pipeline can emit gets a stage and a sentence in the
+    drafts UI. A reason added to FLAG_SOURCES without an entry here falls back
+    to the bare enum — the unreadable review surface this list replaced."""
+    table = re.search(
+        r"const _FLAG_REASONS = \{(.*?)\n\};", _DRAFTS_JSX.read_text(), re.S
+    )
+    assert table is not None, "could not find _FLAG_REASONS in ui/drafts.jsx"
+    explained = set(re.findall(r"^  (\w+):", table.group(1), re.M))
+    assert extract.FLAG_SOURCES.keys() <= explained
