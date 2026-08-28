@@ -606,11 +606,12 @@ def _property_noun_phrase(doc: Doc, text: str) -> ShapeMatch | None:
     # The command lexicons already accept these lemmas when tagged VB, so when
     # the parser tags one NOUN or ADJ the command and property readings are both
     # live on identical structure ("Review value" against "Download URL"). This
-    # is a lexical abstention, not a structural test: it distrusts the nominal
-    # reading without asserting the verbal one, which is why the result is a
-    # flag and never a reclassification to action or check. It costs the ~1.5%
-    # of real property names that open with a command lemma, taken deliberately
-    # because a flag reaches a curator and a wrong statement does not.
+    # is a lexical abstention, not a structural test: this detector declines
+    # without asserting the verbal reading, so it can never reclassify the
+    # fragment as action or check. 2 of 136 labeled property statements open
+    # with a command lemma, and neither reached this shape already, so the
+    # measured incremental cost is zero; the exposed prevalence is the price,
+    # taken because a flag reaches a curator and a wrong statement does not.
     if first.lemma_.lower() in COMMAND_LEMMAS:
         return None
     return ShapeMatch("property", "property-noun-phrase", root.text)
@@ -694,9 +695,9 @@ def match_shapes(text: str) -> list[ShapeMatch]:
     # Refusing here costs one flag, not two. The double-flag arises earlier,
     # when segmentation splits a coordinated sentence and each half then fails
     # every shape: 30 of 1644 labeled statements carry a coordinated predicate
-    # and 4 of those 30 (13.3%) end up double-flagged. Those four halves fail on
-    # missing participle vocabulary rather than on coordination, so there is no
-    # coordination-specific recovery to build; they stay double-flagged.
+    # and 4 of those 30 (13.3%) end up double-flagged. The halves of those four
+    # statements fail on missing participle vocabulary rather than on
+    # coordination, so there is no coordination-specific recovery to build.
     # A how-to heading is exempt — it names one procedure however many verbs
     # its title mentions.
     if (

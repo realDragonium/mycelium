@@ -140,7 +140,8 @@ def test_ordinary_property_names_remain_property_noun_phrases():
 
 
 def test_bare_noun_phrase_fragment_is_indistinguishable_from_a_property_name():
-    # Deliberate limit: matcher lacks evidence to reject it; segmentation owns it.
+    # Deliberate limit: no current stage separates a stray fragment from a real
+    # property name; doing so needs provenance the matcher does not have.
     _assert_assigned_shape("Blue widgets", "property", "property-noun-phrase")
 
 
