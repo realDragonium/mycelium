@@ -19,6 +19,7 @@ play); we set the drafter principal directly via contextvar where
 needed — that's the same path the streamable-HTTP transport uses.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -26,6 +27,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store, vector
+from mycelium.connect import extract
+from mycelium.connect.draft import BatchInput, assemble_draft
 
 
 def _reset_server() -> None:
@@ -642,3 +645,72 @@ def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
         "statements": [{"links": [{"to_id": "@2"}]}],
         "proposal": {"from_id": "stm_created"},
     }
+
+
+_DRAFTS_JSX = Path(__file__).resolve().parents[1] / "src/mycelium/ui/drafts.jsx"
+
+
+def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypatch):
+    """The drafts UI lists each flag beside the graph from `text`, `reason` and
+    `detail` on the op. The queued-op rows below it only dump the payload
+    generically, so these three names are load-bearing for review and nowhere
+    else. Going through the real writer makes renaming one fail here rather
+    than only in a browser."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        flags = extract.extract("The status becomes active").flags
+        assert flags, "expected the phrasing catalog to refuse this wording"
+        draft_id = assemble_draft(
+            server._drafts_db(),
+            batch=[BatchInput(kind="event", text="the exporter uploads the report")],
+            proposals=[],
+            text_of=lambda _id: None,
+            created_by="d1",
+            flags=flags,
+        )
+
+        r = client.get(f"/api/drafts/{draft_id}")
+        assert r.status_code == 200, r.text
+        flag_ops = [op for op in r.json()["draft"]["ops"] if op["kind"] == "flag"]
+        assert len(flag_ops) == 1
+        assert flag_ops[0]["payload"]["text"] == "The status becomes active"
+        assert flag_ops[0]["payload"]["reason"] == "rejected"
+        assert flag_ops[0]["payload"]["detail"]
+        assert flag_ops[0]["provenance"]["source"] == "phrasing"
+
+
+def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
+    """Every reason the pipeline can emit gets a stage and a sentence in the
+    drafts UI. A reason added to FLAG_SOURCES without both falls back to its
+    provenance source and a generic line, which names the stage but cannot say
+    what that stage actually refused."""
+    table = re.search(
+        r"const _FLAG_REASONS = \{(.*?)\n\};", _DRAFTS_JSX.read_text(), re.S
+    )
+    assert table is not None, "could not find _FLAG_REASONS in ui/drafts.jsx"
+    explained = {
+        reason: re.findall(r"'([^']*)'", value)
+        for reason, value in re.findall(r"^  (\w+): \[(.+)\],$", table.group(1), re.M)
+    }
+
+    assert extract.FLAG_SOURCES.keys() <= explained.keys()
+    for reason in extract.FLAG_SOURCES:
+        parts = explained[reason]
+        assert len(parts) == 2, f"{reason} needs a stage and an explanation"
+        stage, explanation = parts
+        assert stage.strip(), f"{reason} names no stage"
+        assert explanation.strip().endswith("."), f"{reason} has no explaining sentence"
+
+
+def test_flag_reason_lookup_is_guarded_against_inherited_properties():
+    """`_FLAG_REASONS[reason]` on its own reaches Object.prototype, so a flag
+    whose reason is `constructor` or `toString` resolves to an inherited member
+    and renders a blank stage with a blank explanation — worse than the enum,
+    because it looks like the pipeline said nothing. Only the own-property
+    guard keeps that off the review surface, and no JS test runner exists here
+    to catch it if the guard is dropped."""
+    lookup = re.search(r"const known = (.*?);\n", _DRAFTS_JSX.read_text(), re.S)
+    assert lookup is not None, "could not find the _FLAG_REASONS lookup"
+    assert "hasOwnProperty.call(_FLAG_REASONS" in lookup.group(1), (
+        "the flag-reason lookup must be own-property guarded"
+    )
