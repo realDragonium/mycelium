@@ -36,10 +36,16 @@ def negated_verb(doc: "Doc", span: tuple[int, int]) -> str | None:
         return None
     anchors = [token for token in cue_span if token.pos_ in {"VERB", "AUX"}]
     if not anchors:
-        head = cue_span.root.head
-        if head.pos_ not in {"VERB", "AUX"}:
+        head = cue_span.root
+        # spaCy builds a fresh Token per access, so root detection must
+        # compare indices: the sentence root is its own head.
+        while head.head.i != head.i:
+            head = head.head
+            if head.pos_ in {"VERB", "AUX"}:
+                anchors = [head]
+                break
+        if not anchors:
             return None
-        anchors = [head]
     for anchor in anchors:
         negator = _token_negator(anchor)
         if negator is not None:
@@ -48,6 +54,14 @@ def negated_verb(doc: "Doc", span: tuple[int, int]) -> str | None:
             negator = _token_negator(anchor.head)
             if negator is not None:
                 return negator
+        # Greedy phrase groups can swallow coordinated clauses, so a negated
+        # conjunct contaminates resolution with the denied target. Prefer
+        # under-proposal to emitting that edge.
+        for child in anchor.children:
+            if child.dep_ == "conj" and child.pos_ in {"VERB", "AUX"}:
+                negator = _token_negator(child)
+                if negator is not None:
+                    return negator
     return None
 
 

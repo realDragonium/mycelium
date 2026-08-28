@@ -9,6 +9,7 @@ from mycelium.connect import pipeline
 from mycelium.connect.funnel import BatchStatement
 from mycelium.connect.nli import NliLabel, NliUnavailable
 from mycelium.connect.pipeline import NliPairs
+from mycelium.connect.rules import SuppressedNegation
 
 
 class FakeView:
@@ -56,6 +57,31 @@ class FakeNli:
     def classify(self, pairs: list[tuple[str, str]]) -> list[NliLabel]:
         self.calls.append(pairs)
         return [NliLabel("neutral", 1.0) for _ in pairs]
+
+
+def test_negated_statement_reports_suppression_without_link_proposal() -> None:
+    result = pipeline.run(
+        [
+            BatchStatement(
+                0,
+                "state",
+                "The report does not belong to the archive",
+            )
+        ],
+        FakeView([]),
+        text_of=lambda statement_id: None,
+    )
+
+    assert result.link_proposals == []
+    assert result.suppressed_negations == [
+        SuppressedNegation(
+            new_index=0,
+            pattern="contains-belongs-to",
+            cue="belong to",
+            phrase="the archive",
+            negator="not",
+        )
+    ]
 
 
 def test_unavailable_nli_reports_reason_and_warning(

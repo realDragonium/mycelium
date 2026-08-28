@@ -105,7 +105,9 @@ def _proposals_for(
     shipped: dict[str, frozenset[str] | None] | None = None,
 ) -> RuleProposals:
     view = FakeView(
-        allow_all_link_types=frozenset({"contains", "restricts", "triggers"})
+        allow_all_link_types=frozenset(
+            {"composes", "contains", "restricts", "triggers"}
+        )
     )
     view.embeddings_by_text[phrase] = [1.0, 0.0]
     batch = [
@@ -231,6 +233,56 @@ def test_negated_match_with_affirmative_conjunct_is_suppressed_as_one_match():
     # this catalog does not recover the affirmative conjunct separately.
     assert result.links == []
     assert [item.negator for item in result.suppressed_negations] == ["not"]
+
+
+def test_affirmative_match_with_negated_conjunct_is_suppressed_as_one_match():
+    result = _proposals_for(
+        "The report belongs to the workspace but does not belong to the archive",
+        "state",
+        "the workspace",
+    )
+
+    assert result.links == []
+    assert result.suppressed_negations == [
+        SuppressedNegation(
+            new_index=0,
+            pattern="contains-belongs-to",
+            cue="belongs to",
+            phrase="the workspace but does not belong to the archive",
+            negator="not",
+        )
+    ]
+
+
+def test_nonverbal_cue_follows_head_chain_to_negated_verb():
+    result = _proposals_for(
+        "The formula does not include base plus tax",
+        "rule",
+        "tax",
+    )
+
+    assert result.links == []
+    assert result.suppressed_negations == [
+        SuppressedNegation(
+            new_index=0,
+            pattern="composes-formula",
+            cue="plus",
+            phrase="tax",
+            negator="not",
+        )
+    ]
+
+
+def test_focus_negation_does_not_suppress_affirmative_cue():
+    result = _proposals_for(
+        "The quota not only limits uploads but also blocks retries",
+        "rule",
+        "uploads but also blocks retries",
+    )
+
+    assert len(result.links) == 1
+    assert result.links[0].link_type == "restricts"
+    assert result.suppressed_negations == []
 
 
 def test_shipped_anchored_cue_resolves_to_batch_sibling_and_records_exact_cue():

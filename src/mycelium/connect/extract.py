@@ -110,6 +110,8 @@ def _cut_links(
     condition_pairs = {
         (claim, condition) for claim, condition, _link_type in condition_links
     }
+    # Registered aliases express curator intent, and negation may itself carry
+    # the relation, as in a "cannot" alias for restricts. Do not second-guess it.
     for cut in segmentation.cuts:
         if cut.link_type is None:
             continue
