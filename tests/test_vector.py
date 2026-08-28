@@ -44,6 +44,17 @@ def test_save_and_load(tmp_path):
     assert hits[0][0] == 7
 
 
+def test_load_empty_index_restores_capacity_for_insert(tmp_path):
+    path = tmp_path / "empty.bin"
+    vector.Index.empty().save(path)
+
+    loaded = vector.Index.load(path)
+
+    assert loaded._index.get_max_elements() >= vector.INITIAL_CAPACITY
+    loaded.add(0, rand_vec(4))
+    assert loaded.search(rand_vec(4), k=1)[0][0] == 0
+
+
 def test_search_empty_index():
     idx = vector.Index.empty()
     assert idx.search(rand_vec(1), k=5) == []

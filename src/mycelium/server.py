@@ -991,13 +991,19 @@ def init(data_dir: Path) -> None:
 
     # The .vec files are re-derivable from the substrate, so backup.sh omits
     # them while keeping the *_vector_ids mappings in the DB. When a .vec is
-    # missing (a fresh checkout, or a restore of such a backup) rebuild the
-    # index by re-embedding, or search would silently return nothing against a
-    # populated substrate.
+    # missing (a fresh checkout, or a restore of such a backup) or marked dirty
+    # after an interrupted write, rebuild the index by re-embedding, or search
+    # could silently use vectors that diverge from the populated substrate.
     index_path = data_dir / "mycelium.vec"
-    if index_path.exists():
+    index_dirty = _dirty_marker_path(index_path).exists()
+    if index_path.exists() and not index_dirty:
         index = vector.Index.load(index_path)
     else:
+        if index_dirty:
+            logger.warning(
+                "rebuilding statement vector index: dirty marker indicates a "
+                "crash before the index was persisted"
+            )
         index = vector.Index.empty()
         _rebuild_vector_index(
             index,
@@ -1008,9 +1014,11 @@ def init(data_dir: Path) -> None:
             label="statement",
         )
         index.save(index_path)
+        _clear_dirty_marker(index_path)
 
     name_index_path = data_dir / "mycelium-names.vec"
-    if name_index_path.exists():
+    name_index_dirty = _dirty_marker_path(name_index_path).exists()
+    if name_index_path.exists() and not name_index_dirty:
         name_index = vector.Index.load(name_index_path)
         # A migration can drop name rows and their vector mappings while
         # the persisted index keeps the vectors (v6's case-variant merge
@@ -1027,6 +1035,11 @@ def init(data_dir: Path) -> None:
                 name_index.delete(vid)
             name_index.save(name_index_path)
     else:
+        if name_index_dirty:
+            logger.warning(
+                "rebuilding name vector index: dirty marker indicates a crash "
+                "before the index was persisted"
+            )
         name_index = vector.Index.empty()
         _rebuild_vector_index(
             name_index,
@@ -1037,6 +1050,7 @@ def init(data_dir: Path) -> None:
             label="name",
         )
         name_index.save(name_index_path)
+        _clear_dirty_marker(name_index_path)
 
     _ctx = AppContext(
         data_dir=data_dir,
@@ -1199,6 +1213,62 @@ def _persist_name_index() -> None:
     _name_idx().save(_name_idx_path())
 
 
+def _dirty_marker_path(index_path: Path) -> Path:
+    return index_path.with_name(index_path.name + ".dirty")
+
+
+def _write_dirty_marker(index_path: Path) -> None:
+    marker_path = _dirty_marker_path(index_path)
+    marker_fd = os.open(marker_path, os.O_CREAT | os.O_WRONLY)
+    try:
+        os.fsync(marker_fd)
+    finally:
+        os.close(marker_fd)
+
+    parent_fd = os.open(marker_path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _clear_dirty_marker(index_path: Path) -> None:
+    _dirty_marker_path(index_path).unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def _persisted_index_write(
+    *, statements: bool = False, names: bool = False
+) -> Iterator[None]:
+    """Run one write operation's substrate and index mutations, then persist
+    them before releasing the write lock.
+
+    This is the persist-inside-lock guarantee apply_draft got in DRA-373. A
+    dirty marker covers the window from the first index mutation through a
+    successful persist and commit, so a hard crash triggers a startup rebuild.
+    The marker is cleared only after COMMIT, not merely after persistence: if
+    commit fails, DRA-418 rolls the DB back and the next startup heals the
+    divergent index.
+    """
+    with store.write_lock():
+        with store.transaction(_db()):
+            if statements:
+                _write_dirty_marker(_idx_path())
+            if names:
+                _write_dirty_marker(_name_idx_path())
+            yield
+            if statements:
+                _persist_index()
+            if names:
+                _persist_name_index()
+        # transaction committed; still under the reentrant lock so no other
+        # writer can interleave between commit and marker clear
+        if statements:
+            _clear_dirty_marker(_idx_path())
+        if names:
+            _clear_dirty_marker(_name_idx_path())
+
+
 def _restore_index_snapshots(
     snapshots: tuple[tuple[vector.Index, Path, Path], ...],
 ) -> None:
@@ -1213,6 +1283,7 @@ def _restore_index_snapshots(
             index.restore(snapshot_path)
             index.save(live_path)
             snapshot_path.unlink(missing_ok=True)
+            _clear_dirty_marker(live_path)
         except Exception:
             logger.exception(
                 "failed to restore vector index %s from %s; "
@@ -1224,17 +1295,21 @@ def _restore_index_snapshots(
 
 
 def _index_name(name_id: str, text: str) -> None:
-    """Embed `text` and register the vector under `name_id`. Used on
-    name creation."""
+    """Embed `text` and register its in-memory vector under `name_id`.
+
+    The wrapping `_persisted_index_write` persists the index.
+    """
     vid = store.next_name_vector_id(_db())
     vec = embed.embed(text)
     _name_idx().add(vid, vec)
     store.set_name_vector_id(_db(), name_id, vid)
-    _persist_name_index()
 
 
 def _reindex_name(name_id: str, new_text: str) -> None:
-    """Replace the vector for an existing indexed name (rename)."""
+    """Replace an indexed name's in-memory vector.
+
+    The wrapping `_persisted_index_write` persists the index.
+    """
     vid = store.get_name_vector_id(_db(), name_id)
     vec = embed.embed(new_text)
     if vid is None:
@@ -1245,16 +1320,17 @@ def _reindex_name(name_id: str, new_text: str) -> None:
         store.set_name_vector_id(_db(), name_id, vid)
     else:
         _name_idx().replace(vid, vec)
-    _persist_name_index()
 
 
 def _drop_name_from_index(name_id: str) -> None:
-    """Remove a name's vector. Idempotent."""
+    """Remove a name's in-memory vector. Idempotent.
+
+    The wrapping `_persisted_index_write` persists the index.
+    """
     vid = store.get_name_vector_id(_db(), name_id)
     if vid is not None:
         _name_idx().delete(vid)
         store.delete_name_vector_mapping(_db(), name_id)
-        _persist_name_index()
 
 
 def _derive_statement_mentions(statement_id: str, text: str) -> None:
@@ -2360,7 +2436,7 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     new entity AND a name pointing at it.
     """
     existing = store.get_name_by_text(_db(), name)
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         if existing is not None:
             store.update_entity_description(_db(), existing["entity_id"], description)
             return {"entity_id": existing["entity_id"]}
@@ -2505,7 +2581,7 @@ def upsert_statement(
         (item["to_id"], item["link_type"], item.get("when")) for item in links
     ]
 
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         if id is not None:
             store.update_statement(_db(), id, kind, text)
             vector_id = require(
@@ -2531,7 +2607,6 @@ def upsert_statement(
             ]
             store.insert_links(_db(), edges)
 
-    _persist_index()
     response: dict[str, Any] = {
         "statement_id": statement_id,
         "near_duplicates": _near_duplicates(vec, exclude_id=statement_id),
@@ -2942,7 +3017,7 @@ def upsert_statements(
     # don't create names), so build it once.
     name_index = store.build_name_index(_db())
     statement_ids: dict[int, str] = {}
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         for i, spec in enumerate(statements):
             if i in plan.rejected:
                 continue
@@ -2966,8 +3041,6 @@ def upsert_statements(
         )
         if edges:
             store.insert_links(_db(), edges)
-
-    _persist_index()
 
     # Near-duplicate warnings per newly-inserted statement.
     near_dups: dict[str, list[dict[str, Any]]] = {}
@@ -3850,11 +3923,10 @@ def replace_text(
         return reject
 
     vec = embed.embed(text)
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         store.update_statement_text(_db(), id, text)
         vector_id = require(store.get_vector_id(_db(), id), "vector_id for statement")
         _idx().replace(vector_id, vec)
-        _persist_index()
         # Text changed → re-derive mentions.
         _derive_statement_mentions(id, text)
     response: dict[str, Any] = {"statement_id": id}
@@ -3925,7 +3997,7 @@ def patch_statement(
         vec = embed.embed(text)
 
     # Mutate field-by-field so omitted fields stay untouched.
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=vec is not None):
         if text is not None and kind is not None:
             store.update_statement(_db(), id, kind, text)
         elif text is not None:
@@ -3938,8 +4010,6 @@ def patch_statement(
                 store.get_vector_id(_db(), id), "vector_id for statement"
             )
             _idx().replace(vector_id, vec)
-            _persist_index()
-
         # Re-derive mentions only when the text changed (kind-only patches
         # don't affect what entities the text mentions).
         if text is not None:
@@ -3973,7 +4043,7 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
             f"name {text!r} already belongs to entity {existing['entity_id']!r}; "
             "use move_name or merge_entities"
         )
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         name_id = _create_name_with_plural(text, entity_id)
     return {"name_id": name_id}
 
@@ -4077,7 +4147,7 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     # still contains the OLD label, which is no longer a name) — recompute
     # them. Regenerate the name's plural from the new text. Scan for the new
     # text so statements containing it pick up the mention.
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         affected = list(store.statements_mentioning_name(_db(), name_id))
         store.rename_name(_db(), name_id, new_text)
         _reindex_name(name_id, new_text)
@@ -4109,7 +4179,7 @@ def delete_name(name_id: str) -> dict[str, Any]:
     # Cascade through the name and any generated plurals, then recompute the
     # statements that mentioned them — a removed name may have been the
     # representative for an entity another of whose names still matches.
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         mentions_removed, affected = _delete_name_cascade(name_id)
         store.enqueue_recompute_statements(_db(), affected)
     return {
@@ -4139,7 +4209,7 @@ def delete_entity(id: str) -> dict[str, Any]:
     if store.get_entity_by_id(_db(), id) is None:
         raise ValueError(f"entity {id!r} does not exist")
 
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         name_rows = store.get_names_by_entity(_db(), id)
         name_ids = [r["id"] for r in name_rows]
         affected: list[str] = []
@@ -4236,7 +4306,7 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     # unchanged) and the source's derived rows are cleared so the source
     # can be deleted under FK enforcement. Nothing is moved.
     mentions_moved = 0
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         store.clear_derived_for_statement(_db(), from_id)
         outgoing_moved = store.merge_outgoing_links_into(_db(), from_id, into_id)
         incoming_moved = store.merge_incoming_links_into(_db(), from_id, into_id)
@@ -4256,8 +4326,6 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
         if vector_id is not None:
             _idx().delete(vector_id)
         store.delete_statement(_db(), from_id)
-    _persist_index()
-
     return {
         "into_id": into_id,
         "mentions_moved": mentions_moved,
@@ -4310,7 +4378,7 @@ def delete_statement(id: str) -> dict[str, Any]:
     # and incoming statement_links, any statement_links / entity_statement_links
     # whose when-tree references it, and entity↔statement edges with it as an
     # endpoint (see the helper for the exact ordering and counting rules).
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         (
             outgoing_removed,
             incoming_removed,
@@ -4323,8 +4391,6 @@ def delete_statement(id: str) -> dict[str, Any]:
         if vector_id is not None:
             _idx().delete(vector_id)
         store.delete_statement(_db(), id)
-    _persist_index()
-
     return {
         "deleted": True,
         "mentions_removed": mentions_removed,
