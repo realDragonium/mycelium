@@ -837,8 +837,8 @@ def _anchored_boundary(
     leaves: list[_Piece], side: str, role: str, anchor: int | None
 ) -> _Piece:
     """Select the leaf holding an anchor origin or fall back to its role boundary."""
-    # Missing/unresolvable advcl anchors retain the pre-existing role-boundary fallback
-    # rather than drop proposals; it fired 0/146 times in a 64-sentence sweep.
+    # Missing or unresolvable anchors retain the role-boundary fallback because the
+    # unanchored initial and textual conditional paths rely on that positional policy.
     if anchor is not None:
         for leaf in leaves:
             # `_span` is an envelope over possibly scattered origins, so containment
