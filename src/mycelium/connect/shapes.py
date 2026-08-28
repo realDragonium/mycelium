@@ -7,6 +7,12 @@ Entries must be lemmas the parser actually emits in that shape's frame;
 lemmatizer quirks make some vocabulary unreachable. Noun/verb homographs can
 also defeat a shape entirely: "The nightly backup runs" parses "runs" as a noun
 and intentionally remains unmatched rather than guessed.
+
+A property statement in this substrate names an attribute, so a bare noun phrase is its
+canonical form, not a degenerate one. Requiring predication lowered precision
+on the labeled corpus. A stray fragment like "Blue widgets" is structurally
+indistinguishable from real property "Custom query fields". The matcher cannot
+separate them and does not try; statementhood belongs to segmentation.
 """
 
 from __future__ import annotations
@@ -211,6 +217,7 @@ CHECK_LEMMAS = frozenset(
         "verify",
     }
 )
+COMMAND_LEMMAS = UI_ACTION_LEMMAS | CHECK_LEMMAS
 
 SHAPE_NAMES = (
     "capability-modal",
@@ -593,6 +600,12 @@ def _property_noun_phrase(doc: Doc, text: str) -> ShapeMatch | None:
         or first.text.lower() in NEGATED_NP_OPENERS
     ):
         return None
+    # The command lexicons already accept these lemmas when tagged VB. When the
+    # parser tags one NOUN or ADJ, both command and property readings remain live,
+    # and the matcher has no evidence to choose. Reading the parser's own lemma and
+    # declining does not override its parse, so this flags instead of reclassifying.
+    if first.lemma_.lower() in COMMAND_LEMMAS:
+        return None
     return ShapeMatch("property", "property-noun-phrase", root.text)
 
 
@@ -671,6 +684,9 @@ def match_shapes(text: str) -> list[ShapeMatch]:
     # Every detector reads the root, so a second coordinated predicate ("… is
     # sent and … is enabled") would be classified by its first clause alone.
     # That is the same compound the phrasing catalog rejects: flag, don't guess.
+    # On the labeled corpus, 30 of 1644 statements carry a coordinated predicate;
+    # only 4 of those produce two flags instead of one, so the halves stay
+    # double-flagged rather than gaining a recovery path.
     # A how-to heading is exempt — it names one procedure however many verbs
     # its title mentions.
     if (
