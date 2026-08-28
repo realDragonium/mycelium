@@ -193,7 +193,7 @@ def test_anchored_boundary_ignores_a_scattered_leafs_envelope():
         sentence=0,
     )
 
-    assert seg._anchored_boundary([a, b], "left", "claim", 115) is b
+    assert seg._anchored_boundary([a, b], "right", "claim", 115) is b
 
 
 def test_nested_causal_advcl_preserves_the_outer_condition():
