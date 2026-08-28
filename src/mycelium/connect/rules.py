@@ -49,11 +49,18 @@ SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
     # undecidable between proceeds and triggers (2 event fires: 1 outgoing proceeds,
     # 1 outgoing triggers); composes-determined-by (27.3%) and composes-combines
     # (22.2%) miss the precision criterion, as do all 0%-precision patterns and every
-    # pattern whose link type has no ground truth in this snapshot.
+    # pattern whose link type has no ground truth in this snapshot. The alias-aware
+    # 2026-08-27 run found zero governed-by-phrase fires across all 1644 statements
+    # and no usable lexical surface on any of the 104 governed-by link endpoints, so
+    # it stays unshipped rather than receiving a criterion exception.
     # Shipped outside the report (2026-08-20): the frame postdates the measured
     # catalog, so it has no ground truth either way. It exists so "X is a part
     # of Y" yields the edge the words state — Y contains X — rather than none.
     "contains-part-of": None,
+    # Shipped outside the report: this frame postdates the measured catalog, so
+    # it has no ground truth either way and the next run scores it. "X belongs
+    # to Y" yields Y contains X rather than no edge.
+    "contains-belongs-to": None,
 }
 
 

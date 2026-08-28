@@ -40,6 +40,8 @@ _ALIAS_SEED: dict[str, tuple[str, ...]] = {
         "consists of",
         "is made up of",
         "is part of",
+        "belongs to",
+        "is owned by",
     ),
     "triggers": ("triggers", "fires", "kicks off", "causes", "results in", "leads to"),
     "establishes": ("establishes", "marks", "sets", "becomes", "transitions to"),
@@ -127,6 +129,8 @@ _REVERSE_SEED: frozenset[tuple[str, str]] = frozenset(
         ("requires", "is required for"),
         ("cases", "is one of"),
         ("contains", "is part of"),
+        ("contains", "belongs to"),
+        ("contains", "is owned by"),
     }
 )
 

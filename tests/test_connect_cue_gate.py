@@ -95,14 +95,14 @@ def test_runner_up_of_same_type_does_not_cost_margin(monkeypatch):
 def test_absorbed_cue_inherits_the_nearest_alias_direction(monkeypatch):
     monkeypatch.delenv("MYCELIUM_CUE_RESOLUTION", raising=False)
     vectors = [
-        AliasVector("contains", "is part of", _vec(1.0, 0.0, 0.0), "reverse"),
+        AliasVector("contains", "belongs to", _vec(1.0, 0.0, 0.0), "reverse"),
         AliasVector("proceeds", "then", _vec(0.0, 0.0, 1.0)),
     ]
 
     result = resolve_cue(
-        "belongs to",
+        "is property of",
         vectors,
-        embed_text=_fake_embed({carrier_text("belongs to"): _vec(1.0, 0.0, 0.0)}),
+        embed_text=_fake_embed({carrier_text("is property of"): _vec(1.0, 0.0, 0.0)}),
     )
 
     assert result.decision == "auto"
@@ -115,13 +115,13 @@ def test_direction_conflict_inside_margin_stays_unresolved(monkeypatch):
     monkeypatch.delenv("MYCELIUM_CUE_RESOLUTION", raising=False)
     vectors = [
         AliasVector("contains", "includes", _vec(1.0, 0.05, 0.0), "forward"),
-        AliasVector("contains", "is part of", _vec(1.0, 0.0, 0.05), "reverse"),
+        AliasVector("contains", "is owned by", _vec(1.0, 0.0, 0.05), "reverse"),
     ]
 
     result = resolve_cue(
-        "belongs to",
+        "is property of",
         vectors,
-        embed_text=_fake_embed({carrier_text("belongs to"): _vec(1.0, 0.0, 0.0)}),
+        embed_text=_fake_embed({carrier_text("is property of"): _vec(1.0, 0.0, 0.0)}),
     )
 
     assert result.decision == "direction-conflict"
