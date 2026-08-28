@@ -667,10 +667,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         is None
     )
     conn.executescript(SCHEMA)
+    # Seed and commit before migrations so a failure cannot leave new glossary
+    # tables existing but unseeded on retry.
+    glossary.seed_glossaries(conn, new_glossary_tables)
+    conn.commit()
     migrations.apply_migrations(conn)
     if has_history(conn):
         conn.executescript(HISTORY_SCHEMA)
-    glossary.seed_glossaries(conn, new_glossary_tables)
     kind_link_matrix.seed_kind_link_matrix(conn)
     link_type_aliases.seed_link_type_aliases(conn)
     conn.commit()
