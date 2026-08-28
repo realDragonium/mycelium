@@ -20,10 +20,12 @@ needed — that's the same path the streamable-HTTP transport uses.
 """
 
 import sqlite3
+from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, auth_store, drafts_store, server, store
+from mycelium import auth, auth_store, drafts_store, server, store, vector
 
 
 def _reset_server() -> None:
@@ -237,6 +239,97 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
 
         row = drafts_store.get_draft(server._drafts_db(), draft_id)
         assert drafts_store.status_for(row) == "submitted"
+
+
+def test_approve_failure_restores_vector_indexes(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        tokens = _as_drafter("sess-index-rollback")
+        try:
+            queued = server.upsert_statement(
+                kind="state", text="the flow halts", links=[]
+            )
+            server.upsert_entity(name="Rollback Fixture", description="test entity")
+            server.delete_statement(id="stm_nonexistent")
+        finally:
+            _restore(tokens)
+        draft_id = queued["draft_id"]
+        statement_ids_before = server._idx().ids()
+        name_ids_before = server._name_idx().ids()
+        assert statement_ids_before == []
+        assert name_ids_before == []
+
+        submitted = client.post(f"/api/drafts/{draft_id}/submit")
+        assert submitted.status_code == 200
+        approved = client.post(f"/api/drafts/{draft_id}/approve")
+        assert approved.status_code == 400
+
+        conn = store.substrate_connection()
+        assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
+        assert server._idx().ids() == statement_ids_before
+        assert server._name_idx().ids() == name_ids_before
+
+        index_path = tmp_path / "mycelium.vec"
+        name_index_path = tmp_path / "mycelium-names.vec"
+        assert vector.Index.load(index_path).ids() == statement_ids_before
+        assert vector.Index.load(name_index_path).ids() == name_ids_before
+        assert list(tmp_path.glob("*.pre-apply*")) == []
+
+
+def test_commit_failure_rolls_back_and_restores_indexes(tmp_path, monkeypatch):
+    class FlakyCommitConnection(sqlite3.Connection):
+        fail_commits = False
+
+        def commit(self) -> None:
+            if FlakyCommitConnection.fail_commits:
+                raise sqlite3.OperationalError("injected commit failure")
+            super().commit()
+
+    real_connect = sqlite3.connect
+
+    def connect_with_flaky_substrate(database, *args, **kwargs):
+        if Path(str(database)).name == "mycelium.db":
+            kwargs["factory"] = FlakyCommitConnection
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", connect_with_flaky_substrate)
+    client = _app(tmp_path, monkeypatch)
+
+    with client:
+        tokens = _as_drafter("sess-commit-failure")
+        try:
+            queued = server.upsert_statement(
+                kind="state", text="the flow halts", links=[]
+            )
+            server.upsert_entity(name="Commit Fixture", description="test entity")
+        finally:
+            _restore(tokens)
+        draft_id = queued["draft_id"]
+
+        FlakyCommitConnection.fail_commits = True
+        try:
+            with pytest.raises(sqlite3.OperationalError):
+                server.apply_draft(draft_id)
+        finally:
+            FlakyCommitConnection.fail_commits = False
+
+        conn = store.substrate_connection()
+        assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
+        assert server._idx().ids() == []
+        assert server._name_idx().ids() == []
+
+        # Suppress plural-name generation so "After" contributes exactly one
+        # name vector and the count below stays exact.
+        monkeypatch.setattr(server.plurals, "regular_plural", lambda _: None)
+        server.upsert_entity(name="After", description="x")
+
+        assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 1
+        assert server._idx().ids() == []
+        assert len(server._name_idx().ids()) == 1
+        assert list(tmp_path.glob("*.pre-apply*")) == []
 
 
 def test_list_drafts_endpoint_returns_counts(tmp_path, monkeypatch):

@@ -40,6 +40,16 @@ class Index:
         idx.set_ef(EF_SEARCH)
         return cls(idx)
 
+    def restore(self, path: Path) -> None:
+        """Reload a saved index while preserving this wrapper's identity."""
+        idx = hnswlib.Index(space="cosine", dim=DIM)
+        idx.load_index(str(path), allow_replace_deleted=True)
+        # hnswlib loads an empty index with zero capacity instead of the saved value.
+        if idx.get_max_elements() < INITIAL_CAPACITY:
+            idx.resize_index(INITIAL_CAPACITY)
+        idx.set_ef(EF_SEARCH)
+        self._index = idx
+
     def save(self, path: Path) -> None:
         self._index.save_index(str(path))
 

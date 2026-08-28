@@ -100,6 +100,18 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
             _txn_depth[id(conn)] = depth
 
 
+@contextmanager
+def write_lock() -> Iterator[None]:
+    """Serialize index recovery without changing transaction state.
+
+    The write lock also protects in-memory vector-index mutation. Recovery
+    after a failed commit must hold it directly: opening a transaction on that
+    connection could commit the changes the failed commit left pending.
+    """
+    with _write_lock:
+        yield
+
+
 def _now() -> str:
     """ISO-8601 UTC timestamp with millisecond precision and trailing Z.
 
