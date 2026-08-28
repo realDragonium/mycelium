@@ -1,12 +1,13 @@
 """Classify statement kinds with positive phrasing-shape matches.
 
-Participle lexicons are separate allow-lists because ``X is <participle>`` is
-shared by events, states, and rules. Unknown participles must remain unmatched
-so precision degrades gracefully on vocabulary the lexicons have never seen.
-Entries must be lemmas the parser actually emits in that shape's frame;
-lemmatizer quirks make some vocabulary unreachable. Noun/verb homographs can
-also defeat a shape entirely: "The nightly backup runs" parses "runs" as a noun
-and intentionally remains unmatched rather than guessed.
+Passive participle lexicons are separate allow-lists because
+``X is <participle>`` is shared by events, states, and rules. Unknown passive
+participles must remain unmatched so precision degrades gracefully on
+vocabulary the lexicons have never seen. Their entries must be lemmas the
+parser actually emits in that shape's frame; lemmatizer quirks make some
+vocabulary unreachable. Noun/verb homographs can also defeat a shape entirely:
+"The nightly backup runs" parses "runs" as a noun and intentionally remains
+unmatched rather than guessed.
 """
 
 from __future__ import annotations
@@ -117,6 +118,15 @@ EVENT_PARTICIPLES = frozenset(
         "write",
     }
 )
+# Membership is keyed on the ADJ complement's lowercased surface form because
+# spaCy's ADJ lemma equals its surface. Include a word only when spaCy actually
+# tags it ADJ on this copula frame, its adjectival state reading is implausible,
+# and an event reading was intended. Legitimate adjectival states such as
+# "open", "empty", and "closed" must never be added, so this is curated rather
+# than accepting any participle-looking ADJ. To extend it, add the word and
+# confirm the reachability test below still passes. ``un``-prefixed participles
+# such as "unlinked" stay out because their negative-state reading is plausible.
+AMBIGUOUS_EVENT_PARTICIPLES = frozenset({"resent", "upserted"})
 RULE_PARTICIPLES = frozenset(
     {
         "bound",
@@ -216,6 +226,7 @@ SHAPE_NAMES = (
     "capability-modal",
     "event-passive",
     "event-active",
+    "event-participle-adj",
     "state-passive",
     "state-perfect",
     "state-copula-condition",
@@ -379,6 +390,40 @@ def _event_active(doc: Doc, text: str) -> ShapeMatch | None:
     return ShapeMatch("event", "event-active", root.text)
 
 
+def _unconditional_present_copula_root(doc: Doc) -> Token | None:
+    """Return the root of an unconditional present copula frame."""
+    root = _root(doc)
+    if (
+        root is None
+        or root.pos_ != "AUX"
+        or root.lemma_.lower() != "be"
+        or root.tag_ not in _PRESENT_TAGS
+        or _modal(doc) is not None
+    ):
+        return None
+    if _band_marker(doc, root) is not None:
+        # "is X for/when/if Y" makes the copula a conditional value band, which
+        # is rule-shaped; a state holds unconditionally. A marker inside the
+        # subject ("the list for a vacancy is empty") conditions nothing.
+        return None
+    return root
+
+
+def _ambiguous_event_participle(doc: Doc, text: str) -> ShapeMatch | None:
+    """Match an event participle parsed as an adjectival copula complement."""
+    root = _unconditional_present_copula_root(doc)
+    if root is None:
+        return None
+    complement = _complement(root)
+    if (
+        complement is None
+        or complement.pos_ != "ADJ"
+        or complement.text.lower() not in AMBIGUOUS_EVENT_PARTICIPLES
+    ):
+        return None
+    return ShapeMatch("event", "event-participle-adj", complement.text)
+
+
 def _state_passive(doc: Doc, text: str) -> ShapeMatch | None:
     """Match a condition-shaped present passive."""
     return _passive_match(
@@ -421,19 +466,8 @@ def _state_perfect(doc: Doc, text: str) -> ShapeMatch | None:
 
 def _state_copula_condition(doc: Doc, text: str) -> ShapeMatch | None:
     """Match adjective, determined noun, or prepositional conditions."""
-    root = _root(doc)
-    if (
-        root is None
-        or root.pos_ != "AUX"
-        or root.lemma_.lower() != "be"
-        or root.tag_ not in _PRESENT_TAGS
-        or _modal(doc) is not None
-    ):
-        return None
-    if _band_marker(doc, root) is not None:
-        # "is X for/when/if Y" makes the copula a conditional value band, which
-        # is rule-shaped; a state holds unconditionally. A marker inside the
-        # subject ("the list for a vacancy is empty") conditions nothing.
+    root = _unconditional_present_copula_root(doc)
+    if root is None:
         return None
     complement = _complement(root)
     if (
@@ -638,6 +672,7 @@ _DETECTORS: tuple[Callable[[Doc, str], ShapeMatch | None], ...] = (
     _capability_modal,
     _event_passive,
     _event_active,
+    _ambiguous_event_participle,
     _state_passive,
     _state_perfect,
     _state_copula_condition,

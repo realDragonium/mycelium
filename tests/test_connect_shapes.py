@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from mycelium.connect import shapes
 from mycelium.connect.shapes import (
     EVENT_PARTICIPLES,
     RULE_PARTICIPLES,
@@ -52,10 +53,45 @@ def test_event_passive_shape():
     _assert_assigned_shape(
         "An invite is sent to the participant", "event", "event-passive"
     )
+    _assert_assigned_shape("The draft is created", "event", "event-passive")
 
 
 def test_event_active_shape():
     _assert_assigned_shape("The request arrives", "event", "event-active")
+
+
+def test_adjectival_event_participles_are_ambiguous():
+    # On master these misclassified as state via the copula path (DRA-424).
+    for text in ("The statement is upserted", "The invite is resent"):
+        result = classify(text)
+
+        assert result.status == "ambiguous"
+        assert result.kind is None
+        assert {
+            "state-copula-condition",
+            "event-participle-adj",
+        } <= {match.shape for match in result.matches}
+
+
+def test_ambiguous_event_participle_entries_are_reachable_and_compete():
+    """Keep every curated entry reachable without silently guessing event.
+
+    The carrier sentence is the reachability probe because ADJ tagging is
+    subject-dependent. An entry that matches nothing is dead weight under the
+    DRA-390 pruning discipline. An entry whose event shape fires without the
+    state shape would instead give classify() one kind and silently assign
+    event. That can happen because the state shape skips ADJ complements whose
+    lemma is in LEVEL_LEMMAS or _PERIPHRASTIC_MODAL_ADJECTIVES.
+    """
+    for word in shapes.AMBIGUOUS_EVENT_PARTICIPLES:
+        result = classify(f"The invite is {word}")
+
+        assert result.status == "ambiguous"
+        assert result.kind is None
+        assert {
+            "event-participle-adj",
+            "state-copula-condition",
+        } <= {match.shape for match in result.matches}
 
 
 def test_state_passive_shape():
@@ -75,6 +111,13 @@ def test_state_copula_condition_shape():
         "state",
         "state-copula-condition",
     )
+
+
+def test_genuine_adjectival_states_remain_states():
+    # "The window is closed" is unmatched on master: it parses as VERB/VBN,
+    # "close" is absent from STATE_PARTICIPLES, and it never reaches this path.
+    _assert_assigned_shape("The window is open", "state", "state-copula-condition")
+    _assert_assigned_shape("The field is empty", "state", "state-copula-condition")
 
 
 def test_state_possession_shape():
@@ -254,6 +297,7 @@ def test_shape_names_cover_every_detector_without_duplicates():
         "capability-modal",
         "event-passive",
         "event-active",
+        "event-participle-adj",
         "state-passive",
         "state-perfect",
         "state-copula-condition",
