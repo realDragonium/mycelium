@@ -178,7 +178,37 @@ def _record(
     )
 
 
-SCHEMA = """
+GLOSSARY_TABLE_DDL: dict[str, str] = {
+    "statement_kind_glossary": """CREATE TABLE IF NOT EXISTS statement_kind_glossary (
+    kind        TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    when_to_use TEXT,
+    created_at  TEXT,
+    updated_at  TEXT,
+    created_by  TEXT,
+    updated_by  TEXT
+);""",
+    "statement_link_type_glossary": """CREATE TABLE IF NOT EXISTS statement_link_type_glossary (
+    link_type   TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    created_at  TEXT,
+    updated_at  TEXT,
+    created_by  TEXT,
+    updated_by  TEXT
+);""",
+    "entity_link_type_glossary": """CREATE TABLE IF NOT EXISTS entity_link_type_glossary (
+    link_type   TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    created_at  TEXT,
+    updated_at  TEXT,
+    created_by  TEXT,
+    updated_by  TEXT
+);""",
+}
+
+
+SCHEMA = (
+    """
 CREATE TABLE IF NOT EXISTS entities (
     id          TEXT PRIMARY KEY,
     description TEXT,
@@ -367,35 +397,12 @@ END;
 -- entity-link `link_type` value in use. The MCP / HTTP read tools
 -- (list_statement_kinds, list_link_types, list_entity_link_types)
 -- read from these tables; the website provides a CRUD surface so
--- definitions can be updated without a redeploy. Seeded on first
--- run from `_STATEMENT_KIND_SEED` / `_STATEMENT_LINK_TYPE_SEED` /
--- `_ENTITY_LINK_TYPE_SEED` below — `INSERT OR IGNORE`, so existing
--- rows are never overwritten by a re-seed.
-CREATE TABLE IF NOT EXISTS statement_kind_glossary (
-    kind        TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    when_to_use TEXT,
-    created_at  TEXT,
-    updated_at  TEXT,
-    created_by  TEXT,
-    updated_by  TEXT
-);
-CREATE TABLE IF NOT EXISTS statement_link_type_glossary (
-    link_type   TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    created_at  TEXT,
-    updated_at  TEXT,
-    created_by  TEXT,
-    updated_by  TEXT
-);
-CREATE TABLE IF NOT EXISTS entity_link_type_glossary (
-    link_type   TEXT PRIMARY KEY,
-    description TEXT NOT NULL,
-    created_at  TEXT,
-    updated_at  TEXT,
-    created_by  TEXT,
-    updated_by  TEXT
-);
+-- definitions can be updated without a redeploy. Each table is seeded
+-- from its packaged defaults only when that table is created; after that,
+-- the DB is authoritative and curator changes survive restarts.
+"""
+    + "\n".join(GLOSSARY_TABLE_DDL.values())
+    + """
 
 -- Instance configuration: which link types are admissible between a
 -- source kind and a target kind. Seeded once from the ontology (kinds
@@ -532,6 +539,7 @@ CREATE INDEX IF NOT EXISTS pending_mentions_statement
 CREATE INDEX IF NOT EXISTS pending_mentions_name
     ON pending_mentions (name_id);
 """
+)
 
 
 def connect(
@@ -644,18 +652,48 @@ CREATE INDEX IF NOT EXISTS history.history_actor
 def migrate(conn: sqlite3.Connection) -> None:
     """Bring the substrate's schema up to the latest version.
 
-    Two-step: first apply `SCHEMA` (CREATE TABLE IF NOT EXISTS, which
-    fully creates a fresh DB but is a no-op on existing tables); then
-    run the versioned migration runner, which catches up legacy DBs and
-    fast-forwards fresh ones. See `mycelium.migrations` for details."""
+    First create and seed missing glossary tables atomically, then apply
+    `SCHEMA` (CREATE TABLE IF NOT EXISTS, which fully creates a fresh DB but is
+    a no-op on existing tables). Finally, run the versioned migration runner,
+    which catches up legacy DBs and fast-forwards fresh ones. See
+    `mycelium.migrations` for details."""
     from .. import migrations
     from . import glossary, kind_link_matrix, link_type_aliases
 
+    def absent_glossary_tables() -> frozenset[str]:
+        return frozenset(
+            table
+            for table in GLOSSARY_TABLE_DDL
+            if conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            is None
+        )
+
+    new_glossary_tables = absent_glossary_tables()
+    if new_glossary_tables:
+        # Close any pending implicit transaction, as executescript did here.
+        conn.commit()
+        # sqlite3's legacy mode autocommits bare DDL, so BEGIN IMMEDIATE makes
+        # create + seed atomic and serializes concurrent first starts.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # This recheck makes the gate authoritative: a racer that lost the
+            # create race must not re-seed tables that now exist.
+            new_glossary_tables = absent_glossary_tables()
+            if new_glossary_tables:
+                for table in new_glossary_tables:
+                    conn.execute(GLOSSARY_TABLE_DDL[table])
+                glossary.seed_glossaries(conn, new_glossary_tables)
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
     conn.executescript(SCHEMA)
     migrations.apply_migrations(conn)
     if has_history(conn):
         conn.executescript(HISTORY_SCHEMA)
-    glossary.seed_glossaries(conn)
     kind_link_matrix.seed_kind_link_matrix(conn)
     link_type_aliases.seed_link_type_aliases(conn)
     conn.commit()

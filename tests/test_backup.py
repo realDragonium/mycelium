@@ -338,6 +338,10 @@ def test_round_trip_restores_emptied_config_table(tmp_path):
     backup.import_substrate(archive, dst)
 
     assert _row_count(dst, "entity_link_type_glossary") == 0
+    conn = store.connect(dst / "mycelium.db")
+    store.migrate(conn)
+    conn.close()
+    assert _row_count(dst, "entity_link_type_glossary") == 0
 
 
 def test_round_trip_preserves_alias_embedding_blob(tmp_path):
