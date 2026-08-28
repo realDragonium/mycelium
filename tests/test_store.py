@@ -14,11 +14,17 @@ def fresh_conn():
 def test_commit_failure_rolls_back_and_connection_remains_usable():
     class FlakyCommitConnection(sqlite3.Connection):
         fail_commits = False
+        fail_rollbacks = False
 
         def commit(self) -> None:
             if FlakyCommitConnection.fail_commits:
                 raise sqlite3.OperationalError("injected commit failure")
             super().commit()
+
+        def rollback(self) -> None:
+            super().rollback()
+            if FlakyCommitConnection.fail_rollbacks:
+                raise sqlite3.OperationalError("injected rollback failure")
 
     conn = sqlite3.connect(":memory:", factory=FlakyCommitConnection)
     conn.row_factory = sqlite3.Row
@@ -29,8 +35,10 @@ def test_commit_failure_rolls_back_and_connection_remains_usable():
             with store.transaction(conn):
                 doomed_id = store.create_entity(conn, "doomed")
                 FlakyCommitConnection.fail_commits = True
+                FlakyCommitConnection.fail_rollbacks = True
     finally:
         FlakyCommitConnection.fail_commits = False
+        FlakyCommitConnection.fail_rollbacks = False
 
     assert conn.in_transaction is False
     assert store.get_entity_by_id(conn, doomed_id) is None
