@@ -44,6 +44,9 @@ SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
     # the bare slot.
     "restricts-limits": frozenset({"rule"}),
     "restricts-state": frozenset({"state"}),  # 5/6 (83.3%)
+    # Carved out of restricts-state's shipped live phrasing: the passive agent
+    # already fired there, but with the edge direction reversed.
+    "restricts-state-by": frozenset({"state"}),
     "proceeds-redirected": frozenset({"event"}),  # 3/9 (33.3%), 4 link hits
     # Not shipped: establishes-event-state (1/2) is too thin; proceeds-then is
     # undecidable between proceeds and triggers (2 event fires: 1 outgoing proceeds,

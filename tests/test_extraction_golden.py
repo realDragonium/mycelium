@@ -470,6 +470,28 @@ SUBSTRATE_GOLDEN: dict[str, SubstrateGolden] = {
             ),
         ),
     ),
+    # The shipped passive-by frame puts the resolved agent in the SOURCE slot
+    # even though the cue sits on the new statement.
+    "passive-by-agent-is-the-link-source": SubstrateGolden(
+        "The cache is locked by the freeze policy.",
+        existing=(("s-policy", "rule", "The freeze policy applies"),),
+        candidates=(
+            (
+                "The cache is locked by the freeze policy",
+                "related",
+                "s-policy",
+                0.632,
+            ),
+        ),
+        proposals=(
+            (
+                "s-policy",
+                "restricts",
+                "The cache is locked by the freeze policy",
+                "is locked by",
+            ),
+        ),
+    ),
     "belongs-to-existing-owner-is-the-link-source": SubstrateGolden(
         "The nightly automated purge schedule belongs to the retention policy.",
         existing=(("s-policy", "rule", "The retention policy applies"),),

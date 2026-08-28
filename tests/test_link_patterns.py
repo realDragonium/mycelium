@@ -84,6 +84,97 @@ def test_belongs_to_captures_the_owner_from_slot():
         )
 
 
+def test_passive_locked_by_captures_the_restrictor_from_slot():
+    text = "The cache is locked by the freeze policy"
+    cues = find_cues(text, "state")
+    match = next(cue for cue in cues if cue.pattern == "restricts-state-by")
+
+    assert (match.cue, match.link_type, match.phrase_role, match.phrase) == (
+        "is locked by",
+        "restricts",
+        "from",
+        "the freeze policy",
+    )
+    assert not any(cue.pattern == "restricts-state" for cue in cues)
+
+
+def test_overlapping_state_aliases_cannot_backtrack_around_the_by_guard():
+    aliases = {"restricts": ("locked down", "locked")}
+
+    passive = find_cues(
+        "The vault is locked down by the policy", "state", aliases=aliases
+    )
+    assert not any(cue.pattern == "restricts-state" for cue in passive)
+    by_match = next(cue for cue in passive if cue.pattern == "restricts-state-by")
+    assert (by_match.cue, by_match.phrase, by_match.phrase_role) == (
+        "is locked down by",
+        "the policy",
+        "from",
+    )
+
+    plain = find_cues("The vault is locked down", "state", aliases=aliases)
+    plain_match = next(cue for cue in plain if cue.pattern == "restricts-state")
+    assert (plain_match.cue, plain_match.phrase_role) == ("is locked down", "to")
+
+    boundary_aliases = {"restricts": ("disabled on", "disabled")}
+    boundary = find_cues(
+        "The job is disabled once the quota empties", "state", aliases=boundary_aliases
+    )
+    boundary_match = next(cue for cue in boundary if cue.pattern == "restricts-state")
+    assert (boundary_match.cue, boundary_match.phrase, boundary_match.phrase_role) == (
+        "is disabled",
+        "once the quota empties",
+        "to",
+    )
+
+
+def test_limited_by_and_limited_to_capture_opposite_slots():
+    limited_by = find_cues("The retry budget is limited by the daily quota", "property")
+    by_match = next(cue for cue in limited_by if cue.pattern == "restricts-limited-by")
+    assert (by_match.phrase_role, by_match.phrase) == ("from", "the daily quota")
+
+    limited_to = find_cues("The batch size is limited to 100 rows", "property")
+    to_match = next(cue for cue in limited_to if cue.pattern == "restricts-limited-to")
+    assert (to_match.phrase_role, to_match.phrase) == ("to", "100 rows")
+
+
+def test_enabled_by_captures_the_enabler_from_slot_and_bare_enabled_still_fires():
+    enabled_by = find_cues("The export step is enabled by the feature flag", "state")
+    by_match = next(cue for cue in enabled_by if cue.pattern == "enables-state-by")
+    assert (by_match.phrase_role, by_match.phrase) == ("from", "the feature flag")
+
+    bare = find_cues("The export step is enabled", "state")
+    bare_match = next(cue for cue in bare if cue.pattern == "enables-state")
+    assert (bare_match.phrase_role, bare_match.phrase) == ("to", None)
+
+
+def test_bounded_by_and_bounded_between_keep_their_distinct_geometry():
+    bounded_by = find_cues("X is bounded by Y", "property")
+    by_match = next(cue for cue in bounded_by if cue.pattern == "restricts-limited-by")
+    assert (by_match.phrase_role, by_match.phrase) == ("from", "Y")
+
+    bounded_between = find_cues(
+        "The retry count is bounded between one and five", "rule"
+    )
+    between_match = next(
+        cue for cue in bounded_between if cue.pattern == "restricts-bounds"
+    )
+    assert (between_match.phrase_role, between_match.phrase) == (
+        "to",
+        "one and five",
+    )
+
+
+def test_establishes_frames_capture_the_resulting_state():
+    marked = find_cues("The approval marks the invoice as paid", "event")
+    marks_match = next(cue for cue in marked if cue.pattern == "establishes-marks")
+    assert (marks_match.phrase_role, marks_match.phrase) == ("to", "paid")
+
+    moved = find_cues("The approval moves the order into review", "event")
+    moves_match = next(cue for cue in moved if cue.pattern == "establishes-moves-into")
+    assert (moves_match.phrase_role, moves_match.phrase) == ("to", "review")
+
+
 def test_find_cues_obeys_kind_scope_and_unknown_kind_baseline():
     text = "A login attempt is rejected on an unrecognized account"
 
@@ -204,6 +295,15 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
         ("cases-one-of", "is one of"),
         ("contains-belongs-to", "belongs to"),
         ("contains-belongs-to", "is owned by"),
+        ("restricts-state-by", "is locked by"),
+        ("restricts-state-by", "is disabled by"),
+        ("restricts-state-by", "is frozen by"),
+        ("restricts-state-by", "is suspended by"),
+        ("restricts-limited-by", "is limited by"),
+        ("restricts-limited-by", "is bounded by"),
+        ("restricts-limited-by", "is capped by"),
+        ("enables-state-by", "is enabled by"),
+        ("enables-state-by", "is unlocked by"),
     } <= agreements
     # A frame whose phrasing never equals a seeded alias has no seeded direction
     # to agree with, so the sweep binds exactly the frames pinned here.
@@ -219,8 +319,11 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
             "configures-verb",
             "restricts-verb",
             "restricts-limits",
+            "restricts-limited-by",
+            "restricts-state-by",
             "enables-verb",
             "enables-allows",
+            "enables-state-by",
             "triggers-verb",
             "triggers-causes",
             "establishes-verb",

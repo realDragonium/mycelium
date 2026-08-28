@@ -1,9 +1,9 @@
 """Lexical link patterns shared by auto-linking and offline evaluation.
 
-Unknown statement kinds deliberately receive only the common pattern catalog. Aliases
-belong to a link type, so every shipped template of that type accepts all of them; an
-alias registered for one frame can therefore fire in another. This cross-frame reach
-is the accepted cost of typing aliases rather than patterns.
+Unknown statement kinds deliberately receive only the common pattern catalog. Forward
+aliases belong to a link type and ride every shipped cue slot of that type, so an alias
+registered for one frame can fire in another. This cross-frame reach is the accepted
+cost of typing aliases rather than patterns.
 """
 
 from __future__ import annotations
@@ -148,7 +148,13 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
     _pattern(
         "restricts-limited-to",
         "restricts",
-        r"\b(?P<cue>(?:is|are) (?:limited|capped|bounded) (?:to|by|at|between))\b\s*(?P<to>.+)",
+        r"\b(?P<cue>(?:is|are) (?:limited|capped|bounded) (?:to|at|between))\b\s*(?P<to>.+)",
+    ),
+    # The passive agent is the restrictor, so it fills the `from` slot.
+    _pattern(
+        "restricts-limited-by",
+        "restricts",
+        r"\b(?P<cue>(?:is|are) (?:limited|capped|bounded) by)\b\s*(?P<from>.+)",
     ),
     _pattern(
         "restricts-blocks",
@@ -190,15 +196,19 @@ COMMON_PATTERNS: tuple[Pattern, ...] = (
         "establishes",
         r"\b(?P<cue>establishes?)\b\s*(?P<to>.+)",
     ),
+    # The first standalone delimiter wins; attachment ambiguity is unresolved,
+    # so this frame stays unshipped until measured.
     _pattern(
         "establishes-marks",
         "establishes",
-        r"\b(?P<cue>marks?|flags?)\b\s*(?P<to>.+)\s+\bas\b",
+        r"\b(?P<cue>marks?|flags?)\b\s+.+?\s+\bas\b\s*(?P<to>.+)",
     ),
+    # The first standalone delimiter wins; attachment ambiguity is unresolved,
+    # so this frame stays unshipped until measured.
     _pattern(
         "establishes-moves-into",
         "establishes",
-        r"\b(?P<cue>moves?|puts?|places?)\b\s*(?P<to>.+)\s+\b(?:in|into|to)\b",
+        r"\b(?P<cue>moves?|puts?|places?)\b\s+.+?\s+\b(?:in|into|to)\b\s*(?P<to>.+)",
     ),
     _pattern(
         "establishes-becomes",
@@ -326,16 +336,30 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "valued-by",
             r"\b(?P<cue>(?:is|are) (?:derived|computed|calculated) (?:from|by|as))\b\s*(?P<to>.+)",
         ),
+        # Commit a boundary-valid alias so it cannot be retried around the `by` guard.
         _templated(
             "restricts-state",
             "restricts",
-            r"\b(?P<cue>(?:is|are) {cue})\b\s*(?P<to>.+)?",
+            r"\b(?P<cue>(?:is|are) (?>{cue}\b))(?!\s+by\b)\s*(?P<to>.+)?",
+            ("disabled", "locked", "frozen", "suspended", "read-only"),
+        ),
+        # The passive agent is the restrictor, so it fills the `from` slot.
+        _templated(
+            "restricts-state-by",
+            "restricts",
+            r"\b(?P<cue>(?:is|are) {cue} by)\b\s*(?P<from>.+)",
             ("disabled", "locked", "frozen", "suspended", "read-only"),
         ),
         _pattern(
             "enables-state",
             "enables",
-            r"\b(?P<cue>(?:is|are) (?:enabled|active|unlocked|available))\b\s*(?P<to>.+)?",
+            r"\b(?P<cue>(?:is|are) (?:enabled|active|unlocked|available))\b(?!\s+by\b)\s*(?P<to>.+)?",
+        ),
+        # "active by" and "available by" do not name passive agents.
+        _pattern(
+            "enables-state-by",
+            "enables",
+            r"\b(?P<cue>(?:is|are) (?:enabled|unlocked) by)\b\s*(?P<from>.+)",
         ),
     ),
     "capability": (
@@ -440,7 +464,7 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
         _pattern(
             "restricts-bounds",
             "restricts",
-            r"\b(?P<cue>at most|at least|no more than|no fewer than|(?:is|are) bounded (?:between|by)|(?:is|are) capped at)\b\s*(?P<to>.+)",
+            r"\b(?P<cue>at most|at least|no more than|no fewer than|(?:is|are) bounded between|(?:is|are) capped at)\b\s*(?P<to>.+)",
         ),
         _pattern(
             "requires-applies-when",

@@ -436,6 +436,33 @@ def test_targetless_shipped_cue_proposes_nothing():
     assert view.embed_calls == Counter()
 
 
+def test_shipped_passive_by_frame_puts_the_resolved_agent_in_the_source_slot():
+    view = FakeView(allow_all_link_types=frozenset({"restricts"}))
+    phrase = "the freeze policy"
+    view.embeddings_by_text[phrase] = [1.0, 0.0]
+    batch = [
+        BatchStatement(0, "state", "The cache is locked by the freeze policy"),
+        BatchStatement(1, "rule", "The freeze policy applies"),
+    ]
+    funnel = _funnel({1: ([0.8, 0.6], frozenset())})
+
+    proposals = propose_links(batch, funnel, view)
+
+    assert proposals == [
+        LinkProposal(
+            new_index=0,
+            source="@1",
+            target="@0",
+            link_type="restricts",
+            pattern="restricts-state-by",
+            cue="is locked by",
+            phrase=phrase,
+            score=0.8,
+            anchored=False,
+        )
+    ]
+
+
 def test_target_phrase_embedding_and_sharing_are_cached_across_statements():
     view = FakeView(allow_all_link_types=_RULE_LINK_TYPES)
     phrase = "the dispatch attempts"
