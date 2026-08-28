@@ -686,11 +686,10 @@ def migrate(conn: sqlite3.Connection) -> None:
                 for table in new_glossary_tables:
                     conn.execute(GLOSSARY_TABLE_DDL[table])
                 glossary.seed_glossaries(conn, new_glossary_tables)
+            conn.commit()
         except BaseException:
             conn.rollback()
             raise
-        else:
-            conn.commit()
     conn.executescript(SCHEMA)
     migrations.apply_migrations(conn)
     if has_history(conn):
