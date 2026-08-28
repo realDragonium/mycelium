@@ -72,11 +72,11 @@ def test_second_seed_does_not_resurrect_deleted_row():
 
 
 def test_seed_includes_kind_present_only_on_a_statement():
-    conn = store.connect(":memory:")
-    conn.executescript(store.SCHEMA)
+    conn = fresh_conn()
     store.create_statement(conn, "widget", "A widget exists")
+    conn.execute("DELETE FROM kind_link_matrix")
 
-    store.migrate(conn)
+    store.seed_kind_link_matrix(conn)
 
     assert any(
         row["from_kind"] == "widget" for row in store.list_kind_link_matrix(conn)

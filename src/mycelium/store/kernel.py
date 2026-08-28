@@ -367,10 +367,9 @@ END;
 -- entity-link `link_type` value in use. The MCP / HTTP read tools
 -- (list_statement_kinds, list_link_types, list_entity_link_types)
 -- read from these tables; the website provides a CRUD surface so
--- definitions can be updated without a redeploy. Seeded on first
--- run from `_STATEMENT_KIND_SEED` / `_STATEMENT_LINK_TYPE_SEED` /
--- `_ENTITY_LINK_TYPE_SEED` below — `INSERT OR IGNORE`, so existing
--- rows are never overwritten by a re-seed.
+-- definitions can be updated without a redeploy. Each table is seeded
+-- from its packaged defaults only when that table is created; after that,
+-- the DB is authoritative and curator changes survive restarts.
 CREATE TABLE IF NOT EXISTS statement_kind_glossary (
     kind        TEXT PRIMARY KEY,
     description TEXT NOT NULL,
@@ -651,11 +650,27 @@ def migrate(conn: sqlite3.Connection) -> None:
     from .. import migrations
     from . import glossary, kind_link_matrix, link_type_aliases
 
+    glossary_tables = frozenset(
+        (
+            "statement_kind_glossary",
+            "statement_link_type_glossary",
+            "entity_link_type_glossary",
+        )
+    )
+    new_glossary_tables = frozenset(
+        table
+        for table in glossary_tables
+        if conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        is None
+    )
     conn.executescript(SCHEMA)
     migrations.apply_migrations(conn)
     if has_history(conn):
         conn.executescript(HISTORY_SCHEMA)
-    glossary.seed_glossaries(conn)
+    glossary.seed_glossaries(conn, new_glossary_tables)
     kind_link_matrix.seed_kind_link_matrix(conn)
     link_type_aliases.seed_link_type_aliases(conn)
     conn.commit()
