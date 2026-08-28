@@ -5,14 +5,18 @@ import os
 
 import pytest
 
+from mycelium.connect import nli
 from mycelium.connect.funnel import BatchStatement, Candidate
 from mycelium.connect.nli import (
+    DEFAULT_MAX_PAIRS,
     DEFAULT_MODEL,
     NliLabel,
     NliUnavailable,
     TransformersNli,
     available,
     classify_candidates,
+    default_model,
+    max_pairs,
     model_name,
 )
 
@@ -257,6 +261,48 @@ def test_model_name_defaults_and_honours_environment(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setenv("MYCELIUM_NLI_MODEL", "local/checkpoint")
     assert model_name() == "local/checkpoint"
+
+
+def test_max_pairs_defaults_and_honours_environment(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("MYCELIUM_NLI_MAX_PAIRS", raising=False)
+    assert max_pairs() == DEFAULT_MAX_PAIRS == 400
+
+    monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", "24")
+    assert max_pairs() == 24
+
+    monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", "2")
+    assert max_pairs() == 2
+
+
+@pytest.mark.parametrize("configured", ["1", "0", "-1", "not-an-integer"])
+def test_max_pairs_rejects_values_below_two_and_non_integer_values(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+):
+    monkeypatch.setenv("MYCELIUM_NLI_MAX_PAIRS", configured)
+
+    with pytest.raises(
+        ValueError, match="at least 2 because each candidate costs two pairs"
+    ):
+        max_pairs()
+
+
+def test_default_model_reloads_when_checkpoint_changes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(nli, "available", lambda: True)
+    monkeypatch.setattr(nli, "_model", None)
+    monkeypatch.setenv("MYCELIUM_NLI_MODEL", "ck/a")
+
+    first = default_model()
+    assert first.model_name == "ck/a"
+    assert default_model() is first
+
+    monkeypatch.setenv("MYCELIUM_NLI_MODEL", "ck/b")
+    second = default_model()
+
+    assert second is not first
+    assert second.model_name == "ck/b"
 
 
 @pytest.mark.skipif(

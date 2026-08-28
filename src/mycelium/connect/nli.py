@@ -20,6 +20,7 @@ from mycelium.connect.funnel import BatchStatement, Candidate
 LABELS = ("contradiction", "entailment", "neutral")
 DEFAULT_MODEL = "cross-encoder/nli-deberta-v3-base"
 DEFAULT_CONFIDENCE = 0.7
+DEFAULT_MAX_PAIRS = 400
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,24 @@ def model_name() -> str:
 def confidence_threshold() -> float:
     """Return the configured minimum NLI label confidence."""
     return float(os.environ.get("MYCELIUM_NLI_CONFIDENCE") or DEFAULT_CONFIDENCE)
+
+
+def max_pairs() -> int:
+    """Return the configured per-batch NLI pair budget."""
+    configured = os.environ.get("MYCELIUM_NLI_MAX_PAIRS") or DEFAULT_MAX_PAIRS
+    try:
+        resolved = int(configured)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            f"NLI max pairs {configured!r} must be an integer of at least 2 "
+            "because each candidate costs two pairs"
+        ) from error
+    if resolved < 2:
+        raise ValueError(
+            f"NLI max pairs {resolved!r} must be an integer of at least 2 "
+            "because each candidate costs two pairs"
+        )
+    return resolved
 
 
 def _resolve_model_name(configured_name: str | None) -> str:
@@ -109,6 +128,11 @@ class TransformersNli:
         self._transformer = None
         self._id2label: dict[int, str] = {}
         self._load_lock = threading.Lock()
+
+    @property
+    def model_name(self) -> str:
+        """Return the resolved checkpoint name."""
+        return self._model_name
 
     def _load(self) -> None:
         """Load and validate the configured checkpoint once."""
@@ -199,8 +223,9 @@ def default_model() -> TransformersNli:
     """Return the process-wide default NLI model."""
     global _model
     with _model_lock:
-        if _model is None:
-            _model = TransformersNli()
+        configured_model_name = model_name()
+        if _model is None or _model.model_name != configured_model_name:
+            _model = TransformersNli(configured_model_name)
         return _model
 
 
@@ -268,8 +293,8 @@ def classify_candidates(
     """Classify funnel candidates as duplicate, contradiction, or related.
 
     Only confident bidirectional same-kind entailment proposes a duplicate;
-    confident contradiction in either direction proposes a conflict. All other
-    results are demoted to related candidates.
+    confident contradiction in either direction yields a contradiction verdict.
+    All other results are demoted to related candidates.
     """
     resolved_threshold = _resolve_threshold(threshold)
     statements = {statement.index: statement for statement in batch}

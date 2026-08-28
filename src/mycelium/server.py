@@ -828,8 +828,8 @@ class ConnectedStatementSpec(TypedDict):
     are always outgoing from this statement, so `incoming_links` is omitted —
     an item that sends one is rejected rather than losing the edge silently.
     `mention_hints` names texts the agent asserts this statement is about. They
-    only widen candidate discovery for this call and are never written to the
-    substrate.
+    widen candidate discovery for this call, count as shared entities for the
+    conflict gate, and are never written to the substrate.
     """
 
     kind: str
@@ -3362,6 +3362,7 @@ def _connected_response(
             for proposal in proposals
             if proposal.kind == "conflict"
         ],
+        "suppressed_conflicts": run.proposal_set.suppressed_conflicts,
         "related": _connected_related(
             run.pipeline_result, run.proposal_set, run.text_of
         ),
@@ -3371,6 +3372,12 @@ def _connected_response(
         ],
         "unresolved_hints": run.unresolved_hints,
         "nli": run.pipeline_result.nli,
+        "nli_reason": run.pipeline_result.nli_reason,
+        "nli_pairs": {
+            "classified": run.pipeline_result.nli_pairs.classified,
+            "skipped": run.pipeline_result.nli_pairs.skipped,
+            "budget": run.pipeline_result.nli_pairs.budget,
+        },
         "draft": run.draft,
     }
 
@@ -3379,8 +3386,9 @@ def _empty_connected_batch() -> dict[str, Any]:
     """Return the no-op response for a batch with nothing to connect.
 
     Same shape as a batch where every item was rejected, built without
-    touching the substrate or the NLI model — an empty batch has nothing to
-    classify, so `nli` reports the stage as not having run.
+    touching the substrate, NLI configuration, or NLI model. An empty batch has
+    nothing to classify, so `nli` reports that no classification was needed and
+    the pair budget is zero because the pipeline never ran.
     """
     return {
         "draft_id": None,
@@ -3389,10 +3397,13 @@ def _empty_connected_batch() -> dict[str, Any]:
         "links": [],
         "merges": [],
         "conflicts": [],
+        "suppressed_conflicts": 0,
         "related": [],
         "dropped_merges": [],
         "unresolved_hints": [],
-        "nli": "unavailable",
+        "nli": "nothing_to_classify",
+        "nli_reason": None,
+        "nli_pairs": {"classified": 0, "skipped": 0, "budget": 0},
         "draft": None,
     }
 
@@ -3418,7 +3429,11 @@ def submit_connected_batch(
     candidates**, from embedding similarity — turned into a real verdict by
     bidirectional entailment when the `nli` extra is installed. **Contradiction
     flags**, filed as knowledge gaps, where your text and an existing
-    statement can't both hold.
+    statement can't both hold. A contradiction only becomes a conflict when
+    the statements share an entity, mentioned in the text or asserted via
+    `mention_hints`; suppressed contradictions are
+    counted in `suppressed_conflicts`, and the candidate still surfaces under
+    `related` unless another proposal already names it.
 
     What it will not do is infer a relation the text doesn't state: emergent
     behaviour and cross-feature interaction are still yours to author in
@@ -3474,13 +3489,17 @@ def submit_connected_batch(
             {"batch_index": 0, "statement_id": "stm_...", "text": "...",
              "nli": {...}, "score": 0.0}
           ],
+          "suppressed_conflicts": 0,
           "related": [
             {"batch_index": 0, "statement_id": "stm_...", "text": "...",
              "score": 0.0}
           ],
           "dropped_merges": [<same shape as merges>],
           "unresolved_hints": [...],
-          "nli": "ran" | "unavailable",
+          "nli": "ran" | "unavailable" | "nothing_to_classify",
+          "nli_reason": "NliUnavailable message" | null,
+          "nli_pairs": {"classified": <int>, "skipped": <int>,
+                        "budget": <int>},
           "draft": {"status": "open", "op_count": <int>} | null
         }
         ```
@@ -3709,9 +3728,13 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
           "results": [...],
           "proposals": {"links": 0, "merges": 0, "conflicts": 0},
           "links": [...], "merges": [...], "conflicts": [...],
+          "suppressed_conflicts": 0,
           "related": [...], "dropped_merges": [...],
           "unresolved_hints": [...],
-          "nli": "ran" | "unavailable",
+          "nli": "ran" | "unavailable" | "nothing_to_classify",
+          "nli_reason": "NliUnavailable message" | null,
+          "nli_pairs": {"classified": <int>, "skipped": <int>,
+                        "budget": <int>},
           "draft": {"status": "open", "op_count": 0, "flags": 0,
                     "aliases": 0} | null
         }

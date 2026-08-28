@@ -13,6 +13,7 @@ def _candidate(
     statement_id: str,
     score: float,
     relation: str,
+    shared_entities: frozenset[str] = frozenset(),
 ) -> Candidate:
     return Candidate(
         new_index=new_index,
@@ -20,7 +21,7 @@ def _candidate(
         kind="event",
         score=score,
         via=frozenset({"vector"}),
-        shared_entities=frozenset(),
+        shared_entities=shared_entities,
         relation=relation,
         link_types=frozenset(),
     )
@@ -90,7 +91,16 @@ def test_nli_verdicts_produce_merges_and_conflicts_only():
         backward=("neutral", 0.72),
     )
     result = proposals_from(
-        funnel=_funnel(_candidate(2, "stm_ignored", 0.99, "duplicate")),
+        funnel=_funnel(
+            _candidate(2, "stm_ignored", 0.99, "duplicate"),
+            _candidate(
+                1,
+                "stm_conflict",
+                0.79,
+                "related",
+                frozenset({"ent_shared"}),
+            ),
+        ),
         links=[],
         verdicts=[duplicate, contradiction, _verdict(2, "stm_related", "related", 0.8)],
     )
@@ -112,6 +122,40 @@ def test_nli_verdicts_produce_merges_and_conflicts_only():
         "forward": {"label": "contradiction", "confidence": 0.92},
         "backward": {"label": "neutral", "confidence": 0.72},
     }
+
+
+def test_contradiction_without_shared_entities_is_suppressed():
+    result = proposals_from(
+        funnel=_funnel(_candidate(0, "stm_unrelated", 0.6, "related")),
+        links=[],
+        verdicts=[
+            _verdict(0, "stm_unrelated", "contradiction", 0.6),
+        ],
+    )
+
+    assert result.proposals == []
+    assert result.suppressed_conflicts == 1
+
+
+def test_contradiction_with_shared_entities_survives():
+    result = proposals_from(
+        funnel=_funnel(
+            _candidate(
+                0,
+                "stm_conflict",
+                0.6,
+                "related",
+                frozenset({"ent_shared"}),
+            )
+        ),
+        links=[],
+        verdicts=[
+            _verdict(0, "stm_conflict", "contradiction", 0.6),
+        ],
+    )
+
+    assert [proposal.kind for proposal in result.proposals] == ["conflict"]
+    assert result.suppressed_conflicts == 0
 
 
 def test_only_best_merge_per_new_statement_survives():
@@ -210,7 +254,15 @@ def test_link_proposal_keeps_its_edge_geometry():
 
 def test_proposals_are_ordered_links_then_merges_then_conflicts():
     result = proposals_from(
-        funnel=_funnel(),
+        funnel=_funnel(
+            _candidate(
+                1,
+                "stm_conflict",
+                0.8,
+                "related",
+                frozenset({"ent_shared"}),
+            )
+        ),
         links=[_link()],
         verdicts=[
             _verdict(1, "stm_conflict", "contradiction", 0.8),

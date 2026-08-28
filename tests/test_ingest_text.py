@@ -271,7 +271,14 @@ def test_empty_text_returns_the_empty_response(tmp_path, monkeypatch):
             assert response["items"] == []
             assert response["flags"] == []
             assert response["condition_links"] == 0
-            assert response["nli"] == "unavailable"
+            assert response["nli"] == "nothing_to_classify"
+            assert response["nli_reason"] is None
+            assert response["nli_pairs"] == {
+                "classified": 0,
+                "skipped": 0,
+                "budget": 0,
+            }
+            assert response["suppressed_conflicts"] == 0
 
 
 def test_discard_draft_op_strikes_a_flag(tmp_path, monkeypatch):
