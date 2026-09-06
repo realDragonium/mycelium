@@ -1477,6 +1477,13 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
             status_code=400,
             detail="only open or submitted drafts can be rejected",
         )
+    if drafts_store.active_application(conn, draft_id) is not None:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=409,
+            detail="draft has an active reviewed application",
+        )
     with store.transaction(conn):
         drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
     return {"ok": True}

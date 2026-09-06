@@ -6067,6 +6067,10 @@ def _require_mutable_draft(draft_id: str):
     status = drafts_store.status_for(row)
     if status not in ("open", "submitted"):
         raise ValueError(f"cannot modify operations on a {status} draft")
+    if drafts_store.active_application(_drafts_db(), draft_id) is not None:
+        raise drafts_store.ActiveApplicationError(
+            f"draft '{draft_id}' has an active reviewed application"
+        )
     return row
 
 
@@ -6208,11 +6212,11 @@ class DraftOperationFinding(TypedDict):
     finding: str
 
 
-def _payload_knowledge_ids(value: Any) -> tuple[set[str], set[str]]:
+def _payload_knowledge_ids(value: JsonValue) -> tuple[set[str], set[str]]:
     entities: set[str] = set()
     statements: set[str] = set()
 
-    def visit(item: Any) -> None:
+    def visit(item: JsonValue) -> None:
         if isinstance(item, dict):
             for nested in item.values():
                 visit(nested)
@@ -6229,7 +6233,7 @@ def _payload_knowledge_ids(value: Any) -> tuple[set[str], set[str]]:
     return entities, statements
 
 
-def _fingerprint(value: Any) -> str:
+def _fingerprint(value: JsonValue) -> str:
     encoded = _json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(encoded.encode()).hexdigest()
 
@@ -6322,7 +6326,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
 
 
 @tool(role="writer", real_role=True)
-def inspect_draft_review(draft_id: str) -> dict[str, Any]:
+def inspect_draft_review(draft_id: str) -> dict[str, JsonValue]:
     """Inspect exact draft content and affected knowledge for review."""
     from . import drafts_store
 
@@ -6342,12 +6346,12 @@ def inspect_draft_review(draft_id: str) -> dict[str, Any]:
 
 
 @tool(role="writer", real_role=True)
-def add_draft_correction(
+def append_draft_correction(
     draft_id: str,
     tool_name: str,
-    payload: dict[str, Any],
+    payload: dict[str, JsonValue],
     expected_revision: int | None = None,
-) -> dict[str, Any]:
+) -> dict[str, JsonValue]:
     """Append one supported substrate mutation to an open or submitted draft."""
     from . import drafts_store
 
@@ -6388,7 +6392,7 @@ def record_draft_review(
     draft_revision: int,
     knowledge_preconditions: list[KnowledgePrecondition],
     unresolved_questions: list[str] = [],
-) -> dict[str, Any]:
+) -> dict[str, JsonValue]:
     """Record a durable outcome against exact inspected draft and knowledge state."""
     from . import drafts_store
 
@@ -6398,6 +6402,8 @@ def record_draft_review(
     if not rationale.strip():
         raise ValueError("review rationale is required")
     inspected = inspect_draft_review(draft_id)
+    if inspected["draft"]["status"] != "submitted":
+        raise ValueError("only submitted drafts can be reviewed")
     if inspected["draft_revision"] != draft_revision:
         raise drafts_store.StaleDraftRevisionError("draft changed since inspection")
     if inspected["knowledge_preconditions"] != knowledge_preconditions:
@@ -6591,11 +6597,22 @@ def apply_draft(
                 for op in ops:
                     results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
                 if application_id is not None:
+                    replay_result = {
+                        "applied": sum("result" in item for item in results),
+                        "skipped": sum("skipped" in item for item in results),
+                        "results": results,
+                    }
                     _db().execute(
                         "INSERT OR IGNORE INTO reviewed_draft_applications "
-                        "(application_id, draft_id, review_id, committed_at) "
-                        "VALUES (?, ?, ?, ?)",
-                        (application_id, draft_id, review_id, timestamps.now()),
+                        "(application_id, draft_id, review_id, committed_at, result_json) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            application_id,
+                            draft_id,
+                            review_id,
+                            timestamps.now(),
+                            _json.dumps(replay_result),
+                        ),
                     )
             except BaseException:
                 restored = True
@@ -6627,20 +6644,22 @@ def _reviewed_apply_enabled() -> bool:
     return (os.environ.get("MYCELIUM_REVIEWED_APPLY") or "off").lower() == "on"
 
 
-def _substrate_application_exists(application_id: str) -> bool:
-    return (
+def _substrate_application_result(
+    application_id: str,
+) -> dict[str, JsonValue] | None:
+    row = (
         _db()
         .execute(
-            "SELECT 1 FROM reviewed_draft_applications WHERE application_id = ?",
+            "SELECT result_json FROM reviewed_draft_applications WHERE application_id = ?",
             (application_id,),
         )
         .fetchone()
-        is not None
     )
+    return None if row is None else _json.loads(row["result_json"])
 
 
 @tool(role="writer", real_role=True)
-def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, Any]:
+def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, JsonValue]:
     """Apply an accepted exact-version review with durable replay recovery."""
     from . import drafts_store
 
@@ -6648,51 +6667,62 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, Any]:
         raise ValueError("reviewed draft application is disabled")
     principal = _identified_principal()
     conn = _drafts_db()
-    with store.transaction(conn):
-        draft = drafts_store.get_draft(conn, draft_id)
-        review = drafts_store.get_review(conn, review_id)
-        if draft is None or review is None or review["draft_id"] != draft_id:
-            raise ValueError("draft or review not found")
-        if review["outcome"] not in ("accepted", "refined"):
-            raise ValueError("review outcome does not permit application")
-        if _json.loads(review["unresolved_json"]):
-            raise ValueError("review has unresolved questions")
-        if int(draft["revision"]) != int(review["draft_revision"]):
-            raise drafts_store.StaleDraftRevisionError(
-                "draft changed after the recorded review"
-            )
-        current = _knowledge_preconditions(drafts_store.list_ops(conn, draft_id))
-        if current != _json.loads(review["preconditions_json"]):
-            raise ValueError("affected knowledge changed after the recorded review")
-        application_id = drafts_store.claim_application(
-            conn,
-            draft_id=draft_id,
-            review_id=review_id,
-            claimed_by=principal.id,
-        )
-
-    if _substrate_application_exists(application_id):
-        result = {"applied": 0, "skipped": 0, "results": [], "recovered": True}
-    else:
-        try:
-            result = apply_draft(
-                draft_id,
-                application_id=application_id,
-                review_id=review_id,
-                strict=True,
-            )
-        except BaseException as exc:
-            with store.transaction(conn):
-                drafts_store.finish_application(
-                    conn, application_id, status="failed", failure=str(exc)
+    with store.write_lock():
+        with store.transaction(conn):
+            draft = drafts_store.get_draft(conn, draft_id)
+            review = drafts_store.get_review(conn, review_id)
+            if draft is None or review is None or review["draft_id"] != draft_id:
+                raise ValueError("draft or review not found")
+            if drafts_store.status_for(draft) != "submitted":
+                raise ValueError("only submitted drafts can be applied")
+            if review["outcome"] not in ("accepted", "refined"):
+                raise ValueError("review outcome does not permit application")
+            if _json.loads(review["unresolved_json"]):
+                raise ValueError("review has unresolved questions")
+            if int(draft["revision"]) != int(review["draft_revision"]):
+                raise drafts_store.StaleDraftRevisionError(
+                    "draft changed after the recorded review"
                 )
-            raise
+            application_id = drafts_store.claim_application(
+                conn,
+                draft_id=draft_id,
+                review_id=review_id,
+                claimed_by=principal.id,
+            )
+            result = _substrate_application_result(application_id)
+            if result is None:
+                current = _knowledge_preconditions(
+                    drafts_store.list_ops(conn, draft_id)
+                )
+                if current != _json.loads(review["preconditions_json"]):
+                    raise ValueError(
+                        "affected knowledge changed after the recorded review"
+                    )
 
-    with store.transaction(conn):
-        drafts_store.finish_application(
-            conn, application_id, status="committed", result=result
-        )
-        drafts_store.set_decision(conn, draft_id, decision="approved", by=principal.id)
+        if result is None:
+            try:
+                result = apply_draft(
+                    draft_id,
+                    application_id=application_id,
+                    review_id=review_id,
+                    strict=True,
+                )
+            except BaseException as exc:
+                with store.transaction(conn):
+                    drafts_store.finish_application(
+                        conn, application_id, status="failed", failure=str(exc)
+                    )
+                raise
+        else:
+            result = {**result, "recovered": True}
+
+        with store.transaction(conn):
+            drafts_store.finish_application(
+                conn, application_id, status="committed", result=result
+            )
+            drafts_store.set_decision(
+                conn, draft_id, decision="approved", by=principal.id
+            )
     return {"application_id": application_id, **result}
 
 

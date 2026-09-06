@@ -253,7 +253,8 @@ CREATE TABLE IF NOT EXISTS reviewed_draft_applications (
     application_id TEXT PRIMARY KEY,
     draft_id       TEXT NOT NULL,
     review_id      TEXT NOT NULL,
-    committed_at   TEXT NOT NULL
+    committed_at   TEXT NOT NULL,
+    result_json    TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS statement_vector_ids (
