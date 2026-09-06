@@ -153,8 +153,7 @@ def test_openai_research_explores_and_reconciles_before_emitting(monkeypatch):
 
 
 def test_research_worker_keeps_model_selected_at_admission(monkeypatch, tmp_path):
-    save_model("research", provider="openai")
-    save_model("research", openai_model="admitted-model")
+    save_model("research", provider="openai", openai_model="admitted-model")
     observed: list[ResearchConfig] = []
 
     def run(
