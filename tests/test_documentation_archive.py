@@ -154,3 +154,26 @@ def test_restore_requires_force_for_document_only_target(tmp_path):
         backup.import_substrate(archive, target)
     with closing(docs_store.connect(target / documentation_archive.DB_NAME)) as conn:
         assert docs_store.get_document(conn, document)["body"] == "Keep this"
+
+
+def test_unresolved_legacy_destination_remains_restorable(tmp_path):
+    source, staging = tmp_path / "source", tmp_path / "staging"
+    source.mkdir()
+    staging.mkdir()
+    with closing(docs_store.connect(source / documentation_archive.DB_NAME)) as conn:
+        docs_store.migrate(conn)
+        document = docs_store.upsert_document(
+            conn, slug="legacy", title="Legacy", body="Body"
+        )
+        conn.execute(
+            "UPDATE generated_documents SET delivery_destination = 'retired', delivery_target = '{}' WHERE id = ?",
+            (document,),
+        )
+        conn.commit()
+    documentation_archive.write(source, staging)
+    prepared = documentation_archive.prepare(staging, required=True)
+    assert prepared is not None
+    with closing(docs_store.connect(prepared)) as conn:
+        row = docs_store.get_document(conn, document)
+        assert row["delivery_target"] == "{}"
+        assert row["delivery_binding"] is None

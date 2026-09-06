@@ -150,7 +150,12 @@ def _validate_json(conn: sqlite3.Connection) -> None:
         "documentation_runs": {"profile_revisions": dict, "profile_snapshot": dict},
     }
     for table, types in fields.items():
-        for row in conn.execute(f"SELECT {', '.join(types)} FROM {table}"):
+        binding_column = {
+            "generated_documents": "delivery_binding",
+            "generated_document_deliveries": "binding",
+        }.get(table)
+        selected = [*types, *([binding_column] if binding_column else [])]
+        for row in conn.execute(f"SELECT {', '.join(selected)} FROM {table}"):
             for field, expected in types.items():
                 if row[field] is None and field == "delivery_target":
                     continue
@@ -163,9 +168,18 @@ def _validate_json(conn: sqlite3.Connection) -> None:
                     not isinstance(item, str) for item in value
                 ):
                     raise ValueError("invalid documentation statement ids")
-                if field in ("target", "delivery_target") and not all(
-                    isinstance(value.get(key), str) and value[key]
-                    for key in ("host", "owner", "repo", "base_branch")
+                unresolved_legacy = (
+                    value == {}
+                    and binding_column is not None
+                    and row[binding_column] is None
+                )
+                if (
+                    field in ("target", "delivery_target")
+                    and not unresolved_legacy
+                    and not all(
+                        isinstance(value.get(key), str) and value[key]
+                        for key in ("host", "owner", "repo", "base_branch")
+                    )
                 ):
                     raise ValueError("invalid documentation delivery coordinates")
 
