@@ -100,6 +100,13 @@ GOLDEN: dict[str, Golden] = {
         ),
         links=(("the draft is created", "requires", "the substrate is locked"),),
     ),
+    # -- passive ownership: "own" is stative, so the passive states a relation.
+    #    Before DRA-427 this sentence flagged "unmatched" and never became a
+    #    statement, capping the contains-belongs-to frame to embedded phrasings.
+    "plain-passive-owned-by": Golden(
+        "The audit log is owned by the compliance charter.",
+        statements=(("state", "The audit log is owned by the compliance charter"),),
+    ),
     # -- untyped cuts: the sentence splits but no relation is inferred.
     "semicolon": Golden(
         "The draft is created; an embedding is queued.",
@@ -470,6 +477,28 @@ SUBSTRATE_GOLDEN: dict[str, SubstrateGolden] = {
             ),
         ),
     ),
+    # The shipped passive-by frame puts the resolved agent in the SOURCE slot
+    # even though the cue sits on the new statement.
+    "passive-by-agent-is-the-link-source": SubstrateGolden(
+        "The cache is locked by the freeze policy.",
+        existing=(("s-policy", "rule", "The freeze policy applies"),),
+        candidates=(
+            (
+                "The cache is locked by the freeze policy",
+                "related",
+                "s-policy",
+                0.632,
+            ),
+        ),
+        proposals=(
+            (
+                "s-policy",
+                "restricts",
+                "The cache is locked by the freeze policy",
+                "is locked by",
+            ),
+        ),
+    ),
     "belongs-to-existing-owner-is-the-link-source": SubstrateGolden(
         "The nightly automated purge schedule belongs to the retention policy.",
         existing=(("s-policy", "rule", "The retention policy applies"),),
@@ -492,6 +521,28 @@ SUBSTRATE_GOLDEN: dict[str, SubstrateGolden] = {
                 "contains",
                 "The monthly archive schedule remains a record that is owned by the "
                 "retention policy",
+                "is owned by",
+            ),
+        ),
+    ),
+    # The owner fills the "from" slot, so the existing owner is the contains source.
+    # The plain passive now reaches the same frame as the embedded phrasing.
+    "plain-passive-owned-by-existing-owner-is-the-link-source": SubstrateGolden(
+        "The audit log is owned by the compliance charter.",
+        existing=(("s-charter", "rule", "The compliance charter applies"),),
+        candidates=(
+            (
+                "The audit log is owned by the compliance charter",
+                "related",
+                "s-charter",
+                0.603,
+            ),
+        ),
+        proposals=(
+            (
+                "s-charter",
+                "contains",
+                "The audit log is owned by the compliance charter",
                 "is owned by",
             ),
         ),
@@ -526,7 +577,7 @@ def test_golden_substrate_linking(case: SubstrateGolden) -> None:
     ]
     view = WordOverlapView(case.existing)
     funnel = find_candidates(batch, view)
-    proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type())
+    proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type()).links
 
     texts = [item.text for item in extraction.items]
 

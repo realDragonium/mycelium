@@ -37,6 +37,8 @@ class Index:
     def load(cls, path: Path) -> Index:
         idx = hnswlib.Index(space="cosine", dim=DIM)
         idx.load_index(str(path), allow_replace_deleted=True)
+        if idx.get_max_elements() < INITIAL_CAPACITY:
+            idx.resize_index(INITIAL_CAPACITY)
         idx.set_ef(EF_SEARCH)
         return cls(idx)
 

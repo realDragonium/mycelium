@@ -28,10 +28,10 @@ def normalize_alias(alias: str) -> str:
 # Two omissions are deliberate, not gaps. Conditional subordinators (`if`,
 # `when`, `unless`, …) and the coordinator `and` are absent: their cuts run
 # right→left or express no relation, and the segmenter links left→right. And
-# the vocabulary of a deliberately UNSHIPPED pattern is absent (`blocks`,
+# the bare vocabulary of a deliberately UNSHIPPED pattern is absent (`blocks`,
 # `prevents`, `suppresses`, `capped`, `bounded` for `restricts`; `combines`,
 # `aggregates` for `composes`) — two shipped templates take a bare cue slot, so
-# seeding those words would ship the phrasings the hit-rate report rejected.
+# seeding those words would enable phrasings outside the current rule selection.
 _ALIAS_SEED: dict[str, tuple[str, ...]] = {
     "contains": (
         "contains",
@@ -45,7 +45,15 @@ _ALIAS_SEED: dict[str, tuple[str, ...]] = {
     ),
     "triggers": ("triggers", "fires", "kicks off", "causes", "results in", "leads to"),
     "establishes": ("establishes", "marks", "sets", "becomes", "transitions to"),
-    "enables": ("enables", "unlocks", "allows", "permits", "makes available"),
+    "enables": (
+        "enables",
+        "unlocks",
+        "allows",
+        "permits",
+        "makes available",
+        "is enabled by",
+        "is unlocked by",
+    ),
     "requires": ("requires", "needs", "must have", "is required for"),
     "accepts": ("accepts", "optionally", "may include", "may provide"),
     "varies-by": ("varies by", "varies with", "varies per", "differs by", "depends on"),
@@ -74,6 +82,13 @@ _ALIAS_SEED: dict[str, tuple[str, ...]] = {
         "frozen",
         "suspended",
         "read-only",
+        "is limited by",
+        "is bounded by",
+        "is locked by",
+        "is capped by",
+        "is disabled by",
+        "is frozen by",
+        "is suspended by",
     ),
     "proceeds": (
         "proceeds to",
@@ -131,6 +146,15 @@ _REVERSE_SEED: frozenset[tuple[str, str]] = frozenset(
         ("contains", "is part of"),
         ("contains", "belongs to"),
         ("contains", "is owned by"),
+        ("restricts", "is limited by"),
+        ("restricts", "is bounded by"),
+        ("restricts", "is locked by"),
+        ("restricts", "is capped by"),
+        ("restricts", "is disabled by"),
+        ("restricts", "is frozen by"),
+        ("restricts", "is suspended by"),
+        ("enables", "is enabled by"),
+        ("enables", "is unlocked by"),
     }
 )
 
@@ -296,10 +320,10 @@ def alias_lookup(conn: sqlite3.Connection) -> dict[str, frozenset[tuple[str, str
 def aliases_by_type(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]:
     """Group cue-slot aliases by link type, longest first so regex wins.
 
-    Only forward aliases ride templated frames: every shipped template's
-    captured phrase fills the `to` slot, so splicing a far-side alias into
-    one would fire it with the wrong geometry. A far-side frame gets its own
-    pattern (like `contains-part-of`) rather than a cue slot.
+    Only forward aliases ride templated frames. Cue slots take bare forward
+    vocabulary; the frame around each slot carries its geometry and direction.
+    A far-side phrasing gets its own frame (like `contains-part-of`) rather
+    than riding a cue slot.
     """
     rows = (
         (row["link_type"], row["alias"], row["direction"])

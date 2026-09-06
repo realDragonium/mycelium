@@ -277,6 +277,101 @@ def test_migration_v10_adds_only_missing_belongs_to_aliases():
     )
 
 
+def test_migration_v11_adds_only_missing_passive_by_aliases():
+    seeded = _v9_alias_conn()
+    seeded.execute(
+        "INSERT INTO link_type_aliases (link_type, alias) "
+        "VALUES ('contains', 'includes')"
+    )
+
+    migrations._migration_v11_passive_by_aliases(seeded)
+
+    rows = seeded.execute(
+        "SELECT link_type, alias, provenance, direction, created_at "
+        "FROM link_type_aliases "
+        "WHERE alias IN ('is limited by', 'is bounded by', 'is locked by', "
+        "'is capped by', 'is disabled by', 'is frozen by', 'is suspended by', "
+        "'is enabled by', 'is unlocked by') ORDER BY link_type, alias"
+    ).fetchall()
+    assert [
+        (row["link_type"], row["alias"], row["provenance"], row["direction"])
+        for row in rows
+    ] == [
+        ("enables", "is enabled by", "seed", "reverse"),
+        ("enables", "is unlocked by", "seed", "reverse"),
+        ("restricts", "is bounded by", "seed", "reverse"),
+        ("restricts", "is capped by", "seed", "reverse"),
+        ("restricts", "is disabled by", "seed", "reverse"),
+        ("restricts", "is frozen by", "seed", "reverse"),
+        ("restricts", "is limited by", "seed", "reverse"),
+        ("restricts", "is locked by", "seed", "reverse"),
+        ("restricts", "is suspended by", "seed", "reverse"),
+    ]
+    assert all(row["created_at"] for row in rows)
+    assert [
+        (row["link_type"], row["alias"])
+        for row in seeded.execute(
+            "SELECT link_type, alias FROM link_type_alias_embed_queue "
+            "ORDER BY link_type, alias"
+        )
+    ] == [
+        ("enables", "is enabled by"),
+        ("enables", "is unlocked by"),
+        ("restricts", "is bounded by"),
+        ("restricts", "is capped by"),
+        ("restricts", "is disabled by"),
+        ("restricts", "is frozen by"),
+        ("restricts", "is limited by"),
+        ("restricts", "is locked by"),
+        ("restricts", "is suspended by"),
+    ]
+
+    absorbed = _v9_alias_conn()
+    absorbed.execute(
+        "INSERT INTO link_type_aliases "
+        "(link_type, alias, provenance, score, direction, created_at, created_by) "
+        "VALUES ('contains', 'includes', 'seed', NULL, 'forward', NULL, NULL), "
+        "('restricts', 'is locked by', 'auto', 0.91, 'forward', "
+        "'chosen-at', 'curator')"
+    )
+    absorbed.execute(
+        "INSERT INTO link_type_alias_embed_queue "
+        "(link_type, alias, enqueued_at) "
+        "VALUES ('restricts', 'is locked by', 'chosen-at')"
+    )
+
+    migrations._migration_v11_passive_by_aliases(absorbed)
+
+    existing = absorbed.execute(
+        "SELECT provenance, score, direction, created_at, created_by "
+        "FROM link_type_aliases "
+        "WHERE link_type = 'restricts' AND alias = 'is locked by'"
+    ).fetchone()
+    assert tuple(existing) == ("auto", 0.91, "forward", "chosen-at", "curator")
+    queued = absorbed.execute(
+        "SELECT link_type, alias FROM link_type_alias_embed_queue ORDER BY id"
+    ).fetchall()
+    assert [(row["link_type"], row["alias"]) for row in queued] == [
+        ("restricts", "is locked by"),
+        ("restricts", "is limited by"),
+        ("restricts", "is bounded by"),
+        ("restricts", "is capped by"),
+        ("restricts", "is disabled by"),
+        ("restricts", "is frozen by"),
+        ("restricts", "is suspended by"),
+        ("enables", "is enabled by"),
+        ("enables", "is unlocked by"),
+    ]
+
+    empty = _v9_alias_conn()
+    migrations._migration_v11_passive_by_aliases(empty)
+    assert empty.execute("SELECT COUNT(*) FROM link_type_aliases").fetchone()[0] == 0
+    assert (
+        empty.execute("SELECT COUNT(*) FROM link_type_alias_embed_queue").fetchone()[0]
+        == 0
+    )
+
+
 def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
     store.upsert_link_type_alias(
         fresh_conn, "contains", "belongs to", direction="reverse"
@@ -290,8 +385,8 @@ def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
 
 
 def test_migrate_sets_alias_schema_version(fresh_conn):
-    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 10
-    assert migrations.CURRENT_VERSION == 10
+    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 11
+    assert migrations.CURRENT_VERSION == 11
 
 
 def test_carrier_embedding_drain_round_trips_and_skips_deleted_target(fresh_conn):

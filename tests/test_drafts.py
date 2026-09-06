@@ -19,6 +19,7 @@ play); we set the drafter principal directly via contextvar where
 needed — that's the same path the streamable-HTTP transport uses.
 """
 
+import re
 import sqlite3
 from pathlib import Path
 
@@ -26,6 +27,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store, vector
+from mycelium.connect import extract
+from mycelium.connect.draft import BatchInput, assemble_draft
 
 
 def _reset_server() -> None:
@@ -642,3 +645,80 @@ def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
         "statements": [{"links": [{"to_id": "@2"}]}],
         "proposal": {"from_id": "stm_created"},
     }
+
+
+_DRAFTS_JSX = Path(__file__).resolve().parents[1] / "src/mycelium/ui/drafts.jsx"
+
+
+def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypatch):
+    """Pins the writer/API contract the drafts UI flag list depends on: a flag
+    op reaches `GET /api/drafts/{id}` carrying `text`, `reason` and `detail`,
+    plus its provenance source. Those names are read nowhere else except a
+    generic payload dump, so going through the real writer makes renaming one
+    fail here rather than only in a browser. It asserts the payload, not the
+    rendering."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        flags = extract.extract("The status becomes active").flags
+        assert flags, "expected the phrasing catalog to refuse this wording"
+        draft_id = assemble_draft(
+            server._drafts_db(),
+            batch=[BatchInput(kind="event", text="the exporter uploads the report")],
+            proposals=[],
+            text_of=lambda _id: None,
+            created_by="d1",
+            flags=flags,
+        )
+
+        r = client.get(f"/api/drafts/{draft_id}")
+        assert r.status_code == 200, r.text
+        flag_ops = [op for op in r.json()["draft"]["ops"] if op["kind"] == "flag"]
+        assert len(flag_ops) == 1
+        assert flag_ops[0]["payload"]["text"] == "The status becomes active"
+        assert flag_ops[0]["payload"]["reason"] == "rejected"
+        assert flag_ops[0]["payload"]["detail"]
+        assert flag_ops[0]["provenance"]["source"] == "phrasing"
+
+
+def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
+    """Keeps the UI reason table in step with `FLAG_SOURCES`: every reason the
+    pipeline can emit has an entry carrying a non-empty stage and an explaining
+    sentence. A reason added upstream without one still renders, but only with
+    a generic line that cannot say what that stage refused. This checks the
+    source table, not the runtime fallback."""
+    table = re.search(
+        r"const _FLAG_REASONS = \{(.*?)\n\};", _DRAFTS_JSX.read_text(), re.S
+    )
+    assert table is not None, "could not find _FLAG_REASONS in ui/drafts.jsx"
+    explained = {
+        reason: re.findall(r"'([^']*)'", value)
+        for reason, value in re.findall(r"^  (\w+): \[(.+)\],$", table.group(1), re.M)
+    }
+
+    assert extract.FLAG_SOURCES.keys() <= explained.keys()
+    for reason in extract.FLAG_SOURCES:
+        parts = explained[reason]
+        assert len(parts) == 2, f"{reason} needs a stage and an explanation"
+        stage, explanation = parts
+        assert stage.strip(), f"{reason} names no stage"
+        assert explanation.strip().endswith("."), f"{reason} has no explaining sentence"
+
+
+def test_flag_reason_lookup_is_guarded_against_inherited_properties():
+    """A bare `_FLAG_REASONS[reason]` index reaches Object.prototype, so a flag
+    whose reason is `constructor` or `toString` resolves to an inherited member
+    and renders a blank stage and a blank explanation next to the enum — worse
+    than the enum alone, because it reads as though the pipeline said nothing.
+
+    There is no JS test runner in this repo, so hold the concrete guard and
+    fallback expression that prevent inherited members from being rendered."""
+    source = _DRAFTS_JSX.read_text()
+    lookup = re.search(r"const known = ([^;]*?_FLAG_REASONS[^;]*?);\n", source, re.S)
+    assert lookup is not None, "could not find the _FLAG_REASONS lookup"
+    guard = " ".join(lookup.group(1).split())
+    assert guard == (
+        "Object.prototype.hasOwnProperty.call(_FLAG_REASONS, p.reason) "
+        "? _FLAG_REASONS[p.reason] : null"
+    )
+    assert "const stage = known ? known[0]" in source
+    assert "const explanation = known ? known[1]" in source

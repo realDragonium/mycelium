@@ -432,11 +432,9 @@ def import_substrate(
         if prompts_jsonl.exists():
             _restore_prompts(data_dir / PROMPTS_DB_NAME, prompts_jsonl)
 
-        # Vector files: copy back if present in the archive. Otherwise
-        # leave the data dir without them — the server's next `init()`
-        # will create empty indexes and `_backfill_name_index` will
-        # rebuild names. The statement index stays empty until explicit
-        # reindex (a separate operation, out of scope here).
+        # Vector files: copy back if present in the archive. Otherwise leave
+        # the data dir without them; the server's next `init()` rebuilds each
+        # missing index by re-embedding the stored statement or name text.
         vectors_src = staging / "vectors"
         if vectors_src.is_dir():
             for vf in _VECTOR_FILES:
