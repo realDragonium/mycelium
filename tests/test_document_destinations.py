@@ -410,6 +410,106 @@ def test_redelivery_reuses_the_recorded_path_after_the_template_changes():
     assert _request_json(tree_request)["tree"][0]["path"] == delivery.path
 
 
+@pytest.mark.parametrize("branch_exists", [True, False])
+def test_redelivery_aligns_a_closed_review_branch_when_base_already_has_the_body(
+    branch_exists,
+):
+    requests: list[httpx.Request] = []
+    branch = "mycelium/docs/configuring-sso-gdc_123"
+    stale_sha = "8" * 40
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path.endswith("/pulls") and request.method == "GET":
+            return httpx.Response(200, json=[])
+        if "/git/ref/heads/" in path and request.method == "GET":
+            if branch_exists:
+                return httpx.Response(200, json={"object": {"sha": stale_sha}})
+            return httpx.Response(404, json={"message": "Not Found"})
+        if path.endswith("/branches/docs-main"):
+            return httpx.Response(
+                200,
+                json={
+                    "commit": {
+                        "sha": BASE_COMMIT_SHA,
+                        "commit": {"tree": {"sha": BASE_TREE_SHA}},
+                    }
+                },
+            )
+        if "/contents/" in path:
+            body = _document().body
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(body.encode()).decode(),
+                    "sha": _blob_id(body),
+                },
+            )
+        if path.endswith("/git/blobs"):
+            return httpx.Response(201, json={"sha": CONTENT_SHA})
+        if path.endswith("/git/trees"):
+            return httpx.Response(201, json={"sha": TREE_SHA})
+        if path.endswith("/git/commits"):
+            return httpx.Response(201, json={"sha": DELIVERY_SHA})
+        if path.endswith("/git/refs") and request.method == "POST":
+            payload = _request_json(request)
+            return httpx.Response(201, json=_ref(branch, payload["sha"]))
+        if "/git/refs/heads/" in path and request.method == "PATCH":
+            payload = _request_json(request)
+            return httpx.Response(200, json=_ref(branch, payload["sha"]))
+        if path.endswith("/pulls"):
+            return httpx.Response(
+                201, json=_pull("https://github.com/acme/handbook/pull/18")
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    delivery = deliver(
+        _config(),
+        replace(
+            _document(),
+            delivered_path="docs/recorded.md",
+            delivered_content_revision=_blob_id("previous body"),
+            revision_source_content_revision=_blob_id("source body"),
+        ),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    ref_request = next(
+        request
+        for request in requests
+        if request.method in {"POST", "PATCH"} and "/git/refs" in request.url.path
+    )
+    assert _request_json(ref_request)["sha"] == DELIVERY_SHA
+    assert ref_request.url.path.endswith(
+        "/git/refs/heads/mycelium/docs/configuring-sso-gdc_123"
+    ) or ref_request.url.path.endswith("/git/refs")
+    commit_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/git/commits")
+    )
+    expected_parents = (
+        [stale_sha, BASE_COMMIT_SHA] if branch_exists else [BASE_COMMIT_SHA]
+    )
+    assert _request_json(commit_request)["parents"] == expected_parents
+    tree_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/git/trees")
+    )
+    assert _request_json(tree_request)["base_tree"] == BASE_TREE_SHA
+    review_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/pulls")
+    )
+    assert requests.index(ref_request) < requests.index(review_request)
+    assert delivery.content_revision == CONTENT_SHA
+
+
 def test_redelivery_refuses_when_the_file_changed_after_generation():
     requests, base_handler = _responses(
         existing_reference="https://github.com/acme/handbook/pull/17"

@@ -73,6 +73,25 @@ def _start(conn, tmp_path, runner=None, **overrides) -> str:
 # --- the executor -----------------------------------------------------------
 
 
+def test_every_registered_document_is_available_for_matching(tmp_path):
+    conn = _conn(tmp_path)
+    document_ids = {
+        docs_store.upsert_document(
+            conn,
+            slug=f"topic-{index}",
+            title=f"Topic {index}",
+            body=f"Body {index}",
+            guideline_set="kb-authoring",
+            document_type="how-to",
+        )
+        for index in range(101)
+    }
+
+    candidates = doc_runs._existing_documents(conn)
+
+    assert {candidate.id for candidate in candidates} == document_ids
+
+
 def test_row_is_running_before_the_runner_returns(tmp_path):
     conn = _conn(tmp_path)
     release = threading.Event()

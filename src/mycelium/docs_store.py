@@ -753,12 +753,16 @@ def get_document_by_slug(
     ).fetchone()
 
 
-def list_documents(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
+def list_documents(
+    conn: sqlite3.Connection, limit: int | None = 100
+) -> list[sqlite3.Row]:
+    limit_clause = "" if limit is None else " LIMIT ?"
+    parameters: tuple[int, ...] = () if limit is None else (limit,)
     return list(
         conn.execute(
             "SELECT * FROM generated_documents "
-            "ORDER BY updated_at DESC, id DESC LIMIT ?",
-            (limit,),
+            "ORDER BY updated_at DESC, id DESC" + limit_clause,
+            parameters,
         ).fetchall()
     )
 

@@ -317,7 +317,7 @@ def _existing_documents(conn: sqlite3.Connection) -> tuple[ExistingDocument, ...
             document_type=str(row["document_type"]),
             body_digest=docs_store.body_digest(str(row["body"])),
         )
-        for row in docs_store.list_documents(conn)
+        for row in docs_store.list_documents(conn, limit=None)
     )
 
 

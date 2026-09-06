@@ -266,7 +266,7 @@ def _deliver(
         ref = branch if reuse_branch else config.base_branch
         current = _file(config, path, ref, client, token)
         intended_revision = _git_blob_id(document.body)
-        if current.content_revision == intended_revision:
+        if current.content_revision == intended_revision and reuse_branch:
             reference = _review(config, document, branch, client, token)
             return Delivery(
                 destination=config.destination.name,
@@ -274,7 +274,10 @@ def _deliver(
                 reference=reference,
                 content_revision=intended_revision,
             )
-        if current.content_revision != expected_revision:
+        if (
+            current.content_revision != intended_revision
+            and current.content_revision != expected_revision
+        ):
             raise DestinationError(
                 f"destination {config.destination.name!r} document changed after generation; retry the documentation run"
             )
