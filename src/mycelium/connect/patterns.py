@@ -440,7 +440,7 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
         _pattern(
             "cases-one-of",
             "cases",
-            r"\b(?P<cue>is one of)\s+(?:the )?(?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten) (?:cases|levels|values|modes|branches) of\s+(?P<from>.+)",
+            r"\b(?P<cue>(?:is|are) one of)\s+(?:the )?(?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten) (?:cases|levels|values|modes|branches) of\s+(?P<from>.+)",
         ),
         # "A is either X or Y": the carrier enumerates its own values.
         _pattern(

@@ -197,12 +197,20 @@ def test_far_side_frame_links_existing_parent_to_new_child(tmp_path, monkeypatch
         ]
 
 
-@pytest.mark.parametrize("parent_location", ["batch", "substrate", "both"])
+@pytest.mark.parametrize(
+    "parent_location,member",
+    [
+        ("batch", "High is"),
+        ("substrate", "High is"),
+        ("both", "High is"),
+        ("substrate", "These statuses are"),
+    ],
+)
 def test_counted_cases_prose_reuses_named_parent(
-    tmp_path, monkeypatch, parent_location
+    tmp_path, monkeypatch, parent_location, member
 ):
     parent_text = "The alert priority has three levels"
-    child_text = "High is one of the three levels of the alert priority"
+    child_text = f"{member} one of the three levels of the alert priority"
     with _app(tmp_path, monkeypatch):
         server.upsert_entity(name="alert priority", description="The alert level set")
         parent_id = (
