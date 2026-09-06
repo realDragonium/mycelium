@@ -6050,11 +6050,14 @@ def list_prompt_text_versions(type: str, name: str) -> dict[str, Any]:
 
 
 @tool(role="admin", real_role=True)
-def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
+def retire_prompt_text(
+    type: str, name: str, expected_version: int | None = None
+) -> dict[str, Any]:
     """Retire a text, preserving history. Packaged loop doctrines remain protected.
 
     Documentation starters are user-owned; only an active default's final
-    template is protected until another default is selected.
+    template is protected until another default is selected. Pass expected_version
+    to reject retirement when another caller has changed the text.
     """
     if _is_seeded(type, name):
         raise ValueError(
@@ -6062,7 +6065,9 @@ def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
             f"retired: the next start would re-seed the packaged default at a "
             f"new version. Edit it with save_prompt_text instead."
         )
-    retired = documentation_profiles.retire_text(type, name, _prompt_principal())
+    retired = documentation_profiles.retire_text(
+        type, name, _prompt_principal(), expected_version=expected_version
+    )
     return {"retired": retired}
 
 
