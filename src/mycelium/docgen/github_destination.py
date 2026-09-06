@@ -10,7 +10,7 @@ import re
 import unicodedata
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Literal, Mapping, TypeAlias, overload
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -34,6 +34,11 @@ _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrst
 _ACTIVE_CREDENTIALS: ContextVar[tuple[str, ...]] = ContextVar(
     "document_delivery_credentials", default=()
 )
+JsonValue: TypeAlias = (
+    str | int | float | bool | None | list["JsonValue"] | dict[str, "JsonValue"]
+)
+JsonObject: TypeAlias = dict[str, JsonValue]
+JsonList: TypeAlias = list[JsonValue]
 
 
 @dataclass(frozen=True)
@@ -512,6 +517,54 @@ def _valid_reference(config: GitHubConfig, reference: object) -> bool:
     )
 
 
+@overload
+def _request_json(
+    client: httpx.Client,
+    config: GitHubConfig,
+    token: str,
+    method: str,
+    path: str,
+    *,
+    allow_not_found: Literal[True],
+    branch_moved_on_conflict: bool = False,
+    expect_list: Literal[False] = False,
+    json: JsonObject | None = None,
+    params: Mapping[str, str] | None = None,
+) -> JsonObject | None: ...
+
+
+@overload
+def _request_json(
+    client: httpx.Client,
+    config: GitHubConfig,
+    token: str,
+    method: str,
+    path: str,
+    *,
+    allow_not_found: Literal[False] = False,
+    branch_moved_on_conflict: bool = False,
+    expect_list: Literal[True],
+    json: JsonObject | None = None,
+    params: Mapping[str, str] | None = None,
+) -> JsonList: ...
+
+
+@overload
+def _request_json(
+    client: httpx.Client,
+    config: GitHubConfig,
+    token: str,
+    method: str,
+    path: str,
+    *,
+    allow_not_found: Literal[False] = False,
+    branch_moved_on_conflict: bool = False,
+    expect_list: Literal[False] = False,
+    json: JsonObject | None = None,
+    params: Mapping[str, str] | None = None,
+) -> JsonObject: ...
+
+
 def _request_json(
     client: httpx.Client,
     config: GitHubConfig,
@@ -522,8 +575,9 @@ def _request_json(
     allow_not_found: bool = False,
     branch_moved_on_conflict: bool = False,
     expect_list: bool = False,
-    **kwargs,
-) -> dict | list | None:
+    json: JsonObject | None = None,
+    params: Mapping[str, str] | None = None,
+) -> JsonObject | JsonList | None:
     url = _api_base(config) + f"/repos/{config.owner}/{config.repo}" + path
     credentials = list(_ACTIVE_CREDENTIALS.get()) or [token]
     log_filter = _CredentialFilter(credentials)
@@ -534,7 +588,13 @@ def _request_json(
     for handler in handlers:
         handler.addFilter(log_filter)
     try:
-        response = client.request(method, url, headers=_headers(token), **kwargs)
+        response = client.request(
+            method,
+            url,
+            headers=_headers(token),
+            json=json,
+            params=params,
+        )
     except httpx.HTTPError as exc:
         raise DestinationError(
             _scrub(
@@ -660,7 +720,7 @@ def _logging_handlers(
 
 def _http_loggers() -> tuple[logging.Logger, ...]:
     loggers = [logging.getLogger("httpx"), logging.getLogger("httpcore")]
-    for name, logger in logging.Logger.manager.loggerDict.items():
+    for name, logger in list(logging.Logger.manager.loggerDict.items()):
         if (
             isinstance(logger, logging.Logger)
             and name.startswith(("httpx.", "httpcore."))
