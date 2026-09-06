@@ -100,7 +100,6 @@ def test_add_links_rejects_mixed_batch_before_any_mutation(tmp_path, monkeypatch
                 "links": [
                     {"from_id": s1, "to_id": s2, "link_type": "triggers"},
                     {"from_id": e, "to_id": s1, "link_type": "performs"},
-                    {"from_id": s2, "to_id": s1, "link_type": "requires"},
                 ]
             },
         )
@@ -111,6 +110,12 @@ def test_add_links_rejects_mixed_batch_before_any_mutation(tmp_path, monkeypatch
             .execute("SELECT COUNT(*) AS n FROM statement_links")
             .fetchone()["n"]
             == 1
+        )
+        assert (
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM entity_statement_links")
+            .fetchone()["n"]
+            == 0
         )
 
 

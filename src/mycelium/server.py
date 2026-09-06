@@ -780,12 +780,10 @@ class IncomingLinkSpec(TypedDict):
 class EdgeSpec(TypedDict):
     """A typed edge with both endpoints addressed.
 
-    Used by `add_links` and `remove_links`. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination — the substrate
-    routes statement↔statement edges to `statement_links` and any edge
-    touching an entity to `entity_statement_links` (which also accepts a
-    `when` condition with the same grammar). Externally, callers see a
-    single uniform link API; the distinction is internal storage only.
+    Used by `add_links` and `remove_links`. `add_links` accepts only statement
+    endpoints (`stm_…`). `remove_links` also accepts entity endpoints (`ent_…`)
+    so callers can remove legacy entity↔statement edges. Those legacy edges may
+    carry a `when` condition with the same grammar.
 
     Entity↔entity edges are **not** handled here — those live in their
     own vocabulary and are managed by `add_entity_links` /
