@@ -17,7 +17,8 @@ function docRoute() {
 function docNavigate(next) {
   const params = new URLSearchParams();
   Object.entries(next).forEach(([key, value]) => { if (value) params.set(key, value); });
-  window.location.hash = '/documentation' + (params.size ? '?' + params.toString() : '');
+  const query = params.toString();
+  window.location.hash = '/documentation' + (query ? '?' + query : '');
 }
 
 const docActive = run => ['queued', 'running'].includes(run.status);

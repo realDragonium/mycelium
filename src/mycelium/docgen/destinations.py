@@ -309,6 +309,8 @@ def bind_legacy_deliveries(conn: sqlite3.Connection) -> None:
         configured = load_destinations()
     except (ValueError, RuntimeError):
         configured = {}
+    from .. import docs_store
+
     with conn:
         for row in rows:
             destination = configured.get(row["delivery_destination"])
@@ -316,6 +318,7 @@ def bind_legacy_deliveries(conn: sqlite3.Connection) -> None:
                 "UPDATE generated_documents SET delivery_target = ? WHERE id = ?",
                 (target_identity(destination) if destination else "{}", row["id"]),
             )
+        docs_store.backfill_delivery_receipts(conn)
 
 
 _publication_locks: dict[str, threading.Lock] = {}

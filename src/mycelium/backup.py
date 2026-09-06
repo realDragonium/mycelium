@@ -493,6 +493,11 @@ def _prepare_restore_target(data_dir: Path, *, force: bool) -> None:
                 f"data dir {data_dir!r} already contains an instance; "
                 "pass force=True to clobber (auto-snapshots first)"
             )
+        if not db_path.exists() and (data_dir / documentation_archive.DB_NAME).exists():
+            raise ValueError(
+                "Cannot safely overwrite documentation without its substrate database. "
+                "Restore into an empty directory instead."
+            )
         if db_path.exists():
             _safety_snapshot(data_dir)
         _wipe_data_dir(data_dir)

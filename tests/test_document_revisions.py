@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 from collections.abc import Iterator
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -435,3 +436,224 @@ def test_first_publication_requests_share_one_lock(
     assert len(created) == 1
     assert len(locks) == 2
     assert locks[0] is locks[1]
+
+
+def test_legacy_delivery_refresh_preserves_proven_revision_and_updates_receipt(
+    db: sqlite3.Connection,
+) -> None:
+    document_id = document(db)
+    coordinates = {
+        "host": "github.com",
+        "owner": "team",
+        "repo": "handbook",
+        "base_branch": "main",
+    }
+    target = json.dumps(coordinates)
+    docs_store.record_delivery(
+        db,
+        document_id,
+        destination="docs",
+        path="docs/policy.md",
+        reference="original-pr",
+        content_revision="known-sha",
+        target=target,
+        revision=1,
+        binding="approved",
+    )
+
+    revise(db, document_id, "Second body", 1)
+
+    docs_store.record_delivery(
+        db,
+        document_id,
+        destination="docs",
+        path="docs/policy.md",
+        reference="replacement-pr",
+        content_revision="known-sha",
+        target=json.dumps(coordinates, sort_keys=True),
+    )
+
+    current = docs_store.get_document(db, document_id)
+    receipt = db.execute(
+        "SELECT * FROM generated_document_deliveries WHERE document_id=? AND revision=1",
+        (document_id,),
+    ).fetchone()
+    assert current["published_revision"] == 1
+    assert (
+        docs_store.serialize_document(current)["delivery_status"] == "changes_pending"
+    )
+    assert current["delivery_binding"] == "approved"
+    assert receipt["reference"] == current["delivery_reference"] == "replacement-pr"
+    assert receipt["binding"] == "approved"
+    assert (
+        json.loads(receipt["target"])
+        == json.loads(current["delivery_target"])
+        == coordinates
+    )
+
+    # An explicit binding change updates both views of the same publication.
+    docs_store.record_delivery(
+        db,
+        document_id,
+        destination="docs",
+        path="docs/policy.md",
+        reference="replacement-pr",
+        content_revision="known-sha",
+        target=target,
+        revision=1,
+        binding="rotated",
+    )
+    assert docs_store.get_document(db, document_id)["delivery_binding"] == "rotated"
+    assert (
+        db.execute(
+            "SELECT binding FROM generated_document_deliveries WHERE document_id=? AND revision=1",
+            (document_id,),
+        ).fetchone()["binding"]
+        == "rotated"
+    )
+
+
+@pytest.mark.parametrize("change", ["content", "target"])
+def test_legacy_delivery_cannot_attribute_changed_content_or_borrow_new_target_binding(
+    db: sqlite3.Connection,
+    change: str,
+) -> None:
+    document_id = document(db)
+    coordinates = {
+        "host": "github.com",
+        "owner": "team",
+        "repo": "handbook",
+        "base_branch": "main",
+    }
+    target = json.dumps(coordinates)
+    docs_store.record_delivery(
+        db,
+        document_id,
+        destination="docs",
+        path="docs/policy.md",
+        reference="known-pr",
+        content_revision="known-sha",
+        target=target,
+        revision=1,
+        binding="approved",
+    )
+    original_receipt = dict(
+        db.execute(
+            "SELECT * FROM generated_document_deliveries WHERE document_id=?",
+            (document_id,),
+        ).fetchone()
+    )
+
+    docs_store.record_delivery(
+        db,
+        document_id,
+        destination="docs",
+        path="docs/policy.md",
+        reference="new-pr",
+        content_revision="changed-sha" if change == "content" else "known-sha",
+        target=target
+        if change == "content"
+        else json.dumps({**coordinates, "repo": "different"}),
+    )
+
+    current = docs_store.get_document(db, document_id)
+    assert current["published_revision"] is None
+    assert current["delivery_binding"] == ("approved" if change == "content" else None)
+    assert (
+        dict(
+            db.execute(
+                "SELECT * FROM generated_document_deliveries WHERE document_id=?",
+                (document_id,),
+            ).fetchone()
+        )
+        == original_receipt
+    )
+
+
+def test_explicit_receipt_without_coordinates_keeps_unknown_target_consistent(
+    db: sqlite3.Connection,
+    tmp_path: Path,
+) -> None:
+    from mycelium import documentation_archive
+    from mycelium.docgen import destinations
+
+    document_id = document(db)
+    docs_store.record_delivery(
+        db,
+        document_id,
+        destination="legacy",
+        path="docs/policy.md",
+        reference="legacy-pr",
+        content_revision="known-sha",
+        revision=1,
+    )
+    current = docs_store.get_document(db, document_id)
+    receipt = db.execute(
+        "SELECT * FROM generated_document_deliveries WHERE document_id=?",
+        (document_id,),
+    ).fetchone()
+    assert current["delivery_target"] == receipt["target"] == "{}"
+    assert current["delivery_binding"] is receipt["binding"] is None
+    documentation_archive._validate_history(db)
+
+    destinations.bind_legacy_deliveries(db)
+    source, staging = tmp_path / "source", tmp_path / "staging"
+    source.mkdir()
+    staging.mkdir()
+    with closing(docs_store.connect(source / documentation_archive.DB_NAME)) as copied:
+        db.backup(copied)
+    documentation_archive.write(source, staging)
+    prepared = documentation_archive.prepare(staging, required=True)
+    assert prepared is not None
+    with closing(docs_store.connect(prepared)) as restored:
+        row = docs_store.get_document(restored, document_id)
+        assert row["published_revision"] == 1
+        assert row["delivery_target"] == "{}"
+        assert row["delivery_binding"] is None
+
+
+@pytest.mark.parametrize("configured", [True, False])
+def test_legacy_startup_attributes_receipt_after_target_binding(
+    db: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: bool,
+) -> None:
+    import hashlib
+
+    from mycelium import documentation_archive
+    from mycelium.docgen import destinations
+
+    if configured:
+        configure(monkeypatch)
+    document_id = document(db)
+    body = "First body".encode()
+    git_revision = hashlib.sha1(
+        f"blob {len(body)}\0".encode() + body, usedforsecurity=False
+    ).hexdigest()
+    docs_store.record_delivery(
+        db,
+        document_id,
+        destination="docs",
+        path="docs/policy.md",
+        reference="legacy-pr",
+        content_revision=git_revision,
+    )
+
+    docs_store.migrate(db)
+    assert docs_store.get_document(db, document_id)["published_revision"] is None
+    assert (
+        db.execute("SELECT count(*) FROM generated_document_deliveries").fetchone()[0]
+        == 0
+    )
+    destinations.bind_legacy_deliveries(db)
+
+    current = docs_store.get_document(db, document_id)
+    receipt = db.execute(
+        "SELECT * FROM generated_document_deliveries WHERE document_id=?",
+        (document_id,),
+    ).fetchone()
+    assert current["published_revision"] == receipt["revision"] == 1
+    assert current["delivery_target"] == receipt["target"]
+    assert bool(json.loads(receipt["target"])) is configured
+    assert receipt["created_at"] is None
+    documentation_archive._validate_history(db)

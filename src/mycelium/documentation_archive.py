@@ -136,6 +136,36 @@ def _validate_history(conn: sqlite3.Connection) -> None:
     if missing_published:
         raise ValueError("documentation archive is missing a publication receipt")
     _validate_json(conn)
+    _validate_publication(conn)
+
+
+def _validate_publication(conn: sqlite3.Connection) -> None:
+    fields = {
+        "delivery_destination": "destination",
+        "delivery_path": "path",
+        "delivery_reference": "reference",
+        "delivery_content_revision": "content_revision",
+        "delivery_target": "target",
+        "delivery_binding": "binding",
+    }
+    columns = ", ".join(
+        f"d.{current}, p.{receipt} AS receipt_{receipt}"
+        for current, receipt in fields.items()
+    )
+    for row in conn.execute(
+        f"SELECT {columns} FROM generated_documents d "
+        "JOIN generated_document_deliveries p ON p.document_id = d.id "
+        "AND p.revision = d.published_revision"
+    ):
+        for current, receipt in fields.items():
+            actual, expected = row[current], row[f"receipt_{receipt}"]
+            if current == "delivery_target":
+                actual = json.loads(actual) if actual is not None else None
+                expected = json.loads(expected)
+            if actual != expected:
+                raise ValueError(
+                    "documentation publication metadata differs from its receipt"
+                )
 
 
 def _validate_json(conn: sqlite3.Connection) -> None:

@@ -187,10 +187,22 @@ def _add_document_revisions(conn: sqlite3.Connection) -> None:
         "SELECT id, current_revision, slug, title, guideline_set, document_type, body, "
         "statement_ids, review, updated_at, last_run_id FROM generated_documents"
     )
+    conn.execute(
+        "UPDATE documentation_runs SET result_revision = "
+        "(SELECT current_revision FROM generated_documents d WHERE d.id = documentation_runs.document_id AND d.last_run_id = documentation_runs.id) "
+        "WHERE result_revision IS NULL AND outcome = 'document_written'"
+    )
+    backfill_delivery_receipts(conn)
+
+
+def backfill_delivery_receipts(conn: sqlite3.Connection) -> None:
+    """Attribute complete legacy delivery metadata to a proven body version."""
     # A legacy receipt need not describe today's body. Only a matching Git blob
     # can establish which backfilled internal version was actually published.
     for row in conn.execute(
-        "SELECT * FROM generated_documents WHERE delivery_content_revision IS NOT NULL AND published_revision IS NULL"
+        "SELECT * FROM generated_documents WHERE delivery_content_revision IS NOT NULL AND published_revision IS NULL "
+        "AND delivery_destination IS NOT NULL AND delivery_target IS NOT NULL "
+        "AND delivery_path IS NOT NULL AND delivery_reference IS NOT NULL"
     ):
         body = row["body"].encode("utf-8")
         git_digest = hashlib.sha1(
@@ -202,11 +214,6 @@ def _add_document_revisions(conn: sqlite3.Connection) -> None:
                 (row["id"],),
             )
 
-    conn.execute(
-        "UPDATE documentation_runs SET result_revision = "
-        "(SELECT current_revision FROM generated_documents d WHERE d.id = documentation_runs.document_id AND d.last_run_id = documentation_runs.id) "
-        "WHERE result_revision IS NULL AND outcome = 'document_written'"
-    )
     conn.execute(
         "INSERT OR IGNORE INTO generated_document_deliveries "
         "(document_id, revision, destination, binding, target, path, reference, content_revision, created_at) "
@@ -935,21 +942,41 @@ def record_delivery(
     revision: int | None = None,
     binding: str | None = None,
 ) -> None:
-    """Record a completed delivery without accepting or rewriting content."""
+    """Record a completed delivery without accepting or rewriting content.
+
+    Legacy omissions retain a known revision only for the same delivered content
+    and location. A credential binding may carry forward only at the same target;
+    missing metadata never authorizes a changed publication destination.
+    """
     try:
         conn.execute("BEGIN IMMEDIATE", ())
-        if revision is not None and get_revision(conn, document_id, revision) is None:
-            raise ValueError("generated document revision not found")
+        current = get_document(conn, document_id)
+        if current is None:
+            raise ValueError(f"generated document not found: {document_id}")
         if expected_body_digest is not None and revision is None:
-            current = conn.execute(
-                "SELECT body FROM generated_documents WHERE id = ?", (document_id,)
-            ).fetchone()
-            if current is None:
-                raise ValueError(f"generated document not found: {document_id}")
             if body_digest(str(current["body"])) != expected_body_digest:
                 raise ValueError(
                     "document changed while delivery was in progress; retry delivery"
                 )
+        same_target = (
+            destination == current["delivery_destination"]
+            and target is not None
+            and current["delivery_target"] is not None
+            and json.loads(target) == json.loads(current["delivery_target"])
+        )
+        if binding is None and same_target:
+            binding = current["delivery_binding"]
+        if (
+            revision is None
+            and same_target
+            and path == current["delivery_path"]
+            and content_revision == current["delivery_content_revision"]
+        ):
+            revision = current["published_revision"]
+        if revision is not None:
+            if get_revision(conn, document_id, revision) is None:
+                raise ValueError("generated document revision not found")
+            target = target if target is not None else "{}"
         cursor = conn.execute(
             "UPDATE generated_documents SET delivery_destination = ?, "
             "delivery_path = ?, delivery_reference = ?, "
@@ -974,6 +1001,8 @@ def record_delivery(
                 "(document_id, revision, destination, binding, target, path, reference, content_revision, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(document_id, revision) DO UPDATE SET "
+                "destination = excluded.destination, binding = excluded.binding, "
+                "target = excluded.target, path = excluded.path, "
                 "reference = excluded.reference, content_revision = excluded.content_revision, created_at = excluded.created_at",
                 (
                     document_id,

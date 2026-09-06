@@ -352,12 +352,17 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
             ),
         ),
         revision_target=RevisionTarget(
-            selected, 3, CurrentDocument("Internal body the user selected")
+            selected,
+            3,
+            CurrentDocument(
+                "Internal body the user selected", content_revision="b" * 40
+            ),
         ),
         load_current_document=unexpected_external_read,
     )
     assert isinstance(result, DocumentWritten)
     assert result.matched_document_id == "gdc_selected"
+    assert result.matched_content_revision == "b" * 40
     assert result.matched_body_digest == selected.body_digest
     assert (
         "Internal body the user selected" in client.calls[0]["messages"][0]["content"]

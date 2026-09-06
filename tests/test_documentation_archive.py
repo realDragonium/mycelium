@@ -177,3 +177,74 @@ def test_unresolved_legacy_destination_remains_restorable(tmp_path):
         row = docs_store.get_document(conn, document)
         assert row["delivery_target"] == "{}"
         assert row["delivery_binding"] is None
+
+
+def test_force_restore_refuses_unrecoverable_document_only_target(tmp_path):
+    source, target = tmp_path / "source", tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    with closing(store.connect(source / "mycelium.db")) as conn:
+        store.migrate(conn)
+    with closing(docs_store.connect(target / documentation_archive.DB_NAME)) as conn:
+        docs_store.migrate(conn)
+        document = docs_store.upsert_document(
+            conn, slug="only-copy", title="Only copy", body="Keep"
+        )
+    archive = tmp_path / "backup.tar.gz"
+    backup.export_substrate(source, archive, include_vectors=False)
+    with pytest.raises(ValueError, match="Cannot safely overwrite documentation"):
+        backup.import_substrate(archive, target, force=True)
+    assert not (target / "mycelium.db").exists()
+    with closing(docs_store.connect(target / documentation_archive.DB_NAME)) as conn:
+        assert docs_store.get_document(conn, document)["body"] == "Keep"
+
+
+@pytest.mark.parametrize(
+    "field", ["delivery_path", "delivery_target", "delivery_binding"]
+)
+def test_archive_rejects_publication_that_disagrees_with_receipt(tmp_path, field):
+    source, staging = tmp_path / "source", tmp_path / "staging"
+    source.mkdir()
+    staging.mkdir()
+    target = json.dumps(
+        {
+            "host": "github.com",
+            "owner": "example",
+            "repo": "docs",
+            "base_branch": "main",
+        }
+    )
+    with closing(docs_store.connect(source / documentation_archive.DB_NAME)) as conn:
+        docs_store.migrate(conn)
+        document = docs_store.upsert_document(
+            conn, slug="page", title="Page", body="Body"
+        )
+        docs_store.record_delivery(
+            conn,
+            document,
+            destination="docs",
+            binding="approved",
+            target=target,
+            path="docs/page.md",
+            reference="https://github.com/example/docs/pull/1",
+            content_revision="sha",
+            revision=1,
+        )
+    documentation_archive.write(source, staging)
+    path = staging / documentation_archive.FILE_NAME
+    payload = json.loads(path.read_text())
+    # Equivalent coordinate JSON stays valid despite different whitespace/key order.
+    payload["tables"]["generated_documents"][0]["delivery_target"] = json.dumps(
+        json.loads(target), sort_keys=True, indent=2
+    )
+    path.write_text(json.dumps(payload))
+    assert documentation_archive.prepare(staging, required=True) is not None
+    (staging / "documentation-validated.db").unlink()
+    payload["tables"]["generated_documents"][0][field] = (
+        json.dumps({**json.loads(target), "repo": "different"})
+        if field == "delivery_target"
+        else "different"
+    )
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="differs from its receipt"):
+        documentation_archive.prepare(staging, required=True)

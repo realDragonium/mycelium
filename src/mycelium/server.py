@@ -2369,6 +2369,7 @@ def request_documentation(
     `provider` selects claude or openai; omitted uses saved documentation settings
     (default claude). The configured model is captured for writing and review.
     Use list_documentation_models for available choices.
+    match_existing defaults to True; False disables matching an existing document.
     Returns {run row: id, prompt, guideline_set, document_type, provider, model, status,
     created_at, created_by, started_at, finished_at, outcome, document_id,
     error}."""
