@@ -51,6 +51,38 @@ def test_commit_failure_rolls_back_and_connection_remains_usable():
     assert store.get_entity_by_id(conn, persisted_id) is not None
 
 
+@pytest.mark.parametrize(
+    "rollback_error", [sqlite3.OperationalError("rollback failed"), KeyboardInterrupt()]
+)
+def test_body_error_survives_rollback_failure(rollback_error: BaseException):
+    class FailingRollbackConnection(sqlite3.Connection):
+        def rollback(self) -> None:
+            super().rollback()
+            raise rollback_error
+
+    conn = sqlite3.connect(":memory:", factory=FailingRollbackConnection)
+    conn.row_factory = sqlite3.Row
+    store.migrate(conn)
+    original = ValueError("transaction body failed")
+    try:
+        with pytest.raises(BaseException) as raised:
+            with store.transaction(conn):
+                doomed_id = store.create_entity(conn, "doomed")
+                raise original
+
+        assert raised.value is original
+        assert not store.in_transaction(conn)
+        assert not conn.in_transaction
+        assert store.get_entity_by_id(conn, doomed_id) is None
+        with store.transaction(conn):
+            persisted_id = store.create_entity(conn, "persisted")
+        assert not store.in_transaction(conn)
+        assert not conn.in_transaction
+        assert store.get_entity_by_id(conn, persisted_id) is not None
+    finally:
+        conn.close()
+
+
 def test_entity_and_name_roundtrip():
     conn = fresh_conn()
     eid = store.create_entity(conn, "User authentication surface")

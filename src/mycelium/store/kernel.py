@@ -91,7 +91,8 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
             yield conn
         except BaseException:
             if depth == 0:
-                conn.rollback()
+                with suppress(BaseException):
+                    conn.rollback()
             raise
         else:
             if depth == 0:
