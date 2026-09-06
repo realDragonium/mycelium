@@ -1,12 +1,11 @@
 """Tunables for the `ingest` write-harness loop.
 
-Model choices use saved per-action settings, with environment defaults before
-the first save. Other task budgets come from `MYCELIUM_INGEST_*` variables.
+Model choices use saved per-action settings, with legacy environment values imported
+once on upgrade. Other task budgets come from `MYCELIUM_INGEST_*` variables.
 
 The model default is **Sonnet** (`claude-sonnet-4-6`) — one model, one context
 drives extract -> reconcile -> classify -> link -> emit. The id is config,
-never hardcoded in logic; choose it in AI settings or supply the initial
-`MYCELIUM_INGEST_MODEL` environment default.
+never hardcoded in logic; choose it in AI settings.
 
 `ingest` runs hotter than `ask`: it reconciles *every* extracted candidate
 against the substrate, so the op cap and wall clock are larger.

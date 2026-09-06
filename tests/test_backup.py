@@ -964,7 +964,19 @@ def test_export_without_a_prompts_db_carries_no_prompts_section(tmp_path):
 
     dst = tmp_path / "dst"
     backup.import_substrate(archive, dst)
-    assert not (dst / backup.PROMPTS_DB_NAME).exists()
+    from mycelium import draft_review_settings, prompt_store
+
+    settings_conn = prompt_store.connect(dst / backup.PROMPTS_DB_NAME)
+    try:
+        assert not draft_review_settings.load_controls(
+            settings_conn
+        ).application_enabled
+        assert draft_review_settings.load_controls(settings_conn).mode == "off"
+        assert settings_conn.execute(
+            "SELECT 1 FROM instance_settings_migrations WHERE name = 'environment-import-disabled'"
+        ).fetchone()
+    finally:
+        settings_conn.close()
     assert _row_count(dst, "statements") == _row_count(src, "statements")
 
 

@@ -780,8 +780,8 @@ directories using fake embeddings.
 
 ## Configuration
 
-All runtime configuration is via environment variables; no config files
-beyond `pyproject.toml` are read. The substrate honours `MYCELIUM_DATA_DIR`
+Administrators choose per-action models and draft review controls in AI settings.
+Deployment configuration remains in environment variables. The substrate honours `MYCELIUM_DATA_DIR`
 for the database directory (default `./.mycelium/`), `OLLAMA_URL` for the
 Ollama endpoint (default `http://localhost:11434`), `EMBED_MODEL` for the
 embedding model (default `nomic-embed-text`), `MYCELIUM_HTTP_HOST` for

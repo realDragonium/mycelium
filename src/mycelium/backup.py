@@ -547,6 +547,13 @@ def import_substrate(
             staging, bool(manifest.get("includes_model_settings"))
         )
         _prepare_restore_target(data_dir, force=force)
+        from . import prompt_store
+
+        settings_db = prompt_store.connect(data_dir / PROMPTS_DB_NAME)
+        try:
+            prompt_store.prepare_settings(settings_db, import_environment=False)
+        finally:
+            settings_db.close()
 
         row_counts = manifest.get("row_counts")
         if not isinstance(row_counts, dict):
@@ -592,6 +599,13 @@ def import_substrate(
         if review_settings is not None:
             _restore_review_settings(data_dir / PROMPTS_DB_NAME, review_settings)
         _restore_model_settings(data_dir / PROMPTS_DB_NAME, models)
+
+        settings_db = prompt_store.connect(data_dir / PROMPTS_DB_NAME)
+        try:
+            prompt_store.migrate(settings_db)
+            prompt_store.initialize_settings(settings_db, import_environment=False)
+        finally:
+            settings_db.close()
 
         # Vector files: copy back if present in the archive. Otherwise leave
         # the data dir without them; the server's next `init()` rebuilds each

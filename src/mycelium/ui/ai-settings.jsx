@@ -13,7 +13,7 @@ function DraftReviewSettings() {
 
   const accept = data => {
     setSettings(data);
-    setForm({ mode: data.mode, provider: data.provider, model: data.model, reviewer_id: data.reviewer_id, revision: data.revision, model_revision: data.model_revision });
+    setForm({ application_enabled: data.application_enabled, mode: data.mode, provider: data.provider, model: data.model, reviewer_id: data.reviewer_id, revision: data.revision, model_revision: data.model_revision });
   };
   const reload = React.useCallback(async () => {
     setBusy(true); setError(null); setSaved(false);
@@ -80,14 +80,17 @@ function DraftReviewSettings() {
       <p style={{ marginTop: 0 }}>
         Current: {settings.mode === 'off' ? 'Off' : settings.mode === 'review-only' ? 'Review only' : 'Review and apply'}
         {' · '}{draftReviewProviderName(settings.provider)}{settings.model ? ` · ${settings.model}` : ' · No model configured'}.
-        {' '}{settings.source === 'saved' ? 'Saved in Mycelium.' : 'Using server environment defaults.'}
+        {' '}{settings.source === 'saved' ? 'Saved in Mycelium.' : 'Using built-in defaults.'}
       </p>
       {settings.issues.length > 0 && <ul style={{ paddingLeft: 20 }}>{settings.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}
-      <p>Automatic application is {settings.application_enabled ? 'enabled' : 'disabled'} on the server.
-        {!settings.application_enabled && ' To apply reviewed drafts automatically, the server administrator must enable MYCELIUM_REVIEWED_APPLY.'}
-      </p>
+      <p>Applying accepted reviews is {settings.application_enabled ? 'enabled' : 'disabled'}. This permission covers manual curator application and automatic application.</p>
       {settings.can_configure ? <form onSubmit={save}>
         <fieldset disabled={busy || conflict} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+          <label style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+            <input type="checkbox" checked={form.application_enabled} onChange={event => change('application_enabled', event.target.checked)} />
+            Allow applying accepted reviews
+          </label>
+          <p>Automatic application also requires Review and apply mode. This permission can be enabled while automatic reviews are Off.</p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
             <label style={fieldStyle}>Review mode
               <select aria-label="Review mode" style={inputStyle} value={form.mode} onChange={event => change('mode', event.target.value)}>
@@ -185,7 +188,7 @@ function ActionModelSettings({ settings, canConfigure }) {
   return <section aria-label={`${title} model settings`} style={{ padding: '18px 20px', marginBottom: 16, border: '1px solid var(--rule, var(--line))', borderRadius: 6, color: 'var(--ink-3)', fontSize: 13, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
     <h2 style={{ margin: 0, fontSize: 16, color: 'var(--ink)' }}>{title}</h2>
     <p>Current: {draftReviewProviderName(current.provider)} · {current.model || 'No model configured'}.
-      {' '}{current.source === 'saved' ? 'Saved in Mycelium.' : 'Using server environment defaults.'}
+      {' '}{current.source === 'saved' ? 'Saved in Mycelium.' : 'Using built-in defaults.'}
     </p>
     {settings.action === 'docgen' && <p>This is the default for new documents. You can choose a different provider in the generation screen.</p>}
     {current.configuration_error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{current.configuration_error} Save valid settings to enable this action.</p>}

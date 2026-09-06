@@ -30,7 +30,7 @@ profiles. The settings screen shows local credential availability; it does not
 make a provider request to test a model or establish account access. Provider
 errors remain explicit and never cause fallback to a different model.
 
-Before an action is first saved, its existing environment defaults apply:
+Existing instances import these legacy environment values once at upgrade, preserving saved values. Fresh instances use built-in defaults. Subsequent environment changes have no effect:
 
 | Action | Provider | Claude model | OpenAI model |
 | --- | --- | --- | --- |
@@ -45,9 +45,8 @@ OpenAI model IDs have no implicit default. Draft review retains its OpenAI defau
 provider and accepts the existing `MYCELIUM_DRAFT_REVIEW_MODEL` as the selected
 provider's initial model when its provider-specific variable is absent.
 
-After an action is saved, its provider and both model IDs come entirely from saved
-settings. Changing environment variables does not override that saved action.
-The separate `MYCELIUM_REVIEWED_APPLY` gate remains server-controlled.
+Each action’s provider and both model IDs come entirely from saved settings. Changing environment variables does not override that saved action.
+The administrator controls **Allow applying accepted reviews** in AI settings. This separate permission covers manual curator application and automatic application.
 
 ## Persistence and API
 
@@ -59,8 +58,7 @@ an invalid action, reports the configuration error, and presents blank fields
 for an administrator to repair with an explicit save. Other actions remain
 editable. Database-level failures still require operator repair. Backup refuses to omit
 unreadable instance configuration, and restore validates required settings
-sections before replacing the target. Older archives without settings retain
-legacy environment defaults.
+sections before replacing the target. Older archives without settings receive built-in defaults, with automation off; restore never imports the target environment.
 
 Authenticated `GET /api/model-settings` returns all five actions, their effective
 provider, selected model, remembered model IDs, source, and revision. Admin-only

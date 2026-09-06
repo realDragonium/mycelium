@@ -1,9 +1,9 @@
 """Tunables for the documentation-generation loop.
 
-Model choices use saved per-action settings, with environment defaults before
-the first save. Other task budgets come from `MYCELIUM_DOCGEN_*` variables.
+Model choices use saved per-action settings, with legacy environment values imported
+once on upgrade. Other task budgets come from `MYCELIUM_DOCGEN_*` variables.
 
-Claude remains the default and falls back to ingest's model. GPT uses an
+Claude remains the default, with the same built-in model as ingest. GPT uses an
 explicitly configured model ID. A generation
 run is shaped like `research` rather than like `ask` — it surveys the
 substrate before it writes a word — so the op cap and wall clock are sized

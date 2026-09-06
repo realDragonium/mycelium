@@ -14,6 +14,7 @@ from mycelium import ai, doc_runs, docgen, docs_store
 from mycelium.docgen.config import DocgenConfig, model_choices, resolve_provider
 from mycelium.docgen.loop import _execute
 from mycelium.docgen.schema import DocumentWritten, NothingWritten
+from settings_helpers import save_model
 from test_docgen import FakeGapReporter, _substrate
 
 
@@ -261,7 +262,7 @@ def test_configuration_keeps_claude_default_and_requires_gpt_model(monkeypatch):
     monkeypatch.delenv("MYCELIUM_DOCGEN_PROVIDER", raising=False)
     monkeypatch.delenv("MYCELIUM_DOCGEN_OPENAI_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("MYCELIUM_DOCGEN_MODEL", "configured-claude")
+    save_model("docgen", claude_model="configured-claude")
     assert DocgenConfig.from_env().model == "configured-claude"
     assert DocgenConfig.from_env().provider == "claude"
     assert DocgenConfig.from_env(provider="openai").model == ""
@@ -272,7 +273,7 @@ def test_configuration_keeps_claude_default_and_requires_gpt_model(monkeypatch):
 
 
 def test_admission_captures_model_before_worker_wait(monkeypatch, tmp_path):
-    monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "gpt-at-admission")
+    save_model("docgen", openai_model="gpt-at-admission")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     conn = docs_store.connect(tmp_path / "drafts.db")
     docs_store.migrate(conn)
@@ -296,7 +297,7 @@ def test_admission_captures_model_before_worker_wait(monkeypatch, tmp_path):
             provider="openai",
         )
         assert entered.wait(5)
-        monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "gpt-after-admission")
+        save_model("docgen", openai_model="gpt-after-admission")
         release.set()
         doc_runs.wait_all()
         row = docs_store.serialize_run(docs_store.get_run(conn, run_id))
@@ -324,7 +325,6 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
         return principal
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
-    monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "configured-gpt")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-claude-key")
     conn = docs_store.connect(tmp_path / "drafts.db")
@@ -333,7 +333,10 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
     prompt_store.migrate(prompts)
     prompt_store.save(prompts, type=guidelines.TYPE, name="public/how-to", text="steps")
     monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    prompt_store.use_connection(prompts)
+    save_model("docgen", openai_model="configured-gpt")
     monkeypatch.setattr(prompt_store, "connection", lambda: prompts)
+    monkeypatch.setattr(prompt_store, "is_configured", lambda: True)
     monkeypatch.setattr(
         doc_runs,
         "RUNNER",
@@ -398,7 +401,7 @@ def test_missing_gpt_configuration_refuses_before_creating_a_run(monkeypatch, tm
                 conn=conn,
                 provider="openai",
             )
-        monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "configured-gpt")
+        save_model("docgen", openai_model="configured-gpt")
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             doc_runs.start_run(
                 prompt="SSO",
@@ -561,7 +564,7 @@ def test_broken_claude_profile_does_not_hide_configured_gpt(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_PROFILE", " invalid-profile")
-    monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "configured-gpt")
+    save_model("docgen", openai_model="configured-gpt")
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
     choices = model_choices()
     assert choices[0]["available"] is False

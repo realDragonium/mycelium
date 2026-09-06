@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +9,8 @@ from fastapi.testclient import TestClient
 from mycelium import auth, auth_store, drafts_store, server, store
 
 
-def _app(tmp_path, monkeypatch):
+@contextmanager
+def _app(tmp_path, monkeypatch, *, application_enabled=False):
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
@@ -21,7 +23,12 @@ def _app(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)
     from mycelium.http import app
 
-    return TestClient(app)
+    with TestClient(app) as client:
+        from settings_helpers import set_review_controls
+
+        if application_enabled:
+            set_review_controls(application_enabled=True)
+        yield client
 
 
 def _principal(role="writer"):
@@ -55,8 +62,7 @@ def _accepted_review(draft_id):
 def test_review_contract_refines_records_and_applies_when_enabled(
     tmp_path, monkeypatch
 ):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         draft_id = _submitted_entity_draft()
         token = _principal()
         try:
@@ -315,8 +321,7 @@ def test_statement_text_captures_name_resolution_precondition(tmp_path, monkeypa
 
 
 def test_apply_rechecks_affected_knowledge_and_real_tool_role(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         entity_id = server.upsert_entity("Existing", "before")["entity_id"]
         token = _principal("drafter")
         session = auth.current_session_id.set("delete-test")
@@ -363,8 +368,7 @@ def test_apply_rechecks_affected_knowledge_and_real_tool_role(tmp_path, monkeypa
 
 
 def test_commit_before_finalization_recovers_without_replay(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         draft_id = _submitted_entity_draft()
         token = _principal()
         review = _accepted_review(draft_id)
@@ -410,8 +414,7 @@ def test_commit_before_finalization_recovers_without_replay(tmp_path, monkeypatc
 
 
 def test_interrupted_claim_with_stale_knowledge_is_failed(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         entity_id = server.upsert_entity("Changing", "before")["entity_id"]
         token = _principal("drafter")
         session = auth.current_session_id.set("stale-claim")
@@ -452,8 +455,7 @@ def test_interrupted_claim_with_stale_knowledge_is_failed(tmp_path, monkeypatch)
 
 
 def test_soft_replay_rejection_rolls_back_and_records_failure(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         conn = server._drafts_db()
         draft_id = drafts_store.create_draft(
             conn, created_by="drafter-1", session_id=None
@@ -493,8 +495,7 @@ def test_soft_replay_rejection_rolls_back_and_records_failure(tmp_path, monkeypa
 
 
 def test_failure_before_substrate_commit_is_durable(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         draft_id = _submitted_entity_draft()
         token = _principal()
         review = _accepted_review(draft_id)
@@ -524,8 +525,7 @@ def test_failure_before_substrate_commit_is_durable(tmp_path, monkeypatch):
 
 
 def test_exception_after_substrate_commit_recovers_same_attempt(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         draft_id = _submitted_entity_draft()
         token = _principal()
         review = _accepted_review(draft_id)
@@ -581,8 +581,7 @@ def test_active_claim_blocks_manual_apply_and_edits(tmp_path, monkeypatch):
 
 
 def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
-    with _app(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch, application_enabled=True):
         draft_id = _submitted_entity_draft()
         token = _principal()
         try:

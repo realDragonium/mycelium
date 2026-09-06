@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import httpx
 
 from . import ai
@@ -34,20 +32,15 @@ or clarity benefit.
 def assess(
     context: str,
     *,
-    model: str | None = None,
+    model: str,
     provider: ai.Provider = "openai",
     client: httpx.Client | None = None,
 ) -> Assessment:
-    selected_model = (
-        model
-        if model is not None
-        else os.environ.get("MYCELIUM_DRAFT_REVIEW_MODEL", "").strip()
-    )
     result = ai.structured(
         ai.StructuredTask(system=SYSTEM, prompt=context, output_type=Assessment),
         ai.ModelConfig(
             provider=provider,
-            model=selected_model,
+            model=model,
             max_tokens=6000,
             request_timeout_s=90,
             max_retries=0,

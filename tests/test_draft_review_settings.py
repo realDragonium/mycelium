@@ -22,7 +22,14 @@ from mycelium import (
     draft_review_settings as settings,
 )
 from test_backup import _seed_substrate
-from test_internal_draft_review import _assessment, _draft, _request, _result
+from test_internal_draft_review import (
+    _assessment,
+    _draft,
+    _request,
+    _result,
+    _set_review_controls,
+    _set_review_model,
+)
 from test_internal_draft_review import running_app as running_app
 
 
@@ -32,6 +39,7 @@ def configured_app(running_app, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-claude-key")
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODEL", "gpt-fixture")
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_PROVIDER", "openai")
+    _set_review_model("gpt-fixture")
     return running_app
 
 
@@ -41,6 +49,7 @@ def _body(client, **changes):
         **{
             key: current[key]
             for key in (
+                "application_enabled",
                 "mode",
                 "provider",
                 "model",
@@ -56,15 +65,15 @@ def _body(client, **changes):
 def test_save_persists_and_environment_cannot_override(configured_app, monkeypatch):
     client, reviewer = configured_app
     initial = client.get("/api/draft-review/settings").json()
-    assert initial["source"] == "environment"
-    assert initial["revision"] == 0
+    assert initial["source"] == "saved"
+    assert initial["revision"] == 2
     assert initial["reviewer_id"] == reviewer
     assert initial["ready"] is True
     assert initial["application_enabled"] is False
     body = _body(client, mode="review-only", provider="claude", model="claude-fixture")
     response = client.patch("/api/draft-review/settings", json=body)
     assert response.status_code == 200, response.text
-    assert response.json()["revision"] == 1
+    assert response.json()["revision"] == 3
     assert response.json()["source"] == "saved"
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODEL", "changed-environment")
@@ -78,7 +87,7 @@ def test_save_persists_and_environment_cannot_override(configured_app, monkeypat
         conn.close()
     assert client.patch("/api/draft-review/settings", json=body).status_code == 409
     same = client.patch("/api/draft-review/settings", json=_body(client))
-    assert same.json()["revision"] == 1
+    assert same.json()["revision"] == 3
     assert "fixture-openai-key" not in response.text
     assert "fixture-claude-key" not in response.text
 
@@ -152,14 +161,14 @@ def test_corruption_fails_closed_and_is_not_environment_fallback(
 
 
 @pytest.mark.parametrize(
-    "change", ["off-on", "model", "provider", "reviewer", "review-only"]
+    "change", ["off-on", "gate-off-on", "model", "provider", "reviewer", "review-only"]
 )
 def test_any_settings_generation_change_prevents_old_automatic_action(
     configured_app, monkeypatch, change
 ):
     client, _ = configured_app
     draft_id = _draft()
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(application_enabled=True)
     assert (
         client.patch(
             "/api/draft-review/settings", json=_body(client, mode="review-and-apply")
@@ -178,6 +187,17 @@ def test_any_settings_generation_change_prevents_old_automatic_action(
                 auth.LOCAL_ADMIN,
             )
             changes = {"mode": "review-and-apply"}
+        elif change == "gate-off-on":
+            settings.save(
+                settings.SaveSettings(
+                    **{
+                        **current.model_dump(exclude={"source"}),
+                        "application_enabled": False,
+                    }
+                ),
+                auth.LOCAL_ADMIN,
+            )
+            changes = {"application_enabled": True}
         elif change == "model":
             changes = {"model": "gpt-new"}
         elif change == "provider":
@@ -201,7 +221,7 @@ def test_any_settings_generation_change_prevents_old_automatic_action(
     result = _result(draft_id)
     assert result["status"] == "completed", result
     assert result["application"] == "unapplied"
-    assert result["settings_revision"] == 1
+    assert result["settings_revision"] == 4
     assert drafts_store.list_reviews(server._drafts_db(), draft_id) == []
     assert server.get_draft(draft_id)["status"] == "submitted"
 
@@ -229,7 +249,7 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
         ).status_code
         == 200
     )
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(application_enabled=True)
     try:
         first = _draft()
         assert entered.wait(5)
@@ -273,7 +293,7 @@ def test_fresh_rerun_uses_current_settings(configured_app, monkeypatch):
         ).status_code
         == 200
     )
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(application_enabled=True)
     _request(draft_id, rerun=True)
     after = _result(draft_id)
     assert before["application"] == "unapplied"
@@ -404,7 +424,9 @@ def test_settings_backup_restore_and_legacy_archive(tmp_path, monkeypatch):
     _seed_substrate(src)
     conn = prompt_store.connect(src / backup.PROMPTS_DB_NAME)
     prompt_store.migrate(conn)
-    saved = settings.Controls(mode="review-only", reviewer_id="reviewer")
+    saved = settings.Controls(
+        mode="review-only", reviewer_id="reviewer", application_enabled=True
+    )
     conn.execute(
         "INSERT INTO draft_review_settings VALUES (1, 8, ?)", (saved.model_dump_json(),)
     )
@@ -425,7 +447,21 @@ def test_settings_backup_restore_and_legacy_archive(tmp_path, monkeypatch):
     _seed_substrate(legacy)
     old = tmp_path / "old.tar.gz"
     backup.export_substrate(legacy, old)
+    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
+    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    monkeypatch.setenv("MYCELIUM_ASK_MODEL", "ambient-model")
     backup.import_substrate(old, tmp_path / "old-restored")
+    restored = prompt_store.connect(tmp_path / "old-restored" / backup.PROMPTS_DB_NAME)
+    try:
+        prompt_store.initialize_settings(restored)
+        assert settings.load_controls(restored).mode == "off"
+        assert not settings.load_controls(restored).application_enabled
+        assert (
+            model_settings.get("ask", conn=restored).model
+            == model_settings.defaults("ask").claude_model
+        )
+    finally:
+        restored.close()
 
 
 @pytest.mark.parametrize("corrupt", [True, False])
@@ -505,14 +541,7 @@ def test_actions_persist_independent_models_and_remember_alternate(
             "MYCELIUM_" + action.upper() + "_OPENAI_MODEL", "ignored-env"
         )
         assert model_settings.get(action).model == f"gpt-{index}"
-        selected = model_settings.resolve(
-            action,
-            provider="claude",
-            claude_model="ignored",
-            openai_model="ignored",
-            override="claude",
-        )
-        assert selected.model == f"claude-{index}"
+
     from mycelium.ask.config import AskConfig
     from mycelium.docgen.config import DocgenConfig
     from mycelium.ingest.config import IngestConfig
@@ -528,7 +557,7 @@ def test_actions_persist_independent_models_and_remember_alternate(
     assert settings.load().model == "gpt-4"
     review = client.get("/api/draft-review/settings").json()
     assert review["model"] == "gpt-4"
-    assert review["model_revision"] == 1
+    assert review["model_revision"] == 3
     assert review["claude_model"] == "claude-4"
 
 
@@ -542,7 +571,7 @@ def test_review_controls_and_model_save_are_atomic_with_cas(configured_app):
     assert client.patch("/api/draft-review/settings", json=stale).status_code == 409
     view = client.get("/api/draft-review/settings").json()
     assert view["mode"] == "off"
-    assert view["revision"] == 0
+    assert view["revision"] == 2
     assert view["model"] == "new-model"
     assert (
         client.patch(
@@ -554,7 +583,7 @@ def test_review_controls_and_model_save_are_atomic_with_cas(configured_app):
     shared = model_settings.get("draft_review")
     assert shared.model == "new-claude"
     assert shared.openai_model == "new-model"
-    assert shared.revision == 2
+    assert shared.revision == 4
 
 
 @pytest.mark.parametrize("role", ["reader", "drafter", "writer", "admin"])
@@ -584,7 +613,7 @@ def test_model_setting_change_alone_invalidates_automatic_review(
         ).status_code
         == 200
     )
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(application_enabled=True)
 
     def model(context):
         current = model_settings.get("draft_review")
@@ -605,8 +634,8 @@ def test_model_setting_change_alone_invalidates_automatic_review(
     result = _result(draft_id)
     assert result["status"] == "completed"
     assert result["application"] == "unapplied"
-    assert result["settings_revision"] == 1
-    assert result["model_settings_revision"] == 1
+    assert result["settings_revision"] == 4
+    assert result["model_settings_revision"] == 2
     assert server.get_draft(draft_id)["status"] == "submitted"
 
 
@@ -684,7 +713,7 @@ def test_concurrent_model_saves_have_one_winner(configured_app):
             )
         )
     assert sorted(results) == [200, 409]
-    assert model_settings.get("ask").revision == 1
+    assert model_settings.get("ask").revision == 2
 
 
 @pytest.mark.parametrize("missing", [True, False])
@@ -766,13 +795,24 @@ def test_backup_controls_and_models_share_one_snapshot(tmp_path, monkeypatch):
     assert json.loads((staging / "model-settings.json").read_text())[0]["revision"] == 1
 
 
-@pytest.mark.parametrize("source", ["environment", "saved"])
+@pytest.mark.parametrize("source", ["invalid-provider", "saved"])
 def test_invalid_action_settings_are_explicitly_repairable(
     configured_app, monkeypatch, source
 ):
     client, _ = configured_app
-    if source == "environment":
-        monkeypatch.setenv("MYCELIUM_ASK_PROVIDER", "invalid-provider")
+    if source == "invalid-provider":
+        prompt_store.connection().execute(
+            "UPDATE model_settings SET body_json = ? WHERE action = 'ask'",
+            (
+                json.dumps(
+                    {
+                        "provider": "invalid-provider",
+                        "claude_model": "",
+                        "openai_model": "",
+                    }
+                ),
+            ),
+        )
     else:
         assert (
             client.patch(
@@ -803,7 +843,7 @@ def test_invalid_action_settings_are_explicitly_repairable(
     assert client.patch("/api/model-settings/ask", json=body).status_code == 409
 
 
-@pytest.mark.parametrize("broken", ["mode-environment", "controls", "model", "both"])
+@pytest.mark.parametrize("broken", ["controls", "model", "both"])
 def test_off_save_repairs_review_setup_without_credentials(
     configured_app, monkeypatch, broken
 ):
@@ -814,9 +854,6 @@ def test_off_save_repairs_review_setup_without_credentials(
         ).status_code
         == 200
     )
-    if broken == "mode-environment":
-        prompt_store.connection().execute("DELETE FROM draft_review_settings")
-        monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "invalid")
     if broken in ("controls", "both"):
         prompt_store.connection().execute(
             "UPDATE draft_review_settings SET body_json = '{bad'"
@@ -838,3 +875,84 @@ def test_off_save_repairs_review_setup_without_credentials(
     assert response.status_code == 200, response.text
     assert response.json()["configuration_error"] is None
     assert settings.load().mode == "off"
+
+
+def test_manual_application_permission_is_independent_of_automatic_review_setup(
+    configured_app,
+):
+    from test_reviewed_application import _accepted_review, _principal
+
+    client, _ = configured_app
+    draft_id = _draft()
+    assert (
+        client.patch(
+            "/api/draft-review/settings",
+            json=_body(
+                client, mode="off", application_enabled=True, model="", reviewer_id=""
+            ),
+        ).status_code
+        == 200
+    )
+    prompt_store.connection().execute(
+        "UPDATE model_settings SET body_json = '{bad' WHERE action = 'draft_review'"
+    )
+    token = _principal()
+    try:
+        review = _accepted_review(draft_id)
+        result = server.apply_reviewed_draft(draft_id, review["review_id"])
+    finally:
+        auth.current_principal.reset(token)
+    assert result["applied"] == 1
+
+
+def test_manual_application_checks_permission_after_waiting_for_write_lock(
+    configured_app, monkeypatch
+):
+    from test_reviewed_application import _accepted_review, _principal
+
+    client, _ = configured_app
+    draft_id = _draft()
+    assert (
+        client.patch(
+            "/api/draft-review/settings", json=_body(client, application_enabled=True)
+        ).status_code
+        == 200
+    )
+    token = _principal()
+    try:
+        review = _accepted_review(draft_id)
+    finally:
+        auth.current_principal.reset(token)
+    waiting = threading.Event()
+    original = server._identified_principal
+
+    def identified():
+        waiting.set()
+        return original()
+
+    monkeypatch.setattr(server, "_identified_principal", identified)
+
+    def apply():
+        token = _principal()
+        try:
+            return server.apply_reviewed_draft(draft_id, review["review_id"])
+        finally:
+            auth.current_principal.reset(token)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with store.write_lock():
+            result = executor.submit(apply)
+            assert waiting.wait(5)
+            current = settings.load()
+            settings.save(
+                settings.SaveSettings(
+                    **{
+                        **current.model_dump(exclude={"source"}),
+                        "application_enabled": False,
+                    }
+                ),
+                auth.LOCAL_ADMIN,
+            )
+        with pytest.raises(ValueError, match="disabled"):
+            result.result(timeout=5)
+    assert server.get_draft(draft_id)["status"] == "submitted"

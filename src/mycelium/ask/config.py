@@ -1,14 +1,14 @@
 """Tunables for the `ask` reasoning loop.
 
-Model choices use saved per-action settings, with environment defaults before
-the first save. Other task budgets come from `MYCELIUM_ASK_*` variables.
+Model choices use saved per-action settings, with legacy environment values imported
+once on upgrade. Other task budgets come from `MYCELIUM_ASK_*` variables.
 
 The model default is **Haiku** (`claude-haiku-4-5`). The spec originally
 mandated one model (Sonnet), but the ask loop's latency is dominated by
 per-call model inference across its sequential retrieval turns, and Haiku's
 much lower per-call latency is the only lever that brings a multi-hop answer
 under ~40s. The id is config, never hardcoded in logic; set
-`MYCELIUM_ASK_MODEL=claude-sonnet-4-6` before saving settings, or choose Sonnet
+`MYCELIUM_ASK_MODEL=claude-sonnet-4-6` before the one-time upgrade import, or choose Sonnet
 in AI settings. Unknown model pricing is omitted from the trace.
 """
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from typing import Literal
 
@@ -27,11 +26,12 @@ class Controls(BaseModel):
     )
     mode: Mode = "off"
     reviewer_id: str = Field(default="", max_length=200)
+    application_enabled: bool = False
 
 
 class ControlSnapshot(Controls):
     revision: int = Field(default=0, ge=0)
-    source: Literal["environment", "saved"] = "environment"
+    source: Literal["default", "saved"] = "default"
 
 
 class Settings(Controls):
@@ -42,7 +42,7 @@ class Settings(Controls):
 class Snapshot(Settings):
     revision: int = Field(default=0, ge=0)
     model_revision: int = Field(default=0, ge=0)
-    source: Literal["environment", "saved"] = "environment"
+    source: Literal["default", "saved"] = "default"
 
 
 class SaveSettings(Settings):
@@ -75,14 +75,7 @@ def load_controls(conn: sqlite3.Connection) -> ControlSnapshot:
             "SELECT revision, body_json FROM draft_review_settings WHERE singleton = 1"
         ).fetchone()
         if row is None:
-            return ControlSnapshot.model_validate(
-                {
-                    "mode": os.environ.get("MYCELIUM_DRAFT_REVIEW_MODE", "off").strip(),
-                    "reviewer_id": os.environ.get(
-                        "MYCELIUM_DRAFT_REVIEW_USER_ID", ""
-                    ).strip(),
-                }
-            )
+            return ControlSnapshot()
         controls = Controls.model_validate_json(row["body_json"])
         return ControlSnapshot(
             **controls.model_dump(), revision=row["revision"], source="saved"
@@ -103,7 +96,7 @@ def editable_controls(conn: sqlite3.Connection) -> tuple[ControlSnapshot, str | 
             ).fetchone()
             return ControlSnapshot(
                 revision=row["revision"] if row else 0,
-                source="saved" if row else "environment",
+                source="saved" if row else "default",
             ), str(exc)
         except (sqlite3.Error, ValidationError, RuntimeError):
             raise Unavailable("Instance review configuration cannot be read.") from None
@@ -122,7 +115,7 @@ def load(conn: sqlite3.Connection | None = None) -> Snapshot:
                 model_revision=model.revision,
                 source="saved"
                 if controls.source == "saved" or model.source == "saved"
-                else "environment",
+                else "default",
             )
     except RuntimeError:
         raise Unavailable(
@@ -159,7 +152,7 @@ def view(principal: auth.Principal) -> SettingsView:
             model_revision=model.revision,
             source="saved"
             if controls.source == "saved" or model.source == "saved"
-            else "environment",
+            else "default",
         )
     errors = [error for error in (controls_error, model_error) if error is not None]
     configuration_error = " ".join(errors) or None
@@ -178,7 +171,6 @@ def view(principal: auth.Principal) -> SettingsView:
         openai_model=model.openai_model,
         can_review=auth.principal_has_real_role(principal, "writer"),
         can_configure=principal.is_admin,
-        application_enabled=server._reviewed_apply_enabled(),
         ready=not issues,
         issues=issues,
         providers=[
@@ -192,7 +184,11 @@ def view(principal: auth.Principal) -> SettingsView:
 def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
     if not principal.is_admin:
         raise auth.RoleRequired("admin role required")
-    desired = Controls(mode=request.mode, reviewer_id=request.reviewer_id)
+    desired = Controls(
+        mode=request.mode,
+        reviewer_id=request.reviewer_id,
+        application_enabled=request.application_enabled,
+    )
     if desired.mode != "off":
         issues = configuration_issues(request)
         if issues:
@@ -220,7 +216,12 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
             ),
         )
         unchanged = (
-            Controls(mode=current.mode, reviewer_id=current.reviewer_id) == desired
+            Controls(
+                mode=current.mode,
+                reviewer_id=current.reviewer_id,
+                application_enabled=current.application_enabled,
+            )
+            == desired
         )
         if controls_error or not unchanged or current.source != "saved":
             db.execute(

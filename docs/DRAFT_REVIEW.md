@@ -20,8 +20,7 @@ Saving `off` is possible with an empty model or reviewer and no credentials.
 Enabled modes require those prerequisites. Model IDs must support the selected
 provider's structured outputs; account access is established only by a real run.
 
-Until the first save, these environment values supply the defaults. After that,
-saved review controls and model selections take precedence over their environment defaults.
+Existing instances import legacy environment values once at upgrade, preserving saved settings. Fresh instances start with reviews and reviewed application off. Subsequent environment changes do not change product settings.
 The shared model settings remember a separate Claude and OpenAI model ID; see
 [AI model configuration](AI_MODELS.md).
 
@@ -33,7 +32,7 @@ The shared model settings remember a separate Claude and OpenAI model ID; see
 | `OPENAI_API_KEY` | OpenAI API key supplied to the server process. |
 | Anthropic credentials | Claude uses the Anthropic SDK credential configuration, including `ANTHROPIC_API_KEY`, tokens, and profiles. |
 | `MYCELIUM_DRAFT_REVIEW_USER_ID` | Required ID of an active stored Mycelium writer/admin, independent of the draft creator. |
-| `MYCELIUM_REVIEWED_APPLY` | Existing application gate; defaults off. Set `on` to permit automatic changes in `review-and-apply`. |
+| `MYCELIUM_REVIEWED_APPLY` | Imported once on upgrade into Allow applying accepted reviews; defaults off on fresh instances. |
 
 Use an existing service user with the required role. The synthetic `local-admin`
 identity and a drafter account do not qualify, even when authentication is off.
@@ -51,7 +50,7 @@ Each run captures its mode, provider, model, reviewer account, and configuration
 revision when admitted, including runs waiting for a worker. Any saved settings
 change prevents an older active run from automatically editing, rejecting, or
 applying a draft. That run can finish with an advisory assessment; use **Run
-again** to assess it under the new configuration. Turning the mode off and back
+again** to assess it under the new configuration. Turning the mode or application permission off and back
 on does not restore an old run's authority. The reviewer remains subject to
 current account status and permissions before automatic changes.
 
@@ -63,8 +62,7 @@ settings disable review instead of reviving environment defaults. The settings
 form reports the error and allows an administrator to save an explicit repair;
 saving off does not depend on credentials or a valid reviewer. Backup refuses
 to omit unreadable instance settings; restore validates the required settings
-section before replacing an existing instance. Older archives without settings
-continue to use environment defaults.
+section before replacing an existing instance. Older archives without settings receive built-in defaults with automation off. Restore never imports the target environment.
 
 ## Evidence and scope
 

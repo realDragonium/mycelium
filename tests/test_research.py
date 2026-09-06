@@ -22,6 +22,7 @@ from mycelium.research import NothingFound, ResearchConfig, ResearchDraftCreated
 from mycelium.research.loop import run_research
 from mycelium.research.sources import Source, SourceError
 from mycelium.research.workspace import WorkspaceError
+from settings_helpers import save_model
 
 # --------------------------------------------------------------------------- #
 # Fakes (mirror test_ingest.py)
@@ -630,7 +631,7 @@ def test_no_source_and_no_workspace_returns_nothing_found():
 
 
 def test_config_from_env_reads_research_vars(monkeypatch):
-    monkeypatch.setenv("MYCELIUM_RESEARCH_MODEL", "claude-test-1")
+    save_model("research", claude_model="claude-test-1")
     monkeypatch.setenv("MYCELIUM_RESEARCH_OP_CAP", "42")
     monkeypatch.setenv("MYCELIUM_RESEARCH_WALL_CLOCK_S", "99.5")
     cfg = ResearchConfig.from_env()
@@ -646,7 +647,7 @@ def test_config_model_falls_back_to_ingest_default(monkeypatch):
     monkeypatch.delenv("MYCELIUM_INGEST_MODEL", raising=False)
     assert ResearchConfig.from_env().model == DEFAULT_MODEL
     monkeypatch.setenv("MYCELIUM_INGEST_MODEL", "claude-ingest-x")
-    assert ResearchConfig.from_env().model == "claude-ingest-x"
+    assert ResearchConfig.from_env().model == DEFAULT_MODEL
 
 
 # --------------------------------------------------------------------------- #

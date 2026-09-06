@@ -36,7 +36,7 @@ class ModelSnapshot(Selection):
     action: Action
     model: str
     revision: int = Field(ge=0)
-    source: Literal["environment", "saved"]
+    source: Literal["default", "saved"]
 
 
 class SaveSelection(Selection):
@@ -67,60 +67,26 @@ class Conflict(ValueError):
     pass
 
 
-def resolve(
-    action: Action,
-    *,
-    provider: str,
-    claude_model: str,
-    openai_model: str,
-    override: Provider | None = None,
-    conn: sqlite3.Connection | None = None,
-) -> ModelSnapshot:
-    try:
-        row = None
-        if conn is not None or prompt_store.is_configured():
-            db = conn if conn is not None else prompt_store.connection()
-            row = db.execute(
-                "SELECT revision, body_json FROM model_settings WHERE action = ?",
-                (action,),
-            ).fetchone()
-        selected = (
-            Selection.model_validate_json(row["body_json"])
-            if row
-            else Selection.model_validate(
-                {
-                    "provider": provider,
-                    "claude_model": claude_model,
-                    "openai_model": openai_model,
-                }
-            )
-        )
-        chosen = override or selected.provider
-        return ModelSnapshot(
-            action=action,
-            provider=chosen,
-            claude_model=selected.claude_model,
-            openai_model=selected.openai_model,
-            model=selected.claude_model
-            if chosen == "claude"
-            else selected.openai_model,
-            revision=row["revision"] if row else 0,
-            source="saved" if row else "environment",
-        )
-    except (sqlite3.Error, ValidationError, RuntimeError):
-        raise Unavailable(
-            f"Model settings for {action} cannot be read; the action is disabled."
-        ) from None
-
-
-def get(action: Action, *, conn: sqlite3.Connection | None = None) -> ModelSnapshot:
+def defaults(action: Action) -> Selection:
     from .ask.config import DEFAULT_MODEL as ASK_MODEL
     from .ingest.config import DEFAULT_MODEL as INGEST_MODEL
 
-    prefix = "MYCELIUM_" + action.upper()
-    provider = os.environ.get(
-        prefix + "_PROVIDER", "openai" if action == "draft_review" else "claude"
+    return Selection(
+        provider="openai" if action == "draft_review" else "claude",
+        claude_model=""
+        if action == "draft_review"
+        else ASK_MODEL
+        if action == "ask"
+        else INGEST_MODEL,
+        openai_model="",
     )
+
+
+def legacy_selection(action: Action) -> dict[str, str]:
+    """Capture legacy values without hiding invalid configuration during migration."""
+    default = defaults(action)
+    prefix = "MYCELIUM_" + action.upper()
+    provider = os.environ.get(prefix + "_PROVIDER", default.provider)
     if action == "draft_review":
         legacy = os.environ.get(prefix + "_MODEL", "")
         claude = os.environ.get(
@@ -131,15 +97,40 @@ def get(action: Action, *, conn: sqlite3.Connection | None = None) -> ModelSnaps
         )
     else:
         fallback = (
-            ASK_MODEL
+            default.claude_model
             if action == "ask"
-            else (os.environ.get("MYCELIUM_INGEST_MODEL") or INGEST_MODEL)
+            else os.environ.get("MYCELIUM_INGEST_MODEL") or default.claude_model
         )
         claude = os.environ.get(prefix + "_MODEL") or fallback
         openai = os.environ.get(prefix + "_OPENAI_MODEL", "")
-    return resolve(
-        action, provider=provider, claude_model=claude, openai_model=openai, conn=conn
-    )
+    return {"provider": provider, "claude_model": claude, "openai_model": openai}
+
+
+def get(action: Action, *, conn: sqlite3.Connection | None = None) -> ModelSnapshot:
+    try:
+        row = None
+        if conn is not None or prompt_store.is_configured():
+            db = conn if conn is not None else prompt_store.connection()
+            row = db.execute(
+                "SELECT revision, body_json FROM model_settings WHERE action = ?",
+                (action,),
+            ).fetchone()
+        selected = (
+            Selection.model_validate_json(row["body_json"]) if row else defaults(action)
+        )
+        return ModelSnapshot(
+            action=action,
+            **selected.model_dump(),
+            model=selected.claude_model
+            if selected.provider == "claude"
+            else selected.openai_model,
+            revision=row["revision"] if row else 0,
+            source="saved" if row else "default",
+        )
+    except (sqlite3.Error, ValidationError, RuntimeError):
+        raise Unavailable(
+            f"Model settings for {action} cannot be read; the action is disabled."
+        ) from None
 
 
 def provider_availability(provider: Provider) -> ProviderAvailability:
@@ -173,7 +164,7 @@ def editable(
                 openai_model="",
                 model="",
                 revision=row["revision"] if row else 0,
-                source="saved" if row else "environment",
+                source="saved" if row else "default",
             ), str(exc)
         except (sqlite3.Error, ValidationError, RuntimeError):
             raise Unavailable("Instance model configuration cannot be read.") from None

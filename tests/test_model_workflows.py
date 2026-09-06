@@ -21,6 +21,7 @@ from mycelium.research import run_research
 from mycelium.research.config import ResearchConfig
 from mycelium.research.schema import NothingFound, ResearchDraftCreated
 from mycelium.research.sources import Source
+from settings_helpers import save_model
 
 
 def _transport(
@@ -152,8 +153,8 @@ def test_openai_research_explores_and_reconciles_before_emitting(monkeypatch):
 
 
 def test_research_worker_keeps_model_selected_at_admission(monkeypatch, tmp_path):
-    monkeypatch.setenv("MYCELIUM_RESEARCH_PROVIDER", "openai")
-    monkeypatch.setenv("MYCELIUM_RESEARCH_OPENAI_MODEL", "admitted-model")
+    save_model("research", provider="openai")
+    save_model("research", openai_model="admitted-model")
     observed: list[ResearchConfig] = []
 
     def run(
@@ -164,7 +165,7 @@ def test_research_worker_keeps_model_selected_at_admission(monkeypatch, tmp_path
 
     monkeypatch.setattr(research, "run_research", run)
     runner = research_runs._default_runner(str(tmp_path))
-    monkeypatch.setenv("MYCELIUM_RESEARCH_OPENAI_MODEL", "changed-model")
+    save_model("research", openai_model="changed-model")
     runner("topic", source="fixture")
     assert observed[0].provider == "openai"
     assert observed[0].model == "admitted-model"
