@@ -34,6 +34,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import JsonValue
 
 from . import (
+    documentation_profiles,
     embed,
     link_authoring,
     link_rules,
@@ -48,6 +49,7 @@ from . import (
     when_expression,
 )
 from .app_context import AppContext
+from .auth import Principal as AuthPrincipal
 from .connect import aliases as connect_aliases
 from .connect import cue_gate
 from .connect import draft as connect_draft
@@ -1127,23 +1129,7 @@ def init(data_dir: Path) -> None:
 
 
 def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
-    """The prompt texts startup owns: (type, name, where that name's seed
-    text is read from).
-
-    The one place that knows which names startup writes. `prompt_store`
-    keeps `type` and `name` free strings and enumerates neither, so
-    seeded-ness is a fact of the seeding caller: `_seed_prompt_texts` reads
-    this to write the packaged defaults, and `retire_prompt_text` reads it
-    to refuse a retirement the next start would undo.
-
-    The third element is a callable rather than the file itself because the
-    two kinds of entry resolve differently and one of them can fail. A
-    doctrine's path comes from its loop config, so an env override moves it
-    and a malformed tunable raises; a guideline-set row is a packaged file
-    with nothing to resolve. Deferring both puts every resolution inside the
-    per-row guard in `_seed_prompt_texts`, where a failure costs one row.
-    """
-    from . import guidelines
+    """Loop doctrines whose packaged defaults remain available after restart."""
     from .agentloop import DOCTRINE_TYPE
     from .docgen.config import DOCTRINE_NAME as DOCGEN_DOCTRINE
     from .docgen.config import DocgenConfig
@@ -1168,12 +1154,6 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
             RESEARCH_DOCTRINE,
             lambda: Path(ResearchConfig.from_env().doctrine_path),
         ),
-        *(
-            # `path=path` binds the file per row; a bare closure over the
-            # loop variable would hand all seven rows the last one.
-            (guidelines.TYPE, guidelines.row_name(slot), lambda path=path: path)
-            for slot, path in guidelines.SOURCES.items()
-        ),
     )
 
 
@@ -1185,31 +1165,13 @@ def _is_seeded(type: str, name: str) -> bool:
 
 
 def _seed_prompt_texts() -> None:
-    """Put each packaged default in the store when it holds none: the three
-    loop doctrines and the rows of the shipped guideline set.
-
-    `save_if_absent` carries the whole idempotency story: every startup runs
-    this, and one that finds a row leaves it alone — so an operator's edit
-    survives restarts and no duplicate versions accumulate. It is also the
-    difference between this pass and `scripts/seed_guideline_sets.py`, which
-    supersedes a row whose file has moved on. A boot may not do that: the
-    file it would compare against is whatever the deployed image happens to
-    carry, so a redeploy would silently revert every edit an operator made.
-
-    A tombstone reads as "no live text", so a seeded name that was retired
-    at the store level comes back here at a new version. That is why
-    `retire_prompt_text` refuses these names outright: an operator learns
-    the rule when they try, rather than discovering it after a deploy.
-
-    Best-effort per row, resolution included: an instance that can't seed one
-    still starts. An unseeded doctrine still reaches its loop, because
-    `load_doctrine` falls back to this same file; an unseeded guideline-set
-    row is simply absent, and a generation run against it fails on its own
-    terms rather than taking the boot down with it. What a failure here
-    cannot repair is its own cause — a malformed loop tunable that stopped
-    `from_env` also raises when that loop runs.
-    """
+    """Seed starter profiles once; keep the established per-doctrine bootstrap."""
     from . import prompt_store
+
+    try:
+        documentation_profiles.seed_starters(_prompts_db())
+    except Exception:
+        logger.warning("could not seed documentation starter profiles", exc_info=True)
 
     for type, name, source in _seeded_prompt_texts():
         try:
@@ -5933,22 +5895,17 @@ def _actor_id() -> str | None:
 
 
 @tool(role="writer", real_role=True)
-def save_prompt_text(type: str, name: str, text: str) -> dict[str, Any]:
-    """Store a new version of a steering text under (type, name).
+def save_prompt_text(
+    type: str, name: str, text: str, expected_version: int | None = None
+) -> dict[str, object]:
+    """Save a steering text; optional expected_version rejects stale edits.
 
-    `type` and `name` are free strings — nothing enumerates them, so a new
-    sort of steering text needs no code change; consumers declare what they
-    load. Saving appends a version rather than rewriting one, and consumers
-    read at run start, so an edit applies to the next run with no restart.
-
-    Returns the stored row {id, type, name, text, version, deleted,
-    created_at, created_by}."""
-    from . import prompt_store
-
-    row = prompt_store.save(
-        _prompts_db(), type=type, name=name, text=text, created_by=_actor_id()
-    )
-    return prompt_store.serialize(row)
+    Guideline names use profile/slot. Individual saves support creating a
+    profile in stages; use save_documentation_profile for one atomic edit.
+    """
+    return documentation_profiles.save_text(
+        type, name, text, _prompt_principal(), revision=expected_version
+    ).model_dump()
 
 
 @tool
@@ -6002,29 +5959,78 @@ def list_prompt_text_versions(type: str, name: str) -> dict[str, Any]:
 
 @tool(role="admin", real_role=True)
 def retire_prompt_text(type: str, name: str) -> dict[str, Any]:
-    """Retire the text stored under (type, name): it stops being listed and
-    served, while its history stays readable and the name can be saved again.
+    """Retire a text, preserving history. Packaged loop doctrines remain protected.
 
-    Names that startup seeds — the `doctrine` texts `ingest` and `research`,
-    and every row of the shipped `kb-authoring` guideline set — are refused,
-    because startup would re-seed the packaged default at a new version and
-    undo the retirement at the next restart. Change one with
-    `save_prompt_text` instead.
-
-    Returns {"retired": true} — or false when nothing live was stored
-    there."""
-    from . import prompt_store
-
+    Documentation starters are user-owned; only an active default's final
+    template is protected until another default is selected.
+    """
     if _is_seeded(type, name):
         raise ValueError(
             f"prompt text '{type}/{name}' is seeded at startup and cannot be "
             f"retired: the next start would re-seed the packaged default at a "
             f"new version. Edit it with save_prompt_text instead."
         )
-    retired = prompt_store.delete(
-        _prompts_db(), type=type, name=name, created_by=_actor_id()
-    )
+    retired = documentation_profiles.retire_text(type, name, _prompt_principal())
     return {"retired": retired}
+
+
+def _prompt_principal() -> AuthPrincipal:
+    from . import auth
+
+    return auth.current_principal.get() or auth.LOCAL_ADMIN
+
+
+@tool
+def list_documentation_profiles() -> dict[str, object]:
+    """List documentation profiles, readiness and editing permissions."""
+    return documentation_profiles.view(_prompt_principal()).model_dump()
+
+
+@tool
+def get_documentation_profile(name: str) -> dict[str, object]:
+    """Read a profile and its revision for an atomic save."""
+    return documentation_profiles.read(name).model_dump()
+
+
+@tool(role="writer", real_role=True)
+def save_documentation_profile(
+    name: str,
+    revision: str,
+    guidance: str = "",
+    exposure: str = "",
+    templates: list[documentation_profiles.Template] | None = None,
+) -> dict[str, object]:
+    """Save a complete profile atomically. Removing existing slots requires admin."""
+    body = documentation_profiles.SaveProfile.model_validate(
+        {
+            "revision": revision,
+            "guidance": guidance,
+            "exposure": exposure,
+            "templates": templates or [],
+        }
+    )
+    return documentation_profiles.save(name, body, _prompt_principal()).model_dump()
+
+
+@tool(role="admin", real_role=True)
+def retire_documentation_profile(name: str, revision: str) -> dict[str, object]:
+    """Retire a profile while preserving history; configured defaults are protected."""
+    return documentation_profiles.retire(
+        name, revision, _prompt_principal()
+    ).model_dump()
+
+
+@tool(role="writer", real_role=True)
+def restore_prompt_text(
+    type: str, name: str, version: int, expected_version: int
+) -> dict[str, object]:
+    """Restore an earlier text as a new version without overwriting history."""
+    return documentation_profiles.restore_text(
+        documentation_profiles.RestoreText(
+            type=type, name=name, version=version, revision=expected_version
+        ),
+        _prompt_principal(),
+    ).model_dump()
 
 
 # --- draft management tools -----------------------------------------------

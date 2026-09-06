@@ -1,44 +1,8 @@
-"""Guideline sets: what a set is called in the store, and which one ships.
+"""Documentation profiles use the existing guideline-set/profile-slot convention.
 
-Two halves, both about the same convention (`docs/GUIDELINE_SETS.md`).
-
-The naming half — `TYPE`, `row_name`, and the two readers `catalogue` /
-`texts` — is about every set, shipped or not. A set is not a registry: it is
-whichever `<set>/<slot>` rows are live, so "which sets exist and what can each
-write" is a listing, and "give me the three texts this run writes against" is
-three lookups. Both live here so a caller never has to spell `<set>/<slot>`
-itself; a set added purely as config is therefore selectable with no code
-change anywhere.
-
-The shipping half — `SET_NAME`, `SOURCES`, `read_rows` — is about the one set
-that has source files, because an instance with an empty store has nothing to
-generate against and a fresh deployment has to arrive with something.
-
-A guideline set is what a documentation-generation run writes against: one
-set-wide `guidance` row, one set-wide `exposure` row, and one template row per
-document type. Sets live in `prompt_store` so an operator can edit or add one
-with a tool call.
-
-The files sit under `src/mycelium/` for the same reason the loop doctrines do:
-that is the tree the wheel carries and the image copies, so a deployment gets
-them without a checkout and without an operator running anything. `.claude/`
-is a local tool's configuration directory; nothing that has to reach a server
-can live there.
-
-Two callers SEED the shipped set, and they want different writes:
-
-- `server.init` seeds through `save_if_absent`, which never supersedes. An
-  operator's edit outlives every restart, and a boot against a seeded store
-  writes nothing.
-- `scripts/seed_guideline_sets.py` writes through `save`, which appends a new
-  version whenever the file has moved on. That is how an author pushes a
-  reworked template into an instance they hold a checkout of.
-
-Neither write belongs to the other, which is why this module stops at the
-paths and the names: it is the shared half — where each row's text comes from
-and what the row is called — and each caller keeps its own write. The readers
-below take a connection for the same reason: whose connection it is belongs
-to the caller (`server._prompts_db()`, a run thread's own), not here.
+Packaged files supply the initial examples. Once any guideline history exists,
+startup leaves it alone, including retired rows. Readers share the immutable
+profile snapshot adapter used by generation runs.
 """
 
 from __future__ import annotations
@@ -75,9 +39,7 @@ _SET_DIR = Path(__file__).resolve().parent / SET_NAME
 #: `exposure` steer the whole set; the rest are named for the document type
 #: they produce, so a run fetches exactly the template it is writing.
 #:
-#: Explicit rather than a directory scan: this list is also what startup
-#: refuses to let an operator retire, and a name that becomes un-retirable
-#: because a file appeared next to the templates would be a surprise.
+#: Explicit starter contents; subsequent deployments do not add or restore slots.
 SOURCES: dict[str, Path] = {
     "guidance": _SET_DIR / "guidance.md",
     "exposure": _SET_DIR / "exposure.md",
@@ -95,45 +57,19 @@ def row_name(slot: str, set_name: str = SET_NAME) -> str:
 
 
 def catalogue(conn: sqlite3.Connection) -> dict[str, list[str]]:
-    """Every configured set mapped to the document types it can write.
+    """Live, well-formed profiles mapped to their available document types."""
+    from ..documentation_profiles import capture
 
-    Derived from the live rows, never from a list in code: a set added with
-    three `save_prompt_text` calls appears here, and one whose rows were
-    retired disappears. The set-wide `guidance` and `exposure` slots are
-    excluded from every value because neither is something a run can be asked
-    to produce. A set present with only non-type rows maps to an empty list,
-    which reads as "configured but cannot write anything yet" rather than
-    vanishing.
-    """
-    from .. import prompt_store
-
-    sets: dict[str, set[str]] = {}
-    for row in prompt_store.list_current(conn, TYPE):
-        set_name, _, slot = row["name"].partition("/")
-        sets.setdefault(set_name, set()).add(slot)
-    return {
-        name: sorted(slots - NON_TYPE_SLOTS) for name, slots in sorted(sets.items())
-    }
+    return capture(conn).catalogue()
 
 
 def texts(
     conn: sqlite3.Connection, set_name: str, document_type: str
 ) -> tuple[str | None, str | None, str | None]:
-    """The three texts a run writes against: guidance, exposure, and template.
+    """Read guidance, exposure and template from one consistent snapshot."""
+    from ..documentation_profiles import capture
 
-    Three lookups rather than one omnibus row, which is the whole reason a set
-    is several rows (docs/GUIDELINE_SETS.md). Any may be None when the row is
-    absent or retired. Missing guidance only costs the run context, and a set
-    without exposure is not fatal — a later stage records that exposure went
-    unchecked. The template is still the only fatal absence.
-    """
-    from .. import prompt_store
-
-    return (
-        prompt_store.latest_text(conn, TYPE, row_name(GUIDANCE_SLOT, set_name)),
-        prompt_store.latest_text(conn, TYPE, row_name(EXPOSURE_SLOT, set_name)),
-        prompt_store.latest_text(conn, TYPE, row_name(document_type, set_name)),
-    )
+    return capture(conn).texts(set_name, document_type)
 
 
 def read_rows() -> dict[str, str]:

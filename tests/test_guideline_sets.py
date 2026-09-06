@@ -25,7 +25,6 @@ import re
 import sqlite3
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, guidelines, prompt_store, server, store
@@ -153,9 +152,8 @@ def test_startup_leaves_an_edited_row_alone(tmp_path, monkeypatch):
         assert [v["version"] for v in untouched] == [1]
 
 
-def test_an_unreadable_source_degrades_only_that_row(tmp_path, monkeypatch):
-    """Best-effort per row: one source that cannot be read costs that row and
-    nothing else — not its six siblings, not the doctrines, not the boot."""
+def test_an_unreadable_starter_leaves_no_partial_profile(tmp_path, monkeypatch):
+    """A failed starter seed is atomic and does not prevent doctrine bootstrap."""
     monkeypatch.setitem(
         guidelines.SOURCES, "reference", tmp_path / "gone" / "reference.md"
     )
@@ -165,34 +163,35 @@ def test_an_unreadable_source_degrades_only_that_row(tmp_path, monkeypatch):
             p["name"]
             for p in server.list_prompt_texts(type="guideline-set")["prompt_texts"]
         ]
-        assert names == [n for n in _KB_ROWS if n != "kb-authoring/reference"]
+        assert names == []
         assert [
             p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
         ] == ["docgen", "ingest", "research"]
 
 
-def test_retiring_a_seeded_guideline_row_is_refused(tmp_path, monkeypatch):
-    """Startup re-seeds these names, so a retirement would undo itself at the
-    next restart. The tool refuses at the moment of the attempt and appends no
-    tombstone — the same rule the doctrines live under."""
+def test_retiring_starter_template_survives_restart(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:
-        for name in _KB_ROWS:
-            with pytest.raises(ValueError, match="seeded at startup"):
-                server.retire_prompt_text("guideline-set", name)
-            versions = server.list_prompt_text_versions("guideline-set", name)[
-                "versions"
-            ]
-            assert [v["deleted"] for v in versions] == [False]
-
-        # Per name, not per type: a set nobody seeds is an ordinary text.
-        server.save_prompt_text("guideline-set", "internal-doc/guidance", "v1")
-        assert server.retire_prompt_text("guideline-set", "internal-doc/guidance") == {
+        assert server.retire_prompt_text("guideline-set", "kb-authoring/reference") == {
             "retired": True
         }
-
-
-# --- the checkout script, which does supersede ------------------------------
+        assert [
+            item["deleted"]
+            for item in server.list_prompt_text_versions(
+                "guideline-set", "kb-authoring/reference"
+            )["versions"]
+        ] == [True, False]
+    with _app(tmp_path, monkeypatch):
+        assert (
+            "reference"
+            not in guidelines.catalogue(server._prompts_db())["kb-authoring"]
+        )
+        assert [
+            item["version"]
+            for item in server.list_prompt_text_versions(
+                "guideline-set", "kb-authoring/reference"
+            )["versions"]
+        ] == [2, 1]
 
 
 def test_seed_writes_the_named_rows():

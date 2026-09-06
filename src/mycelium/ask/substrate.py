@@ -49,6 +49,8 @@ _NON_READ_READER_TOOLS = frozenset(
         "get_draft_review_run",  # internal review state
         "list_documentation_runs",  # documentation run history
         "get_documentation_run",  # documentation run state
+        "list_documentation_profiles",  # documentation configuration
+        "get_documentation_profile",  # documentation configuration
         "list_documentation_models",  # provider configuration
         "list_generated_documents",  # generated projections
         "get_generated_document",  # generated document state

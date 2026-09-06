@@ -7,9 +7,22 @@ store (`prompt_store`, its own `mycelium-prompts.db`) as ordinary rows, so
 adding, editing or replacing one is a tool call — never a code change and
 never a redeploy.
 
-This document is the convention. Nothing enforces it: `type` and `name` are
-free strings and the store never enumerates them. That is the point — a new
-documentation variant is data.
+Open **AI settings → Documentation profiles** in either UI to create, edit,
+duplicate or retire profiles and templates. The shared editor also shows text
+history and can restore earlier versions. Writers can save and restore;
+administrators can retire profiles or remove existing slots. The configured
+default profile's last template is protected until another default is selected.
+
+A save checks the profile revision and appends all changed slots atomically.
+Conflicts keep local edits visible until you reload. Existing MCP tools use the
+same validation; slot-by-slot creation remains supported, and a profile without
+a template is shown as incomplete. Templates keep stable names; duplicating a
+profile creates a new identity. Audience/disclosure guidance does not change
+access permissions on generated documents.
+
+**Advanced AI instructions** in settings edits the existing ingestion, research
+and documentation loop doctrines with the same version history and conflict
+checks. These doctrines retain their existing protection against retirement.
 
 ## The convention
 
@@ -66,7 +79,7 @@ on the next run, and one whose rows were retired stops being offered. A pair
 that does not appear together is sent back once and then refused; the run
 writes nothing rather than falling back to a set nobody configured.
 
-Having chosen, the run fetches its three texts — `<set>/guidance`,
+Having chosen, the run reads its three texts together from one store snapshot — `<set>/guidance`,
 `<set>/exposure`, and `<set>/<type>` — and writes against them. A named set
 that is not configured, or a type that set has no template for, is refused at
 the door by `request_documentation` instead of failing minutes later inside a
@@ -94,20 +107,15 @@ is a consumer of that same text, not a second copy of it: it points a reader
 who has a checkout at the guidance file and translates the row names into
 paths.
 
-**Two writers, on purpose.** `server.init` seeds through `save_if_absent`,
-which never supersedes: a boot against a store that already has these rows
-writes nothing, and an operator's edit outlives every restart and every
-redeploy. `scripts/seed_guideline_sets.py` writes through `save`, which
-compares each row against the stored latest version and appends a new one
-where the source has moved on — that is how an author publishes a reworked
-template into an instance they hold a checkout of, and `--dry-run` reports
-what it would supersede first. Both read the same files and build the same
-names, from `mycelium.guidelines`; only the write differs.
+Startup inserts the starter profile atomically only when no guideline-set
+history exists. Saved edits and retirement tombstones take precedence, including
+after backup restoration; redeploying does not synchronize template files into
+saved profiles. A missing starter file leaves no partial profile and does not
+prevent the server from starting.
 
-Because startup re-seeds them, these seven names cannot be retired.
-`retire_prompt_text` refuses them outright rather than letting the next
-restart quietly undo the retirement — edit them with `save_prompt_text`
-instead.
+The optional checkout script `scripts/seed_guideline_sets.py` remains an explicit
+import tool. Running it can overwrite UI edits with new versions; it is not part
+of startup or the normal editing workflow.
 
 **`internal-doc`** — four rows, a deliberately minimal set for terse
 internal notes. It exists to prove that a variant needs no code: it was added
@@ -146,12 +154,12 @@ get_prompt_text("guideline-set", "internal-doc/how-to")
 
 Editing a row is another `save_prompt_text` (it appends a version;
 `list_prompt_text_versions` shows the history). Withdrawing one is
-`retire_prompt_text`, which hides the name and keeps its past — unless
-startup seeds the name, which it does only for `kb-authoring`.
+`retire_prompt_text`, which hides the name and keeps its past. Bundled templates
+can also be retired, subject to the configured default reference.
 
-A set only needs source files when it has to survive a fresh deployment, as
-`kb-authoring` does. A set authored directly in the store has none, is not
-seeded, and needs neither.
+Saved profiles survive deployments and are included in instance backups.
+Source files are needed only for the packaged initial examples, not for profiles
+authored in the UI or through MCP.
 
 The cockpit's Documentation screen also offers a per-run Claude/GPT choice.
 See [Documentation models](DOCUMENTATION_MODELS.md) for server configuration and
