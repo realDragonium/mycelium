@@ -6212,9 +6212,12 @@ class DraftOperationFinding(TypedDict):
     finding: str
 
 
-def _payload_knowledge_ids(value: JsonValue) -> tuple[set[str], set[str]]:
+def _payload_knowledge_ids(
+    value: JsonValue,
+) -> tuple[set[str], set[str], set[str]]:
     entities: set[str] = set()
     statements: set[str] = set()
+    names: set[str] = set()
 
     def visit(item: JsonValue) -> None:
         if isinstance(item, dict):
@@ -6228,9 +6231,11 @@ def _payload_knowledge_ids(value: JsonValue) -> tuple[set[str], set[str]]:
                 entities.add(item)
             elif item.startswith("stm_"):
                 statements.add(item)
+            elif item.startswith("nam_"):
+                names.add(item)
 
     visit(value)
-    return entities, statements
+    return entities, statements, names
 
 
 def _fingerprint(value: JsonValue) -> str:
@@ -6243,9 +6248,13 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
     statement_ids: set[str] = set()
     for op in ops:
         payload = _json.loads(op["payload_json"])
-        entities, statements = _payload_knowledge_ids(payload)
+        entities, statements, names = _payload_knowledge_ids(payload)
         entity_ids.update(entities)
         statement_ids.update(statements)
+        for name_id in names:
+            row = store.get_name_by_id(_db(), name_id)
+            if row is not None:
+                entity_ids.add(row["entity_id"])
         names = []
         if op["kind"] == "upsert_entity" and isinstance(payload.get("name"), str):
             names.append(payload["name"])
@@ -6322,6 +6331,23 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
                     "finding": "unknown_parameters:" + ",".join(unknown),
                 }
             )
+        if kind == "upsert_statements":
+            allowed = set(BatchStatementSpec.__annotations__)
+            for index, item in enumerate(payload.get("statements", [])):
+                if not isinstance(item, dict):
+                    continue
+                nested_unknown = sorted(set(item) - allowed)
+                if nested_unknown:
+                    findings.append(
+                        {
+                            "operation_ref": operation_ref,
+                            "kind": kind,
+                            "finding": "unknown_parameters:statements["
+                            + str(index)
+                            + "]."
+                            + ",".join(nested_unknown),
+                        }
+                    )
     return findings
 
 
@@ -6331,10 +6357,9 @@ def inspect_draft_review(draft_id: str) -> dict[str, JsonValue]:
     from . import drafts_store
 
     _identified_principal()
-    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    row, ops = drafts_store.get_draft_snapshot(_drafts_db(), draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
-    ops = drafts_store.list_ops(_drafts_db(), draft_id)
     findings = _draft_operation_findings(ops)
     return {
         "draft": drafts_store.serialize_draft(row, ops=ops),
@@ -6372,10 +6397,13 @@ def append_draft_correction(
             payload=payload,
             created_by=principal.id,
         )
-    updated = drafts_store.get_draft(conn, draft_id)
+        updated = drafts_store.get_draft(conn, draft_id)
+        operation = next(
+            op for op in drafts_store.list_ops(conn, draft_id) if op["seq"] == seq
+        )
     return {
         "draft_id": draft_id,
-        "operation_ref": drafts_store.list_ops(conn, draft_id)[-1]["id"],
+        "operation_ref": operation["id"],
         "seq": seq,
         "revision": int(updated["revision"]),
     }
@@ -6401,29 +6429,36 @@ def record_draft_review(
         raise ValueError("invalid review outcome")
     if not rationale.strip():
         raise ValueError("review rationale is required")
-    inspected = inspect_draft_review(draft_id)
-    if inspected["draft"]["status"] != "submitted":
-        raise ValueError("only submitted drafts can be reviewed")
-    if inspected["draft_revision"] != draft_revision:
-        raise drafts_store.StaleDraftRevisionError("draft changed since inspection")
-    if inspected["knowledge_preconditions"] != knowledge_preconditions:
-        raise ValueError("affected knowledge changed since inspection")
-    unresolved = list(unresolved_questions)
-    unresolved.extend(finding["finding"] for finding in inspected["operation_findings"])
-    if outcome in ("accepted", "refined") and unresolved:
-        raise ValueError("accepted reviews cannot contain unresolved findings")
     conn = _drafts_db()
-    with store.transaction(conn):
-        review_id = drafts_store.create_review(
-            conn,
-            draft_id=draft_id,
-            outcome=outcome,
-            rationale=rationale.strip(),
-            draft_revision=draft_revision,
-            preconditions=knowledge_preconditions,
-            unresolved_questions=unresolved,
-            reviewed_by=principal.id,
+    with store.write_lock():
+        inspected = inspect_draft_review(draft_id)
+        if inspected["draft"]["status"] != "submitted":
+            raise ValueError("only submitted drafts can be reviewed")
+        if inspected["draft_revision"] != draft_revision:
+            raise drafts_store.StaleDraftRevisionError("draft changed since inspection")
+        if inspected["knowledge_preconditions"] != knowledge_preconditions:
+            raise ValueError("affected knowledge changed since inspection")
+        unresolved = list(unresolved_questions)
+        unresolved.extend(
+            finding["finding"] for finding in inspected["operation_findings"]
         )
+        if outcome in ("accepted", "refined") and unresolved:
+            raise ValueError("accepted reviews cannot contain unresolved findings")
+        with store.transaction(conn):
+            review_id = drafts_store.create_review(
+                conn,
+                draft_id=draft_id,
+                outcome=outcome,
+                rationale=rationale.strip(),
+                draft_revision=draft_revision,
+                preconditions=knowledge_preconditions,
+                unresolved_questions=unresolved,
+                reviewed_by=principal.id,
+            )
+            if outcome == "rejected":
+                drafts_store.set_decision(
+                    conn, draft_id, decision="rejected", by=principal.id
+                )
     return drafts_store.serialize_review(drafts_store.get_review(conn, review_id))
 
 
@@ -6470,6 +6505,8 @@ def _replay_draft_op(
     op: sqlite3.Row,
     tools_by_name: dict[str, Callable[..., Any]],
     results_by_seq: dict[int, Any],
+    *,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Resolve and replay one draft operation with contextual errors."""
     from . import drafts_store
@@ -6510,6 +6547,14 @@ def _replay_draft_op(
         result = wrapper(**payload)
     except Exception as ex:
         raise RuntimeError(f"op seq={seq} ({kind}) failed during replay: {ex}") from ex
+    rejected = isinstance(result, dict) and result.get("rejected") is True
+    items = result.get("results") if isinstance(result, dict) else None
+    if isinstance(items, list):
+        rejected = rejected or any(
+            isinstance(item, dict) and item.get("rejected") is True for item in items
+        )
+    if strict and rejected:
+        raise RuntimeError(f"op seq={seq} ({kind}) was rejected during replay")
     results_by_seq[seq] = result
     return {"seq": seq, "kind": kind, "result": result}
 
@@ -6595,7 +6640,11 @@ def apply_draft(
             snapshots_taken = True
             try:
                 for op in ops:
-                    results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
+                    results.append(
+                        _replay_draft_op(
+                            op, tools_by_name, results_by_seq, strict=strict
+                        )
+                    )
                 if application_id is not None:
                     replay_result = {
                         "applied": sum("result" in item for item in results),
@@ -6668,11 +6717,16 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, JsonValue]:
     principal = _identified_principal()
     conn = _drafts_db()
     with store.write_lock():
+        stale_knowledge = False
         with store.transaction(conn):
             draft = drafts_store.get_draft(conn, draft_id)
             review = drafts_store.get_review(conn, review_id)
             if draft is None or review is None or review["draft_id"] != draft_id:
                 raise ValueError("draft or review not found")
+            existing = drafts_store.application_for_review(conn, draft_id, review_id)
+            if existing is not None and existing["status"] == "committed":
+                stored = _json.loads(existing["result_json"])
+                return {"application_id": existing["id"], **stored, "recovered": True}
             if drafts_store.status_for(draft) != "submitted":
                 raise ValueError("only submitted drafts can be applied")
             if review["outcome"] not in ("accepted", "refined"):
@@ -6695,9 +6749,15 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, JsonValue]:
                     drafts_store.list_ops(conn, draft_id)
                 )
                 if current != _json.loads(review["preconditions_json"]):
-                    raise ValueError(
-                        "affected knowledge changed after the recorded review"
-                    )
+                    stale_knowledge = True
+
+        if stale_knowledge:
+            failure = "affected knowledge changed after the recorded review"
+            with store.transaction(conn):
+                drafts_store.finish_application(
+                    conn, application_id, status="failed", failure=failure
+                )
+            raise ValueError(failure)
 
         if result is None:
             try:
@@ -6721,7 +6781,11 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, JsonValue]:
                 conn, application_id, status="committed", result=result
             )
             drafts_store.set_decision(
-                conn, draft_id, decision="approved", by=principal.id
+                conn,
+                draft_id,
+                decision="approved",
+                by=principal.id,
+                application_id=application_id,
             )
     return {"application_id": application_id, **result}
 

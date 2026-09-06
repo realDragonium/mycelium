@@ -354,6 +354,13 @@ def _check_revision(row: sqlite3.Row, expected_revision: int | None) -> None:
         )
 
 
+def _check_no_active_application(conn: sqlite3.Connection, draft_id: str) -> None:
+    if active_application(conn, draft_id) is not None:
+        raise ActiveApplicationError(
+            f"draft '{draft_id}' has an active reviewed application"
+        )
+
+
 def set_source(
     conn: sqlite3.Connection,
     draft_id: str,
@@ -361,6 +368,7 @@ def set_source(
     *,
     expected_revision: int | None = None,
 ) -> int:
+    _check_no_active_application(conn, draft_id)
     values = (
         source["repository"],
         source["pull_request"],
@@ -404,6 +412,7 @@ def add_op(
     """Append an op to a draft; returns the new seq number. Caller must
     have already verified the draft is open — this function does not
     re-check (callers vary in how they want to report the failure)."""
+    _check_no_active_application(conn, draft_id)
     if kind == "add_links":
         reject_entity_statement_additions(payload.get("links"))
     row = conn.execute(
@@ -446,6 +455,7 @@ def remove_op(
     *,
     expected_revision: int | None = None,
 ) -> int | None:
+    _check_no_active_application(conn, draft_id)
     revision_clause = "" if expected_revision is None else " AND revision = ?"
     params: tuple[object, ...] = (draft_id, seq, draft_id)
     if expected_revision is not None:
@@ -499,6 +509,7 @@ def update_op_payload(
     *,
     expected_revision: int | None = None,
 ) -> int | None:
+    _check_no_active_application(conn, draft_id)
     row = conn.execute(
         "SELECT kind FROM draft_ops WHERE draft_id = ? AND seq = ?",
         (draft_id, seq),
@@ -575,10 +586,20 @@ def set_submitted(conn: sqlite3.Connection, draft_id: str) -> None:
 
 
 def set_decision(
-    conn: sqlite3.Connection, draft_id: str, *, decision: str, by: str | None
+    conn: sqlite3.Connection,
+    draft_id: str,
+    *,
+    decision: str,
+    by: str | None,
+    application_id: str | None = None,
 ) -> None:
     if decision not in ("approved", "rejected", "withdrawn"):
         raise ValueError(f"invalid decision: {decision}")
+    active = active_application(conn, draft_id)
+    if active is not None and active["id"] != application_id:
+        raise ActiveApplicationError(
+            f"draft '{draft_id}' has an active reviewed application"
+        )
     conn.execute(
         "UPDATE drafts SET decided_at = ?, decided_by = ?, decision = ? "
         "WHERE id = ? AND decided_at IS NULL",
@@ -628,6 +649,16 @@ def active_application(conn: sqlite3.Connection, draft_id: str) -> sqlite3.Row |
         "SELECT * FROM draft_applications WHERE draft_id = ? "
         "AND status IN ('claimed', 'committed') ORDER BY claimed_at DESC LIMIT 1",
         (draft_id,),
+    ).fetchone()
+
+
+def application_for_review(
+    conn: sqlite3.Connection, draft_id: str, review_id: str
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM draft_applications WHERE draft_id = ? AND review_id = ? "
+        "ORDER BY claimed_at DESC LIMIT 1",
+        (draft_id, review_id),
     ).fetchone()
 
 

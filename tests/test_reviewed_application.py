@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -97,6 +98,25 @@ def test_reviewed_apply_is_disabled_by_default(tmp_path, monkeypatch):
             auth.current_principal.reset(token)
 
 
+def test_rejected_review_finalizes_draft(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        draft_id = _submitted_entity_draft()
+        token = _principal()
+        try:
+            evidence = server.inspect_draft_review(draft_id)
+            review = server.record_draft_review(
+                draft_id,
+                "rejected",
+                "The proposal is not supported by the source.",
+                evidence["draft_revision"],
+                evidence["knowledge_preconditions"],
+            )
+        finally:
+            auth.current_principal.reset(token)
+        assert review["outcome"] == "rejected"
+        assert server.get_draft(draft_id)["status"] == "rejected"
+
+
 def test_review_rejects_stale_draft_and_unresolved_flag(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch):
         draft_id = _submitted_entity_draft()
@@ -181,6 +201,47 @@ def test_inspection_refuses_obsolete_operations_and_correction_is_versioned(
             auth.current_principal.reset(token)
 
 
+def test_inspection_tracks_name_owner_and_rejects_nested_batch_fields(
+    tmp_path, monkeypatch
+):
+    with _app(tmp_path, monkeypatch):
+        entity_id = server.upsert_entity("Named", "before")["entity_id"]
+        name_id = store.get_names_by_entity(store.substrate_connection(), entity_id)[0][
+            "id"
+        ]
+        conn = server._drafts_db()
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="delete_name",
+            payload={"name_id": name_id},
+            created_by="drafter-1",
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_statements",
+            payload={
+                "statements": [
+                    {"id": "stm_existing", "kind": "state", "text": "it exists"}
+                ]
+            },
+            created_by="drafter-1",
+        )
+        drafts_store.set_submitted(conn, draft_id)
+        token = _principal()
+        try:
+            evidence = server.inspect_draft_review(draft_id)
+        finally:
+            auth.current_principal.reset(token)
+
+        assert evidence["knowledge_preconditions"][0]["id"] == entity_id
+        assert "statements[0].id" in evidence["operation_findings"][0]["finding"]
+
+
 def test_apply_rechecks_affected_knowledge_and_real_tool_role(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
     with _app(tmp_path, monkeypatch):
@@ -218,7 +279,7 @@ def test_apply_rechecks_affected_knowledge_and_real_tool_role(tmp_path, monkeypa
                 server._drafts_db()
                 .execute(
                     "SELECT status, failure FROM draft_applications "
-                    "WHERE draft_id = ? ORDER BY claimed_at DESC LIMIT 1",
+                    "WHERE draft_id = ? ORDER BY rowid DESC LIMIT 1",
                     (queued["draft_id"],),
                 )
                 .fetchone()
@@ -238,24 +299,147 @@ def test_commit_before_finalization_recovers_without_replay(tmp_path, monkeypatc
         original = drafts_store.set_decision
         calls = 0
 
-        def fail_once(conn, target, *, decision, by):
+        def fail_once(conn, target, *, decision, by, application_id=None):
             nonlocal calls
             calls += 1
             if calls == 1:
                 raise sqlite3.OperationalError("finalization failed")
-            return original(conn, target, decision=decision, by=by)
+            return original(
+                conn,
+                target,
+                decision=decision,
+                by=by,
+                application_id=application_id,
+            )
 
         monkeypatch.setattr(drafts_store, "set_decision", fail_once)
         try:
             with pytest.raises(sqlite3.OperationalError, match="finalization"):
                 server.apply_reviewed_draft(draft_id, review["review_id"])
             recovered = server.apply_reviewed_draft(draft_id, review["review_id"])
+            repeated = server.apply_reviewed_draft(draft_id, review["review_id"])
         finally:
             auth.current_principal.reset(token)
 
         assert recovered["recovered"] is True
         assert recovered["applied"] == 1
         assert server.list_entities()["total"] == 1
+        assert repeated["application_id"] == recovered["application_id"]
+        assert repeated["recovered"] is True
+
+
+def test_interrupted_claim_with_stale_knowledge_is_failed(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    with _app(tmp_path, monkeypatch):
+        entity_id = server.upsert_entity("Changing", "before")["entity_id"]
+        token = _principal("drafter")
+        session = auth.current_session_id.set("stale-claim")
+        try:
+            queued = server.delete_entity(entity_id)
+            server.submit_draft(queued["draft_id"])
+        finally:
+            auth.current_session_id.reset(session)
+            auth.current_principal.reset(token)
+        token = _principal("admin")
+        try:
+            review = _accepted_review(queued["draft_id"])
+            with store.transaction(server._drafts_db()):
+                application_id = drafts_store.claim_application(
+                    server._drafts_db(),
+                    draft_id=queued["draft_id"],
+                    review_id=review["review_id"],
+                    claimed_by="admin-1",
+                )
+            with store.transaction(store.substrate_connection()):
+                store.update_entity_description(
+                    store.substrate_connection(), entity_id, "changed"
+                )
+            with pytest.raises(ValueError, match="knowledge changed"):
+                server.apply_reviewed_draft(queued["draft_id"], review["review_id"])
+        finally:
+            auth.current_principal.reset(token)
+        attempt = (
+            server._drafts_db()
+            .execute(
+                "SELECT status, failure FROM draft_applications WHERE id = ?",
+                (application_id,),
+            )
+            .fetchone()
+        )
+        assert attempt["status"] == "failed"
+        assert "knowledge changed" in attempt["failure"]
+
+
+def test_soft_replay_rejection_rolls_back_and_records_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    with _app(tmp_path, monkeypatch):
+        conn = server._drafts_db()
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_statement",
+            payload={"kind": "state", "text": "A and B", "links": []},
+            created_by="drafter-1",
+        )
+        drafts_store.set_submitted(conn, draft_id)
+        token = _principal()
+        monkeypatch.setattr(
+            server,
+            "_phrasing_gate",
+            lambda *args: ([], {"rejected": True, "violations": ["test"]}),
+        )
+        try:
+            review = _accepted_review(draft_id)
+            with pytest.raises(RuntimeError, match="was rejected"):
+                server.apply_reviewed_draft(draft_id, review["review_id"])
+        finally:
+            auth.current_principal.reset(token)
+        assert (
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) FROM statements")
+            .fetchone()[0]
+            == 0
+        )
+        attempt = conn.execute(
+            "SELECT status, failure FROM draft_applications WHERE draft_id = ?",
+            (draft_id,),
+        ).fetchone()
+        assert attempt["status"] == "failed"
+        assert "was rejected" in attempt["failure"]
+
+
+def test_failure_before_substrate_commit_is_durable(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    with _app(tmp_path, monkeypatch):
+        draft_id = _submitted_entity_draft()
+        token = _principal()
+        review = _accepted_review(draft_id)
+        monkeypatch.setattr(
+            server,
+            "apply_draft",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                sqlite3.OperationalError("substrate commit failed")
+            ),
+        )
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="commit failed"):
+                server.apply_reviewed_draft(draft_id, review["review_id"])
+        finally:
+            auth.current_principal.reset(token)
+        attempt = (
+            server._drafts_db()
+            .execute(
+                "SELECT status, failure FROM draft_applications WHERE draft_id = ?",
+                (draft_id,),
+            )
+            .fetchone()
+        )
+        assert attempt["status"] == "failed"
+        assert attempt["failure"] == "substrate commit failed"
+        assert server.get_draft(draft_id)["status"] == "submitted"
 
 
 def test_active_claim_blocks_manual_apply_and_edits(tmp_path, monkeypatch):
@@ -278,3 +462,64 @@ def test_active_claim_blocks_manual_apply_and_edits(tmp_path, monkeypatch):
                 server.strike_draft_operation(draft_id, op["operation_ref"])
         finally:
             auth.current_principal.reset(token)
+
+
+def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    with _app(tmp_path, monkeypatch):
+        draft_id = _submitted_entity_draft()
+        token = _principal()
+        try:
+            review = _accepted_review(draft_id)
+        finally:
+            auth.current_principal.reset(token)
+
+        entered = threading.Event()
+        release = threading.Event()
+        reviewed_started = threading.Event()
+        reviewed_finished = threading.Event()
+        outcomes = []
+
+        def blocking_manual_apply(target):
+            entered.set()
+            assert release.wait(2)
+            return {"applied": 1, "skipped": 0, "results": []}
+
+        monkeypatch.setattr(server, "apply_draft", blocking_manual_apply)
+
+        class Request:
+            class state:
+                principal = auth.Principal(
+                    id="writer-manual",
+                    name="manual",
+                    role="writer",
+                    type="human",
+                )
+
+        def manual():
+            from mycelium.http import approve_draft
+
+            outcomes.append(approve_draft(draft_id, Request()))
+
+        def reviewed():
+            principal = _principal()
+            reviewed_started.set()
+            try:
+                with pytest.raises(ValueError, match="only submitted"):
+                    server.apply_reviewed_draft(draft_id, review["review_id"])
+            finally:
+                auth.current_principal.reset(principal)
+                reviewed_finished.set()
+
+        manual_thread = threading.Thread(target=manual)
+        reviewed_thread = threading.Thread(target=reviewed)
+        manual_thread.start()
+        assert entered.wait(2)
+        reviewed_thread.start()
+        assert reviewed_started.wait(2)
+        assert not reviewed_finished.wait(0.05)
+        release.set()
+        manual_thread.join(2)
+        reviewed_thread.join(2)
+        assert reviewed_finished.is_set()
+        assert outcomes[0]["ok"] is True
