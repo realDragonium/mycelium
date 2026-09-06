@@ -4,7 +4,8 @@ Config follows the repo convention (ingest/config.py, research/config.py): a
 frozen dataclass of defaults, `from_env` reading `MYCELIUM_DOCGEN_*` with
 inline fallbacks. No central settings module.
 
-The model default falls back to ingest's, as research's does. A generation
+Claude remains the default and falls back to ingest's model. GPT uses an
+explicitly configured model ID. A generation
 run is shaped like `research` rather than like `ask` — it surveys the
 substrate before it writes a word — so the op cap and wall clock are sized
 closer to a research run than to a single question.
@@ -23,6 +24,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, TypedDict
 
 from .. import tracing
 from ..guidelines import SET_NAME
@@ -37,9 +39,70 @@ _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 DOCTRINE_NAME = "docgen"
 
 
+Provider = Literal["claude", "openai"]
+
+
+def resolve_provider(value: str | None = None) -> Provider:
+    selected = value or os.environ.get("MYCELIUM_DOCGEN_PROVIDER", "claude")
+    if selected not in ("claude", "openai"):
+        raise ValueError("documentation provider must be claude or openai")
+    return selected
+
+
+class ModelChoice(TypedDict):
+    provider: Provider
+    label: str
+    model: str | None
+    available: bool
+    reason: str | None
+
+
+def _claude_configuration_error() -> str | None:
+    from anthropic import Anthropic, AnthropicError
+
+    # SDK discovery includes tokens, profiles and federation. Constructing a
+    # client resolves configuration locally; credentials are fetched on request.
+    try:
+        with Anthropic() as client:
+            if client.api_key or client.auth_token or client.credentials:
+                return None
+    except (AnthropicError, ValueError, OSError):
+        return "Check the server's Anthropic credential configuration."
+    return "Configure Anthropic credentials on the server."
+
+
+def model_choices() -> list[ModelChoice]:
+    choices: list[ModelChoice] = []
+    for provider in ("claude", "openai"):
+        config = DocgenConfig.from_env(provider=resolve_provider(provider))
+        key = "ANTHROPIC_API_KEY" if provider == "claude" else "OPENAI_API_KEY"
+        reason = None
+        if not config.model:
+            reason = (
+                "Set MYCELIUM_DOCGEN_OPENAI_MODEL on the server."
+                if provider == "openai"
+                else "Set MYCELIUM_DOCGEN_MODEL on the server."
+            )
+        elif provider == "claude":
+            reason = _claude_configuration_error()
+        elif not os.environ.get(key, "").strip():
+            reason = f"Set {key} on the server."
+        choices.append(
+            {
+                "provider": config.provider,
+                "label": "Claude" if provider == "claude" else "GPT",
+                "model": config.model or None,
+                "available": reason is None,
+                "reason": reason,
+            }
+        )
+    return choices
+
+
 @dataclass(frozen=True)
 class DocgenConfig:
     model: str = DEFAULT_MODEL
+    provider: Provider = "claude"
     #: The set this instance prefers when the request named none. It is a
     #: preference the resolution step is told about, not an override: the
     #: request wins, and a prompt that plainly asks for another configured
@@ -77,8 +140,8 @@ class DocgenConfig:
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
     #: Pricing, $ / 1M tokens — used only to stamp an estimated cost on the
     #: trace. Override when running a non-default model.
-    input_per_mtok: float = 3.0
-    output_per_mtok: float = 15.0
+    input_per_mtok: float | None = 3.0
+    output_per_mtok: float | None = 15.0
     #: JSONL sink for the trace. None disables it.
     trace_log_path: str | None = None
     #: Directory for per-run speedscope timing files. Defaults under the data
@@ -86,7 +149,9 @@ class DocgenConfig:
     trace_dir: str | None = None
 
     @classmethod
-    def from_env(cls) -> "DocgenConfig":
+    def from_env(cls, *, provider: Provider | None = None) -> "DocgenConfig":
+        selected_provider = resolve_provider(provider)
+
         def _f(name: str, default: float) -> float:
             v = os.environ.get(name)
             return float(v) if v else default
@@ -96,10 +161,15 @@ class DocgenConfig:
             return int(v) if v else default
 
         return cls(
+            provider=selected_provider,
             model=(
-                os.environ.get("MYCELIUM_DOCGEN_MODEL")
-                or os.environ.get("MYCELIUM_INGEST_MODEL")
-                or DEFAULT_MODEL
+                (os.environ.get("MYCELIUM_DOCGEN_OPENAI_MODEL") or "").strip()
+                if selected_provider == "openai"
+                else (
+                    os.environ.get("MYCELIUM_DOCGEN_MODEL")
+                    or os.environ.get("MYCELIUM_INGEST_MODEL")
+                    or DEFAULT_MODEL
+                ).strip()
             ),
             guideline_set=os.environ.get("MYCELIUM_DOCGEN_GUIDELINE_SET") or SET_NAME,
             op_cap=_i("MYCELIUM_DOCGEN_OP_CAP", 150),
@@ -116,8 +186,16 @@ class DocgenConfig:
                 os.environ.get("MYCELIUM_DOCGEN_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH
             ),
-            input_per_mtok=_f("MYCELIUM_DOCGEN_INPUT_PER_MTOK", 3.0),
-            output_per_mtok=_f("MYCELIUM_DOCGEN_OUTPUT_PER_MTOK", 15.0),
+            input_per_mtok=(
+                None
+                if selected_provider == "openai"
+                else _f("MYCELIUM_DOCGEN_INPUT_PER_MTOK", 3.0)
+            ),
+            output_per_mtok=(
+                None
+                if selected_provider == "openai"
+                else _f("MYCELIUM_DOCGEN_OUTPUT_PER_MTOK", 15.0)
+            ),
             trace_log_path=os.environ.get("MYCELIUM_DOCGEN_TRACE_LOG"),
             trace_dir=(
                 os.environ.get("MYCELIUM_DOCGEN_TRACE_DIR")

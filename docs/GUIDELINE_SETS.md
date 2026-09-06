@@ -152,3 +152,7 @@ startup seeds the name, which it does only for `kb-authoring`.
 A set only needs source files when it has to survive a fresh deployment, as
 `kb-authoring` does. A set authored directly in the store has none, is not
 seeded, and needs neither.
+
+The cockpit's Documentation screen also offers a per-run Claude/GPT choice.
+See [Documentation models](DOCUMENTATION_MODELS.md) for server configuration and
+how that selection applies to writing and review.

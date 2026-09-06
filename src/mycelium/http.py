@@ -18,7 +18,7 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import anyio.to_thread
 import uvicorn
@@ -1248,6 +1248,53 @@ def _serialize_draft(row, *, ops=None) -> dict[str, Any]:
     from . import drafts_store
 
     return drafts_store.serialize_draft(row, ops=ops)
+
+
+class DocumentationRequestBody(BaseModel):
+    prompt: str
+    guideline_set: str | None = None
+    document_type: str | None = None
+    provider: Literal["claude", "openai"] | None = None
+
+
+@app.get("/api/documentation/options")
+def documentation_options(request: Request) -> dict[str, object]:
+    principal = _require_principal(request)
+    from . import guidelines, prompt_store
+    from .docgen.config import DocgenConfig
+
+    return {
+        **server.list_documentation_models(),
+        "can_generate": auth.principal_has_real_role(principal, "writer"),
+        "guideline_sets": guidelines.catalogue(prompt_store.connection()),
+        "max_prompt_chars": DocgenConfig.from_env().max_prompt_chars,
+    }
+
+
+@app.post("/api/documentation/runs")
+def request_documentation_http(
+    body: DocumentationRequestBody, request: Request
+) -> dict[str, object]:
+    _enforce_role(request, "writer", real_role=True)
+    return server.request_documentation(**body.model_dump())
+
+
+@app.get("/api/documentation/runs")
+def documentation_runs_http(request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return server.list_documentation_runs()
+
+
+@app.get("/api/documentation/runs/{run_id}")
+def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return server.get_documentation_run(run_id)
+
+
+@app.get("/api/documentation/documents/{document_id}")
+def generated_document_http(document_id: str, request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return server.get_generated_document(document_id)
 
 
 @app.get("/api/drafts")

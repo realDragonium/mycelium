@@ -28,6 +28,7 @@ import threading
 from typing import Any, Callable
 
 from . import docs_store
+from .docgen.config import DocgenConfig, Provider
 from .docgen.schema import CurrentDocument, ExistingDocument
 
 logger = logging.getLogger(__name__)
@@ -45,11 +46,23 @@ def start_run(
     document_type: str | None,
     created_by: str | None,
     conn: sqlite3.Connection,
+    provider: Provider | None = None,
     runner: Callable[..., Any] | None = None,
 ) -> str:
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
     selected_runner = runner or RUNNER or _default_runner
+    config = DocgenConfig.from_env(provider=provider)
+    if not config.model:
+        setting = (
+            "MYCELIUM_DOCGEN_OPENAI_MODEL"
+            if config.provider == "openai"
+            else "MYCELIUM_DOCGEN_MODEL"
+        )
+        raise ValueError(f"Set {setting} on the server.")
+    if config.provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY", "").strip():
+            raise ValueError("Set OPENAI_API_KEY on the server.")
     max_active = int(os.environ.get(MAX_ACTIVE_ENV) or 2)
 
     with _spawn_lock:
@@ -65,6 +78,8 @@ def start_run(
             guideline_set=guideline_set,
             document_type=document_type,
             created_by=created_by,
+            provider=config.provider,
+            model=config.model,
         )
         # Anything failing between here and thread.start() must not strand
         # the freshly committed row: finish it as failed, then re-raise.
@@ -90,6 +105,7 @@ def start_run(
                     document_type,
                     db_path,
                     selected_runner,
+                    config,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -124,11 +140,12 @@ def _default_runner(
     document_type: str | None = None,
     existing_documents: tuple[ExistingDocument, ...] = (),
     load_current_document: Callable[[str], CurrentDocument] | None = None,
+    config: DocgenConfig | None = None,
 ) -> Any:
     """The real generation loop.
 
     Imported inside the call, on the worker thread: the loop pulls the
-    anthropic SDK, and requesting a documentation run must not be what makes
+    provider client, and requesting a documentation run must not be what makes
     an instance that never generates pay for it. Anything the loop cannot
     survive comes back as an exception here and lands on the row's `error`,
     which is where a caller polling the run will read it."""
@@ -141,8 +158,11 @@ def _default_runner(
             document_type=document_type,
             existing_documents=existing_documents,
             load_current_document=load_current_document,
+            config=config,
         )
-    return run_docgen(prompt, guideline_set=guideline_set, document_type=document_type)
+    return run_docgen(
+        prompt, guideline_set=guideline_set, document_type=document_type, config=config
+    )
 
 
 def _execute_run(
@@ -152,6 +172,7 @@ def _execute_run(
     document_type: str | None,
     db_path: str,
     runner: Callable[..., Any],
+    config: DocgenConfig | None = None,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -184,6 +205,7 @@ def _execute_run(
                     prompt,
                     guideline_set=guideline_set,
                     document_type=document_type,
+                    config=config,
                     existing_documents=_existing_documents(conn),
                     load_current_document=lambda document_id: _load_current_document(
                         conn, document_id

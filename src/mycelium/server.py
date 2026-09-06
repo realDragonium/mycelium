@@ -2359,6 +2359,7 @@ def request_documentation(
     prompt: str,
     guideline_set: str | None = None,
     document_type: str | None = None,
+    provider: Literal["claude", "openai"] | None = None,
 ) -> dict[str, Any]:
     """Request a background documentation run: generate one document from
     `prompt` and store it as a generated document.
@@ -2377,7 +2378,10 @@ def request_documentation(
     reached (MYCELIUM_DOCGEN_MAX_ACTIVE, default 2), when `guideline_set` is
     unknown, when `document_type` is not one that set can write, or when
     `prompt` is blank or longer than MYCELIUM_DOCGEN_MAX_PROMPT_CHARS.
-    Returns {run row: id, prompt, guideline_set, document_type, status,
+    `provider` selects claude or openai; omitted uses MYCELIUM_DOCGEN_PROVIDER
+    (default claude). The configured model is captured for writing and review.
+    Use list_documentation_models for available choices.
+    Returns {run row: id, prompt, guideline_set, document_type, provider, model, status,
     created_at, created_by, started_at, finished_at, outcome, document_id,
     error}."""
     from . import auth as _auth
@@ -2406,11 +2410,20 @@ def request_documentation(
         document_type=document_type,
         created_by=created_by,
         conn=_drafts_db(),
+        provider=provider,
     )
     row = require(
         docs_store.get_run(_drafts_db(), run_id), "documentation run just created"
     )
     return docs_store.serialize_run(row)
+
+
+@tool
+def list_documentation_models() -> dict[str, object]:
+    """List configured documentation providers and safe availability reasons."""
+    from .docgen.config import model_choices, resolve_provider
+
+    return {"default_provider": resolve_provider(), "models": model_choices()}
 
 
 @tool

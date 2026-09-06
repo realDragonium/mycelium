@@ -7,11 +7,10 @@ the tool-use loop, the grounding and review gates, the op-cap / wall-clock
 ceilings, and graceful degradation. The model writes; this code chooses
 nothing about the prose, and refuses what it cannot let stand.
 
-Core-at-the-center: `_execute` depends only on a client-like object (anything
-with `.messages.create(...)`), a `SubstrateReader`, a gap-reporting callable,
-and a `load_texts` callable. All four are injectable, so the loop is
+Core-at-the-center: `_execute` depends only on an injectable provider client,
+a `SubstrateReader`, a gap-reporting callable, and a `load_texts` callable. All four are injectable, so the loop is
 exercisable with plain fakes — no server, no DB, no network. The framework
-seam (`run_docgen`) wires the real Anthropic client, the in-process substrate,
+seam (`run_docgen`) wires the selected provider client, the in-process substrate,
 `server.report_knowledge_gap`, and the prompt store.
 
 Structurally read-only over the substrate
@@ -65,6 +64,7 @@ from ..agentloop import (
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
 from .config import DOCTRINE_NAME, DocgenConfig
+from .openai_model import OpenAIModel
 from .schema import (
     CurrentDocument,
     DocgenResult,
@@ -122,7 +122,7 @@ def run_docgen(
 
     `guideline_set` / `document_type` are what the REQUEST named; either may
     be None, in which case the run resolves it. Everything else is injectable
-    for tests; in production they default to the real Anthropic client, the
+    for tests; in production they default to the selected provider client, the
     in-process substrate, `server.report_knowledge_gap`, and env-derived
     config.
     """
@@ -130,7 +130,11 @@ def run_docgen(
     if substrate is None:
         substrate = InProcessSubstrate()
     if client is None:
-        client = default_client(config.max_retries)
+        client = (
+            OpenAIModel()
+            if config.provider == "openai"
+            else default_client(config.max_retries)
+        )
     if report_gap is None:
         report_gap = _default_gap_reporter
 
@@ -242,6 +246,7 @@ def _execute(
     start = time.monotonic()
     trace = TraceBuilder(
         model=config.model,
+        provider=config.provider,
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
         prompt=prompt,
@@ -267,6 +272,7 @@ def _execute(
         exposure=None,
         template=None,
         review_error="",
+        model_error=None,
         review=None,
         unresolved="",
         retrieved_ids=set(),
@@ -422,7 +428,8 @@ def _write(ctx: _RunContext) -> DocgenResult:
             with trace.span("model_turn"):
                 resp = _model_turn(ctx, ctx.messages, force_tool=None)
         except Exception as exc:  # noqa: BLE001 — terminal API error after backoff
-            trace.notes.append(f"model error: {exc}")
+            ctx.model_error = f"model error: {exc}"
+            trace.notes.append(ctx.model_error)
             return _forced_finalize("api_error", ctx)
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -947,9 +954,10 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> DocgenResult:
             trace.notes.append("forced finalize: model did not emit a document")
     except Exception as exc:  # noqa: BLE001
         trace.notes.append(f"forced finalize failed: {exc}")
-    return _nothing(
-        ctx, f"no document could be grounded before the run ended ({reason})"
-    )
+    failure = f"no document could be grounded before the run ended ({reason})"
+    if reason == "api_error" and ctx.model_error:
+        failure += f": {ctx.model_error}"
+    return _nothing(ctx, failure)
 
 
 # --------------------------------------------------------------------------- #
@@ -1062,6 +1070,16 @@ def _model_turn(
 ) -> Any:
     config: DocgenConfig = ctx.config
     client = ctx.client
+    if config.provider == "openai":
+        if not isinstance(client, OpenAIModel):
+            raise ValueError("OpenAI documentation requires its configured transport")
+        return client.turn(
+            config=config,
+            messages=messages,
+            tools=tools if tools is not None else ctx.tools,
+            system=ctx.system_prompt if system is None else system,
+            force_tool=force_tool,
+        )
     if hasattr(client, "with_options"):
         client = client.with_options(
             timeout=config.request_timeout_s, max_retries=config.max_retries
