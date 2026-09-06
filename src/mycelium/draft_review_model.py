@@ -1,12 +1,10 @@
-"""One fresh GPT assessment over bounded, server-supplied review evidence."""
+"""One fresh provider-selected assessment over bounded, server-supplied review evidence."""
 
 from __future__ import annotations
 
-import os
-
 import httpx
-from pydantic import BaseModel, ConfigDict, Field
 
+from . import ai
 from .draft_review_store import Assessment
 
 SYSTEM = """Review a proposed Mycelium knowledge change in a fresh context.
@@ -31,73 +29,24 @@ or clarity benefit.
 """
 
 
-class OutputPart(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    type: str
-    text: str | None = None
-
-
-class OutputItem(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    type: str
-    content: list[OutputPart] = Field(default_factory=list)
-
-
-class Response(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    status: str
-    output: list[OutputItem]
-
-
-def assess(context: str, *, client: httpx.Client | None = None) -> Assessment:
-    key = os.environ.get("OPENAI_API_KEY", "").strip()
-    model = os.environ.get("MYCELIUM_DRAFT_REVIEW_MODEL", "").strip()
-    if not key or not model:
-        raise ValueError("OPENAI_API_KEY and MYCELIUM_DRAFT_REVIEW_MODEL are required")
-    payload = {
-        "model": model,
-        "store": False,
-        "instructions": SYSTEM,
-        "input": [{"role": "user", "content": context}],
-        "max_output_tokens": 6000,
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": "draft_assessment",
-                "strict": True,
-                "schema": Assessment.model_json_schema(),
-            }
-        },
-    }
-    owned = client is None
-    transport = client or httpx.Client(timeout=httpx.Timeout(90, connect=10))
-    try:
-        response = transport.post(
-            "https://api.openai.com/v1/responses",
-            json=payload,
-            headers={"Authorization": f"Bearer {key}"},
-        )
-        # Do not persist remote error bodies, which can echo supplied evidence.
-        if response.is_error:
-            raise ValueError(
-                f"OpenAI review request failed (HTTP {response.status_code})"
-            )
-        parsed = Response.model_validate_json(response.content)
-    finally:
-        if owned:
-            transport.close()
-    if parsed.status != "completed":
-        raise ValueError(f"OpenAI review response was {parsed.status}")
-    texts = [
-        part.text
-        for item in parsed.output
-        if item.type == "message"
-        for part in item.content
-        if part.type == "output_text"
-    ]
-    if len(texts) != 1 or texts[0] is None:
-        raise ValueError("OpenAI review did not return one complete assessment")
-    result = Assessment.model_validate_json(texts[0])
+def assess(
+    context: str,
+    *,
+    model: str,
+    provider: ai.Provider = "openai",
+    client: httpx.Client | None = None,
+) -> Assessment:
+    result = ai.structured(
+        ai.StructuredTask(system=SYSTEM, prompt=context, output_type=Assessment),
+        ai.ModelConfig(
+            provider=provider,
+            model=model,
+            max_tokens=6000,
+            request_timeout_s=90,
+            max_retries=0,
+        ),
+        client=client,
+    )
     validate_assessment(result)
     return result
 

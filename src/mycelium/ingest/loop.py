@@ -11,7 +11,7 @@ Core-at-the-center: `_execute` depends only on a client-like object (anything
 with `.messages.create(...)`), a `SubstrateReader` (reused from `ask`), and a
 `DraftEmitter`. All three are injectable, so the loop is exercisable with plain
 fakes — no server, no DB, no network. The framework seam (`run_ingest`) wires
-the real Anthropic client + in-process substrate + in-process draft emitter and
+the shared model transport + in-process substrate + in-process draft emitter and
 writes the trace.
 
 THE NO-LIVE-WRITE GUARANTEE: the model is handed READ tools plus one terminal
@@ -24,15 +24,17 @@ write tool and never touches `server._conn`.
 from __future__ import annotations
 
 import time
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
-from .. import tracing
+import httpx
+
+from .. import ai, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
 from ..agentloop import (
     check_budget,
-    default_client,
     load_doctrine,
 )
 from ..agentloop import (
@@ -40,9 +42,6 @@ from ..agentloop import (
 )
 from ..agentloop import (
     serialize as _serialize,
-)
-from ..agentloop import (
-    strip_thinking as _strip_thinking,
 )
 from ..agentloop import (
     substrate_has as _substrate_has,
@@ -63,6 +62,10 @@ from .schema import (
 )
 from .tools import EMIT_TOOL, build_tools, parse_emit_input
 from .trace import TraceBuilder
+
+if TYPE_CHECKING:
+    from ..research.config import ResearchConfig
+
 
 #: Reconcile reads — at least one must have happened before emit is accepted.
 _RECONCILE_TOOLS = frozenset(
@@ -116,16 +119,14 @@ def run_ingest(
     writes live.
 
     `client` / `substrate` / `emitter` / `config` are injectable for tests; in
-    production they default to the real Anthropic client, the in-process
-    substrate, the in-process draft emitter, and env-derived config.
+    production they default to the shared model transport, the in-process
+    substrate, the in-process draft emitter, and effective saved configuration.
     """
     config = config or IngestConfig.from_env()
     if substrate is None:
         substrate = InProcessSubstrate()
     if emitter is None:
         emitter = InProcessDraftEmitter()
-    if client is None:
-        client = default_client(config.max_retries)
 
     doctrine_text, doctrine_note = load_doctrine(
         config.doctrine_path, name=DOCTRINE_NAME
@@ -172,6 +173,7 @@ def _execute(
 
     trace = TraceBuilder(
         model=config.model,
+        provider=config.provider,
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
         input_chars=len(text),
@@ -959,41 +961,31 @@ def _normalize_ledger_row(row: dict) -> dict:
 
 
 def _model_turn(
-    client: Any,
-    config: IngestConfig,
+    client: ai.ClaudeClient | httpx.Client | None,
+    config: IngestConfig | ResearchConfig,
     system_prompt: str,
-    messages: list[dict[str, Any]],
-    tools: list[dict],
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]],
     *,
     force: bool,
-) -> Any:
-    c = client
-    if hasattr(client, "with_options"):
-        c = client.with_options(
-            timeout=config.request_timeout_s, max_retries=config.max_retries
-        )
-    kwargs: dict[str, Any] = {
-        "model": config.model,
-        "max_tokens": config.max_tokens,
-        "system": system_prompt,
-        "messages": messages,
-        "tools": tools,
-    }
-    if force:
-        # Forcing a specific tool is incompatible with extended thinking, so we
-        # leave thinking off on the emergency finalize turn — and strip the
-        # thinking blocks the adaptive turns left in history.
-        kwargs["messages"] = _strip_thinking(messages)
-        kwargs["tool_choice"] = {
-            "type": "tool",
-            "name": EMIT_TOOL,
-            "disable_parallel_tool_use": True,
-        }
-    else:
-        kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
-        if config.thinking:
-            kwargs["thinking"] = {"type": "adaptive"}
-    return c.messages.create(**kwargs)
+) -> ai.ModelResponse:
+    return ai.turn(
+        ai.ToolTask(
+            system=system_prompt,
+            messages=messages,
+            tools=tools,
+            force_tool=EMIT_TOOL if force else None,
+        ),
+        ai.ModelConfig(
+            provider=config.provider,
+            model=config.model,
+            max_tokens=config.max_tokens,
+            request_timeout_s=config.request_timeout_s,
+            max_retries=config.max_retries,
+            thinking=config.thinking,
+        ),
+        client=client,
+    )
 
 
 def _append_tool_result(

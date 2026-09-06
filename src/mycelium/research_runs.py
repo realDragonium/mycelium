@@ -118,17 +118,17 @@ def _default_runner(data_dir: str) -> Callable[..., Any]:
     """
     import dataclasses
 
+    from .research.config import ResearchConfig
+
+    config = ResearchConfig.from_env()
+    if not config.trace_log_path:
+        config = dataclasses.replace(config, trace_log_path=_trace_log_path(data_dir))
+
     def run(topic: str, *, source: str | None = None) -> Any:
         from . import server
         from .ingest.draft import InProcessDraftEmitter
         from .research import run_research
-        from .research.config import ResearchConfig
 
-        config = ResearchConfig.from_env()
-        if not config.trace_log_path:
-            config = dataclasses.replace(
-                config, trace_log_path=_trace_log_path(data_dir)
-            )
         return run_research(
             topic, source, config=config, emitter=InProcessDraftEmitter(server)
         )

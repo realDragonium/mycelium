@@ -54,12 +54,9 @@ def start_run(
     selected_runner = runner or RUNNER or _default_runner
     config = DocgenConfig.from_env(provider=provider)
     if not config.model:
-        setting = (
-            "MYCELIUM_DOCGEN_OPENAI_MODEL"
-            if config.provider == "openai"
-            else "MYCELIUM_DOCGEN_MODEL"
+        raise ValueError(
+            f"Choose a {config.provider} documentation model in AI settings."
         )
-        raise ValueError(f"Set {setting} on the server.")
     if config.provider == "openai":
         if not os.environ.get("OPENAI_API_KEY", "").strip():
             raise ValueError("Set OPENAI_API_KEY on the server.")

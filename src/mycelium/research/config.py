@@ -1,11 +1,9 @@
 """Tunables for the `research` write-harness loop.
 
-Config follows the repo convention (ingest/config.py, ask/config.py):
-module-level defaults read from `MYCELIUM_RESEARCH_*` env vars with inline
-fallbacks. No central settings module.
+Model choices use saved per-action settings, with legacy environment values imported
+once on upgrade. Other task budgets come from `MYCELIUM_RESEARCH_*` variables.
 
-The model default falls back to ingest's (`MYCELIUM_RESEARCH_MODEL` first,
-then ingest's `DEFAULT_MODEL`). Research runs much hotter than ingest: the
+The built-in model default matches ingest's `DEFAULT_MODEL`. Research runs much hotter than ingest: the
 loop explores a whole codebase before it ever reconciles, so the op cap and
 wall clock are an order of magnitude larger.
 """
@@ -16,7 +14,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import tracing
+from .. import model_settings, tracing
+from ..ai import Provider
 from ..ingest.config import DEFAULT_MODEL
 
 #: The research doctrine the inner model reads, shipped beside this package.
@@ -31,6 +30,7 @@ DOCTRINE_NAME = "research"
 @dataclass(frozen=True)
 class ResearchConfig:
     model: str = DEFAULT_MODEL
+    provider: Provider = "claude"
     #: Hard ceiling on tool operations per run. Vocab fetch, every workspace
     #: read, and every reconcile read all count toward it.
     op_cap: int = 150
@@ -39,9 +39,9 @@ class ResearchConfig:
     wall_clock_s: float = 1200.0
     #: max_tokens per model turn. Comfortably above a structured emit.
     max_tokens: int = 8000
-    #: Anthropic SDK auto-retries 429/5xx/connection with exponential backoff.
+    #: Provider retries cover 429/5xx/connection with exponential backoff.
     max_retries: int = 4
-    #: Per-Anthropic-call timeout, seconds. Kept well under the wall clock so
+    #: Per-model-call timeout, seconds. Kept well under the wall clock so
     #: a single hung call can't blow the whole budget.
     request_timeout_s: float = 120.0
     #: Adaptive thinking in the loop (disabled only on the forced emit call,
@@ -52,10 +52,9 @@ class ResearchConfig:
     max_topic_chars: int = 2000
     #: Path to the research doctrine injected into the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
-    #: Pricing, $ / 1M tokens — used only to stamp an estimated cost on the
-    #: trace. Override when running a non-default model.
-    input_per_mtok: float = 3.0
-    output_per_mtok: float = 15.0
+    #: Cost rates are populated only for the known default Claude model.
+    input_per_mtok: float | None = None
+    output_per_mtok: float | None = None
     #: JSONL sink for the trace. None → resolved by the caller to a default
     #: under the data dir (see research_runs wiring).
     trace_log_path: str | None = None
@@ -73,12 +72,11 @@ class ResearchConfig:
             v = os.environ.get(name)
             return int(v) if v else default
 
+        selected = model_settings.get("research")
+
         return cls(
-            model=(
-                os.environ.get("MYCELIUM_RESEARCH_MODEL")
-                or os.environ.get("MYCELIUM_INGEST_MODEL")
-                or DEFAULT_MODEL
-            ),
+            model=selected.model,
+            provider=selected.provider,
             op_cap=_i("MYCELIUM_RESEARCH_OP_CAP", 150),
             wall_clock_s=_f("MYCELIUM_RESEARCH_WALL_CLOCK_S", 1200.0),
             max_tokens=_i("MYCELIUM_RESEARCH_MAX_TOKENS", 8000),
@@ -92,8 +90,16 @@ class ResearchConfig:
                 os.environ.get("MYCELIUM_RESEARCH_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH
             ),
-            input_per_mtok=_f("MYCELIUM_RESEARCH_INPUT_PER_MTOK", 3.0),
-            output_per_mtok=_f("MYCELIUM_RESEARCH_OUTPUT_PER_MTOK", 15.0),
+            input_per_mtok=(
+                _f("MYCELIUM_RESEARCH_INPUT_PER_MTOK", 3.0)
+                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
+                else None
+            ),
+            output_per_mtok=(
+                _f("MYCELIUM_RESEARCH_OUTPUT_PER_MTOK", 15.0)
+                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
+                else None
+            ),
             trace_log_path=os.environ.get("MYCELIUM_RESEARCH_TRACE_LOG"),
             trace_dir=(
                 os.environ.get("MYCELIUM_RESEARCH_TRACE_DIR")

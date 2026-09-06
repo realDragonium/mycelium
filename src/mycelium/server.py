@@ -958,6 +958,22 @@ def init(data_dir: Path) -> None:
     from . import auth_store, docs_store, drafts_store, prompt_store, research_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    prompt_store.configure(data_dir / "mycelium-prompts.db")
+    prompts = _prompts_db()
+    existing_settings_instance = (data_dir / "mycelium.db").exists() or prompts.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('prompt_texts', 'model_settings', 'draft_review_settings')"
+    ).fetchone() is not None
+    # Persist fresh-instance provenance before other databases can make a
+    # retry after interrupted startup look like a legacy upgrade.
+    prompt_store.prepare_settings(
+        prompts, import_environment=existing_settings_instance
+    )
+    prompt_store.migrate(prompts)
+    prompt_store.initialize_settings(
+        prompts, import_environment=existing_settings_instance
+    )
+
     store.configure_substrate(
         data_dir / "mycelium.db",
         history_path=data_dir / "mycelium-history.db",
@@ -985,11 +1001,6 @@ def init(data_dir: Path) -> None:
     research_store.migrate(_drafts_db())
     docs_store.migrate(_drafts_db())
 
-    # Prompt texts are instance configuration, so they get their own file:
-    # dropping the substrate or wiping drafts leaves an instance's steering
-    # texts intact.
-    prompt_store.configure(data_dir / "mycelium-prompts.db")
-    prompt_store.migrate(_prompts_db())
     _seed_prompt_texts()
 
     # Operation ledger: a bounded, best-effort record of attempted tool calls,
@@ -2386,7 +2397,7 @@ def request_documentation(
     reached (MYCELIUM_DOCGEN_MAX_ACTIVE, default 2), when `guideline_set` is
     unknown, when `document_type` is not one that set can write, or when
     `prompt` is blank or longer than MYCELIUM_DOCGEN_MAX_PROMPT_CHARS.
-    `provider` selects claude or openai; omitted uses MYCELIUM_DOCGEN_PROVIDER
+    `provider` selects claude or openai; omitted uses saved documentation settings
     (default claude). The configured model is captured for writing and review.
     Use list_documentation_models for available choices.
     Returns {run row: id, prompt, guideline_set, document_type, provider, model, status,
@@ -6994,8 +7005,9 @@ def apply_draft(
 
 
 def _reviewed_apply_enabled() -> bool:
-    value = (os.environ.get("MYCELIUM_REVIEWED_APPLY") or "").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    from . import draft_review_settings
+
+    return draft_review_settings.load_controls(_prompts_db()).application_enabled
 
 
 def _substrate_application_result(
@@ -7017,11 +7029,11 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationRe
     """Apply an accepted exact-version review with durable replay recovery."""
     from . import drafts_store
 
-    if not _reviewed_apply_enabled():
-        raise ValueError("reviewed draft application is disabled")
     principal = _identified_principal()
     conn = _drafts_db()
     with store.write_lock():
+        if not _reviewed_apply_enabled():
+            raise ValueError("reviewed draft application is disabled")
         stale_knowledge = False
         with store.transaction(conn):
             draft = drafts_store.get_draft(conn, draft_id)

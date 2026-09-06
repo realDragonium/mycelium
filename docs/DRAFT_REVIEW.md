@@ -1,19 +1,38 @@
 # Internal draft review
 
-Mycelium can review submitted drafts with GPT through the OpenAI Responses API.
+Mycelium can review submitted drafts with Claude or an OpenAI GPT model.
 Review starts on submission from MCP or either browser interface. It works for
 all drafts; PR provenance is optional. Enabling the feature does not sweep the
 existing backlog. A curator can explicitly review an existing submitted draft.
 
 ## Configuration
 
+Administrators can open **AI settings** from cockpit Drafts or the existing
+Settings screen. The draft-review card configures this action independently of
+Ask, Ingest, Research, and Documentation. Choose the mode, provider, model ID, and independent reviewer
+account, then save. Changes take effect for new submissions and explicit reruns
+without restarting the server. The form can create a stored writer service
+account if none exists. Saving settings does not start any reviews.
+
+Credentials remain in the server environment. The form reports missing setup and
+the separate application gate; it does not test model access or expose API keys.
+Saving `off` is possible with an empty model or reviewer and no credentials.
+Enabled modes require those prerequisites. Model IDs must support the selected
+provider's structured outputs; account access is established only by a real run.
+
+Existing instances import legacy environment values once at upgrade, preserving saved settings. Fresh instances start with reviews and reviewed application off. Subsequent environment changes do not change product settings.
+The shared model settings remember a separate Claude and OpenAI model ID; see
+[AI model configuration](AI_MODELS.md).
+
 | Variable | Meaning |
 | --- | --- |
 | `MYCELIUM_DRAFT_REVIEW_MODE` | `off` (default), `review-only`, or `review-and-apply`. |
-| `MYCELIUM_DRAFT_REVIEW_MODEL` | Required OpenAI model ID supporting structured outputs. No model is silently selected. |
+| `MYCELIUM_DRAFT_REVIEW_PROVIDER` | `openai` (default) or `claude`. |
+| `MYCELIUM_DRAFT_REVIEW_MODEL` | Model ID supporting structured outputs for the selected provider. No model is silently selected. |
 | `OPENAI_API_KEY` | OpenAI API key supplied to the server process. |
+| Anthropic credentials | Claude uses the Anthropic SDK credential configuration, including `ANTHROPIC_API_KEY`, tokens, and profiles. |
 | `MYCELIUM_DRAFT_REVIEW_USER_ID` | Required ID of an active stored Mycelium writer/admin, independent of the draft creator. |
-| `MYCELIUM_REVIEWED_APPLY` | Existing application gate; defaults off. Set `on` to permit automatic changes in `review-and-apply`. |
+| `MYCELIUM_REVIEWED_APPLY` | Imported once on upgrade into Allow applying accepted reviews; defaults off on fresh instances. |
 
 Use an existing service user with the required role. The synthetic `local-admin`
 identity and a drafter account do not qualify, even when authentication is off.
@@ -27,12 +46,23 @@ small corrections and record an authoritative review, reject the draft, or apply
 it through `apply_reviewed_draft`. The separate application gate must be enabled
 before any automatic operation edits or final decisions occur.
 
-Changing the process configuration to `off` or `review-only` prevents subsequent
-automatic mutations by an in-flight review. A run started in `review-only` never
-upgrades itself if configuration changes to `review-and-apply`. Stored reviewer
-status/role and configured identity are checked again before automatic changes.
-Environment settings are process configuration, not a browser settings feature;
-changing a service environment file normally requires restarting the service.
+Each run captures its mode, provider, model, reviewer account, and configuration
+revision when admitted, including runs waiting for a worker. Any saved settings
+change prevents an older active run from automatically editing, rejecting, or
+applying a draft. That run can finish with an advisory assessment; use **Run
+again** to assess it under the new configuration. Turning the mode or application permission off and back
+on does not restore an old run's authority. The reviewer remains subject to
+current account status and permissions before automatic changes.
+
+Review controls and shared per-action model settings live in dedicated tables in
+`mycelium-prompts.db`, separate from editable
+prompt texts and disposable drafts. They survive draft cleanup and backup/restore.
+Conflicting admin saves return a conflict and require reloading. Unreadable saved
+settings disable review instead of reviving environment defaults. The settings
+form reports the error and allows an administrator to save an explicit repair;
+saving off does not depend on credentials or a valid reviewer. Backup refuses
+to omit unreadable instance settings; restore validates the required settings
+section before replacing an existing instance. Older archives without settings receive built-in defaults with automation off. Restore never imports the target environment.
 
 ## Evidence and scope
 
@@ -88,6 +118,8 @@ result does not itself authorize application.
 both browser interfaces expose the latest `review_assessment`, including:
 
 - Status (`running`, `completed`, `failed`), assessed revision, and staleness.
+- Selected provider/model, reviewer ID, and control/model settings revisions. Historical attempts
+  retain unknown metadata; a selected model does not imply a provider was called.
 - Label (`good`, `changes_suggested`, `reject`, `needs_context`), rationale,
   questions, and concrete suggested corrections.
 - Application outcome (`unapplied`, `applied`, `rejected`) and explanatory detail.
@@ -97,7 +129,11 @@ The HTTP tool mirrors are `POST /request-draft-review` and
 `POST /get-draft-review-run`, with the same named arguments as JSON fields.
 Submission from `POST /api/drafts/{id}/submit` also starts review.
 The browser bridge uses authenticated `GET /api/draft-review/settings` for
-`mode` and `can_review`, and `POST /api/drafts/{id}/review` with no body for an
+effective configuration, readiness, and caller permissions. Admin-only
+`PATCH /api/draft-review/settings` accepts `mode`, `provider`, `model`,
+`reviewer_id`, the current control `revision`, and `model_revision`; a conflicting
+revision returns 409. The selected model and review controls save atomically.
+`POST /api/drafts/{id}/review` with no body starts an
 explicit rerun. The latter returns `{review: ...}` and enforces the current
 server mode and the caller's real curator role.
 
@@ -128,7 +164,10 @@ When a reviewed application still needs finalization, inspect its durable receip
 and use the existing `apply_reviewed_draft(draft_id, review_id)` recovery path.
 No startup recovery launches model work or replays an uncommitted application.
 
-The transport follows OpenAI's [Responses structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs),
-uses `store=false`, and validates the complete response before accepting it. The
-model and wire contract are tested with fake responses; setup has not been
-validated against a live OpenAI account.
+OpenAI uses the [Responses structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs)
+with `store=false`. Claude uses the Anthropic SDK's
+[structured-output parser](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+Both validate the same assessment schema and decision rules, reject incomplete or
+invalid output, and never fall back to another provider. The wire contracts are
+tested with isolated fake responses; live provider access and factual judgment
+have not been validated by those tests.

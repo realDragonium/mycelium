@@ -688,38 +688,6 @@ def test_discovery_auto_includes_new_read_primitive_excludes_writes():
     assert "upsert_widget" not in names
 
 
-def test_strip_thinking_sanitizes_forced_turn_history():
-    """The forced (thinking-disabled) turn must not carry thinking blocks, but
-    keeps tool_use / tool_result / text and never empties a message."""
-    from mycelium.ask.loop import _strip_thinking
-
-    th = types.SimpleNamespace(type="thinking", thinking="...")
-    tu = types.SimpleNamespace(
-        type="tool_use", id="x", name="search_statements", input={}
-    )
-    msgs = [
-        {"role": "user", "content": "q"},
-        {"role": "assistant", "content": [th, tu]},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": "x",
-                    "content": "r",
-                    "is_error": False,
-                }
-            ],
-        },
-        {"role": "assistant", "content": [th]},  # thinking-only: must not be emptied
-    ]
-    out = _strip_thinking(msgs)
-    assert [b.type for b in out[1]["content"]] == ["tool_use"]  # thinking dropped
-    assert out[2]["content"][0]["type"] == "tool_result"  # tool_result kept
-    assert out[0]["content"] == "q"  # string content untouched
-    assert out[3]["content"] == [th]  # not emptied
-
-
 def test_ids_present_in_matches_statement_identity_not_a_shared_prefix():
     """A longer statement id must not vouch for a shorter id sharing its prefix."""
     ids = {"stm_1", "stm_12"}
@@ -851,7 +819,10 @@ def test_the_inner_loop_is_offered_exactly_the_domain_readers():
 
 def _last_block(message: dict):
     content = message["content"]
-    return content[-1] if isinstance(content, list) else content
+    last = content[-1] if isinstance(content, list) else content
+    from pydantic import BaseModel
+
+    return last.model_dump(exclude_none=True) if isinstance(last, BaseModel) else last
 
 
 def test_caching_marks_static_and_rolling_breakpoints():

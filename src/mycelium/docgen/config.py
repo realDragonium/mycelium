@@ -1,10 +1,9 @@
 """Tunables for the documentation-generation loop.
 
-Config follows the repo convention (ingest/config.py, research/config.py): a
-frozen dataclass of defaults, `from_env` reading `MYCELIUM_DOCGEN_*` with
-inline fallbacks. No central settings module.
+Model choices use saved per-action settings, with legacy environment values imported
+once on upgrade. Other task budgets come from `MYCELIUM_DOCGEN_*` variables.
 
-Claude remains the default and falls back to ingest's model. GPT uses an
+Claude remains the default, with the same built-in model as ingest. GPT uses an
 explicitly configured model ID. A generation
 run is shaped like `research` rather than like `ask` — it surveys the
 substrate before it writes a word — so the op cap and wall clock are sized
@@ -24,11 +23,15 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import TypedDict
 
-from .. import tracing
+from .. import model_settings, tracing
+from ..ai import Provider
 from ..guidelines import SET_NAME
 from ..ingest.config import DEFAULT_MODEL
+from ..model_credentials import (
+    claude_configuration_error as _claude_configuration_error,
+)
 
 #: The generation doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
@@ -39,11 +42,8 @@ _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 DOCTRINE_NAME = "docgen"
 
 
-Provider = Literal["claude", "openai"]
-
-
 def resolve_provider(value: str | None = None) -> Provider:
-    selected = value or os.environ.get("MYCELIUM_DOCGEN_PROVIDER", "claude")
+    selected = value if value is not None else model_settings.get("docgen").provider
     if selected not in ("claude", "openai"):
         raise ValueError("documentation provider must be claude or openai")
     return selected
@@ -57,20 +57,6 @@ class ModelChoice(TypedDict):
     reason: str | None
 
 
-def _claude_configuration_error() -> str | None:
-    from anthropic import Anthropic, AnthropicError
-
-    # SDK discovery includes tokens, profiles and federation. Constructing a
-    # client resolves configuration locally; credentials are fetched on request.
-    try:
-        with Anthropic() as client:
-            if client.api_key or client.auth_token or client.credentials:
-                return None
-    except (AnthropicError, ValueError, OSError):
-        return "Check the server's Anthropic credential configuration."
-    return "Configure Anthropic credentials on the server."
-
-
 def model_choices() -> list[ModelChoice]:
     choices: list[ModelChoice] = []
     for provider in ("claude", "openai"):
@@ -79,9 +65,9 @@ def model_choices() -> list[ModelChoice]:
         reason = None
         if not config.model:
             reason = (
-                "Set MYCELIUM_DOCGEN_OPENAI_MODEL on the server."
+                "Choose an OpenAI documentation model in AI settings."
                 if provider == "openai"
-                else "Set MYCELIUM_DOCGEN_MODEL on the server."
+                else "Choose a Claude documentation model in AI settings."
             )
         elif provider == "claude":
             reason = _claude_configuration_error()
@@ -119,9 +105,9 @@ class DocgenConfig:
     #: max_tokens per model turn. A document body is the largest single thing
     #: any loop in this tree emits, hence the headroom over ask's.
     max_tokens: int = 12000
-    #: Anthropic SDK auto-retries 429/5xx/connection with exponential backoff.
+    #: Provider retries cover 429/5xx/connection with exponential backoff.
     max_retries: int = 4
-    #: Per-Anthropic-call timeout, seconds. Kept well under the wall clock so
+    #: Per-model-call timeout, seconds. Kept well under the wall clock so
     #: a single hung call can't blow the whole budget.
     request_timeout_s: float = 120.0
     #: Adaptive thinking in the loop.
@@ -138,8 +124,7 @@ class DocgenConfig:
     #: Path to the docgen doctrine seeded into the store and injected into
     #: the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
-    #: Pricing, $ / 1M tokens — used only to stamp an estimated cost on the
-    #: trace. Override when running a non-default model.
+    #: Cost rates are populated only for the known default Claude model.
     input_per_mtok: float | None = 3.0
     output_per_mtok: float | None = 15.0
     #: JSONL sink for the trace. None disables it.
@@ -150,7 +135,15 @@ class DocgenConfig:
 
     @classmethod
     def from_env(cls, *, provider: Provider | None = None) -> "DocgenConfig":
-        selected_provider = resolve_provider(provider)
+        selected = model_settings.get("docgen")
+        selected_provider = (
+            selected.provider if provider is None else resolve_provider(provider)
+        )
+        selected_model = (
+            selected.claude_model
+            if selected_provider == "claude"
+            else selected.openai_model
+        )
 
         def _f(name: str, default: float) -> float:
             v = os.environ.get(name)
@@ -162,15 +155,7 @@ class DocgenConfig:
 
         return cls(
             provider=selected_provider,
-            model=(
-                (os.environ.get("MYCELIUM_DOCGEN_OPENAI_MODEL") or "").strip()
-                if selected_provider == "openai"
-                else (
-                    os.environ.get("MYCELIUM_DOCGEN_MODEL")
-                    or os.environ.get("MYCELIUM_INGEST_MODEL")
-                    or DEFAULT_MODEL
-                ).strip()
-            ),
+            model=selected_model,
             guideline_set=os.environ.get("MYCELIUM_DOCGEN_GUIDELINE_SET") or SET_NAME,
             op_cap=_i("MYCELIUM_DOCGEN_OP_CAP", 150),
             wall_clock_s=_f("MYCELIUM_DOCGEN_WALL_CLOCK_S", 900.0),
@@ -188,12 +173,12 @@ class DocgenConfig:
             ),
             input_per_mtok=(
                 None
-                if selected_provider == "openai"
+                if selected_provider != "claude" or selected_model != DEFAULT_MODEL
                 else _f("MYCELIUM_DOCGEN_INPUT_PER_MTOK", 3.0)
             ),
             output_per_mtok=(
                 None
-                if selected_provider == "openai"
+                if selected_provider != "claude" or selected_model != DEFAULT_MODEL
                 else _f("MYCELIUM_DOCGEN_OUTPUT_PER_MTOK", 15.0)
             ),
             trace_log_path=os.environ.get("MYCELIUM_DOCGEN_TRACE_LOG"),

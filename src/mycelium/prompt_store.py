@@ -25,11 +25,15 @@ Consumers declare what they load, so a new sort of steering text is a new
 
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 import uuid as _uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+from pydantic import ValidationError
 
 from . import timestamps
 from .connections import ConnectionProvider
@@ -99,8 +103,89 @@ def reset() -> None:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    conn.executescript(PROMPT_TEXTS_SCHEMA)
+    from .draft_review_settings import SCHEMA
+    from .model_settings import SCHEMA as MODEL_SCHEMA
+
+    conn.executescript(PROMPT_TEXTS_SCHEMA + SCHEMA + MODEL_SCHEMA)
     conn.commit()
+
+
+def prepare_settings(conn: sqlite3.Connection, *, import_environment: bool) -> None:
+    """Record fresh-instance provenance before creating any instance schema."""
+    with _writing(conn):
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS instance_settings_migrations (name TEXT PRIMARY KEY)"
+        )
+        if not import_environment:
+            conn.execute(
+                "INSERT OR IGNORE INTO instance_settings_migrations VALUES ('environment-import-disabled')"
+            )
+
+
+def initialize_settings(
+    conn: sqlite3.Connection, *, import_environment: bool = True
+) -> None:
+    """Import legacy product configuration once, preserving every saved row."""
+    from . import draft_review_settings, model_settings
+
+    prepare_settings(conn, import_environment=import_environment)
+    with _writing(conn):
+        if conn.execute(
+            "SELECT 1 FROM instance_settings_migrations WHERE name = 'models-and-review-controls'"
+        ).fetchone():
+            return
+        import_environment = (
+            import_environment
+            and conn.execute(
+                "SELECT 1 FROM instance_settings_migrations WHERE name = 'environment-import-disabled'"
+            ).fetchone()
+            is None
+        )
+        for action in model_settings.ACTIONS:
+            body = (
+                model_settings.legacy_selection(action)
+                if import_environment
+                else model_settings.defaults(action).model_dump()
+            )
+            conn.execute(
+                "INSERT OR IGNORE INTO model_settings VALUES (?, 1, ?)",
+                (action, json.dumps(body)),
+            )
+        controls = draft_review_settings.Controls().model_dump()
+        if import_environment:
+            controls.update(
+                mode=os.environ.get("MYCELIUM_DRAFT_REVIEW_MODE", "off").strip(),
+                reviewer_id=os.environ.get("MYCELIUM_DRAFT_REVIEW_USER_ID", "").strip(),
+                application_enabled=(os.environ.get("MYCELIUM_REVIEWED_APPLY") or "")
+                .strip()
+                .lower()
+                in {"1", "true", "yes", "on"},
+            )
+        conn.execute(
+            "INSERT OR IGNORE INTO draft_review_settings VALUES (1, 1, ?)",
+            (json.dumps(controls),),
+        )
+        row = conn.execute(
+            "SELECT body_json FROM draft_review_settings WHERE singleton = 1"
+        ).fetchone()
+        try:
+            saved = draft_review_settings.Controls.model_validate_json(row["body_json"])
+        except ValidationError:
+            pass
+        else:
+            if "application_enabled" not in saved.model_fields_set:
+                body = {
+                    **saved.model_dump(),
+                    "application_enabled": controls["application_enabled"],
+                }
+                conn.execute(
+                    "UPDATE draft_review_settings SET revision = revision + 1, body_json = ?",
+                    (json.dumps(body),),
+                )
+
+        conn.execute(
+            "INSERT INTO instance_settings_migrations VALUES ('models-and-review-controls')"
+        )
 
 
 @contextmanager

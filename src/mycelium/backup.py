@@ -13,6 +13,8 @@ Archive layout
                                 discriminated by `_kind`, dependency-ordered
     history.jsonl              audit log events (omit with --no-history)
     prompts.jsonl              editable prompt texts, every version
+    draft-review-settings.json saved review controls (when configured)
+    model-settings.json        saved per-action models (when configured)
     vectors/mycelium.vec       statement vector index (omit with --no-vectors)
     vectors/mycelium-names.vec
 
@@ -28,12 +30,12 @@ opt-out flag. The archive carries *every* version, tombstones included: the
 store is append-only and a restore is a point-in-time recovery of it, so a
 name an operator retired comes back retired.
 
-Two payloads, two postures. The substrate is what the archive is for — no
-`mycelium.db`, no export. Prompt texts degrade instead of failing: an
-unreadable prompts DB is left out of the archive with a warning, and an
-unreadable prompts section is skipped on import, because startup re-seeds
-its packaged defaults into an empty store and an instance that comes back
-with default steering beats one that doesn't come back.
+The substrate is required: no `mycelium.db`, no export. Individual unreadable
+prompt text sections can fall back to packaged defaults, but privileged review
+and model settings cannot be omitted safely. An unreadable configuration DB
+fails export; required settings sections are validated before restore replaces
+an existing target. Older archives without those sections retain their defaults.
+
 """
 
 from __future__ import annotations
@@ -45,9 +47,10 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 
 from . import migrations, store
 
@@ -71,6 +74,10 @@ _LEGACY_ANNOTATION_KINDS: frozenset[str] = frozenset(
 SCHEMA_VERSION = migrations.CURRENT_VERSION
 
 # The editable prompt texts, alongside the substrate in the data dir.
+if TYPE_CHECKING:
+    from .draft_review_settings import ControlSnapshot
+    from .model_settings import ModelSnapshot
+
 PROMPTS_DB_NAME = "mycelium-prompts.db"
 
 
@@ -186,6 +193,10 @@ def export_substrate(
             if prompts_count is not None:
                 row_counts["prompt_texts"] = prompts_count
 
+            models_included, settings_included = _archive_instance_settings(
+                prompts_db_path, staging
+            )
+
             if include_vectors:
                 vectors_dir = staging / "vectors"
                 vectors_dir.mkdir()
@@ -199,6 +210,8 @@ def export_substrate(
                 "exported_at": _now_iso(),
                 "includes_history": include_history and history_db_path.exists(),
                 "includes_prompts": prompts_count is not None,
+                "includes_draft_review_settings": settings_included,
+                "includes_model_settings": models_included,
                 "includes_vectors": include_vectors,
                 "row_counts": row_counts,
             }
@@ -314,6 +327,140 @@ def _write_prompts(prompts_db_path: Path, out_path: Path) -> int:
         conn.close()
 
 
+def _archive_instance_settings(db_path: Path, staging: Path) -> tuple[bool, bool]:
+    from . import prompt_store
+
+    if not db_path.exists():
+        return False, False
+    with closing(prompt_store.connect(db_path)) as conn:
+        # Both settings sections describe one database snapshot, even when a
+        # separate server process saves a model and review controls together.
+        conn.execute("BEGIN")
+        try:
+            return (
+                _archive_model_settings(conn, staging / "model-settings.json"),
+                _archive_review_settings(conn, staging / "draft-review-settings.json"),
+            )
+        finally:
+            conn.rollback()
+
+
+def _archive_review_settings(conn: sqlite3.Connection, out_path: Path) -> bool:
+    from . import draft_review_settings
+
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'draft_review_settings'"
+    ).fetchone()
+    if (
+        table is None
+        or conn.execute("SELECT 1 FROM draft_review_settings").fetchone() is None
+    ):
+        return False
+    settings = draft_review_settings.load_controls(conn)
+    out_path.write_text(settings.model_dump_json(), encoding="utf-8")
+    return True
+
+
+def _archived_review_settings(staging: Path, required: bool) -> ControlSnapshot | None:
+    from .draft_review_settings import ControlSnapshot
+
+    path = staging / "draft-review-settings.json"
+    if not path.exists():
+        if required:
+            raise ValueError("Archive is missing its saved draft review settings")
+        return None
+    snapshot = ControlSnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+    if snapshot.source != "saved" or snapshot.revision < 1:
+        raise ValueError("Archive contains invalid saved draft review settings")
+    return snapshot
+
+
+def _restore_review_settings(db_path: Path, settings: ControlSnapshot) -> None:
+    from . import prompt_store
+    from .draft_review_settings import Controls
+
+    conn = prompt_store.connect(db_path)
+    try:
+        prompt_store.migrate(conn)
+        body = Controls.model_validate(
+            settings.model_dump(exclude={"revision", "source"})
+        )
+        with prompt_store._writing(conn):
+            conn.execute(
+                "INSERT INTO draft_review_settings(singleton, revision, body_json) VALUES (1, ?, ?)",
+                (settings.revision, body.model_dump_json()),
+            )
+    finally:
+        conn.close()
+
+
+def _archive_model_settings(conn: sqlite3.Connection, out_path: Path) -> bool:
+    from . import model_settings
+
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'model_settings'"
+        ).fetchone()
+        is None
+    ):
+        return False
+    rows = conn.execute("SELECT action FROM model_settings ORDER BY action").fetchall()
+    saved = []
+    for row in rows:
+        if row["action"] not in model_settings.ACTIONS:
+            raise ValueError("Unknown saved model action; cannot archive configuration")
+        saved.append(
+            model_settings.get(row["action"], conn=conn).model_dump(mode="json")
+        )
+    if not saved:
+        return False
+    out_path.write_text(json.dumps(saved), encoding="utf-8")
+    return True
+
+
+def _archived_model_settings(staging: Path, required: bool) -> list[ModelSnapshot]:
+    from pydantic import TypeAdapter
+
+    from .model_settings import ModelSnapshot
+
+    path = staging / "model-settings.json"
+    if not path.exists():
+        if required:
+            raise ValueError("Archive is missing its saved model settings")
+        return []
+    snapshots = TypeAdapter(list[ModelSnapshot]).validate_json(
+        path.read_text(encoding="utf-8")
+    )
+    if any(item.source != "saved" or item.revision < 1 for item in snapshots):
+        raise ValueError("Archive contains invalid saved model settings")
+    if len({item.action for item in snapshots}) != len(snapshots):
+        raise ValueError("Archive contains duplicate model settings")
+    return snapshots
+
+
+def _restore_model_settings(db_path: Path, settings: list[ModelSnapshot]) -> None:
+    from . import model_settings, prompt_store
+
+    if not settings:
+        return
+    conn = prompt_store.connect(db_path)
+    try:
+        prompt_store.migrate(conn)
+        with prompt_store._writing(conn):
+            for item in settings:
+                body = model_settings.Selection(
+                    provider=item.provider,
+                    claude_model=item.claude_model,
+                    openai_model=item.openai_model,
+                )
+                conn.execute(
+                    "INSERT INTO model_settings VALUES (?, ?, ?)",
+                    (item.action, item.revision, body.model_dump_json()),
+                )
+    finally:
+        conn.close()
+
+
 def _make_archive(staging: Path, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with tarfile.open(out_path, "w:gz") as tar:
@@ -323,6 +470,21 @@ def _make_archive(staging: Path, out_path: Path) -> None:
 
 
 # --- import -----------------------------------------------------------------
+
+
+def _prepare_restore_target(data_dir: Path, *, force: bool) -> None:
+    db_path = data_dir / "mycelium.db"
+    if db_path.exists() or (data_dir / PROMPTS_DB_NAME).exists():
+        if not force:
+            raise FileExistsError(
+                f"data dir {data_dir!r} already contains an instance; "
+                "pass force=True to clobber (auto-snapshots first)"
+            )
+        if db_path.exists():
+            _safety_snapshot(data_dir)
+        _wipe_data_dir(data_dir)
+
+    data_dir.mkdir(parents=True, exist_ok=True)
 
 
 def import_substrate(
@@ -348,18 +510,6 @@ def import_substrate(
     data_dir = Path(data_dir)
 
     db_path = data_dir / "mycelium.db"
-    if db_path.exists() or (data_dir / PROMPTS_DB_NAME).exists():
-        if not force:
-            raise FileExistsError(
-                f"data dir {data_dir!r} already contains an instance; "
-                "pass force=True to clobber (auto-snapshots first)"
-            )
-        if db_path.exists():
-            _safety_snapshot(data_dir)
-        _wipe_data_dir(data_dir)
-
-    data_dir.mkdir(parents=True, exist_ok=True)
-
     with tempfile.TemporaryDirectory() as staging_str:
         staging = Path(staging_str)
         with tarfile.open(archive_path, "r:gz") as tar:
@@ -390,6 +540,21 @@ def import_substrate(
                 f"this build's schema_version {SCHEMA_VERSION}; this build is too "
                 "old for the archive"
             )
+        review_settings = _archived_review_settings(
+            staging, bool(manifest.get("includes_draft_review_settings"))
+        )
+        models = _archived_model_settings(
+            staging, bool(manifest.get("includes_model_settings"))
+        )
+        _prepare_restore_target(data_dir, force=force)
+        from . import prompt_store
+
+        settings_db = prompt_store.connect(data_dir / PROMPTS_DB_NAME)
+        try:
+            prompt_store.prepare_settings(settings_db, import_environment=False)
+        finally:
+            settings_db.close()
+
         row_counts = manifest.get("row_counts")
         if not isinstance(row_counts, dict):
             row_counts = {}
@@ -431,6 +596,16 @@ def import_substrate(
         prompts_jsonl = staging / "prompts.jsonl"
         if prompts_jsonl.exists():
             _restore_prompts(data_dir / PROMPTS_DB_NAME, prompts_jsonl)
+        if review_settings is not None:
+            _restore_review_settings(data_dir / PROMPTS_DB_NAME, review_settings)
+        _restore_model_settings(data_dir / PROMPTS_DB_NAME, models)
+
+        settings_db = prompt_store.connect(data_dir / PROMPTS_DB_NAME)
+        try:
+            prompt_store.migrate(settings_db)
+            prompt_store.initialize_settings(settings_db, import_environment=False)
+        finally:
+            settings_db.close()
 
         # Vector files: copy back if present in the archive. Otherwise leave
         # the data dir without them; the server's next `init()` rebuilds each

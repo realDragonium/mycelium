@@ -9,11 +9,8 @@ assembly — but a spine of small, boundary-facing helpers is identical across
 them. That spine lives here so the three packages compose over it instead of
 each carrying a copy.
 
-Everything here is a plain function over plain data (or the injectable
-Anthropic client). No package imports ask/ingest/research, so there is no cycle
-— the loops import from this module, never the reverse. The `import anthropic`
-inside `default_client` stays function-local so the packages import without the
-SDK installed.
+The loops import these helpers without reverse dependencies. Model requests
+are routed separately through `mycelium.ai`.
 """
 
 from __future__ import annotations
@@ -40,14 +37,8 @@ DOCTRINE_TYPE = "doctrine"
 
 
 # --------------------------------------------------------------------------- #
-# Client + doctrine (framework-seam helpers)
+# Doctrine loading
 # --------------------------------------------------------------------------- #
-
-
-def default_client(max_retries: int) -> Any:
-    import anthropic  # local import: keeps the package importable without the SDK
-
-    return anthropic.Anthropic(max_retries=max_retries)
 
 
 def load_doctrine(doctrine_path: str, *, name: str) -> tuple[str, str | None]:
@@ -122,35 +113,6 @@ def first_tool_use(resp: Any) -> Any | None:
         if getattr(block, "type", None) == "tool_use":
             return block
     return None
-
-
-def _block_type(block: Any) -> Any:
-    if isinstance(block, dict):
-        return block.get("type")
-    return getattr(block, "type", None)
-
-
-def strip_thinking(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Drop thinking / redacted_thinking blocks from assistant turns.
-
-    Used only for the thinking-disabled forced-finalize request: a request
-    without thinking enabled should not carry thinking blocks. If filtering
-    would empty a message's content, the original is kept (an empty content
-    list is itself invalid).
-    """
-    out: list[dict[str, Any]] = []
-    for message in messages:
-        content = message.get("content")
-        if isinstance(content, list):
-            filtered = [
-                b
-                for b in content
-                if _block_type(b) not in ("thinking", "redacted_thinking")
-            ]
-            out.append({**message, "content": filtered or content})
-        else:
-            out.append(message)
-    return out
 
 
 def serialize(result: Any) -> str:

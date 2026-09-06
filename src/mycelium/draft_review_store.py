@@ -45,6 +45,11 @@ class ReviewRun(BaseModel):
     status: Literal["running", "completed", "failed"] = "running"
     mode: Mode
     draft_revision: int
+    provider: Literal["claude", "openai"] | None = None
+    model: str | None = None
+    reviewer_id: str | None = None
+    settings_revision: int | None = None
+    model_settings_revision: int | None = None
     review_id: str | None = None
     stale: bool = False
     knowledge_preconditions: list[Precondition] = Field(default_factory=list)

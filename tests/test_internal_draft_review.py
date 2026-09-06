@@ -14,6 +14,8 @@ from mycelium import (
     store,
 )
 from mycelium.draft_review_store import Assessment, Correction
+from settings_helpers import save_model
+from settings_helpers import set_review_controls as _set_review_controls
 from test_reviewed_application import _app, _principal
 
 
@@ -28,6 +30,10 @@ def _assessment(label="good", corrections=()):
     )
 
 
+def _set_review_model(model):
+    save_model("draft_review", openai_model=model)
+
+
 @pytest.fixture
 def running_app(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "off")
@@ -38,7 +44,8 @@ def running_app(tmp_path, monkeypatch):
             reviewer = auth.create_user(
                 server._auth_db(), name="Reviewer", role="writer", type="service"
             )
-        monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_USER_ID", reviewer)
+        _set_review_controls(reviewer_id=reviewer)
+        _set_review_model("gpt-fixture")
         yield client, reviewer
         draft_review_runs.wait_all()
 
@@ -80,7 +87,7 @@ def _result(draft_id):
     "label", ["good", "changes_suggested", "reject", "needs_context"]
 )
 def test_review_only_is_advisory(running_app, monkeypatch, label):
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     corrections = (
         [
             Correction(
@@ -117,7 +124,7 @@ def test_both_submission_paths_trigger_and_off_is_default(running_app, monkeypat
     with pytest.raises(ValueError, match="off"):
         _request(draft_id)
     next_id = _draft(submit=False)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     response = client.post(f"/api/drafts/{next_id}/submit")
     assert response.status_code == 200
     assert _result(next_id)["label"] == "good"
@@ -138,7 +145,7 @@ def test_rerun_concurrency_and_evidence_staleness(running_app, monkeypatch):
 
     monkeypatch.setattr(draft_review_runs, "RUNNER", model)
     draft_id = _draft()
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     first = _request(draft_id)
     assert entered.wait(5)
     duplicate = _request(draft_id, rerun=True)
@@ -173,25 +180,25 @@ def test_running_review_cannot_retain_mutation_privilege(
 
     def model(context):
         if change in ("off", "review-only"):
-            monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", change)
+            _set_review_controls(mode=change)
         elif change == "demote":
             with store.transaction(server._auth_db()):
                 server._auth_db().execute(
                     "UPDATE users SET role = 'drafter' WHERE id = ?", (reviewer,)
                 )
         elif change == "same-creator":
-            monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_USER_ID", "drafter-1")
+            _set_review_controls(reviewer_id="drafter-1")
         else:
             with store.transaction(server._auth_db()):
                 other = auth.create_user(
                     server._auth_db(), name="Other", role="writer", type="service"
                 )
-            monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_USER_ID", other)
+            _set_review_controls(reviewer_id=other)
         return _assessment("reject")
 
     monkeypatch.setattr(draft_review_runs, "RUNNER", model)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     _request(draft_id)
     result = _result(draft_id)
     assert result["application"] == "unapplied"
@@ -203,12 +210,12 @@ def test_review_only_cannot_upgrade_inflight(running_app, monkeypatch):
     draft_id = _draft()
 
     def model(context):
-        monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
+        _set_review_controls(mode="review-and-apply")
         return _assessment("reject")
 
     monkeypatch.setattr(draft_review_runs, "RUNNER", model)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-only")
+    _set_review_controls(application_enabled=True)
     _request(draft_id)
     assert _result(draft_id)["application"] == "unapplied"
     assert server.get_draft(draft_id)["status"] == "submitted"
@@ -216,8 +223,8 @@ def test_review_only_cannot_upgrade_inflight(running_app, monkeypatch):
 
 @pytest.mark.parametrize("label", ["good", "reject", "needs_context"])
 def test_automatic_outcomes(running_app, monkeypatch, label):
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment(label))
     draft_id = _draft()
     result = _result(draft_id)
@@ -251,8 +258,8 @@ def test_corrections_apply_as_exact_reviewed_revision(running_app, monkeypatch):
         "RUNNER",
         lambda context: _assessment("changes_suggested", [correction]),
     )
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "completed", result
@@ -263,11 +270,11 @@ def test_corrections_apply_as_exact_reviewed_revision(running_app, monkeypatch):
 
 
 def test_default_application_gate_and_bad_reviewer(running_app, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
+    _set_review_controls(mode="review-and-apply")
     draft_id = _draft()
     assert "gate is disabled" in _result(draft_id)["detail"]
     assert drafts_store.list_reviews(server._drafts_db(), draft_id) == []
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_USER_ID", "local-admin")
+    _set_review_controls(reviewer_id="local-admin")
     _request(draft_id, rerun=True)
     result = _result(draft_id)
     assert result["status"] == "failed"
@@ -285,14 +292,13 @@ def test_interrupted_runs_are_retryable(running_app, monkeypatch):
     draft_review_store.mark_orphaned(conn)
     assert _result(draft_id)["status"] == "failed"
     assert "interrupted" in _result(draft_id)["detail"]
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     _request(draft_id, rerun=True)
     assert _result(draft_id)["status"] == "completed"
 
 
 def test_openai_wire_is_fresh_structured_and_configurable(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODEL", "fixture-gpt")
 
     def handle(request):
         body = json.loads(request.content)
@@ -326,7 +332,10 @@ def test_openai_wire_is_fresh_structured_and_configurable(monkeypatch):
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         assert (
-            draft_review_model.assess("Review evidence", client=client).label == "good"
+            draft_review_model.assess(
+                "Review evidence", model="fixture-gpt", client=client
+            ).label
+            == "good"
         )
 
 
@@ -348,14 +357,15 @@ def test_openai_wire_is_fresh_structured_and_configurable(monkeypatch):
 )
 def test_openai_incomplete_or_refused_output_is_not_success(monkeypatch, response):
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODEL", "fixture-gpt")
     with httpx.Client(
         transport=httpx.MockTransport(
             lambda request: httpx.Response(200, json=response)
         )
     ) as client:
         with pytest.raises(ValueError):
-            draft_review_model.assess("Review evidence", client=client)
+            draft_review_model.assess(
+                "Review evidence", model="fixture-gpt", client=client
+            )
 
 
 def _supporting_statement():
@@ -386,8 +396,8 @@ def test_supporting_knowledge_change_blocks_automatic_action(running_app, monkey
         return _assessment()
 
     monkeypatch.setattr(draft_review_runs, "RUNNER", model)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed", result
@@ -428,7 +438,7 @@ def test_authoritative_support_preconditions_survive_later_apply(
                 inspection["draft_revision"],
                 conditions,
             )
-        monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+        _set_review_controls(application_enabled=True)
         with pytest.raises(ValueError, match="knowledge changed"):
             server.apply_reviewed_draft(draft_id, review["review_id"])
         assert server.get_draft(draft_id)["status"] == "submitted"
@@ -460,8 +470,8 @@ def test_failed_correction_batch_rolls_back_all_edits(running_app, monkeypatch):
         "RUNNER",
         lambda context: _assessment("changes_suggested", corrections),
     )
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed", result
@@ -472,7 +482,7 @@ def test_failed_correction_batch_rolls_back_all_edits(running_app, monkeypatch):
 
 
 def test_source_attach_invalidates_completed_assessment(running_app, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     draft_id = _draft()
     assert _result(draft_id)["stale"] is False
     token = _principal("drafter")
@@ -494,7 +504,7 @@ def test_source_attach_invalidates_completed_assessment(running_app, monkeypatch
 
 def test_drafter_cannot_request_or_impersonate_reviewer(running_app, monkeypatch):
     draft_id = _draft()
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     token = _principal("drafter")
     try:
         with pytest.raises(auth.RoleRequired):
@@ -505,7 +515,7 @@ def test_drafter_cannot_request_or_impersonate_reviewer(running_app, monkeypatch
         server._auth_db().execute(
             "INSERT INTO users(id, name, role, type, status, created_at) VALUES ('drafter-1', 'Creator', 'writer', 'service', 'active', 'now')"
         )
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_USER_ID", "drafter-1")
+    _set_review_controls(reviewer_id="drafter-1")
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed"
@@ -517,7 +527,7 @@ def test_model_failure_and_missing_configuration_are_visible(running_app, monkey
     monkeypatch.setattr(draft_review_runs, "RUNNER", None)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("MYCELIUM_DRAFT_REVIEW_MODEL", raising=False)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed"
@@ -539,12 +549,10 @@ def test_http_review_uses_real_curator_role(running_app, monkeypatch, role):
         user_id = auth.create_user(conn, name=role, role=role, type="service")
         raw, _ = auth.issue_token(conn, user_id=user_id, name="Fixture", scope=role)
     headers = {"Authorization": f"Bearer {raw}"}
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     settings = client.get("/api/draft-review/settings", headers=headers)
-    assert settings.json() == {
-        "mode": "review-only",
-        "can_review": role in ("writer", "admin"),
-    }
+    assert settings.json()["mode"] == "review-only"
+    assert settings.json()["can_review"] == (role in ("writer", "admin"))
     response = client.post(f"/api/drafts/{draft_id}/review", headers=headers)
     assert response.status_code == (200 if role in ("writer", "admin") else 403)
     if response.status_code == 200:
@@ -556,14 +564,13 @@ def test_http_review_uses_real_curator_role(running_app, monkeypatch, role):
 def test_http_review_refuses_off_open_and_terminal_drafts(running_app, monkeypatch):
     client, _ = running_app
     draft_id = _draft()
-    assert client.get("/api/draft-review/settings").json() == {
-        "mode": "off",
-        "can_review": True,
-    }
+    settings = client.get("/api/draft-review/settings").json()
+    assert settings["mode"] == "off"
+    assert settings["can_review"] is True
     response = client.post(f"/api/drafts/{draft_id}/review")
     assert response.status_code == 400
     assert "off" in response.json()["detail"]
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     open_id = _draft(submit=False)
     assert client.post(f"/api/drafts/{open_id}/review").status_code == 400
     assert client.post(f"/api/drafts/{draft_id}/reject").status_code == 200
@@ -582,11 +589,11 @@ def test_http_rerun_uses_current_mode_and_fresh_model(running_app, monkeypatch):
         return _assessment()
 
     monkeypatch.setattr(draft_review_runs, "RUNNER", model)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     first = client.post(f"/api/drafts/{draft_id}/review").json()["review"]
     assert _result(draft_id)["application"] == "unapplied"
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     second = client.post(f"/api/drafts/{draft_id}/review").json()["review"]
     assert second["run_id"] != first["run_id"]
     result = _result(draft_id)
@@ -606,7 +613,7 @@ def test_submission_burst_waits_for_workers_and_deduplicates(running_app, monkey
         return _assessment()
 
     monkeypatch.setattr(draft_review_runs, "RUNNER", model)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     try:
         draft_ids = [_draft() for _ in range(4)]
         for draft_id in draft_ids:
@@ -625,8 +632,8 @@ def test_interrupted_final_status_recovers_committed_outcome(
     running_app, monkeypatch, label
 ):
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment(label))
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     draft_id = _draft()
     result = _result(draft_id)
     assert result["status"] == "completed", result
@@ -655,7 +662,7 @@ def test_invalid_advisory_correction_is_failed_without_label(running_app, monkey
         "RUNNER",
         lambda context: _assessment("changes_suggested", [correction]),
     )
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed"
@@ -691,7 +698,7 @@ def test_advisory_statement_correction_validates_link_spec(
         "RUNNER",
         lambda context: _assessment("changes_suggested", [correction]),
     )
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _set_review_controls(mode="review-only")
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == ("completed" if valid else "failed"), result
@@ -721,12 +728,12 @@ def test_configuration_downgrade_during_corrections_rolls_back(
 
     def downgrade(*args, **kwargs):
         result = original(*args, **kwargs)
-        monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+        _set_review_controls(mode="review-only")
         return result
 
     monkeypatch.setattr(server, "revise_draft_operation", downgrade)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed"
@@ -748,8 +755,8 @@ def test_committed_substrate_receipt_survives_failed_finalization(
         return original(conn, application_id, status=status, **kwargs)
 
     monkeypatch.setattr(drafts_store, "finish_application", fail_finalization)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     draft_id = _draft()
     result = _result(draft_id)
     assert result["status"] == "completed", result
@@ -823,8 +830,8 @@ def test_struck_entity_remains_an_authoritative_support_precondition(
         raise RuntimeError("Fixture interruption before application")
 
     monkeypatch.setattr(server, "apply_reviewed_draft", interrupt)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed", result
@@ -876,8 +883,8 @@ def test_uninspected_glossary_cannot_be_automatically_overwritten(
             )
         finally:
             auth.current_principal.reset(token)
-    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-and-apply")
-    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
     token = _principal("drafter")
     try:
         server.submit_draft(draft_id)

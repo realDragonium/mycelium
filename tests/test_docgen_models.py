@@ -10,11 +10,11 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from mycelium import doc_runs, docgen, docs_store
+from mycelium import ai, doc_runs, docgen, docs_store
 from mycelium.docgen.config import DocgenConfig, model_choices, resolve_provider
 from mycelium.docgen.loop import _execute
-from mycelium.docgen.openai_model import OpenAIModel
 from mycelium.docgen.schema import DocumentWritten, NothingWritten
+from settings_helpers import save_model
 from test_docgen import FakeGapReporter, _substrate
 
 
@@ -57,6 +57,15 @@ def _config() -> DocgenConfig:
     )
 
 
+def _model_config() -> ai.ModelConfig:
+    return ai.ModelConfig(
+        provider="openai",
+        model="configured-gpt",
+        max_tokens=12000,
+        request_timeout_s=120,
+    )
+
+
 def _tool() -> dict[str, object]:
     return {
         "name": "lookup",
@@ -86,33 +95,38 @@ def test_responses_continuation_keeps_reasoning_and_forced_call_ids(monkeypatch)
         return _response(reasoning, call)
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        model = OpenAIModel(client)
-        first = model.turn(
-            config=_config(),
-            messages=[{"role": "user", "content": "write SSO"}],
-            tools=[_tool()],
-            system="writer",
-            force_tool=None,
+        first = ai.turn(
+            ai.ToolTask(
+                messages=[{"role": "user", "content": "write SSO"}],
+                tools=[_tool()],
+                system="writer",
+                force_tool=None,
+            ),
+            _model_config(),
+            client=client,
         )
-        model.turn(
-            config=_config(),
-            messages=[
-                {"role": "user", "content": "write SSO"},
-                {"role": "assistant", "content": first.content},
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": "call_one",
-                            "content": "found",
-                        }
-                    ],
-                },
-            ],
-            tools=[_tool()],
-            system="writer",
-            force_tool="lookup",
+        ai.turn(
+            ai.ToolTask(
+                messages=[
+                    {"role": "user", "content": "write SSO"},
+                    {"role": "assistant", "content": first.content},
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": "call_one",
+                                "content": "found",
+                            }
+                        ],
+                    },
+                ],
+                tools=[_tool()],
+                system="writer",
+                force_tool="lookup",
+            ),
+            _model_config(),
+            client=client,
         )
     assert captured[1]["input"][1:3] == [reasoning, call]
     assert captured[1]["input"][3] == {
@@ -126,7 +140,7 @@ def test_responses_continuation_keeps_reasoning_and_forced_call_ids(monkeypatch)
     assert captured[0]["parallel_tool_calls"] is False
     assert captured[0]["tools"][0]["strict"] is False
     assert captured[0]["tools"][0]["parameters"]["required"] == []
-    assert first.usage.input_tokens == 11
+    assert first.usage.input_tokens == 8
     assert first.usage.cache_read_input_tokens == 3
 
 
@@ -150,12 +164,15 @@ def test_api_failures_do_not_yield_tool_calls(monkeypatch, response):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     with httpx.Client(transport=httpx.MockTransport(lambda _: response)) as client:
         with pytest.raises(ValueError) as error:
-            OpenAIModel(client).turn(
-                config=_config(),
-                messages=[],
-                tools=[_tool()],
-                system="writer",
-                force_tool=None,
+            ai.turn(
+                ai.ToolTask(
+                    messages=[],
+                    tools=[_tool()],
+                    system="writer",
+                    force_tool=None,
+                ),
+                _model_config(),
+                client=client,
             )
     assert "private error body" not in str(error.value)
 
@@ -169,12 +186,15 @@ def test_timeout_is_bounded_and_does_not_expose_credentials(monkeypatch):
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(ValueError, match="failed to reach") as error:
-            OpenAIModel(client).turn(
-                config=replace(_config(), request_timeout_s=9),
-                messages=[],
-                tools=[],
-                system="",
-                force_tool=None,
+            ai.turn(
+                ai.ToolTask(
+                    messages=[],
+                    tools=[],
+                    system="",
+                    force_tool=None,
+                ),
+                replace(_model_config(), request_timeout_s=9),
+                client=client,
             )
     assert "secret" not in str(error.value)
 
@@ -219,7 +239,7 @@ def test_gpt_generation_retains_grounding_and_fresh_review(monkeypatch, review_p
             "document SSO",
             requested_set="kb",
             requested_type="how-to",
-            client=OpenAIModel(client),
+            client=client,
             substrate=_substrate(),
             report_gap=FakeGapReporter(),
             config=_config(),
@@ -242,18 +262,18 @@ def test_configuration_keeps_claude_default_and_requires_gpt_model(monkeypatch):
     monkeypatch.delenv("MYCELIUM_DOCGEN_PROVIDER", raising=False)
     monkeypatch.delenv("MYCELIUM_DOCGEN_OPENAI_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("MYCELIUM_DOCGEN_MODEL", "configured-claude")
+    save_model("docgen", claude_model="configured-claude")
     assert DocgenConfig.from_env().model == "configured-claude"
     assert DocgenConfig.from_env().provider == "claude"
     assert DocgenConfig.from_env(provider="openai").model == ""
     assert model_choices()[1]["available"] is False
-    assert "MYCELIUM_DOCGEN_OPENAI_MODEL" in model_choices()[1]["reason"]
+    assert "AI settings" in model_choices()[1]["reason"]
     with pytest.raises(ValueError, match="provider"):
         resolve_provider("bad-provider")
 
 
 def test_admission_captures_model_before_worker_wait(monkeypatch, tmp_path):
-    monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "gpt-at-admission")
+    save_model("docgen", openai_model="gpt-at-admission")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     conn = docs_store.connect(tmp_path / "drafts.db")
     docs_store.migrate(conn)
@@ -277,7 +297,7 @@ def test_admission_captures_model_before_worker_wait(monkeypatch, tmp_path):
             provider="openai",
         )
         assert entered.wait(5)
-        monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "gpt-after-admission")
+        save_model("docgen", openai_model="gpt-after-admission")
         release.set()
         doc_runs.wait_all()
         row = docs_store.serialize_run(docs_store.get_run(conn, run_id))
@@ -305,7 +325,6 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
         return principal
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
-    monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "configured-gpt")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-claude-key")
     conn = docs_store.connect(tmp_path / "drafts.db")
@@ -314,7 +333,10 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
     prompt_store.migrate(prompts)
     prompt_store.save(prompts, type=guidelines.TYPE, name="public/how-to", text="steps")
     monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    prompt_store.use_connection(prompts)
+    save_model("docgen", openai_model="configured-gpt")
     monkeypatch.setattr(prompt_store, "connection", lambda: prompts)
+    monkeypatch.setattr(prompt_store, "is_configured", lambda: True)
     monkeypatch.setattr(
         doc_runs,
         "RUNNER",
@@ -370,7 +392,7 @@ def test_missing_gpt_configuration_refuses_before_creating_a_run(monkeypatch, tm
     monkeypatch.delenv("MYCELIUM_DOCGEN_OPENAI_MODEL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     try:
-        with pytest.raises(ValueError, match="MYCELIUM_DOCGEN_OPENAI_MODEL"):
+        with pytest.raises(ValueError, match="AI settings"):
             doc_runs.start_run(
                 prompt="SSO",
                 guideline_set=None,
@@ -379,7 +401,7 @@ def test_missing_gpt_configuration_refuses_before_creating_a_run(monkeypatch, tm
                 conn=conn,
                 provider="openai",
             )
-        monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "configured-gpt")
+        save_model("docgen", openai_model="configured-gpt")
         with pytest.raises(ValueError, match="OPENAI_API_KEY"):
             doc_runs.start_run(
                 prompt="SSO",
@@ -457,7 +479,7 @@ def test_gpt_matching_resolution_and_reads_use_same_transport(monkeypatch):
             "document SSO",
             requested_set=None,
             requested_type=None,
-            client=OpenAIModel(client),
+            client=client,
             substrate=_substrate(),
             report_gap=FakeGapReporter(),
             config=_config(),
@@ -506,7 +528,7 @@ def test_gpt_cannot_emit_unretrieved_knowledge(monkeypatch):
             "document SSO",
             requested_set="kb",
             requested_type="how-to",
-            client=OpenAIModel(client),
+            client=client,
             substrate=_substrate(),
             report_gap=FakeGapReporter(),
             config=_config(),
@@ -542,7 +564,7 @@ def test_broken_claude_profile_does_not_hide_configured_gpt(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     monkeypatch.setenv("ANTHROPIC_PROFILE", " invalid-profile")
-    monkeypatch.setenv("MYCELIUM_DOCGEN_OPENAI_MODEL", "configured-gpt")
+    save_model("docgen", openai_model="configured-gpt")
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
     choices = model_choices()
     assert choices[0]["available"] is False
@@ -561,7 +583,7 @@ def test_provider_failure_reaches_run_result_without_api_body(monkeypatch):
             "document SSO",
             requested_set="kb",
             requested_type="how-to",
-            client=OpenAIModel(client),
+            client=client,
             substrate=_substrate(),
             report_gap=FakeGapReporter(),
             config=_config(),
