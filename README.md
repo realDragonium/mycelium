@@ -110,8 +110,9 @@ search_statements({
 For multi-statement prose, prefer `ingest_text`. It segments the text, assigns
 statement kinds, proposes links, and returns a draft for review.
 
-Historical annotation data is migrated into the statement model when old
-databases are opened. Keep those migrations when changing current storage.
+Historical annotation tables may remain in old databases but are inert. The
+current migration runner leaves them intact for compatibility, and archive
+imports skip their records rather than converting them into statements.
 
 ## Tests
 

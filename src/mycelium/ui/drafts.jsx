@@ -348,7 +348,7 @@ function DraftFlags({ ops }) {
   if (!flags.length) return null;
 
   return (
-    <aside style={{ width: 360, flexShrink: 0 }}>
+    <aside style={{ width: 360, maxWidth: '100%', flex: '1 1 320px' }}>
       <h2 style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
         Flagged fragments · {flags.length}
       </h2>
@@ -654,8 +654,8 @@ function DraftDetail({ draftId, onBack }) {
       </div>
 
       <div style={{ maxWidth: WIDE, margin: '0 auto', padding: '0 24px' }}>
-        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
+          <div style={{ flex: '1 1 600px', minWidth: 0 }}>
             <h2 style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Graph</h2>
             <p style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 0, marginBottom: 10 }}>
               Shows the entities and statements the draft touches, plus one hop of substrate context.

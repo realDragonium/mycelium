@@ -710,13 +710,15 @@ def test_flag_reason_lookup_is_guarded_against_inherited_properties():
     and renders a blank stage and a blank explanation next to the enum — worse
     than the enum alone, because it reads as though the pipeline said nothing.
 
-    The assertion is that the lookup is not a bare index, which is the actual
-    invariant: an own-property guard, `Object.hasOwn`, a `Map`, or a
-    null-prototype table all satisfy it. There is no JS test runner in this
-    repo, so a source assertion is the only way to hold this."""
-    lookup = re.search(r"const known = (.*?);\n", _DRAFTS_JSX.read_text(), re.S)
+    There is no JS test runner in this repo, so hold the concrete guard and
+    fallback expression that prevent inherited members from being rendered."""
+    source = _DRAFTS_JSX.read_text()
+    lookup = re.search(r"const known = (.*?);\n", source, re.S)
     assert lookup is not None, "could not find the _FLAG_REASONS lookup"
-    expression = " ".join(lookup.group(1).split())
-    assert not re.fullmatch(r"_FLAG_REASONS\[[^\]]+\]", expression), (
-        f"flag-reason lookup reaches Object.prototype: {expression}"
+    guard = " ".join(lookup.group(1).split())
+    assert guard == (
+        "Object.prototype.hasOwnProperty.call(_FLAG_REASONS, p.reason) "
+        "? _FLAG_REASONS[p.reason] : null"
     )
+    assert "const stage = known ? known[0]" in source
+    assert "const explanation = known ? known[1]" in source

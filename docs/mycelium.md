@@ -39,7 +39,9 @@ in the names table.
 A **name** is a record holding an opaque id, a text string, and a foreign
 key to an entity. Each entity is reachable through one or more names; the
 text column is globally unique so no two entities can share an alias.
-Names are exact-match-only in v1 — they are not embedded.
+Names are embedded in a separate vector index used by entity search and by
+alias-aware statement retrieval. Exact name matching remains available for
+deterministic entity resolution.
 
 A **statement** is a record holding an opaque id, a `kind` string, and a
 chunk of text. The statement is the unit that carries meaning. A statement
@@ -60,11 +62,10 @@ compatibility (e.g., that `triggers` only joins events) — trust the
 writer.
 
 A **statement_mentions** row links a statement to a *name*, not directly to
-an entity. This indirection preserves provenance: when a statement is
-authored, the writer chose a specific name to refer to an entity, and that
-choice is recorded so that future merges or splits do not lose the original
-phrasing. The mention's effective entity is the entity that name currently
-points at.
+an entity. Mentions are derived from names found in statement text whenever
+the text is created or changed. The indirection preserves which alias matched,
+and the mention's effective entity is the entity that name currently points
+at.
 
 A **statement_link** is a directed edge from one statement to another with
 a string label called the link_type. The link_type vocabulary is open;
@@ -125,11 +126,10 @@ The substrate writes to two files inside `MYCELIUM_DATA_DIR` (default
 name, statement, mention, and link records. `mycelium.vec` is an hnswlib
 binary holding the vector index of statement embeddings.
 
-The schema migration runs on every connect via `CREATE TABLE IF NOT EXISTS`
-statements, so opening an existing data directory leaves its contents
-intact. There are no migration scripts beyond the initial schema; if the
-schema changes incompatibly, the supported upgrade path is to wipe the
-data directory and re-ingest from the source payloads.
+Versioned schema migrations run whenever the store opens. They upgrade older
+supported schemas in place and preserve legacy annotation tables as inert
+compatibility data. Archive import likewise skips legacy annotation records;
+it does not convert them into statements.
 
 Foreign keys are declared in the schema as `REFERENCES` clauses and are
 enforced via `PRAGMA foreign_keys = ON` set on every connection. This
