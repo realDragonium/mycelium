@@ -1444,6 +1444,7 @@ def test_the_delivery_tool_records_a_completed_delivery(tmp_path, monkeypatch):
         "path": "docs/configuring-sso.md",
         "reference": "https://github.com/acme/handbook/pull/17",
         "content_revision": CONTENT_SHA,
+        "revision": 1,
     }
     assert document["body"] == "# Configuring SSO\n"
     assert document["delivery_destination"] == "knowledge-base"

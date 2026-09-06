@@ -178,7 +178,7 @@ function App() {
     case 'ingest': screen = <IngestSurface key={igNonce} />; break;
     case 'settings': screen = <main className="page narrow"><div className="crumbs"><a href="#/">~</a><span className="sep">/</span><span>settings</span></div><h1>AI settings</h1><AISettings /></main>; break;
     case 'research': screen = <ResearchSurface key="research" />; break;
-    case 'documentation': screen = <DocumentationSurface runId={router.id} />; break;
+    case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'coverage': screen = <CoverageScreen />; break;
     case 'mentions': screen = <MentionsScreen />; break;
     case 'drafts': screen = <DraftsList />; break;

@@ -146,7 +146,7 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, guidelineSet
   </details>;
 }
 
-function ProductSettings() {
+function ProductSettings({ kinds } = {}) {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [retry, setRetry] = React.useState(0);
@@ -166,7 +166,7 @@ function ProductSettings() {
     {data?.github_configuration_error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{data.github_configuration_error}</p>}
     {error ? <><p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p><button onClick={() => setRetry(value => value + 1)} style={productSettingsStyle.button}>Reload product settings</button></>
       : !data ? <p>Loading product settings…</p>
-      : data.sections.map(snapshot => <ProductSettingsSection key={snapshot.settings.kind} snapshot={snapshot} canConfigure={data.can_configure} bindings={data.github_bindings} guidelineSets={data.guideline_sets} onOptions={setData} />)}
+      : data.sections.filter(snapshot => !kinds || kinds.includes(snapshot.settings.kind)).map(snapshot => <ProductSettingsSection key={snapshot.settings.kind} snapshot={snapshot} canConfigure={data.can_configure} bindings={data.github_bindings} guidelineSets={data.guideline_sets} onOptions={setData} />)}
   </section>;
 }
 

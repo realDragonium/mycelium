@@ -1,40 +1,69 @@
 # Documentation models
 
-Open **Documentation** in the cockpit to request a document and select **Claude**
-or **GPT** for that run. Optional guideline set and document type choices select
-writing guidance and templates. The model can resolve omitted choices from the
-configured catalogue. Readers can inspect runs; starting a run requires a real
-writer or admin role.
+Open **Documentation** in either UI to create a document, read saved documents,
+inspect revision history, or publish an update to GitHub. **Profiles & templates**
+edits writing guidance; **Models & GitHub** configures the generation model,
+limits, default profile, and repository destinations. These settings persist in
+the instance and do not require editing files or redeploying.
 
-The selection applies to document matching, knowledge retrieval, writing, and
-the separate review conversation. Existing grounding, review and delivery rules
-still apply. A completed generation stores a document internally; publishing it
-uses the existing explicit delivery workflow.
+Each generation form can choose Claude or GPT independently of the saved default.
+The configured model handles retrieval, writing, and a separate review conversation.
+Credentials stay on the server: Anthropic uses its existing SDK credentials;
+OpenAI uses `OPENAI_API_KEY`. Model IDs and provider defaults are saved through
+the settings UI. The provider list reports local configuration, not a live check
+of model access, quota, or compatibility. Failures never silently switch providers.
 
-Configure providers on the server:
+A new UI generation creates a document. To improve an existing one, open it from
+**Documents** and describe the change under **Create revision**. This targets the
+exact internal version on screen, preserving its identity and earlier revisions.
+It does not ask the model to select a different document or substitute GitHub's
+content. If another run changes the document first, reload its current revision
+before retrying. Old revisions remain readable and downloadable as Markdown.
 
-| Setting | Meaning |
-| --- | --- |
-| `MYCELIUM_DOCGEN_PROVIDER` | Default for requests without a provider: `claude` (default) or `openai`. |
-| `MYCELIUM_DOCGEN_MODEL` | Claude model ID. Falls back to `MYCELIUM_INGEST_MODEL`, then the existing packaged Claude default. |
-| Anthropic credentials | Existing SDK configuration, including `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, profiles and federation. |
-| `MYCELIUM_DOCGEN_OPENAI_MODEL` | Required GPT model ID with Responses API function calling support. No implicit model default. |
-| `OPENAI_API_KEY` | Required OpenAI API credential. Kept on the server. |
+Generation records the model and a consistent snapshot of the available writing
+profiles at admission. The selected guidance, exposure rules, template, and their
+versions are retained with the run. Changing settings while a run is queued does
+not change that run's instructions.
 
-The provider list shows configured model IDs and missing configuration, never
-credentials. Availability means local configuration exists; it does not probe
-provider access, quota, or model compatibility. Unknown providers and missing
-GPT configuration are refused before creating a run. Provider failures never
-switch to another model automatically.
+### GitHub publication
 
-`request_documentation(prompt, guideline_set=None, document_type=None,
-provider=None)` exposes the same choice through MCP and its REST mirror.
-`list_documentation_models()` lists the configured options. The cockpit uses
-`GET /api/documentation/options` and `POST /api/documentation/runs`; run lists,
-run details and document details are available beneath `/api/documentation`.
-Every new run captures its provider and model at admission, including while it
-waits for a model slot. Later configuration changes affect later runs. Historical
-runs retain null provider/model because their exact model was not recorded.
+Add a destination in **Models & GitHub → Documentation delivery**: name,
+repository owner and name, base branch, path template, and approved credential
+binding. Use `{slug}` in the path template, for example `docs/{slug}.md`.
+Server administrators provide bindings through `MYCELIUM_GITHUB_CREDENTIALS`;
+no credential values are stored by the browser.
+
+Open a document, select its destination, and choose **Create / update GitHub PR**.
+Publication is explicit. Failures leave the internal document saved and can be
+retried without another AI run. Later updates preserve the recorded repository,
+branch, credential binding and path, even if its destination settings change.
+A binding removed from the deployment must be restored before publishing there.
+
+The document shows which revision was published and whether a newer internal
+revision awaits publication. A publication completing during a concurrent local
+edit still records the exact revision sent. Existing remote-change checks remain
+in place. Merging and deployment happen in GitHub; Mycelium does not perform them.
+
+### Storage and automation
+
+Documents, immutable revisions, generation runs, and publication receipts live
+in `mycelium-drafts.db`. Instance exports include those tables in
+`documentation.json`, alongside prompt history and configuration. Unrelated draft
+operations and credentials are excluded. Older installations receive a snapshot
+of their current document body; overwritten bodies cannot be reconstructed.
+Legacy publication timestamps remain unknown rather than inferred from edit times.
+Archives predating document backups contain no document library to restore.
+
+MCP and REST use the same operations: `request_documentation`,
+`list_generated_documents`, `get_generated_document`, `list_document_revisions`,
+`get_document_revision`, `revise_document`, and `deliver_document`.
+`revise_document` requires `document_id`, `expected_revision`, and instructions.
+The UI always supplies the current revision when publishing. Existing automation
+may retain automatic document matching through `request_documentation`'s default
+`match_existing=True`; the UI creation endpoint disables that matching.
+
+Readers can inspect documents and runs. Generation and publication require a real
+writer or admin role. Writing profiles describe an audience, not access controls.
 
 GPT uses the OpenAI Responses API with `store: false`. The adapter preserves
 response items, encrypted reasoning, and function-call IDs across tool results.

@@ -39,6 +39,13 @@ class CurrentDocument:
     content_revision: str | None = None
 
 
+@dataclass(frozen=True)
+class RevisionTarget:
+    document: ExistingDocument
+    revision: int
+    current: CurrentDocument
+
+
 class ReviewFinding(BaseModel):
     """One actionable reason a review check failed."""
 

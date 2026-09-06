@@ -1461,7 +1461,7 @@ def request_documentation_http(
     body: DocumentationRequestBody, request: Request
 ) -> dict[str, object]:
     _enforce_role(request, "writer", real_role=True)
-    return server.request_documentation(**body.model_dump())
+    return server.request_documentation(**body.model_dump(), match_existing=False)
 
 
 @app.get("/api/documentation/runs")
@@ -1481,15 +1481,99 @@ def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class DocumentRevisionBody(BaseModel):
+    prompt: str
+    expected_revision: int = PydField(ge=1, strict=True)
+    provider: Literal["claude", "openai"] | None = None
+
+
+class DocumentDeliveryBody(BaseModel):
+    destination: str
+    expected_revision: int = PydField(ge=1, strict=True)
+
+
+def _document_preview(document: dict[str, object]) -> dict[str, object]:
+    from markdown_it import MarkdownIt
+
+    body = document.get("body")
+    return {
+        **document,
+        "body_html": MarkdownIt("js-default").disable("image").render(body)
+        if isinstance(body, str)
+        else "",
+    }
+
+
+@app.get("/api/documentation/documents")
+def generated_documents_http(request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return server.list_generated_documents()
+
+
+@app.get("/api/documentation/destinations")
+def documentation_destinations_http(request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return server.list_documentation_destinations()
+
+
 @app.get("/api/documentation/documents/{document_id}")
 def generated_document_http(document_id: str, request: Request) -> dict[str, object]:
     _require_principal(request)
     try:
-        return server.get_generated_document(document_id)
+        return _document_preview(server.get_generated_document(document_id))
     except ValueError as exc:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/documentation/documents/{document_id}/revisions")
+def document_revisions_http(document_id: str, request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return server.list_document_revisions(document_id)
+
+
+@app.get("/api/documentation/documents/{document_id}/revisions/{revision}")
+def document_revision_http(
+    document_id: str, revision: int, request: Request
+) -> dict[str, object]:
+    _require_principal(request)
+    try:
+        return _document_preview(server.get_document_revision(document_id, revision))
+    except ValueError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/documentation/documents/{document_id}/revisions")
+def revise_document_http(
+    document_id: str, body: DocumentRevisionBody, request: Request
+) -> dict[str, object]:
+    from fastapi import HTTPException
+
+    from .docs_store import RevisionConflict
+
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        return server.revise_document(document_id, **body.model_dump())
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/documentation/documents/{document_id}/delivery")
+def deliver_document_http(
+    document_id: str, body: DocumentDeliveryBody, request: Request
+) -> dict[str, object]:
+    from fastapi import HTTPException
+
+    from .docs_store import RevisionConflict
+
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        return server.deliver_document(document_id, **body.model_dump())
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.get("/api/drafts")

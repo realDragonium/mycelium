@@ -20,6 +20,7 @@ dependencies = [
     "hnswlib>=0.8.0",
     "httpx>=0.28.1",
     "itsdangerous>=2.2.0",
+    "markdown-it-py>=4.0.0",
     "matplotlib>=3.10.9",
     "mcp>=2.0.0",
     "numpy>=2.4.4",

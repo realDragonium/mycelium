@@ -16,6 +16,7 @@ function useHashRoute() {
     if (parts[0] === 'entities') return { view: 'entities', focus: params.focus || null };
     if (parts[0] === 'browse') return { view: 'browse' };
     if (parts[0] === 'glossary') return { view: 'glossary' };
+    if (parts[0] === 'documentation') return { view: 'documentation' };
     if (parts[0] === 'settings') return { view: 'settings' };
     if (parts[0] === 'gaps') return { view: 'gaps' };
     if (parts[0] === 'pending') return { view: 'pending' };
@@ -50,6 +51,7 @@ function useHashRoute() {
     else if (next.view === 'entities') h = next.focus ? `#/entities?focus=${next.focus}` : `#/entities`;
     else if (next.view === 'browse') h = `#/browse`;
     else if (next.view === 'glossary') h = `#/glossary`;
+    else if (next.view === 'documentation') h = '#/documentation';
     else if (next.view === 'settings') h = `#/settings`;
     else if (next.view === 'gaps') h = `#/gaps`;
     else if (next.view === 'pending') h = `#/pending`;
@@ -125,6 +127,7 @@ function App() {
     case 'entities': screen = <EntitiesGraph focusId={router.focus} />; break;
     case 'browse': screen = <BrowseIndex />; break;
     case 'glossary': screen = <GlossaryScreen />; break;
+    case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'settings': screen = <SettingsScreen />; break;
     case 'gaps': screen = <GapsScreen />; break;
     case 'pending': screen = <PendingMentionsScreen />; break;

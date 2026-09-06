@@ -2347,6 +2347,7 @@ def request_documentation(
     guideline_set: str | None = None,
     document_type: str | None = None,
     provider: Literal["claude", "openai"] | None = None,
+    match_existing: bool = True,
 ) -> dict[str, Any]:
     """Request a background documentation run: generate one document from
     `prompt` and store it as a generated document.
@@ -2398,11 +2399,97 @@ def request_documentation(
         created_by=created_by,
         conn=_drafts_db(),
         provider=provider,
+        match_existing=match_existing,
     )
     row = require(
         docs_store.get_run(_drafts_db(), run_id), "documentation run just created"
     )
     return docs_store.serialize_run(row)
+
+
+@tool(role="writer", real_role=True)
+def revise_document(
+    document_id: str,
+    expected_revision: int,
+    prompt: str,
+    provider: Literal["claude", "openai"] | None = None,
+) -> dict[str, object]:
+    """Iterate on exactly the selected internal document version."""
+    from . import auth, doc_runs, docs_store
+    from .docgen.config import DocgenConfig
+
+    text = prompt.strip()
+    if not text:
+        raise ValueError("prompt is required")
+    if len(text) > DocgenConfig.from_env().max_prompt_chars:
+        raise ValueError(
+            "The revision instructions exceed the documentation prompt limit."
+        )
+    row = docs_store.require_revision(_drafts_db(), document_id, expected_revision)
+    _check_guideline_selection(str(row["guideline_set"]), str(row["document_type"]))
+    principal = auth.current_principal.get()
+    run_id = doc_runs.start_run(
+        prompt=text,
+        guideline_set=str(row["guideline_set"]),
+        document_type=str(row["document_type"]),
+        created_by=principal.id if principal is not None else None,
+        conn=_drafts_db(),
+        provider=provider,
+        target_document_id=document_id,
+        expected_revision=expected_revision,
+        match_existing=False,
+    )
+    return docs_store.serialize_run(
+        require(docs_store.get_run(_drafts_db(), run_id), "new documentation run")
+    )
+
+
+@tool
+def list_document_revisions(document_id: str) -> dict[str, object]:
+    """List the stored versions of a document, newest first, without bodies."""
+    from . import docs_store
+
+    if docs_store.get_document(_drafts_db(), document_id) is None:
+        raise ValueError("generated document not found")
+    return {
+        "revisions": [
+            docs_store.serialize_revision(row, include_body=False)
+            for row in docs_store.list_revisions(_drafts_db(), document_id)
+        ]
+    }
+
+
+@tool
+def get_document_revision(document_id: str, revision: int) -> dict[str, object]:
+    """Read an immutable version with grounding, review and generation backlink."""
+    from . import docs_store
+
+    row = docs_store.get_revision(_drafts_db(), document_id, revision)
+    if row is None:
+        raise ValueError("generated document revision not found")
+    result = docs_store.serialize_revision(row)
+    delivery = (
+        _drafts_db()
+        .execute(
+            "SELECT destination, target, path, reference, content_revision, created_at "
+            "FROM generated_document_deliveries WHERE document_id = ? AND revision = ?",
+            (document_id, revision),
+        )
+        .fetchone()
+    )
+    result["delivery"] = (
+        None
+        if delivery is None
+        else {
+            "destination": delivery["destination"],
+            "coordinates": _json.loads(delivery["target"]),
+            "path": delivery["path"],
+            "reference": delivery["reference"],
+            "content_revision": delivery["content_revision"],
+            "created_at": delivery["created_at"],
+        }
+    )
+    return result
 
 
 @tool
@@ -2466,7 +2553,7 @@ def list_generated_documents() -> dict[str, Any]:
     return {
         "documents": [
             docs_store.serialize_document_summary(row)
-            for row in docs_store.list_documents(_drafts_db())
+            for row in docs_store.list_documents(_drafts_db(), limit=None)
         ]
     }
 
@@ -2485,65 +2572,70 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
 
 
 @tool(role="writer", real_role=True, capture_request=False)
-def deliver_document(document_id: str, destination: str) -> dict[str, str]:
-    """Deliver a generated document into a configured destination's review flow.
+def deliver_document(
+    document_id: str,
+    destination: str,
+    expected_revision: int | None = None,
+) -> dict[str, object]:
+    """Publish a selected internal version through its GitHub review flow.
 
-    Records the destination only after delivery succeeds. Raises for an unknown
-    document, destination configuration, or delivery failure.
+    Existing documents reuse recorded repository coordinates and path. A receipt
+    belongs to the captured immutable version even when generation advances the
+    document while GitHub is processing the publication.
     """
     from . import docs_store
     from .docgen import destinations
 
-    row = docs_store.get_document(_drafts_db(), document_id)
-    if row is None:
-        raise ValueError("generated document not found")
-    try:
-        configured = destinations.get_destination(destination)
-        is_same_destination = row["delivery_destination"] == destination
-        if is_same_destination:
-            destinations.require_recorded_target(configured, row["delivery_target"])
-    except destinations.DestinationError as exc:
-        raise ValueError(str(exc)) from None
-    document = destinations.DeliveryDocument(
-        id=str(row["id"]),
-        slug=str(row["slug"]),
-        title=str(row["title"]),
-        body=str(row["body"]),
-        guideline_set=str(row["guideline_set"]),
-        document_type=str(row["document_type"]),
-        statement_ids=tuple(_json.loads(row["statement_ids"])),
-        delivered_path=(
-            str(row["delivery_path"])
-            if is_same_destination and row["delivery_path"] is not None
-            else None
-        ),
-        delivered_content_revision=(
-            str(row["delivery_content_revision"])
-            if is_same_destination and row["delivery_content_revision"] is not None
-            else None
-        ),
-        revision_source_content_revision=(
-            str(row["revision_source_content_revision"])
-            if is_same_destination
-            and row["revision_source_content_revision"] is not None
-            else None
-        ),
-    )
-    try:
-        delivery = destinations.deliver_document(configured, document)
-    except destinations.DestinationError as exc:
-        raise ValueError(str(exc)) from None
-    docs_store.record_delivery(
-        _drafts_db(),
-        document_id,
-        destination=delivery.destination,
-        path=delivery.path,
-        reference=delivery.reference,
-        content_revision=delivery.content_revision,
-        expected_body_digest=docs_store.body_digest(str(row["body"])),
-        target=destinations.target_identity(configured),
-    )
-    return delivery.serialize()
+    with destinations.publication_lock(document_id):
+        row = docs_store.get_document(_drafts_db(), document_id)
+        if row is None:
+            raise ValueError("generated document not found")
+        revision = (
+            int(row["current_revision"])
+            if expected_revision is None
+            else expected_revision
+        )
+        row = docs_store.require_revision(_drafts_db(), document_id, revision)
+        try:
+            configured, binding = destinations.publishing_destination(row, destination)
+        except destinations.DestinationError as exc:
+            raise ValueError(str(exc)) from None
+        document = destinations.DeliveryDocument(
+            id=str(row["id"]),
+            slug=str(row["slug"]),
+            title=str(row["title"]),
+            body=str(row["body"]),
+            guideline_set=str(row["guideline_set"]),
+            document_type=str(row["document_type"]),
+            statement_ids=tuple(_json.loads(row["statement_ids"])),
+            delivered_path=str(row["delivery_path"])
+            if row["delivery_path"] is not None
+            else None,
+            delivered_content_revision=str(row["delivery_content_revision"])
+            if row["delivery_content_revision"] is not None
+            else None,
+            revision_source_content_revision=str(
+                row["revision_source_content_revision"]
+            )
+            if row["revision_source_content_revision"] is not None
+            else None,
+        )
+        try:
+            delivery = destinations.deliver_document(configured, document)
+        except destinations.DestinationError as exc:
+            raise ValueError(str(exc)) from None
+        docs_store.record_delivery(
+            _drafts_db(),
+            document_id,
+            destination=delivery.destination,
+            path=delivery.path,
+            reference=delivery.reference,
+            content_revision=delivery.content_revision,
+            target=destinations.target_identity(configured),
+            revision=revision,
+            binding=binding,
+        )
+        return {**delivery.serialize(), "revision": revision}
 
 
 @tool

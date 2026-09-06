@@ -1,0 +1,37 @@
+.docw { max-width: 1040px; margin: 0 auto; padding: 32px 24px 64px; color: var(--ink); font-size: 14px; line-height: 1.6; }
+.docw h1 { font-size: 30px; margin: 0; }
+.docw h2 { font-size: 20px; line-height: 1.3; margin: 12px 0; }
+.docw p { margin: 12px 0; }
+.docw a { color: inherit; text-decoration: underline; }
+.docw button, .docw input, .docw select, .docw textarea { font: inherit; color: var(--ink); background: var(--surface-2, var(--paper)); border: 1px solid var(--rule, var(--line)); border-radius: 5px; padding: 8px 12px; }
+.docw button { cursor: pointer; }
+.docw button:hover:not(:disabled) { border-color: var(--ink-3); }
+.docw button:disabled, .docw fieldset:disabled { opacity: .6; cursor: default; }
+.docw button:focus-visible, .docw input:focus-visible, .docw select:focus-visible, .docw textarea:focus-visible { outline: 2px solid var(--ink-3); outline-offset: 2px; }
+.docw-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0; }
+.docw-tabs [aria-current] { border-color: var(--ink); font-weight: 600; }
+.docw-panel { border: 1px solid var(--rule, var(--line)); border-radius: 8px; padding: 24px; margin-bottom: 20px; min-width: 0; overflow-wrap: anywhere; }
+.docw label { display: grid; gap: 6px; margin-bottom: 16px; font-weight: 500; }
+.docw input, .docw select, .docw textarea { width: 100%; min-width: 0; box-sizing: border-box; }
+.docw textarea { min-height: 150px; resize: vertical; }
+.docw fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.docw-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.docw-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.docw-actions h2 { margin-right: auto; }
+.docw-meta, .docw-list span { color: var(--ink-3); font-size: 12px; }
+.docw-list { display: grid; gap: 10px; margin-top: 18px; }
+.docw-list button { display: grid; gap: 4px; text-align: left; padding: 16px; overflow-wrap: anywhere; }
+.docw-list strong { font-weight: 600; }
+.docw-source { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono, monospace); font-size: 12px; }
+.docw-prose { border-top: 1px solid var(--rule, var(--line)); border-bottom: 1px solid var(--rule, var(--line)); padding: 20px 0; margin: 20px 0; line-height: 1.8; }
+.docw-prose h1 { font-size: 26px; }
+.docw-prose h2, .docw-prose h3 { margin-top: 28px; }
+.docw-prose ul, .docw-prose ol { padding-left: 28px; }
+.docw-prose pre { overflow-x: auto; padding: 14px; background: var(--surface-2, var(--paper)); border: 1px solid var(--rule, var(--line)); }
+.docw-prose code { font-family: var(--mono, monospace); font-size: .9em; }
+.docw-prose blockquote { border-left: 3px solid var(--ink-3); padding-left: 16px; margin-left: 0; }
+.docw-prose table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.docw-prose th, .docw-prose td { border: 1px solid var(--rule, var(--line)); padding: 8px; }
+.docw [role="alert"] { color: var(--red, #dc5757); }
+.docw summary { cursor: pointer; }
+@media (max-width: 620px) { .docw { padding: 20px 12px; } .docw-panel { padding: 16px; } .docw-fields { grid-template-columns: 1fr; gap: 0; } }

@@ -220,6 +220,7 @@ function TopBar({ small = false }) {
           <button className={router.view === 'pending' ? 'is-active' : ''} onClick={() => router.go({ view: 'pending' })}>Pending</button>
           <button className={router.view === 'drafts' ? 'is-active' : ''} onClick={() => router.go({ view: 'drafts' })}>Drafts</button>
           <button onClick={() => { window.location.href = '/connect'; }}>Connect</button>
+          <button className={router.view === 'documentation' ? 'is-active' : ''} onClick={() => router.go({ view: 'documentation' })}>Documentation</button>
           <button className={router.view === 'settings' ? 'is-active' : ''} onClick={() => router.go({ view: 'settings' })}>Settings</button>
           <ThemeToggle />
         </nav>

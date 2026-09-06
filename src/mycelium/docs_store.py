@@ -113,7 +113,172 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_generated_document_review(conn)
     _add_generated_document_delivery(conn)
     _rekey_generated_documents(conn)
+    _add_document_revisions(conn)
     conn.commit()
+
+
+DOCUMENT_REVISIONS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS generated_document_revisions (
+    document_id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    parent_revision INTEGER,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    guideline_set TEXT NOT NULL,
+    document_type TEXT NOT NULL,
+    body TEXT NOT NULL,
+    statement_ids TEXT NOT NULL,
+    review TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    run_id TEXT,
+    PRIMARY KEY (document_id, revision)
+);
+CREATE TABLE IF NOT EXISTS generated_document_deliveries (
+    document_id TEXT NOT NULL,
+    revision INTEGER NOT NULL,
+    destination TEXT NOT NULL,
+    binding TEXT,
+    target TEXT NOT NULL,
+    path TEXT NOT NULL,
+    reference TEXT NOT NULL,
+    content_revision TEXT NOT NULL,
+    created_at TEXT,
+    PRIMARY KEY (document_id, revision)
+);
+"""
+
+
+class RevisionConflict(ValueError):
+    """The selected internal version is no longer the document head."""
+
+
+def _add_document_revisions(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(generated_documents)")
+    }
+    for name, definition in (
+        ("current_revision", "INTEGER NOT NULL DEFAULT 1"),
+        ("published_revision", "INTEGER"),
+        ("delivery_binding", "TEXT"),
+    ):
+        if name not in columns:
+            conn.execute(
+                f"ALTER TABLE generated_documents ADD COLUMN {name} {definition}"
+            )
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    for name, definition in (
+        ("target_document_id", "TEXT"),
+        ("target_revision", "INTEGER"),
+        ("result_revision", "INTEGER"),
+        ("profile_revisions", "TEXT NOT NULL DEFAULT '{}'"),
+        ("profile_snapshot", "TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        if name not in columns:
+            conn.execute(
+                f"ALTER TABLE documentation_runs ADD COLUMN {name} {definition}"
+            )
+    conn.executescript(DOCUMENT_REVISIONS_SCHEMA)
+    conn.execute(
+        "INSERT OR IGNORE INTO generated_document_revisions "
+        "(document_id, revision, slug, title, guideline_set, document_type, body, "
+        "statement_ids, review, created_at, run_id) "
+        "SELECT id, current_revision, slug, title, guideline_set, document_type, body, "
+        "statement_ids, review, updated_at, last_run_id FROM generated_documents"
+    )
+    # A legacy receipt need not describe today's body. Only a matching Git blob
+    # can establish which backfilled internal version was actually published.
+    for row in conn.execute(
+        "SELECT * FROM generated_documents WHERE delivery_content_revision IS NOT NULL AND published_revision IS NULL"
+    ):
+        body = row["body"].encode("utf-8")
+        git_digest = hashlib.sha1(
+            f"blob {len(body)}\0".encode() + body, usedforsecurity=False
+        ).hexdigest()
+        if git_digest == row["delivery_content_revision"]:
+            conn.execute(
+                "UPDATE generated_documents SET published_revision = current_revision WHERE id = ?",
+                (row["id"],),
+            )
+
+    conn.execute(
+        "UPDATE documentation_runs SET result_revision = "
+        "(SELECT current_revision FROM generated_documents d WHERE d.id = documentation_runs.document_id AND d.last_run_id = documentation_runs.id) "
+        "WHERE result_revision IS NULL AND outcome = 'document_written'"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO generated_document_deliveries "
+        "(document_id, revision, destination, binding, target, path, reference, content_revision, created_at) "
+        "SELECT id, published_revision, delivery_destination, delivery_binding, delivery_target, delivery_path, delivery_reference, delivery_content_revision, NULL "
+        "FROM generated_documents WHERE published_revision IS NOT NULL AND delivery_destination IS NOT NULL "
+        "AND delivery_target IS NOT NULL AND delivery_path IS NOT NULL AND delivery_reference IS NOT NULL AND delivery_content_revision IS NOT NULL"
+    )
+
+
+def require_revision(
+    conn: sqlite3.Connection, document_id: str, expected_revision: int
+) -> sqlite3.Row:
+    row = get_document(conn, document_id)
+    if row is None:
+        raise ValueError("generated document not found")
+    if expected_revision < 1 or row["current_revision"] != expected_revision:
+        raise RevisionConflict("The document has changed. Reload it before continuing.")
+    return row
+
+
+def list_revisions(conn: sqlite3.Connection, document_id: str) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            "SELECT * FROM generated_document_revisions WHERE document_id = ? ORDER BY revision DESC",
+            (document_id,),
+        )
+    )
+
+
+def get_revision(
+    conn: sqlite3.Connection, document_id: str, revision: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM generated_document_revisions WHERE document_id = ? AND revision = ?",
+        (document_id, revision),
+    ).fetchone()
+
+
+def serialize_revision(
+    row: sqlite3.Row, *, include_body: bool = True
+) -> dict[str, object]:
+    result: dict[str, object] = {
+        "document_id": row["document_id"],
+        "revision": row["revision"],
+        "parent_revision": row["parent_revision"],
+        "slug": row["slug"],
+        "title": row["title"],
+        "guideline_set": row["guideline_set"],
+        "document_type": row["document_type"],
+        "statement_ids": json.loads(row["statement_ids"]),
+        "review": json.loads(row["review"]),
+        "created_at": row["created_at"],
+        "run_id": row["run_id"],
+        "chars": len(row["body"]),
+    }
+    if include_body:
+        result["body"] = row["body"]
+    return result
+
+
+def _revision_metadata(row: sqlite3.Row) -> dict[str, object]:
+    published = row["published_revision"]
+    return {
+        "current_revision": row["current_revision"],
+        "published_revision": published,
+        "delivery_status": "published"
+        if published == row["current_revision"]
+        else ("changes_pending" if row["delivery_destination"] else "unpublished"),
+        "delivery_coordinates": json.loads(row["delivery_target"])
+        if row["delivery_target"]
+        else None,
+    }
 
 
 def _add_refused_draft_columns(conn: sqlite3.Connection) -> None:
@@ -340,24 +505,35 @@ def create_run(
     created_by: str | None,
     provider: str | None = None,
     model: str | None = None,
+    target_document_id: str | None = None,
+    target_revision: int | None = None,
 ) -> str:
     run_id = "drn_" + _uuid.uuid4().hex[:12]
-    conn.execute(
-        "INSERT INTO documentation_runs "
-        "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            run_id,
-            prompt,
-            guideline_set,
-            document_type,
-            _now(),
-            created_by,
-            provider,
-            model,
-        ),
-    )
-    conn.commit()
+    with conn:
+        if target_document_id is not None:
+            if target_revision is None:
+                raise ValueError(
+                    "target_revision is required for a document revision run"
+                )
+            conn.execute("BEGIN IMMEDIATE")
+            require_revision(conn, target_document_id, target_revision)
+        conn.execute(
+            "INSERT INTO documentation_runs "
+            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, target_document_id, target_revision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id,
+                prompt,
+                guideline_set,
+                document_type,
+                _now(),
+                created_by,
+                provider,
+                model,
+                target_document_id,
+                target_revision,
+            ),
+        )
     return run_id
 
 
@@ -402,6 +578,7 @@ def finish_run(
     draft_title: str | None = None,
     draft_body: str | None = None,
     matched_document_id: str | None = None,
+    result_revision: int | None = None,
 ) -> None:
     """Close a run, keeping the text of a draft the review gate turned down.
 
@@ -414,7 +591,7 @@ def finish_run(
     conn.execute(
         "UPDATE documentation_runs "
         "SET finished_at = ?, outcome = ?, document_id = ?, error = ?, "
-        "draft_title = ?, draft_body = ?, matched_document_id = ? "
+        "draft_title = ?, draft_body = ?, matched_document_id = ?, result_revision = COALESCE(?, result_revision) "
         "WHERE id = ? AND finished_at IS NULL",
         (
             _now(),
@@ -424,6 +601,7 @@ def finish_run(
             draft_title,
             draft_body,
             matched_document_id,
+            result_revision,
             run_id,
         ),
     )
@@ -501,6 +679,11 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "outcome": row["outcome"],
         "document_id": row["document_id"],
         "matched_document_id": row["matched_document_id"],
+        "target_document_id": row["target_document_id"],
+        "target_revision": row["target_revision"],
+        "result_revision": row["result_revision"],
+        "profile_revisions": json.loads(row["profile_revisions"]),
+        "profile_snapshot": json.loads(row["profile_snapshot"]),
         "document_superseded": _document_superseded(row),
         "error": row["error"],
         "draft_chars": len(row["draft_body"] or ""),
@@ -605,6 +788,7 @@ def upsert_document(
     updates: str | None = None,
     replacing: str | None = None,
     revision_source_content_revision: str | None = None,
+    expected_revision: int | None = None,
 ) -> str:
     """Write content while preserving metadata a partial writer omits.
 
@@ -638,11 +822,17 @@ def upsert_document(
     try:
         existing = conn.execute(
             "SELECT id, body, statement_ids, review, last_run_id, "
-            "revision_source_content_revision "
+            "revision_source_content_revision, current_revision "
             "FROM generated_documents "
             "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
             (guideline_set, document_type, slug),
         ).fetchone()
+        if expected_revision is not None:
+            if updates is None:
+                raise ValueError(
+                    "expected_revision requires an explicit document target"
+                )
+            require_revision(conn, updates, expected_revision)
         refusal = _write_refusal(
             existing,
             identity=(guideline_set, document_type, slug),
@@ -701,6 +891,24 @@ def upsert_document(
                     document_id,
                 ),
             )
+        revision = 1 if existing is None else int(existing["current_revision"]) + 1
+        conn.execute(
+            "UPDATE generated_documents SET current_revision = ? WHERE id = ?",
+            (revision, document_id),
+        )
+        conn.execute(
+            "INSERT INTO generated_document_revisions "
+            "(document_id, revision, parent_revision, slug, title, guideline_set, document_type, body, "
+            "statement_ids, review, created_at, run_id) "
+            "SELECT id, current_revision, ?, slug, title, guideline_set, document_type, body, "
+            "statement_ids, review, updated_at, last_run_id FROM generated_documents WHERE id = ?",
+            (revision - 1 if revision > 1 else None, document_id),
+        )
+        if run_id is not None:
+            conn.execute(
+                "UPDATE documentation_runs SET result_revision = ? WHERE id = ?",
+                (revision, run_id),
+            )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -724,11 +932,15 @@ def record_delivery(
     content_revision: str,
     expected_body_digest: str | None = None,
     target: str | None = None,
+    revision: int | None = None,
+    binding: str | None = None,
 ) -> None:
     """Record a completed delivery without accepting or rewriting content."""
     try:
         conn.execute("BEGIN IMMEDIATE", ())
-        if expected_body_digest is not None:
+        if revision is not None and get_revision(conn, document_id, revision) is None:
+            raise ValueError("generated document revision not found")
+        if expected_body_digest is not None and revision is None:
             current = conn.execute(
                 "SELECT body FROM generated_documents WHERE id = ?", (document_id,)
             ).fetchone()
@@ -741,12 +953,40 @@ def record_delivery(
         cursor = conn.execute(
             "UPDATE generated_documents SET delivery_destination = ?, "
             "delivery_path = ?, delivery_reference = ?, "
-            "delivery_content_revision = ?, delivery_target = ? "
+            "delivery_content_revision = ?, delivery_target = ?, published_revision = ?, delivery_binding = ? "
             "WHERE id = ?",
-            (destination, path, reference, content_revision, target, document_id),
+            (
+                destination,
+                path,
+                reference,
+                content_revision,
+                target,
+                revision,
+                binding,
+                document_id,
+            ),
         )
         if cursor.rowcount != 1:
             raise ValueError(f"generated document not found: {document_id}")
+        if revision is not None:
+            conn.execute(
+                "INSERT INTO generated_document_deliveries "
+                "(document_id, revision, destination, binding, target, path, reference, content_revision, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(document_id, revision) DO UPDATE SET "
+                "reference = excluded.reference, content_revision = excluded.content_revision, created_at = excluded.created_at",
+                (
+                    document_id,
+                    revision,
+                    destination,
+                    binding,
+                    target or "{}",
+                    path,
+                    reference,
+                    content_revision,
+                    _now(),
+                ),
+            )
         conn.commit()
     except Exception:
         conn.rollback()
@@ -806,6 +1046,7 @@ def _review(row: sqlite3.Row) -> dict:
 
 def serialize_document(row: sqlite3.Row) -> dict:
     return {
+        **_revision_metadata(row),
         "id": row["id"],
         "slug": row["slug"],
         "title": row["title"],
@@ -839,6 +1080,7 @@ def serialize_document_summary(row: sqlite3.Row) -> dict:
         "title": row["title"],
         "guideline_set": row["guideline_set"],
         "document_type": row["document_type"],
+        **_revision_metadata(row),
         "chars": len(row["body"]),
         "statement_ids": _statement_ids(row),
         "review": _review(row),
