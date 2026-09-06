@@ -24,9 +24,10 @@ of that tool's arguments; use null for irrelevant correction fields. A changes
 suggested assessment certifies the complete proposed corrected draft, not just
 individual edits. Never propose direct application or record a review yourself.
 Return a concise rationale, actionable corrections, and any missing-evidence
-questions. A good result has no corrections/questions; changes_suggested requires
-corrections and no questions; needs_context requires questions and cannot certify
-application. Avoid stylistic changes with no factual or clarity benefit.
+questions. Good and reject results have no corrections/questions;
+changes_suggested requires corrections and no questions; needs_context requires
+questions and cannot certify application. Avoid stylistic changes with no factual
+or clarity benefit.
 """
 
 

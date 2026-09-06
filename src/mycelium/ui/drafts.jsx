@@ -815,15 +815,16 @@ function DraftsScreen({ selected }) {
   const [err, setErr] = useD(null);
   const [loading, setLoading] = useD(true);
 
-  const reload = useCBD(async (statusFilter) => {
-    setLoading(true); setErr(null);
+  const reload = useCBD(async (statusFilter, quiet = false) => {
+    if (!quiet) setLoading(true);
+    setErr(null);
     try {
       const data = await _fetchDrafts(statusFilter);
       setDrafts(data.drafts || []);
     } catch (e) {
       setErr(e.message);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, []);
 
@@ -836,7 +837,7 @@ function DraftsScreen({ selected }) {
     let cancelled = false;
     let timer;
     const poll = async () => {
-      await reload(filter);
+      await reload(filter, true);
       if (!cancelled) timer = setTimeout(poll, 3000);
     };
     timer = setTimeout(poll, 3000);

@@ -664,6 +664,42 @@ def test_invalid_advisory_correction_is_failed_without_label(running_app, monkey
     assert len(server.get_draft(draft_id)["ops"]) == 1
 
 
+@pytest.mark.parametrize(
+    ("links", "valid"),
+    [
+        ([], True),
+        ([{"to_id": "stm_existing", "link_type": "supports"}], True),
+        ([{"to_id": "stm_existing"}], False),
+        ([{"to_id": 123, "link_type": "supports"}], False),
+    ],
+)
+def test_advisory_statement_correction_validates_link_spec(
+    running_app, monkeypatch, links, valid
+):
+    draft_id = _draft()
+    correction = Correction(
+        action="append",
+        operation_ref=None,
+        tool_name="upsert_statement",
+        payload_json=json.dumps(
+            {"kind": "state", "text": "The subject is documented.", "links": links}
+        ),
+        reason="Document the supplied statement.",
+    )
+    monkeypatch.setattr(
+        draft_review_runs,
+        "RUNNER",
+        lambda context: _assessment("changes_suggested", [correction]),
+    )
+    monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
+    _request(draft_id)
+    result = _result(draft_id)
+    assert result["status"] == ("completed" if valid else "failed"), result
+    assert result["label"] == ("changes_suggested" if valid else None)
+    assert result["application"] == "unapplied"
+    assert len(server.get_draft(draft_id)["ops"]) == 1
+
+
 def test_configuration_downgrade_during_corrections_rolls_back(
     running_app, monkeypatch
 ):

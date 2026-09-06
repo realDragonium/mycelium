@@ -475,6 +475,7 @@ def _validate_corrections(
         for op in ops
         if isinstance(op, dict) and isinstance(op.get("operation_ref"), str)
     }
+    tools_by_name = {wrapper.__name__: wrapper for wrapper in server.TOOLS}
     changed: set[str] = set()
     for correction in result.corrections:
         reference = correction.operation_ref
@@ -500,12 +501,16 @@ def _validate_corrections(
             raise ValueError(
                 "correction affects knowledge internal review cannot inspect"
             )
-        if not isinstance(name, str) or name not in server._ORIG_SIGNATURES:
+        if (
+            not isinstance(name, str)
+            or name not in server._ORIG_SIGNATURES
+            or name not in tools_by_name
+        ):
             raise ValueError("correction names an unsupported tool")
         signature = server._ORIG_SIGNATURES[name]
         signature.bind(**payload)
         for key, value in payload.items():
-            TypeAdapter(signature.parameters[key].annotation).validate_python(
+            TypeAdapter(tools_by_name[name].__annotations__[key]).validate_python(
                 value, strict=True
             )
         if server._nested_parameter_findings(name, payload):
