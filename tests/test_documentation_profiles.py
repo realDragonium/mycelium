@@ -250,3 +250,43 @@ def test_read_only_http_cannot_save_or_restore(tmp_path, monkeypatch):
             json={"revision": "", "guidance": "Denied"},
         )
         assert response.status_code == 403
+        restore = client.post(
+            "/api/documentation/prompts/restore",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"type": "doctrine", "name": "ingest", "version": 1, "revision": 1},
+        )
+        assert restore.status_code == 403
+        assert server.get_prompt_text("doctrine", "ingest")["version"] == 1
+
+
+def test_versioned_prompt_retirement_rejects_stale_heads_and_preserves_legacy_calls(
+    tmp_path, monkeypatch
+):
+    with _app(tmp_path, monkeypatch) as client:
+        first = server.save_prompt_text(
+            guidelines.TYPE, "internal/reference", "Version one"
+        )
+        server.save_prompt_text(guidelines.TYPE, "internal/reference", "Version two")
+        body = {
+            "type": guidelines.TYPE,
+            "name": "internal/reference",
+            "expected_version": first["version"],
+        }
+        response = client.post("/retire-prompt-text", json=body)
+        assert response.status_code == 409
+        assert (
+            server.get_prompt_text(guidelines.TYPE, "internal/reference")["text"]
+            == "Version two"
+        )
+        body["expected_version"] = 2
+        assert client.post("/retire-prompt-text", json=body).json() == {"retired": True}
+        assert client.post("/retire-prompt-text", json=body).status_code == 409
+        body["expected_version"] = 3
+        assert client.post("/retire-prompt-text", json=body).json() == {
+            "retired": False
+        }
+        server.restore_prompt_text(guidelines.TYPE, "internal/reference", 1, 3)
+        assert client.post("/retire-prompt-text", json=body).status_code == 409
+        assert server.retire_prompt_text(guidelines.TYPE, "internal/reference") == {
+            "retired": True
+        }

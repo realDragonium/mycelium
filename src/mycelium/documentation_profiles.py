@@ -473,13 +473,24 @@ def save_text(
         )
 
 
-def retire_text(type: str, name: str, principal: auth.Principal) -> bool:
+def retire_text(
+    type: str,
+    name: str,
+    principal: auth.Principal,
+    *,
+    expected_version: int | None = None,
+) -> bool:
     _authorize(principal, "admin")
     type, name = validate_key(type, name)
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):
-        current = prompt_store.latest(conn, type, name)
-        if current is None:
+        history = prompt_store.history(conn, type, name)
+        current = history[0] if history else None
+        if expected_version is not None and expected_version != (
+            int(current["version"]) if current else 0
+        ):
+            raise Conflict("This text changed. Reload before retiring.")
+        if current is None or current["deleted"]:
             return False
         if type == guidelines.TYPE:
             profile, _, slot = name.partition("/")
