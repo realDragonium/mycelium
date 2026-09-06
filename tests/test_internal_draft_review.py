@@ -541,10 +541,8 @@ def test_http_review_uses_real_curator_role(running_app, monkeypatch, role):
     headers = {"Authorization": f"Bearer {raw}"}
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "review-only")
     settings = client.get("/api/draft-review/settings", headers=headers)
-    assert settings.json() == {
-        "mode": "review-only",
-        "can_review": role in ("writer", "admin"),
-    }
+    assert settings.json()["mode"] == "review-only"
+    assert settings.json()["can_review"] == (role in ("writer", "admin"))
     response = client.post(f"/api/drafts/{draft_id}/review", headers=headers)
     assert response.status_code == (200 if role in ("writer", "admin") else 403)
     if response.status_code == 200:
@@ -556,10 +554,9 @@ def test_http_review_uses_real_curator_role(running_app, monkeypatch, role):
 def test_http_review_refuses_off_open_and_terminal_drafts(running_app, monkeypatch):
     client, _ = running_app
     draft_id = _draft()
-    assert client.get("/api/draft-review/settings").json() == {
-        "mode": "off",
-        "can_review": True,
-    }
+    settings = client.get("/api/draft-review/settings").json()
+    assert settings["mode"] == "off"
+    assert settings["can_review"] is True
     response = client.post(f"/api/drafts/{draft_id}/review")
     assert response.status_code == 400
     assert "off" in response.json()["detail"]

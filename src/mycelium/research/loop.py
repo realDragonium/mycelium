@@ -11,7 +11,7 @@ Core-at-the-center: `_execute` depends only on a client-like object (anything
 with `.messages.create(...)`), a `SubstrateReader`, a `WorkspaceReader`-shaped
 object, and a `DraftEmitter`. All four are injectable, so the loop is
 exercisable with plain fakes — no server, no DB, no network, no git. The
-framework seam (`run_research`) wires the real Anthropic client, in-process
+framework seam (`run_research`) wires the shared model transport, in-process
 substrate, a fresh shallow-clone workspace, and the in-process draft emitter.
 
 THE NO-LIVE-WRITE GUARANTEE: the model is handed READ tools plus one terminal
@@ -35,7 +35,6 @@ from ..agentloop import (
 )
 from ..agentloop import (
     check_budget,
-    default_client,
     load_doctrine,
 )
 from ..agentloop import (
@@ -120,8 +119,6 @@ def run_research(
         substrate = InProcessSubstrate()
     if emitter is None:
         emitter = InProcessDraftEmitter()
-    if client is None:
-        client = default_client(config.max_retries)
 
     doctrine_text, doctrine_note = load_doctrine(
         config.doctrine_path, name=DOCTRINE_NAME
@@ -197,6 +194,7 @@ def _execute(
 
     trace = TraceBuilder(
         model=config.model,
+        provider=config.provider,
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
         input_chars=len(topic),

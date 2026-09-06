@@ -36,16 +36,16 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
-from .. import tracing
+from .. import ai, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
 from ..agentloop import (
     check_budget,
     collect_statement_ids,
-    default_client,
     ids_present_in,
     load_doctrine,
 )
@@ -56,15 +56,11 @@ from ..agentloop import (
     serialize as _serialize,
 )
 from ..agentloop import (
-    strip_thinking as _strip_thinking,
-)
-from ..agentloop import (
     substrate_has as _substrate_has,
 )
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
 from .config import DOCTRINE_NAME, DocgenConfig
-from .openai_model import OpenAIModel
 from .schema import (
     CurrentDocument,
     DocgenResult,
@@ -129,12 +125,6 @@ def run_docgen(
     config = config or DocgenConfig.from_env()
     if substrate is None:
         substrate = InProcessSubstrate()
-    if client is None:
-        client = (
-            OpenAIModel()
-            if config.provider == "openai"
-            else default_client(config.max_retries)
-        )
     if report_gap is None:
         report_gap = _default_gap_reporter
 
@@ -1062,55 +1052,30 @@ def _slug(title: str) -> str:
 
 def _model_turn(
     ctx: _RunContext,
-    messages: list[dict[str, Any]],
+    messages: Sequence[Mapping[str, object]],
     *,
     force_tool: str | None,
-    tools: list[dict] | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
     system: str | None = None,
-) -> Any:
+) -> ai.ModelResponse:
     config: DocgenConfig = ctx.config
-    client = ctx.client
-    if config.provider == "openai":
-        if not isinstance(client, OpenAIModel):
-            raise ValueError("OpenAI documentation requires its configured transport")
-        return client.turn(
-            config=config,
+    return ai.turn(
+        ai.ToolTask(
+            system=ctx.system_prompt if system is None else system,
             messages=messages,
             tools=tools if tools is not None else ctx.tools,
-            system=ctx.system_prompt if system is None else system,
             force_tool=force_tool,
-        )
-    if hasattr(client, "with_options"):
-        client = client.with_options(
-            timeout=config.request_timeout_s, max_retries=config.max_retries
-        )
-    kwargs: dict[str, Any] = {
-        "model": config.model,
-        "max_tokens": config.max_tokens,
-        "messages": messages,
-        "tools": tools if tools is not None else ctx.tools,
-    }
-    # The reviewer's prompt is not the writer's: reusing the generation
-    # protocol would put writing instructions in front of a judging context.
-    selected_system = ctx.system_prompt if system is None else system
-    if selected_system:
-        kwargs["system"] = selected_system
-    if force_tool:
-        # Forcing a specific tool is incompatible with extended thinking, so
-        # thinking stays off on a forced turn — and the thinking blocks the
-        # adaptive turns left in history are stripped, which a
-        # thinking-disabled request should not carry.
-        kwargs["messages"] = _strip_thinking(messages)
-        kwargs["tool_choice"] = {
-            "type": "tool",
-            "name": force_tool,
-            "disable_parallel_tool_use": True,
-        }
-    else:
-        kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
-        if config.thinking:
-            kwargs["thinking"] = {"type": "adaptive"}
-    return client.messages.create(**kwargs)
+        ),
+        ai.ModelConfig(
+            provider=config.provider,
+            model=config.model,
+            max_tokens=config.max_tokens,
+            request_timeout_s=config.request_timeout_s,
+            max_retries=config.max_retries,
+            thinking=config.thinking,
+        ),
+        client=ctx.client,
+    )
 
 
 def _append_tool_result(

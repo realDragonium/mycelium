@@ -408,13 +408,14 @@ function DraftAssessment({ assessment, compact = false }) {
     : assessment.status === 'failed' ? 'Failed'
     : labels[assessment.label] || 'Completed';
   const badge = <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600 }}>
-    GPT review: {result}{assessment.stale ? ' · Stale' : ''}
+    AI review: {result}{assessment.stale ? ' · Stale' : ''}
   </span>;
   if (compact) return <div style={{ marginTop: 6, color: 'var(--ink-3)' }}>{badge}</div>;
 
   return (
-    <section aria-label="GPT review" style={{ padding: 14, marginBottom: 18, border: '1px solid var(--rule)', borderRadius: 6, color: 'var(--ink-3)', fontSize: 12, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
+    <section aria-label="AI review" style={{ padding: 14, marginBottom: 18, border: '1px solid var(--rule)', borderRadius: 6, color: 'var(--ink-3)', fontSize: 12, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
       {badge}
+      <div style={{ marginTop: 4 }}>Reviewer: {draftReviewProviderName(assessment.provider)} · {assessment.model || 'Model not recorded'}</div>
       <div style={{ marginTop: 4 }}>
         {assessment.mode === 'review-only' ? 'Review only. This review does not edit, reject, or apply the draft.' : 'Review and apply.'}
         {' '}Status: {assessment.status}.{' '}
@@ -609,7 +610,8 @@ function DraftDetail({ draftId, onBack }) {
     });
     loadSettings();
     window.addEventListener('focus', loadSettings);
-    return () => { cancelled = true; window.removeEventListener('focus', loadSettings); };
+    window.addEventListener('draft-review-settings-changed', loadSettings);
+    return () => { cancelled = true; window.removeEventListener('focus', loadSettings); window.removeEventListener('draft-review-settings-changed', loadSettings); };
   }, [draftId]);
 
   const reload = useCBD(async () => {
@@ -749,12 +751,14 @@ function DraftDetail({ draftId, onBack }) {
             <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
               {!reviewSettings ? 'Review settings unavailable.'
                 : !reviewSettings.can_review ? 'A real curator role is required to run reviews.'
-                : reviewSettings.mode === 'off' ? 'Review is off. Enable it in server settings to run a review.'
+                : reviewSettings.mode === 'off' ? 'Review is off. An administrator can enable it in draft review settings.'
                 : reviewSettings.mode === 'review-only' ? 'Current mode: Review only.' : 'Current mode: Review and apply.'}
+            {reviewSettings?.can_review && reviewSettings.mode !== 'off' && reviewSettings.provider && ` ${draftReviewProviderName(reviewSettings.provider)} · ${reviewSettings.model || 'No model configured'}.`}
             </span>
           </div>
         )}
 
+        <p style={{ fontSize: 12 }}><a href="/ui/#/settings">AI settings</a></p>
         <DraftAssessment assessment={data.review_assessment} />
 
         {canDecide && (

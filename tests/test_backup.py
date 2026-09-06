@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import tarfile
 from collections.abc import Callable
 from pathlib import Path
@@ -967,27 +968,15 @@ def test_export_without_a_prompts_db_carries_no_prompts_section(tmp_path):
     assert _row_count(dst, "statements") == _row_count(src, "statements")
 
 
-def test_export_survives_an_unreadable_prompts_db(tmp_path, caplog):
-    """The substrate is the payload. A prompts DB that will not open costs
-    the archive its prompt texts and a warning, not the backup."""
+def test_export_refuses_unreadable_instance_configuration(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     _seed_substrate(src)
     (src / backup.PROMPTS_DB_NAME).write_bytes(b"this is not a database")
-
     archive = tmp_path / "snap.tar.gz"
-    with caplog.at_level(logging.WARNING, logger="mycelium.backup"):
-        manifest = backup.export_substrate(src, archive)
-
-    assert manifest["includes_prompts"] is False
-    with tarfile.open(archive, "r:gz") as tar:
-        assert "prompts.jsonl" not in set(tar.getnames())
-    assert any("prompt texts" in r.getMessage() for r in caplog.records)
-
-    # And the substrate in that archive is intact.
-    dst = tmp_path / "dst"
-    backup.import_substrate(archive, dst)
-    assert _row_count(dst, "statements") == _row_count(src, "statements")
+    with pytest.raises(sqlite3.DatabaseError):
+        backup.export_substrate(src, archive)
+    assert not archive.exists()
 
 
 def test_export_survives_a_prompt_row_json_cannot_hold(tmp_path, caplog):

@@ -19,6 +19,7 @@ from typing import Any
 
 from .. import agentloop
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
+from ..ai import Provider
 from ..tracing import SpanRecorder
 
 
@@ -27,6 +28,7 @@ class TraceBuilder:
     model: str
     op_cap: int
     wall_clock_s: float
+    provider: Provider = "claude"
     #: length of the input text actually processed (after any truncation).
     input_chars: int = 0
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
@@ -78,7 +80,11 @@ class TraceBuilder:
     def add_usage(self, usage: Any) -> None:
         agentloop.add_usage(self, usage)
 
-    def cost_usd(self, input_per_mtok: float, output_per_mtok: float) -> float:
+    def cost_usd(
+        self, input_per_mtok: float | None, output_per_mtok: float | None
+    ) -> float | None:
+        if input_per_mtok is None or output_per_mtok is None:
+            return None
         return agentloop.cost_usd(self.tokens, input_per_mtok, output_per_mtok)
 
     def build(
@@ -87,13 +93,14 @@ class TraceBuilder:
         outcome: str,
         latency_ms: float,
         floor: dict,
-        input_per_mtok: float,
-        output_per_mtok: float,
+        input_per_mtok: float | None,
+        output_per_mtok: float | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
         return {
             "model": self.model,
+            "provider": self.provider,
             "outcome": outcome,
             "input_chars": self.input_chars,
             "op_count": self.op_count,

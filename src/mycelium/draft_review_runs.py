@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
-import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -17,6 +16,7 @@ from pydantic import JsonValue, TypeAdapter
 from . import (
     auth,
     draft_review_model,
+    draft_review_settings,
     draft_review_store,
     drafts_store,
     store,
@@ -67,16 +67,12 @@ class Read:
 
 
 def mode() -> Mode:
-    value = os.environ.get("MYCELIUM_DRAFT_REVIEW_MODE", "off").strip()
-    if value not in ("off", "review-only", "review-and-apply"):
-        raise ValueError("invalid MYCELIUM_DRAFT_REVIEW_MODE")
-    return value
+    return draft_review_settings.load().mode
 
 
-def reviewer(creator: str | None) -> auth.Principal:
+def reviewer(creator: str | None, identity: str) -> auth.Principal:
     from . import server  # local import: server registers the review tools
 
-    identity = os.environ.get("MYCELIUM_DRAFT_REVIEW_USER_ID", "").strip()
     principal = auth.resolve_session_user(server._auth_db(), identity)
     if principal is None or not auth.principal_has_real_role(principal, "writer"):
         raise ValueError(
@@ -90,8 +86,8 @@ def reviewer(creator: str | None) -> auth.Principal:
 def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
     from . import server  # local import: server registers the review tools
 
-    selected_mode = mode()
-    if selected_mode == "off":
+    settings = draft_review_settings.load()
+    if settings.mode == "off":
         raise ValueError("internal draft review is off")
     conn = server._drafts_db()
     with _spawn_lock, store.transaction(conn):
@@ -107,10 +103,15 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
         ).fetchone()
         if active:
             return draft_review_store.get(conn, active["id"])
-        run = draft_review_store.new(draft_id, selected_mode, int(row["revision"]))
+        run = draft_review_store.new(draft_id, settings.mode, int(row["revision"]))
+        run.provider = settings.provider
+        run.model = settings.model
+        run.reviewer_id = settings.reviewer_id
+        run.settings_revision = settings.revision
+        run.model_settings_revision = settings.model_revision
         draft_review_store.save(conn, run)
     try:
-        principal = reviewer(row["created_by"])
+        principal = reviewer(row["created_by"], settings.reviewer_id)
         token = auth.current_principal.set(principal)
         try:
             inspection = server.inspect_draft_review(draft_id)
@@ -121,7 +122,7 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
         context = contextvars.Context()
         run.knowledge_preconditions = inspection["knowledge_preconditions"]
         _save(run)
-        future = _executor.submit(context.run, _execute, run, inspection, principal.id)
+        future = _executor.submit(context.run, _execute, run, inspection, settings)
         _futures[run.run_id] = future
         future.add_done_callback(lambda _: _futures.pop(run.run_id, None))
     except Exception as exc:
@@ -226,17 +227,19 @@ def _context(inspection: DraftReviewInspection) -> tuple[str, list[Read]]:
     return context, reads
 
 
-def _execute(run: ReviewRun, inspection: DraftReviewInspection, identity: str) -> None:
+def _execute(
+    run: ReviewRun,
+    inspection: DraftReviewInspection,
+    settings: draft_review_settings.Snapshot,
+) -> None:
     from . import server  # local import: server registers the review tools
 
     try:
-        principal = reviewer(_creator(inspection))
-        if principal.id != identity or mode() == "off":
-            raise ValueError("review configuration changed before execution; rerun")
+        principal = reviewer(_creator(inspection), settings.reviewer_id)
         auth.current_principal.set(principal)
         with server.model_loop_slot():
             context, reads = _context(inspection)
-            result = _assess(context, inspection)
+            result = _assess(context, inspection, settings)
         draft_review_model.validate_assessment(result)
         _validate_corrections(result, inspection)
         run.label = result.label
@@ -244,7 +247,7 @@ def _execute(run: ReviewRun, inspection: DraftReviewInspection, identity: str) -
         run.questions = result.questions
         run.corrections = result.corrections
         run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
-        _finish(run, inspection, identity, reads)
+        _finish(run, inspection, settings, reads)
         run.status = "completed"
         run.finished_at = timestamps.now()
         _save(run)
@@ -260,7 +263,11 @@ def _creator(inspection: DraftReviewInspection) -> str | None:
     return creator if isinstance(creator, str) else None
 
 
-def _assess(context: str, inspection: DraftReviewInspection) -> Assessment:
+def _assess(
+    context: str,
+    inspection: DraftReviewInspection,
+    settings: draft_review_settings.Snapshot,
+) -> Assessment:
     ops = inspection["draft"].get("ops")
     if not isinstance(ops, list):
         raise ValueError("draft has no operation list")
@@ -282,7 +289,11 @@ def _assess(context: str, inspection: DraftReviewInspection) -> Assessment:
             ],
             corrections=[],
         )
-    return (RUNNER or draft_review_model.assess)(context)
+    if RUNNER is not None:
+        return RUNNER(context)
+    return draft_review_model.assess(
+        context, model=settings.model, provider=settings.provider
+    )
 
 
 def _validate_snapshot(inspection: DraftReviewInspection, reads: list[Read]) -> None:
@@ -305,27 +316,32 @@ def _validate_snapshot(inspection: DraftReviewInspection, reads: list[Read]) -> 
 
 
 def _mutation_authority(
-    run: ReviewRun, inspection: DraftReviewInspection, identity: str
+    run: ReviewRun,
+    inspection: DraftReviewInspection,
+    settings: draft_review_settings.Snapshot,
 ) -> None:
     if run.mode != "review-and-apply" or mode() != "review-and-apply":
         raise ValueError("automatic action disabled by review mode")
-    principal = reviewer(_creator(inspection))
-    if principal.id != identity:
-        raise ValueError("configured reviewer identity changed; rerun")
+    if draft_review_settings.load() != settings:
+        raise ValueError("review configuration changed; rerun before automatic action")
+    principal = reviewer(_creator(inspection), settings.reviewer_id)
     auth.current_principal.set(principal)
 
 
 def _finish(
-    run: ReviewRun, inspection: DraftReviewInspection, identity: str, reads: list[Read]
+    run: ReviewRun,
+    inspection: DraftReviewInspection,
+    settings: draft_review_settings.Snapshot,
+    reads: list[Read],
 ) -> None:
     from . import server  # local import: server registers the review tools
 
     with store.write_lock():
         _validate_snapshot(inspection, reads)
-        if run.mode != "review-and-apply" or mode() != "review-and-apply":
-            run.detail = "Advisory assessment only; automatic action disabled by mode."
+        if run.mode != "review-and-apply" or draft_review_settings.load() != settings:
+            run.detail = "Advisory assessment only; automatic action disabled by mode or changed settings."
             return
-        _mutation_authority(run, inspection, identity)
+        _mutation_authority(run, inspection, settings)
         if run.label == "needs_context":
             run.detail = "Missing evidence; answer the questions and rerun."
             return
@@ -333,13 +349,13 @@ def _finish(
             run.detail = "Reviewed application gate is disabled; no automatic changes."
             return
         with store.transaction(drafts_store.connection()):
-            _mutation_authority(run, inspection, identity)
+            _mutation_authority(run, inspection, settings)
             for correction in run.corrections:
-                _mutation_authority(run, inspection, identity)
+                _mutation_authority(run, inspection, settings)
                 _correct(run.draft_id, correction)
             final = server.inspect_draft_review(run.draft_id)
             _check_correction_knowledge(inspection, final, reads)
-            _mutation_authority(run, inspection, identity)
+            _mutation_authority(run, inspection, settings)
             outcome = (
                 "rejected"
                 if run.label == "reject"
@@ -362,7 +378,7 @@ def _finish(
             run.application = "rejected"
             run.detail = "Draft rejected by the configured internal reviewer."
             return
-        _mutation_authority(run, inspection, identity)
+        _mutation_authority(run, inspection, settings)
         receipt = server.apply_reviewed_draft(run.draft_id, review["review_id"])
         run.application = "applied"
         run.detail = (

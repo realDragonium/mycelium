@@ -34,12 +34,16 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import (
     auth,
     connect_page,
+    model_settings,
     oauth_server,
     oidc,
     ops_ledger,
     server,
     store,
     tracing,
+)
+from . import (
+    draft_review_settings as review_settings,
 )
 
 # Build the streamable-HTTP sub-app once at import time. Transport
@@ -1244,15 +1248,58 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
 # pattern as knowledge_gaps.
 
 
-@app.get("/api/draft-review/settings")
-def draft_review_settings(request: Request) -> dict[str, str | bool]:
-    from . import draft_review_runs
+@app.get("/api/model-settings")
+def ai_model_settings(request: Request) -> model_settings.SettingsView:
+    from fastapi import HTTPException
 
     principal = _require_principal(request)
-    return {
-        "mode": draft_review_runs.mode(),
-        "can_review": auth.principal_has_real_role(principal, "writer"),
-    }
+    try:
+        return model_settings.view(principal)
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.patch("/api/model-settings/{action}")
+def save_ai_model_settings(
+    action: model_settings.Action, body: model_settings.SaveSelection, request: Request
+) -> model_settings.ActionView:
+    from fastapi import HTTPException
+
+    principal = _require_admin(request)
+    try:
+        model_settings.save(action, body, principal)
+        return model_settings.action_view(action)
+    except model_settings.Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.get("/api/draft-review/settings")
+def draft_review_settings(request: Request) -> review_settings.SettingsView:
+    from fastapi import HTTPException
+
+    principal = _require_principal(request)
+    try:
+        return review_settings.view(principal)
+    except review_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.patch("/api/draft-review/settings")
+def save_draft_review_settings(
+    body: review_settings.SaveSettings, request: Request
+) -> review_settings.SettingsView:
+    from fastapi import HTTPException
+
+    principal = _require_admin(request)
+    try:
+        review_settings.save(body, principal)
+        return review_settings.view(principal)
+    except review_settings.Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except review_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 @app.post("/api/drafts/{draft_id}/review")

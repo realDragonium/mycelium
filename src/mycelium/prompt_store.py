@@ -99,7 +99,10 @@ def reset() -> None:
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    conn.executescript(PROMPT_TEXTS_SCHEMA)
+    from .draft_review_settings import SCHEMA
+    from .model_settings import SCHEMA as MODEL_SCHEMA
+
+    conn.executescript(PROMPT_TEXTS_SCHEMA + SCHEMA + MODEL_SCHEMA)
     conn.commit()
 
 

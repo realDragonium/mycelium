@@ -146,6 +146,7 @@ function DocumentationSurface({ runId }) {
     <div className="crumbs"><a href="#/">~</a><span className="sep">/</span><span>documentation</span></div>
     <h1 className="ingest-title">Generate a document</h1>
     <p className="ingest-sub">Describe what to document and who it is for. The selected model writes and reviews it against the knowledge in Mycelium.</p>
+    <p className="doc-meta"><a href="#/settings">Configure AI defaults</a>. The model selected below applies only to this document.</p>
     {optionsError ? <div><p role="alert" className="stmt-edit-err">{optionsError}</p><button className="btn ghost" onClick={() => setOptionsRetry(n => n + 1)}>Retry loading models</button></div> : !options && <p role="status">Loading model options…</p>}
     {options && <form onSubmit={start}>
       <fieldset className="doc-models" disabled={busy}>
