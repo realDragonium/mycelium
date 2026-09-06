@@ -1297,6 +1297,7 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
     draft_row = drafts_store.get_draft(conn, result.draft_id)
     assert draft_row is not None
     assert drafts_store.status_for(draft_row) == "open"
+    assert draft_row["revision"] == 1
     # the op row landed too, and the None-valued `id` key was dropped at queue
     op_rows = drafts_store.list_ops(conn, result.draft_id)
     assert len(op_rows) == 1

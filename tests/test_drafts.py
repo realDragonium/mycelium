@@ -113,6 +113,337 @@ def test_drafter_writes_in_same_session_share_one_draft(tmp_path, monkeypatch):
             _restore(tokens)
         assert r1["draft_id"] == r2["draft_id"]
         assert r2["seq"] == r1["seq"] + 1
+        assert r1["revision"] == 1
+        assert r2["revision"] == 2
+
+
+def test_legacy_drafts_migrate_with_zero_revision_and_no_source():
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE drafts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT NOT NULL, "
+        "created_by TEXT, session_id TEXT, submitted_at TEXT, decided_at TEXT, "
+        "decided_by TEXT, decision TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE draft_ops (id TEXT PRIMARY KEY, draft_id TEXT NOT NULL, "
+        "seq INTEGER NOT NULL, kind TEXT NOT NULL, payload_json TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, created_by TEXT, UNIQUE (draft_id, seq))"
+    )
+    conn.execute(
+        "INSERT INTO drafts (id, created_at, created_by) VALUES ('legacy', 'then', 'd1')"
+    )
+
+    drafts_store.migrate(conn)
+
+    saved = drafts_store.serialize_draft(drafts_store.get_draft(conn, "legacy"))
+    assert saved["revision"] == 0
+    assert saved["source"] is None
+
+
+def _pr_source(*, attempt: int = 1, commit: str = "abc123"):
+    return {
+        "repository": "dragonium/mycelium",
+        "pull_request": 42,
+        "merged_commit": commit,
+        "workflow_run_id": 9001,
+        "workflow_run_attempt": attempt,
+    }
+
+
+def test_source_round_trip_and_lookup_are_creator_and_run_scoped(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        tokens = _as_drafter("source-session")
+        try:
+            queued = server.upsert_entity(name="Sourced", description="from PR")
+            attached = server.attach_draft_source(
+                queued["draft_id"], _pr_source(), expected_revision=1
+            )
+            found = server.find_my_draft_by_source(_pr_source())
+            rerun = server.find_my_draft_by_source(_pr_source(attempt=2))
+            second_draft = drafts_store.create_draft(
+                server._drafts_db(), created_by="d1", session_id=None
+            )
+            server._drafts_db().commit()
+            with pytest.raises(ValueError, match=queued["draft_id"]):
+                server.attach_draft_source(second_draft, _pr_source())
+            second = server.attach_draft_source(second_draft, _pr_source(attempt=2))
+        finally:
+            _restore(tokens)
+
+        assert attached["revision"] == 2
+        assert attached["source"] == _pr_source()
+        assert found["draft"]["id"] == queued["draft_id"]
+        assert rerun == {"draft": None}
+        assert second["source"]["workflow_run_attempt"] == 2
+
+        other = auth.Principal(
+            id="d2", name="Other Drafter", role="drafter", type="human"
+        )
+        token = auth.current_principal.set(other)
+        try:
+            assert server.find_my_draft_by_source(_pr_source()) == {"draft": None}
+            with pytest.raises(auth.RoleRequired, match="only be set by its creator"):
+                server.attach_draft_source(queued["draft_id"], _pr_source(attempt=2))
+        finally:
+            auth.current_principal.reset(token)
+
+        denied = client.post(
+            "/attach-draft-source",
+            json={"draft_id": queued["draft_id"], "source": _pr_source(attempt=2)},
+        )
+        assert denied.status_code == 403
+        assert denied.json()["detail"] == (
+            "draft source evidence may only be set by its creator"
+        )
+
+
+def test_every_reviewable_mutation_advances_revision_and_stale_is_atomic(
+    tmp_path, monkeypatch
+):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        conn = server._drafts_db()
+        draft_id = drafts_store.create_draft(conn, created_by="author", session_id=None)
+        seq = drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_entity",
+            payload={"name": "Before"},
+            created_by="author",
+        )
+        op = drafts_store.serialize_op(drafts_store.list_ops(conn, draft_id)[0])
+        assert op["operation_ref"] == op["id"]
+        assert drafts_store.get_draft(conn, draft_id)["revision"] == 1
+
+        revision = drafts_store.update_op_payload(
+            conn,
+            draft_id,
+            seq,
+            {"name": "After"},
+            expected_revision=1,
+        )
+        assert revision == 2
+        with pytest.raises(drafts_store.StaleDraftRevisionError):
+            drafts_store.remove_op(conn, draft_id, seq, expected_revision=1)
+        assert len(drafts_store.list_ops(conn, draft_id)) == 1
+        assert drafts_store.get_draft(conn, draft_id)["revision"] == 2
+
+        assert drafts_store.set_source(conn, draft_id, _pr_source()) == 3
+        assert drafts_store.set_source(conn, draft_id, _pr_source()) == 3
+        with pytest.raises(drafts_store.StaleDraftRevisionError):
+            drafts_store.set_source(
+                conn, draft_id, _pr_source(attempt=2), expected_revision=2
+            )
+        assert (
+            drafts_store.serialize_draft(drafts_store.get_draft(conn, draft_id))[
+                "source"
+            ]
+            == _pr_source()
+        )
+        assert (
+            drafts_store.set_source(
+                conn, draft_id, _pr_source(commit="def456"), expected_revision=3
+            )
+            == 4
+        )
+        assert drafts_store.remove_op(conn, draft_id, seq) == 5
+        next_seq = drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_entity",
+            payload={"name": "Replacement"},
+            created_by="author",
+        )
+        replacement = drafts_store.serialize_op(
+            drafts_store.list_ops(conn, draft_id)[0]
+        )
+        assert next_seq == 1
+        assert replacement["operation_ref"] != op["operation_ref"]
+        assert drafts_store.get_draft(conn, draft_id)["revision"] == 6
+        assert (
+            drafts_store.remove_op_by_ref(conn, draft_id, op["operation_ref"]) is None
+        )
+        assert drafts_store.list_ops(conn, draft_id)[0]["id"] == replacement["id"]
+        with pytest.raises(drafts_store.StaleDraftRevisionError):
+            drafts_store.update_op_payload_by_ref(
+                conn,
+                draft_id,
+                op["operation_ref"],
+                {"name": "Stale"},
+                expected_revision=5,
+            )
+
+
+def test_revision_compare_and_swap_rejects_another_connection(tmp_path):
+    path = tmp_path / "drafts.db"
+    first = drafts_store.connect(path)
+    second = drafts_store.connect(path)
+    drafts_store.migrate(first)
+    draft_id = drafts_store.create_draft(first, created_by="author", session_id=None)
+    drafts_store.add_op(
+        first,
+        draft_id=draft_id,
+        kind="upsert_entity",
+        payload={"name": "Original"},
+        created_by="author",
+    )
+    first.commit()
+
+    assert (
+        drafts_store.update_op_payload(
+            second, draft_id, 1, {"name": "Winner"}, expected_revision=1
+        )
+        == 2
+    )
+    second.commit()
+    with pytest.raises(drafts_store.StaleDraftRevisionError):
+        drafts_store.update_op_payload(
+            first, draft_id, 1, {"name": "Stale"}, expected_revision=1
+        )
+    first.rollback()
+
+    saved = drafts_store.serialize_op(drafts_store.list_ops(first, draft_id)[0])
+    assert saved["payload"] == {"name": "Winner"}
+    assert drafts_store.get_draft(first, draft_id)["revision"] == 2
+
+
+def test_draft_detail_uses_one_revision_and_operation_snapshot(tmp_path, monkeypatch):
+    path = tmp_path / "drafts.db"
+    reader = drafts_store.connect(path)
+    writer = drafts_store.connect(path)
+    drafts_store.migrate(reader)
+    draft_id = drafts_store.create_draft(reader, created_by="author", session_id=None)
+    drafts_store.add_op(
+        reader,
+        draft_id=draft_id,
+        kind="upsert_entity",
+        payload={"name": "Revision one"},
+        created_by="author",
+    )
+    reader.commit()
+    original_list_ops = drafts_store.list_ops
+
+    def mutate_between_reads(conn, selected_draft_id):
+        assert (
+            drafts_store.update_op_payload(
+                writer, draft_id, 1, {"name": "Revision two"}
+            )
+            == 2
+        )
+        writer.commit()
+        return original_list_ops(conn, selected_draft_id)
+
+    monkeypatch.setattr(drafts_store, "list_ops", mutate_between_reads)
+    row, ops = drafts_store.get_draft_snapshot(reader, draft_id)
+    saved = drafts_store.serialize_draft(row, ops=ops)
+    assert saved["revision"] == 1
+    assert saved["ops"][0]["payload"] == {"name": "Revision one"}
+
+
+def test_terminal_transition_prevents_store_mutation(tmp_path):
+    path = tmp_path / "drafts.db"
+    editor = drafts_store.connect(path)
+    decider = drafts_store.connect(path)
+    drafts_store.migrate(editor)
+    draft_id = drafts_store.create_draft(editor, created_by="author", session_id=None)
+    drafts_store.add_op(
+        editor,
+        draft_id=draft_id,
+        kind="upsert_entity",
+        payload={"name": "Original"},
+        created_by="author",
+    )
+    editor.commit()
+    drafts_store.set_decision(decider, draft_id, decision="rejected", by="curator")
+    decider.commit()
+
+    assert (
+        drafts_store.update_op_payload(editor, draft_id, 1, {"name": "Too late"})
+        is None
+    )
+    editor.rollback()
+    saved = drafts_store.serialize_op(drafts_store.list_ops(editor, draft_id)[0])
+    assert saved["payload"] == {"name": "Original"}
+    assert drafts_store.get_draft(editor, draft_id)["revision"] == 1
+    with pytest.raises(ValueError, match="rejected draft"):
+        drafts_store.set_source(editor, draft_id, _pr_source())
+    editor.rollback()
+    assert (
+        drafts_store.serialize_draft(drafts_store.get_draft(editor, draft_id))["source"]
+        is None
+    )
+
+
+def test_curator_tools_use_stable_refs_and_require_real_writer(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        tokens = _as_drafter("curator-gate")
+        try:
+            queued = server.upsert_entity(name="Before", description="x")
+            draft = server.get_draft(queued["draft_id"])
+            operation_ref = draft["ops"][0]["operation_ref"]
+            with pytest.raises(auth.RoleRequired):
+                server.revise_draft_operation(
+                    queued["draft_id"], operation_ref, {"name": "Denied"}
+                )
+            with pytest.raises(auth.RoleRequired):
+                server.strike_draft_operation(queued["draft_id"], operation_ref)
+        finally:
+            _restore(tokens)
+
+        writer = auth.Principal(
+            id="curator", name="Curator", role="writer", type="human"
+        )
+        token = auth.current_principal.set(writer)
+        try:
+            edited = server.revise_draft_operation(
+                queued["draft_id"],
+                operation_ref,
+                {"name": "After", "description": "x"},
+                expected_revision=1,
+            )
+            assert edited["revision"] == 2
+            removed = server.strike_draft_operation(
+                queued["draft_id"], operation_ref, expected_revision=2
+            )
+            assert removed["revision"] == 3
+        finally:
+            auth.current_principal.reset(token)
+
+        tool_names = {tool.__name__ for tool in server.TOOLS}
+        assert {"revise_draft_operation", "strike_draft_operation"} <= tool_names
+
+
+def test_http_edit_and_removal_return_revision_and_reject_stale(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        draft_id = drafts_store.create_draft(
+            server._drafts_db(), created_by="author", session_id=None
+        )
+        drafts_store.add_op(
+            server._drafts_db(),
+            draft_id=draft_id,
+            kind="upsert_entity",
+            payload={"name": "Before"},
+            created_by="author",
+        )
+        server._drafts_db().commit()
+        edited = client.patch(
+            f"/api/drafts/{draft_id}/ops/1",
+            json={"payload": {"name": "After"}, "expected_revision": 1},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["revision"] == 2
+
+        stale = client.delete(f"/api/drafts/{draft_id}/ops/1?expected_revision=1")
+        assert stale.status_code == 409
+        assert len(drafts_store.list_ops(server._drafts_db(), draft_id)) == 1
+
+        removed = client.delete(f"/api/drafts/{draft_id}/ops/1")
+        assert removed.status_code == 200
+        assert removed.json()["revision"] == 3
 
 
 def test_explicit_draft_id_queues_op_for_any_writer(tmp_path, monkeypatch):
@@ -205,6 +536,7 @@ def test_direct_draft_queue_and_edit_reject_mixed_add_links(tmp_path, monkeypatc
             drafts_store.update_op_payload(conn, draft_id, seq, payload)
         saved = drafts_store.serialize_op(drafts_store.list_ops(conn, draft_id)[0])
         assert saved["payload"]["links"][0]["from_id"] == "stm_one"
+        assert drafts_store.get_draft(conn, draft_id)["revision"] == 1
 
 
 def test_saved_mixed_addition_is_rejected_after_reference_resolution(

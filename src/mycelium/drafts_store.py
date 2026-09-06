@@ -25,6 +25,7 @@ import json as _json
 import sqlite3
 import uuid as _uuid
 from pathlib import Path
+from typing import TypedDict
 
 from . import timestamps
 from .connections import ConnectionProvider
@@ -40,6 +41,12 @@ CREATE TABLE IF NOT EXISTS drafts (
     created_at   TEXT NOT NULL,
     created_by   TEXT,
     session_id   TEXT,
+    revision     INTEGER NOT NULL DEFAULT 0,
+    source_repository TEXT,
+    source_pull_request INTEGER,
+    source_merged_commit TEXT,
+    source_workflow_run_id INTEGER,
+    source_workflow_run_attempt INTEGER,
     submitted_at TEXT,
     decided_at   TEXT,
     decided_by   TEXT,
@@ -47,7 +54,6 @@ CREATE TABLE IF NOT EXISTS drafts (
 );
 CREATE INDEX IF NOT EXISTS drafts_session ON drafts (session_id);
 CREATE INDEX IF NOT EXISTS drafts_creator ON drafts (created_by);
-
 -- Each queued tool call as one row. `kind` matches the substrate tool's
 -- function name (e.g. 'upsert_statement'). `payload_json` carries the
 -- kwargs the tool would have been called with (minus `draft_id`). `seq`
@@ -65,11 +71,46 @@ CREATE TABLE IF NOT EXISTS draft_ops (
     UNIQUE (draft_id, seq)
 );
 CREATE INDEX IF NOT EXISTS draft_ops_draft ON draft_ops (draft_id);
+
+CREATE TRIGGER IF NOT EXISTS draft_ops_revision_insert
+AFTER INSERT ON draft_ops
+BEGIN
+    UPDATE drafts SET revision = revision + 1 WHERE id = NEW.draft_id;
+END;
+CREATE TRIGGER IF NOT EXISTS draft_ops_revision_update
+AFTER UPDATE OF payload_json ON draft_ops
+BEGIN
+    UPDATE drafts SET revision = revision + 1 WHERE id = NEW.draft_id;
+END;
+CREATE TRIGGER IF NOT EXISTS draft_ops_revision_delete
+AFTER DELETE ON draft_ops
+BEGIN
+    UPDATE drafts SET revision = revision + 1 WHERE id = OLD.draft_id;
+END;
 """
+
+DRAFTS_SOURCE_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS drafts_source ON drafts ("
+    "created_by, source_repository, source_pull_request, source_merged_commit, "
+    "source_workflow_run_id, source_workflow_run_attempt) "
+    "WHERE source_repository IS NOT NULL"
+)
 
 #: Op kinds that are records for the curator, not tool calls: replay skips them
 #: by membership rather than by name-matching scattered through the replayer.
 NON_REPLAYING_OP_KINDS = frozenset({"flag"})
+
+
+class DraftSource(TypedDict):
+    repository: str
+    pull_request: int
+    merged_commit: str
+    workflow_run_id: int
+    workflow_run_attempt: int
+
+
+class StaleDraftRevisionError(ValueError):
+    pass
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
@@ -119,6 +160,21 @@ def reset() -> None:
 
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DRAFTS_SCHEMA)
+    draft_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(drafts)").fetchall()
+    }
+    additions = {
+        "revision": "INTEGER NOT NULL DEFAULT 0",
+        "source_repository": "TEXT",
+        "source_pull_request": "INTEGER",
+        "source_merged_commit": "TEXT",
+        "source_workflow_run_id": "INTEGER",
+        "source_workflow_run_attempt": "INTEGER",
+    }
+    for name, definition in additions.items():
+        if name not in draft_columns:
+            conn.execute(f"ALTER TABLE drafts ADD COLUMN {name} {definition}")
+    conn.execute(DRAFTS_SOURCE_INDEX)
     columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(draft_ops)").fetchall()
     }
@@ -224,6 +280,85 @@ def get_draft(conn: sqlite3.Connection, draft_id: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
 
 
+def get_draft_snapshot(
+    conn: sqlite3.Connection, draft_id: str
+) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
+    """Read a draft and its operations from one SQLite snapshot."""
+    owns_transaction = not conn.in_transaction
+    if owns_transaction:
+        conn.execute("BEGIN")
+    try:
+        row = get_draft(conn, draft_id)
+        ops = list_ops(conn, draft_id) if row is not None else []
+        return row, ops
+    finally:
+        if owns_transaction:
+            conn.rollback()
+
+
+def find_draft_by_source(
+    conn: sqlite3.Connection, creator: str, source: DraftSource
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM drafts WHERE created_by = ? AND source_repository = ? "
+        "AND source_pull_request = ? AND source_workflow_run_id = ? "
+        "AND source_workflow_run_attempt = ? AND source_merged_commit = ?",
+        (
+            creator,
+            source["repository"],
+            source["pull_request"],
+            source["workflow_run_id"],
+            source["workflow_run_attempt"],
+            source["merged_commit"],
+        ),
+    ).fetchone()
+
+
+def _check_revision(row: sqlite3.Row, expected_revision: int | None) -> None:
+    if expected_revision is not None and row["revision"] != expected_revision:
+        raise StaleDraftRevisionError(
+            f"draft revision is {row['revision']}; expected {expected_revision}"
+        )
+
+
+def set_source(
+    conn: sqlite3.Connection,
+    draft_id: str,
+    source: DraftSource,
+    *,
+    expected_revision: int | None = None,
+) -> int:
+    values = (
+        source["repository"],
+        source["pull_request"],
+        source["merged_commit"],
+        source["workflow_run_id"],
+        source["workflow_run_attempt"],
+    )
+    revision_clause = "" if expected_revision is None else " AND revision = ?"
+    params: tuple[object, ...] = (*values, draft_id, *values)
+    if expected_revision is not None:
+        params = (*params, expected_revision)
+    cur = conn.execute(
+        "UPDATE drafts SET source_repository = ?, source_pull_request = ?, "
+        "source_merged_commit = ?, source_workflow_run_id = ?, "
+        "source_workflow_run_attempt = ?, revision = revision + 1 WHERE id = ? "
+        "AND decided_at IS NULL "
+        "AND NOT (source_repository IS ? AND source_pull_request IS ? "
+        "AND source_merged_commit IS ? AND source_workflow_run_id IS ? "
+        "AND source_workflow_run_attempt IS ?)" + revision_clause,
+        params,
+    )
+    row = get_draft(conn, draft_id)
+    if row is None:
+        raise ValueError(f"draft '{draft_id}' not found")
+    if cur.rowcount == 0:
+        _check_revision(row, expected_revision)
+        if row["decided_at"] is not None:
+            raise ValueError(f"cannot attach source to a {status_for(row)} draft")
+    return int(row["revision"])
+
+
 def add_op(
     conn: sqlite3.Connection,
     *,
@@ -271,28 +406,132 @@ def list_ops(conn: sqlite3.Connection, draft_id: str) -> list[sqlite3.Row]:
     )
 
 
-def remove_op(conn: sqlite3.Connection, draft_id: str, seq: int) -> bool:
+def remove_op(
+    conn: sqlite3.Connection,
+    draft_id: str,
+    seq: int,
+    *,
+    expected_revision: int | None = None,
+) -> int | None:
+    revision_clause = "" if expected_revision is None else " AND revision = ?"
+    params: tuple[object, ...] = (draft_id, seq, draft_id)
+    if expected_revision is not None:
+        params = (*params, expected_revision)
     cur = conn.execute(
-        "DELETE FROM draft_ops WHERE draft_id = ? AND seq = ?",
-        (draft_id, seq),
+        "DELETE FROM draft_ops WHERE draft_id = ? AND seq = ? AND EXISTS ("
+        "SELECT 1 FROM drafts WHERE id = ? AND decided_at IS NULL"
+        + revision_clause
+        + ")",
+        params,
     )
-    return cur.rowcount > 0
+    if cur.rowcount == 0:
+        row = get_draft(conn, draft_id)
+        if row is not None and expected_revision is not None:
+            _check_revision(row, expected_revision)
+        return None
+    return int(get_draft(conn, draft_id)["revision"])
+
+
+def remove_op_by_ref(
+    conn: sqlite3.Connection,
+    draft_id: str,
+    operation_ref: str,
+    *,
+    expected_revision: int | None = None,
+) -> int | None:
+    revision_clause = "" if expected_revision is None else " AND revision = ?"
+    params: tuple[object, ...] = (draft_id, operation_ref, draft_id)
+    if expected_revision is not None:
+        params = (*params, expected_revision)
+    cur = conn.execute(
+        "DELETE FROM draft_ops WHERE draft_id = ? AND id = ? AND EXISTS ("
+        "SELECT 1 FROM drafts WHERE id = ? AND decided_at IS NULL"
+        + revision_clause
+        + ")",
+        params,
+    )
+    if cur.rowcount == 0:
+        row = get_draft(conn, draft_id)
+        if row is not None and expected_revision is not None:
+            _check_revision(row, expected_revision)
+        return None
+    return int(get_draft(conn, draft_id)["revision"])
 
 
 def update_op_payload(
-    conn: sqlite3.Connection, draft_id: str, seq: int, payload: dict
-) -> bool:
+    conn: sqlite3.Connection,
+    draft_id: str,
+    seq: int,
+    payload: dict,
+    *,
+    expected_revision: int | None = None,
+) -> int | None:
     row = conn.execute(
         "SELECT kind FROM draft_ops WHERE draft_id = ? AND seq = ?",
         (draft_id, seq),
     ).fetchone()
     if row is not None and row["kind"] == "add_links":
         reject_entity_statement_additions(payload.get("links"))
+    revision_clause = "" if expected_revision is None else " AND revision = ?"
+    params: tuple[object, ...] = (_json.dumps(payload), draft_id, seq, draft_id)
+    if expected_revision is not None:
+        params = (*params, expected_revision)
     cur = conn.execute(
-        "UPDATE draft_ops SET payload_json = ? WHERE draft_id = ? AND seq = ?",
-        (_json.dumps(payload), draft_id, seq),
+        "UPDATE draft_ops SET payload_json = ? WHERE draft_id = ? AND seq = ? "
+        "AND EXISTS (SELECT 1 FROM drafts WHERE id = ? AND decided_at IS NULL"
+        + revision_clause
+        + ")",
+        params,
     )
-    return cur.rowcount > 0
+    if cur.rowcount == 0:
+        draft = get_draft(conn, draft_id)
+        if draft is not None and expected_revision is not None:
+            _check_revision(draft, expected_revision)
+        return None
+    return int(get_draft(conn, draft_id)["revision"])
+
+
+def update_op_payload_by_ref(
+    conn: sqlite3.Connection,
+    draft_id: str,
+    operation_ref: str,
+    payload: dict,
+    *,
+    expected_revision: int | None = None,
+) -> int | None:
+    row = conn.execute(
+        "SELECT kind FROM draft_ops WHERE draft_id = ? AND id = ?",
+        (draft_id, operation_ref),
+    ).fetchone()
+    if row is None:
+        draft = get_draft(conn, draft_id)
+        if draft is not None:
+            _check_revision(draft, expected_revision)
+        return None
+    if row["kind"] == "add_links":
+        reject_entity_statement_additions(payload.get("links"))
+    revision_clause = "" if expected_revision is None else " AND revision = ?"
+    params: tuple[object, ...] = (
+        _json.dumps(payload),
+        draft_id,
+        operation_ref,
+        draft_id,
+    )
+    if expected_revision is not None:
+        params = (*params, expected_revision)
+    cur = conn.execute(
+        "UPDATE draft_ops SET payload_json = ? WHERE draft_id = ? AND id = ? "
+        "AND EXISTS (SELECT 1 FROM drafts WHERE id = ? AND decided_at IS NULL"
+        + revision_clause
+        + ")",
+        params,
+    )
+    if cur.rowcount == 0:
+        draft = get_draft(conn, draft_id)
+        if draft is not None and expected_revision is not None:
+            _check_revision(draft, expected_revision)
+        return None
+    return int(get_draft(conn, draft_id)["revision"])
 
 
 def set_submitted(conn: sqlite3.Connection, draft_id: str) -> None:
@@ -322,6 +561,18 @@ def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -
         "created_at": row["created_at"],
         "created_by": row["created_by"],
         "session_id": row["session_id"],
+        "revision": row["revision"],
+        "source": (
+            {
+                "repository": row["source_repository"],
+                "pull_request": row["source_pull_request"],
+                "merged_commit": row["source_merged_commit"],
+                "workflow_run_id": row["source_workflow_run_id"],
+                "workflow_run_attempt": row["source_workflow_run_attempt"],
+            }
+            if row["source_repository"] is not None
+            else None
+        ),
         "submitted_at": row["submitted_at"],
         "decided_at": row["decided_at"],
         "decided_by": row["decided_by"],
@@ -335,6 +586,7 @@ def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -
 def serialize_op(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
+        "operation_ref": row["id"],
         "seq": row["seq"],
         "kind": row["kind"],
         "payload": _json.loads(row["payload_json"]),
