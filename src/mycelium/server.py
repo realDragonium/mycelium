@@ -31,6 +31,7 @@ import anyio
 import anyio.to_thread
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
+from pydantic import JsonValue
 
 from . import (
     embed,
@@ -727,7 +728,13 @@ def _queue_draft_op(
             payload=clean,
             created_by=actor,
         )
-    return {"draft_id": draft_id, "seq": seq, "queued": kind}
+        revision = drafts_store.get_draft(_drafts_db(), draft_id)["revision"]
+    return {
+        "draft_id": draft_id,
+        "seq": seq,
+        "queued": kind,
+        "revision": revision,
+    }
 
 
 class LinkSpec(TypedDict):
@@ -6021,15 +6028,142 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    row, ops = drafts_store.get_draft_snapshot(_drafts_db(), draft_id)
     if row is None:
         return {"id": draft_id, "missing": [draft_id]}
-    ops = drafts_store.list_ops(_drafts_db(), draft_id)
     return {**drafts_store.serialize_draft(row, ops=ops), "missing": []}
 
 
+class DraftSourceInput(TypedDict):
+    repository: str
+    pull_request: int
+    merged_commit: str
+    workflow_run_id: int
+    workflow_run_attempt: int
+
+
+class DraftMutationReceipt(TypedDict):
+    draft_id: str
+    operation_ref: str
+    revision: int
+
+
+def _identified_principal():
+    from . import auth as _auth
+
+    principal = _auth.current_principal.get()
+    if principal is None:
+        raise _auth.RoleRequired("draft source operations require an identified caller")
+    return principal
+
+
+def _require_mutable_draft(draft_id: str):
+    from . import drafts_store
+
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    if row is None:
+        raise ValueError(f"draft '{draft_id}' not found")
+    status = drafts_store.status_for(row)
+    if status not in ("open", "submitted"):
+        raise ValueError(f"cannot modify operations on a {status} draft")
+    return row
+
+
+@tool(role="drafter")
+def attach_draft_source(
+    draft_id: str,
+    source: DraftSourceInput,
+    expected_revision: int | None = None,
+) -> dict[str, JsonValue]:
+    """Attach complete PR and workflow evidence to the caller's draft."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    conn = _drafts_db()
+    with store.transaction(conn):
+        row = _require_mutable_draft(draft_id)
+        if row["created_by"] != principal.id:
+            from . import auth as _auth
+
+            raise _auth.RoleRequired(
+                "draft source evidence may only be set by its creator"
+            )
+        try:
+            drafts_store.set_source(
+                conn, draft_id, source, expected_revision=expected_revision
+            )
+        except sqlite3.IntegrityError as ex:
+            existing = drafts_store.find_draft_by_source(conn, principal.id, source)
+            owner = existing["id"] if existing is not None else "another draft"
+            detail = f"source evidence already belongs to draft '{owner}'"
+            raise ValueError(detail) from ex
+    return get_draft(draft_id)
+
+
+@tool(role="drafter")
+def find_my_draft_by_source(source: DraftSourceInput) -> dict[str, JsonValue]:
+    """Locate the caller's draft from its complete PR workflow identity."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    row = drafts_store.find_draft_by_source(_drafts_db(), principal.id, source)
+    if row is None:
+        return {"draft": None}
+    return {"draft": get_draft(row["id"])}
+
+
+@tool(role="writer", real_role=True)
+def revise_draft_operation(
+    draft_id: str,
+    operation_ref: str,
+    payload: dict[str, JsonValue],
+    expected_revision: int | None = None,
+) -> DraftMutationReceipt:
+    """Replace one operation payload using its stable reference."""
+    from . import drafts_store
+
+    conn = _drafts_db()
+    with store.transaction(conn):
+        _require_mutable_draft(draft_id)
+        revision = drafts_store.update_op_payload_by_ref(
+            conn,
+            draft_id,
+            operation_ref,
+            payload,
+            expected_revision=expected_revision,
+        )
+    if revision is None:
+        raise ValueError(f"operation '{operation_ref}' not found in draft '{draft_id}'")
+    return {"draft_id": draft_id, "operation_ref": operation_ref, "revision": revision}
+
+
+@tool(role="writer", real_role=True)
+def strike_draft_operation(
+    draft_id: str,
+    operation_ref: str,
+    expected_revision: int | None = None,
+) -> DraftMutationReceipt:
+    """Remove one operation using its stable reference."""
+    from . import drafts_store
+
+    conn = _drafts_db()
+    with store.transaction(conn):
+        _require_mutable_draft(draft_id)
+        revision = drafts_store.remove_op_by_ref(
+            conn,
+            draft_id,
+            operation_ref,
+            expected_revision=expected_revision,
+        )
+    if revision is None:
+        raise ValueError(f"operation '{operation_ref}' not found in draft '{draft_id}'")
+    return {"draft_id": draft_id, "operation_ref": operation_ref, "revision": revision}
+
+
 @tool
-def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
+def discard_draft_op(
+    draft_id: str, seq: int, expected_revision: int | None = None
+) -> dict[str, Any]:
     """Remove a queued op from an open draft by its seq number.
 
     Lets a drafter self-correct a mistake without abandoning the whole
@@ -6048,10 +6182,17 @@ def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
             f"can't modify ops on a non-open draft"
         )
     with store.transaction(_drafts_db()):
-        removed = drafts_store.remove_op(_drafts_db(), draft_id, seq)
-    if not removed:
+        revision = drafts_store.remove_op(
+            _drafts_db(), draft_id, seq, expected_revision=expected_revision
+        )
+    if revision is None:
         raise ValueError(f"no op with seq {seq} in draft '{draft_id}'")
-    return {"draft_id": draft_id, "seq": seq, "removed": True}
+    return {
+        "draft_id": draft_id,
+        "seq": seq,
+        "removed": True,
+        "revision": revision,
+    }
 
 
 _DRAFT_RESULT_REF = re.compile(r"^@(\d+):(\d+)$")

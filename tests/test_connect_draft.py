@@ -139,6 +139,7 @@ def test_assemble_and_apply_transfers_links_and_records_proposals(
         draft_id = _assemble(x_id, e_id, y_id)
 
         draft = server.get_draft(draft_id)
+        assert draft["revision"] == len(draft["ops"])
         assert [op["kind"] for op in draft["ops"]] == [
             "upsert_statements",
             "add_links",

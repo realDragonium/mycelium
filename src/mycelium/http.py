@@ -1283,27 +1283,25 @@ def get_draft_detail(draft_id: str, request: Request) -> dict[str, Any]:
     from . import drafts_store
 
     conn = server._drafts_db()
-    row = drafts_store.get_draft(conn, draft_id)
+    row, ops = drafts_store.get_draft_snapshot(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="draft not found")
-    ops = drafts_store.list_ops(conn, draft_id)
     return {"draft": drafts_store.serialize_draft(row, ops=ops)}
 
 
 class DraftOpEditBody(BaseModel):
     payload: dict[str, Any]
+    expected_revision: int | None = None
 
 
 @app.patch("/api/drafts/{draft_id}/ops/{seq}")
 def edit_draft_op(
     draft_id: str, seq: int, body: DraftOpEditBody, request: Request
 ) -> dict[str, Any]:
-    """Replace an op's payload. Only valid on open drafts (a submitted
-    draft is awaiting review; if the curator wants to tweak it they
-    should approve-or-reject and have the drafter re-submit)."""
-    _require_principal(request)
+    """Replace an op's payload on an open or submitted draft."""
+    _enforce_curator(request, action="editing a draft operation")
     from . import drafts_store
 
     conn = server._drafts_db()
@@ -1312,26 +1310,47 @@ def edit_draft_op(
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="draft not found")
-    status = drafts_store.status_for(row)
-    if status not in ("open", "submitted"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail=f"cannot edit ops on a {status} draft",
-        )
     with store.transaction(conn):
-        ok = drafts_store.update_op_payload(conn, draft_id, seq, body.payload)
-    if not ok:
+        row = drafts_store.get_draft(conn, draft_id)
+        if row is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="draft not found")
+        status = drafts_store.status_for(row)
+        if status not in ("open", "submitted"):
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"cannot edit ops on a {status} draft",
+            )
+        try:
+            revision = drafts_store.update_op_payload(
+                conn,
+                draft_id,
+                seq,
+                body.payload,
+                expected_revision=body.expected_revision,
+            )
+        except drafts_store.StaleDraftRevisionError as ex:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=409, detail=str(ex)) from ex
+    if revision is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="op seq not found")
-    return {"ok": True}
+    return {"ok": True, "revision": revision}
 
 
 @app.delete("/api/drafts/{draft_id}/ops/{seq}")
-def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str, Any]:
-    _require_principal(request)
+def remove_draft_op_http(
+    draft_id: str,
+    seq: int,
+    request: Request,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    _enforce_curator(request, action="removing a draft operation")
     from . import drafts_store
 
     conn = server._drafts_db()
@@ -1340,21 +1359,33 @@ def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str,
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="draft not found")
-    status = drafts_store.status_for(row)
-    if status not in ("open", "submitted"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail=f"cannot remove ops from a {status} draft",
-        )
     with store.transaction(conn):
-        ok = drafts_store.remove_op(conn, draft_id, seq)
-    if not ok:
+        row = drafts_store.get_draft(conn, draft_id)
+        if row is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="draft not found")
+        status = drafts_store.status_for(row)
+        if status not in ("open", "submitted"):
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"cannot remove ops from a {status} draft",
+            )
+        try:
+            revision = drafts_store.remove_op(
+                conn, draft_id, seq, expected_revision=expected_revision
+            )
+        except drafts_store.StaleDraftRevisionError as ex:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=409, detail=str(ex)) from ex
+    if revision is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="op seq not found")
-    return {"ok": True}
+    return {"ok": True, "revision": revision}
 
 
 class DraftDecisionBody(BaseModel):
@@ -1385,7 +1416,9 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
     return {"ok": True}
 
 
-def _enforce_curator(request: Request) -> auth.Principal:
+def _enforce_curator(
+    request: Request, action: str = "approving or rejecting a draft"
+) -> auth.Principal:
     """Approve/reject require a *real* writer or admin — `_enforce_role`
     routes drafters through too (because the @tool wrapper's drafter
     equivalence makes them satisfy writer), which would let a drafter
@@ -1398,7 +1431,7 @@ def _enforce_curator(request: Request) -> auth.Principal:
 
         raise HTTPException(
             status_code=403,
-            detail="approving / rejecting a draft requires the writer or admin role",
+            detail=f"{action} requires the writer or admin role",
         )
     return p
 
