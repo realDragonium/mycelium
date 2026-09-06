@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import threading
 
@@ -77,12 +78,17 @@ def test_review_contract_refines_records_and_applies_when_enabled(
                 evidence["knowledge_preconditions"],
             )
             result = server.apply_reviewed_draft(draft_id, review["review_id"])
+            inspection = server.inspect_draft_review(draft_id)
         finally:
             auth.current_principal.reset(token)
 
         assert result["applied"] == 1
         assert server.get_draft(draft_id)["status"] == "approved"
         assert server.list_entities()["entities"][0]["description"] == "refined"
+        assert inspection["reviews"][0]["review_id"] == review["review_id"]
+        assert (
+            inspection["applications"][0]["application_id"] == result["application_id"]
+        )
 
 
 def test_reviewed_apply_is_disabled_by_default(tmp_path, monkeypatch):
@@ -242,6 +248,35 @@ def test_inspection_tracks_name_owner_and_rejects_nested_batch_fields(
         assert "statements[0].id" in evidence["operation_findings"][0]["finding"]
 
 
+def test_inspection_rejects_dangling_operation_references(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        draft_id = _submitted_entity_draft()
+        conn = server._drafts_db()
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="add_links",
+            payload={
+                "links": [
+                    {
+                        "from_id": "@99:0",
+                        "to_id": "stm_target",
+                        "link_type": "requires",
+                    }
+                ]
+            },
+            created_by="drafter-1",
+        )
+        token = _principal()
+        try:
+            evidence = server.inspect_draft_review(draft_id)
+        finally:
+            auth.current_principal.reset(token)
+        assert evidence["operation_findings"][-1]["finding"].startswith(
+            "unresolved_operation_reference"
+        )
+
+
 def test_apply_rechecks_affected_knowledge_and_real_tool_role(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
     with _app(tmp_path, monkeypatch):
@@ -326,6 +361,15 @@ def test_commit_before_finalization_recovers_without_replay(tmp_path, monkeypatc
         assert server.list_entities()["total"] == 1
         assert repeated["application_id"] == recovered["application_id"]
         assert repeated["recovered"] is True
+        attempt = (
+            server._drafts_db()
+            .execute(
+                "SELECT failure FROM draft_applications WHERE id = ?",
+                (recovered["application_id"],),
+            )
+            .fetchone()
+        )
+        assert "finalization failed" in attempt["failure"]
 
 
 def test_interrupted_claim_with_stale_knowledge_is_failed(tmp_path, monkeypatch):
@@ -440,6 +484,41 @@ def test_failure_before_substrate_commit_is_durable(tmp_path, monkeypatch):
         assert attempt["status"] == "failed"
         assert attempt["failure"] == "substrate commit failed"
         assert server.get_draft(draft_id)["status"] == "submitted"
+
+
+def test_exception_after_substrate_commit_recovers_same_attempt(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
+    with _app(tmp_path, monkeypatch):
+        draft_id = _submitted_entity_draft()
+        token = _principal()
+        review = _accepted_review(draft_id)
+        calls = []
+
+        def commit_then_interrupt(target, *, application_id, review_id, strict):
+            calls.append(application_id)
+            result = {"applied": 1, "skipped": 0, "results": []}
+            with store.transaction(store.substrate_connection()):
+                store.substrate_connection().execute(
+                    "INSERT INTO reviewed_draft_applications "
+                    "(application_id, draft_id, review_id, committed_at, result_json) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        application_id,
+                        target,
+                        review_id,
+                        "2026-01-01T00:00:00Z",
+                        json.dumps(result),
+                    ),
+                )
+            raise KeyboardInterrupt("after commit")
+
+        monkeypatch.setattr(server, "apply_draft", commit_then_interrupt)
+        try:
+            result = server.apply_reviewed_draft(draft_id, review["review_id"])
+        finally:
+            auth.current_principal.reset(token)
+        assert result["recovered"] is True
+        assert len(calls) == 1
 
 
 def test_active_claim_blocks_manual_apply_and_edits(tmp_path, monkeypatch):

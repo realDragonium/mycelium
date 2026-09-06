@@ -6275,6 +6275,12 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
             if row is not None:
                 entity_ids.add(row["entity_id"])
 
+    for entity_id in entity_ids:
+        for name_row in store.get_names_by_entity(_db(), entity_id):
+            statement_ids.update(
+                store.statements_mentioning_name(_db(), name_row["id"])
+            )
+
     out: list[KnowledgePrecondition] = []
     for entity_id in sorted(entity_ids):
         entity = get_entity(entity_id)
@@ -6293,61 +6299,94 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
     return out
 
 
+def _batch_nested_parameter_findings(payload: dict) -> list[str]:
+    findings: list[str] = []
+    allowed = set(BatchStatementSpec.__annotations__)
+    for index, item in enumerate(payload.get("statements", [])):
+        if not isinstance(item, dict):
+            continue
+        unknown = sorted(set(item) - allowed)
+        if unknown:
+            findings.append(
+                f"unknown_parameters:statements[{index}]." + ",".join(unknown)
+            )
+        for path, link_allowed in (
+            ("links", set(LinkSpec.__annotations__)),
+            ("incoming_links", set(IncomingLinkSpec.__annotations__)),
+        ):
+            for link_index, link in enumerate(item.get(path, [])):
+                if isinstance(link, dict):
+                    unknown_link = sorted(set(link) - link_allowed)
+                    if unknown_link:
+                        findings.append(
+                            f"unknown_parameters:statements[{index}]."
+                            f"{path}[{link_index}]." + ",".join(unknown_link)
+                        )
+    return findings
+
+
+def _nested_parameter_findings(kind: str, payload: dict) -> list[str]:
+    specs: list[tuple[str, JsonValue, set[str]]] = []
+    if kind in ("add_links", "remove_links"):
+        specs.append(("links", payload.get("links", []), set(EdgeSpec.__annotations__)))
+    elif kind in ("add_entity_links", "remove_entity_links"):
+        specs.append(
+            ("links", payload.get("links", []), set(EntityEdgeSpec.__annotations__))
+        )
+    elif kind == "upsert_statement":
+        specs.extend(
+            (
+                ("links", payload.get("links", []), set(LinkSpec.__annotations__)),
+                (
+                    "incoming_links",
+                    payload.get("incoming_links", []),
+                    set(IncomingLinkSpec.__annotations__),
+                ),
+            )
+        )
+    findings: list[str] = []
+    for path, items, allowed in specs:
+        if isinstance(items, list):
+            for index, item in enumerate(items):
+                if isinstance(item, dict):
+                    unknown = sorted(set(item) - allowed)
+                    if unknown:
+                        findings.append(
+                            f"unknown_parameters:{path}[{index}]." + ",".join(unknown)
+                        )
+    if kind == "upsert_statements":
+        findings.extend(_batch_nested_parameter_findings(payload))
+    return findings
+
+
 def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFinding]:
     from . import drafts_store
 
     findings: list[DraftOperationFinding] = []
     tools_by_name = {wrapper.__name__: wrapper for wrapper in TOOLS}
+    available_sequences = {int(op["seq"]) for op in ops}
     for op in ops:
         kind = op["kind"]
         operation_ref = op["id"]
-        if kind in {"flag"}:
-            findings.append(
-                {
-                    "operation_ref": operation_ref,
-                    "kind": kind,
-                    "finding": "unresolved_flag",
-                }
-            )
-            continue
-        if kind in drafts_store.NON_REPLAYING_OP_KINDS:
-            continue
-        if kind not in tools_by_name or kind not in _ORIG_SIGNATURES:
-            findings.append(
-                {
-                    "operation_ref": operation_ref,
-                    "kind": kind,
-                    "finding": "obsolete_tool",
-                }
-            )
-            continue
-        payload = _json.loads(op["payload_json"])
-        unknown = sorted(set(payload) - set(_ORIG_SIGNATURES[kind].parameters))
-        if unknown:
-            findings.append(
-                {
-                    "operation_ref": operation_ref,
-                    "kind": kind,
-                    "finding": "unknown_parameters:" + ",".join(unknown),
-                }
-            )
-        if kind == "upsert_statements":
-            allowed = set(BatchStatementSpec.__annotations__)
-            for index, item in enumerate(payload.get("statements", [])):
-                if not isinstance(item, dict):
-                    continue
-                nested_unknown = sorted(set(item) - allowed)
-                if nested_unknown:
-                    findings.append(
-                        {
-                            "operation_ref": operation_ref,
-                            "kind": kind,
-                            "finding": "unknown_parameters:statements["
-                            + str(index)
-                            + "]."
-                            + ",".join(nested_unknown),
-                        }
-                    )
+        if kind == "flag":
+            messages = ["unresolved_flag"]
+        elif kind in drafts_store.NON_REPLAYING_OP_KINDS:
+            messages = []
+        elif kind not in tools_by_name or kind not in _ORIG_SIGNATURES:
+            messages = ["obsolete_tool"]
+        else:
+            payload = _json.loads(op["payload_json"])
+            unknown = sorted(set(payload) - set(_ORIG_SIGNATURES[kind].parameters))
+            messages = ["unknown_parameters:" + ",".join(unknown)] if unknown else []
+            messages.extend(_nested_parameter_findings(kind, payload))
+        for reference in re.findall(r'"@(\d+):\d+"', op["payload_json"]):
+            producer = int(reference)
+            if producer not in available_sequences or producer >= int(op["seq"]):
+                messages.append(f"unresolved_operation_reference:@{reference}")
+        findings.extend(
+            {"operation_ref": operation_ref, "kind": kind, "finding": message}
+            for message in messages
+        )
     return findings
 
 
@@ -6361,12 +6400,19 @@ def inspect_draft_review(draft_id: str) -> dict[str, JsonValue]:
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
     findings = _draft_operation_findings(ops)
+    reviews = drafts_store.list_reviews(_drafts_db(), draft_id)
+    applications = drafts_store.list_applications(_drafts_db(), draft_id)
     return {
         "draft": drafts_store.serialize_draft(row, ops=ops),
         "draft_revision": int(row["revision"]),
         "knowledge_preconditions": _knowledge_preconditions(ops),
         "operation_findings": findings,
         "unresolved": bool(findings),
+        "reviews": [drafts_store.serialize_review(review) for review in reviews],
+        "applications": [
+            drafts_store.serialize_application(application)
+            for application in applications
+        ],
     }
 
 
@@ -6768,25 +6814,35 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, JsonValue]:
                     strict=True,
                 )
             except BaseException as exc:
-                with store.transaction(conn):
-                    drafts_store.finish_application(
-                        conn, application_id, status="failed", failure=str(exc)
-                    )
-                raise
+                committed = _substrate_application_result(application_id)
+                if committed is None:
+                    with store.transaction(conn):
+                        drafts_store.finish_application(
+                            conn, application_id, status="failed", failure=str(exc)
+                        )
+                    raise
+                result = {**committed, "recovered": True}
         else:
             result = {**result, "recovered": True}
 
-        with store.transaction(conn):
-            drafts_store.finish_application(
-                conn, application_id, status="committed", result=result
-            )
-            drafts_store.set_decision(
-                conn,
-                draft_id,
-                decision="approved",
-                by=principal.id,
-                application_id=application_id,
-            )
+        try:
+            with store.transaction(conn):
+                drafts_store.finish_application(
+                    conn, application_id, status="committed", result=result
+                )
+                drafts_store.set_decision(
+                    conn,
+                    draft_id,
+                    decision="approved",
+                    by=principal.id,
+                    application_id=application_id,
+                )
+        except BaseException as exc:
+            with store.transaction(conn):
+                drafts_store.note_application_failure(
+                    conn, application_id, f"draft finalization failed: {exc}"
+                )
+            raise
     return {"application_id": application_id, **result}
 
 

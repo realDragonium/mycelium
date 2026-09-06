@@ -644,6 +644,20 @@ def get_review(conn: sqlite3.Connection, review_id: str) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def list_reviews(conn: sqlite3.Connection, draft_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM draft_reviews WHERE draft_id = ? ORDER BY reviewed_at, rowid",
+        (draft_id,),
+    ).fetchall()
+
+
+def list_applications(conn: sqlite3.Connection, draft_id: str) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM draft_applications WHERE draft_id = ? ORDER BY claimed_at, rowid",
+        (draft_id,),
+    ).fetchall()
+
+
 def active_application(conn: sqlite3.Connection, draft_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM draft_applications WHERE draft_id = ? "
@@ -695,7 +709,7 @@ def finish_application(
 ) -> None:
     conn.execute(
         "UPDATE draft_applications SET status = ?, finished_at = ?, "
-        "result_json = ?, failure = ? WHERE id = ?",
+        "result_json = ?, failure = COALESCE(?, failure) WHERE id = ?",
         (
             status,
             _now(),
@@ -704,6 +718,29 @@ def finish_application(
             application_id,
         ),
     )
+
+
+def note_application_failure(
+    conn: sqlite3.Connection, application_id: str, failure: str
+) -> None:
+    conn.execute(
+        "UPDATE draft_applications SET failure = ? WHERE id = ?",
+        (failure, application_id),
+    )
+
+
+def serialize_application(row: sqlite3.Row) -> dict:
+    return {
+        "application_id": row["id"],
+        "draft_id": row["draft_id"],
+        "review_id": row["review_id"],
+        "status": row["status"],
+        "claimed_at": row["claimed_at"],
+        "finished_at": row["finished_at"],
+        "claimed_by": row["claimed_by"],
+        "result": _json.loads(row["result_json"]) if row["result_json"] else None,
+        "failure": row["failure"],
+    }
 
 
 def serialize_review(row: sqlite3.Row) -> dict:
