@@ -151,6 +151,10 @@ def deliver_document(
     return implementation.deliver(config, document, env)
 
 
+def destination_coordinates(config: DestinationConfig) -> dict[str, str]:
+    return _backend(config).coordinates(config)
+
+
 def _backend(config: DestinationConfig) -> ModuleType:
     if config.type == "github":
         from . import github_destination

@@ -72,6 +72,16 @@ def parse_config(destination: DestinationConfig) -> GitHubConfig:
     return GitHubConfig.parse(destination)
 
 
+def coordinates(destination: DestinationConfig) -> dict[str, str]:
+    config = GitHubConfig.parse(destination)
+    return {
+        "host": config.host,
+        "owner": config.owner,
+        "repo": config.repo,
+        "base_branch": config.base_branch,
+    }
+
+
 def deliver(
     destination: DestinationConfig,
     document: DeliveryDocument,
@@ -155,6 +165,11 @@ def _delivery_base(
             f"destination {config.destination.name!r} returned an invalid branch "
             "response"
         ) from None
+    if token and token in parent_sha:
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid branch "
+            "response"
+        )
     payload = _request_json(
         client,
         config,
@@ -327,7 +342,7 @@ def _review(
                 f"destination {config.destination.name!r} returned an invalid "
                 "review response"
             )
-        return _review_reference(config, first)
+        return _review_reference(config, first, branch)
 
     provenance = "\n".join(
         f"- `{statement_id}`" for statement_id in document.statement_ids
@@ -345,12 +360,26 @@ def _review(
             "body": "Generated from substrate statements:\n\n" + provenance,
         },
     )
-    return _review_reference(config, payload)
+    return _review_reference(config, payload, branch)
 
 
-def _review_reference(config: GitHubConfig, payload: dict) -> str:
+def _review_reference(config: GitHubConfig, payload: dict, branch: str) -> str:
     reference = payload.get("html_url")
-    if not _valid_reference(config, reference):
+    try:
+        state = payload["state"]
+        base = payload["base"]["ref"]
+        head = payload["head"]["ref"]
+        repository = payload["head"]["repo"]["full_name"]
+    except (KeyError, TypeError):
+        state = base = head = repository = None
+    if (
+        not _valid_reference(config, reference)
+        or state != "open"
+        or base != config.base_branch
+        or head != branch
+        or not isinstance(repository, str)
+        or _ascii_lower(repository) != _ascii_lower(f"{config.owner}/{config.repo}")
+    ):
         raise DestinationError(
             f"destination {config.destination.name!r} returned an invalid review "
             "response"
@@ -420,13 +449,10 @@ def _request_json(
             f"destination {config.destination.name!r} branch moved during delivery"
         )
     if not response.is_success:
-        detail = response.text[:500]
+        detail = _scrub(response.text, [token])[:500]
         raise DestinationError(
-            _scrub(
-                f"destination {config.destination.name!r} request failed with HTTP "
-                f"{response.status_code}: {detail}",
-                [token],
-            )
+            f"destination {config.destination.name!r} request failed with HTTP "
+            f"{response.status_code}: {detail}"
         ) from None
     try:
         payload = response.json()

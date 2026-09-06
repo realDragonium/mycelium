@@ -9,7 +9,7 @@ from functools import partial
 import httpx
 import pytest
 
-from mycelium import docs_store, drafts_store, server
+from mycelium import auth, docs_store, drafts_store, server
 from mycelium.docgen.destinations import (
     DeliveryDocument,
     DestinationConfig,
@@ -83,6 +83,20 @@ def _document() -> DeliveryDocument:
     )
 
 
+def _pull(
+    reference: str, branch: str = "mycelium/docs/configuring-sso-gdc_123"
+) -> dict:
+    return {
+        "html_url": reference,
+        "state": "open",
+        "base": {"ref": "docs-main"},
+        "head": {
+            "ref": branch,
+            "repo": {"full_name": "acme/handbook"},
+        },
+    }
+
+
 def _responses(
     *,
     blob_sha: str = CONTENT_SHA,
@@ -118,16 +132,15 @@ def _responses(
                 json={"ref": "refs/heads/mycelium/docs/configuring-sso-gdc_123"},
             )
         if path.endswith("/pulls") and request.method == "GET":
-            pulls = (
-                [] if existing_reference is None else [{"html_url": existing_reference}]
-            )
+            pulls = [] if existing_reference is None else [_pull(existing_reference)]
             return httpx.Response(200, json=pulls)
         if path.endswith("/pulls"):
+            branch = _request_json(request)["head"]
             return httpx.Response(
                 201,
-                json={
-                    "html_url": reference or "https://github.com/acme/handbook/pull/17"
-                },
+                json=_pull(
+                    reference or "https://github.com/acme/handbook/pull/17", branch
+                ),
             )
         raise AssertionError(f"unexpected request: {request.method} {request.url}")
 
@@ -142,7 +155,9 @@ def _retry_pull_response(request: httpx.Request, remote: dict) -> httpx.Response
     if request.method == "GET":
         if remote["open_pull"] is None:
             return httpx.Response(200, json=[])
-        return httpx.Response(200, json=[{"html_url": remote["open_pull"]}])
+        return httpx.Response(
+            200, json=[_pull(remote["open_pull"], remote["branch_name"])]
+        )
     if remote["fail_review"]:
         remote["fail_review"] = False
         remote["open_pull"] = "https://github.com/acme/handbook/pull/17"
@@ -187,6 +202,9 @@ def _retry_response(
         if remote["branch_sha"] is not None:
             return httpx.Response(422, json={"message": "Reference exists"})
         remote["branch_sha"] = _request_json(request)["sha"]
+        remote["branch_name"] = _request_json(request)["ref"].removeprefix(
+            "refs/heads/"
+        )
         return httpx.Response(201, json={"ref": "created"})
     if "/git/refs/heads/" in path and request.method == "PATCH":
         remote["branch_sha"] = _request_json(request)["sha"]
@@ -696,6 +714,74 @@ def test_a_token_shaped_git_object_id_is_refused_without_reflection():
     assert REFLECTION_TOKEN not in str(excinfo.value)
 
 
+def test_a_token_shaped_branch_object_id_is_refused_before_another_request():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"object": {"sha": REFLECTION_TOKEN}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": REFLECTION_TOKEN},
+            client=client,
+        )
+
+    assert REFLECTION_TOKEN not in str(excinfo.value)
+    assert len(requests) == 1
+
+
+def test_a_token_crossing_the_error_excerpt_boundary_is_fully_scrubbed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="x" * 490 + TOKEN)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert TOKEN not in str(excinfo.value)
+    assert TOKEN[:5] not in str(excinfo.value)
+
+
+def test_an_existing_review_must_match_the_requested_delivery():
+    requests, handler = _responses(
+        existing_reference="https://github.com/acme/handbook/pull/17"
+    )
+
+    def mismatched_handler(request: httpx.Request) -> httpx.Response:
+        response = handler(request)
+        if request.url.path.endswith("/pulls") and request.method == "GET":
+            payload = _pull("https://github.com/acme/handbook/pull/17")
+            payload["base"] = {"ref": "main"}
+            return httpx.Response(200, json=[payload])
+        return response
+
+    client = httpx.Client(transport=httpx.MockTransport(mismatched_handler))
+
+    with pytest.raises(DestinationError, match="invalid review response"):
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert not any(
+        request.url.path.endswith("/pulls") and request.method == "POST"
+        for request in requests
+    )
+
+
 def test_non_ascii_review_digits_are_refused_without_reflecting_a_token_shaped_value():
     reference = (
         f"https://github.com/acme/{REFLECTION_TOKEN}/pull/\N{ARABIC-INDIC DIGIT ONE}"
@@ -867,6 +953,12 @@ def test_listing_destinations_returns_only_generic_configuration(monkeypatch):
                 "name": "knowledge-base",
                 "type": "github",
                 "path_template": "docs/{slug}.md",
+                "coordinates": {
+                    "host": "github.com",
+                    "owner": "acme",
+                    "repo": "handbook",
+                    "base_branch": "docs-main",
+                },
             }
         ]
     }
@@ -910,6 +1002,18 @@ def test_delivering_an_unknown_document_refuses_before_contacting_a_destination(
         conn.close()
 
 
-def test_delivery_tools_are_registered_with_their_inferred_roles():
+def test_delivery_tools_are_registered_with_their_required_roles():
     assert server.deliver_document._mycelium_required_role == "writer"
+    assert server.deliver_document._mycelium_real_role is True
     assert server.list_documentation_destinations._mycelium_required_role == "reader"
+
+
+def test_a_drafter_cannot_trigger_document_delivery():
+    token = auth.current_principal.set(
+        auth.Principal(id="d", name="Drafter", role="drafter", type="human")
+    )
+    try:
+        with pytest.raises(PermissionError):
+            server.deliver_document("gdc_missing", "knowledge-base")
+    finally:
+        auth.current_principal.reset(token)

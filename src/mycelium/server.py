@@ -2325,7 +2325,7 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     return docs_store.serialize_document(row)
 
 
-@tool
+@tool(role="writer", real_role=True)
 def deliver_document(document_id: str, destination: str) -> dict[str, str]:
     """Deliver a generated document into a configured destination's review flow.
 
@@ -2381,6 +2381,7 @@ def list_documentation_destinations() -> dict[str, Any]:
                 "name": destination.name,
                 "type": destination.type,
                 "path_template": destination.path_template,
+                "coordinates": destinations.destination_coordinates(destination),
             }
             for destination in configured.values()
         ]
