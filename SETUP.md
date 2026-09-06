@@ -16,7 +16,7 @@ and install its dependencies:
 
 ```sh
 ollama pull nomic-embed-text
-git clone https://github.com/dragonium/mycelium.git
+git clone https://github.com/realDragonium/mycelium.git
 cd mycelium
 uv sync
 uv run pytest

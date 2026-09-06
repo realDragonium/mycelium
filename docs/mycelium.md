@@ -129,8 +129,9 @@ name, statement, mention, and link records. `mycelium.vec` is an hnswlib
 binary holding the vector index of statement embeddings, and
 `mycelium-names.vec` holds the separate entity-name index. Exports include both
 vector files unless `--no-vectors` is set, and imports restore either file that
-the archive contains. If omitted, startup rebuilds the name index; the statement
-index remains empty until it is explicitly reindexed.
+the archive contains. If either file is omitted, startup rebuilds that index by
+re-embedding the stored statement or name text. Starting after such a restore
+therefore requires the configured embedding service and model to be available.
 
 Versioned schema migrations run whenever the store opens. They upgrade older
 supported schemas in place and preserve legacy annotation tables as inert
@@ -289,15 +290,15 @@ frontier of `when` leaves) should batch them in a single call rather
 than loop. A single lookup is just `get_statements([id])`.
 
 Returns `{statements: [{id, kind, text, mentions, links,
-incoming_links, when_references}, ...]}` in the same order
+incoming_links, when_references}, ...], missing}` in the same order
 as the input ids, where `mentions` is `[{name_id, name, entity_id}]`,
 `links` is the outgoing edges this statement owns, and `incoming_links`
 is `[{from_id, link_type}]` listing every node that points at this one
 (statement *or* entity — the substrate treats them uniformly on
-hydration). Raises ValueError if `ids` is empty or if any id is unknown (no
-partial results). Used by callers that already have ids in hand (from a
-search hit's links field, an entity mention chain, etc.) and want the
-full hydrated records.
+hydration). Unknown ids appear in `missing` while known records are still
+returned; an empty input returns empty `statements` and `missing` lists. Used by
+callers that already have ids in hand (from a search hit's links field, an
+entity mention chain, etc.) and want the full hydrated records.
 
 ### get_entity
 
@@ -308,8 +309,9 @@ links, incoming_links, statement_links, incoming_statement_links}`.
 vocabulary, see `list_entity_link_types`). `statement_links` /
 `incoming_statement_links` are mixed entity↔statement edges with the
 same `{to_id|from_id, link_type, when?}` shape that `add_links`
-produces. Raises ValueError on unknown id. To find statements that
-mention an entity by name (rather than via a direct edge), use
+produces. The response always includes `missing`: it is empty for a resolved
+entity, while an unknown id returns only `{id, missing: [id]}`. To find
+statements that mention an entity by name (rather than via a direct edge), use
 `search_statements` with the `mentions` filter.
 
 ### list_entities and list_statements
@@ -323,7 +325,7 @@ falls back to its id.
 
 `list_statements(limit=50, offset=0, entity_id?, name?, kind?)` pages
 through statements in insertion order, returning `{total, statements:
-[{id, kind, text}]}` — text only, no mentions or links. Without filters
+[{id, kind, text}], missing}` — text only, no mentions or links. Without filters
 it scans the entire corpus; with `entity_id` or `name` (pass at most one)
 it restricts to statements that mention that entity. The optional `kind`
 argument narrows further to one shape of claim and combines with the
@@ -333,8 +335,9 @@ collapse into one filter — passing the canonical name and passing an
 alias return the same set. The query joins `statements` to
 `statement_mentions` and `names` and uses DISTINCT so a statement
 mentioning multiple aliases of the same entity appears once. Unknown
-name or unknown entity_id raises ValueError. For full statement
-structure use `get_statements(ids)`.
+names or entity ids return an empty page and the unresolved filter in
+`missing`; otherwise `missing` is empty. For full statement structure use
+`get_statements(ids)`.
 
 ### upsert_name
 
@@ -686,10 +689,11 @@ UI renders mentions as entity chips.
 
 ## Browser UI
 
-The browser UI is a read-only React application bundled inside
-`src/mycelium/ui/` and served as static files. It does not have a build
-step: React, ReactDOM, and Babel-Standalone are loaded from the unpkg
-CDN, and Babel transpiles the JSX in the browser at page load.
+The browser UI is a React application bundled inside `src/mycelium/ui/` and
+served as static files. Alongside graph browsing, it exposes authenticated
+draft review, glossary editing, and other role-gated mutation controls. It does
+not have a build step: React, ReactDOM, and Babel-Standalone are loaded from the
+unpkg CDN, and Babel transpiles the JSX in the browser at page load.
 
 The UI is a single-page application backed by hash-based routing. It
 loads the entire substrate in one fetch from `/api/data` at startup,
