@@ -418,3 +418,117 @@ def test_http_concurrency_save_updates_existing_request_limiter(running_app):
         json={"revision": 2, "settings": {"kind": "concurrency", "model_loops": 2}},
     )
     assert response.status_code == 200, response.text
+
+
+def test_backup_preserves_disabled_legacy_settings_and_restore_provenance(
+    tmp_path, monkeypatch
+):
+    from mycelium import backup
+    from test_backup import _seed_substrate
+
+    source = tmp_path / "source"
+    source.mkdir()
+    _seed_substrate(source)
+    conn = prompt_store.connect(source / backup.PROMPTS_DB_NAME)
+    prompt_store.migrate(conn)
+    conn.execute(
+        "INSERT INTO product_settings VALUES ('ingest', 7, ?)",
+        (settings.IngestSettings(max_tokens=1234).model_dump_json(),),
+    )
+    secret = "invalid-legacy-credential-sentinel"
+    monkeypatch.setenv("MYCELIUM_SOURCES", '{"token":"' + secret + '"}')
+    prompt_store.initialize_settings(conn, import_environment=True)
+    before = settings.archive(conn)
+    assert secret not in before.model_dump_json()
+    conn.close()
+
+    archive_path = tmp_path / "settings.tar.gz"
+    manifest = backup.export_substrate(source, archive_path)
+    assert manifest["includes_product_settings"] is True
+    monkeypatch.setenv(
+        "MYCELIUM_SOURCES", '{"ambient":{"owner":"other","repo":"unrelated"}}'
+    )
+    target = tmp_path / "restored"
+    backup.import_substrate(archive_path, target)
+    restored = prompt_store.connect(target / backup.PROMPTS_DB_NAME)
+    try:
+        prompt_store.initialize_settings(restored, import_environment=True)
+        assert settings.archive(restored) == before
+        assert restored.execute(
+            "SELECT 1 FROM instance_settings_migrations "
+            "WHERE name = 'environment-import-disabled'"
+        ).fetchone()
+        with pytest.raises(settings.Unavailable):
+            settings.get(settings.SourcesSettings, conn=restored)
+        editable = settings.editable(settings.SourcesSettings(), restored)
+        assert editable.configuration_error
+        assert editable.revision == 1
+        assert settings.get(settings.IngestSettings, conn=restored).max_tokens == 1234
+        prompt_store.use_connection(restored)
+        recovered = save(settings.SourcesSettings())
+        assert recovered.revision == 2
+        assert recovered.configuration_error is None
+        assert settings.get(settings.SourcesSettings).sources == ()
+    finally:
+        prompt_store.reset()
+        restored.close()
+
+
+@pytest.mark.parametrize(
+    "body_json",
+    [
+        "{}",
+        '{"kind":"unknown","invalid_legacy_configuration":true}',
+        '{"kind":"sources","invalid_legacy_configuration":false}',
+        '{"kind":"sources","invalid_legacy_configuration":1}',
+        '{"kind":"sources","invalid_legacy_configuration":"true"}',
+        '{"kind":"sources","invalid_legacy_configuration":null}',
+        '{"kind":"sources","invalid_legacy_configuration":true,"secret":"hidden"}',
+        '{"kind":"sources","invalid_legacy_configuration":true,"sources":[]}',
+    ],
+)
+def test_archive_rejects_corruption_and_inexact_disabled_markers(db, body_json):
+    db.execute("INSERT INTO product_settings VALUES ('sources', 1, ?)", (body_json,))
+    with pytest.raises(ValidationError):
+        settings.archive(db)
+    archive_json = (
+        '{"sections":[{"revision":1,"settings":'
+        + body_json
+        + '}],"github_bindings":{}}'
+    )
+    with pytest.raises(ValidationError):
+        settings.Archive.model_validate_json(archive_json)
+
+
+def test_archive_rejects_marker_for_different_stored_section(db):
+    marker = settings.InvalidLegacySettings(
+        kind="sources", invalid_legacy_configuration=True
+    )
+    db.execute(
+        "INSERT INTO product_settings VALUES ('ask', 1, ?)",
+        (marker.model_dump_json(),),
+    )
+    with pytest.raises(ValueError, match="section does not match"):
+        settings.archive(db)
+
+
+def test_archived_marker_cannot_enter_admin_save_payload():
+    with pytest.raises(ValidationError):
+        settings.SaveSettings.model_validate_json(
+            '{"revision":1,"settings":'
+            '{"kind":"sources","invalid_legacy_configuration":true}}'
+        )
+
+
+def test_existing_valid_archive_payload_remains_compatible():
+    original = {
+        "sections": [
+            settings.Snapshot(
+                revision=4, settings=settings.AskSettings(max_tokens=321)
+            ).model_dump(mode="json")
+        ],
+        "github_bindings": {},
+    }
+    archived = settings.Archive.model_validate_json(json.dumps(original))
+    assert archived.model_dump(mode="json") == original
+    assert isinstance(archived.sections[0].settings, settings.AskSettings)

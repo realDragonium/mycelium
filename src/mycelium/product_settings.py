@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 from typing import TYPE_CHECKING, Annotated, Literal, TypeVar
@@ -13,6 +12,7 @@ from pydantic import (
     Field,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -238,6 +238,22 @@ DEFAULTS: tuple[Body, ...] = (
     DocumentationSettings(),
     SourcesSettings(),
 )
+
+
+class InvalidLegacySettings(SettingsModel):
+    kind: Section
+    invalid_legacy_configuration: Literal[True]
+
+    @field_validator("invalid_legacy_configuration", mode="before")
+    @classmethod
+    def require_true(cls, value: object) -> Literal[True]:
+        if value is not True:
+            raise ValueError("Invalid legacy configuration marker must be true.")
+        return True
+
+
+ArchivedBody = Body | InvalidLegacySettings
+ARCHIVED_BODY = TypeAdapter(ArchivedBody)
 
 
 class Snapshot(SettingsModel):
@@ -489,9 +505,9 @@ def initialize(conn: sqlite3.Connection, *, import_environment: bool) -> None:
         except (ValueError, RuntimeError):
             # Invalid legacy configuration stays disabled without archiving arbitrary
             # environment text, which may contain a mistakenly pasted credential.
-            body = json.dumps(
-                {"kind": default.kind, "invalid_legacy_configuration": True}
-            )
+            body = InvalidLegacySettings(
+                kind=default.kind, invalid_legacy_configuration=True
+            ).model_dump_json()
         conn.execute(
             "INSERT OR IGNORE INTO product_settings VALUES (?, 1, ?)",
             (default.kind, body),
@@ -501,8 +517,14 @@ def initialize(conn: sqlite3.Connection, *, import_environment: bool) -> None:
     )
 
 
+class ArchivedSection(SettingsModel):
+    revision: int = Field(gt=0)
+    settings: ArchivedBody
+    configuration_error: None = None
+
+
 class Archive(SettingsModel):
-    sections: list[Snapshot]
+    sections: list[ArchivedSection]
     github_bindings: dict[str, github_credentials.Binding]
 
     @model_validator(mode="after")
@@ -510,8 +532,6 @@ class Archive(SettingsModel):
         kinds = [item.settings.kind for item in self.sections]
         if len(set(kinds)) != len(kinds):
             raise ValueError("Archive repeats a product settings section.")
-        if any(item.revision < 1 or item.configuration_error for item in self.sections):
-            raise ValueError("Archive contains invalid product settings.")
         return self
 
 
@@ -520,12 +540,12 @@ def archive(conn: sqlite3.Connection) -> Archive:
     for row in conn.execute(
         "SELECT section, revision, body_json FROM product_settings ORDER BY section"
     ):
-        settings = BODY.validate_json(row["body_json"])
+        settings = ARCHIVED_BODY.validate_json(row["body_json"])
         if settings.kind != row["section"]:
             raise ValueError(
                 "Saved product settings section does not match its content."
             )
-        sections.append(Snapshot(revision=row["revision"], settings=settings))
+        sections.append(ArchivedSection(revision=row["revision"], settings=settings))
     bindings = {
         row["name"]: github_credentials.Binding.model_validate_json(row["body_json"])
         for row in conn.execute(
