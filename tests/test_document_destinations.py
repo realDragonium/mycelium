@@ -464,6 +464,25 @@ def test_repository_coordinates_and_token_names_are_validated_fail_closed(field,
         load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
 
 
+def test_a_destination_cannot_expose_another_destinations_credential():
+    other_token = "fixture-token-for-other-destination"
+    raw = json.dumps(
+        {
+            "first": _entry(owner=other_token),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    with pytest.raises(DestinationError, match="contains a credential"):
+        load_destinations(
+            {
+                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "DOCS_GITHUB_TOKEN": TOKEN,
+                "OTHER_GITHUB_TOKEN": other_token,
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -510,6 +529,21 @@ def test_document_values_cannot_render_a_path_outside_the_destination():
             {"DOCS_GITHUB_TOKEN": TOKEN},
             client=client,
         )
+    assert requests == []
+
+
+def test_a_derived_delivery_branch_cannot_equal_the_configured_base():
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError, match="configured base branch"):
+        deliver(
+            _config(base_branch="mycelium/docs/configuring-sso-gdc_123"),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
     assert requests == []
 
 

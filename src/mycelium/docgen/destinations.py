@@ -90,7 +90,7 @@ def load_destinations(
         name = str(raw_name)
         try:
             config = _load_destination(name, entry)
-            _backend(config).validate_config_secrets(config, e)
+            _backend(config).validate_config_secrets(config, secrets)
         except DestinationError as exc:
             raise DestinationError(_scrub(str(exc), secrets)) from None
         configured[name] = config

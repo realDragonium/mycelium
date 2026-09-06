@@ -84,10 +84,9 @@ def coordinates(destination: DestinationConfig) -> dict[str, str]:
 
 
 def validate_config_secrets(
-    destination: DestinationConfig, env: Mapping[str, str]
+    destination: DestinationConfig, credentials: list[str]
 ) -> None:
     config = GitHubConfig.parse(destination)
-    token = env.get(config.token_env)
     public_values = (
         destination.name,
         destination.path_template,
@@ -96,7 +95,11 @@ def validate_config_secrets(
         config.repo,
         config.base_branch,
     )
-    if token and any(token in value for value in public_values):
+    if any(
+        credential and credential in value
+        for credential in credentials
+        for value in public_values
+    ):
         raise DestinationError("destination configuration contains a credential")
 
 
@@ -142,6 +145,11 @@ def _deliver(
 ) -> Delivery:
     path = render_path(config.destination, document)
     branch = _branch_name(config, document)
+    if branch == config.base_branch:
+        raise DestinationError(
+            f"destination {config.destination.name!r} derived its configured base "
+            "branch from the document"
+        )
     parent_sha, base_tree_sha, branch_exists = _delivery_base(
         config, branch, client, token
     )
