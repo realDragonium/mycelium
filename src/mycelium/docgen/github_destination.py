@@ -22,7 +22,6 @@ from .destinations import (
 )
 
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
-_BASE_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?\Z")
 _TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 _BRANCH_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
@@ -64,24 +63,13 @@ class GitHubConfig:
             token_env=_validate(
                 destination.name, "token_env", token_env, _TOKEN_ENV_RE
             ),
-            base_branch=_validate(
-                destination.name, "base_branch", base_branch, _BASE_BRANCH_RE
-            ),
-            host=_validate(destination.name, "host", host, _HOST_RE),
+            base_branch=_validate_branch(destination.name, base_branch),
+            host=_validate_host(destination.name, host),
         )
 
 
 def parse_config(destination: DestinationConfig) -> GitHubConfig:
     return GitHubConfig.parse(destination)
-
-
-@dataclass(frozen=True)
-class GitHubDestination:
-    config: DestinationConfig
-    env: Mapping[str, str] | None = None
-
-    def deliver(self, document: DeliveryDocument) -> Delivery:
-        return deliver(self.config, document, self.env)
 
 
 def deliver(
@@ -326,7 +314,11 @@ def _review(
         "GET",
         "/pulls",
         expect_list=True,
-        params={"state": "open", "head": f"{config.owner}:{branch}"},
+        params={
+            "state": "open",
+            "head": f"{config.owner}:{branch}",
+            "base": config.base_branch,
+        },
     )
     if existing:
         first = existing[0]
@@ -516,6 +508,40 @@ def _validate(name: str, field: str, value: str, pattern: re.Pattern[str]) -> st
             f"destination {name!r} has an invalid {field!r} value "
             "(must match the destination's own naming, with no leading '-', "
             "'..', or URL control characters)"
+        )
+    return value
+
+
+def _validate_host(name: str, value: str) -> str:
+    host = _validate(name, "host", value, _HOST_RE)
+    _, separator, port = host.partition(":")
+    if separator and not 1 <= int(port) <= 65535:
+        raise DestinationError(
+            f"destination {name!r} has an invalid 'host' value "
+            "(port must be between 1 and 65535)"
+        )
+    return host
+
+
+def _validate_branch(name: str, value: str) -> str:
+    invalid = (
+        not value.isascii()
+        or value.startswith(("-", "/", "."))
+        or value.endswith(("/", "."))
+        or "//" in value
+        or ".." in value
+        or "@{" in value
+        or value == "@"
+        or any(
+            part.startswith(".") or part.endswith(".lock") for part in value.split("/")
+        )
+        or any(character in value for character in " \\~^:?*[")
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    )
+    if invalid:
+        raise DestinationError(
+            f"destination {name!r} has an invalid 'base_branch' value "
+            "(must be a valid Git branch name)"
         )
     return value
 

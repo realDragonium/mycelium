@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from functools import partial
 
 import httpx
@@ -253,6 +254,7 @@ def test_the_github_destination_runs_the_git_data_sequence_and_opens_review():
     assert dict(requests[6].url.params) == {
         "state": "open",
         "head": "acme:mycelium/docs/configuring-sso-gdc_123",
+        "base": "docs-main",
     }
     review = _request_json(requests[7])
     assert review["head"] == "mycelium/docs/configuring-sso-gdc_123"
@@ -266,6 +268,21 @@ def test_the_github_destination_runs_the_git_data_sequence_and_opens_review():
     assert delivery.path == "docs/kb-authoring/configuring-sso.how-to.md"
     assert delivery.reference == "https://github.com/acme/handbook/pull/17"
     assert delivery.content_revision == CONTENT_SHA
+
+
+def test_blob_id_uses_utf8_byte_length():
+    expected_sha = "61961d7eefc6a0808a2a215a6bca2e711648631b"
+    _, handler = _responses(blob_sha=expected_sha)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    delivery = deliver(
+        _config(),
+        replace(_document(), body="# Café\n"),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=client,
+    )
+
+    assert delivery.content_revision == expected_sha
 
 
 def test_an_enterprise_destination_uses_the_hosts_api_v3_base():
@@ -342,6 +359,25 @@ def test_a_crafted_host_cannot_redirect_the_credential(host):
                 )
             }
         )
+
+
+@pytest.mark.parametrize("host", ["ghe.example:0", "ghe.example:65536"])
+def test_host_ports_are_validated_when_destinations_load(host):
+    raw = json.dumps({"knowledge-base": _entry(host=host)})
+
+    with pytest.raises(DestinationError, match="port must be between"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
+
+
+@pytest.mark.parametrize(
+    "base_branch",
+    ["main/", "main//topic", "topic.lock", "topic/.hidden", "topic@{upstream}"],
+)
+def test_invalid_git_branch_names_are_refused_when_destinations_load(base_branch):
+    raw = json.dumps({"knowledge-base": _entry(base_branch=base_branch)})
+
+    with pytest.raises(DestinationError, match="valid Git branch name"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
 
 
 def test_unknown_top_level_configuration_fields_are_refused_fail_closed():
