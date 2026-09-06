@@ -267,6 +267,103 @@ function DraftGraph({ ops }) {
 }
 
 
+// ---------- Flagged fragments (draft detail) ----------
+//
+// A `flag` op is a fragment the pipeline refused to turn into a statement.
+// It has no id and no edges, so there is no honest node for it: drawing one
+// would show the curator something that does not exist in the substrate.
+// It gets a list beside the graph instead — the text that did not land, and
+// which stage refused it.
+//
+// The enum is the word the API, the logs and `FLAG_SOURCES` use, so it stays
+// on screen; the sentence beside it is the part a curator can act on.
+//
+// The stage label names, in an operator's words, the stage that RAISED the
+// flag. That is usually a rewording of `FLAG_SOURCES` in connect/extract.py,
+// but deliberately not always: `FLAG_SOURCES['phrasing']` records the
+// phrasing catalog, because the catalog is what refused the wording — yet the
+// flag is raised by the planner (`_ingest_plan_flags` in server.py) against a
+// statement it had already classified. The label follows the raiser, so a
+// curator reading it knows which stage to go and look at; the sentence still
+// names the catalog as the thing that objected.
+//
+// An op carrying a reason this table has not learned falls back to its own
+// `provenance.source` rather than inventing an explanation.
+const _FLAG_REASONS = {
+  unsplit: ['segmenter', 'A compound the segmenter could not cut into separate statements.'],
+  rejected: ['phrasing catalog', 'The wording was refused before the fragment was classified.'],
+  ambiguous: ['shape matching', 'More than one shape matched, so the statement kind stayed undecided.'],
+  unmatched: ['shape matching', 'No shape matched, so no statement kind could be assigned.'],
+  phrasing: ['planner', 'Classified, then refused by the phrasing catalog.'],
+  flip: ['planner', 'A link on this statement runs against a directional rule.'],
+  depends_on_rejected: ['planner', 'It builds on another fragment that was itself rejected.'],
+  cue: ['cue gate', 'The connective joining two fragments could not be typed as a link.'],
+};
+
+
+function FlagEntry({ op, first }) {
+  const p = op.payload || {};
+  // Own-property only: a reason of 'constructor' or 'toString' would
+  // otherwise find an inherited member and render an empty stage.
+  const known = Object.prototype.hasOwnProperty.call(_FLAG_REASONS, p.reason)
+    ? _FLAG_REASONS[p.reason]
+    : null;
+  const stage = known ? known[0] : ((op.provenance || {}).source || 'pipeline');
+  const explanation = known ? known[1] : 'This stage refused the fragment; see the detail below.';
+  return (
+    <li style={{
+      listStyle: 'none', padding: '10px 12px',
+      borderTop: first ? 'none' : '1px solid var(--rule)',
+    }}>
+      <div style={{ fontSize: 12.5, color: 'var(--ink-2)', lineHeight: 1.45 }}>
+        {p.text || <span style={{ fontStyle: 'italic', color: 'var(--ink-3)' }}>(no text on this flag)</span>}
+      </div>
+      <div style={{
+        marginTop: 7, fontSize: 10.5, fontFamily: 'var(--mono)', fontWeight: 600,
+        letterSpacing: '0.04em', color: 'var(--k-name)',
+      }}>
+        {stage} · {p.reason || 'unknown'}
+      </div>
+      <div style={{ marginTop: 3, fontSize: 11.5, color: 'var(--ink-3)', lineHeight: 1.45 }}>
+        {explanation}
+      </div>
+      {p.detail && (
+        <div style={{
+          marginTop: 5, fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--ink-3)',
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        }}>{p.detail}</div>
+      )}
+    </li>
+  );
+}
+
+
+function DraftFlags({ ops }) {
+  const flags = (ops || []).filter(op => op.kind === 'flag');
+  // A draft with nothing flagged says nothing: the graph then takes the row
+  // on its own, exactly as it did before this panel existed.
+  if (!flags.length) return null;
+
+  return (
+    <aside style={{ width: 360, flexShrink: 0 }}>
+      <h2 style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
+        Flagged fragments · {flags.length}
+      </h2>
+      <p style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 0, marginBottom: 10 }}>
+        Text the pipeline would not turn into a statement. Approving the draft writes nothing for these.
+      </p>
+      <ul style={{
+        margin: 0, padding: 0,
+        border: '1px solid var(--rule)', borderRadius: 6,
+        background: 'var(--surface, var(--bg-1))',
+      }}>
+        {flags.map((op, i) => <FlagEntry key={op.seq} op={op} first={i === 0} />)}
+      </ul>
+    </aside>
+  );
+}
+
+
 function DraftStatusBadge({ status }) {
   const styles = {
     open:      { bg: 'rgba(217,119,6,0.16)', fg: '#d97706' },
@@ -514,6 +611,8 @@ function DraftDetail({ draftId, onBack }) {
   // horizontal padding on each side. The graph card itself caps at the
   // size-derived maxWidth and centers within this container, so smaller
   // sizes still look balanced rather than left-aligned in dead space.
+  // WIDE is itself clamped by `main.page`'s 1440px max-width, so the largest
+  // graph sizes never reach the width named here — raising it changes nothing.
   const WIDE = 1768;
   return (
     <main className="page">
@@ -552,13 +651,18 @@ function DraftDetail({ draftId, onBack }) {
       </div>
 
       <div style={{ maxWidth: WIDE, margin: '0 auto', padding: '0 24px' }}>
-        <h2 style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Graph</h2>
-        <p style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 0, marginBottom: 10 }}>
-          Shows the entities and statements the draft touches, plus one hop of substrate context.
-          Same controls as the main graph — pan, zoom, drag nodes, click to focus.
-        </p>
-        <div style={{ marginBottom: 18 }}>
-          <DraftGraph ops={data.ops || []} />
+        <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <h2 style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Graph</h2>
+            <p style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 0, marginBottom: 10 }}>
+              Shows the entities and statements the draft touches, plus one hop of substrate context.
+              Same controls as the main graph — pan, zoom, drag nodes, click to focus.
+            </p>
+            <div style={{ marginBottom: 18 }}>
+              <DraftGraph ops={data.ops || []} />
+            </div>
+          </div>
+          <DraftFlags ops={data.ops || []} />
         </div>
       </div>
 
