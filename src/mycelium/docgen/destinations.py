@@ -15,7 +15,7 @@ interpreting them. Each implementation validates and uses its own settings.
 from __future__ import annotations
 
 import json
-import os
+import sqlite3
 import string
 from dataclasses import dataclass
 from typing import Mapping, Protocol, cast
@@ -98,7 +98,12 @@ class DestinationBackend(Protocol):
 def load_destinations(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, DestinationConfig]:
-    e = os.environ if env is None else env
+    if env is None:
+        from .. import product_settings
+
+        settings = product_settings.get(product_settings.DocumentationSettings)
+        return {item.name: item.destination() for item in settings.destinations}
+    e = env
     raw = e.get("MYCELIUM_DOC_DESTINATIONS")
     if not raw:
         return {}
@@ -283,3 +288,28 @@ def _scrub(text: str, secrets: list[str]) -> str:
         if secret:
             out = out.replace(secret, "***")
     return out
+
+
+def target_identity(config: DestinationConfig) -> str:
+    return json.dumps(destination_coordinates(config), sort_keys=True)
+
+
+def require_recorded_target(config: DestinationConfig, recorded: str | None) -> None:
+    if recorded != target_identity(config):
+        raise DestinationError(
+            "The document destination has changed. Use a new destination name to deliver to a different repository or branch."
+        )
+
+
+def bind_legacy_deliveries(conn: sqlite3.Connection) -> None:
+    """Pin older delivery records once; unresolved targets remain disabled."""
+    configured = load_destinations()
+    with conn:
+        for row in conn.execute(
+            "SELECT id, delivery_destination FROM generated_documents WHERE delivery_destination IS NOT NULL AND delivery_target IS NULL"
+        ):
+            destination = configured.get(row["delivery_destination"])
+            conn.execute(
+                "UPDATE generated_documents SET delivery_target = ? WHERE id = ?",
+                (target_identity(destination) if destination else "{}", row["id"]),
+            )

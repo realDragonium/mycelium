@@ -27,8 +27,9 @@ import sqlite3
 import threading
 from typing import Any, Callable
 
-from . import docs_store
+from . import docs_store, product_settings
 from .docgen.config import DocgenConfig, Provider
+from .docgen.destinations import DestinationConfig, load_destinations
 from .docgen.schema import CurrentDocument, ExistingDocument
 
 logger = logging.getLogger(__name__)
@@ -60,13 +61,15 @@ def start_run(
     if config.provider == "openai":
         if not os.environ.get("OPENAI_API_KEY", "").strip():
             raise ValueError("Set OPENAI_API_KEY on the server.")
-    max_active = int(os.environ.get(MAX_ACTIVE_ENV) or 2)
+    max_active = product_settings.get(
+        product_settings.ConcurrencySettings
+    ).documentation_runs
+    destinations = load_destinations()
 
     with _spawn_lock:
         if docs_store.count_active(conn) >= max_active:
             raise ValueError(
-                f"too many active documentation runs (max {max_active}, from "
-                f"{MAX_ACTIVE_ENV}); retry when one finishes"
+                f"too many active documentation runs (max {max_active}); retry when one finishes"
             )
 
         run_id = docs_store.create_run(
@@ -103,6 +106,7 @@ def start_run(
                     db_path,
                     selected_runner,
                     config,
+                    destinations,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -170,6 +174,7 @@ def _execute_run(
     db_path: str,
     runner: Callable[..., Any],
     config: DocgenConfig | None = None,
+    destinations: dict[str, DestinationConfig] | None = None,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -205,7 +210,7 @@ def _execute_run(
                     config=config,
                     existing_documents=_existing_documents(conn),
                     load_current_document=lambda document_id: _load_current_document(
-                        conn, document_id
+                        conn, document_id, destinations
                     ),
                 )
             else:
@@ -341,7 +346,9 @@ def _existing_documents(conn: sqlite3.Connection) -> tuple[ExistingDocument, ...
 
 
 def _load_current_document(
-    conn: sqlite3.Connection, document_id: str
+    conn: sqlite3.Connection,
+    document_id: str,
+    configured_destinations: dict[str, DestinationConfig] | None = None,
 ) -> CurrentDocument:
     from .docgen import destinations
 
@@ -351,7 +358,16 @@ def _load_current_document(
     destination = row["delivery_destination"]
     path = row["delivery_path"]
     if destination and path:
-        configured = destinations.get_destination(str(destination))
+        configured = (
+            destinations.get_destination(str(destination))
+            if configured_destinations is None
+            else configured_destinations.get(str(destination))
+        )
+        if configured is None:
+            raise ValueError(
+                "The document destination was unavailable when this run started."
+            )
+        destinations.require_recorded_target(configured, row["delivery_target"])
         return destinations.read_document(
             configured, str(path), document_id, str(row["slug"])
         )

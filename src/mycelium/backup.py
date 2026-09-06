@@ -77,6 +77,7 @@ SCHEMA_VERSION = migrations.CURRENT_VERSION
 if TYPE_CHECKING:
     from .draft_review_settings import ControlSnapshot
     from .model_settings import ModelSnapshot
+    from .product_settings import Archive as ProductArchive
 
 PROMPTS_DB_NAME = "mycelium-prompts.db"
 
@@ -193,8 +194,8 @@ def export_substrate(
             if prompts_count is not None:
                 row_counts["prompt_texts"] = prompts_count
 
-            models_included, settings_included = _archive_instance_settings(
-                prompts_db_path, staging
+            models_included, settings_included, products_included = (
+                _archive_instance_settings(prompts_db_path, staging)
             )
 
             if include_vectors:
@@ -212,6 +213,7 @@ def export_substrate(
                 "includes_prompts": prompts_count is not None,
                 "includes_draft_review_settings": settings_included,
                 "includes_model_settings": models_included,
+                "includes_product_settings": products_included,
                 "includes_vectors": include_vectors,
                 "row_counts": row_counts,
             }
@@ -327,11 +329,11 @@ def _write_prompts(prompts_db_path: Path, out_path: Path) -> int:
         conn.close()
 
 
-def _archive_instance_settings(db_path: Path, staging: Path) -> tuple[bool, bool]:
+def _archive_instance_settings(db_path: Path, staging: Path) -> tuple[bool, bool, bool]:
     from . import prompt_store
 
     if not db_path.exists():
-        return False, False
+        return False, False, False
     with closing(prompt_store.connect(db_path)) as conn:
         # Both settings sections describe one database snapshot, even when a
         # separate server process saves a model and review controls together.
@@ -340,6 +342,7 @@ def _archive_instance_settings(db_path: Path, staging: Path) -> tuple[bool, bool
             return (
                 _archive_model_settings(conn, staging / "model-settings.json"),
                 _archive_review_settings(conn, staging / "draft-review-settings.json"),
+                _archive_product_settings(conn, staging / "product-settings.json"),
             )
         finally:
             conn.rollback()
@@ -546,6 +549,9 @@ def import_substrate(
         models = _archived_model_settings(
             staging, bool(manifest.get("includes_model_settings"))
         )
+        products = _archived_product_settings(
+            staging, bool(manifest.get("includes_product_settings"))
+        )
         _prepare_restore_target(data_dir, force=force)
         from . import prompt_store
 
@@ -599,6 +605,7 @@ def import_substrate(
         if review_settings is not None:
             _restore_review_settings(data_dir / PROMPTS_DB_NAME, review_settings)
         _restore_model_settings(data_dir / PROMPTS_DB_NAME, models)
+        _restore_product_settings(data_dir / PROMPTS_DB_NAME, products)
 
         settings_db = prompt_store.connect(data_dir / PROMPTS_DB_NAME)
         try:
@@ -846,3 +853,35 @@ def _wipe_data_dir(data_dir: Path) -> None:
 def _now_iso() -> str:
     t = datetime.now(timezone.utc)
     return f"{t.strftime('%Y-%m-%dT%H:%M:%S')}.{t.microsecond // 1000:03d}Z"
+
+
+def _archive_product_settings(conn: sqlite3.Connection, path: Path) -> bool:
+    from . import product_settings
+
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'product_settings'"
+    ).fetchone():
+        return False
+    path.write_text(product_settings.archive(conn).model_dump_json(), encoding="utf-8")
+    return True
+
+
+def _archived_product_settings(staging: Path, required: bool) -> ProductArchive | None:
+    from .product_settings import Archive
+
+    path = staging / "product-settings.json"
+    if not path.exists():
+        if required:
+            raise ValueError("Archive is missing product-settings.json")
+        return None
+    return Archive.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def _restore_product_settings(path: Path, archive: ProductArchive | None) -> None:
+    from . import product_settings, prompt_store
+
+    with closing(prompt_store.connect(path)) as conn:
+        prompt_store.migrate(conn)
+        with prompt_store._writing(conn):
+            if archive is not None:
+                product_settings.restore(conn, archive)

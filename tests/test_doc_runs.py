@@ -16,7 +16,16 @@ from types import SimpleNamespace
 
 import pytest
 
-from mycelium import auth, doc_runs, docs_store, drafts_store, prompt_store, server
+from mycelium import (
+    auth,
+    doc_runs,
+    docs_store,
+    drafts_store,
+    product_settings,
+    prompt_store,
+    server,
+)
+from product_settings_helpers import set_product
 
 
 @pytest.fixture(autouse=True)
@@ -637,7 +646,7 @@ def test_a_runner_that_raises_finishes_the_run_failed(tmp_path):
 
 def test_capacity_refuses_when_at_max_and_names_the_env_var(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
-    monkeypatch.setenv(doc_runs.MAX_ACTIVE_ENV, "2")
+    set_product(product_settings.ConcurrencySettings(documentation_runs=2))
     release = threading.Event()
 
     def runner(prompt, *, guideline_set, document_type):
@@ -651,7 +660,7 @@ def test_capacity_refuses_when_at_max_and_names_the_env_var(tmp_path, monkeypatc
         docs_store.status_for(docs_store.get_run(conn, run2)),
     } == {"running"}
 
-    with pytest.raises(ValueError, match="max 2, from MYCELIUM_DOCGEN_MAX_ACTIVE"):
+    with pytest.raises(ValueError, match="max 2"):
         _start(conn, tmp_path, runner)
 
     release.set()
@@ -673,7 +682,7 @@ def test_bound_is_db_derived(tmp_path, monkeypatch):
     """A row left running by a previous process still counts, because the
     count comes from the table and not from this process's threads."""
     conn = _conn(tmp_path)
-    monkeypatch.setenv(doc_runs.MAX_ACTIVE_ENV, "1")
+    set_product(product_settings.ConcurrencySettings(documentation_runs=1))
     stranded = docs_store.create_run(conn, prompt="stranded", created_by=None)
     docs_store.mark_started(conn, stranded)
 
@@ -687,7 +696,7 @@ def test_bound_is_db_derived(tmp_path, monkeypatch):
 
 def test_concurrent_starts_race_one_wins(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
-    monkeypatch.setenv(doc_runs.MAX_ACTIVE_ENV, "1")
+    set_product(product_settings.ConcurrencySettings(documentation_runs=1))
     release = threading.Event()
     barrier = threading.Barrier(2)
     errors = []
@@ -748,7 +757,7 @@ def test_explicit_runner_beats_module_override(tmp_path):
 def test_run_holds_a_shared_model_loop_slot(tmp_path, monkeypatch):
     """The wiring: the runner must execute inside the slot, not beside it —
     otherwise a documentation run and `ask` each get the full budget."""
-    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "1")
+    set_product(product_settings.ConcurrencySettings(model_loops=1))
     server._model_loop_budget.cache_clear()
 
     db_path = tmp_path / "mycelium-drafts.db"
@@ -889,7 +898,7 @@ def test_blank_and_oversized_prompts_are_refused(_stores, monkeypatch):
     with pytest.raises(ValueError, match="prompt is required"):
         server.request_documentation("   ")
 
-    monkeypatch.setenv("MYCELIUM_DOCGEN_MAX_PROMPT_CHARS", "10")
+    set_product(product_settings.DocgenSettings(max_prompt_chars=10))
     with pytest.raises(ValueError, match="the limit is 10"):
         server.request_documentation("x" * 11)
 
@@ -916,8 +925,10 @@ def test_no_refusal_leaves_a_run_behind(_stores, monkeypatch):
         with pytest.raises(ValueError, match=message):
             server.request_documentation(**kwargs)
 
-    monkeypatch.setenv(doc_runs.MAX_ACTIVE_ENV, "0")
-    with pytest.raises(ValueError, match="MYCELIUM_DOCGEN_MAX_ACTIVE"):
+    prompts_conn.execute(
+        "INSERT OR REPLACE INTO product_settings VALUES ('concurrency', 1, '{}')"
+    )
+    with pytest.raises(ValueError, match="Saved product settings"):
         server.request_documentation("p")
 
     assert docs_store.list_runs(drafts_conn) == []

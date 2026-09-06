@@ -20,7 +20,6 @@ import os
 import re
 import sqlite3
 import sys
-import threading
 import time
 import uuid
 from collections.abc import Iterator, Sequence
@@ -66,6 +65,7 @@ from .connect.funnel import BatchStatement
 from .connect.proposals import Proposal, ProposalSet, proposals_from
 from .connect.substrate import HintedView, LiveSubstrate
 from .layout_baker import LayoutBaker
+from .model_capacity import Capacity
 from .require import require
 from .tracing import trace_span
 
@@ -280,7 +280,9 @@ _MODEL_LOOP_MAX_CONCURRENT_ENV = "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT"
 
 
 def _model_loop_max_concurrent() -> int:
-    return int(os.environ.get(_MODEL_LOOP_MAX_CONCURRENT_ENV) or 2)
+    from . import product_settings
+
+    return product_settings.get(product_settings.ConcurrencySettings).model_loops
 
 
 # Two primitives, one number, because the model loops do not all start from the
@@ -307,8 +309,8 @@ def _model_loop_limiter() -> anyio.CapacityLimiter:
 
 
 @functools.cache
-def _model_loop_budget() -> threading.BoundedSemaphore:
-    return threading.BoundedSemaphore(_model_loop_max_concurrent())
+def _model_loop_budget() -> "Capacity":
+    return Capacity(_model_loop_max_concurrent)
 
 
 @contextlib.contextmanager
@@ -353,7 +355,11 @@ def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
     which does not care which transport asked, so a caller must not be able to
     slip past it by calling `/ingest` instead of the MCP tool.
     """
-    return _model_loop_limiter() if tool_name in _MODEL_LOOP_TOOLS else None
+    if tool_name not in _MODEL_LOOP_TOOLS:
+        return None
+    limiter = _model_loop_limiter()
+    limiter.total_tokens = _model_loop_max_concurrent()
+    return limiter
 
 
 def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
@@ -2529,7 +2535,10 @@ def deliver_document(document_id: str, destination: str) -> dict[str, str]:
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
         raise ValueError("generated document not found")
+    configured = destinations.get_destination(destination)
     is_same_destination = row["delivery_destination"] == destination
+    if is_same_destination:
+        destinations.require_recorded_target(configured, row["delivery_target"])
     document = destinations.DeliveryDocument(
         id=str(row["id"]),
         slug=str(row["slug"]),
@@ -2556,7 +2565,6 @@ def deliver_document(document_id: str, destination: str) -> dict[str, str]:
         ),
     )
     try:
-        configured = destinations.get_destination(destination)
         delivery = destinations.deliver_document(configured, document)
     except destinations.DestinationError as exc:
         raise ValueError(str(exc)) from None
@@ -2568,6 +2576,7 @@ def deliver_document(document_id: str, destination: str) -> dict[str, str]:
         reference=delivery.reference,
         content_revision=delivery.content_revision,
         expected_body_digest=docs_store.body_digest(str(row["body"])),
+        target=destinations.target_identity(configured),
     )
     return delivery.serialize()
 

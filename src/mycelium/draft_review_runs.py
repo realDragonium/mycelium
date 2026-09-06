@@ -19,6 +19,7 @@ from . import (
     draft_review_settings,
     draft_review_store,
     drafts_store,
+    product_settings,
     store,
     timestamps,
 )
@@ -87,6 +88,7 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
     from . import server  # local import: server registers the review tools
 
     settings = draft_review_settings.load()
+    limits = product_settings.get(product_settings.ReviewSettings)
     if settings.mode == "off":
         raise ValueError("internal draft review is off")
     if not settings.model:
@@ -124,7 +126,9 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
         context = contextvars.Context()
         run.knowledge_preconditions = inspection["knowledge_preconditions"]
         _save(run)
-        future = _executor.submit(context.run, _execute, run, inspection, settings)
+        future = _executor.submit(
+            context.run, _execute, run, inspection, settings, limits
+        )
         _futures[run.run_id] = future
         future.add_done_callback(lambda _: _futures.pop(run.run_id, None))
     except Exception as exc:
@@ -233,6 +237,7 @@ def _execute(
     run: ReviewRun,
     inspection: DraftReviewInspection,
     settings: draft_review_settings.Snapshot,
+    limits: product_settings.ReviewSettings | None = None,
 ) -> None:
     from . import server  # local import: server registers the review tools
 
@@ -241,7 +246,7 @@ def _execute(
         auth.current_principal.set(principal)
         with server.model_loop_slot():
             context, reads = _context(inspection)
-            result = _assess(context, inspection, settings)
+            result = _assess(context, inspection, settings, limits)
         draft_review_model.validate_assessment(result)
         _validate_corrections(result, inspection)
         run.label = result.label
@@ -269,6 +274,7 @@ def _assess(
     context: str,
     inspection: DraftReviewInspection,
     settings: draft_review_settings.Snapshot,
+    limits: product_settings.ReviewSettings | None = None,
 ) -> Assessment:
     ops = inspection["draft"].get("ops")
     if not isinstance(ops, list):
@@ -294,7 +300,7 @@ def _assess(
     if RUNNER is not None:
         return RUNNER(context)
     return draft_review_model.assess(
-        context, model=settings.model, provider=settings.provider
+        context, model=settings.model, provider=settings.provider, limits=limits
     )
 
 

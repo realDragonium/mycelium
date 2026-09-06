@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import model_settings, tracing
+from .. import model_settings, product_settings, tracing
 from ..ai import Provider
 from ..ingest.config import DEFAULT_MODEL
 
@@ -68,24 +68,19 @@ class ResearchConfig:
             v = os.environ.get(name)
             return float(v) if v else default
 
-        def _i(name: str, default: int) -> int:
-            v = os.environ.get(name)
-            return int(v) if v else default
-
+        limits = product_settings.get(product_settings.ResearchSettings)
         selected = model_settings.get("research")
 
         return cls(
             model=selected.model,
             provider=selected.provider,
-            op_cap=_i("MYCELIUM_RESEARCH_OP_CAP", 150),
-            wall_clock_s=_f("MYCELIUM_RESEARCH_WALL_CLOCK_S", 1200.0),
-            max_tokens=_i("MYCELIUM_RESEARCH_MAX_TOKENS", 8000),
-            max_retries=_i("MYCELIUM_RESEARCH_MAX_RETRIES", 4),
-            request_timeout_s=_f("MYCELIUM_RESEARCH_REQUEST_TIMEOUT_S", 120.0),
-            thinking=(
-                os.environ.get("MYCELIUM_RESEARCH_THINKING", "on").lower() != "off"
-            ),
-            max_topic_chars=_i("MYCELIUM_RESEARCH_MAX_TOPIC_CHARS", 2000),
+            op_cap=limits.op_cap,
+            wall_clock_s=limits.wall_clock_s,
+            max_tokens=limits.max_tokens,
+            max_retries=limits.max_retries,
+            request_timeout_s=limits.request_timeout_s,
+            thinking=limits.thinking,
+            max_topic_chars=limits.max_topic_chars,
             doctrine_path=(
                 os.environ.get("MYCELIUM_RESEARCH_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH

@@ -68,7 +68,23 @@ class Source:
 
 
 def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
-    e = env or os.environ
+    if env is None:
+        from .. import github_credentials, product_settings
+
+        settings = product_settings.get(product_settings.SourcesSettings)
+        sources = {}
+        for item in settings.sources:
+            binding = github_credentials.resolve(item.binding) if item.binding else None
+            sources[item.name] = Source(
+                name=item.name,
+                owner=item.owner,
+                repo=item.repo,
+                ref=item.ref,
+                token_env=binding.token_env if binding else None,
+                host=binding.host if binding else item.host,
+            )
+        return sources
+    e = env
     raw = e.get("MYCELIUM_SOURCES")
     if not raw:
         return {}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import httpx
 
-from . import ai
+from . import ai, product_settings
 from .draft_review_store import Assessment
 
 SYSTEM = """Review a proposed Mycelium knowledge change in a fresh context.
@@ -35,15 +35,17 @@ def assess(
     model: str,
     provider: ai.Provider = "openai",
     client: httpx.Client | None = None,
+    limits: product_settings.ReviewSettings | None = None,
 ) -> Assessment:
+    limits = limits or product_settings.get(product_settings.ReviewSettings)
     result = ai.structured(
         ai.StructuredTask(system=SYSTEM, prompt=context, output_type=Assessment),
         ai.ModelConfig(
             provider=provider,
             model=model,
-            max_tokens=6000,
-            request_timeout_s=90,
-            max_retries=0,
+            max_tokens=limits.max_tokens,
+            request_timeout_s=limits.request_timeout_s,
+            max_retries=limits.max_retries,
         ),
         client=client,
     )

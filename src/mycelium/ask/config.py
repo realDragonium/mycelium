@@ -17,7 +17,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 
-from .. import model_settings, tracing
+from .. import model_settings, product_settings, tracing
 from ..ai import Provider
 
 #: Current Haiku model id (confirmed against Anthropic's model catalog:
@@ -92,23 +92,20 @@ class AskConfig:
             v = os.environ.get(name)
             return float(v) if v else default
 
-        def _i(name: str, default: int) -> int:
-            v = os.environ.get(name)
-            return int(v) if v else default
-
+        limits = product_settings.get(product_settings.AskSettings)
         selected = model_settings.get("ask")
 
         return cls(
             model=selected.model,
             provider=selected.provider,
-            op_cap=_i("MYCELIUM_ASK_OP_CAP", 25),
-            wall_clock_s=_f("MYCELIUM_ASK_WALL_CLOCK_S", 90.0),
-            recon_k=_i("MYCELIUM_ASK_RECON_K", 8),
-            max_tokens=_i("MYCELIUM_ASK_MAX_TOKENS", 8000),
-            max_retries=_i("MYCELIUM_ASK_MAX_RETRIES", 4),
-            request_timeout_s=_f("MYCELIUM_ASK_REQUEST_TIMEOUT_S", 75.0),
-            thinking=(os.environ.get("MYCELIUM_ASK_THINKING", "off").lower() == "on"),
-            cache=(os.environ.get("MYCELIUM_ASK_CACHE", "on").lower() != "off"),
+            op_cap=limits.op_cap,
+            wall_clock_s=limits.wall_clock_s,
+            recon_k=limits.recon_k,
+            max_tokens=limits.max_tokens,
+            max_retries=limits.max_retries,
+            request_timeout_s=limits.request_timeout_s,
+            thinking=limits.thinking,
+            cache=limits.cache,
             input_per_mtok=(
                 _f("MYCELIUM_ASK_INPUT_PER_MTOK", 1.0)
                 if selected.provider == "claude" and selected.model == DEFAULT_MODEL

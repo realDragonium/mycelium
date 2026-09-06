@@ -16,7 +16,8 @@ import time
 import anyio
 import pytest
 
-from mycelium import auth, server
+from mycelium import auth, product_settings, server
+from product_settings_helpers import set_product
 
 
 async def _ticks_during(call):
@@ -122,7 +123,7 @@ def test_every_registered_mcp_tool_is_offloaded():
 
 
 def test_model_loop_tools_are_bounded_more_tightly_than_the_general_pool(monkeypatch):
-    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "3")
+    set_product(product_settings.ConcurrencySettings(model_loops=3))
     server._model_loop_limiter.cache_clear()
 
     async def scenario():
@@ -161,7 +162,7 @@ def test_rest_mirror_routes_bounded_tools_through_an_async_handler():
 def test_rest_offload_applies_the_same_bound(monkeypatch):
     """The regression Codex caught: `/ask` and `/ingest` over REST bypassed the
     limiter entirely, so the bound could be exceeded by choosing a transport."""
-    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "2")
+    set_product(product_settings.ConcurrencySettings(model_loops=2))
     server._model_loop_limiter.cache_clear()
 
     from mycelium import http
@@ -196,7 +197,7 @@ def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
     """Research runs on its own daemon thread with no event loop, so it cannot
     wait on the anyio limiter. If it kept a private cap the two would add up and
     the box would hold more model contexts than either cap intended."""
-    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "2")
+    set_product(product_settings.ConcurrencySettings(model_loops=2))
     server._model_loop_budget.cache_clear()
 
     peak = 0
@@ -229,7 +230,7 @@ def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
 
 def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
     """The wiring: the runner must execute inside the slot, not beside it."""
-    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "1")
+    set_product(product_settings.ConcurrencySettings(model_loops=1))
     server._model_loop_budget.cache_clear()
 
     from mycelium import research_runs, research_store
@@ -261,7 +262,7 @@ def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
 
 
 def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):
-    monkeypatch.setenv(server._MODEL_LOOP_MAX_CONCURRENT_ENV, "2")
+    set_product(product_settings.ConcurrencySettings(model_loops=2))
     server._model_loop_limiter.cache_clear()
 
     peak = 0

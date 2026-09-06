@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
-from .. import model_settings, tracing
+from .. import model_settings, product_settings, tracing
 from ..ai import Provider
 from ..guidelines import SET_NAME
 from ..ingest.config import DEFAULT_MODEL
@@ -135,6 +135,7 @@ class DocgenConfig:
 
     @classmethod
     def from_env(cls, *, provider: Provider | None = None) -> "DocgenConfig":
+        limits = product_settings.get(product_settings.DocgenSettings)
         selected = model_settings.get("docgen")
         selected_provider = (
             selected.provider if provider is None else resolve_provider(provider)
@@ -149,24 +150,20 @@ class DocgenConfig:
             v = os.environ.get(name)
             return float(v) if v else default
 
-        def _i(name: str, default: int) -> int:
-            v = os.environ.get(name)
-            return int(v) if v else default
-
         return cls(
             provider=selected_provider,
             model=selected_model,
-            guideline_set=os.environ.get("MYCELIUM_DOCGEN_GUIDELINE_SET") or SET_NAME,
-            op_cap=_i("MYCELIUM_DOCGEN_OP_CAP", 150),
-            wall_clock_s=_f("MYCELIUM_DOCGEN_WALL_CLOCK_S", 900.0),
-            max_tokens=_i("MYCELIUM_DOCGEN_MAX_TOKENS", 12000),
-            max_retries=_i("MYCELIUM_DOCGEN_MAX_RETRIES", 4),
-            request_timeout_s=_f("MYCELIUM_DOCGEN_REQUEST_TIMEOUT_S", 120.0),
-            thinking=(
-                os.environ.get("MYCELIUM_DOCGEN_THINKING", "on").lower() != "off"
-            ),
-            max_prompt_chars=_i("MYCELIUM_DOCGEN_MAX_PROMPT_CHARS", 2000),
-            recon_k=_i("MYCELIUM_DOCGEN_RECON_K", 30),
+            guideline_set=product_settings.get(
+                product_settings.DocumentationSettings
+            ).guideline_set,
+            op_cap=limits.op_cap,
+            wall_clock_s=limits.wall_clock_s,
+            max_tokens=limits.max_tokens,
+            max_retries=limits.max_retries,
+            request_timeout_s=limits.request_timeout_s,
+            thinking=limits.thinking,
+            max_prompt_chars=limits.max_prompt_chars,
+            recon_k=limits.recon_k,
             doctrine_path=(
                 os.environ.get("MYCELIUM_DOCGEN_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH

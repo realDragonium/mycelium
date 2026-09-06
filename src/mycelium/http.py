@@ -38,6 +38,7 @@ from . import (
     oauth_server,
     oidc,
     ops_ledger,
+    product_settings,
     server,
     store,
     tracing,
@@ -1246,6 +1247,34 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
 # approve (replay ops against the substrate) or reject (drop without
 # applying). Status is derived from terminal timestamps + decision, same
 # pattern as knowledge_gaps.
+
+
+@app.get("/api/product-settings")
+def read_product_settings(request: Request) -> product_settings.SettingsView:
+    from fastapi import HTTPException
+
+    principal = _require_principal(request)
+    try:
+        return product_settings.view(principal)
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.patch("/api/product-settings")
+def save_product_settings(
+    body: product_settings.SaveSettings, request: Request
+) -> product_settings.Snapshot:
+    from fastapi import HTTPException
+
+    principal = _require_admin(request)
+    try:
+        return product_settings.save(body, principal)
+    except model_settings.Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.get("/api/model-settings")
