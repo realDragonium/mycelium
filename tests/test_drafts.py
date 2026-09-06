@@ -713,7 +713,7 @@ def test_flag_reason_lookup_is_guarded_against_inherited_properties():
     There is no JS test runner in this repo, so hold the concrete guard and
     fallback expression that prevent inherited members from being rendered."""
     source = _DRAFTS_JSX.read_text()
-    lookup = re.search(r"const known = (.*?);\n", source, re.S)
+    lookup = re.search(r"const known = ([^;]*?_FLAG_REASONS[^;]*?);\n", source, re.S)
     assert lookup is not None, "could not find the _FLAG_REASONS lookup"
     guard = " ".join(lookup.group(1).split())
     assert guard == (

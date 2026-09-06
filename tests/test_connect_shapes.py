@@ -102,6 +102,7 @@ def test_ambiguous_event_participle_entries_are_reachable_and_compete():
     event. That can happen because the state shape skips ADJ complements whose
     lemma is in LEVEL_LEMMAS or _PERIPHRASTIC_MODAL_ADJECTIVES.
     """
+    assert shapes.AMBIGUOUS_EVENT_PARTICIPLES
     for word in shapes.AMBIGUOUS_EVENT_PARTICIPLES:
         result = classify(f"The invite is {word}")
 

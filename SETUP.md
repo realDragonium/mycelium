@@ -5,17 +5,17 @@ This guide starts a local Mycelium substrate over MCP and HTTP.
 ## 1. Install requirements
 
 Install Python 3.11 or later, [`uv`](https://docs.astral.sh/uv/), and
-[Ollama](https://ollama.com/download). Then start Ollama and pull the default
-embedding model:
+[Ollama](https://ollama.com/download). Start Ollama:
 
 ```sh
 ollama serve
-ollama pull nomic-embed-text
 ```
 
-In another terminal, clone the repository and install its dependencies:
+In another terminal, pull the default embedding model, clone the repository,
+and install its dependencies:
 
 ```sh
+ollama pull nomic-embed-text
 git clone https://github.com/dragonium/mycelium.git
 cd mycelium
 uv sync

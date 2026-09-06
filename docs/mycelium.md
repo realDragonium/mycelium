@@ -92,7 +92,9 @@ talk about a relationship, search statements that mention both entities.
 A statement_link may carry an optional `when` — an **expression tree**
 that reifies the *condition* under which the edge holds. A leaf is
 `{"statement_id": "stm_…"}`; internal nodes are
-`{"op": "and" | "or", "of": [<child>, …]}` and may nest arbitrarily.
+`{"op": "and" | "or", "of": [<child>, …]}` or
+`{"op": "not", "of": [<child>]}` and may nest arbitrarily. `not` requires
+exactly one child.
 This lets the substrate record statements like "A — triggers (when C) → B"
 or "A — triggers (when C and (D or E)) → B" without burying the
 condition inside the source or target statement's text. Each leaf is
@@ -121,10 +123,14 @@ Any statement is a valid entry point into the graph.
 
 ## Persistence
 
-The substrate writes to two files inside `MYCELIUM_DATA_DIR` (default
+The substrate writes to three files inside `MYCELIUM_DATA_DIR` (default
 `./.mycelium/`): `mycelium.db` is a SQLite database holding all entity,
 name, statement, mention, and link records. `mycelium.vec` is an hnswlib
-binary holding the vector index of statement embeddings.
+binary holding the vector index of statement embeddings, and
+`mycelium-names.vec` holds the separate entity-name index. Exports include both
+vector files unless `--no-vectors` is set, and imports restore either file that
+the archive contains. If omitted, startup rebuilds the name index; the statement
+index remains empty until it is explicitly reindexed.
 
 Versioned schema migrations run whenever the store opens. They upgrade older
 supported schemas in place and preserve legacy annotation tables as inert
