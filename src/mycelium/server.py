@@ -6283,6 +6283,7 @@ def _fingerprint(value: JsonValue) -> str:
 def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePrecondition]:
     entity_ids: set[str] = set()
     statement_ids: set[str] = set()
+    all_names = store.list_all_names(_db())
     for op in ops:
         payload = _json.loads(op["payload_json"])
         entities, statements, names = _payload_knowledge_ids(payload)
@@ -6296,7 +6297,7 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
             for item in payload.get("statements", [])
             if isinstance(item, dict) and isinstance(item.get("text"), str)
         )
-        for name_row in store.list_all_names(_db()):
+        for name_row in all_names:
             if any(
                 mentions.text_contains_name(text, name_row["text"]) for text in texts
             ):
@@ -6315,13 +6316,7 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
                 if isinstance(item, dict) and isinstance(item.get("name"), str)
             )
         for name in names:
-            row = (
-                _db()
-                .execute(
-                    "SELECT entity_id FROM names WHERE text = ? COLLATE NOCASE", (name,)
-                )
-                .fetchone()
-            )
+            row = store.get_name_by_text(_db(), name)
             if row is not None:
                 entity_ids.add(row["entity_id"])
 
@@ -6337,8 +6332,16 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
         out.append(
             {"kind": "entity", "id": entity_id, "fingerprint": _fingerprint(entity)}
         )
-    for statement_id in sorted(statement_ids):
-        statement = get_statements([statement_id])
+    ordered_statement_ids = sorted(statement_ids)
+    statements = get_statements(ordered_statement_ids)["statements"]
+    statements_by_id = {statement["id"]: statement for statement in statements}
+    for statement_id in ordered_statement_ids:
+        hydrated = statements_by_id.get(statement_id)
+        statement = (
+            {"statements": [hydrated], "missing": []}
+            if hydrated is not None
+            else {"statements": [], "missing": [statement_id]}
+        )
         out.append(
             {
                 "kind": "statement",
@@ -6526,7 +6529,7 @@ def record_draft_review(
     rationale: str,
     draft_revision: int,
     knowledge_preconditions: list[KnowledgePrecondition],
-    unresolved_questions: list[str] = [],
+    unresolved_questions: list[str] | None = None,
 ) -> DraftReviewRecord:
     """Record a durable outcome against exact inspected draft and knowledge state."""
     from . import drafts_store
@@ -6545,7 +6548,7 @@ def record_draft_review(
             raise drafts_store.StaleDraftRevisionError("draft changed since inspection")
         if inspected["knowledge_preconditions"] != knowledge_preconditions:
             raise ValueError("affected knowledge changed since inspection")
-        unresolved = list(unresolved_questions)
+        unresolved = list(unresolved_questions or [])
         unresolved.extend(
             finding["finding"] for finding in inspected["operation_findings"]
         )
@@ -6688,6 +6691,9 @@ def apply_draft(
     """
     from . import drafts_store
 
+    if (application_id is None) != (review_id is None):
+        raise ValueError("application_id and review_id must be supplied together")
+
     row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
@@ -6797,7 +6803,8 @@ def apply_draft(
 
 
 def _reviewed_apply_enabled() -> bool:
-    return (os.environ.get("MYCELIUM_REVIEWED_APPLY") or "off").lower() == "on"
+    value = (os.environ.get("MYCELIUM_REVIEWED_APPLY") or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def _substrate_application_result(
@@ -6909,6 +6916,11 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationRe
                 drafts_store.note_application_failure(
                     conn, application_id, f"draft finalization failed: {exc}"
                 )
+            logger.warning(
+                "reviewed draft application %s for %s awaits recovery",
+                application_id,
+                draft_id,
+            )
             raise
     return {"application_id": application_id, **result}
 

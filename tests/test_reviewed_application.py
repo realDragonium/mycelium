@@ -216,28 +216,29 @@ def test_inspection_tracks_name_owner_and_rejects_nested_batch_fields(
             "id"
         ]
         conn = server._drafts_db()
-        draft_id = drafts_store.create_draft(
-            conn, created_by="drafter-1", session_id=None
-        )
-        drafts_store.add_op(
-            conn,
-            draft_id=draft_id,
-            kind="delete_name",
-            payload={"name_id": name_id},
-            created_by="drafter-1",
-        )
-        drafts_store.add_op(
-            conn,
-            draft_id=draft_id,
-            kind="upsert_statements",
-            payload={
-                "statements": [
-                    {"id": "stm_existing", "kind": "state", "text": "it exists"}
-                ]
-            },
-            created_by="drafter-1",
-        )
-        drafts_store.set_submitted(conn, draft_id)
+        with store.transaction(conn):
+            draft_id = drafts_store.create_draft(
+                conn, created_by="drafter-1", session_id=None
+            )
+            drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="delete_name",
+                payload={"name_id": name_id},
+                created_by="drafter-1",
+            )
+            drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="upsert_statements",
+                payload={
+                    "statements": [
+                        {"id": "stm_existing", "kind": "state", "text": "it exists"}
+                    ]
+                },
+                created_by="drafter-1",
+            )
+            drafts_store.set_submitted(conn, draft_id)
         token = _principal()
         try:
             evidence = server.inspect_draft_review(draft_id)
@@ -252,28 +253,29 @@ def test_inspection_rejects_dangling_operation_references(tmp_path, monkeypatch)
     with _app(tmp_path, monkeypatch):
         draft_id = _submitted_entity_draft()
         conn = server._drafts_db()
-        producer_seq = drafts_store.add_op(
-            conn,
-            draft_id=draft_id,
-            kind="upsert_statements",
-            payload={"statements": [{"kind": "state", "text": "one"}]},
-            created_by="drafter-1",
-        )
-        drafts_store.add_op(
-            conn,
-            draft_id=draft_id,
-            kind="add_links",
-            payload={
-                "links": [
-                    {
-                        "from_id": f"@{producer_seq}:99",
-                        "to_id": "stm_target",
-                        "link_type": "requires",
-                    }
-                ]
-            },
-            created_by="drafter-1",
-        )
+        with store.transaction(conn):
+            producer_seq = drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="upsert_statements",
+                payload={"statements": [{"kind": "state", "text": "one"}]},
+                created_by="drafter-1",
+            )
+            drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="add_links",
+                payload={
+                    "links": [
+                        {
+                            "from_id": f"@{producer_seq}:99",
+                            "to_id": "stm_target",
+                            "link_type": "requires",
+                        }
+                    ]
+                },
+                created_by="drafter-1",
+            )
         token = _principal()
         try:
             evidence = server.inspect_draft_review(draft_id)
@@ -288,21 +290,22 @@ def test_statement_text_captures_name_resolution_precondition(tmp_path, monkeypa
     with _app(tmp_path, monkeypatch):
         entity_id = server.upsert_entity("Mycelium", "system")["entity_id"]
         conn = server._drafts_db()
-        draft_id = drafts_store.create_draft(
-            conn, created_by="drafter-1", session_id=None
-        )
-        drafts_store.add_op(
-            conn,
-            draft_id=draft_id,
-            kind="upsert_statement",
-            payload={
-                "kind": "state",
-                "text": "Mycelium is available",
-                "links": [],
-            },
-            created_by="drafter-1",
-        )
-        drafts_store.set_submitted(conn, draft_id)
+        with store.transaction(conn):
+            draft_id = drafts_store.create_draft(
+                conn, created_by="drafter-1", session_id=None
+            )
+            drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="upsert_statement",
+                payload={
+                    "kind": "state",
+                    "text": "Mycelium is available",
+                    "links": [],
+                },
+                created_by="drafter-1",
+            )
+            drafts_store.set_submitted(conn, draft_id)
         token = _principal()
         try:
             evidence = server.inspect_draft_review(draft_id)
@@ -592,6 +595,7 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
         reviewed_started = threading.Event()
         reviewed_finished = threading.Event()
         outcomes = []
+        failures: list[BaseException] = []
 
         def blocking_manual_apply(target):
             entered.set()
@@ -612,7 +616,10 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
         def manual():
             from mycelium.http import approve_draft
 
-            outcomes.append(approve_draft(draft_id, Request()))
+            try:
+                outcomes.append(approve_draft(draft_id, Request()))
+            except BaseException as exc:
+                failures.append(exc)
 
         def reviewed():
             principal = _principal()
@@ -620,6 +627,8 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
             try:
                 with pytest.raises(ValueError, match="only submitted"):
                     server.apply_reviewed_draft(draft_id, review["review_id"])
+            except BaseException as exc:
+                failures.append(exc)
             finally:
                 auth.current_principal.reset(principal)
                 reviewed_finished.set()
@@ -634,5 +643,8 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
         release.set()
         manual_thread.join(2)
         reviewed_thread.join(2)
+        assert not manual_thread.is_alive()
+        assert not reviewed_thread.is_alive()
         assert reviewed_finished.is_set()
+        assert not failures, failures
         assert outcomes[0]["ok"] is True

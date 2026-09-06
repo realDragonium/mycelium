@@ -1459,6 +1459,10 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
             result = server.apply_draft(draft_id)
             with store.transaction(conn):
                 drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
+    except drafts_store.ActiveApplicationError as ex:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=409, detail=str(ex)) from ex
     except (ValueError, RuntimeError) as ex:
         from fastapi import HTTPException
 
