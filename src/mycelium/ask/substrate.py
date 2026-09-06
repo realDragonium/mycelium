@@ -46,6 +46,7 @@ _NON_READ_READER_TOOLS = frozenset(
         "ask",  # this tool itself, avoiding recursion
         "list_my_drafts",  # draft-session state
         "get_draft",  # draft-session state
+        "get_draft_review_run",  # internal review state
         "list_documentation_runs",  # documentation run history
         "get_documentation_run",  # documentation run state
         "list_generated_documents",  # generated projections

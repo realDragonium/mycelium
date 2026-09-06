@@ -974,6 +974,14 @@ def init(data_dir: Path) -> None:
 
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
+    from . import draft_review_store
+
+    draft_review_store.mark_orphaned(
+        _drafts_db(),
+        lambda application_id: (
+            _substrate_application_result(application_id) is not None
+        ),
+    )
     research_store.migrate(_drafts_db())
     docs_store.migrate(_drafts_db())
 
@@ -6032,7 +6040,64 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
     with store.transaction(_drafts_db()):
         drafts_store.set_submitted(_drafts_db(), draft_id)
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
+    from . import draft_review_runs
+
+    draft_review_runs.on_submitted(draft_id)
     return {"draft_id": draft_id, "op_count": len(ops)}
+
+
+@tool(role="writer", real_role=True)
+def request_draft_review(draft_id: str, rerun: bool = False) -> dict[str, JsonValue]:
+    """Start internal GPT review, or return its latest run; rerun starts a new attempt.
+
+    Requires an identified curator. Mode off refuses requests; configuration and
+    execution failures remain visible on the draft's review_assessment.
+    """
+    from . import draft_review_runs
+
+    _identified_principal()
+    return draft_review_runs.start(draft_id, rerun=rerun).model_dump(mode="json")
+
+
+@tool
+def get_draft_review_run(run_id: str) -> dict[str, JsonValue]:
+    """Inspect an internal review attempt, including failure and staleness."""
+    from . import draft_review_store
+
+    return draft_review_store.get(_drafts_db(), run_id).model_dump(mode="json")
+
+
+@tool(role="drafter")
+def set_draft_review_evidence(
+    draft_id: str, evidence: str, expected_revision: int
+) -> dict[str, JsonValue]:
+    """Replace evidence supplied by the draft creator and invalidate old assessments.
+
+    Supply source excerpts, change descriptions, or concrete supporting facts,
+    up to 30000 characters. URLs alone do not provide their contents.
+    """
+    from . import drafts_store
+
+    principal = _identified_principal()
+    if len(evidence) > 30000:
+        raise ValueError("review evidence exceeds 30000 characters")
+    conn = _drafts_db()
+    with store.transaction(conn):
+        row = _require_mutable_draft(draft_id)
+        if row["created_by"] != principal.id:
+            from . import auth as _auth
+
+            raise _auth.RoleRequired(
+                "only the draft creator can supply review evidence"
+            )
+        drafts_store._check_revision(row, expected_revision)
+        if row["review_evidence"] != evidence:
+            conn.execute(
+                "UPDATE drafts SET review_evidence = ?, revision = revision + 1 "
+                "WHERE id = ?",
+                (evidence, draft_id),
+            )
+    return get_draft(draft_id)
 
 
 @tool
@@ -6438,6 +6503,30 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
     return out
 
 
+def _review_knowledge_preconditions(
+    ops: list[sqlite3.Row], expected: list[KnowledgePrecondition]
+) -> list[KnowledgePrecondition]:
+    """Include supporting records actually inspected beyond operation targets."""
+    current = {
+        (item["kind"], item["id"]): item for item in _knowledge_preconditions(ops)
+    }
+    for item in expected:
+        key = (item["kind"], item["id"])
+        if key in current:
+            continue
+        value = (
+            get_entity(item["id"])
+            if item["kind"] == "entity"
+            else get_statements([item["id"]])
+        )
+        current[key] = {
+            "kind": item["kind"],
+            "id": item["id"],
+            "fingerprint": _fingerprint(value),
+        }
+    return [current[key] for key in sorted(current)]
+
+
 def _batch_nested_parameter_findings(payload: dict) -> list[str]:
     findings: list[str] = []
     allowed = set(BatchStatementSpec.__annotations__)
@@ -6632,7 +6721,10 @@ def record_draft_review(
             raise ValueError("only submitted drafts can be reviewed")
         if inspected["draft_revision"] != draft_revision:
             raise drafts_store.StaleDraftRevisionError("draft changed since inspection")
-        if inspected["knowledge_preconditions"] != knowledge_preconditions:
+        current_knowledge = _review_knowledge_preconditions(
+            drafts_store.list_ops(conn, draft_id), knowledge_preconditions
+        )
+        if current_knowledge != knowledge_preconditions:
             raise ValueError("affected knowledge changed since inspection")
         unresolved = list(unresolved_questions or [])
         unresolved.extend(
@@ -6945,8 +7037,9 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationRe
             )
             result = _substrate_application_result(application_id)
             if result is None:
-                current = _knowledge_preconditions(
-                    drafts_store.list_ops(conn, draft_id)
+                current = _review_knowledge_preconditions(
+                    drafts_store.list_ops(conn, draft_id),
+                    _json.loads(review["preconditions_json"]),
                 )
                 if current != _json.loads(review["preconditions_json"]):
                     stale_knowledge = True

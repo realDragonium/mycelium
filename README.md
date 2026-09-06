@@ -6,6 +6,8 @@ hnswlib indexes backed by Ollama embeddings.
 
 See `project_vision.md` for the product direction, `SETUP.md` for a guided local
 setup, and `docs/mycelium.md` for detailed contracts.
+See [internal draft review](docs/DRAFT_REVIEW.md) for optional GPT assessment and
+automatic application configuration.
 
 ## Requirements
 

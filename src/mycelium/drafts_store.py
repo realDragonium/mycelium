@@ -198,6 +198,8 @@ def migrate(conn: sqlite3.Connection) -> None:
     }
     additions = {
         "revision": "INTEGER NOT NULL DEFAULT 0",
+        "review_assessment_json": "TEXT",
+        "review_evidence": "TEXT",
         "source_repository": "TEXT",
         "source_pull_request": "INTEGER",
         "source_merged_commit": "TEXT",
@@ -213,6 +215,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     }
     if "provenance_json" not in columns:
         conn.execute("ALTER TABLE draft_ops ADD COLUMN provenance_json TEXT")
+    from . import draft_review_store
+
+    draft_review_store.migrate(conn)
     conn.commit()
 
 
@@ -758,7 +763,13 @@ def serialize_review(row: sqlite3.Row) -> dict:
 
 
 def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -> dict:
+    from . import draft_review_store
+
     out = {
+        "review_evidence": row["review_evidence"],
+        "review_assessment": draft_review_store.serialized_assessment(
+            row["review_assessment_json"], row["revision"]
+        ),
         "id": row["id"],
         "title": row["title"],
         "status": status_for(row),
