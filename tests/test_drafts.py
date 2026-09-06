@@ -651,11 +651,12 @@ _DRAFTS_JSX = Path(__file__).resolve().parents[1] / "src/mycelium/ui/drafts.jsx"
 
 
 def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypatch):
-    """The drafts UI lists each flag beside the graph from `text`, `reason` and
-    `detail` on the op. The queued-op rows below it only dump the payload
-    generically, so these three names are load-bearing for review and nowhere
-    else. Going through the real writer makes renaming one fail here rather
-    than only in a browser."""
+    """Pins the writer/API contract the drafts UI flag list depends on: a flag
+    op reaches `GET /api/drafts/{id}` carrying `text`, `reason` and `detail`,
+    plus its provenance source. Those names are read nowhere else except a
+    generic payload dump, so going through the real writer makes renaming one
+    fail here rather than only in a browser. It asserts the payload, not the
+    rendering."""
     client = _app(tmp_path, monkeypatch)
     with client:
         flags = extract.extract("The status becomes active").flags
@@ -680,10 +681,11 @@ def test_draft_detail_serves_the_fields_the_flag_list_renders(tmp_path, monkeypa
 
 
 def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
-    """Every reason the pipeline can emit gets a stage and a sentence in the
-    drafts UI. A reason added to FLAG_SOURCES without both falls back to its
-    provenance source and a generic line, which names the stage but cannot say
-    what that stage actually refused."""
+    """Keeps the UI reason table in step with `FLAG_SOURCES`: every reason the
+    pipeline can emit has an entry carrying a non-empty stage and an explaining
+    sentence. A reason added upstream without one still renders, but only with
+    a generic line that cannot say what that stage refused. This checks the
+    source table, not the runtime fallback."""
     table = re.search(
         r"const _FLAG_REASONS = \{(.*?)\n\};", _DRAFTS_JSX.read_text(), re.S
     )
@@ -703,14 +705,18 @@ def test_drafts_ui_explains_every_flag_reason_the_pipeline_emits():
 
 
 def test_flag_reason_lookup_is_guarded_against_inherited_properties():
-    """`_FLAG_REASONS[reason]` on its own reaches Object.prototype, so a flag
+    """A bare `_FLAG_REASONS[reason]` index reaches Object.prototype, so a flag
     whose reason is `constructor` or `toString` resolves to an inherited member
-    and renders a blank stage with a blank explanation — worse than the enum,
-    because it looks like the pipeline said nothing. Only the own-property
-    guard keeps that off the review surface, and no JS test runner exists here
-    to catch it if the guard is dropped."""
+    and renders a blank stage and a blank explanation next to the enum — worse
+    than the enum alone, because it reads as though the pipeline said nothing.
+
+    The assertion is that the lookup is not a bare index, which is the actual
+    invariant: an own-property guard, `Object.hasOwn`, a `Map`, or a
+    null-prototype table all satisfy it. There is no JS test runner in this
+    repo, so a source assertion is the only way to hold this."""
     lookup = re.search(r"const known = (.*?);\n", _DRAFTS_JSX.read_text(), re.S)
     assert lookup is not None, "could not find the _FLAG_REASONS lookup"
-    assert "hasOwnProperty.call(_FLAG_REASONS" in lookup.group(1), (
-        "the flag-reason lookup must be own-property guarded"
+    expression = " ".join(lookup.group(1).split())
+    assert not re.fullmatch(r"_FLAG_REASONS\[[^\]]+\]", expression), (
+        f"flag-reason lookup reaches Object.prototype: {expression}"
     )

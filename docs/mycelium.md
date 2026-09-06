@@ -775,9 +775,8 @@ search and the `merge_entities` and `move_name` flows. The Ollama
 embedding client is monkeypatched in HTTP tests so the suite runs
 without a live Ollama. The current count is fifteen tests, all passing.
 
-A separate `scripts/smoke.py` exercises the substrate end-to-end against
-a temporary data directory using a fake embedding, and is the canonical
-sanity check that nothing has broken at the integration level.
+The pytest suite exercises the substrate end-to-end against temporary data
+directories using fake embeddings.
 
 ## Configuration
 

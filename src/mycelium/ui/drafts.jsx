@@ -269,11 +269,13 @@ function DraftGraph({ ops }) {
 
 // ---------- Flagged fragments (draft detail) ----------
 //
-// A `flag` op is a fragment the pipeline refused to turn into a statement.
+// A `flag` op records something the pipeline would not decide on its own:
+// usually a fragment it refused to turn into a statement, and for `cue` a
+// connective it could not type between two fragments it did write.
 // It has no id and no edges, so there is no honest node for it: drawing one
 // would show the curator something that does not exist in the substrate.
-// It gets a list beside the graph instead — the text that did not land, and
-// which stage refused it.
+// It gets a list beside the graph instead — the text involved, and which
+// stage stopped.
 //
 // The enum is the word the API, the logs and `FLAG_SOURCES` use, so it stays
 // on screen; the sentence beside it is the part a curator can act on.
@@ -287,8 +289,9 @@ function DraftGraph({ ops }) {
 // curator reading it knows which stage to go and look at; the sentence still
 // names the catalog as the thing that objected.
 //
-// An op carrying a reason this table has not learned falls back to its own
-// `provenance.source` rather than inventing an explanation.
+// An op carrying a reason this table has not learned uses its own
+// `provenance.source` for the stage and a generic line for the explanation,
+// rather than inventing a reason-specific one.
 const _FLAG_REASONS = {
   unsplit: ['segmenter', 'A compound the segmenter could not cut into separate statements.'],
   rejected: ['phrasing catalog', 'The wording was refused before the fragment was classified.'],
@@ -297,7 +300,7 @@ const _FLAG_REASONS = {
   phrasing: ['planner', 'Classified, then refused by the phrasing catalog.'],
   flip: ['planner', 'A link on this statement runs against a directional rule.'],
   depends_on_rejected: ['planner', 'It builds on another fragment that was itself rejected.'],
-  cue: ['cue gate', 'The connective joining two fragments could not be typed as a link.'],
+  cue: ['cue gate', 'The connective joining two fragments could not be typed, so both were written without a link between them.'],
 };
 
 
@@ -350,7 +353,7 @@ function DraftFlags({ ops }) {
         Flagged fragments · {flags.length}
       </h2>
       <p style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 0, marginBottom: 10 }}>
-        Text the pipeline would not turn into a statement. Approving the draft writes nothing for these.
+        Where the pipeline stopped short and left the call to you. A flag is a record, not a queued write: approving the draft replays none of them.
       </p>
       <ul style={{
         margin: 0, padding: 0,
