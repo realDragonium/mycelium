@@ -126,6 +126,25 @@ def test_property_noun_phrase_shape():
     _assert_assigned_shape("Vacancy ID", "property", "property-noun-phrase")
 
 
+def test_command_lemma_bare_noun_phrase_is_unmatched():
+    for text in ("Review value", "Delete account"):
+        result = classify(text)
+
+        assert result.kind is None
+        assert result.status == "unmatched"
+
+
+def test_ordinary_property_names_remain_property_noun_phrases():
+    for text in ("Partner client secret", "Base URL", "Custom query fields"):
+        _assert_assigned_shape(text, "property", "property-noun-phrase")
+
+
+def test_bare_noun_phrase_fragment_is_indistinguishable_from_a_property_name():
+    # Deliberate limit: no current stage separates a stray fragment from a real
+    # property name; doing so needs provenance the matcher does not have.
+    _assert_assigned_shape("Blue widgets", "property", "property-noun-phrase")
+
+
 def test_action_imperative_shape():
     _assert_assigned_shape("Click the Save button", "action", "action-imperative")
 
