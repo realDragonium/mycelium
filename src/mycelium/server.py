@@ -34,6 +34,7 @@ from mcp.server.mcpserver import MCPServer
 
 from . import (
     embed,
+    link_authoring,
     link_rules,
     mentions,
     ops_ledger,
@@ -460,6 +461,14 @@ def tool(
                 else:
                     draft_id = None
 
+                if func.__name__ == "add_links":
+                    bound = _ORIG_SIGNATURES[func.__name__].bind_partial(
+                        *args, **kwargs
+                    )
+                    link_authoring.reject_entity_statement_additions(
+                        bound.arguments.get("links")
+                    )
+
                 if is_mutation:
                     redirect = _resolve_draft_target(principal, draft_id)
                     if redirect is not None:
@@ -771,12 +780,10 @@ class IncomingLinkSpec(TypedDict):
 class EdgeSpec(TypedDict):
     """A typed edge with both endpoints addressed.
 
-    Used by `add_links` and `remove_links`. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination — the substrate
-    routes statement↔statement edges to `statement_links` and any edge
-    touching an entity to `entity_statement_links` (which also accepts a
-    `when` condition with the same grammar). Externally, callers see a
-    single uniform link API; the distinction is internal storage only.
+    Used by `add_links` and `remove_links`. `add_links` accepts only statement
+    endpoints (`stm_…`). `remove_links` also accepts entity endpoints (`ent_…`)
+    so callers can remove legacy entity↔statement edges. Those legacy edges may
+    carry a `when` condition with the same grammar.
 
     Entity↔entity edges are **not** handled here — those live in their
     own vocabulary and are managed by `add_entity_links` /
@@ -4550,9 +4557,10 @@ def _validate_edge_endpoints(links: list[EdgeSpec]) -> dict[str, sqlite3.Row]:
 
 @tool
 def add_links(links: list[EdgeSpec]) -> dict[str, int]:
-    """Insert one or more typed edges. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination except
-    entity↔entity (use `add_entity_links` for those).
+    """Insert one or more statement-to-statement typed edges.
+
+    Existing entity↔statement links remain readable and removable, but new
+    ones cannot be authored. Use `add_entity_links` for entity↔entity edges.
 
     Direction note: source is the bigger/earlier/wrapping/primary side;
     target is the smaller/later/contained/dependent side. Before
@@ -4577,6 +4585,8 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     """
     if not links:
         return {"inserted": 0}
+
+    link_authoring.reject_entity_statement_additions(links)
 
     stmt_edges, es_edges = _split_edges(links)
 
@@ -6107,6 +6117,14 @@ def _replay_draft_op(
         payload = _resolve_draft_refs(payload, results_by_seq)
     except ValueError as ex:
         raise RuntimeError(f"op seq={seq} references {ex}") from ex
+
+    if kind == "add_links":
+        try:
+            link_authoring.reject_entity_statement_additions(payload.get("links"))
+        except ValueError as ex:
+            raise RuntimeError(
+                f"op seq={seq} ({kind}) failed during replay: {ex}"
+            ) from ex
 
     # Drop payload keys the tool no longer accepts (e.g. a stale `mentions` /
     # `strict_mentions` on a queued upsert_statement) so an old draft replays

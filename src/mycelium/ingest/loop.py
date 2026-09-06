@@ -670,6 +670,13 @@ def _normalize_and_check(
         if offending is not None:
             flagged.append(f"op[{idx}] (add_links) dropped: {offending}")
             return payload, rationale, True
+        from ..link_authoring import reject_entity_statement_additions
+
+        try:
+            reject_entity_statement_additions(payload.get("links"))
+        except ValueError as ex:
+            flagged.append(f"op[{idx}] (add_links) dropped: {ex}")
+            return payload, rationale, True
         return payload, rationale, False
 
     if kind == "add_entity_links":

@@ -243,7 +243,8 @@ _REC_COMPOUND = (
 )
 _REC_RULE = (
     "Model the obligation as its own statement with kind='rule' and connect "
-    "it to the relevant statement or entity with add_links / add_entity_links."
+    "it to the relevant statement with add_links. Name a relevant entity in "
+    "the statement text when it should be anchored by a derived mention."
 )
 _REC_PROPERTY_BE = (
     "Use upsert_entity (description) or a separate statement with kind='property'."

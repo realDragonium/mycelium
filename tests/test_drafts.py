@@ -19,6 +19,7 @@ play); we set the drafter principal directly via contextvar where
 needed — that's the same path the streamable-HTTP transport uses.
 """
 
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -133,6 +134,140 @@ def test_explicit_draft_id_queues_op_for_any_writer(tmp_path, monkeypatch):
         assert (
             store.substrate_connection()
             .execute("SELECT COUNT(*) AS n FROM entities")
+            .fetchone()["n"]
+            == 0
+        )
+
+
+def test_mixed_add_links_is_rejected_before_draft_creation(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        tokens = _as_drafter("mixed-links")
+        try:
+            with pytest.raises(ValueError, match="statement-to-statement"):
+                server.add_links(
+                    links=[
+                        {
+                            "from_id": "ent_existing",
+                            "to_id": "stm_existing",
+                            "link_type": "performs",
+                        }
+                    ]
+                )
+        finally:
+            _restore(tokens)
+        assert (
+            server._drafts_db()
+            .execute("SELECT COUNT(*) AS n FROM drafts")
+            .fetchone()["n"]
+            == 0
+        )
+
+
+def test_direct_draft_queue_and_edit_reject_mixed_add_links(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        conn = server._drafts_db()
+        draft_id = drafts_store.create_draft(conn, created_by="tester", session_id=None)
+        payload = {
+            "links": [
+                {
+                    "from_id": "ent_existing",
+                    "to_id": "stm_existing",
+                    "link_type": "performs",
+                }
+            ]
+        }
+        with pytest.raises(ValueError, match="statement-to-statement"):
+            drafts_store.add_op(
+                conn,
+                draft_id=draft_id,
+                kind="add_links",
+                payload=payload,
+                created_by="tester",
+            )
+        seq = drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="add_links",
+            payload={
+                "links": [
+                    {
+                        "from_id": "stm_one",
+                        "to_id": "stm_two",
+                        "link_type": "requires",
+                    }
+                ]
+            },
+            created_by="tester",
+        )
+        with pytest.raises(ValueError, match="statement-to-statement"):
+            drafts_store.update_op_payload(conn, draft_id, seq, payload)
+        saved = drafts_store.serialize_op(drafts_store.list_ops(conn, draft_id)[0])
+        assert saved["payload"]["links"][0]["from_id"] == "stm_one"
+
+
+def test_saved_mixed_addition_is_rejected_after_reference_resolution(
+    tmp_path, monkeypatch
+):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        conn = server._drafts_db()
+        draft_id = drafts_store.create_draft(conn, created_by="legacy", session_id=None)
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_statements",
+            payload={
+                "statements": [
+                    {
+                        "kind": "event",
+                        "text": "the replay creates a statement",
+                        "links": [],
+                        "allow_phrasing_violations": True,
+                    }
+                ]
+            },
+            created_by="legacy",
+        )
+        seq = drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="add_links",
+            payload={
+                "links": [
+                    {
+                        "from_id": "stm_legacy",
+                        "to_id": "@1:0",
+                        "link_type": "requires",
+                    }
+                ]
+            },
+            created_by="legacy",
+        )
+        conn.execute(
+            "UPDATE draft_ops SET payload_json = ? WHERE draft_id = ? AND seq = ?",
+            (
+                json.dumps(
+                    {
+                        "links": [
+                            {
+                                "from_id": "ent_legacy",
+                                "to_id": "@1:0",
+                                "link_type": "performs",
+                            }
+                        ]
+                    }
+                ),
+                draft_id,
+                seq,
+            ),
+        )
+        with pytest.raises(RuntimeError, match="statement-to-statement"):
+            server.apply_draft(draft_id)
+        assert (
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM statements")
             .fetchone()["n"]
             == 0
         )
