@@ -312,7 +312,7 @@ def _set_branch(
 ) -> None:
     ref = f"heads/{branch}"
     if not branch_exists:
-        _request_json(
+        payload = _request_json(
             client,
             config,
             token,
@@ -321,16 +321,31 @@ def _set_branch(
             json={"ref": f"refs/{ref}", "sha": commit_sha},
             branch_moved_on_conflict=True,
         )
-        return
-    _request_json(
-        client,
-        config,
-        token,
-        "PATCH",
-        f"/git/refs/{quote(ref, safe='/')}",
-        json={"sha": commit_sha},
-        branch_moved_on_conflict=True,
-    )
+    else:
+        payload = _request_json(
+            client,
+            config,
+            token,
+            "PATCH",
+            f"/git/refs/{quote(ref, safe='/')}",
+            json={"sha": commit_sha},
+            branch_moved_on_conflict=True,
+        )
+    try:
+        returned_ref = payload["ref"]
+        object_type = payload["object"]["type"]
+        returned_sha = payload["object"]["sha"]
+    except (KeyError, TypeError):
+        returned_ref = object_type = returned_sha = None
+    if (
+        returned_ref != f"refs/{ref}"
+        or object_type != "commit"
+        or returned_sha != commit_sha
+    ):
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid branch "
+            "update response"
+        )
 
 
 def _review(

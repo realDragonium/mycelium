@@ -84,13 +84,33 @@ def load_destinations(
             "MYCELIUM_DOC_DESTINATIONS must be a JSON object keyed by destination name"
         )
 
+    secrets = _configured_credentials(parsed, e)
     configured: dict[str, DestinationConfig] = {}
     for raw_name, entry in parsed.items():
         name = str(raw_name)
-        config = _load_destination(name, entry)
-        _backend(config).validate_config_secrets(config, e)
+        try:
+            config = _load_destination(name, entry)
+            _backend(config).validate_config_secrets(config, e)
+        except DestinationError as exc:
+            raise DestinationError(_scrub(str(exc), secrets)) from None
         configured[name] = config
     return configured
+
+
+def _configured_credentials(
+    parsed: dict[object, object], env: Mapping[str, str]
+) -> list[str]:
+    credentials: list[str] = []
+    for entry in parsed.values():
+        if not isinstance(entry, dict):
+            continue
+        settings = entry.get("config")
+        if not isinstance(settings, dict):
+            continue
+        token_env = settings.get("token_env")
+        if isinstance(token_env, str) and token_env in env:
+            credentials.append(env[token_env])
+    return credentials
 
 
 def _load_destination(name: str, entry: object) -> DestinationConfig:

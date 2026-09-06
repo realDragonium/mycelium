@@ -97,6 +97,13 @@ def _pull(
     }
 
 
+def _ref(branch: str, sha: str) -> dict:
+    return {
+        "ref": f"refs/heads/{branch}",
+        "object": {"type": "commit", "sha": sha},
+    }
+
+
 def _responses(
     *,
     blob_sha: str = CONTENT_SHA,
@@ -127,9 +134,13 @@ def _responses(
         if path.endswith("/git/commits"):
             return httpx.Response(201, json={"sha": DELIVERY_SHA})
         if path.endswith("/git/refs"):
+            ref_request = _request_json(request)
             return httpx.Response(
                 201,
-                json={"ref": "refs/heads/mycelium/docs/configuring-sso-gdc_123"},
+                json=_ref(
+                    ref_request["ref"].removeprefix("refs/heads/"),
+                    ref_request["sha"],
+                ),
             )
         if path.endswith("/pulls") and request.method == "GET":
             pulls = [] if existing_reference is None else [_pull(existing_reference)]
@@ -205,10 +216,14 @@ def _retry_response(
         remote["branch_name"] = _request_json(request)["ref"].removeprefix(
             "refs/heads/"
         )
-        return httpx.Response(201, json={"ref": "created"})
+        return httpx.Response(
+            201, json=_ref(remote["branch_name"], remote["branch_sha"])
+        )
     if "/git/refs/heads/" in path and request.method == "PATCH":
         remote["branch_sha"] = _request_json(request)["sha"]
-        return httpx.Response(200, json={"ref": "updated"})
+        return httpx.Response(
+            200, json=_ref(remote["branch_name"], remote["branch_sha"])
+        )
     if path.endswith("/pulls"):
         return _retry_pull_response(request, remote)
     raise AssertionError(f"unexpected request: {request.method} {request.url}")
@@ -637,6 +652,27 @@ def test_a_non_fast_forward_update_is_refused_because_the_branch_moved():
     assert not any(request.url.path.endswith("/pulls") for request in requests)
 
 
+def test_a_malformed_successful_branch_update_is_refused():
+    requests, handler = _responses()
+
+    def malformed_ref(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/git/refs") and request.method == "POST":
+            return httpx.Response(201, json={})
+        return handler(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(malformed_ref))
+
+    with pytest.raises(DestinationError, match="invalid branch update response"):
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert not any(request.url.path.endswith("/pulls") for request in requests)
+
+
 def test_transport_errors_are_scrubbed_and_do_not_chain_the_credential():
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadError(f"network exposed {TOKEN}", request=request)
@@ -1001,6 +1037,20 @@ def test_listing_refuses_public_configuration_that_contains_the_credential(
         server.list_documentation_destinations()
 
     assert TOKEN not in str(excinfo.value)
+
+
+def test_malformed_configuration_scrubs_a_credential_from_its_name(monkeypatch):
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({TOKEN: _entry(host="github.com/path")}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+
+    with pytest.raises(ValueError) as excinfo:
+        server.list_documentation_destinations()
+
+    assert TOKEN not in str(excinfo.value)
+    assert "***" in str(excinfo.value)
 
 
 def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(
