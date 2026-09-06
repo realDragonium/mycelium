@@ -172,10 +172,10 @@ which produces 768-dimensional vectors. Both can be overridden via the
 a model with a different output dimension you must also update the
 `DIM` constant in `vector.py` — the two must match.
 
-Only statement text is embedded. Names are stored as exact-match strings
-without embeddings, and entity descriptions are not embedded either. Name
-embeddings are an explicit deferred feature; descriptions follow because
-v1 routes all retrieval through statements anyway.
+Statement text and entity-name text are embedded in separate indexes. Name
+embeddings support semantic entity search and duplicate discovery; exact name
+matching still governs identity and mention derivation. Entity descriptions are
+not embedded.
 
 ## Tool surface
 
@@ -231,7 +231,7 @@ created in the same call.
 
 ### upsert_statement
 
-`upsert_statement(kind, text, mentions, links, id?, incoming_links?)`
+`upsert_statement(kind, text, links, id?, incoming_links?, allow_phrasing_violations?)`
 is the main write path for statements. `kind` is required on every
 call (`event` / `state` / `capability` from the starting vocabulary,
 or any open kind). Without `id` it always creates a brand-new statement
@@ -242,9 +242,9 @@ twice with the same text produces two statements. To update an existing statemen
 
 When `id` is given, the substrate replaces the statement at that id
 wholesale. The new text is re-embedded via Ollama, the vector is replaced
-in hnswlib at the same numeric label, and the `mentions` and outgoing
-`links` lists are written wholesale rather than appended. Adding a single
-mention or outgoing link therefore requires passing the full updated list.
+in hnswlib at the same numeric label, mentions are re-derived from the new
+text, and outgoing `links` are written wholesale rather than appended. Adding
+a single outgoing link therefore requires passing the full updated list.
 
 If `id` is provided but does not match an existing statement the call
 raises a `ValueError`, surfaced as HTTP 400 in FastAPI and as a tool
@@ -270,13 +270,8 @@ wholesale-replaced because it represents the set this statement owns.
 incoming edges live on other statements and shouldn't be removed by an
 update that targets this one.
 
-For each `mentions` text the substrate looks up the name; if no name
-with that text exists, a fresh entity and a name pointing at it are
-auto-created. The specific name used is recorded against the statement so
-future merge or split operations preserve the original phrasing. Pass
-`strict_mentions=True` to error on unknown names instead of
-auto-creating — useful for authoring agents that expect every mention
-to resolve to an existing entity and want typos surfaced.
+Mentions are not accepted as input. They are derived from entity names found in
+the statement text and kept up to date when statements or names change.
 
 ### get_statements
 
@@ -370,8 +365,9 @@ entity's id while names left behind on the source entity are untouched.
 
 `merge_statements(from_id, into_id)` consolidates two statements into
 one when the writer discovers they describe the same fact under
-different wordings. Mentions are unioned onto the target, deduped on
-`name_id`. Outgoing links are unioned and deduped on
+different wordings. Mentions are derived from text, so the target keeps its own
+mentions and the source's mentions are discarded. Outgoing links are unioned
+and deduped on
 `(to_id, link_type, when)`. Incoming links — every
 other statement that pointed at the source — are rewritten to point at
 the target, with the same dedup. Any edge elsewhere in the graph whose
@@ -465,14 +461,11 @@ edge that references a non-existent statement simply removes nothing.
 
 ### list_link_types
 
-`list_link_types()` returns the distinct `link_type` values currently
-materialised on at least one `statement_links` row, sorted
-alphabetically. The result is a snapshot of what is IN USE, not the
-substrate's allowed vocabulary — the vocabulary is open, any string is
-a valid `link_type`, and new ones appear in the result as soon as a
-statement_link uses them. To learn what specific types mean or which
-types are conceptually available, search for statements that describe
-`link_type` instead.
+`list_link_types()` returns every statement-link type known through either the
+editable glossary or a materialised link, sorted alphabetically. Each row has
+`{link_type, type, description, usage_count, in_use, direction?}`. A glossary
+type can therefore appear with `usage_count: 0`; an in-use type without a
+glossary entry appears with an empty description. The vocabulary remains open.
 
 ### add_entity_links and remove_entity_links
 
@@ -498,12 +491,11 @@ block the source's deletion.
 
 ### list_entity_link_types
 
-`list_entity_link_types()` returns the distinct `link_type` values
-currently materialised on at least one `entity_links` row, sorted
-alphabetically. Statement link types and entity link types live in
-separate namespaces (different tables) — the same word can mean
-different things between domains. Use this to discover entity-link
-conventions and `list_link_types()` for statement-link conventions.
+`list_entity_link_types()` returns every entity-link type known through either
+the editable glossary or a materialised link, sorted alphabetically. Each row
+has `{link_type, type, description, usage_count, in_use}`; glossary entries may
+have zero usage, and used types may have an empty description. Statement and
+entity link types live in separate namespaces.
 
 ### discover_facts
 
@@ -787,6 +779,9 @@ Ollama endpoint (default `http://localhost:11434`), `EMBED_MODEL` for the
 embedding model (default `nomic-embed-text`), `MYCELIUM_HTTP_HOST` for
 the FastAPI bind host (default `127.0.0.1`), and `MYCELIUM_HTTP_PORT`
 for the FastAPI port (default `8765`).
+Authentication is optional and defaults off. Set `MYCELIUM_AUTH=on` and provide
+`MYCELIUM_SESSION_SECRET` to require authenticated sessions or bearer tokens on
+the HTTP and MCP surfaces.
 
 ## Non-goals
 
@@ -795,11 +790,7 @@ land if real usage forces them. Concurrent-write safety is not provided.
 A reranker for search results is not implemented; vector search alone
 returns top-k results. Fuzzy duplicate detection on entity creation is
 not implemented; exact-name match is the only dedup. Name embeddings
-are not implemented; names are exact-match-only at write time and
-search time. Authentication on the MCP and HTTP servers is not
-implemented; the deployment posture is local-first. A query language is
-explicitly never going to be exposed; the tool primitives are the
-surface. Migrations beyond the initial schema are not supported; the
-expected upgrade path is to wipe the data directory and re-ingest. There
-is no CLI inspection tool or human-readable dump format other than the
-browser UI.
+assist semantic search and duplicate discovery but do not change that identity
+rule. A query language is explicitly never going to be exposed; the tool
+primitives are the surface. There is no CLI inspection tool or human-readable
+dump format other than the browser UI.
