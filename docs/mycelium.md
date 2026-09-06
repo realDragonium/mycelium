@@ -441,7 +441,8 @@ endpoint, plus every `statement_id` leaf inside any `when` tree) exists
 in the substrate. If any is unknown the call raises `ValueError` and
 inserts nothing, so a typo cannot half-apply a bulk insert. `when`
 leaves are always statement ids — an entity has no notion of
-"holding" — and the grammar is identical across both link kinds.
+"holding." The grammar applies to statement links and to legacy mixed edges
+addressed by `remove_links`; entity↔entity links do not accept `when`.
 
 No embedding work is performed — this is the cheap path for adding
 relationships between nodes that already exist. By contrast,

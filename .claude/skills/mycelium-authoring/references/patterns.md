@@ -28,9 +28,9 @@ These produce a **valid graph that is wrong**. No rejection fires; the error is 
 
 - **Entity data shape** — document required vs. optional fields as `property`
   statements that name the entity, so derived mentions anchor them. Link those
-  properties to the statements that consume them with `requires`/`accepts` (and
-  add a config `state` if the configured condition must gate other edges via
-  `when`). Neither is forced; absence is silent.
+  each statement that consumes a property to that property with
+  `requires`/`accepts` (and add a config `state` if the configured condition
+  must gate other edges via `when`). Neither is forced; absence is silent.
 
 - **Temporal / provider variation** — reify the date or provider as a `state` and link the override (`replaces` / `restricts`). A merged *"sometimes X"* statement is valid and wrong.
 
