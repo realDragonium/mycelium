@@ -994,6 +994,32 @@ def test_delivery_scrubs_credentials_from_logged_exceptions(caplog):
     assert other_token not in caplog.text
 
 
+@pytest.mark.parametrize("logger_name", ["mycelium.unrelated", "httpxylophone"])
+def test_delivery_preserves_unrelated_log_arguments_and_exception(caplog, logger_name):
+    unrelated_logger = logging.getLogger(logger_name)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            raise RuntimeError("fixture failure")
+        except RuntimeError:
+            unrelated_logger.exception("unrelated %s", "argument")
+        return httpx.Response(500, text="failed")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level("ERROR", logger=logger_name):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {"DOCS_GITHUB_TOKEN": TOKEN},
+                client=client,
+            )
+
+    record = next(record for record in caplog.records if record.name == logger_name)
+    assert record.args == ("argument",)
+    assert record.exc_info is not None
+
+
 def test_review_reference_cannot_expose_a_configured_credential():
     other_token = "1234567890123456789012345678901234567890"
     raw = json.dumps(

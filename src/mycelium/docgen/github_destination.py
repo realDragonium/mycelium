@@ -699,6 +699,10 @@ class _CredentialFilter(logging.Filter):
         self._credentials = credentials
 
     def filter(self, record: logging.LogRecord) -> bool:
+        if record.name not in {"httpx", "httpcore"} and not record.name.startswith(
+            ("httpx.", "httpcore.")
+        ):
+            return True
         record.msg = _scrub(record.getMessage(), self._credentials)
         record.args = ()
         if record.exc_text:
