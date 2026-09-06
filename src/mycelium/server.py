@@ -395,6 +395,7 @@ def tool(
     *,
     role: str | None = None,
     real_role: bool = False,
+    capture_request: bool = True,
 ) -> Callable[..., Any]:
     """Register `func` as both an MCP tool and an HTTP endpoint.
 
@@ -500,7 +501,11 @@ def tool(
             # Snapshot the request kwargs before _dispatch pops draft_id. Drop
             # draft_id from the captured request — it has its own ledger column,
             # and it shouldn't be duplicated into the free-form request summary.
-            captured = {k: v for k, v in kwargs.items() if k != "draft_id"}
+            captured = (
+                {k: v for k, v in kwargs.items() if k != "draft_id"}
+                if capture_request
+                else {}
+            )
             ctx = ops_ledger.CallContext(
                 tool=func.__name__,
                 actor=getattr(_auth.current_principal.get(), "id", None),
@@ -2477,6 +2482,69 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     if row is None:
         raise ValueError(f"generated document not found: {document_id}")
     return docs_store.serialize_document(row)
+
+
+@tool(role="writer", real_role=True, capture_request=False)
+def deliver_document(document_id: str, destination: str) -> dict[str, str]:
+    """Deliver a generated document into a configured destination's review flow.
+
+    Records the destination only after delivery succeeds. Raises for an unknown
+    document, destination configuration, or delivery failure.
+    """
+    from . import docs_store
+    from .docgen import destinations
+
+    row = docs_store.get_document(_drafts_db(), document_id)
+    if row is None:
+        raise ValueError("generated document not found")
+    document = destinations.DeliveryDocument(
+        id=str(row["id"]),
+        slug=str(row["slug"]),
+        title=str(row["title"]),
+        body=str(row["body"]),
+        guideline_set=str(row["guideline_set"]),
+        document_type=str(row["document_type"]),
+        statement_ids=tuple(_json.loads(row["statement_ids"])),
+    )
+    try:
+        configured = destinations.get_destination(destination)
+        delivery = destinations.deliver_document(configured, document)
+    except destinations.DestinationError as exc:
+        raise ValueError(str(exc)) from None
+    docs_store.record_delivery(
+        _drafts_db(),
+        document_id,
+        destination=delivery.destination,
+        path=delivery.path,
+        reference=delivery.reference,
+        content_revision=delivery.content_revision,
+    )
+    return delivery.serialize()
+
+
+@tool
+def list_documentation_destinations() -> dict[str, Any]:
+    """List configured documentation destinations by generic identity.
+
+    Returns no credential and no credential environment variable name.
+    """
+    from .docgen import destinations
+
+    try:
+        configured = destinations.load_destinations()
+    except destinations.DestinationError as exc:
+        raise ValueError(str(exc)) from None
+    return {
+        "destinations": [
+            {
+                "name": destination.name,
+                "type": destination.type,
+                "path_template": destination.path_template,
+                "coordinates": destinations.destination_coordinates(destination),
+            }
+            for destination in configured.values()
+        ]
+    }
 
 
 @tool
