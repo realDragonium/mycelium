@@ -51,6 +51,7 @@ SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
     # "X is a part of Y" and "X belongs to Y" both express Y contains X.
     "contains-part-of": None,
     "contains-belongs-to": None,
+    "cases-one-of": frozenset({"rule"}),
 }
 
 
@@ -290,6 +291,12 @@ def propose_links(
             if doc is None:
                 doc = phrasing.get_nlp()(statement.text)
                 docs[statement.index] = doc
+            if cue.pattern == "cases-one-of" and cue.phrase_span is not None:
+                parent_span = doc.char_span(*cue.phrase_span, alignment_mode="expand")
+                if parent_span is None or any(
+                    token.dep_ in {"cc", "conj"} for token in parent_span
+                ):
+                    continue
             negator = (
                 negated_verb(doc, cue.cue_span) if cue.cue_span is not None else None
             ) or (
@@ -297,6 +304,20 @@ def propose_links(
                 if cue.phrase_span is not None
                 else None
             )
+            if cue.pattern == "cases-one-of" and cue.cue_span is not None:
+                subject_span = (0, cue.cue_span[0])
+                negator = negator or negated_phrase_root(doc, subject_span)
+                subject = doc.char_span(*subject_span, alignment_mode="expand")
+                if subject is not None:
+                    negator = negator or next(
+                        (
+                            token.text
+                            for token in subject
+                            if token.dep_ == "neg"
+                            or token.lemma_.casefold() == "neither"
+                        ),
+                        None,
+                    )
             if negator is not None:
                 suppressed_negations.append(
                     SuppressedNegation(

@@ -278,7 +278,11 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
         for link_type, alias, direction in seed_rows():
             if link_type != pattern.link_type:
                 continue
-            text = f"X {alias} Y"
+            text = (
+                f"X {alias} the three values of Y"
+                if pattern.name == "cases-one-of"
+                else f"X {alias} Y"
+            )
             for kind in kinds:
                 for cue in find_cues(text, kind, aliases):
                     if (

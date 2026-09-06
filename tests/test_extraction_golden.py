@@ -66,6 +66,14 @@ def _observed_links(result: ex.Extraction) -> tuple[tuple[str, str, str], ...]:
 
 
 GOLDEN: dict[str, Golden] = {
+    "named-finite-cases": Golden(
+        "The alert priority has three levels. "
+        "High is one of the three levels of the alert priority.",
+        statements=(
+            ("state", "The alert priority has three levels"),
+            ("rule", "High is one of the three levels of the alert priority"),
+        ),
+    ),
     # -- conditionals: the condition becomes its own statement and the claim
     #    requires it, whichever side of the sentence it sits on.
     "conditional-initial": Golden(

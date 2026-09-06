@@ -119,7 +119,16 @@ search_statements({
 ```
 
 For multi-statement prose, prefer `ingest_text`. It segments the text, assigns
-statement kinds, proposes links, and returns a draft for review.
+statement kinds, proposes links, and returns a draft for review. Explicit counted
+membership such as "The alert priority has three levels. High is one of the three
+levels of the alert priority." proposes a `cases` edge from the named parent set
+to the membership statement. The parent can appear in the same input or resolve
+to an existing statement; repeated parent statements reuse their existing IDs.
+Supported forms use `is/are one of`, a positive digit count or `one` through `ten`,
+then `cases`, `levels`, `values`, `modes`, or `branches`, followed by `of` the parent.
+Use digits for larger counts, such as `11 modes`.
+Ordinary level prose such as "The response latency is high for the alert priority"
+and membership without a finite count produce no `cases` edge.
 
 Historical annotation tables may remain in old databases but are inert. The
 current migration runner leaves them intact for compatibility, and archive

@@ -436,11 +436,11 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "valued-by",
             r"\b(?P<cue>equals?)\b\s*(?P<to>.+)",
         ),
-        # "A is one of B": the enumerating parent B is the edge's source.
+        # Counted membership states a finite set; the named set is the source.
         _pattern(
             "cases-one-of",
             "cases",
-            r"\b(?P<cue>(?:is|are) one of|one of:)\s*(?P<from>.+)",
+            r"\b(?P<cue>(?:is|are) one of)\s+(?:the )?(?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten) (?:cases|levels|values|modes|branches) of\s+(?P<from>.+)",
         ),
         # "A is either X or Y": the carrier enumerates its own values.
         _pattern(

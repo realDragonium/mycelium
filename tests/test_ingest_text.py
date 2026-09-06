@@ -9,10 +9,12 @@ import json
 import zlib
 
 import numpy as np
+import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, drafts_store, embed, server, store
 from mycelium.connect import aliases as connect_aliases
+from mycelium.connect import nli
 
 TEXT = """When the invite is sent, a reminder is scheduled. Notification cadence can be configured on Company.
 
@@ -39,6 +41,7 @@ def _app(tmp_path, monkeypatch):
     from mycelium import embed
 
     monkeypatch.setattr(embed, "embed", _word_embed)
+    monkeypatch.setattr(nli, "available", lambda: False)
     from mycelium.http import app
 
     return TestClient(app)
@@ -192,6 +195,86 @@ def test_far_side_frame_links_existing_parent_to_new_child(tmp_path, monkeypatch
         assert store.get_links(server._db(), parent_id) == [
             (child_id, "contains", None)
         ]
+
+
+@pytest.mark.parametrize(
+    "parent_location,member",
+    [
+        ("batch", "High is"),
+        ("substrate", "High is"),
+        ("both", "High is"),
+        ("substrate", "These statuses are"),
+    ],
+)
+def test_counted_cases_prose_reuses_named_parent(
+    tmp_path, monkeypatch, parent_location, member
+):
+    parent_text = "The alert priority has three levels"
+    child_text = f"{member} one of the three levels of the alert priority"
+    with _app(tmp_path, monkeypatch):
+        server.upsert_entity(name="alert priority", description="The alert level set")
+        parent_id = (
+            _statement("state", parent_text) if parent_location != "batch" else None
+        )
+        include_parent = parent_location != "substrate"
+        response = server.ingest_text(
+            f"{parent_text}. {child_text}." if include_parent else f"{child_text}."
+        )
+        assert response["flags"] == []
+        draft = server.get_draft(response["draft_id"])
+        statements = draft["ops"][0]["payload"]["statements"]
+        assert [(item["kind"], item["text"]) for item in statements] == (
+            [("state", parent_text), ("rule", child_text)]
+            if include_parent
+            else [("rule", child_text)]
+        )
+        (link,) = response["links"]
+        assert (link["source"], link["target"], link["link_type"]) == (
+            "@0" if include_parent else parent_id,
+            "@1" if include_parent else "@0",
+            "cases",
+        )
+        applied = server.apply_draft(response["draft_id"])
+        results = applied["results"][0]["result"]["results"]
+        if include_parent:
+            applied_parent_id = results[0]["statement_id"]
+            if parent_id is None:
+                parent_id = applied_parent_id
+            else:
+                assert store.get_statement(server._db(), applied_parent_id) is None
+                assert store.get_statement(server._db(), parent_id) is not None
+        child_id = results[-1]["statement_id"]
+        assert store.get_links(server._db(), parent_id) == [(child_id, "cases", None)]
+        assert store.get_links(server._db(), child_id) == []
+        assert set(store.all_statement_ids(server._db())) == {parent_id, child_id}
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "The response latency is high for the alert priority.",
+        "High is one of the levels of the alert priority.",
+        "High is one of the many levels of the alert priority.",
+        "High is one of the zero levels of the alert priority.",
+        "High is not one of the three levels of the alert priority.",
+        "No status is one of the three levels of the alert priority.",
+        "Neither status is one of the three levels of the alert priority.",
+        "Not every status is one of the three levels of the alert priority.",
+        "High is one of the three levels of no alert priority.",
+        "High is one of the three levels of the alert priority or the response policy.",
+        "Verify High is one of the three levels of the alert priority.",
+    ],
+)
+def test_cases_prose_abstains_without_unambiguous_membership(
+    tmp_path, monkeypatch, text
+):
+    with _app(tmp_path, monkeypatch):
+        server.upsert_entity(name="alert priority", description="The alert level set")
+        parent_id = _statement("state", "The alert priority has three levels")
+        response = server.ingest_text(text)
+        assert not [link for link in response["links"] if link["link_type"] == "cases"]
+        server.apply_draft(response["draft_id"])
+        assert store.get_links(server._db(), parent_id) == []
 
 
 def test_apply_draft_skips_flags_and_creates_condition_link(tmp_path, monkeypatch):

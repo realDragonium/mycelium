@@ -767,3 +767,34 @@ def test_anchored_fan_out_scores_all_sharing_ids_in_one_batched_call():
     assert len(proposals) == 1
     assert proposals[0].target == "stm_58"
     assert proposals[0].score == 0.99
+
+
+@pytest.mark.parametrize(
+    "count,noun", [("three", "levels"), ("12", "cases"), ("two", "branches")]
+)
+def test_cases_frame_names_the_counted_set(count: str, noun: str) -> None:
+    (cue,) = shipped_cues(
+        f"High is one of the {count} {noun} of the alert priority", "rule"
+    )
+    assert (cue.pattern, cue.phrase_role, cue.phrase) == (
+        "cases-one-of",
+        "from",
+        "the alert priority",
+    )
+
+
+def test_cases_aliases_cannot_widen_the_counted_membership_frame() -> None:
+    aliases = {"cases": ("is high for", "is one of", "is one of the levels of")}
+    for text in (
+        "The latency is high for the alert priority",
+        "High is one of the levels of the alert priority",
+    ):
+        assert shipped_cues(text, "rule", aliases=aliases) == []
+    assert (
+        shipped_cues(
+            "High is one of the three levels of the alert priority",
+            "state",
+            aliases=aliases,
+        )
+        == []
+    )
