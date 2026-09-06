@@ -28,6 +28,7 @@ import threading
 from typing import Any, Callable
 
 from . import docs_store
+from .docgen.schema import CurrentDocument, ExistingDocument
 
 logger = logging.getLogger(__name__)
 MAX_ACTIVE_ENV = "MYCELIUM_DOCGEN_MAX_ACTIVE"
@@ -121,6 +122,8 @@ def _default_runner(
     *,
     guideline_set: str | None = None,
     document_type: str | None = None,
+    existing_documents: tuple[ExistingDocument, ...] = (),
+    load_current_document: Callable[[str], CurrentDocument] | None = None,
 ) -> Any:
     """The real generation loop.
 
@@ -131,6 +134,14 @@ def _default_runner(
     which is where a caller polling the run will read it."""
     from .docgen import run_docgen
 
+    if existing_documents:
+        return run_docgen(
+            prompt,
+            guideline_set=guideline_set,
+            document_type=document_type,
+            existing_documents=existing_documents,
+            load_current_document=load_current_document,
+        )
     return run_docgen(prompt, guideline_set=guideline_set, document_type=document_type)
 
 
@@ -150,6 +161,7 @@ def _execute_run(
     error = None
     draft_title = None
     draft_body = None
+    matched_document_id = None
 
     try:
         # Inside the try: a failed connect must still reach the finally-side
@@ -167,9 +179,20 @@ def _execute_run(
         from . import server
 
         with server.model_loop_slot():
-            result = runner(
-                prompt, guideline_set=guideline_set, document_type=document_type
-            )
+            if runner is _default_runner:
+                result = runner(
+                    prompt,
+                    guideline_set=guideline_set,
+                    document_type=document_type,
+                    existing_documents=_existing_documents(conn),
+                    load_current_document=lambda document_id: _load_current_document(
+                        conn, document_id
+                    ),
+                )
+            else:
+                result = runner(
+                    prompt, guideline_set=guideline_set, document_type=document_type
+                )
         payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
         # The request may have named neither, in which case the run chose. Put
         # the choice on the row before the outcome is decided, so a run that
@@ -183,6 +206,7 @@ def _execute_run(
             document_type=payload.get("document_type"),
         )
         reported = payload.get("outcome")
+        matched_document_id = payload.get("matched_document_id")
         if reported not in ("document_written", "nothing_written"):
             # Not folded into `nothing_written`: a runner that returns junk, or
             # reports its own failure, would otherwise be recorded as a clean
@@ -203,9 +227,20 @@ def _execute_run(
             # Written before `outcome` is set, so a rejected document (a
             # refused collision, blank slug, or unwritable DB) finishes the run
             # failed rather than claiming a document that is not there.
+            matched_row = (
+                docs_store.get_document(conn, matched_document_id)
+                if matched_document_id is not None
+                else None
+            )
+            if matched_document_id is not None and matched_row is None:
+                raise ValueError("matched generated document no longer exists")
             document_id = docs_store.upsert_document(
                 conn,
-                slug=payload["slug"],
+                slug=(
+                    str(matched_row["slug"])
+                    if matched_row is not None
+                    else payload["slug"]
+                ),
                 title=payload["title"],
                 body=payload["body"],
                 # The run may resolve what the request left unnamed; what it
@@ -218,6 +253,19 @@ def _execute_run(
                 # of making their missing record fatal; the store writes `{}`.
                 review=payload.get("review"),
                 run_id=run_id,
+                updates=matched_document_id,
+                replacing=(
+                    str(payload["matched_body_digest"])
+                    if payload.get("matched_body_digest") is not None
+                    else (
+                        docs_store.body_digest(str(matched_row["body"]))
+                        if matched_row is not None
+                        else None
+                    )
+                ),
+                revision_source_content_revision=payload.get(
+                    "matched_content_revision"
+                ),
             )
             outcome = "document_written"
         else:
@@ -249,6 +297,7 @@ def _execute_run(
                 error=error,
                 draft_title=draft_title,
                 draft_body=draft_body,
+                matched_document_id=matched_document_id,
             )
         except Exception:  # noqa: BLE001
             logger.exception("could not finalize documentation run %s", run_id)
@@ -256,3 +305,35 @@ def _execute_run(
             if own_conn is not None:
                 own_conn.close()
             _threads.pop(run_id, None)
+
+
+def _existing_documents(conn: sqlite3.Connection) -> tuple[ExistingDocument, ...]:
+    return tuple(
+        ExistingDocument(
+            id=str(row["id"]),
+            slug=str(row["slug"]),
+            title=str(row["title"]),
+            guideline_set=str(row["guideline_set"]),
+            document_type=str(row["document_type"]),
+            body_digest=docs_store.body_digest(str(row["body"])),
+        )
+        for row in docs_store.list_documents(conn, limit=None)
+    )
+
+
+def _load_current_document(
+    conn: sqlite3.Connection, document_id: str
+) -> CurrentDocument:
+    from .docgen import destinations
+
+    row = docs_store.get_document(conn, document_id)
+    if row is None:
+        raise ValueError("matched generated document no longer exists")
+    destination = row["delivery_destination"]
+    path = row["delivery_path"]
+    if destination and path:
+        configured = destinations.get_destination(str(destination))
+        return destinations.read_document(
+            configured, str(path), document_id, str(row["slug"])
+        )
+    return CurrentDocument(body=str(row["body"]))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -22,7 +23,7 @@ from mycelium.docgen.destinations import (
     get_destination,
     load_destinations,
 )
-from mycelium.docgen.github_destination import deliver
+from mycelium.docgen.github_destination import deliver, read
 
 TOKEN = "credential-sentinel-8d76"
 REFLECTION_TOKEN = "dec0de00" * 5
@@ -322,6 +323,225 @@ def test_blob_id_uses_utf8_byte_length():
     )
 
     assert delivery.content_revision == expected_sha
+
+
+def test_read_fetches_the_recorded_path_from_the_base_after_review_closes():
+    requests: list[httpx.Request] = []
+    body = "# Edited during review\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(
+            200,
+            json={
+                "encoding": "base64",
+                "content": base64.b64encode(body.encode()).decode(),
+                "sha": _blob_id(body),
+            },
+        )
+
+    current = read(
+        _config(),
+        "docs/recorded.md",
+        "gdc_123",
+        "configuring-sso",
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert current.body == body
+    assert requests[1].url.path.endswith("/contents/docs/recorded.md")
+    assert dict(requests[1].url.params) == {"ref": "docs-main"}
+
+
+def test_read_fetches_reviewer_edits_from_the_open_document_branch():
+    requests: list[httpx.Request] = []
+    body = "# Reviewer edit\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(
+                200,
+                json=[_pull("https://github.com/acme/handbook/pull/17")],
+            )
+        return httpx.Response(
+            200,
+            json={
+                "encoding": "base64",
+                "content": base64.b64encode(body.encode()).decode(),
+                "sha": _blob_id(body),
+            },
+        )
+
+    current = read(
+        _config(),
+        "docs/recorded.md",
+        "gdc_123",
+        "configuring-sso",
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert current.body == body
+    assert current.content_revision == _blob_id(body)
+    assert dict(requests[1].url.params) == {
+        "ref": "mycelium/docs/configuring-sso-gdc_123"
+    }
+
+
+def test_redelivery_reuses_the_recorded_path_after_the_template_changes():
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    delivery = deliver(
+        _config(path_template="docs/new/{slug}.md"),
+        replace(_document(), delivered_path="docs/original/configuring-sso.md"),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=client,
+    )
+
+    assert delivery.path == "docs/original/configuring-sso.md"
+    tree_request = next(
+        request for request in requests if request.url.path.endswith("/git/trees")
+    )
+    assert _request_json(tree_request)["tree"][0]["path"] == delivery.path
+
+
+@pytest.mark.parametrize("branch_exists", [True, False])
+def test_redelivery_aligns_a_closed_review_branch_when_base_already_has_the_body(
+    branch_exists,
+):
+    requests: list[httpx.Request] = []
+    branch = "mycelium/docs/configuring-sso-gdc_123"
+    stale_sha = "8" * 40
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path.endswith("/pulls") and request.method == "GET":
+            return httpx.Response(200, json=[])
+        if "/git/ref/heads/" in path and request.method == "GET":
+            if branch_exists:
+                return httpx.Response(200, json={"object": {"sha": stale_sha}})
+            return httpx.Response(404, json={"message": "Not Found"})
+        if path.endswith("/branches/docs-main"):
+            return httpx.Response(
+                200,
+                json={
+                    "commit": {
+                        "sha": BASE_COMMIT_SHA,
+                        "commit": {"tree": {"sha": BASE_TREE_SHA}},
+                    }
+                },
+            )
+        if "/contents/" in path:
+            body = _document().body
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(body.encode()).decode(),
+                    "sha": _blob_id(body),
+                },
+            )
+        if path.endswith("/git/blobs"):
+            return httpx.Response(201, json={"sha": CONTENT_SHA})
+        if path.endswith("/git/trees"):
+            return httpx.Response(201, json={"sha": TREE_SHA})
+        if path.endswith("/git/commits"):
+            return httpx.Response(201, json={"sha": DELIVERY_SHA})
+        if path.endswith("/git/refs") and request.method == "POST":
+            payload = _request_json(request)
+            return httpx.Response(201, json=_ref(branch, payload["sha"]))
+        if "/git/refs/heads/" in path and request.method == "PATCH":
+            payload = _request_json(request)
+            return httpx.Response(200, json=_ref(branch, payload["sha"]))
+        if path.endswith("/pulls"):
+            return httpx.Response(
+                201, json=_pull("https://github.com/acme/handbook/pull/18")
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    delivery = deliver(
+        _config(),
+        replace(
+            _document(),
+            delivered_path="docs/recorded.md",
+            delivered_content_revision=_blob_id("previous body"),
+            revision_source_content_revision=_blob_id("source body"),
+        ),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    ref_request = next(
+        request
+        for request in requests
+        if request.method in {"POST", "PATCH"} and "/git/refs" in request.url.path
+    )
+    assert _request_json(ref_request)["sha"] == DELIVERY_SHA
+    assert ref_request.url.path.endswith(
+        "/git/refs/heads/mycelium/docs/configuring-sso-gdc_123"
+    ) or ref_request.url.path.endswith("/git/refs")
+    commit_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/git/commits")
+    )
+    expected_parents = (
+        [stale_sha, BASE_COMMIT_SHA] if branch_exists else [BASE_COMMIT_SHA]
+    )
+    assert _request_json(commit_request)["parents"] == expected_parents
+    tree_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/git/trees")
+    )
+    assert _request_json(tree_request)["base_tree"] == BASE_TREE_SHA
+    review_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/pulls")
+    )
+    assert requests.index(ref_request) < requests.index(review_request)
+    assert delivery.content_revision == CONTENT_SHA
+
+
+def test_redelivery_refuses_when_the_file_changed_after_generation():
+    requests, base_handler = _responses(
+        existing_reference="https://github.com/acme/handbook/pull/17"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/contents/" in request.url.path:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(b"reviewer changed this\n").decode(),
+                    "sha": _blob_id("reviewer changed this\n"),
+                },
+            )
+        return base_handler(request)
+
+    document = replace(
+        _document(),
+        delivered_path="docs/configuring-sso.md",
+        revision_source_content_revision="a" * 40,
+    )
+    with pytest.raises(DestinationError, match="changed after generation"):
+        deliver(
+            _config(),
+            document,
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+    assert not any(request.url.path.endswith("/git/blobs") for request in requests)
 
 
 def test_an_enterprise_destination_uses_the_hosts_api_v3_base():

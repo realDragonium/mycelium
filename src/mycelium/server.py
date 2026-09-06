@@ -2497,6 +2497,7 @@ def deliver_document(document_id: str, destination: str) -> dict[str, str]:
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
         raise ValueError("generated document not found")
+    is_same_destination = row["delivery_destination"] == destination
     document = destinations.DeliveryDocument(
         id=str(row["id"]),
         slug=str(row["slug"]),
@@ -2505,6 +2506,22 @@ def deliver_document(document_id: str, destination: str) -> dict[str, str]:
         guideline_set=str(row["guideline_set"]),
         document_type=str(row["document_type"]),
         statement_ids=tuple(_json.loads(row["statement_ids"])),
+        delivered_path=(
+            str(row["delivery_path"])
+            if is_same_destination and row["delivery_path"] is not None
+            else None
+        ),
+        delivered_content_revision=(
+            str(row["delivery_content_revision"])
+            if is_same_destination and row["delivery_content_revision"] is not None
+            else None
+        ),
+        revision_source_content_revision=(
+            str(row["revision_source_content_revision"])
+            if is_same_destination
+            and row["revision_source_content_revision"] is not None
+            else None
+        ),
     )
     try:
         configured = destinations.get_destination(destination)
@@ -2518,6 +2535,7 @@ def deliver_document(document_id: str, destination: str) -> dict[str, str]:
         path=delivery.path,
         reference=delivery.reference,
         content_revision=delivery.content_revision,
+        expected_body_digest=docs_store.body_digest(str(row["body"])),
     )
     return delivery.serialize()
 

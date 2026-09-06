@@ -17,9 +17,26 @@ made that choice, and the row should show it.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal, Union
 
 from pydantic import BaseModel, Field
+
+
+@dataclass(frozen=True)
+class ExistingDocument:
+    id: str
+    title: str
+    guideline_set: str
+    document_type: str
+    slug: str = ""
+    body_digest: str = ""
+
+
+@dataclass(frozen=True)
+class CurrentDocument:
+    body: str
+    content_revision: str | None = None
 
 
 class ReviewFinding(BaseModel):
@@ -65,6 +82,9 @@ class DocumentWritten(BaseModel):
     statement_ids: list[str] = Field(default_factory=list)
     guideline_set: str
     document_type: str
+    matched_document_id: str | None = None
+    matched_body_digest: str | None = None
+    matched_content_revision: str | None = None
     #: The independent gate that accepted this exact document.
     review: ReviewRecord
     #: What the guideline set asked for that the substrate could not supply —
@@ -85,6 +105,7 @@ class NothingWritten(BaseModel):
     reason: str
     guideline_set: str | None = None
     document_type: str | None = None
+    matched_document_id: str | None = None
     #: Present only when a written document reached and failed the review gate.
     review: ReviewRecord | None = None
     #: The refused draft, present only when one was written and the gate turned

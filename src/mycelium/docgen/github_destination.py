@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -23,6 +24,7 @@ from .destinations import (
     _scrub,
     render_path,
 )
+from .schema import CurrentDocument
 
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?\Z")
@@ -149,6 +151,55 @@ def deliver(
         _ACTIVE_CREDENTIALS.reset(context)
 
 
+def read(
+    destination: DestinationConfig,
+    path: str,
+    document_id: str,
+    slug: str,
+    env: Mapping[str, str] | None = None,
+    *,
+    client: httpx.Client | None = None,
+) -> CurrentDocument:
+    config = GitHubConfig.parse(destination)
+    e = os.environ if env is None else env
+    token = e.get(config.token_env)
+    credentials = tuple(_configured_credentials(e, token))
+    if not token:
+        raise DestinationError(
+            _scrub(f"missing token env var {config.token_env}", list(credentials))
+        )
+    branch = _branch_name(
+        config,
+        DeliveryDocument(document_id, slug, "", "", "", "", ()),
+    )
+
+    def fetch(active: httpx.Client) -> CurrentDocument:
+        ref = (
+            branch
+            if _has_open_review(config, branch, active, token)
+            else config.base_branch
+        )
+        return _file(config, path, ref, active, token)
+
+    context = _ACTIVE_CREDENTIALS.set(credentials)
+    try:
+        if client is not None:
+            return fetch(client)
+        with _client(config, token) as owned_client:
+            return fetch(owned_client)
+    except DestinationError as exc:
+        raise DestinationError(_scrub(str(exc), list(credentials))) from None
+    except Exception as exc:
+        raise DestinationError(
+            _scrub(
+                f"destination {destination.name!r} read failed: {exc}",
+                list(credentials),
+            )
+        ) from None
+    finally:
+        _ACTIVE_CREDENTIALS.reset(context)
+
+
 def _configured_credentials(env: Mapping[str, str], token: str | None) -> list[str]:
     credentials = [token] if token else []
     raw = env.get("MYCELIUM_DOC_DESTINATIONS")
@@ -183,7 +234,7 @@ def _deliver(
     document: DeliveryDocument,
     token: str,
 ) -> Delivery:
-    path = render_path(config.destination, document)
+    path = document.delivered_path or render_path(config.destination, document)
     branch = _branch_name(config, document)
     credentials = list(_ACTIVE_CREDENTIALS.get()) or [token]
     if any(
@@ -200,13 +251,55 @@ def _deliver(
             f"destination {config.destination.name!r} derived its configured base "
             "branch from the document"
         )
-    parent_sha, base_tree_sha, branch_exists = _delivery_base(
-        config, branch, client, token
+    reuse_branch = (
+        _has_open_review(config, branch, client, token)
+        if document.delivered_path is not None
+        else True
     )
+    parent_sha, base_tree_sha, branch_exists, additional_parent_sha = _delivery_base(
+        config, branch, client, token, reuse_branch=reuse_branch
+    )
+    expected_revision = (
+        document.revision_source_content_revision or document.delivered_content_revision
+    )
+    if expected_revision is not None:
+        ref = branch if reuse_branch else config.base_branch
+        current = _file(config, path, ref, client, token)
+        intended_revision = _git_blob_id(document.body)
+        if current.content_revision == intended_revision and reuse_branch:
+            reference = _review(config, document, branch, client, token)
+            return Delivery(
+                destination=config.destination.name,
+                path=path,
+                reference=reference,
+                content_revision=intended_revision,
+            )
+        if (
+            current.content_revision != intended_revision
+            and current.content_revision != expected_revision
+        ):
+            raise DestinationError(
+                f"destination {config.destination.name!r} document changed after generation; retry the documentation run"
+            )
     content_sha = _blob(config, document, client, token)
     tree_sha = _tree(config, path, base_tree_sha, content_sha, client, token)
-    delivery_sha = _commit(config, document, parent_sha, tree_sha, client, token)
-    _set_branch(config, branch, delivery_sha, branch_exists, client, token)
+    delivery_sha = _commit(
+        config,
+        document,
+        parent_sha,
+        tree_sha,
+        client,
+        token,
+        additional_parent_sha=additional_parent_sha,
+    )
+    _set_branch(
+        config,
+        branch,
+        delivery_sha,
+        branch_exists,
+        client,
+        token,
+    )
     reference = _review(config, document, branch, client, token)
     return Delivery(
         destination=config.destination.name,
@@ -221,7 +314,9 @@ def _delivery_base(
     branch: str,
     client: httpx.Client,
     token: str,
-) -> tuple[str, str, bool]:
+    *,
+    reuse_branch: bool = True,
+) -> tuple[str, str, bool, str | None]:
     ref = f"heads/{branch}"
     existing = _request_json(
         client,
@@ -233,7 +328,7 @@ def _delivery_base(
     )
     if existing is None:
         parent_sha, tree_sha = _base(config, client, token)
-        return parent_sha, tree_sha, False
+        return parent_sha, tree_sha, False, None
     try:
         parent_sha = _object_id(config, existing["object"]["sha"], "branch")
     except (KeyError, TypeError):
@@ -246,6 +341,9 @@ def _delivery_base(
             f"destination {config.destination.name!r} returned an invalid branch "
             "response"
         )
+    if not reuse_branch:
+        base_sha, tree_sha = _base(config, client, token)
+        return parent_sha, tree_sha, True, base_sha
     payload = _request_json(
         client,
         config,
@@ -260,7 +358,70 @@ def _delivery_base(
             f"destination {config.destination.name!r} returned an invalid branch "
             "commit response"
         ) from None
-    return parent_sha, _object_id(config, tree_sha, "branch tree"), True
+    return parent_sha, _object_id(config, tree_sha, "branch tree"), True, None
+
+
+def _has_open_review(
+    config: GitHubConfig,
+    branch: str,
+    client: httpx.Client,
+    token: str,
+) -> bool:
+    existing = _request_json(
+        client,
+        config,
+        token,
+        "GET",
+        "/pulls",
+        expect_list=True,
+        params={
+            "state": "open",
+            "head": f"{config.owner}:{branch}",
+            "base": config.base_branch,
+        },
+    )
+    if not existing:
+        return False
+    first = existing[0]
+    if not isinstance(first, dict):
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid review response"
+        )
+    _review_reference(config, first, branch)
+    return True
+
+
+def _file(
+    config: GitHubConfig,
+    path: str,
+    ref: str,
+    client: httpx.Client,
+    token: str,
+) -> CurrentDocument:
+    payload = _request_json(
+        client,
+        config,
+        token,
+        "GET",
+        f"/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}",
+    )
+    encoded = payload.get("content")
+    if not isinstance(encoded, str) or payload.get("encoding") != "base64":
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid file response"
+        )
+    content_revision = _sha(config, payload, "file")
+    try:
+        body = base64.b64decode("".join(encoded.split()), validate=True).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid file response"
+        ) from None
+    if content_revision != _git_blob_id(body):
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid file response"
+        )
+    return CurrentDocument(body=body, content_revision=content_revision)
 
 
 def _base(config: GitHubConfig, client: httpx.Client, token: str) -> tuple[str, str]:
@@ -344,6 +505,8 @@ def _commit(
     tree_sha: str,
     client: httpx.Client,
     token: str,
+    *,
+    additional_parent_sha: str | None = None,
 ) -> str:
     payload = _request_json(
         client,
@@ -354,7 +517,8 @@ def _commit(
         json={
             "message": f"Deliver {document.title}",
             "tree": tree_sha,
-            "parents": [parent_sha],
+            "parents": [parent_sha]
+            + ([additional_parent_sha] if additional_parent_sha else []),
         },
     )
     return _sha(config, payload, "commit")

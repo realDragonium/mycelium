@@ -36,6 +36,7 @@ from .schema import ReviewCheck, ReviewFinding
 EMIT_TOOL = "emit_document"
 GAP_TOOL = "report_knowledge_gap"
 RESOLVE_TOOL = "choose_guideline_set"
+MATCH_TOOL = "choose_existing_document"
 REVIEW_TOOL = "record_review"
 
 _EMIT_SCHEMA: dict[str, Any] = {
@@ -179,6 +180,26 @@ def resolve_tool_def(catalogue: dict[str, list[str]], preferred: str | None) -> 
                 },
             },
             "required": ["guideline_set", "document_type", "reason"],
+        },
+    }
+
+
+def match_tool_def(document_ids: list[str]) -> dict:
+    return {
+        "name": MATCH_TOOL,
+        "description": "Decide whether this request revises one listed document.",
+        "strict": True,
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "document_id": {
+                    "type": ["string", "null"],
+                    "enum": [*document_ids, None],
+                },
+                "reason": {"type": "string"},
+            },
+            "required": ["document_id", "reason"],
         },
     }
 
