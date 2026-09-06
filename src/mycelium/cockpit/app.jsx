@@ -192,7 +192,7 @@ function App() {
 
   return (
     <RouterCtx.Provider value={router}>
-      <div className="shell">
+      <div className={`shell${router.view === 'documentation' ? ' documentation-shell' : ''}`}>
         <header className="topbar">
           <div className="topbar-inner">
             <div className="brand" onClick={() => router.go({ view: 'landing' })}>

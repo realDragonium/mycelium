@@ -35,3 +35,11 @@
 .docw [role="alert"] { color: var(--red, #dc5757); }
 .docw summary { cursor: pointer; }
 @media (max-width: 620px) { .docw { padding: 20px 12px; } .docw-panel { padding: 16px; } .docw-fields { grid-template-columns: 1fr; gap: 0; } }
+
+.documentation-shell { grid-template-columns: minmax(0, 1fr); }
+.documentation-shell > * { min-width: 0; }
+.documentation-shell .docw { width: 100%; box-sizing: border-box; }
+.documentation-shell .topbar-inner { overflow-x: auto; max-width: 100%; box-sizing: border-box; }
+@media (max-width: 620px) {
+  .documentation-shell footer .ftr-inner, .documentation-shell footer .fi { flex-wrap: wrap; gap: 8px; }
+}

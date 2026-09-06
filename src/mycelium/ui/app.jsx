@@ -141,7 +141,7 @@ function App() {
     <RouterCtx.Provider value={router}>
       <TweaksCtx.Provider value={tweaksValue}>
        <DataCtx.Provider value={dataCtxValue}>
-        <div className="shell">
+        <div className={`shell${router.view === 'documentation' ? ' documentation-shell' : ''}`}>
           <TopBar small={true} />
           {screen}
           <Footer />
