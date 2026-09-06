@@ -955,6 +955,66 @@ def test_delivery_scrubs_credentials_from_child_logger_handlers(caplog):
     assert "***" in caplog.text
 
 
+def test_delivery_scrubs_credentials_from_logged_exceptions(caplog):
+    other_token = "fixture-token-for-other-destination"
+    httpcore_logger = logging.getLogger("httpcore.http11")
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            raise RuntimeError(other_token)
+        except RuntimeError:
+            httpcore_logger.exception("transport failed")
+        return httpx.Response(500, text="failed")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level("ERROR", logger="httpcore.http11"):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {
+                    "MYCELIUM_DOC_DESTINATIONS": raw,
+                    "DOCS_GITHUB_TOKEN": TOKEN,
+                    "OTHER_GITHUB_TOKEN": other_token,
+                },
+                client=client,
+            )
+
+    assert other_token not in caplog.text
+
+
+def test_review_reference_cannot_expose_a_configured_credential():
+    other_token = "1234567890123456789012345678901234567890"
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+    _, handler = _responses(
+        reference=f"https://github.com/acme/handbook/pull/{other_token}"
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError, match="credential-bearing review reference"):
+        deliver(
+            _config(),
+            _document(),
+            {
+                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "DOCS_GITHUB_TOKEN": TOKEN,
+                "OTHER_GITHUB_TOKEN": other_token,
+            },
+            client=client,
+        )
+
+
 def test_an_existing_review_must_match_the_requested_delivery():
     requests, handler = _responses(
         existing_reference="https://github.com/acme/handbook/pull/17"

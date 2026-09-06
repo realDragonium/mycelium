@@ -470,6 +470,12 @@ def _review_reference(config: GitHubConfig, payload: dict, branch: str) -> str:
             f"destination {config.destination.name!r} returned an invalid review "
             "response"
         )
+    credentials = list(_ACTIVE_CREDENTIALS.get())
+    if any(credential and credential in reference for credential in credentials):
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned a credential-bearing "
+            "review reference"
+        )
     return reference
 
 
@@ -635,6 +641,9 @@ class _CredentialFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = _scrub(record.getMessage(), self._credentials)
         record.args = ()
+        if record.exc_text:
+            record.exc_text = _scrub(record.exc_text, self._credentials)
+        record.exc_info = None
         return True
 
 
