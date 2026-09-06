@@ -10,6 +10,7 @@ from functools import partial
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 
 from mycelium import auth, docs_store, drafts_store, server
 from mycelium.docgen.destinations import (
@@ -1309,6 +1310,50 @@ def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
     )
     assert TOKEN not in str(excinfo.value)
     assert TOKEN not in rendered_traceback
+
+
+def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
+    monkeypatch,
+):
+    from mycelium.http import app
+
+    conn = docs_store.connect(":memory:")
+    docs_store.migrate(conn)
+    monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    monkeypatch.setenv("MYCELIUM_AUTH", "off")
+
+    try:
+        for deliver_document in (
+            server.deliver_document.__wrapped__,
+            server.deliver_document,
+        ):
+            with pytest.raises(ValueError) as excinfo:
+                deliver_document(TOKEN, "knowledge-base")
+
+            rendered_traceback = "".join(
+                traceback.format_exception(
+                    excinfo.type, excinfo.value, excinfo.value.__traceback__
+                )
+            )
+            assert str(excinfo.value) == "generated document not found"
+            assert TOKEN not in rendered_traceback
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/deliver-document",
+                json={"document_id": TOKEN, "destination": "knowledge-base"},
+            )
+
+        assert response.status_code == 400
+        assert response.json() == {"detail": "generated document not found"}
+        assert TOKEN not in response.text
+    finally:
+        conn.close()
 
 
 def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(

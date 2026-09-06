@@ -2337,7 +2337,7 @@ def deliver_document(document_id: str, destination: str) -> dict[str, str]:
 
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
-        raise ValueError(f"generated document not found: {document_id}")
+        raise ValueError("generated document not found")
     document = destinations.DeliveryDocument(
         id=str(row["id"]),
         slug=str(row["slug"]),
