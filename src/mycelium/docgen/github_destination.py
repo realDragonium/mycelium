@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import re
 import unicodedata
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import quote, urlsplit
@@ -29,6 +31,9 @@ _BRANCH_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _OBJECT_ID_RE = re.compile(r"^(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})\Z")
 _CONFIG_FIELDS = frozenset({"owner", "repo", "token_env", "host", "base_branch"})
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+_ACTIVE_CREDENTIALS: ContextVar[tuple[str, ...]] = ContextVar(
+    "document_delivery_credentials", default=()
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,7 @@ def validate_config_secrets(
         config.host,
         config.owner,
         config.repo,
+        config.token_env,
         config.base_branch,
     )
     if any(
@@ -113,20 +119,49 @@ def deliver(
     config = GitHubConfig.parse(destination)
     e = os.environ if env is None else env
     token = e.get(config.token_env)
+    credentials = tuple(_configured_credentials(e, token))
     if not token:
-        raise DestinationError(f"missing token env var {config.token_env}")
+        raise DestinationError(
+            _scrub(f"missing token env var {config.token_env}", list(credentials))
+        )
 
+    context = _ACTIVE_CREDENTIALS.set(credentials)
     try:
         if client is not None:
             return _deliver(client, config, document, token)
         with _client(config, token) as owned_client:
             return _deliver(owned_client, config, document, token)
     except DestinationError as exc:
-        raise DestinationError(_scrub(str(exc), [token])) from None
+        raise DestinationError(_scrub(str(exc), list(credentials))) from None
     except Exception as exc:
         raise DestinationError(
-            _scrub(f"destination {destination.name!r} delivery failed: {exc}", [token])
+            _scrub(
+                f"destination {destination.name!r} delivery failed: {exc}",
+                list(credentials),
+            )
         ) from None
+    finally:
+        _ACTIVE_CREDENTIALS.reset(context)
+
+
+def _configured_credentials(env: Mapping[str, str], token: str | None) -> list[str]:
+    credentials = [token] if token else []
+    raw = env.get("MYCELIUM_DOC_DESTINATIONS")
+    if not raw:
+        return credentials
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return credentials
+    if not isinstance(parsed, dict):
+        return credentials
+    for entry in parsed.values():
+        if not isinstance(entry, dict) or not isinstance(entry.get("config"), dict):
+            continue
+        token_env = entry["config"].get("token_env")
+        if isinstance(token_env, str) and env.get(token_env):
+            credentials.append(env[token_env])
+    return list(dict.fromkeys(credentials))
 
 
 def _client(config: GitHubConfig, token: str) -> httpx.Client:
@@ -474,7 +509,8 @@ def _request_json(
     **kwargs,
 ) -> dict | list | None:
     url = _api_base(config) + f"/repos/{config.owner}/{config.repo}" + path
-    log_filter = _CredentialFilter(token)
+    credentials = list(_ACTIVE_CREDENTIALS.get()) or [token]
+    log_filter = _CredentialFilter(credentials)
     loggers = (logging.getLogger("httpx"), logging.getLogger("httpcore"))
     handlers = _logging_handlers(loggers)
     for logger in loggers:
@@ -487,7 +523,7 @@ def _request_json(
         raise DestinationError(
             _scrub(
                 f"destination {config.destination.name!r} request failed: {exc}",
-                [token],
+                credentials,
             )
         ) from None
     finally:
@@ -502,7 +538,7 @@ def _request_json(
             f"destination {config.destination.name!r} branch moved during delivery"
         )
     if not response.is_success:
-        detail = _scrub(response.text, [token])[:500]
+        detail = _scrub(response.text, credentials)[:500]
         raise DestinationError(
             f"destination {config.destination.name!r} request failed with HTTP "
             f"{response.status_code}: {detail}"
@@ -582,12 +618,12 @@ def _git_blob_id(body: str) -> str:
 
 
 class _CredentialFilter(logging.Filter):
-    def __init__(self, token: str) -> None:
+    def __init__(self, credentials: list[str]) -> None:
         super().__init__()
-        self._token = token
+        self._credentials = credentials
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = record.getMessage().replace(self._token, "***")
+        record.msg = _scrub(record.getMessage(), self._credentials)
         record.args = ()
         return True
 

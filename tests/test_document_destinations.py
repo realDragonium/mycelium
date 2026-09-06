@@ -483,6 +483,24 @@ def test_a_destination_cannot_expose_another_destinations_credential():
         )
 
 
+def test_a_destination_token_env_cannot_expose_another_destinations_credential():
+    other_token = "OTHER_GITHUB_TOKEN"
+    raw = json.dumps(
+        {
+            "first": _entry(token_env=other_token),
+            "second": _entry(owner="other", token_env="SECOND_TOKEN"),
+        }
+    )
+
+    with pytest.raises(DestinationError, match="contains a credential"):
+        load_destinations(
+            {
+                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "SECOND_TOKEN": other_token,
+            }
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -841,6 +859,39 @@ def test_http_client_logs_scrub_a_credential_in_the_response_reason(caplog):
             )
 
     assert TOKEN not in caplog.text
+    assert "***" in caplog.text
+
+
+def test_delivery_scrubs_every_configured_destinations_credential(caplog):
+    other_token = "fixture-token-for-other-destination"
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            text=f"failed with {other_token}",
+            extensions={"reason_phrase": other_token.encode()},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = {
+        "MYCELIUM_DOC_DESTINATIONS": raw,
+        "DOCS_GITHUB_TOKEN": TOKEN,
+        "OTHER_GITHUB_TOKEN": other_token,
+    }
+
+    with caplog.at_level("INFO", logger="httpx"):
+        with pytest.raises(DestinationError) as excinfo:
+            deliver(_config(), _document(), env, client=client)
+
+    assert other_token not in str(excinfo.value)
+    assert other_token not in caplog.text
+    assert "***" in str(excinfo.value)
     assert "***" in caplog.text
 
 

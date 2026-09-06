@@ -18,8 +18,7 @@ import json
 import os
 import string
 from dataclasses import dataclass
-from types import ModuleType
-from typing import Mapping
+from typing import Mapping, Protocol, cast
 
 
 class DestinationError(RuntimeError):
@@ -63,6 +62,23 @@ class Delivery:
             "reference": self.reference,
             "content_revision": self.content_revision,
         }
+
+
+class DestinationBackend(Protocol):
+    def parse_config(self, destination: DestinationConfig) -> object: ...
+
+    def validate_config_secrets(
+        self, destination: DestinationConfig, credentials: list[str]
+    ) -> None: ...
+
+    def coordinates(self, destination: DestinationConfig) -> dict[str, str]: ...
+
+    def deliver(
+        self,
+        destination: DestinationConfig,
+        document: DeliveryDocument,
+        env: Mapping[str, str] | None = None,
+    ) -> Delivery: ...
 
 
 def load_destinations(
@@ -177,11 +193,11 @@ def destination_coordinates(config: DestinationConfig) -> dict[str, str]:
     return _backend(config).coordinates(config)
 
 
-def _backend(config: DestinationConfig) -> ModuleType:
+def _backend(config: DestinationConfig) -> DestinationBackend:
     if config.type == "github":
         from . import github_destination
 
-        return github_destination
+        return cast(DestinationBackend, github_destination)
     raise DestinationError(f"destination {config.name!r} has an unsupported type")
 
 
