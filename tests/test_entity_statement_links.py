@@ -1,11 +1,4 @@
-"""Mixed-endpoint links between entities and statements.
-
-The new `entity_statement_links` table is exposed through the same
-`add_links` / `remove_links` tools that handle statement↔statement edges
-— externally there's no difference between the two flavors. These tests
-cover the routing, the `when` round-trip, cascade on delete, and the
-merge plumbing on both sides (entity and statement).
-"""
+"""Legacy entity-to-statement links remain readable and removable."""
 
 from __future__ import annotations
 
@@ -51,20 +44,22 @@ def _entity(client, name):
     ]
 
 
+def _legacy_link(entity_id, statement_id, direction, link_type, when=None):
+    with store.transaction(store.substrate_connection()):
+        store.insert_entity_statement_links(
+            store.substrate_connection(),
+            [(entity_id, statement_id, direction, link_type, when)],
+        )
+
+
 # ─── routing ───────────────────────────────────────────────────────────────
 
 
-def test_entity_to_statement_link_round_trips(tmp_path, monkeypatch):
-    """An entity→statement edge goes in through `add_links` and surfaces
-    in `get_entity.statement_links` and `get_statements.incoming_links`."""
+def test_legacy_entity_to_statement_link_round_trips(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         e = _entity(client, "Reviewer")
         s = _stmt(client, "the reviewer submits an invite")
-        r = client.post(
-            "/add-links",
-            json={"links": [{"from_id": e, "to_id": s, "link_type": "performs"}]},
-        ).json()
-        assert r == {"inserted": 1}
+        _legacy_link(e, s, "es", "performs")
 
         ent = client.post("/get-entity", json={"id": e}).json()
         assert ent["statement_links"] == [{"to_id": s, "link_type": "performs"}]
@@ -75,17 +70,11 @@ def test_entity_to_statement_link_round_trips(tmp_path, monkeypatch):
         assert stm["links"] == []
 
 
-def test_statement_to_entity_link_round_trips(tmp_path, monkeypatch):
-    """A statement→entity edge surfaces on `get_statements.links` and on
-    `get_entity.incoming_statement_links`."""
+def test_legacy_statement_to_entity_link_round_trips(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         e = _entity(client, "Invite")
         s = _stmt(client, "the system mints a token")
-        r = client.post(
-            "/add-links",
-            json={"links": [{"from_id": s, "to_id": e, "link_type": "produces"}]},
-        ).json()
-        assert r == {"inserted": 1}
+        _legacy_link(e, s, "se", "produces")
 
         stm = client.post("/get-statements", json={"ids": [s]}).json()["statements"][0]
         assert stm["links"] == [{"to_id": e, "link_type": "produces"}]
@@ -96,35 +85,46 @@ def test_statement_to_entity_link_round_trips(tmp_path, monkeypatch):
         ]
 
 
-def test_add_links_routes_each_pair_to_the_right_table(tmp_path, monkeypatch):
-    """Statement↔statement, entity→statement, and statement→entity edges
-    can be added in a single call; counts add up across both tables."""
+def test_add_links_rejects_mixed_batch_before_any_mutation(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         e = _entity(client, "User")
         s1, s2 = _stmt(client, "alpha"), _stmt(client, "beta")
+        first = client.post(
+            "/add-links",
+            json={"links": [{"from_id": s1, "to_id": s2, "link_type": "triggers"}]},
+        )
+        assert first.json() == {"inserted": 1}
         r = client.post(
             "/add-links",
             json={
                 "links": [
                     {"from_id": s1, "to_id": s2, "link_type": "triggers"},
                     {"from_id": e, "to_id": s1, "link_type": "performs"},
-                    {"from_id": s2, "to_id": e, "link_type": "produces"},
+                    {"from_id": s2, "to_id": s1, "link_type": "requires"},
                 ]
             },
-        ).json()
-        assert r == {"inserted": 3}
-
-
-def test_entity_to_entity_via_add_links_is_rejected(tmp_path, monkeypatch):
-    """Entity↔entity edges have their own vocabulary and tool —
-    `add_links` rejects them so the link-type namespaces stay clean."""
-    with _client(tmp_path, monkeypatch) as client:
-        e1, e2 = _entity(client, "User"), _entity(client, "Session")
-        r = client.post(
-            "/add-links",
-            json={"links": [{"from_id": e1, "to_id": e2, "link_type": "contains"}]},
         )
         assert r.status_code == 400
+        assert "statement-to-statement" in r.json()["detail"]
+        assert (
+            store.substrate_connection()
+            .execute("SELECT COUNT(*) AS n FROM statement_links")
+            .fetchone()["n"]
+            == 1
+        )
+
+
+def test_every_entity_endpoint_via_add_links_is_rejected(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        e1, e2 = _entity(client, "User"), _entity(client, "Session")
+        for edge in (
+            {"from_id": e1, "to_id": e2, "link_type": "contains"},
+            {"from_id": e1, "to_id": "stm_missing", "link_type": "performs"},
+            {"from_id": "stm_missing", "to_id": e2, "link_type": "produces"},
+        ):
+            r = client.post("/add-links", json={"links": [edge]})
+            assert r.status_code == 400
+            assert "add_entity_links" in r.json()["detail"]
 
 
 # ─── when expressions ──────────────────────────────────────────────────────
@@ -138,19 +138,7 @@ def test_entity_statement_link_with_when_round_trips(tmp_path, monkeypatch):
         s = _stmt(client, "an invite is sent")
         cond = _stmt(client, "the reviewer is signed in")
 
-        client.post(
-            "/add-links",
-            json={
-                "links": [
-                    {
-                        "from_id": e,
-                        "to_id": s,
-                        "link_type": "performs",
-                        "when": {"statement_id": cond},
-                    }
-                ]
-            },
-        )
+        _legacy_link(e, s, "es", "performs", {"statement_id": cond})
 
         ent = client.post("/get-entity", json={"id": e}).json()
         link = ent["statement_links"][0]
@@ -165,19 +153,7 @@ def test_when_references_includes_entity_statement_edges(tmp_path, monkeypatch):
         s = _stmt(client, "the reviewer submits an invite")
         cond = _stmt(client, "the reviewer is signed in")
 
-        client.post(
-            "/add-links",
-            json={
-                "links": [
-                    {
-                        "from_id": e,
-                        "to_id": s,
-                        "link_type": "performs",
-                        "when": {"statement_id": cond},
-                    }
-                ]
-            },
-        )
+        _legacy_link(e, s, "es", "performs", {"statement_id": cond})
 
         body = client.post("/get-statements", json={"ids": [cond]}).json()
         refs = body["statements"][0]["when_references"]
@@ -200,10 +176,7 @@ def test_remove_links_idempotent_across_kinds(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         e = _entity(client, "Reviewer")
         s = _stmt(client, "invite is sent")
-        client.post(
-            "/add-links",
-            json={"links": [{"from_id": e, "to_id": s, "link_type": "performs"}]},
-        )
+        _legacy_link(e, s, "es", "performs")
 
         r = client.post(
             "/remove-links",
@@ -229,19 +202,7 @@ def test_delete_statement_cascades_entity_statement_links(tmp_path, monkeypatch)
         s = _stmt(client, "invite is sent")
         cond = _stmt(client, "reviewer is signed in")
 
-        client.post(
-            "/add-links",
-            json={
-                "links": [
-                    {
-                        "from_id": e,
-                        "to_id": s,
-                        "link_type": "performs",
-                        "when": {"statement_id": cond},
-                    }
-                ]
-            },
-        )
+        _legacy_link(e, s, "es", "performs", {"statement_id": cond})
 
         # Deleting `s` drops the edge (s is the endpoint).
         r = client.post("/delete-statement", json={"id": s}).json()
@@ -261,19 +222,7 @@ def test_delete_statement_used_as_when_leaf_drops_entity_statement_link(
         s = _stmt(client, "invite is sent")
         cond = _stmt(client, "reviewer is signed in")
 
-        client.post(
-            "/add-links",
-            json={
-                "links": [
-                    {
-                        "from_id": e,
-                        "to_id": s,
-                        "link_type": "performs",
-                        "when": {"statement_id": cond},
-                    }
-                ]
-            },
-        )
+        _legacy_link(e, s, "es", "performs", {"statement_id": cond})
 
         client.post("/delete-statement", json={"id": cond})
         ent = client.post("/get-entity", json={"id": e}).json()
@@ -287,15 +236,8 @@ def test_delete_entity_cascades_entity_statement_links(tmp_path, monkeypatch):
         e = _entity(client, "Reviewer")
         s1, s2 = _stmt(client, "alpha"), _stmt(client, "beta")
 
-        client.post(
-            "/add-links",
-            json={
-                "links": [
-                    {"from_id": e, "to_id": s1, "link_type": "performs"},
-                    {"from_id": s2, "to_id": e, "link_type": "produces"},
-                ]
-            },
-        )
+        _legacy_link(e, s1, "es", "performs")
+        _legacy_link(e, s2, "se", "produces")
 
         r = client.post("/delete-entity", json={"id": e}).json()
         assert r["entity_statement_links_removed"] == 2
@@ -316,14 +258,7 @@ def test_merge_entities_rewrites_entity_statement_links(tmp_path, monkeypatch):
         target = _entity(client, "Sign-in")
         s = _stmt(client, "the user signs in")
 
-        client.post(
-            "/add-links",
-            json={
-                "links": [
-                    {"from_id": source, "to_id": s, "link_type": "performs"},
-                ]
-            },
-        )
+        _legacy_link(source, s, "es", "performs")
 
         client.post(
             "/merge-entities",
@@ -347,14 +282,7 @@ def test_merge_statements_rewrites_entity_statement_link_endpoint(
         s_source = _stmt(client, "draft of the invite event")
         s_target = _stmt(client, "the reviewer submits an invite")
 
-        client.post(
-            "/add-links",
-            json={
-                "links": [
-                    {"from_id": e, "to_id": s_source, "link_type": "performs"},
-                ]
-            },
-        )
+        _legacy_link(e, s_source, "es", "performs")
 
         client.post(
             "/merge-statements",

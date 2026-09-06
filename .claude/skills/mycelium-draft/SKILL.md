@@ -201,18 +201,8 @@ Edges to add where both endpoints are already in the substrate.
 
 ## Entity links
 
-Edges anchored on an entity, not between two statements — the statement-link tables above can't hold these (their endpoints are `Sn`/`stm_`). Two kinds, two tools.
-
-### Entity → statement (`add_links`, `from_id=ent_…`)
-
-Entity-level schema: which `property` records an entity `requires` / `accepts`, etc. (Properties are still anchored to the entity by `mentions` in the New statements table; these edges are the recommended schema-discovery layer on top — authoring §4c.)
-
-| From entity | Link type | To (ref / id) |
-|-------------|-----------|---------------|
-| User Invite | requires | S1 · "Email" |
-| User Invite | accepts | S4 · "Default role" |
-
-[Omit section if none.]
+Only entity↔entity links can be authored. Legacy entity↔statement links remain
+readable and removable but must not appear in a new draft.
 
 ### Entity ↔ entity (`add_entity_links`)
 

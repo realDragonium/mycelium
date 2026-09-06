@@ -424,13 +424,10 @@ ValueError on unknown id.
 ### add_links
 
 `add_links(links)` accepts a list of `{from_id, to_id, link_type,
-when?}` items and inserts each as an edge. Endpoints may be statement
-ids (`stm_…`) or entity ids (`ent_…`) in any combination — except
-entity↔entity, which has its own vocabulary and lives behind
-`add_entity_links`. Statement↔statement edges land in `statement_links`;
-any edge touching an entity lands in `entity_statement_links`.
-Externally the caller sees a single uniform link API; the routing is
-internal storage.
+when?}` items and inserts each as a statement↔statement edge. New
+entity↔statement edges are rejected. Existing mixed edges remain stored,
+readable, removable, and transferable during merges. Entity↔entity links use
+their own vocabulary and live behind `add_entity_links`.
 
 The operation is bulk-by-default — passing a single edge is just a
 one-element list — and idempotent: pre-existing rows are silently

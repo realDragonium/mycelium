@@ -28,6 +28,7 @@ from pathlib import Path
 
 from . import timestamps
 from .connections import ConnectionProvider
+from .link_authoring import reject_entity_statement_additions
 
 DRAFTS_SCHEMA = """
 -- A drafter's pending change set. One open draft per MCP session;
@@ -235,6 +236,8 @@ def add_op(
     """Append an op to a draft; returns the new seq number. Caller must
     have already verified the draft is open — this function does not
     re-check (callers vary in how they want to report the failure)."""
+    if kind == "add_links":
+        reject_entity_statement_additions(payload.get("links"))
     row = conn.execute(
         "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM draft_ops WHERE draft_id = ?",
         (draft_id,),
@@ -279,6 +282,12 @@ def remove_op(conn: sqlite3.Connection, draft_id: str, seq: int) -> bool:
 def update_op_payload(
     conn: sqlite3.Connection, draft_id: str, seq: int, payload: dict
 ) -> bool:
+    row = conn.execute(
+        "SELECT kind FROM draft_ops WHERE draft_id = ? AND seq = ?",
+        (draft_id, seq),
+    ).fetchone()
+    if row is not None and row["kind"] == "add_links":
+        reject_entity_statement_additions(payload.get("links"))
     cur = conn.execute(
         "UPDATE draft_ops SET payload_json = ? WHERE draft_id = ? AND seq = ?",
         (_json.dumps(payload), draft_id, seq),
