@@ -180,6 +180,16 @@ def _deliver(
 ) -> Delivery:
     path = render_path(config.destination, document)
     branch = _branch_name(config, document)
+    credentials = list(_ACTIVE_CREDENTIALS.get()) or [token]
+    if any(
+        credential and credential in value
+        for credential in credentials
+        for value in (path, branch)
+    ):
+        raise DestinationError(
+            f"destination {config.destination.name!r} derived a credential-bearing "
+            "coordinate from the document"
+        )
     if branch == config.base_branch:
         raise DestinationError(
             f"destination {config.destination.name!r} derived its configured base "
@@ -511,7 +521,7 @@ def _request_json(
     url = _api_base(config) + f"/repos/{config.owner}/{config.repo}" + path
     credentials = list(_ACTIVE_CREDENTIALS.get()) or [token]
     log_filter = _CredentialFilter(credentials)
-    loggers = (logging.getLogger("httpx"), logging.getLogger("httpcore"))
+    loggers = _http_loggers()
     handlers = _logging_handlers(loggers)
     for logger in loggers:
         logger.addFilter(log_filter)
@@ -637,6 +647,18 @@ def _logging_handlers(
             if handler not in handlers:
                 handlers.append(handler)
     return tuple(handlers)
+
+
+def _http_loggers() -> tuple[logging.Logger, ...]:
+    loggers = [logging.getLogger("httpx"), logging.getLogger("httpcore")]
+    for name, logger in logging.Logger.manager.loggerDict.items():
+        if (
+            isinstance(logger, logging.Logger)
+            and name.startswith(("httpx.", "httpcore."))
+            and logger not in loggers
+        ):
+            loggers.append(logger)
+    return tuple(loggers)
 
 
 def _validate(name: str, field: str, value: str, pattern: re.Pattern[str]) -> str:

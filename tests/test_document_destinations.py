@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -565,6 +566,33 @@ def test_a_derived_delivery_branch_cannot_equal_the_configured_base():
     assert requests == []
 
 
+def test_document_coordinates_cannot_expose_a_configured_credential():
+    other_token = "fixture-token-for-other-destination"
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    document = replace(_document(), slug=other_token)
+
+    with pytest.raises(DestinationError, match="credential-bearing coordinate"):
+        deliver(
+            _config(),
+            document,
+            {
+                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "DOCS_GITHUB_TOKEN": TOKEN,
+                "OTHER_GITHUB_TOKEN": other_token,
+            },
+            client=client,
+        )
+
+    assert requests == []
+
+
 def test_a_failed_review_can_be_retried_against_the_existing_remote_branch(
     tmp_path, monkeypatch
 ):
@@ -892,6 +920,38 @@ def test_delivery_scrubs_every_configured_destinations_credential(caplog):
     assert other_token not in str(excinfo.value)
     assert other_token not in caplog.text
     assert "***" in str(excinfo.value)
+    assert "***" in caplog.text
+
+
+def test_delivery_scrubs_credentials_from_child_logger_handlers(caplog):
+    other_token = "fixture-token-for-other-destination"
+    httpcore_logger = logging.getLogger("httpcore.http11")
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        httpcore_logger.debug("response reason %s", other_token)
+        return httpx.Response(500, text="failed")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level("DEBUG", logger="httpcore.http11"):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {
+                    "MYCELIUM_DOC_DESTINATIONS": raw,
+                    "DOCS_GITHUB_TOKEN": TOKEN,
+                    "OTHER_GITHUB_TOKEN": other_token,
+                },
+                client=client,
+            )
+
+    assert other_token not in caplog.text
     assert "***" in caplog.text
 
 

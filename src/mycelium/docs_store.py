@@ -661,17 +661,20 @@ def record_delivery(
     content_revision: str,
 ) -> None:
     """Record a completed delivery without accepting or rewriting content."""
-    cursor = conn.execute(
-        "UPDATE generated_documents SET delivery_destination = ?, "
-        "delivery_path = ?, delivery_reference = ?, "
-        "delivery_content_revision = ? "
-        "WHERE id = ?",
-        (destination, path, reference, content_revision, document_id),
-    )
-    if cursor.rowcount != 1:
+    try:
+        cursor = conn.execute(
+            "UPDATE generated_documents SET delivery_destination = ?, "
+            "delivery_path = ?, delivery_reference = ?, "
+            "delivery_content_revision = ? "
+            "WHERE id = ?",
+            (destination, path, reference, content_revision, document_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"generated document not found: {document_id}")
+        conn.commit()
+    except Exception:
         conn.rollback()
-        raise ValueError(f"generated document not found: {document_id}")
-    conn.commit()
+        raise
 
 
 def get_document_by_slug(

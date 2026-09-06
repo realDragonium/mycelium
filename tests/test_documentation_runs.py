@@ -771,6 +771,37 @@ def test_record_delivery_rejects_an_unknown_document_without_writing(tmp_path):
     assert docs_store.list_documents(conn) == []
 
 
+def test_record_delivery_rolls_back_when_commit_fails(tmp_path):
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn, slug="topic", title="Topic", body="Body"
+    )
+
+    class FailingCommitConnection:
+        def execute(self, sql: str, parameters: tuple[str, ...]):
+            return conn.execute(sql, parameters)
+
+        def commit(self) -> None:
+            raise RuntimeError("commit failed")
+
+        def rollback(self) -> None:
+            conn.rollback()
+
+    with pytest.raises(RuntimeError, match="commit failed"):
+        docs_store.record_delivery(
+            FailingCommitConnection(),
+            document_id,
+            destination="knowledge-base",
+            path="docs/topic.md",
+            reference="https://github.com/acme/docs/pull/17",
+            content_revision="abc123",
+        )
+
+    document = docs_store.serialize_document(docs_store.get_document(conn, document_id))
+    assert document["delivery_destination"] is None
+    assert not conn.in_transaction
+
+
 def test_upsert_document_updates_same_slug_in_place(tmp_path):
     conn = _conn(tmp_path)
     first_id = docs_store.upsert_document(
