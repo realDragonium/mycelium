@@ -753,6 +753,27 @@ def test_a_token_crossing_the_error_excerpt_boundary_is_fully_scrubbed():
     assert TOKEN[:5] not in str(excinfo.value)
 
 
+def test_http_client_logs_scrub_a_credential_in_the_response_reason(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500, text="failed", extensions={"reason_phrase": TOKEN.encode()}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with caplog.at_level("INFO", logger="httpx"):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {"DOCS_GITHUB_TOKEN": TOKEN},
+                client=client,
+            )
+
+    assert TOKEN not in caplog.text
+    assert "***" in caplog.text
+
+
 def test_an_existing_review_must_match_the_requested_delivery():
     requests, handler = _responses(
         existing_reference="https://github.com/acme/handbook/pull/17"
@@ -965,6 +986,21 @@ def test_listing_destinations_returns_only_generic_configuration(monkeypatch):
     rendered = json.dumps(listed)
     assert "DOCS_GITHUB_TOKEN" not in rendered
     assert TOKEN not in rendered
+
+
+def test_listing_refuses_public_configuration_that_contains_the_credential(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({TOKEN: _entry(path_template=f"docs/{TOKEN}/{{slug}}.md")}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+
+    with pytest.raises(ValueError) as excinfo:
+        server.list_documentation_destinations()
+
+    assert TOKEN not in str(excinfo.value)
 
 
 def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(

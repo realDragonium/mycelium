@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import unicodedata
@@ -80,6 +81,23 @@ def coordinates(destination: DestinationConfig) -> dict[str, str]:
         "repo": config.repo,
         "base_branch": config.base_branch,
     }
+
+
+def validate_config_secrets(
+    destination: DestinationConfig, env: Mapping[str, str]
+) -> None:
+    config = GitHubConfig.parse(destination)
+    token = env.get(config.token_env)
+    public_values = (
+        destination.name,
+        destination.path_template,
+        config.host,
+        config.owner,
+        config.repo,
+        config.base_branch,
+    )
+    if token and any(token in value for value in public_values):
+        raise DestinationError("destination configuration contains a credential")
 
 
 def deliver(
@@ -433,6 +451,13 @@ def _request_json(
     **kwargs,
 ) -> dict | list | None:
     url = _api_base(config) + f"/repos/{config.owner}/{config.repo}" + path
+    log_filter = _CredentialFilter(token)
+    loggers = (logging.getLogger("httpx"), logging.getLogger("httpcore"))
+    handlers = _logging_handlers(loggers)
+    for logger in loggers:
+        logger.addFilter(log_filter)
+    for handler in handlers:
+        handler.addFilter(log_filter)
     try:
         response = client.request(method, url, headers=_headers(token), **kwargs)
     except httpx.HTTPError as exc:
@@ -442,6 +467,11 @@ def _request_json(
                 [token],
             )
         ) from None
+    finally:
+        for logger in loggers:
+            logger.removeFilter(log_filter)
+        for handler in handlers:
+            handler.removeFilter(log_filter)
     if allow_not_found and response.status_code == 404:
         return None
     if branch_moved_on_conflict and response.status_code in {409, 422}:
@@ -526,6 +556,28 @@ def _git_blob_id(body: str) -> str:
     content = body.encode("utf-8")
     header = f"blob {len(content)}\0".encode()
     return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
+
+
+class _CredentialFilter(logging.Filter):
+    def __init__(self, token: str) -> None:
+        super().__init__()
+        self._token = token
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = record.getMessage().replace(self._token, "***")
+        record.args = ()
+        return True
+
+
+def _logging_handlers(
+    loggers: tuple[logging.Logger, ...],
+) -> tuple[logging.Handler, ...]:
+    handlers: list[logging.Handler] = []
+    for logger in (*loggers, logging.getLogger()):
+        for handler in logger.handlers:
+            if handler not in handlers:
+                handlers.append(handler)
+    return tuple(handlers)
 
 
 def _validate(name: str, field: str, value: str, pattern: re.Pattern[str]) -> str:

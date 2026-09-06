@@ -87,7 +87,9 @@ def load_destinations(
     configured: dict[str, DestinationConfig] = {}
     for raw_name, entry in parsed.items():
         name = str(raw_name)
-        configured[name] = _load_destination(name, entry)
+        config = _load_destination(name, entry)
+        _backend(config).validate_config_secrets(config, e)
+        configured[name] = config
     return configured
 
 
