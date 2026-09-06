@@ -278,7 +278,11 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
         for link_type, alias, direction in seed_rows():
             if link_type != pattern.link_type:
                 continue
-            text = f"X {alias} Y"
+            text = (
+                f"X {alias} the three values of Y"
+                if pattern.name == "cases-one-of"
+                else f"X {alias} Y"
+            )
             for kind in kinds:
                 for cue in find_cues(text, kind, aliases):
                     if (
@@ -293,8 +297,6 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
         ("contains-part-of", "is part of"),
         ("requires-required", "is required for"),
         ("cases-one-of", "is one of"),
-        ("cases-level-for", "is high for"),
-        ("cases-level-for", "is low for"),
         ("contains-belongs-to", "belongs to"),
         ("contains-belongs-to", "is owned by"),
         ("restricts-state-by", "is locked by"),
@@ -351,7 +353,6 @@ def test_seeded_alias_directions_agree_with_every_frame_geometry():
             "valued-by-derived",
             "valued-by-determined",
             "cases-one-of",
-            "cases-level-for",
             "fallback-to-defaults",
             "teaches-how-to",
             "resolves-fix",

@@ -319,7 +319,9 @@ def test_upsert_statement_accepts_unconstrained_self_link(tmp_path, monkeypatch)
         ]
 
 
-def test_entity_touching_edges_are_not_direction_checked(tmp_path, monkeypatch):
+def test_entity_touching_edges_are_rejected_before_direction_checks(
+    tmp_path, monkeypatch
+):
     with _client(tmp_path, monkeypatch) as client:
         prop = _stmt(client, "property", "Export format")
         entity = _entity(client, "Report")
@@ -333,8 +335,8 @@ def test_entity_touching_edges_are_not_direction_checked(tmp_path, monkeypatch):
             },
         )
 
-        assert r.status_code == 200
-        assert r.json() == {"inserted": 1}
+        assert r.status_code == 400
+        assert "statement-to-statement" in r.json()["detail"]
 
 
 def test_contains_between_events_is_unaffected(tmp_path, monkeypatch):

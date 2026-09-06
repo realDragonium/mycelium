@@ -27,7 +27,10 @@ import sqlite3
 import threading
 from typing import Any, Callable
 
-from . import docs_store
+from . import docs_store, product_settings
+from .docgen.config import DocgenConfig, Provider
+from .docgen.destinations import DestinationConfig, load_destinations
+from .docgen.schema import CurrentDocument, ExistingDocument
 
 logger = logging.getLogger(__name__)
 MAX_ACTIVE_ENV = "MYCELIUM_DOCGEN_MAX_ACTIVE"
@@ -44,18 +47,29 @@ def start_run(
     document_type: str | None,
     created_by: str | None,
     conn: sqlite3.Connection,
+    provider: Provider | None = None,
     runner: Callable[..., Any] | None = None,
 ) -> str:
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
     selected_runner = runner or RUNNER or _default_runner
-    max_active = int(os.environ.get(MAX_ACTIVE_ENV) or 2)
+    config = DocgenConfig.from_env(provider=provider)
+    if not config.model:
+        raise ValueError(
+            f"Choose a {config.provider} documentation model in AI settings."
+        )
+    if config.provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY", "").strip():
+            raise ValueError("Set OPENAI_API_KEY on the server.")
+    max_active = product_settings.get(
+        product_settings.ConcurrencySettings
+    ).documentation_runs
+    destinations = load_destinations()
 
     with _spawn_lock:
         if docs_store.count_active(conn) >= max_active:
             raise ValueError(
-                f"too many active documentation runs (max {max_active}, from "
-                f"{MAX_ACTIVE_ENV}); retry when one finishes"
+                f"too many active documentation runs (max {max_active}); retry when one finishes"
             )
 
         run_id = docs_store.create_run(
@@ -64,6 +78,8 @@ def start_run(
             guideline_set=guideline_set,
             document_type=document_type,
             created_by=created_by,
+            provider=config.provider,
+            model=config.model,
         )
         # Anything failing between here and thread.start() must not strand
         # the freshly committed row: finish it as failed, then re-raise.
@@ -89,6 +105,8 @@ def start_run(
                     document_type,
                     db_path,
                     selected_runner,
+                    config,
+                    destinations,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -121,17 +139,31 @@ def _default_runner(
     *,
     guideline_set: str | None = None,
     document_type: str | None = None,
+    existing_documents: tuple[ExistingDocument, ...] = (),
+    load_current_document: Callable[[str], CurrentDocument] | None = None,
+    config: DocgenConfig | None = None,
 ) -> Any:
     """The real generation loop.
 
     Imported inside the call, on the worker thread: the loop pulls the
-    anthropic SDK, and requesting a documentation run must not be what makes
+    provider client, and requesting a documentation run must not be what makes
     an instance that never generates pay for it. Anything the loop cannot
     survive comes back as an exception here and lands on the row's `error`,
     which is where a caller polling the run will read it."""
     from .docgen import run_docgen
 
-    return run_docgen(prompt, guideline_set=guideline_set, document_type=document_type)
+    if existing_documents:
+        return run_docgen(
+            prompt,
+            guideline_set=guideline_set,
+            document_type=document_type,
+            existing_documents=existing_documents,
+            load_current_document=load_current_document,
+            config=config,
+        )
+    return run_docgen(
+        prompt, guideline_set=guideline_set, document_type=document_type, config=config
+    )
 
 
 def _execute_run(
@@ -141,6 +173,8 @@ def _execute_run(
     document_type: str | None,
     db_path: str,
     runner: Callable[..., Any],
+    config: DocgenConfig | None = None,
+    destinations: dict[str, DestinationConfig] | None = None,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -150,6 +184,7 @@ def _execute_run(
     error = None
     draft_title = None
     draft_body = None
+    matched_document_id = None
 
     try:
         # Inside the try: a failed connect must still reach the finally-side
@@ -167,9 +202,21 @@ def _execute_run(
         from . import server
 
         with server.model_loop_slot():
-            result = runner(
-                prompt, guideline_set=guideline_set, document_type=document_type
-            )
+            if runner is _default_runner:
+                result = runner(
+                    prompt,
+                    guideline_set=guideline_set,
+                    document_type=document_type,
+                    config=config,
+                    existing_documents=_existing_documents(conn),
+                    load_current_document=lambda document_id: _load_current_document(
+                        conn, document_id, destinations
+                    ),
+                )
+            else:
+                result = runner(
+                    prompt, guideline_set=guideline_set, document_type=document_type
+                )
         payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
         # The request may have named neither, in which case the run chose. Put
         # the choice on the row before the outcome is decided, so a run that
@@ -183,6 +230,7 @@ def _execute_run(
             document_type=payload.get("document_type"),
         )
         reported = payload.get("outcome")
+        matched_document_id = payload.get("matched_document_id")
         if reported not in ("document_written", "nothing_written"):
             # Not folded into `nothing_written`: a runner that returns junk, or
             # reports its own failure, would otherwise be recorded as a clean
@@ -203,9 +251,20 @@ def _execute_run(
             # Written before `outcome` is set, so a rejected document (a
             # refused collision, blank slug, or unwritable DB) finishes the run
             # failed rather than claiming a document that is not there.
+            matched_row = (
+                docs_store.get_document(conn, matched_document_id)
+                if matched_document_id is not None
+                else None
+            )
+            if matched_document_id is not None and matched_row is None:
+                raise ValueError("matched generated document no longer exists")
             document_id = docs_store.upsert_document(
                 conn,
-                slug=payload["slug"],
+                slug=(
+                    str(matched_row["slug"])
+                    if matched_row is not None
+                    else payload["slug"]
+                ),
                 title=payload["title"],
                 body=payload["body"],
                 # The run may resolve what the request left unnamed; what it
@@ -218,6 +277,19 @@ def _execute_run(
                 # of making their missing record fatal; the store writes `{}`.
                 review=payload.get("review"),
                 run_id=run_id,
+                updates=matched_document_id,
+                replacing=(
+                    str(payload["matched_body_digest"])
+                    if payload.get("matched_body_digest") is not None
+                    else (
+                        docs_store.body_digest(str(matched_row["body"]))
+                        if matched_row is not None
+                        else None
+                    )
+                ),
+                revision_source_content_revision=payload.get(
+                    "matched_content_revision"
+                ),
             )
             outcome = "document_written"
         else:
@@ -249,6 +321,7 @@ def _execute_run(
                 error=error,
                 draft_title=draft_title,
                 draft_body=draft_body,
+                matched_document_id=matched_document_id,
             )
         except Exception:  # noqa: BLE001
             logger.exception("could not finalize documentation run %s", run_id)
@@ -256,3 +329,46 @@ def _execute_run(
             if own_conn is not None:
                 own_conn.close()
             _threads.pop(run_id, None)
+
+
+def _existing_documents(conn: sqlite3.Connection) -> tuple[ExistingDocument, ...]:
+    return tuple(
+        ExistingDocument(
+            id=str(row["id"]),
+            slug=str(row["slug"]),
+            title=str(row["title"]),
+            guideline_set=str(row["guideline_set"]),
+            document_type=str(row["document_type"]),
+            body_digest=docs_store.body_digest(str(row["body"])),
+        )
+        for row in docs_store.list_documents(conn, limit=None)
+    )
+
+
+def _load_current_document(
+    conn: sqlite3.Connection,
+    document_id: str,
+    configured_destinations: dict[str, DestinationConfig] | None = None,
+) -> CurrentDocument:
+    from .docgen import destinations
+
+    row = docs_store.get_document(conn, document_id)
+    if row is None:
+        raise ValueError("matched generated document no longer exists")
+    destination = row["delivery_destination"]
+    path = row["delivery_path"]
+    if destination and path:
+        configured = (
+            destinations.get_destination(str(destination))
+            if configured_destinations is None
+            else configured_destinations.get(str(destination))
+        )
+        if configured is None:
+            raise ValueError(
+                "The document destination was unavailable when this run started."
+            )
+        destinations.require_recorded_target(configured, row["delivery_target"])
+        return destinations.read_document(
+            configured, str(path), document_id, str(row["slug"])
+        )
+    return CurrentDocument(body=str(row["body"]))

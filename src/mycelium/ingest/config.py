@@ -1,12 +1,11 @@
 """Tunables for the `ingest` write-harness loop.
 
-Config follows the repo convention (ask/config.py, embed.py, http.py):
-module-level defaults read from `MYCELIUM_INGEST_*` env vars with inline
-fallbacks. No central settings module.
+Model choices use saved per-action settings, with legacy environment values imported
+once on upgrade. Task budgets come from saved AI settings.
 
 The model default is **Sonnet** (`claude-sonnet-4-6`) — one model, one context
 drives extract -> reconcile -> classify -> link -> emit. The id is config,
-never hardcoded in logic; override with `MYCELIUM_INGEST_MODEL`.
+never hardcoded in logic; choose it in AI settings.
 
 `ingest` runs hotter than `ask`: it reconciles *every* extracted candidate
 against the substrate, so the op cap and wall clock are larger.
@@ -18,7 +17,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import tracing
+from .. import model_settings, product_settings, tracing
+from ..ai import Provider
 
 #: Current Sonnet model id (confirmed against Anthropic's model catalog).
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -35,6 +35,7 @@ DOCTRINE_NAME = "ingest"
 @dataclass(frozen=True)
 class IngestConfig:
     model: str = DEFAULT_MODEL
+    provider: Provider = "claude"
     #: Hard ceiling on substrate operations per call. Vocab fetch + every
     #: reconcile read counts toward it. Higher than ask's: ingest reconciles
     #: per-candidate, so it spends far more reads.
@@ -44,10 +45,10 @@ class IngestConfig:
     wall_clock_s: float = 120.0
     #: max_tokens per model turn. Comfortably above a structured emit.
     max_tokens: int = 8000
-    #: Anthropic SDK auto-retries 429/5xx/connection with exponential backoff;
+    #: Provider retries cover 429/5xx/connection with exponential backoff;
     #: this raises its default 2 for the slow-substrate environment.
     max_retries: int = 4
-    #: Per-Anthropic-call timeout, seconds. Kept under the wall clock so a
+    #: Per-model-call timeout, seconds. Kept under the wall clock so a
     #: single hung call can't blow the whole budget.
     request_timeout_s: float = 90.0
     #: Adaptive thinking in the loop (disabled only on the forced emit call,
@@ -58,11 +59,9 @@ class IngestConfig:
     max_input_chars: int = 20000
     #: Path to the reasoning doctrine injected into the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
-    #: Sonnet pricing, $ / 1M tokens — used only to stamp an estimated cost on
-    #: the trace. Override via MYCELIUM_INGEST_INPUT_PER_MTOK / _OUTPUT_PER_MTOK
-    #: when running a non-default model.
-    input_per_mtok: float = 3.0
-    output_per_mtok: float = 15.0
+    #: Cost rates are populated only for the known default Claude model.
+    input_per_mtok: float | None = None
+    output_per_mtok: float | None = None
     #: JSONL sink for the trace. None → resolved by the caller to a default
     #: under the data dir (see server wiring).
     trace_log_path: str | None = None
@@ -76,27 +75,33 @@ class IngestConfig:
             v = os.environ.get(name)
             return float(v) if v else default
 
-        def _i(name: str, default: int) -> int:
-            v = os.environ.get(name)
-            return int(v) if v else default
+        limits = product_settings.get(product_settings.IngestSettings)
+        selected = model_settings.get("ingest")
 
         return cls(
-            model=os.environ.get("MYCELIUM_INGEST_MODEL") or DEFAULT_MODEL,
-            op_cap=_i("MYCELIUM_INGEST_OP_CAP", 50),
-            wall_clock_s=_f("MYCELIUM_INGEST_WALL_CLOCK_S", 120.0),
-            max_tokens=_i("MYCELIUM_INGEST_MAX_TOKENS", 8000),
-            max_retries=_i("MYCELIUM_INGEST_MAX_RETRIES", 4),
-            request_timeout_s=_f("MYCELIUM_INGEST_REQUEST_TIMEOUT_S", 90.0),
-            thinking=(
-                os.environ.get("MYCELIUM_INGEST_THINKING", "on").lower() != "off"
-            ),
-            max_input_chars=_i("MYCELIUM_INGEST_MAX_INPUT_CHARS", 20000),
+            model=selected.model,
+            provider=selected.provider,
+            op_cap=limits.op_cap,
+            wall_clock_s=limits.wall_clock_s,
+            max_tokens=limits.max_tokens,
+            max_retries=limits.max_retries,
+            request_timeout_s=limits.request_timeout_s,
+            thinking=limits.thinking,
+            max_input_chars=limits.max_input_chars,
             doctrine_path=(
                 os.environ.get("MYCELIUM_INGEST_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH
             ),
-            input_per_mtok=_f("MYCELIUM_INGEST_INPUT_PER_MTOK", 3.0),
-            output_per_mtok=_f("MYCELIUM_INGEST_OUTPUT_PER_MTOK", 15.0),
+            input_per_mtok=(
+                _f("MYCELIUM_INGEST_INPUT_PER_MTOK", 3.0)
+                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
+                else None
+            ),
+            output_per_mtok=(
+                _f("MYCELIUM_INGEST_OUTPUT_PER_MTOK", 15.0)
+                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
+                else None
+            ),
             trace_log_path=os.environ.get("MYCELIUM_INGEST_TRACE_LOG"),
             trace_dir=(
                 os.environ.get("MYCELIUM_INGEST_TRACE_DIR")

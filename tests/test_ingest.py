@@ -459,6 +459,31 @@ def test_missing_required_key_is_flagged():
     assert any("missing required key" in f for f in result.trace["flagged"])
 
 
+def test_entity_statement_addition_is_an_ingest_finding():
+    emit = _emit_input(
+        ops=[
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        {
+                            "from_id": "ent_existing",
+                            "to_id": "stm_existing",
+                            "link_type": "performs",
+                        }
+                    ]
+                },
+            )
+        ],
+        flagged=["keep the draft visible"],
+    )
+    responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+    result, _client, _sub, emitter = _run(responses)
+    assert isinstance(result, DraftCreated)
+    assert emitter.queued == []
+    assert any("statement-to-statement" in finding for finding in result.flagged)
+
+
 # --------------------------------------------------------------------------- #
 # Phrasing pre-validation
 # --------------------------------------------------------------------------- #
@@ -1272,6 +1297,7 @@ def test_t9_real_emitter_persists_draft_and_ops_via_drafts_store_and_drops_none(
     draft_row = drafts_store.get_draft(conn, result.draft_id)
     assert draft_row is not None
     assert drafts_store.status_for(draft_row) == "open"
+    assert draft_row["revision"] == 1
     # the op row landed too, and the None-valued `id` key was dropped at queue
     op_rows = drafts_store.list_ops(conn, result.draft_id)
     assert len(op_rows) == 1

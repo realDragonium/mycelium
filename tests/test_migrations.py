@@ -32,6 +32,47 @@ def test_fresh_db_fast_forwards_to_current():
     assert _has_column(conn, "statements", "updated_by")
 
 
+def test_fresh_db_seeds_all_glossaries():
+    conn = store.connect(":memory:")
+
+    store.migrate(conn)
+
+    assert store.get_statement_kind_glossary(conn, "event") is not None
+    assert store.get_statement_link_type_glossary(conn, "contains") is not None
+    assert store.get_entity_link_type_glossary(conn, "sub-type") is not None
+
+
+def test_migrate_does_not_restore_deleted_glossary_rows():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    conn.execute("DELETE FROM statement_kind_glossary WHERE kind = 'event'")
+    conn.execute(
+        "DELETE FROM statement_link_type_glossary WHERE link_type = 'triggers'"
+    )
+    conn.execute("DELETE FROM entity_link_type_glossary WHERE link_type = 'uses'")
+
+    store.migrate(conn)
+
+    assert store.get_statement_kind_glossary(conn, "event") is None
+    assert store.get_statement_link_type_glossary(conn, "triggers") is None
+    assert store.get_entity_link_type_glossary(conn, "uses") is None
+    assert store.get_statement_kind_glossary(conn, "state") is not None
+    assert store.get_statement_link_type_glossary(conn, "contains") is not None
+    assert store.get_entity_link_type_glossary(conn, "sub-type") is not None
+
+
+def test_migrate_keeps_an_existing_empty_glossary_empty():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    conn.execute("DELETE FROM statement_kind_glossary")
+
+    store.migrate(conn)
+
+    assert store.list_statement_kind_glossary(conn) == []
+    assert store.get_statement_link_type_glossary(conn, "contains") is not None
+    assert store.get_entity_link_type_glossary(conn, "sub-type") is not None
+
+
 def test_legacy_db_runs_v1():
     """Simulate the pre-audit shape: tables without the audit columns
     and no `user_version` set. The runner detects this and applies v1."""

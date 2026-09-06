@@ -1,12 +1,13 @@
 """Classify statement kinds with positive phrasing-shape matches.
 
-Participle lexicons are separate allow-lists because ``X is <participle>`` is
-shared by events, states, and rules. Unknown participles must remain unmatched
-so precision degrades gracefully on vocabulary the lexicons have never seen.
-Entries must be lemmas the parser actually emits in that shape's frame;
-lemmatizer quirks make some vocabulary unreachable. Noun/verb homographs can
-also defeat a shape entirely: "The nightly backup runs" parses "runs" as a noun
-and intentionally remains unmatched rather than guessed.
+Passive participle lexicons are separate allow-lists because
+``X is <participle>`` is shared by events, states, and rules. Unknown passive
+participles must remain unmatched so precision degrades gracefully on
+vocabulary the lexicons have never seen. Their entries must be lemmas the
+parser actually emits in that shape's frame; lemmatizer quirks make some
+vocabulary unreachable. Noun/verb homographs can also defeat a shape entirely:
+"The nightly backup runs" parses "runs" as a noun and intentionally remains
+unmatched rather than guessed.
 """
 
 from __future__ import annotations
@@ -43,6 +44,9 @@ STATE_PARTICIPLES = frozenset(
         "hide",
         "lock",
         "match",
+        # "own" is stative, so its passive states a relation and cannot report
+        # an occurrence, unlike dynamic participles such as "create".
+        "own",
         "populate",
         "register",
         "restrict",
@@ -117,6 +121,16 @@ EVENT_PARTICIPLES = frozenset(
         "write",
     }
 )
+# Membership is keyed on the ADJ complement's lowercased surface form because
+# spaCy's ADJ lemma equals its surface. Include a word only when spaCy actually
+# tags it ADJ on this copula frame, its adjectival state reading is implausible,
+# and an event reading was intended. Legitimate adjectival states such as
+# "open", "empty", and "closed" must never be added, so this is curated rather
+# than accepting any participle-looking ADJ. To extend it, add the word and
+# confirm test_ambiguous_event_participle_entries_are_reachable_and_compete
+# still passes. ``un``-prefixed participles such as "unlinked" stay out because
+# their negative-state reading is plausible.
+AMBIGUOUS_EVENT_PARTICIPLES = frozenset({"resent", "upserted"})
 RULE_PARTICIPLES = frozenset(
     {
         "bound",
@@ -211,11 +225,13 @@ CHECK_LEMMAS = frozenset(
         "verify",
     }
 )
+COMMAND_LEMMAS = UI_ACTION_LEMMAS | CHECK_LEMMAS
 
 SHAPE_NAMES = (
     "capability-modal",
     "event-passive",
     "event-active",
+    "event-participle-adj",
     "state-passive",
     "state-perfect",
     "state-copula-condition",
@@ -379,6 +395,40 @@ def _event_active(doc: Doc, text: str) -> ShapeMatch | None:
     return ShapeMatch("event", "event-active", root.text)
 
 
+def _unconditional_present_copula_root(doc: Doc) -> Token | None:
+    """Return the root of an unconditional present copula frame."""
+    root = _root(doc)
+    if (
+        root is None
+        or root.pos_ != "AUX"
+        or root.lemma_.lower() != "be"
+        or root.tag_ not in _PRESENT_TAGS
+        or _modal(doc) is not None
+    ):
+        return None
+    if _band_marker(doc, root) is not None:
+        # "is X for/when/if Y" makes the copula a conditional value band, which
+        # is rule-shaped; a state holds unconditionally. A marker inside the
+        # subject ("the list for a vacancy is empty") conditions nothing.
+        return None
+    return root
+
+
+def _ambiguous_event_participle(doc: Doc, text: str) -> ShapeMatch | None:
+    """Match an event participle parsed as an adjectival copula complement."""
+    root = _unconditional_present_copula_root(doc)
+    if root is None:
+        return None
+    complement = _complement(root)
+    if (
+        complement is None
+        or complement.pos_ != "ADJ"
+        or complement.text.lower() not in AMBIGUOUS_EVENT_PARTICIPLES
+    ):
+        return None
+    return ShapeMatch("event", "event-participle-adj", complement.text)
+
+
 def _state_passive(doc: Doc, text: str) -> ShapeMatch | None:
     """Match a condition-shaped present passive."""
     return _passive_match(
@@ -421,19 +471,8 @@ def _state_perfect(doc: Doc, text: str) -> ShapeMatch | None:
 
 def _state_copula_condition(doc: Doc, text: str) -> ShapeMatch | None:
     """Match adjective, determined noun, or prepositional conditions."""
-    root = _root(doc)
-    if (
-        root is None
-        or root.pos_ != "AUX"
-        or root.lemma_.lower() != "be"
-        or root.tag_ not in _PRESENT_TAGS
-        or _modal(doc) is not None
-    ):
-        return None
-    if _band_marker(doc, root) is not None:
-        # "is X for/when/if Y" makes the copula a conditional value band, which
-        # is rule-shaped; a state holds unconditionally. A marker inside the
-        # subject ("the list for a vacancy is empty") conditions nothing.
+    root = _unconditional_present_copula_root(doc)
+    if root is None:
         return None
     complement = _complement(root)
     if (
@@ -580,7 +619,16 @@ def _rule_measure(doc: Doc, text: str) -> ShapeMatch | None:
 
 
 def _property_noun_phrase(doc: Doc, text: str) -> ShapeMatch | None:
-    """Match a short bare noun phrase."""
+    """Match a short bare noun phrase.
+
+    A property statement names an attribute, so the bare noun phrase is its
+    canonical form rather than a degenerate one: every property in the labeled
+    corpus is one, and requiring the phrase to predicate something measured a
+    lower precision. The cost is that a stray fragment ("Blue widgets") is
+    structurally identical to a real property name ("Custom query fields"), and
+    no stage currently separates them — telling them apart needs provenance the
+    matcher does not have, so it does not try.
+    """
     root = _root(doc)
     first = doc[0]
     if (
@@ -592,6 +640,17 @@ def _property_noun_phrase(doc: Doc, text: str) -> ShapeMatch | None:
         or first.text.lower() in _DETERMINERS
         or first.text.lower() in NEGATED_NP_OPENERS
     ):
+        return None
+    # The command lexicons already accept these lemmas when tagged VB, so when
+    # the parser tags one NOUN or ADJ the command and property readings are both
+    # live on identical structure ("Review value" against "Download URL"). This
+    # is a lexical abstention, not a structural test: this detector declines
+    # without asserting the verbal reading, so it can never reclassify the
+    # fragment as action or check. 2 of 136 labeled property statements open
+    # with a command lemma, and neither reached this shape already, so the
+    # measured incremental cost is zero; the exposed prevalence is the price,
+    # taken because a flag reaches a curator and a wrong statement does not.
+    if first.lemma_.lower() in COMMAND_LEMMAS:
         return None
     return ShapeMatch("property", "property-noun-phrase", root.text)
 
@@ -638,6 +697,7 @@ _DETECTORS: tuple[Callable[[Doc, str], ShapeMatch | None], ...] = (
     _capability_modal,
     _event_passive,
     _event_active,
+    _ambiguous_event_participle,
     _state_passive,
     _state_perfect,
     _state_copula_condition,
@@ -671,6 +731,12 @@ def match_shapes(text: str) -> list[ShapeMatch]:
     # Every detector reads the root, so a second coordinated predicate ("… is
     # sent and … is enabled") would be classified by its first clause alone.
     # That is the same compound the phrasing catalog rejects: flag, don't guess.
+    # Refusing here costs one flag, not two. The double-flag arises earlier,
+    # when segmentation splits a coordinated sentence and each half then fails
+    # every shape: 30 of 1644 labeled statements carry a coordinated predicate
+    # and 4 of those 30 (13.3%) end up double-flagged. The halves of those four
+    # statements fail on missing participle vocabulary rather than on
+    # coordination, so there is no coordination-specific recovery to build.
     # A how-to heading is exempt — it names one procedure however many verbs
     # its title mentions.
     if (

@@ -55,7 +55,10 @@ CREATE TABLE IF NOT EXISTS documentation_runs (
     document_id   TEXT,
     error         TEXT,
     draft_title   TEXT,
-    draft_body    TEXT
+    draft_body    TEXT,
+    matched_document_id TEXT,
+    provider      TEXT,
+    model         TEXT
 );
 CREATE INDEX IF NOT EXISTS documentation_runs_created ON documentation_runs (created_at);
 CREATE INDEX IF NOT EXISTS documentation_runs_active ON documentation_runs (started_at) WHERE finished_at IS NULL;
@@ -71,6 +74,12 @@ CREATE TABLE IF NOT EXISTS generated_documents (
     body          TEXT NOT NULL,
     statement_ids TEXT NOT NULL DEFAULT '[]',
     review        TEXT NOT NULL DEFAULT '{}',
+    delivery_destination TEXT,
+    delivery_target TEXT,
+    delivery_path        TEXT,
+    delivery_reference   TEXT,
+    delivery_content_revision TEXT,
+    revision_source_content_revision TEXT,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     last_run_id   TEXT
@@ -99,7 +108,10 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DOCUMENTATION_RUNS_SCHEMA)
     conn.executescript(GENERATED_DOCUMENTS_SCHEMA)
     _add_refused_draft_columns(conn)
+    _add_matched_document_column(conn)
+    _add_model_columns(conn)
     _add_generated_document_review(conn)
+    _add_generated_document_delivery(conn)
     _rekey_generated_documents(conn)
     conn.commit()
 
@@ -116,6 +128,25 @@ def _add_refused_draft_columns(conn: sqlite3.Connection) -> None:
         row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
     }
     for column in ("draft_title", "draft_body"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE documentation_runs ADD COLUMN {column} TEXT")
+
+
+def _add_matched_document_column(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    if "matched_document_id" not in columns:
+        conn.execute(
+            "ALTER TABLE documentation_runs ADD COLUMN matched_document_id TEXT"
+        )
+
+
+def _add_model_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    for column in ("provider", "model"):
         if column not in columns:
             conn.execute(f"ALTER TABLE documentation_runs ADD COLUMN {column} TEXT")
 
@@ -138,6 +169,29 @@ def _add_generated_document_review(conn: sqlite3.Connection) -> None:
             "ALTER TABLE generated_documents "
             "ADD COLUMN review TEXT NOT NULL DEFAULT '{}'"
         )
+
+
+def _add_generated_document_delivery(conn: sqlite3.Connection) -> None:
+    """Add delivery fields to a DB created before delivery was available.
+
+    Rows written before the upgrade read as null in every field: the document
+    has no recorded destination. Each column is added independently so startup
+    remains idempotent after an interrupted schema migration.
+    """
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(generated_documents)")
+    }
+    delivery_columns = (
+        "delivery_destination",
+        "delivery_target",
+        "delivery_path",
+        "delivery_reference",
+        "delivery_content_revision",
+        "revision_source_content_revision",
+    )
+    for column in delivery_columns:
+        if column not in columns:
+            conn.execute(f"ALTER TABLE generated_documents ADD COLUMN {column} TEXT")
 
 
 def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
@@ -180,6 +234,12 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
                 body          TEXT NOT NULL,
                 statement_ids TEXT NOT NULL DEFAULT '[]',
                 review        TEXT NOT NULL DEFAULT '{}',
+                delivery_destination TEXT,
+                delivery_target TEXT,
+                delivery_path        TEXT,
+                delivery_reference   TEXT,
+                delivery_content_revision TEXT,
+                revision_source_content_revision TEXT,
                 created_at    TEXT NOT NULL,
                 updated_at    TEXT NOT NULL,
                 last_run_id   TEXT
@@ -190,10 +250,14 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
             """
             INSERT INTO generated_documents_rekeyed
                 (id, slug, title, guideline_set, document_type, body,
-                 statement_ids, review, created_at, updated_at, last_run_id)
+                statement_ids, review, delivery_destination, delivery_target, delivery_path,
+                delivery_reference, delivery_content_revision, created_at,
+                revision_source_content_revision, updated_at, last_run_id)
             SELECT id, slug, title, COALESCE(guideline_set, ''),
                    COALESCE(document_type, ''), body, statement_ids, review,
-                   created_at, updated_at, last_run_id
+                   delivery_destination, delivery_target, delivery_path, delivery_reference,
+                   delivery_content_revision, created_at,
+                   revision_source_content_revision, updated_at, last_run_id
             FROM generated_documents
             """
         )
@@ -274,13 +338,24 @@ def create_run(
     guideline_set: str | None = None,
     document_type: str | None = None,
     created_by: str | None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> str:
     run_id = "drn_" + _uuid.uuid4().hex[:12]
     conn.execute(
         "INSERT INTO documentation_runs "
-        "(id, prompt, guideline_set, document_type, created_at, created_by) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (run_id, prompt, guideline_set, document_type, _now(), created_by),
+        "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            run_id,
+            prompt,
+            guideline_set,
+            document_type,
+            _now(),
+            created_by,
+            provider,
+            model,
+        ),
     )
     conn.commit()
     return run_id
@@ -326,6 +401,7 @@ def finish_run(
     error: str | None = None,
     draft_title: str | None = None,
     draft_body: str | None = None,
+    matched_document_id: str | None = None,
 ) -> None:
     """Close a run, keeping the text of a draft the review gate turned down.
 
@@ -338,9 +414,18 @@ def finish_run(
     conn.execute(
         "UPDATE documentation_runs "
         "SET finished_at = ?, outcome = ?, document_id = ?, error = ?, "
-        "draft_title = ?, draft_body = ? "
+        "draft_title = ?, draft_body = ?, matched_document_id = ? "
         "WHERE id = ? AND finished_at IS NULL",
-        (_now(), outcome, document_id, error, draft_title, draft_body, run_id),
+        (
+            _now(),
+            outcome,
+            document_id,
+            error,
+            draft_title,
+            draft_body,
+            matched_document_id,
+            run_id,
+        ),
     )
     conn.commit()
 
@@ -404,6 +489,8 @@ def serialize_run(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "prompt": row["prompt"],
+        "provider": row["provider"],
+        "model": row["model"],
         "guideline_set": row["guideline_set"],
         "document_type": row["document_type"],
         "status": status_for(row),
@@ -413,6 +500,7 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "finished_at": row["finished_at"],
         "outcome": row["outcome"],
         "document_id": row["document_id"],
+        "matched_document_id": row["matched_document_id"],
         "document_superseded": _document_superseded(row),
         "error": row["error"],
         "draft_chars": len(row["draft_body"] or ""),
@@ -516,6 +604,7 @@ def upsert_document(
     run_id: str | None = None,
     updates: str | None = None,
     replacing: str | None = None,
+    revision_source_content_revision: str | None = None,
 ) -> str:
     """Write content while preserving metadata a partial writer omits.
 
@@ -548,7 +637,8 @@ def upsert_document(
     conn.execute("BEGIN IMMEDIATE")
     try:
         existing = conn.execute(
-            "SELECT id, body, statement_ids, review, last_run_id "
+            "SELECT id, body, statement_ids, review, last_run_id, "
+            "revision_source_content_revision "
             "FROM generated_documents "
             "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
             (guideline_set, document_type, slug),
@@ -569,8 +659,9 @@ def upsert_document(
             conn.execute(
                 "INSERT INTO generated_documents "
                 "(id, slug, title, guideline_set, document_type, body, "
-                "statement_ids, review, created_at, updated_at, last_run_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "statement_ids, review, revision_source_content_revision, "
+                "created_at, updated_at, last_run_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     document_id,
                     slug,
@@ -582,6 +673,7 @@ def upsert_document(
                         list(statement_ids) if statement_ids is not None else []
                     ),
                     json.dumps(review if review is not None else {}),
+                    revision_source_content_revision,
                     now,
                     now,
                     run_id,
@@ -591,8 +683,9 @@ def upsert_document(
             document_id = str(existing["id"])
             conn.execute(
                 "UPDATE generated_documents "
-                "SET title = ?, body = ?, statement_ids = ?, "
-                "review = ?, updated_at = ?, last_run_id = ? WHERE id = ?",
+                "SET title = ?, body = ?, statement_ids = ?, review = ?, "
+                "revision_source_content_revision = ?, updated_at = ?, "
+                "last_run_id = ? WHERE id = ?",
                 (
                     title,
                     body,
@@ -600,6 +693,9 @@ def upsert_document(
                     if statement_ids is None
                     else json.dumps(list(statement_ids)),
                     existing["review"] if review is None else json.dumps(review),
+                    existing["revision_source_content_revision"]
+                    if revision_source_content_revision is None
+                    else revision_source_content_revision,
                     now,
                     existing["last_run_id"] if run_id is None else run_id,
                     document_id,
@@ -616,6 +712,45 @@ def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | No
     return conn.execute(
         "SELECT * FROM generated_documents WHERE id = ?", (document_id,)
     ).fetchone()
+
+
+def record_delivery(
+    conn: sqlite3.Connection,
+    document_id: str,
+    *,
+    destination: str,
+    path: str,
+    reference: str,
+    content_revision: str,
+    expected_body_digest: str | None = None,
+    target: str | None = None,
+) -> None:
+    """Record a completed delivery without accepting or rewriting content."""
+    try:
+        conn.execute("BEGIN IMMEDIATE", ())
+        if expected_body_digest is not None:
+            current = conn.execute(
+                "SELECT body FROM generated_documents WHERE id = ?", (document_id,)
+            ).fetchone()
+            if current is None:
+                raise ValueError(f"generated document not found: {document_id}")
+            if body_digest(str(current["body"])) != expected_body_digest:
+                raise ValueError(
+                    "document changed while delivery was in progress; retry delivery"
+                )
+        cursor = conn.execute(
+            "UPDATE generated_documents SET delivery_destination = ?, "
+            "delivery_path = ?, delivery_reference = ?, "
+            "delivery_content_revision = ?, delivery_target = ? "
+            "WHERE id = ?",
+            (destination, path, reference, content_revision, target, document_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"generated document not found: {document_id}")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_document_by_slug(
@@ -647,12 +782,16 @@ def get_document_by_slug(
     ).fetchone()
 
 
-def list_documents(conn: sqlite3.Connection, limit: int = 100) -> list[sqlite3.Row]:
+def list_documents(
+    conn: sqlite3.Connection, limit: int | None = 100
+) -> list[sqlite3.Row]:
+    limit_clause = "" if limit is None else " LIMIT ?"
+    parameters: tuple[int, ...] = () if limit is None else (limit,)
     return list(
         conn.execute(
             "SELECT * FROM generated_documents "
-            "ORDER BY updated_at DESC, id DESC LIMIT ?",
-            (limit,),
+            "ORDER BY updated_at DESC, id DESC" + limit_clause,
+            parameters,
         ).fetchall()
     )
 
@@ -675,6 +814,11 @@ def serialize_document(row: sqlite3.Row) -> dict:
         "body": row["body"],
         "statement_ids": _statement_ids(row),
         "review": _review(row),
+        "delivery_destination": row["delivery_destination"],
+        "delivery_path": row["delivery_path"],
+        "delivery_reference": row["delivery_reference"],
+        "delivery_content_revision": row["delivery_content_revision"],
+        "revision_source_content_revision": row["revision_source_content_revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "last_run_id": row["last_run_id"],
@@ -698,6 +842,11 @@ def serialize_document_summary(row: sqlite3.Row) -> dict:
         "chars": len(row["body"]),
         "statement_ids": _statement_ids(row),
         "review": _review(row),
+        "delivery_destination": row["delivery_destination"],
+        "delivery_path": row["delivery_path"],
+        "delivery_reference": row["delivery_reference"],
+        "delivery_content_revision": row["delivery_content_revision"],
+        "revision_source_content_revision": row["revision_source_content_revision"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }

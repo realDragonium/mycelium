@@ -53,7 +53,10 @@ def test_negated_cue_is_flagged_without_calling_resolver():
     assert resolutions == [CueResolution("but never", "negated", None, None, None, ())]
     assert len(flags) == 1
     assert flags[0].reason == "cue"
-    assert "the words deny the relation" in flags[0].detail
+    assert flags[0].detail == (
+        'connective "but never" is negated; '
+        "the words deny the relation, so no edge is proposed"
+    )
     assert flags[0].provenance == {
         "cue": "but never",
         "decision": "negated",

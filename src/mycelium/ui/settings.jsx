@@ -436,15 +436,16 @@ function SettingsScreen() {
       <div className="page-inner" style={{ maxWidth: 960, padding: '32px 24px 80px' }}>
         <header style={{ marginBottom: 24 }}>
           <h1 style={{ margin: 0 }}>Settings</h1>
-          <p style={{ marginTop: 6, color: 'var(--ink-3)', fontSize: 13 }}>Account, MCP tokens, and (if admin) user management.</p>
+          <p style={{ marginTop: 6, color: 'var(--ink-3)', fontSize: 13 }}>AI models, account, MCP tokens, and user management.</p>
         </header>
 
+        <AISettings />
         <AccountCard me={me} />
         <TokensCard me={me} />
         {me.role === 'admin' && me.auth_enabled && <UsersCard />}
         {me.role === 'admin' && !me.auth_enabled && (
           <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic', padding: '16px 0' }}>
-            User management is hidden while auth is disabled — only the local-admin exists in this mode. Set <code>MYCELIUM_AUTH=on</code> to enable it.
+            General user management is hidden while authentication is disabled. You can create a reviewer account above. Set <code>MYCELIUM_AUTH=on</code> to enable full user management.
           </div>
         )}
       </div>

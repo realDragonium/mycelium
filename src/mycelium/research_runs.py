@@ -20,7 +20,7 @@ import threading
 from pathlib import Path
 from typing import Any, Callable
 
-from . import research_store
+from . import product_settings, research_store
 
 logger = logging.getLogger(__name__)
 MAX_ACTIVE_ENV = "MYCELIUM_RESEARCH_MAX_ACTIVE"
@@ -41,8 +41,10 @@ def start_run(
 ) -> str:
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
-    selected_runner = runner or RUNNER or _default_runner(str(data_dir))
-    max_active = int(os.environ.get(MAX_ACTIVE_ENV) or 2)
+    selected_runner = runner or RUNNER or _default_runner(str(data_dir), source)
+    max_active = product_settings.get(
+        product_settings.ConcurrencySettings
+    ).research_runs
 
     with _spawn_lock:
         if research_store.count_active(conn) >= max_active:
@@ -105,7 +107,7 @@ def wait_all(timeout: float = 10.0) -> None:
         thread.join(timeout)
 
 
-def _default_runner(data_dir: str) -> Callable[..., Any]:
+def _default_runner(data_dir: str, source_name: str) -> Callable[..., Any]:
     """The real research loop, wired for a worker thread.
 
     - The trace JSONL is defaulted under the data dir (mirroring the `ingest`
@@ -118,19 +120,21 @@ def _default_runner(data_dir: str) -> Callable[..., Any]:
     """
     import dataclasses
 
+    from .research.config import ResearchConfig
+    from .research.sources import get_source
+
+    config = ResearchConfig.from_env()
+    selected_source = get_source(source_name)
+    if not config.trace_log_path:
+        config = dataclasses.replace(config, trace_log_path=_trace_log_path(data_dir))
+
     def run(topic: str, *, source: str | None = None) -> Any:
         from . import server
         from .ingest.draft import InProcessDraftEmitter
         from .research import run_research
-        from .research.config import ResearchConfig
 
-        config = ResearchConfig.from_env()
-        if not config.trace_log_path:
-            config = dataclasses.replace(
-                config, trace_log_path=_trace_log_path(data_dir)
-            )
         return run_research(
-            topic, source, config=config, emitter=InProcessDraftEmitter(server)
+            topic, selected_source, config=config, emitter=InProcessDraftEmitter(server)
         )
 
     return run

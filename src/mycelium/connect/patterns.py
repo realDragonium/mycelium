@@ -436,11 +436,11 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "valued-by",
             r"\b(?P<cue>equals?)\b\s*(?P<to>.+)",
         ),
-        # "A is one of B": the enumerating parent B is the edge's source.
+        # Counted membership states a finite set; the named set is the source.
         _pattern(
             "cases-one-of",
             "cases",
-            r"\b(?P<cue>(?:is|are) one of|one of:)\s*(?P<from>.+)",
+            r"\b(?P<cue>is one of)\s+(?:the )?(?:[1-9]\d*|one|two|three|four|five|six|seven|eight|nine|ten) (?:cases|levels|values|modes|branches) of\s+(?P<from>.+)",
         ),
         # "A is either X or Y": the carrier enumerates its own values.
         _pattern(
@@ -448,14 +448,10 @@ KIND_PATTERNS: dict[str, tuple[Pattern, ...]] = {
             "cases",
             r"\b(?P<cue>(?:is|are) (?:either|any of))\b\s*(?P<to>.+)",
         ),
-        # The level sits on the enumerated value and the phrase after "for" is the
-        # enumerating parent, so the phrase fills the `from` slot. "for" names that
-        # parent; a `when`/`if` clause is a condition, not a `cases` source, and those
-        # arms fired on zero statements in the measured snapshot.
         _pattern(
             "cases-level-for",
             "cases",
-            r"\b(?P<cue>(?:is|are) (?:low|medium|high|extra high|none|positive|negative) for)\b\s*(?P<from>.+)",
+            r"\b(?P<cue>(?:is|are) (?:low|medium|high|extra high|none|positive|negative) (?:for|when|if))\b\s*(?P<to>.+)",
         ),
         _pattern(
             "cases-enumeration",

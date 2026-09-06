@@ -35,8 +35,8 @@
   const layerOf = (kind) => KIND_LAYER[kind] || 'descriptive';
 
   /* ----------------------------- transport ----------------------------- */
-  async function http(method, path, body) {
-    const opts = { method, headers: { accept: 'application/json' }, credentials: 'same-origin' };
+  async function http(method, path, body, signal) {
+    const opts = { method, headers: { accept: 'application/json' }, credentials: 'same-origin', signal };
     if (body !== undefined) {
       opts.headers['content-type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -314,8 +314,17 @@
       get: (id) => post('/get-research-run', { run_id: id }),
       sources: () => get('/list-research-sources').then(r => (r && r.sources) || []),
     },
+    documentation: {
+      options: () => get('/api/documentation/options'),
+      start: (request) => post('/api/documentation/runs', request),
+      list: (signal) => http('GET', '/api/documentation/runs', undefined, signal).then(r => r.runs),
+      get: (id, signal) => http('GET', '/api/documentation/runs/' + encodeURIComponent(id), undefined, signal),
+      document: (id, signal) => http('GET', '/api/documentation/documents/' + encodeURIComponent(id), undefined, signal),
+    },
     // Raw draft REST — drafts.jsx owns the op-shape adaptation/rendering.
     drafts: {
+      reviewSettings: () => get('/api/draft-review/settings'),
+      review: (id) => http('POST', '/api/drafts/' + encodeURIComponent(id) + '/review'),
       list: (status) => get('/api/drafts?status=' + encodeURIComponent(status || 'all')),
       get: (id) => get('/api/drafts/' + encodeURIComponent(id)),
       discardOp: (id, seq) => http('DELETE', '/api/drafts/' + encodeURIComponent(id) + '/ops/' + seq),

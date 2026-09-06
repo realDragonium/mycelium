@@ -18,15 +18,16 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
+import anyio.from_thread
 import anyio.to_thread
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, JsonValue, create_model
 from pydantic import Field as PydField
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -34,12 +35,17 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import (
     auth,
     connect_page,
+    model_settings,
     oauth_server,
     oidc,
     ops_ledger,
+    product_settings,
     server,
     store,
     tracing,
+)
+from . import (
+    draft_review_settings as review_settings,
 )
 
 # Build the streamable-HTTP sub-app once at import time. Transport
@@ -1244,10 +1250,162 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
 # pattern as knowledge_gaps.
 
 
+@app.get("/api/product-settings")
+def read_product_settings(request: Request) -> product_settings.SettingsView:
+    from fastapi import HTTPException
+
+    principal = _require_principal(request)
+    try:
+        return product_settings.view(principal)
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.patch("/api/product-settings")
+def save_product_settings(
+    body: product_settings.SaveSettings, request: Request
+) -> product_settings.Snapshot:
+    from fastapi import HTTPException
+
+    principal = _require_admin(request)
+    try:
+        saved = product_settings.save(body, principal)
+        if isinstance(body.settings, product_settings.ConcurrencySettings):
+            anyio.from_thread.run_sync(lambda: server.limiter_for("ask"))
+        return saved
+    except model_settings.Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.get("/api/model-settings")
+def ai_model_settings(request: Request) -> model_settings.SettingsView:
+    from fastapi import HTTPException
+
+    principal = _require_principal(request)
+    try:
+        return model_settings.view(principal)
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.patch("/api/model-settings/{action}")
+def save_ai_model_settings(
+    action: model_settings.Action, body: model_settings.SaveSelection, request: Request
+) -> model_settings.ActionView:
+    from fastapi import HTTPException
+
+    principal = _require_admin(request)
+    try:
+        model_settings.save(action, body, principal)
+        return model_settings.action_view(action)
+    except model_settings.Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+@app.get("/api/draft-review/settings")
+def draft_review_settings(request: Request) -> review_settings.SettingsView:
+    from fastapi import HTTPException
+
+    principal = _require_principal(request)
+    try:
+        return review_settings.view(principal)
+    except review_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.patch("/api/draft-review/settings")
+def save_draft_review_settings(
+    body: review_settings.SaveSettings, request: Request
+) -> review_settings.SettingsView:
+    from fastapi import HTTPException
+
+    principal = _require_admin(request)
+    try:
+        review_settings.save(body, principal)
+        return review_settings.view(principal)
+    except review_settings.Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except review_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.post("/api/drafts/{draft_id}/review")
+def run_draft_review_http(
+    draft_id: str, request: Request
+) -> dict[str, dict[str, JsonValue]]:
+    _enforce_curator(request, action="running an internal draft review")
+    return {"review": server.request_draft_review(draft_id, rerun=True)}
+
+
 def _serialize_draft(row, *, ops=None) -> dict[str, Any]:
     from . import drafts_store
 
     return drafts_store.serialize_draft(row, ops=ops)
+
+
+class DocumentationRequestBody(BaseModel):
+    prompt: str
+    guideline_set: str | None = None
+    document_type: str | None = None
+    provider: Literal["claude", "openai"] | None = None
+
+
+@app.get("/api/documentation/options")
+def documentation_options(request: Request) -> dict[str, object]:
+    principal = _require_principal(request)
+    from . import guidelines, prompt_store
+    from .docgen.config import DocgenConfig
+
+    return {
+        **server.list_documentation_models(),
+        "can_generate": auth.principal_has_real_role(principal, "writer"),
+        "guideline_sets": guidelines.catalogue(prompt_store.connection()),
+        "max_prompt_chars": DocgenConfig.from_env().max_prompt_chars,
+    }
+
+
+@app.post("/api/documentation/runs")
+def request_documentation_http(
+    body: DocumentationRequestBody, request: Request
+) -> dict[str, object]:
+    _enforce_role(request, "writer", real_role=True)
+    return server.request_documentation(**body.model_dump())
+
+
+@app.get("/api/documentation/runs")
+def documentation_runs_http(request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return server.list_documentation_runs()
+
+
+@app.get("/api/documentation/runs/{run_id}")
+def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
+    _require_principal(request)
+    try:
+        return server.get_documentation_run(run_id)
+    except ValueError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.get("/api/documentation/documents/{document_id}")
+def generated_document_http(document_id: str, request: Request) -> dict[str, object]:
+    _require_principal(request)
+    try:
+        return server.get_generated_document(document_id)
+    except ValueError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/drafts")
@@ -1283,27 +1441,25 @@ def get_draft_detail(draft_id: str, request: Request) -> dict[str, Any]:
     from . import drafts_store
 
     conn = server._drafts_db()
-    row = drafts_store.get_draft(conn, draft_id)
+    row, ops = drafts_store.get_draft_snapshot(conn, draft_id)
     if row is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="draft not found")
-    ops = drafts_store.list_ops(conn, draft_id)
     return {"draft": drafts_store.serialize_draft(row, ops=ops)}
 
 
 class DraftOpEditBody(BaseModel):
     payload: dict[str, Any]
+    expected_revision: int | None = None
 
 
 @app.patch("/api/drafts/{draft_id}/ops/{seq}")
 def edit_draft_op(
     draft_id: str, seq: int, body: DraftOpEditBody, request: Request
 ) -> dict[str, Any]:
-    """Replace an op's payload. Only valid on open drafts (a submitted
-    draft is awaiting review; if the curator wants to tweak it they
-    should approve-or-reject and have the drafter re-submit)."""
-    _require_principal(request)
+    """Replace an op's payload on an open or submitted draft."""
+    _enforce_curator(request, action="editing a draft operation")
     from . import drafts_store
 
     conn = server._drafts_db()
@@ -1312,26 +1468,50 @@ def edit_draft_op(
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="draft not found")
-    status = drafts_store.status_for(row)
-    if status not in ("open", "submitted"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail=f"cannot edit ops on a {status} draft",
-        )
     with store.transaction(conn):
-        ok = drafts_store.update_op_payload(conn, draft_id, seq, body.payload)
-    if not ok:
+        row = drafts_store.get_draft(conn, draft_id)
+        if row is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="draft not found")
+        status = drafts_store.status_for(row)
+        if status not in ("open", "submitted"):
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"cannot edit ops on a {status} draft",
+            )
+        try:
+            revision = drafts_store.update_op_payload(
+                conn,
+                draft_id,
+                seq,
+                body.payload,
+                expected_revision=body.expected_revision,
+            )
+        except (
+            drafts_store.StaleDraftRevisionError,
+            drafts_store.ActiveApplicationError,
+        ) as ex:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=409, detail=str(ex)) from ex
+    if revision is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="op seq not found")
-    return {"ok": True}
+    return {"ok": True, "revision": revision}
 
 
 @app.delete("/api/drafts/{draft_id}/ops/{seq}")
-def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str, Any]:
-    _require_principal(request)
+def remove_draft_op_http(
+    draft_id: str,
+    seq: int,
+    request: Request,
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    _enforce_curator(request, action="removing a draft operation")
     from . import drafts_store
 
     conn = server._drafts_db()
@@ -1340,21 +1520,36 @@ def remove_draft_op_http(draft_id: str, seq: int, request: Request) -> dict[str,
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="draft not found")
-    status = drafts_store.status_for(row)
-    if status not in ("open", "submitted"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail=f"cannot remove ops from a {status} draft",
-        )
     with store.transaction(conn):
-        ok = drafts_store.remove_op(conn, draft_id, seq)
-    if not ok:
+        row = drafts_store.get_draft(conn, draft_id)
+        if row is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="draft not found")
+        status = drafts_store.status_for(row)
+        if status not in ("open", "submitted"):
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"cannot remove ops from a {status} draft",
+            )
+        try:
+            revision = drafts_store.remove_op(
+                conn, draft_id, seq, expected_revision=expected_revision
+            )
+        except (
+            drafts_store.StaleDraftRevisionError,
+            drafts_store.ActiveApplicationError,
+        ) as ex:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=409, detail=str(ex)) from ex
+    if revision is None:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail="op seq not found")
-    return {"ok": True}
+    return {"ok": True, "revision": revision}
 
 
 class DraftDecisionBody(BaseModel):
@@ -1382,10 +1577,15 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
         )
     with store.transaction(conn):
         drafts_store.set_submitted(conn, draft_id)
+    from . import draft_review_runs
+
+    draft_review_runs.on_submitted(draft_id)
     return {"ok": True}
 
 
-def _enforce_curator(request: Request) -> auth.Principal:
+def _enforce_curator(
+    request: Request, action: str = "approving or rejecting a draft"
+) -> auth.Principal:
     """Approve/reject require a *real* writer or admin — `_enforce_role`
     routes drafters through too (because the @tool wrapper's drafter
     equivalence makes them satisfy writer), which would let a drafter
@@ -1398,7 +1598,7 @@ def _enforce_curator(request: Request) -> auth.Principal:
 
         raise HTTPException(
             status_code=403,
-            detail="approving / rejecting a draft requires the writer or admin role",
+            detail=f"{action} requires the writer or admin role",
         )
     return p
 
@@ -1416,13 +1616,18 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
 
     conn = server._drafts_db()
     try:
-        result = server.apply_draft(draft_id)
+        with store.write_lock():
+            result = server.apply_draft(draft_id)
+            with store.transaction(conn):
+                drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
+    except drafts_store.ActiveApplicationError as ex:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=409, detail=str(ex)) from ex
     except (ValueError, RuntimeError) as ex:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=400, detail=str(ex))
-    with store.transaction(conn):
-        drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
     return {"ok": True, **result}
 
 
@@ -1432,20 +1637,25 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
     from . import drafts_store
 
     conn = server._drafts_db()
-    row = drafts_store.get_draft(conn, draft_id)
-    if row is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="draft not found")
-    if drafts_store.status_for(row) not in ("open", "submitted"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail="only open or submitted drafts can be rejected",
-        )
     with store.transaction(conn):
-        drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
+        row = drafts_store.get_draft(conn, draft_id)
+        if row is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="draft not found")
+        if drafts_store.status_for(row) not in ("open", "submitted"):
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail="only open or submitted drafts can be rejected",
+            )
+        try:
+            drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
+        except drafts_store.ActiveApplicationError as ex:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=409, detail=str(ex)) from ex
     return {"ok": True}
 
 
@@ -1468,7 +1678,12 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
             detail="only open or submitted drafts can be withdrawn",
         )
     with store.transaction(conn):
-        drafts_store.set_decision(conn, draft_id, decision="withdrawn", by=p.id)
+        try:
+            drafts_store.set_decision(conn, draft_id, decision="withdrawn", by=p.id)
+        except drafts_store.ActiveApplicationError as ex:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=409, detail=str(ex)) from ex
     return {"ok": True}
 
 

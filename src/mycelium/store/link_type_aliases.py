@@ -30,10 +30,8 @@ def normalize_alias(alias: str) -> str:
 # right→left or express no relation, and the segmenter links left→right. And
 # the bare vocabulary of a deliberately UNSHIPPED pattern is absent (`blocks`,
 # `prevents`, `suppresses`, `capped`, `bounded` for `restricts`; `combines`,
-# `aggregates` for `composes`) — shipped templates take a bare cue slot, so
-# seeding those words would ship the phrasings the hit-rate report rejected.
-# Full reverse phrasings are safe because reverse aliases never ride those
-# slots.
+# `aggregates` for `composes`) — two shipped templates take a bare cue slot, so
+# seeding those words would enable phrasings outside the current rule selection.
 _ALIAS_SEED: dict[str, tuple[str, ...]] = {
     "contains": (
         "contains",

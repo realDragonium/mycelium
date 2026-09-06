@@ -8,7 +8,7 @@ degradation. The model reasons; this code fetches, counts, bounds, and records.
 Core-at-the-center: `_execute` depends only on a client-like object (anything
 with `.messages.create(...)`) and a `SubstrateReader`. Both are injectable, so
 the loop is exercisable with plain fakes — no server, no network. The framework
-seam (`run_ask`) wires the real Anthropic client + in-process substrate and
+seam (`run_ask`) wires the shared model transport + in-process substrate and
 writes the trace.
 
 The boundary-facing spine (client construction, the budget gate, thinking
@@ -20,15 +20,17 @@ two terminals, and the semantic-adjacency floor.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .. import tracing
+import httpx
+
+from .. import ai, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
 from ..agentloop import (
     check_budget,
-    default_client,
 )
 from ..agentloop import (
     collect_statement_ids as _collect_ids,
@@ -41,9 +43,6 @@ from ..agentloop import (
 )
 from ..agentloop import (
     serialize as _serialize,
-)
-from ..agentloop import (
-    strip_thinking as _strip_thinking,
 )
 from ..agentloop import (
     substrate_has as _substrate_has,
@@ -84,14 +83,12 @@ def run_ask(
     `NeedsClarification` — never raises for retrieval/closure reasons.
 
     `client` / `substrate` / `config` are injectable for tests; in production
-    they default to the real Anthropic client, the in-process substrate, and
-    env-derived config.
+    they default to the shared model transport, the in-process substrate, and
+    effective saved configuration.
     """
     config = config or AskConfig.from_env()
     if substrate is None:
         substrate = InProcessSubstrate()
-    if client is None:
-        client = default_client(config.max_retries)
 
     with tracing.profile_to_html("ask", question):
         result = _execute(question, client, substrate, config)
@@ -142,6 +139,7 @@ def _execute(
     trace = TraceBuilder(
         question=question,
         model=config.model,
+        provider=config.provider,
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
     )
@@ -533,90 +531,32 @@ def _floor_detail(floor: dict) -> str:
 
 
 def _model_turn(
-    client: Any,
+    client: ai.ClaudeClient | httpx.Client | None,
     config: AskConfig,
-    messages: list[dict[str, Any]],
-    tools: list[dict],
+    messages: Sequence[Mapping[str, object]],
+    tools: Sequence[Mapping[str, object]],
     *,
     force: bool,
-) -> Any:
-    c = client
-    if hasattr(client, "with_options"):
-        c = client.with_options(
-            timeout=config.request_timeout_s, max_retries=config.max_retries
-        )
-    turn_messages = _strip_thinking(messages) if force else messages
-    if config.cache:
-        turn_messages = _with_rolling_cache(turn_messages)
-    kwargs: dict[str, Any] = {
-        "model": config.model,
-        "max_tokens": config.max_tokens,
-        "system": _system_blocks(config),
-        "messages": turn_messages,
-        "tools": tools,
-    }
-    if force:
-        # Forcing a specific tool is incompatible with extended thinking, so we
-        # leave thinking off on the emergency finalize turn — and strip the
-        # thinking blocks the adaptive turns left in history (done above), which
-        # a thinking-disabled request shouldn't carry. A forced single-tool turn
-        # has no sibling reads, so parallel tool use is moot here.
-        kwargs["tool_choice"] = {
-            "type": "tool",
-            "name": SUBMIT_TOOL,
-            "disable_parallel_tool_use": True,
-        }
-    else:
-        # Parallel tool use lets the model batch independent reads (e.g. several
-        # get_entity / get_statements) into one turn, collapsing serial round
-        # trips. The loop answers every tool_use block in the response (see
-        # `_execute`), which the API requires before the next turn.
-        kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": False}
-        if config.thinking:
-            kwargs["thinking"] = {"type": "adaptive"}
-    return c.messages.create(**kwargs)
-
-
-_CACHE_CONTROL = {"type": "ephemeral"}
-
-
-def _system_blocks(config: AskConfig) -> Any:
-    """The system prompt, as a cache-marked block when caching is on.
-
-    The cache prefix is `tools -> system -> messages`, so a single breakpoint on
-    the system block caches the whole static head (tool schemas + system prompt)
-    — re-read instead of re-ingested on every turn after the first."""
-    if not config.cache:
-        return prompts.SYSTEM_PROMPT
-    return [
-        {"type": "text", "text": prompts.SYSTEM_PROMPT, "cache_control": _CACHE_CONTROL}
-    ]
-
-
-def _with_rolling_cache(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return `messages` with a cache breakpoint on the final block.
-
-    Each turn this marks the end of the conversation-so-far; because the loop
-    only ever appends after it, that prefix is unchanged next turn and is read
-    from cache. We copy rather than mutate the persistent history so the
-    breakpoint doesn't accumulate across turns (the request carries exactly one
-    rolling breakpoint, alongside the static system one)."""
-    if not messages:
-        return messages
-    out = list(messages)
-    last = dict(out[-1])
-    content = last.get("content")
-    if isinstance(content, list) and content and isinstance(content[-1], dict):
-        blocks = list(content)
-        blocks[-1] = {**blocks[-1], "cache_control": _CACHE_CONTROL}
-        last["content"] = blocks
-        out[-1] = last
-    elif isinstance(content, str) and content:
-        last["content"] = [
-            {"type": "text", "text": content, "cache_control": _CACHE_CONTROL}
-        ]
-        out[-1] = last
-    return out
+) -> ai.ModelResponse:
+    return ai.turn(
+        ai.ToolTask(
+            system=prompts.SYSTEM_PROMPT,
+            messages=messages,
+            tools=tools,
+            force_tool=SUBMIT_TOOL if force else None,
+            parallel_tools=not force,
+        ),
+        ai.ModelConfig(
+            provider=config.provider,
+            model=config.model,
+            max_tokens=config.max_tokens,
+            request_timeout_s=config.request_timeout_s,
+            max_retries=config.max_retries,
+            thinking=config.thinking,
+            cache=config.cache,
+        ),
+        client=client,
+    )
 
 
 def _tool_uses(resp: Any) -> list[Any]:

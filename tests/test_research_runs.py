@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from mycelium import research_runs, research_store
+from mycelium import product_settings, research_runs, research_store
+from product_settings_helpers import set_product
 
 
 @pytest.fixture(autouse=True)
@@ -153,7 +154,7 @@ def test_runner_exception_marks_failed(tmp_path):
 
 def test_capacity_refuses_when_at_max(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
-    monkeypatch.setenv(research_runs.MAX_ACTIVE_ENV, "2")
+    set_product(product_settings.ConcurrencySettings(research_runs=2))
     release = threading.Event()
 
     def runner(topic, *, source):
@@ -209,7 +210,7 @@ def test_capacity_refuses_when_at_max(tmp_path, monkeypatch):
 
 def test_bound_is_db_derived(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
-    monkeypatch.setenv(research_runs.MAX_ACTIVE_ENV, "1")
+    set_product(product_settings.ConcurrencySettings(research_runs=1))
     run_id = research_store.create_run(
         conn, topic="stranded", source="manual", created_by=None
     )
@@ -228,7 +229,7 @@ def test_bound_is_db_derived(tmp_path, monkeypatch):
 
 def test_concurrent_starts_race_one_wins(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
-    monkeypatch.setenv(research_runs.MAX_ACTIVE_ENV, "1")
+    set_product(product_settings.ConcurrencySettings(research_runs=1))
     release = threading.Event()
     barrier = threading.Barrier(2)
     errors = []

@@ -39,7 +39,9 @@ in the names table.
 A **name** is a record holding an opaque id, a text string, and a foreign
 key to an entity. Each entity is reachable through one or more names; the
 text column is globally unique so no two entities can share an alias.
-Names are exact-match-only in v1 — they are not embedded.
+Names are embedded in a separate vector index used by entity search and by
+alias-aware statement retrieval. Exact name matching remains available for
+deterministic entity resolution.
 
 A **statement** is a record holding an opaque id, a `kind` string, and a
 chunk of text. The statement is the unit that carries meaning. A statement
@@ -60,11 +62,10 @@ compatibility (e.g., that `triggers` only joins events) — trust the
 writer.
 
 A **statement_mentions** row links a statement to a *name*, not directly to
-an entity. This indirection preserves provenance: when a statement is
-authored, the writer chose a specific name to refer to an entity, and that
-choice is recorded so that future merges or splits do not lose the original
-phrasing. The mention's effective entity is the entity that name currently
-points at.
+an entity. Mentions are derived from names found in statement text whenever
+the text is created or changed. The indirection preserves which alias matched,
+and the mention's effective entity is the entity that name currently points
+at.
 
 A **statement_link** is a directed edge from one statement to another with
 a string label called the link_type. The link_type vocabulary is open;
@@ -91,7 +92,9 @@ talk about a relationship, search statements that mention both entities.
 A statement_link may carry an optional `when` — an **expression tree**
 that reifies the *condition* under which the edge holds. A leaf is
 `{"statement_id": "stm_…"}`; internal nodes are
-`{"op": "and" | "or", "of": [<child>, …]}` and may nest arbitrarily.
+`{"op": "and" | "or", "of": [<child>, …]}` or
+`{"op": "not", "of": [<child>]}` and may nest arbitrarily. `not` requires
+exactly one child.
 This lets the substrate record statements like "A — triggers (when C) → B"
 or "A — triggers (when C and (D or E)) → B" without burying the
 condition inside the source or target statement's text. Each leaf is
@@ -120,16 +123,20 @@ Any statement is a valid entry point into the graph.
 
 ## Persistence
 
-The substrate writes to two files inside `MYCELIUM_DATA_DIR` (default
+The substrate writes to three files inside `MYCELIUM_DATA_DIR` (default
 `./.mycelium/`): `mycelium.db` is a SQLite database holding all entity,
 name, statement, mention, and link records. `mycelium.vec` is an hnswlib
-binary holding the vector index of statement embeddings.
+binary holding the vector index of statement embeddings, and
+`mycelium-names.vec` holds the separate entity-name index. Exports include both
+vector files unless `--no-vectors` is set, and imports restore either file that
+the archive contains. If either file is omitted, startup rebuilds that index by
+re-embedding the stored statement or name text. Starting after such a restore
+therefore requires the configured embedding service and model to be available.
 
-The schema migration runs on every connect via `CREATE TABLE IF NOT EXISTS`
-statements, so opening an existing data directory leaves its contents
-intact. There are no migration scripts beyond the initial schema; if the
-schema changes incompatibly, the supported upgrade path is to wipe the
-data directory and re-ingest from the source payloads.
+Versioned schema migrations run whenever the store opens. They upgrade older
+supported schemas in place and preserve legacy annotation tables as inert
+compatibility data. Archive import likewise skips legacy annotation records;
+it does not convert them into statements.
 
 Foreign keys are declared in the schema as `REFERENCES` clauses and are
 enforced via `PRAGMA foreign_keys = ON` set on every connection. This
@@ -172,10 +179,10 @@ which produces 768-dimensional vectors. Both can be overridden via the
 a model with a different output dimension you must also update the
 `DIM` constant in `vector.py` — the two must match.
 
-Only statement text is embedded. Names are stored as exact-match strings
-without embeddings, and entity descriptions are not embedded either. Name
-embeddings are an explicit deferred feature; descriptions follow because
-v1 routes all retrieval through statements anyway.
+Statement text and entity-name text are embedded in separate indexes. Name
+embeddings support semantic entity search and duplicate discovery; exact name
+matching still governs identity and mention derivation. Entity descriptions are
+not embedded.
 
 ## Tool surface
 
@@ -231,7 +238,7 @@ created in the same call.
 
 ### upsert_statement
 
-`upsert_statement(kind, text, mentions, links, id?, incoming_links?)`
+`upsert_statement(kind, text, links, id?, incoming_links?, allow_phrasing_violations?)`
 is the main write path for statements. `kind` is required on every
 call (`event` / `state` / `capability` from the starting vocabulary,
 or any open kind). Without `id` it always creates a brand-new statement
@@ -242,9 +249,9 @@ twice with the same text produces two statements. To update an existing statemen
 
 When `id` is given, the substrate replaces the statement at that id
 wholesale. The new text is re-embedded via Ollama, the vector is replaced
-in hnswlib at the same numeric label, and the `mentions` and outgoing
-`links` lists are written wholesale rather than appended. Adding a single
-mention or outgoing link therefore requires passing the full updated list.
+in hnswlib at the same numeric label, mentions are re-derived from the new
+text, and outgoing `links` are written wholesale rather than appended. Adding
+a single outgoing link therefore requires passing the full updated list.
 
 If `id` is provided but does not match an existing statement the call
 raises a `ValueError`, surfaced as HTTP 400 in FastAPI and as a tool
@@ -270,13 +277,8 @@ wholesale-replaced because it represents the set this statement owns.
 incoming edges live on other statements and shouldn't be removed by an
 update that targets this one.
 
-For each `mentions` text the substrate looks up the name; if no name
-with that text exists, a fresh entity and a name pointing at it are
-auto-created. The specific name used is recorded against the statement so
-future merge or split operations preserve the original phrasing. Pass
-`strict_mentions=True` to error on unknown names instead of
-auto-creating — useful for authoring agents that expect every mention
-to resolve to an existing entity and want typos surfaced.
+Mentions are not accepted as input. They are derived from entity names found in
+the statement text and kept up to date when statements or names change.
 
 ### get_statements
 
@@ -288,15 +290,15 @@ frontier of `when` leaves) should batch them in a single call rather
 than loop. A single lookup is just `get_statements([id])`.
 
 Returns `{statements: [{id, kind, text, mentions, links,
-incoming_links, when_references}, ...]}` in the same order
+incoming_links, when_references}, ...], missing}` in the same order
 as the input ids, where `mentions` is `[{name_id, name, entity_id}]`,
 `links` is the outgoing edges this statement owns, and `incoming_links`
 is `[{from_id, link_type}]` listing every node that points at this one
 (statement *or* entity — the substrate treats them uniformly on
-hydration). Raises ValueError if `ids` is empty or if any id is unknown (no
-partial results). Used by callers that already have ids in hand (from a
-search hit's links field, an entity mention chain, etc.) and want the
-full hydrated records.
+hydration). Unknown ids appear in `missing` while known records are still
+returned; an empty input returns empty `statements` and `missing` lists. Used by
+callers that already have ids in hand (from a search hit's links field, an
+entity mention chain, etc.) and want the full hydrated records.
 
 ### get_entity
 
@@ -307,8 +309,9 @@ links, incoming_links, statement_links, incoming_statement_links}`.
 vocabulary, see `list_entity_link_types`). `statement_links` /
 `incoming_statement_links` are mixed entity↔statement edges with the
 same `{to_id|from_id, link_type, when?}` shape that `add_links`
-produces. Raises ValueError on unknown id. To find statements that
-mention an entity by name (rather than via a direct edge), use
+produces. The response always includes `missing`: it is empty for a resolved
+entity, while an unknown id returns only `{id, missing: [id]}`. To find
+statements that mention an entity by name (rather than via a direct edge), use
 `search_statements` with the `mentions` filter.
 
 ### list_entities and list_statements
@@ -322,7 +325,7 @@ falls back to its id.
 
 `list_statements(limit=50, offset=0, entity_id?, name?, kind?)` pages
 through statements in insertion order, returning `{total, statements:
-[{id, kind, text}]}` — text only, no mentions or links. Without filters
+[{id, kind, text}], missing}` — text only, no mentions or links. Without filters
 it scans the entire corpus; with `entity_id` or `name` (pass at most one)
 it restricts to statements that mention that entity. The optional `kind`
 argument narrows further to one shape of claim and combines with the
@@ -332,8 +335,9 @@ collapse into one filter — passing the canonical name and passing an
 alias return the same set. The query joins `statements` to
 `statement_mentions` and `names` and uses DISTINCT so a statement
 mentioning multiple aliases of the same entity appears once. Unknown
-name or unknown entity_id raises ValueError. For full statement
-structure use `get_statements(ids)`.
+names or entity ids return an empty page and the unresolved filter in
+`missing`; otherwise `missing` is empty. For full statement structure use
+`get_statements(ids)`.
 
 ### upsert_name
 
@@ -370,8 +374,9 @@ entity's id while names left behind on the source entity are untouched.
 
 `merge_statements(from_id, into_id)` consolidates two statements into
 one when the writer discovers they describe the same fact under
-different wordings. Mentions are unioned onto the target, deduped on
-`name_id`. Outgoing links are unioned and deduped on
+different wordings. Mentions are derived from text, so the target keeps its own
+mentions and the source's mentions are discarded. Outgoing links are unioned
+and deduped on
 `(to_id, link_type, when)`. Incoming links — every
 other statement that pointed at the source — are rewritten to point at
 the target, with the same dedup. Any edge elsewhere in the graph whose
@@ -424,13 +429,10 @@ ValueError on unknown id.
 ### add_links
 
 `add_links(links)` accepts a list of `{from_id, to_id, link_type,
-when?}` items and inserts each as an edge. Endpoints may be statement
-ids (`stm_…`) or entity ids (`ent_…`) in any combination — except
-entity↔entity, which has its own vocabulary and lives behind
-`add_entity_links`. Statement↔statement edges land in `statement_links`;
-any edge touching an entity lands in `entity_statement_links`.
-Externally the caller sees a single uniform link API; the routing is
-internal storage.
+when?}` items and inserts each as a statement↔statement edge. New
+entity↔statement edges are rejected. Existing mixed edges remain stored,
+readable, removable, and transferable during merges. Entity↔entity links use
+their own vocabulary and live behind `add_entity_links`.
 
 The operation is bulk-by-default — passing a single edge is just a
 one-element list — and idempotent: pre-existing rows are silently
@@ -444,7 +446,8 @@ endpoint, plus every `statement_id` leaf inside any `when` tree) exists
 in the substrate. If any is unknown the call raises `ValueError` and
 inserts nothing, so a typo cannot half-apply a bulk insert. `when`
 leaves are always statement ids — an entity has no notion of
-"holding" — and the grammar is identical across both link kinds.
+"holding." The grammar applies to statement links and to legacy mixed edges
+addressed by `remove_links`; entity↔entity links do not accept `when`.
 
 No embedding work is performed — this is the cheap path for adding
 relationships between nodes that already exist. By contrast,
@@ -465,14 +468,11 @@ edge that references a non-existent statement simply removes nothing.
 
 ### list_link_types
 
-`list_link_types()` returns the distinct `link_type` values currently
-materialised on at least one `statement_links` row, sorted
-alphabetically. The result is a snapshot of what is IN USE, not the
-substrate's allowed vocabulary — the vocabulary is open, any string is
-a valid `link_type`, and new ones appear in the result as soon as a
-statement_link uses them. To learn what specific types mean or which
-types are conceptually available, search for statements that describe
-`link_type` instead.
+`list_link_types()` returns every statement-link type known through either the
+editable glossary or a materialised link, sorted alphabetically. Each row has
+`{link_type, type, description, usage_count, in_use, direction?}`. A glossary
+type can therefore appear with `usage_count: 0`; an in-use type without a
+glossary entry appears with an empty description. The vocabulary remains open.
 
 ### add_entity_links and remove_entity_links
 
@@ -498,12 +498,11 @@ block the source's deletion.
 
 ### list_entity_link_types
 
-`list_entity_link_types()` returns the distinct `link_type` values
-currently materialised on at least one `entity_links` row, sorted
-alphabetically. Statement link types and entity link types live in
-separate namespaces (different tables) — the same word can mean
-different things between domains. Use this to discover entity-link
-conventions and `list_link_types()` for statement-link conventions.
+`list_entity_link_types()` returns every entity-link type known through either
+the editable glossary or a materialised link, sorted alphabetically. Each row
+has `{link_type, type, description, usage_count, in_use}`; glossary entries may
+have zero usage, and used types may have an empty description. Statement and
+entity link types live in separate namespaces.
 
 ### discover_facts
 
@@ -688,10 +687,11 @@ UI renders mentions as entity chips.
 
 ## Browser UI
 
-The browser UI is a read-only React application bundled inside
-`src/mycelium/ui/` and served as static files. It does not have a build
-step: React, ReactDOM, and Babel-Standalone are loaded from the unpkg
-CDN, and Babel transpiles the JSX in the browser at page load.
+The browser UI is a React application bundled inside `src/mycelium/ui/` and
+served as static files. Alongside graph browsing, it exposes authenticated
+draft review, glossary editing, and other role-gated mutation controls. It does
+not have a build step: React, ReactDOM, and Babel-Standalone are loaded from the
+unpkg CDN, and Babel transpiles the JSX in the browser at page load.
 
 The UI is a single-page application backed by hash-based routing. It
 loads the entire substrate in one fetch from `/api/data` at startup,
@@ -775,19 +775,21 @@ search and the `merge_entities` and `move_name` flows. The Ollama
 embedding client is monkeypatched in HTTP tests so the suite runs
 without a live Ollama. The current count is fifteen tests, all passing.
 
-A separate `scripts/smoke.py` exercises the substrate end-to-end against
-a temporary data directory using a fake embedding, and is the canonical
-sanity check that nothing has broken at the integration level.
+The pytest suite exercises the substrate end-to-end against temporary data
+directories using fake embeddings.
 
 ## Configuration
 
-All runtime configuration is via environment variables; no config files
-beyond `pyproject.toml` are read. The substrate honours `MYCELIUM_DATA_DIR`
+Administrators choose per-action models and draft review controls in AI settings.
+Deployment configuration remains in environment variables. The substrate honours `MYCELIUM_DATA_DIR`
 for the database directory (default `./.mycelium/`), `OLLAMA_URL` for the
 Ollama endpoint (default `http://localhost:11434`), `EMBED_MODEL` for the
 embedding model (default `nomic-embed-text`), `MYCELIUM_HTTP_HOST` for
 the FastAPI bind host (default `127.0.0.1`), and `MYCELIUM_HTTP_PORT`
 for the FastAPI port (default `8765`).
+Authentication is optional and defaults off. Set `MYCELIUM_AUTH=on` and provide
+`MYCELIUM_SESSION_SECRET` to require authenticated sessions or bearer tokens on
+the HTTP and MCP surfaces.
 
 ## Non-goals
 
@@ -796,11 +798,7 @@ land if real usage forces them. Concurrent-write safety is not provided.
 A reranker for search results is not implemented; vector search alone
 returns top-k results. Fuzzy duplicate detection on entity creation is
 not implemented; exact-name match is the only dedup. Name embeddings
-are not implemented; names are exact-match-only at write time and
-search time. Authentication on the MCP and HTTP servers is not
-implemented; the deployment posture is local-first. A query language is
-explicitly never going to be exposed; the tool primitives are the
-surface. Migrations beyond the initial schema are not supported; the
-expected upgrade path is to wipe the data directory and re-ingest. There
-is no CLI inspection tool or human-readable dump format other than the
-browser UI.
+assist semantic search and duplicate discovery but do not change that identity
+rule. A query language is explicitly never going to be exposed; the tool
+primitives are the surface. There is no CLI inspection tool or human-readable
+dump format other than the browser UI.

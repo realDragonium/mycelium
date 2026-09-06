@@ -1,0 +1,1745 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import logging
+import traceback
+from collections.abc import Callable
+from dataclasses import replace
+from functools import partial
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from mycelium import auth, docs_store, drafts_store, ops_ledger, server
+from mycelium.docgen import destinations
+from mycelium.docgen.destinations import (
+    Delivery,
+    DeliveryDocument,
+    DestinationConfig,
+    DestinationError,
+    get_destination,
+    load_destinations,
+)
+from mycelium.docgen.github_destination import deliver, read
+from product_settings_helpers import import_product_environment
+
+TOKEN = "credential-sentinel-8d76"
+REFLECTION_TOKEN = "dec0de00" * 5
+BASE_COMMIT_SHA = "1" * 40
+BASE_TREE_SHA = "2" * 40
+TREE_SHA = "4" * 40
+DELIVERY_SHA = "5" * 40
+SECOND_TREE_SHA = "6" * 40
+SECOND_DELIVERY_SHA = "7" * 40
+
+
+def _blob_id(content: str) -> str:
+    encoded = content.encode("utf-8")
+    header = f"blob {len(encoded)}\0".encode()
+    return hashlib.sha1(header + encoded, usedforsecurity=False).hexdigest()
+
+
+CONTENT_SHA = _blob_id("# Configuring SSO\n")
+
+
+def _config(**overrides) -> DestinationConfig:
+    generic = {
+        "name": overrides.pop("name", "knowledge-base"),
+        "type": overrides.pop("type", "github"),
+        "path_template": overrides.pop(
+            "path_template", "docs/{guideline_set}/{slug}.{document_type}.md"
+        ),
+    }
+    settings = {
+        "owner": "acme",
+        "repo": "handbook",
+        "token_env": "DOCS_GITHUB_TOKEN",
+        "host": "github.com",
+        "base_branch": "docs-main",
+    }
+    settings.update(overrides)
+    return DestinationConfig(**generic, settings=settings)
+
+
+def _entry(*, path_template="docs/{slug}.md", **settings_overrides) -> dict:
+    settings = {
+        "owner": "acme",
+        "repo": "handbook",
+        "token_env": "DOCS_GITHUB_TOKEN",
+        "base_branch": "docs-main",
+    }
+    settings.update(settings_overrides)
+    return {
+        "type": "github",
+        "path_template": path_template,
+        "config": settings,
+    }
+
+
+def _document() -> DeliveryDocument:
+    return DeliveryDocument(
+        id="gdc_123",
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="# Configuring SSO\n",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=("stm_1", "stm_2"),
+    )
+
+
+def _pull(
+    reference: str, branch: str = "mycelium/docs/configuring-sso-gdc_123"
+) -> dict:
+    return {
+        "html_url": reference,
+        "state": "open",
+        "base": {"ref": "docs-main"},
+        "head": {
+            "ref": branch,
+            "repo": {"full_name": "acme/handbook"},
+        },
+    }
+
+
+def _ref(branch: str, sha: str) -> dict:
+    return {
+        "ref": f"refs/heads/{branch}",
+        "object": {"type": "commit", "sha": sha},
+    }
+
+
+def _responses(
+    *,
+    blob_sha: str = CONTENT_SHA,
+    reference: str | None = None,
+    existing_reference: str | None = None,
+) -> tuple[list[httpx.Request], Callable[[httpx.Request], httpx.Response]]:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if "/git/ref/heads/" in path and request.method == "GET":
+            return httpx.Response(404, json={"message": "Not Found"})
+        if path.endswith("/branches/docs-main"):
+            return httpx.Response(
+                200,
+                json={
+                    "commit": {
+                        "sha": BASE_COMMIT_SHA,
+                        "commit": {"tree": {"sha": BASE_TREE_SHA}},
+                    }
+                },
+            )
+        if path.endswith("/git/blobs"):
+            return httpx.Response(201, json={"sha": blob_sha})
+        if path.endswith("/git/trees"):
+            return httpx.Response(201, json={"sha": TREE_SHA})
+        if path.endswith("/git/commits"):
+            return httpx.Response(201, json={"sha": DELIVERY_SHA})
+        if path.endswith("/git/refs"):
+            ref_request = _request_json(request)
+            return httpx.Response(
+                201,
+                json=_ref(
+                    ref_request["ref"].removeprefix("refs/heads/"),
+                    ref_request["sha"],
+                ),
+            )
+        if path.endswith("/pulls") and request.method == "GET":
+            pulls = [] if existing_reference is None else [_pull(existing_reference)]
+            return httpx.Response(200, json=pulls)
+        if path.endswith("/pulls"):
+            branch = _request_json(request)["head"]
+            return httpx.Response(
+                201,
+                json=_pull(
+                    reference or "https://github.com/acme/handbook/pull/17", branch
+                ),
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    return requests, handler
+
+
+def _request_json(request: httpx.Request) -> dict:
+    return json.loads(request.content)
+
+
+def _retry_pull_response(request: httpx.Request, remote: dict) -> httpx.Response:
+    if request.method == "GET":
+        if remote["open_pull"] is None:
+            return httpx.Response(200, json=[])
+        return httpx.Response(
+            200, json=[_pull(remote["open_pull"], remote["branch_name"])]
+        )
+    if remote["fail_review"]:
+        remote["fail_review"] = False
+        remote["open_pull"] = "https://github.com/acme/handbook/pull/17"
+        return httpx.Response(500, text=f"failed with {TOKEN}")
+    return httpx.Response(422, json={"message": "Pull request exists"})
+
+
+def _retry_response(
+    request: httpx.Request, requests: list[httpx.Request], remote: dict
+) -> httpx.Response:
+    requests.append(request)
+    path = request.url.path
+    if "/git/ref/heads/" in path and request.method == "GET":
+        if remote["branch_sha"] is None:
+            return httpx.Response(404, json={"message": "Not Found"})
+        return httpx.Response(200, json={"object": {"sha": remote["branch_sha"]}})
+    if path.endswith("/branches/docs-main"):
+        return httpx.Response(
+            200,
+            json={
+                "commit": {
+                    "sha": BASE_COMMIT_SHA,
+                    "commit": {"tree": {"sha": BASE_TREE_SHA}},
+                }
+            },
+        )
+    if "/git/commits/" in path and request.method == "GET":
+        commit_sha = path.rsplit("/", 1)[-1]
+        return httpx.Response(
+            200, json={"tree": {"sha": remote["commits"][commit_sha]}}
+        )
+    if path.endswith("/git/blobs"):
+        return httpx.Response(201, json={"sha": CONTENT_SHA})
+    if path.endswith("/git/trees"):
+        tree_sha = remote["tree_responses"].pop(0)
+        return httpx.Response(201, json={"sha": tree_sha})
+    if path.endswith("/git/commits"):
+        commit_sha = remote["commit_responses"].pop(0)
+        remote["commits"][commit_sha] = _request_json(request)["tree"]
+        return httpx.Response(201, json={"sha": commit_sha})
+    if path.endswith("/git/refs") and request.method == "POST":
+        if remote["branch_sha"] is not None:
+            return httpx.Response(422, json={"message": "Reference exists"})
+        remote["branch_sha"] = _request_json(request)["sha"]
+        remote["branch_name"] = _request_json(request)["ref"].removeprefix(
+            "refs/heads/"
+        )
+        return httpx.Response(
+            201, json=_ref(remote["branch_name"], remote["branch_sha"])
+        )
+    if "/git/refs/heads/" in path and request.method == "PATCH":
+        remote["branch_sha"] = _request_json(request)["sha"]
+        return httpx.Response(
+            200, json=_ref(remote["branch_name"], remote["branch_sha"])
+        )
+    if path.endswith("/pulls"):
+        return _retry_pull_response(request, remote)
+    raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+
+def test_the_github_destination_runs_the_git_data_sequence_and_opens_review():
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    delivery = deliver(
+        _config(),
+        _document(),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=client,
+    )
+
+    assert [request.method for request in requests] == [
+        "GET",
+        "GET",
+        "POST",
+        "POST",
+        "POST",
+        "POST",
+        "GET",
+        "POST",
+    ]
+    assert [request.url.path for request in requests] == [
+        "/repos/acme/handbook/git/ref/heads/mycelium/docs/configuring-sso-gdc_123",
+        "/repos/acme/handbook/branches/docs-main",
+        "/repos/acme/handbook/git/blobs",
+        "/repos/acme/handbook/git/trees",
+        "/repos/acme/handbook/git/commits",
+        "/repos/acme/handbook/git/refs",
+        "/repos/acme/handbook/pulls",
+        "/repos/acme/handbook/pulls",
+    ]
+    assert _request_json(requests[2]) == {
+        "content": "# Configuring SSO\n",
+        "encoding": "utf-8",
+    }
+    assert _request_json(requests[3]) == {
+        "base_tree": BASE_TREE_SHA,
+        "tree": [
+            {
+                "path": "docs/kb-authoring/configuring-sso.how-to.md",
+                "mode": "100644",
+                "type": "blob",
+                "sha": CONTENT_SHA,
+            }
+        ],
+    }
+    assert _request_json(requests[4]) == {
+        "message": "Deliver Configuring SSO",
+        "tree": TREE_SHA,
+        "parents": [BASE_COMMIT_SHA],
+    }
+    assert _request_json(requests[5]) == {
+        "ref": "refs/heads/mycelium/docs/configuring-sso-gdc_123",
+        "sha": DELIVERY_SHA,
+    }
+    assert dict(requests[6].url.params) == {
+        "state": "open",
+        "head": "acme:mycelium/docs/configuring-sso-gdc_123",
+        "base": "docs-main",
+    }
+    review = _request_json(requests[7])
+    assert review["head"] == "mycelium/docs/configuring-sso-gdc_123"
+    assert review["base"] == "docs-main"
+    assert "stm_1" in review["body"]
+    assert all(
+        request.headers["Authorization"] == f"Bearer {TOKEN}" for request in requests
+    )
+    assert all(TOKEN not in str(request.url) for request in requests)
+    assert delivery.destination == "knowledge-base"
+    assert delivery.path == "docs/kb-authoring/configuring-sso.how-to.md"
+    assert delivery.reference == "https://github.com/acme/handbook/pull/17"
+    assert delivery.content_revision == CONTENT_SHA
+
+
+def test_blob_id_uses_utf8_byte_length():
+    expected_sha = "61961d7eefc6a0808a2a215a6bca2e711648631b"
+    _, handler = _responses(blob_sha=expected_sha)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    delivery = deliver(
+        _config(),
+        replace(_document(), body="# Café\n"),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=client,
+    )
+
+    assert delivery.content_revision == expected_sha
+
+
+def test_read_fetches_the_recorded_path_from_the_base_after_review_closes():
+    requests: list[httpx.Request] = []
+    body = "# Edited during review\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(
+            200,
+            json={
+                "encoding": "base64",
+                "content": base64.b64encode(body.encode()).decode(),
+                "sha": _blob_id(body),
+            },
+        )
+
+    current = read(
+        _config(),
+        "docs/recorded.md",
+        "gdc_123",
+        "configuring-sso",
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert current.body == body
+    assert requests[1].url.path.endswith("/contents/docs/recorded.md")
+    assert dict(requests[1].url.params) == {"ref": "docs-main"}
+
+
+def test_read_fetches_reviewer_edits_from_the_open_document_branch():
+    requests: list[httpx.Request] = []
+    body = "# Reviewer edit\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(
+                200,
+                json=[_pull("https://github.com/acme/handbook/pull/17")],
+            )
+        return httpx.Response(
+            200,
+            json={
+                "encoding": "base64",
+                "content": base64.b64encode(body.encode()).decode(),
+                "sha": _blob_id(body),
+            },
+        )
+
+    current = read(
+        _config(),
+        "docs/recorded.md",
+        "gdc_123",
+        "configuring-sso",
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert current.body == body
+    assert current.content_revision == _blob_id(body)
+    assert dict(requests[1].url.params) == {
+        "ref": "mycelium/docs/configuring-sso-gdc_123"
+    }
+
+
+def test_redelivery_reuses_the_recorded_path_after_the_template_changes():
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    delivery = deliver(
+        _config(path_template="docs/new/{slug}.md"),
+        replace(_document(), delivered_path="docs/original/configuring-sso.md"),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=client,
+    )
+
+    assert delivery.path == "docs/original/configuring-sso.md"
+    tree_request = next(
+        request for request in requests if request.url.path.endswith("/git/trees")
+    )
+    assert _request_json(tree_request)["tree"][0]["path"] == delivery.path
+
+
+@pytest.mark.parametrize("branch_exists", [True, False])
+def test_redelivery_aligns_a_closed_review_branch_when_base_already_has_the_body(
+    branch_exists,
+):
+    requests: list[httpx.Request] = []
+    branch = "mycelium/docs/configuring-sso-gdc_123"
+    stale_sha = "8" * 40
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if path.endswith("/pulls") and request.method == "GET":
+            return httpx.Response(200, json=[])
+        if "/git/ref/heads/" in path and request.method == "GET":
+            if branch_exists:
+                return httpx.Response(200, json={"object": {"sha": stale_sha}})
+            return httpx.Response(404, json={"message": "Not Found"})
+        if path.endswith("/branches/docs-main"):
+            return httpx.Response(
+                200,
+                json={
+                    "commit": {
+                        "sha": BASE_COMMIT_SHA,
+                        "commit": {"tree": {"sha": BASE_TREE_SHA}},
+                    }
+                },
+            )
+        if "/contents/" in path:
+            body = _document().body
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(body.encode()).decode(),
+                    "sha": _blob_id(body),
+                },
+            )
+        if path.endswith("/git/blobs"):
+            return httpx.Response(201, json={"sha": CONTENT_SHA})
+        if path.endswith("/git/trees"):
+            return httpx.Response(201, json={"sha": TREE_SHA})
+        if path.endswith("/git/commits"):
+            return httpx.Response(201, json={"sha": DELIVERY_SHA})
+        if path.endswith("/git/refs") and request.method == "POST":
+            payload = _request_json(request)
+            return httpx.Response(201, json=_ref(branch, payload["sha"]))
+        if "/git/refs/heads/" in path and request.method == "PATCH":
+            payload = _request_json(request)
+            return httpx.Response(200, json=_ref(branch, payload["sha"]))
+        if path.endswith("/pulls"):
+            return httpx.Response(
+                201, json=_pull("https://github.com/acme/handbook/pull/18")
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    delivery = deliver(
+        _config(),
+        replace(
+            _document(),
+            delivered_path="docs/recorded.md",
+            delivered_content_revision=_blob_id("previous body"),
+            revision_source_content_revision=_blob_id("source body"),
+        ),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    ref_request = next(
+        request
+        for request in requests
+        if request.method in {"POST", "PATCH"} and "/git/refs" in request.url.path
+    )
+    assert _request_json(ref_request)["sha"] == DELIVERY_SHA
+    assert ref_request.url.path.endswith(
+        "/git/refs/heads/mycelium/docs/configuring-sso-gdc_123"
+    ) or ref_request.url.path.endswith("/git/refs")
+    commit_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/git/commits")
+    )
+    expected_parents = (
+        [stale_sha, BASE_COMMIT_SHA] if branch_exists else [BASE_COMMIT_SHA]
+    )
+    assert _request_json(commit_request)["parents"] == expected_parents
+    tree_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/git/trees")
+    )
+    assert _request_json(tree_request)["base_tree"] == BASE_TREE_SHA
+    review_request = next(
+        request
+        for request in requests
+        if request.method == "POST" and request.url.path.endswith("/pulls")
+    )
+    assert requests.index(ref_request) < requests.index(review_request)
+    assert delivery.content_revision == CONTENT_SHA
+
+
+def test_redelivery_refuses_when_the_file_changed_after_generation():
+    requests, base_handler = _responses(
+        existing_reference="https://github.com/acme/handbook/pull/17"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/contents/" in request.url.path:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(b"reviewer changed this\n").decode(),
+                    "sha": _blob_id("reviewer changed this\n"),
+                },
+            )
+        return base_handler(request)
+
+    document = replace(
+        _document(),
+        delivered_path="docs/configuring-sso.md",
+        revision_source_content_revision="a" * 40,
+    )
+    with pytest.raises(DestinationError, match="changed after generation"):
+        deliver(
+            _config(),
+            document,
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+    assert not any(request.url.path.endswith("/git/blobs") for request in requests)
+
+
+def test_an_enterprise_destination_uses_the_hosts_api_v3_base():
+    requests, handler = _responses(
+        reference="https://ghe.corp.example:8443/acme/handbook/pull/17"
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    deliver(
+        _config(host="ghe.corp.example:8443"),
+        _document(),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=client,
+    )
+
+    assert requests[0].url == (
+        "https://ghe.corp.example:8443/api/v3/repos/acme/handbook/git/ref/heads/"
+        "mycelium/docs/configuring-sso-gdc_123"
+    )
+
+
+@pytest.mark.parametrize("host", ["GITHUB.COM", "github.com."])
+def test_public_github_host_spellings_use_the_public_api_base(host):
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    deliver(
+        _config(host=host),
+        _document(),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=client,
+    )
+
+    assert requests[0].url == (
+        "https://api.github.com/repos/acme/handbook/git/ref/heads/mycelium/docs/"
+        "configuring-sso-gdc_123"
+    )
+
+
+@pytest.mark.parametrize(
+    "path_template",
+    [
+        "docs/../{slug}.md",
+        "/docs/{slug}.md",
+        "-docs/{slug}.md",
+        "docs\\{slug}.md",
+        "docs/{unknown}.md",
+    ],
+)
+def test_path_templates_that_can_escape_or_name_unknown_fields_are_refused(
+    path_template,
+):
+    raw = json.dumps({"knowledge-base": _entry(path_template=path_template)})
+
+    with pytest.raises(DestinationError):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "evil.example/@github.com",
+        "github.com@evil.example",
+        "github.com/path",
+        "github.com\n",
+    ],
+)
+def test_a_crafted_host_cannot_redirect_the_credential(host):
+    with pytest.raises(DestinationError):
+        load_destinations(
+            {
+                "MYCELIUM_DOC_DESTINATIONS": json.dumps(
+                    {"knowledge-base": _entry(host=host)}
+                )
+            }
+        )
+
+
+@pytest.mark.parametrize("host", ["ghe.example:0", "ghe.example:65536"])
+def test_host_ports_are_validated_when_destinations_load(host):
+    raw = json.dumps({"knowledge-base": _entry(host=host)})
+
+    with pytest.raises(DestinationError, match="port must be between"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
+
+
+@pytest.mark.parametrize(
+    "base_branch",
+    ["main/", "main//topic", "topic.lock", "topic/.hidden", "topic@{upstream}"],
+)
+def test_invalid_git_branch_names_are_refused_when_destinations_load(base_branch):
+    raw = json.dumps({"knowledge-base": _entry(base_branch=base_branch)})
+
+    with pytest.raises(DestinationError, match="valid Git branch name"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
+
+
+def test_unknown_top_level_configuration_fields_are_refused_fail_closed():
+    entry = _entry()
+    entry["api_url"] = "https://evil.example"
+
+    with pytest.raises(DestinationError, match="unknown field"):
+        load_destinations(
+            {"MYCELIUM_DOC_DESTINATIONS": json.dumps({"knowledge-base": entry})}
+        )
+
+
+def test_unknown_github_configuration_fields_are_refused_when_destinations_load():
+    raw = json.dumps({"knowledge-base": _entry(api_url="https://evil.example")})
+
+    with pytest.raises(DestinationError, match="unknown field"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
+
+
+def test_a_non_object_type_specific_config_is_refused_when_destinations_load():
+    entry = _entry()
+    entry["config"] = None
+
+    with pytest.raises(DestinationError, match="config must be a JSON object"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": json.dumps({"broken": entry})})
+
+
+def test_an_unsupported_destination_type_is_refused_when_destinations_load():
+    entry = _entry()
+    entry["type"] = "unsupported"
+
+    with pytest.raises(DestinationError, match="unsupported type"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": json.dumps({"broken": entry})})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("owner", "-acme"),
+        ("repo", "../handbook"),
+        ("base_branch", "--upload-pack=evil"),
+        ("token_env", "TOKEN-NAME"),
+        ("owner", "acme\n"),
+        ("base_branch", "main\n"),
+    ],
+)
+def test_repository_coordinates_and_token_names_are_validated_fail_closed(field, value):
+    raw = json.dumps({"knowledge-base": _entry(**{field: value})})
+
+    with pytest.raises(DestinationError):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
+
+
+def test_a_destination_cannot_expose_another_destinations_credential():
+    other_token = "fixture-token-for-other-destination"
+    raw = json.dumps(
+        {
+            "first": _entry(owner=other_token),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    with pytest.raises(DestinationError, match="contains a credential"):
+        load_destinations(
+            {
+                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "DOCS_GITHUB_TOKEN": TOKEN,
+                "OTHER_GITHUB_TOKEN": other_token,
+            }
+        )
+
+
+def test_a_destination_token_env_cannot_expose_another_destinations_credential():
+    other_token = "OTHER_GITHUB_TOKEN"
+    raw = json.dumps(
+        {
+            "first": _entry(token_env=other_token),
+            "second": _entry(owner="other", token_env="SECOND_TOKEN"),
+        }
+    )
+
+    with pytest.raises(DestinationError, match="contains a credential"):
+        load_destinations(
+            {
+                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "SECOND_TOKEN": other_token,
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("host", ["github.com"]),
+        ("owner", {"name": "acme"}),
+        ("base_branch", True),
+    ],
+)
+def test_non_string_github_configuration_fields_are_refused_fail_closed(field, value):
+    raw = json.dumps({"knowledge-base": _entry(**{field: value})})
+
+    with pytest.raises(DestinationError):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": raw})
+
+
+def test_non_string_generic_configuration_fields_are_refused_fail_closed():
+    entry = _entry()
+    entry["type"] = ["github"]
+
+    with pytest.raises(DestinationError):
+        load_destinations(
+            {"MYCELIUM_DOC_DESTINATIONS": json.dumps({"knowledge-base": entry})}
+        )
+
+
+def test_document_values_cannot_render_a_path_outside_the_destination():
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    document = _document()
+    escaping = DeliveryDocument(
+        id=document.id,
+        slug=document.slug,
+        title=document.title,
+        body=document.body,
+        guideline_set="../outside",
+        document_type=document.document_type,
+        statement_ids=document.statement_ids,
+    )
+
+    with pytest.raises(DestinationError):
+        deliver(
+            _config(path_template="docs/{guideline_set}/{slug}.md"),
+            escaping,
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+    assert requests == []
+
+
+def test_a_derived_delivery_branch_cannot_equal_the_configured_base():
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError, match="configured base branch"):
+        deliver(
+            _config(base_branch="mycelium/docs/configuring-sso-gdc_123"),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert requests == []
+
+
+def test_document_coordinates_cannot_expose_a_configured_credential():
+    other_token = "fixture-token-for-other-destination"
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+    requests, handler = _responses()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    document = replace(_document(), slug=other_token)
+
+    with pytest.raises(DestinationError, match="credential-bearing coordinate"):
+        deliver(
+            _config(),
+            document,
+            {
+                "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
+                "DOCS_GITHUB_TOKEN": TOKEN,
+                "OTHER_GITHUB_TOKEN": other_token,
+            },
+            client=client,
+        )
+
+    assert requests == []
+
+
+def test_a_failed_review_can_be_retried_against_the_existing_remote_branch(
+    tmp_path, monkeypatch
+):
+    from mycelium.docgen import github_destination
+
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    docs_store.migrate(conn)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="# Configuring SSO\n",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=["stm_1", "stm_2"],
+    )
+    before = dict(docs_store.get_document(conn, document_id))
+    drafts_store.use_connection(conn)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
+    requests: list[httpx.Request] = []
+    remote = {
+        "branch_sha": None,
+        "commits": {},
+        "tree_responses": [TREE_SHA, SECOND_TREE_SHA],
+        "commit_responses": [DELIVERY_SHA, SECOND_DELIVERY_SHA],
+        "open_pull": None,
+        "fail_review": True,
+    }
+
+    monkeypatch.setattr(
+        github_destination,
+        "_client",
+        lambda config, token: httpx.Client(
+            transport=httpx.MockTransport(
+                partial(_retry_response, requests=requests, remote=remote)
+            )
+        ),
+    )
+
+    try:
+        with pytest.raises(ValueError) as excinfo:
+            server.deliver_document(document_id, "knowledge-base")
+        assert dict(docs_store.get_document(conn, document_id)) == before
+        assert remote["branch_sha"] == DELIVERY_SHA
+        assert TOKEN not in str(excinfo.value)
+        assert "***" in str(excinfo.value)
+        assert excinfo.value.__cause__ is None
+
+        result = server.deliver_document(document_id, "knowledge-base")
+        stored = docs_store.serialize_document(
+            docs_store.get_document(conn, document_id)
+        )
+    finally:
+        drafts_store.reset()
+        conn.close()
+
+    assert result["content_revision"] == CONTENT_SHA
+    assert stored["delivery_content_revision"] == CONTENT_SHA
+    assert remote["branch_sha"] == SECOND_DELIVERY_SHA
+    trees = [
+        _request_json(request)
+        for request in requests
+        if request.url.path.endswith("/git/trees")
+    ]
+    assert [tree["base_tree"] for tree in trees] == [BASE_TREE_SHA, TREE_SHA]
+    commits = [
+        _request_json(request)
+        for request in requests
+        if request.url.path.endswith("/git/commits") and request.method == "POST"
+    ]
+    assert [commit["parents"] for commit in commits] == [
+        [BASE_COMMIT_SHA],
+        [DELIVERY_SHA],
+    ]
+    base_reads = [
+        request
+        for request in requests
+        if request.url.path.endswith("/branches/docs-main")
+    ]
+    assert len(base_reads) == 1
+    creates = [
+        request
+        for request in requests
+        if request.url.path.endswith("/git/refs") and request.method == "POST"
+    ]
+    assert len(creates) == 1
+    updates = [request for request in requests if request.method == "PATCH"]
+    assert len(updates) == 1
+    assert _request_json(updates[0]) == {"sha": SECOND_DELIVERY_SHA}
+    pull_creates = [
+        request
+        for request in requests
+        if request.url.path.endswith("/pulls") and request.method == "POST"
+    ]
+    assert len(pull_creates) == 1
+
+
+def test_a_non_fast_forward_update_is_refused_because_the_branch_moved():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        path = request.url.path
+        if "/git/ref/heads/" in path:
+            return httpx.Response(200, json={"object": {"sha": DELIVERY_SHA}})
+        if path.endswith(f"/git/commits/{DELIVERY_SHA}"):
+            return httpx.Response(200, json={"tree": {"sha": TREE_SHA}})
+        if path.endswith("/git/blobs"):
+            return httpx.Response(201, json={"sha": CONTENT_SHA})
+        if path.endswith("/git/trees"):
+            return httpx.Response(201, json={"sha": SECOND_TREE_SHA})
+        if path.endswith("/git/commits"):
+            return httpx.Response(201, json={"sha": SECOND_DELIVERY_SHA})
+        if "/git/refs/heads/" in path and request.method == "PATCH":
+            return httpx.Response(422, json={"message": "Update is not a fast forward"})
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError, match="branch moved"):
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert not any(
+        request.url.path.endswith("/branches/docs-main") for request in requests
+    )
+    update = next(request for request in requests if request.method == "PATCH")
+    assert _request_json(update) == {"sha": SECOND_DELIVERY_SHA}
+    assert not any(request.url.path.endswith("/pulls") for request in requests)
+
+
+def test_a_malformed_successful_branch_update_is_refused():
+    requests, handler = _responses()
+
+    def malformed_ref(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/git/refs") and request.method == "POST":
+            return httpx.Response(201, json={})
+        return handler(request)
+
+    client = httpx.Client(transport=httpx.MockTransport(malformed_ref))
+
+    with pytest.raises(DestinationError, match="invalid branch update response"):
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert not any(request.url.path.endswith("/pulls") for request in requests)
+
+
+def test_transport_errors_are_scrubbed_and_do_not_chain_the_credential():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadError(f"network exposed {TOKEN}", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert TOKEN not in str(excinfo.value)
+    assert "***" in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+
+
+def test_a_redirect_is_refused_without_contacting_or_authorizing_its_target(
+    monkeypatch,
+):
+    from mycelium.docgen import github_destination
+
+    real_client = httpx.Client
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                302, headers={"location": "https://redirect.example/collect"}
+            )
+        if request.url.host == "redirect.example":
+            return httpx.Response(
+                200,
+                json={
+                    "commit": {
+                        "sha": BASE_COMMIT_SHA,
+                        "commit": {"tree": {"sha": BASE_TREE_SHA}},
+                    }
+                },
+            )
+        return httpx.Response(500, text="stop")
+
+    def client_factory(**kwargs):
+        return real_client(transport=httpx.MockTransport(handler), **kwargs)
+
+    monkeypatch.setattr(github_destination.httpx, "Client", client_factory)
+
+    with pytest.raises(DestinationError, match="HTTP 302"):
+        deliver(_config(), _document(), {"DOCS_GITHUB_TOKEN": TOKEN})
+
+    assert len(requests) == 1
+    assert requests[0].headers["Authorization"] == f"Bearer {TOKEN}"
+    assert [
+        request.headers.get("Authorization")
+        for request in requests
+        if request.url.host == "redirect.example"
+    ] == []
+
+
+def test_a_token_shaped_git_object_id_is_refused_without_reflection():
+    _, handler = _responses(blob_sha=REFLECTION_TOKEN)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": REFLECTION_TOKEN},
+            client=client,
+        )
+
+    assert REFLECTION_TOKEN not in str(excinfo.value)
+
+
+def test_a_token_shaped_branch_object_id_is_refused_before_another_request():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"object": {"sha": REFLECTION_TOKEN}})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": REFLECTION_TOKEN},
+            client=client,
+        )
+
+    assert REFLECTION_TOKEN not in str(excinfo.value)
+    assert len(requests) == 1
+
+
+def test_a_token_crossing_the_error_excerpt_boundary_is_fully_scrubbed():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="x" * 490 + TOKEN)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert TOKEN not in str(excinfo.value)
+    assert TOKEN[:5] not in str(excinfo.value)
+
+
+def test_http_client_logs_scrub_a_credential_in_the_response_reason(caplog):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500, text="failed", extensions={"reason_phrase": TOKEN.encode()}
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with caplog.at_level("INFO", logger="httpx"):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {"DOCS_GITHUB_TOKEN": TOKEN},
+                client=client,
+            )
+
+    assert TOKEN not in caplog.text
+    assert "***" in caplog.text
+
+
+def test_delivery_scrubs_every_configured_destinations_credential(caplog):
+    other_token = "fixture-token-for-other-destination"
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            500,
+            text=f"failed with {other_token}",
+            extensions={"reason_phrase": other_token.encode()},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    env = {
+        "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
+        "DOCS_GITHUB_TOKEN": TOKEN,
+        "OTHER_GITHUB_TOKEN": other_token,
+    }
+
+    with caplog.at_level("INFO", logger="httpx"):
+        with pytest.raises(DestinationError) as excinfo:
+            deliver(_config(), _document(), env, client=client)
+
+    assert other_token not in str(excinfo.value)
+    assert other_token not in caplog.text
+    assert "***" in str(excinfo.value)
+    assert "***" in caplog.text
+
+
+def test_delivery_scrubs_credentials_from_child_logger_handlers(caplog):
+    other_token = "fixture-token-for-other-destination"
+    httpcore_logger = logging.getLogger("httpcore.http11")
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        httpcore_logger.debug("response reason %s", other_token)
+        return httpx.Response(500, text="failed")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level("DEBUG", logger="httpcore.http11"):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {
+                    "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
+                    "DOCS_GITHUB_TOKEN": TOKEN,
+                    "OTHER_GITHUB_TOKEN": other_token,
+                },
+                client=client,
+            )
+
+    assert other_token not in caplog.text
+    assert "***" in caplog.text
+
+
+def test_delivery_scrubs_credentials_from_logged_exceptions(caplog):
+    other_token = "fixture-token-for-other-destination"
+    httpcore_logger = logging.getLogger("httpcore.http11")
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            raise RuntimeError(other_token)
+        except RuntimeError:
+            httpcore_logger.exception("transport failed")
+        return httpx.Response(500, text="failed")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level("ERROR", logger="httpcore.http11"):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {
+                    "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
+                    "DOCS_GITHUB_TOKEN": TOKEN,
+                    "OTHER_GITHUB_TOKEN": other_token,
+                },
+                client=client,
+            )
+
+    assert other_token not in caplog.text
+
+
+@pytest.mark.parametrize("logger_name", ["mycelium.unrelated", "httpxylophone"])
+def test_delivery_preserves_unrelated_log_arguments_and_exception(caplog, logger_name):
+    unrelated_logger = logging.getLogger(logger_name)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        try:
+            raise RuntimeError("fixture failure")
+        except RuntimeError:
+            unrelated_logger.exception("unrelated %s", "argument")
+        return httpx.Response(500, text="failed")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with caplog.at_level("ERROR", logger=logger_name):
+        with pytest.raises(DestinationError):
+            deliver(
+                _config(),
+                _document(),
+                {"DOCS_GITHUB_TOKEN": TOKEN},
+                client=client,
+            )
+
+    record = next(record for record in caplog.records if record.name == logger_name)
+    assert record.args == ("argument",)
+    assert record.exc_info is not None
+
+
+def test_review_reference_cannot_expose_a_configured_credential():
+    other_token = "1234567890123456789012345678901234567890"
+    raw = json.dumps(
+        {
+            "first": _entry(),
+            "second": _entry(owner="other", token_env="OTHER_GITHUB_TOKEN"),
+        }
+    )
+    _, handler = _responses(
+        reference=f"https://github.com/acme/handbook/pull/{other_token}"
+    )
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError, match="credential-bearing review reference"):
+        deliver(
+            _config(),
+            _document(),
+            {
+                "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
+                "DOCS_GITHUB_TOKEN": TOKEN,
+                "OTHER_GITHUB_TOKEN": other_token,
+            },
+            client=client,
+        )
+
+
+def test_an_existing_review_must_match_the_requested_delivery():
+    requests, handler = _responses(
+        existing_reference="https://github.com/acme/handbook/pull/17"
+    )
+
+    def mismatched_handler(request: httpx.Request) -> httpx.Response:
+        response = handler(request)
+        if request.url.path.endswith("/pulls") and request.method == "GET":
+            payload = _pull("https://github.com/acme/handbook/pull/17")
+            payload["base"] = {"ref": "main"}
+            return httpx.Response(200, json=[payload])
+        return response
+
+    client = httpx.Client(transport=httpx.MockTransport(mismatched_handler))
+
+    with pytest.raises(DestinationError, match="invalid review response"):
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert not any(
+        request.url.path.endswith("/pulls") and request.method == "POST"
+        for request in requests
+    )
+
+
+def test_non_ascii_review_digits_are_refused_without_reflecting_a_token_shaped_value():
+    reference = (
+        f"https://github.com/acme/{REFLECTION_TOKEN}/pull/\N{ARABIC-INDIC DIGIT ONE}"
+        f"\N{ARABIC-INDIC DIGIT SEVEN}"
+    )
+    _, handler = _responses(reference=reference)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(repo=REFLECTION_TOKEN),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": REFLECTION_TOKEN},
+            client=client,
+        )
+
+    assert REFLECTION_TOKEN not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        f"\x00 https://github.com/acme/{REFLECTION_TOKEN}/pull/17",
+        f"https://github.com/acme/{REFLECTION_TOKEN}/pull/\n17",
+    ],
+)
+def test_control_characters_in_review_references_are_refused_without_reflection(
+    reference,
+):
+    _, handler = _responses(reference=reference)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(repo=REFLECTION_TOKEN),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": REFLECTION_TOKEN},
+            client=client,
+        )
+
+    assert REFLECTION_TOKEN not in str(excinfo.value)
+
+
+def test_review_path_comparison_does_not_fold_non_ascii_text_into_coordinates():
+    reference = f"https://github.com/ß/{REFLECTION_TOKEN}/pull/17"
+    _, handler = _responses(reference=reference)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(owner="ss", repo=REFLECTION_TOKEN),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": REFLECTION_TOKEN},
+            client=client,
+        )
+
+    assert REFLECTION_TOKEN not in str(excinfo.value)
+
+
+def test_an_existing_review_reference_passes_through_reference_validation():
+    requests, handler = _responses(existing_reference=REFLECTION_TOKEN)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": REFLECTION_TOKEN},
+            client=client,
+        )
+
+    assert REFLECTION_TOKEN not in str(excinfo.value)
+    assert not any(
+        request.url.path.endswith("/pulls") and request.method == "POST"
+        for request in requests
+    )
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        TOKEN,
+        "http://github.com/acme/handbook/pull/17",
+        "https://redirect.example/acme/handbook/pull/17",
+        "https://github.com/acme/other/pull/17",
+        f"https://github.com/acme/handbook/pull/{TOKEN}",
+    ],
+)
+def test_unopenable_or_wrong_repository_review_references_are_refused_without_reflection(
+    reference,
+):
+    _, handler = _responses(reference=reference)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(DestinationError) as excinfo:
+        deliver(
+            _config(),
+            _document(),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=client,
+        )
+
+    assert TOKEN not in str(excinfo.value)
+
+
+def test_the_delivery_tool_records_a_completed_delivery(tmp_path, monkeypatch):
+    from mycelium.docgen import github_destination
+
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    docs_store.migrate(conn)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="configuring-sso",
+        title="Configuring SSO",
+        body="# Configuring SSO\n",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        statement_ids=["stm_1", "stm_2"],
+    )
+    drafts_store.use_connection(conn)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
+    _, handler = _responses()
+    monkeypatch.setattr(
+        github_destination,
+        "_client",
+        lambda config, token: httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    try:
+        result = server.deliver_document(document_id, "knowledge-base")
+        document = docs_store.serialize_document(
+            docs_store.get_document(conn, document_id)
+        )
+    finally:
+        drafts_store.reset()
+        conn.close()
+
+    assert result == {
+        "destination": "knowledge-base",
+        "path": "docs/configuring-sso.md",
+        "reference": "https://github.com/acme/handbook/pull/17",
+        "content_revision": CONTENT_SHA,
+    }
+    assert document["body"] == "# Configuring SSO\n"
+    assert document["delivery_destination"] == "knowledge-base"
+    assert document["delivery_path"] == "docs/configuring-sso.md"
+    assert document["delivery_reference"] == (
+        "https://github.com/acme/handbook/pull/17"
+    )
+    assert document["delivery_content_revision"] == CONTENT_SHA
+
+
+def test_listing_destinations_returns_only_generic_configuration(monkeypatch):
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
+
+    listed = server.list_documentation_destinations()
+
+    assert listed == {
+        "destinations": [
+            {
+                "name": "knowledge-base",
+                "type": "github",
+                "path_template": "docs/{slug}.md",
+                "coordinates": {
+                    "host": "github.com",
+                    "owner": "acme",
+                    "repo": "handbook",
+                    "base_branch": "docs-main",
+                },
+            }
+        ]
+    }
+    rendered = json.dumps(listed)
+    assert "DOCS_GITHUB_TOKEN" not in rendered
+    assert TOKEN not in rendered
+
+
+def test_listing_refuses_public_configuration_that_contains_the_credential(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({TOKEN: _entry(path_template=f"docs/{TOKEN}/{{slug}}.md")}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+
+    with pytest.raises(DestinationError) as excinfo:
+        import_product_environment()
+
+    assert TOKEN not in str(excinfo.value)
+
+
+def test_malformed_configuration_scrubs_a_credential_from_its_name(monkeypatch):
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({TOKEN: _entry(host="github.com/path")}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+
+    with pytest.raises(DestinationError) as excinfo:
+        import_product_environment()
+
+    assert TOKEN not in str(excinfo.value)
+    assert "***" in str(excinfo.value)
+
+
+def test_unknown_destination_does_not_reflect_a_configured_credential(monkeypatch):
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
+
+    with pytest.raises(DestinationError) as excinfo:
+        get_destination(TOKEN)
+
+    rendered_traceback = "".join(
+        traceback.format_exception(
+            excinfo.type, excinfo.value, excinfo.value.__traceback__
+        )
+    )
+    assert TOKEN not in str(excinfo.value)
+    assert TOKEN not in rendered_traceback
+    assert "configured destinations: knowledge-base" in str(excinfo.value)
+
+
+def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
+    tmp_path, monkeypatch
+):
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    docs_store.migrate(conn)
+    document_id = docs_store.upsert_document(
+        conn, slug="example", title="Example", body="Body"
+    )
+    drafts_store.use_connection(conn)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
+
+    try:
+        with pytest.raises(ValueError) as excinfo:
+            server.deliver_document(document_id, TOKEN)
+    finally:
+        drafts_store.reset()
+        conn.close()
+
+    rendered_traceback = "".join(
+        traceback.format_exception(
+            excinfo.type, excinfo.value, excinfo.value.__traceback__
+        )
+    )
+    assert TOKEN not in str(excinfo.value)
+    assert TOKEN not in rendered_traceback
+
+
+def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
+    monkeypatch,
+):
+    from mycelium.http import app
+
+    conn = docs_store.connect(":memory:")
+    docs_store.migrate(conn)
+    monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
+    monkeypatch.setenv("MYCELIUM_AUTH", "off")
+
+    try:
+        for deliver_document in (
+            server.deliver_document.__wrapped__,
+            server.deliver_document,
+        ):
+            with pytest.raises(ValueError) as excinfo:
+                deliver_document(TOKEN, "knowledge-base")
+
+            rendered_traceback = "".join(
+                traceback.format_exception(
+                    excinfo.type, excinfo.value, excinfo.value.__traceback__
+                )
+            )
+            assert str(excinfo.value) == "generated document not found"
+            assert TOKEN not in rendered_traceback
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/deliver-document",
+                json={"document_id": TOKEN, "destination": "knowledge-base"},
+            )
+
+        assert response.status_code == 400
+        assert response.json() == {"detail": "generated document not found"}
+        assert TOKEN not in response.text
+    finally:
+        conn.close()
+
+
+def test_delivery_tool_never_captures_credentials_in_request_traces(monkeypatch):
+    from mycelium.http import app
+
+    conn = docs_store.connect(":memory:")
+    docs_store.migrate(conn)
+    ledger = ops_ledger.connect(":memory:")
+    ops_ledger.migrate(ledger)
+    document_id = docs_store.upsert_document(
+        conn, slug="example", title="Example", body="Body"
+    )
+    monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
+    monkeypatch.setenv("MYCELIUM_AUTH", "off")
+    monkeypatch.setenv("MYCELIUM_OPS_CAPTURE", "summary")
+    monkeypatch.setattr(ops_ledger, "enabled", lambda: True)
+    monkeypatch.setattr(ops_ledger, "connection", lambda: ledger)
+    monkeypatch.setattr(
+        destinations,
+        "deliver_document",
+        lambda configured, document: Delivery(
+            destination=configured.name,
+            path="docs/example.md",
+            reference="https://github.com/acme/handbook/pull/1",
+            content_revision="a" * 40,
+        ),
+    )
+
+    try:
+        result = server.deliver_document(
+            document_id=document_id, destination="knowledge-base"
+        )
+        assert result["reference"] == "https://github.com/acme/handbook/pull/1"
+
+        for call in (
+            lambda: server.deliver_document(
+                document_id=TOKEN, destination="knowledge-base"
+            ),
+            lambda: server.deliver_document(document_id=document_id, destination=TOKEN),
+        ):
+            with pytest.raises(ValueError):
+                call()
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/deliver-document",
+                json={"document_id": TOKEN, "destination": "knowledge-base"},
+            )
+        assert response.status_code == 400
+
+        rows = ledger.execute(
+            "SELECT outcome, request_summary, error_message FROM operations"
+        ).fetchall()
+        assert len(rows) == 4
+        assert [row["outcome"] for row in rows].count("succeeded") == 1
+        assert [row["outcome"] for row in rows].count("failed") == 3
+        assert all(row["request_summary"] is None for row in rows)
+        assert all(
+            row["error_message"] is None or TOKEN not in row["error_message"]
+            for row in rows
+        )
+    finally:
+        ledger.close()
+        conn.close()
+
+
+def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(
+    monkeypatch,
+):
+    entry = _entry()
+    entry["config"] = None
+    monkeypatch.setenv("MYCELIUM_DOC_DESTINATIONS", json.dumps({"broken": entry}))
+
+    with pytest.raises(DestinationError, match="config must be a JSON object"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": json.dumps({"broken": entry})})
+
+
+def test_delivering_an_unknown_document_refuses_before_contacting_a_destination(
+    monkeypatch,
+):
+    from mycelium.docgen import destinations
+
+    conn = docs_store.connect(":memory:")
+    docs_store.migrate(conn)
+    drafts_store.use_connection(conn)
+    contacted = False
+
+    def unexpected_delivery(*args, **kwargs):
+        nonlocal contacted
+        contacted = True
+
+    monkeypatch.setattr(destinations, "deliver_document", unexpected_delivery)
+    try:
+        with pytest.raises(ValueError, match="generated document not found"):
+            server.deliver_document("gdc_missing", "knowledge-base")
+        assert contacted is False
+    finally:
+        drafts_store.reset()
+        conn.close()
+
+
+def test_delivery_tools_are_registered_with_their_required_roles():
+    assert server.deliver_document._mycelium_required_role == "writer"
+    assert server.deliver_document._mycelium_real_role is True
+    assert server.list_documentation_destinations._mycelium_required_role == "reader"
+
+
+def test_a_drafter_cannot_trigger_document_delivery():
+    token = auth.current_principal.set(
+        auth.Principal(id="d", name="Drafter", role="drafter", type="human")
+    )
+    try:
+        with pytest.raises(PermissionError):
+            server.deliver_document("gdc_missing", "knowledge-base")
+    finally:
+        auth.current_principal.reset(token)
+
+
+def _bindings(raw: str) -> str:
+    return json.dumps(
+        {
+            name: {
+                "host": entry["config"].get("host", "github.com"),
+                "token_env": entry["config"]["token_env"],
+            }
+            for name, entry in json.loads(raw).items()
+        }
+    )

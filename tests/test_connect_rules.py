@@ -103,10 +103,12 @@ def _proposals_for(
     phrase: str,
     *,
     shipped: dict[str, frozenset[str] | None] | None = None,
-    allow: frozenset[str] | None = None,
 ) -> RuleProposals:
-    default_allow = frozenset({"composes", "contains", "restricts", "triggers"})
-    view = FakeView(allow_all_link_types=default_allow if allow is None else allow)
+    view = FakeView(
+        allow_all_link_types=frozenset(
+            {"composes", "contains", "restricts", "triggers"}
+        )
+    )
     view.embeddings_by_text[phrase] = [1.0, 0.0]
     batch = [
         BatchStatement(0, kind, text),
@@ -155,38 +157,6 @@ def test_negated_from_role_is_suppressed_and_affirmative_keeps_source_slot():
 
     affirmative = _proposals_for(
         "The report belongs to the archive", "state", "the archive"
-    )
-    assert len(affirmative.links) == 1
-    assert affirmative.links[0].source == "@1"
-    assert affirmative.links[0].target == "@0"
-
-
-def test_negated_cases_level_is_suppressed_and_affirmative_keeps_source_slot():
-    # The frame's cue is contiguous, so "is not high for" never matches and
-    # verb negation cannot reach it; the enumerating parent it captures can
-    # still be denied nominally.
-    negated = _proposals_for(
-        "The escalation priority is high for no severity policy",
-        "rule",
-        "no severity policy",
-    )
-
-    assert negated.links == []
-    assert negated.suppressed_negations == [
-        SuppressedNegation(
-            new_index=0,
-            pattern="cases-level-for",
-            cue="is high for",
-            phrase="no severity policy",
-            negator="no",
-        )
-    ]
-
-    affirmative = _proposals_for(
-        "The escalation priority is high for the severity policy",
-        "rule",
-        "the severity policy",
-        allow=frozenset({"cases"}),
     )
     assert len(affirmative.links) == 1
     assert affirmative.links[0].source == "@1"
@@ -797,3 +767,34 @@ def test_anchored_fan_out_scores_all_sharing_ids_in_one_batched_call():
     assert len(proposals) == 1
     assert proposals[0].target == "stm_58"
     assert proposals[0].score == 0.99
+
+
+@pytest.mark.parametrize(
+    "count,noun", [("three", "levels"), ("12", "cases"), ("two", "branches")]
+)
+def test_cases_frame_names_the_counted_set(count: str, noun: str) -> None:
+    (cue,) = shipped_cues(
+        f"High is one of the {count} {noun} of the alert priority", "rule"
+    )
+    assert (cue.pattern, cue.phrase_role, cue.phrase) == (
+        "cases-one-of",
+        "from",
+        "the alert priority",
+    )
+
+
+def test_cases_aliases_cannot_widen_the_counted_membership_frame() -> None:
+    aliases = {"cases": ("is high for", "is one of", "is one of the levels of")}
+    for text in (
+        "The latency is high for the alert priority",
+        "High is one of the levels of the alert priority",
+    ):
+        assert shipped_cues(text, "rule", aliases=aliases) == []
+    assert (
+        shipped_cues(
+            "High is one of the three levels of the alert priority",
+            "state",
+            aliases=aliases,
+        )
+        == []
+    )

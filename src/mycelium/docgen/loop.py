@@ -7,11 +7,10 @@ the tool-use loop, the grounding and review gates, the op-cap / wall-clock
 ceilings, and graceful degradation. The model writes; this code chooses
 nothing about the prose, and refuses what it cannot let stand.
 
-Core-at-the-center: `_execute` depends only on a client-like object (anything
-with `.messages.create(...)`), a `SubstrateReader`, a gap-reporting callable,
-and a `load_texts` callable. All four are injectable, so the loop is
+Core-at-the-center: `_execute` depends only on an injectable provider client,
+a `SubstrateReader`, a gap-reporting callable, and a `load_texts` callable. All four are injectable, so the loop is
 exercisable with plain fakes — no server, no DB, no network. The framework
-seam (`run_docgen`) wires the real Anthropic client, the in-process substrate,
+seam (`run_docgen`) wires the selected provider client, the in-process substrate,
 `server.report_knowledge_gap`, and the prompt store.
 
 Structurally read-only over the substrate
@@ -37,16 +36,16 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
-from .. import tracing
+from .. import ai, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
 from ..agentloop import (
     check_budget,
     collect_statement_ids,
-    default_client,
     ids_present_in,
     load_doctrine,
 )
@@ -57,21 +56,27 @@ from ..agentloop import (
     serialize as _serialize,
 )
 from ..agentloop import (
-    strip_thinking as _strip_thinking,
-)
-from ..agentloop import (
     substrate_has as _substrate_has,
 )
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
 from .config import DOCTRINE_NAME, DocgenConfig
-from .schema import DocgenResult, DocumentWritten, NothingWritten, ReviewRecord
+from .schema import (
+    CurrentDocument,
+    DocgenResult,
+    DocumentWritten,
+    ExistingDocument,
+    NothingWritten,
+    ReviewRecord,
+)
 from .tools import (
     EMIT_TOOL,
     GAP_TOOL,
+    MATCH_TOOL,
     RESOLVE_TOOL,
     REVIEW_TOOL,
     build_tools,
+    match_tool_def,
     parse_emit_input,
     parse_review_input,
     resolve_tool_def,
@@ -104,6 +109,8 @@ def run_docgen(
     substrate: SubstrateReader | None = None,
     report_gap: Callable[[str], Any] | None = None,
     config: DocgenConfig | None = None,
+    existing_documents: tuple[ExistingDocument, ...] = (),
+    load_current_document: Callable[[str], CurrentDocument] | None = None,
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
@@ -111,15 +118,13 @@ def run_docgen(
 
     `guideline_set` / `document_type` are what the REQUEST named; either may
     be None, in which case the run resolves it. Everything else is injectable
-    for tests; in production they default to the real Anthropic client, the
+    for tests; in production they default to the selected provider client, the
     in-process substrate, `server.report_knowledge_gap`, and env-derived
     config.
     """
     config = config or DocgenConfig.from_env()
     if substrate is None:
         substrate = InProcessSubstrate()
-    if client is None:
-        client = default_client(config.max_retries)
     if report_gap is None:
         report_gap = _default_gap_reporter
 
@@ -140,6 +145,8 @@ def run_docgen(
             doctrine_note=doctrine_note,
             catalogue=_store_catalogue(),
             load_texts=_store_texts,
+            existing_documents=existing_documents,
+            load_current_document=load_current_document,
         )
 
     if config.trace_log_path:
@@ -223,10 +230,13 @@ def _execute(
     doctrine_note: str | None,
     catalogue: dict[str, list[str]],
     load_texts: Callable[[str, str], tuple[str | None, str | None, str | None]],
+    existing_documents: tuple[ExistingDocument, ...] = (),
+    load_current_document: Callable[[str], CurrentDocument] | None = None,
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
         model=config.model,
+        provider=config.provider,
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
         prompt=prompt,
@@ -252,6 +262,7 @@ def _execute(
         exposure=None,
         template=None,
         review_error="",
+        model_error=None,
         review=None,
         unresolved="",
         retrieved_ids=set(),
@@ -260,13 +271,48 @@ def _execute(
         nudged=False,
         emit_blocks=0,
         malformed_retries=0,
+        matched_document_id=None,
+        matched_body_digest=None,
+        matched_content_revision=None,
     )
 
-    resolved = _resolve(prompt, catalogue, requested_set, requested_type, ctx)
+    matched_document = None
+    candidates = tuple(
+        item
+        for item in existing_documents
+        if (requested_set is None or item.guideline_set == requested_set)
+        and (requested_type is None or item.document_type == requested_type)
+    )
+    if candidates:
+        matched, matched_document_id = _match_existing(ctx, candidates)
+        if not matched:
+            return _nothing(ctx, ctx.unresolved)
+        if matched_document_id is not None:
+            matched_document = next(
+                item for item in candidates if item.id == matched_document_id
+            )
+            ctx.matched_document_id = matched_document.id
+            ctx.matched_body_digest = matched_document.body_digest
+
+    resolved = _resolve(
+        prompt,
+        catalogue,
+        matched_document.guideline_set if matched_document else requested_set,
+        matched_document.document_type if matched_document else requested_type,
+        ctx,
+    )
     if resolved is None:
         return _nothing(ctx, ctx.unresolved)
     ctx.guideline_set, ctx.document_type = resolved
     trace.guideline_set, trace.document_type = resolved
+    current_document = None
+    if ctx.matched_document_id is not None and load_current_document is not None:
+        try:
+            loaded_document = load_current_document(ctx.matched_document_id)
+        except Exception as exc:  # noqa: BLE001
+            return _nothing(ctx, f"current document could not be loaded: {exc}")
+        current_document = loaded_document.body
+        ctx.matched_content_revision = loaded_document.content_revision
 
     guidance, exposure, template = load_texts(*resolved)
     if not (template or "").strip():
@@ -307,10 +353,55 @@ def _execute(
                 recon,
                 guideline_set=ctx.guideline_set,
                 document_type=ctx.document_type,
+                current_document=current_document,
             ),
         }
     ]
     return _write(ctx)
+
+
+def _match_existing(
+    ctx: _RunContext, documents: tuple[ExistingDocument, ...]
+) -> tuple[bool, str | None]:
+    listing = [
+        {
+            "id": item.id,
+            "title": item.title,
+            "guideline_set": item.guideline_set,
+            "document_type": item.document_type,
+        }
+        for item in documents
+    ]
+    tool = match_tool_def([item.id for item in documents])
+    try:
+        with ctx.trace.span("model_turn:match"):
+            response = _model_turn(
+                ctx,
+                [
+                    {
+                        "role": "user",
+                        "content": prompts.match_message(ctx.prompt, listing),
+                    }
+                ],
+                force_tool=MATCH_TOOL,
+                tools=[tool],
+            )
+    except Exception as exc:  # noqa: BLE001
+        _unresolvable(ctx, f"document matching failed: {exc}")
+        return False, None
+    ctx.trace.model_turns += 1
+    ctx.trace.add_usage(getattr(response, "usage", None))
+    tool_use = _first_tool_use(response)
+    if tool_use is None or tool_use.name != MATCH_TOOL:
+        _unresolvable(ctx, "the run did not choose whether to revise a document")
+        return False, None
+    chosen = dict(tool_use.input or {}).get("document_id")
+    if chosen is None:
+        return True, None
+    if isinstance(chosen, str) and chosen in {item.id for item in documents}:
+        return True, chosen
+    _unresolvable(ctx, "the run chose a document outside the registry listing")
+    return False, None
 
 
 def _write(ctx: _RunContext) -> DocgenResult:
@@ -327,7 +418,8 @@ def _write(ctx: _RunContext) -> DocgenResult:
             with trace.span("model_turn"):
                 resp = _model_turn(ctx, ctx.messages, force_tool=None)
         except Exception as exc:  # noqa: BLE001 — terminal API error after backoff
-            trace.notes.append(f"model error: {exc}")
+            ctx.model_error = f"model error: {exc}"
+            trace.notes.append(ctx.model_error)
             return _forced_finalize("api_error", ctx)
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -685,6 +777,9 @@ def _handle_emit(
         statement_ids=ids,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
+        matched_document_id=ctx.matched_document_id,
+        matched_body_digest=ctx.matched_body_digest,
+        matched_content_revision=ctx.matched_content_revision,
         review=review,
         gaps=_merged_gaps(ctx, gaps),
         trace=_build_trace(ctx, "document_written", cited=ids),
@@ -849,9 +944,10 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> DocgenResult:
             trace.notes.append("forced finalize: model did not emit a document")
     except Exception as exc:  # noqa: BLE001
         trace.notes.append(f"forced finalize failed: {exc}")
-    return _nothing(
-        ctx, f"no document could be grounded before the run ended ({reason})"
-    )
+    failure = f"no document could be grounded before the run ended ({reason})"
+    if reason == "api_error" and ctx.model_error:
+        failure += f": {ctx.model_error}"
+    return _nothing(ctx, failure)
 
 
 # --------------------------------------------------------------------------- #
@@ -872,6 +968,7 @@ def _nothing(
         reason=reason,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
+        matched_document_id=ctx.matched_document_id,
         review=carried_review,
         title=title,
         body=body,
@@ -955,45 +1052,30 @@ def _slug(title: str) -> str:
 
 def _model_turn(
     ctx: _RunContext,
-    messages: list[dict[str, Any]],
+    messages: Sequence[Mapping[str, object]],
     *,
     force_tool: str | None,
-    tools: list[dict] | None = None,
+    tools: Sequence[Mapping[str, object]] | None = None,
     system: str | None = None,
-) -> Any:
+) -> ai.ModelResponse:
     config: DocgenConfig = ctx.config
-    client = ctx.client
-    if hasattr(client, "with_options"):
-        client = client.with_options(
-            timeout=config.request_timeout_s, max_retries=config.max_retries
-        )
-    kwargs: dict[str, Any] = {
-        "model": config.model,
-        "max_tokens": config.max_tokens,
-        "messages": messages,
-        "tools": tools if tools is not None else ctx.tools,
-    }
-    # The reviewer's prompt is not the writer's: reusing the generation
-    # protocol would put writing instructions in front of a judging context.
-    selected_system = ctx.system_prompt if system is None else system
-    if selected_system:
-        kwargs["system"] = selected_system
-    if force_tool:
-        # Forcing a specific tool is incompatible with extended thinking, so
-        # thinking stays off on a forced turn — and the thinking blocks the
-        # adaptive turns left in history are stripped, which a
-        # thinking-disabled request should not carry.
-        kwargs["messages"] = _strip_thinking(messages)
-        kwargs["tool_choice"] = {
-            "type": "tool",
-            "name": force_tool,
-            "disable_parallel_tool_use": True,
-        }
-    else:
-        kwargs["tool_choice"] = {"type": "auto", "disable_parallel_tool_use": True}
-        if config.thinking:
-            kwargs["thinking"] = {"type": "adaptive"}
-    return client.messages.create(**kwargs)
+    return ai.turn(
+        ai.ToolTask(
+            system=ctx.system_prompt if system is None else system,
+            messages=messages,
+            tools=tools if tools is not None else ctx.tools,
+            force_tool=force_tool,
+        ),
+        ai.ModelConfig(
+            provider=config.provider,
+            model=config.model,
+            max_tokens=config.max_tokens,
+            request_timeout_s=config.request_timeout_s,
+            max_retries=config.max_retries,
+            thinking=config.thinking,
+        ),
+        client=ctx.client,
+    )
 
 
 def _append_tool_result(

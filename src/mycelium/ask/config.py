@@ -1,16 +1,15 @@
 """Tunables for the `ask` reasoning loop.
 
-Config follows the repo convention (embed.py / http.py): module-level defaults
-read from `MYCELIUM_ASK_*` env vars with inline fallbacks. No central settings
-module.
+Model choices use saved per-action settings, with legacy environment values imported
+once on upgrade. Task budgets come from saved AI settings.
 
 The model default is **Haiku** (`claude-haiku-4-5`). The spec originally
 mandated one model (Sonnet), but the ask loop's latency is dominated by
 per-call model inference across its sequential retrieval turns, and Haiku's
 much lower per-call latency is the only lever that brings a multi-hop answer
 under ~40s. The id is config, never hardcoded in logic; set
-`MYCELIUM_ASK_MODEL=claude-sonnet-4-6` to go back to Sonnet (and the matching
-`MYCELIUM_ASK_INPUT_PER_MTOK` / `_OUTPUT_PER_MTOK` for an accurate cost stamp).
+`MYCELIUM_ASK_MODEL=claude-sonnet-4-6` before the one-time upgrade import, or choose Sonnet
+in AI settings. Unknown model pricing is omitted from the trace.
 """
 
 from __future__ import annotations
@@ -18,7 +17,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 
-from .. import tracing
+from .. import model_settings, product_settings, tracing
+from ..ai import Provider
 
 #: Current Haiku model id (confirmed against Anthropic's model catalog:
 #: claude-haiku-4-5, 200K context, $1/$5 per MTok).
@@ -29,7 +29,7 @@ DEFAULT_MODEL = "claude-haiku-4-5"
 #: retrieve -> re-search -> re-search dance. `quick` drops the floor and tightens
 #: the caps so the loop collapses to recon -> a targeted read or two -> answer,
 #: returning a real (not degraded) answer inside the window. These are *ceilings*
-#: applied via min(), so a lower global env override still wins.
+#: applied via min(), so a lower saved limit still wins.
 QUICK_OP_CAP = 8
 QUICK_WALL_CLOCK_S = 25.0
 QUICK_REQUEST_TIMEOUT_S = 20.0
@@ -38,6 +38,7 @@ QUICK_REQUEST_TIMEOUT_S = 20.0
 @dataclass(frozen=True)
 class AskConfig:
     model: str = DEFAULT_MODEL
+    provider: Provider = "claude"
     #: Hard ceiling on substrate operations per call. Recon counts toward it.
     op_cap: int = 25
     #: Whole-call wall-clock budget, seconds. On exhaustion we degrade to a
@@ -45,7 +46,7 @@ class AskConfig:
     #: connection window in front of us: the /mcp transport has no keepalive, so
     #: an Ask that runs past the Cloudflare/ALB idle timeout is dropped mid-flight
     #: and the client sees a generic error. 45s returns a fast partial instead.
-    #: Raise with MYCELIUM_ASK_WALL_CLOCK_S once /mcp gets its own keepalive.
+    #: The saved run time limit controls the runtime budget.
     wall_clock_s: float = 45.0
     #: The anti-premature-closure floor (loop.py: recon + a targeted retrieval +
     #: a concept-seeded adjacency re-search before an answer is accepted). ON by
@@ -56,29 +57,26 @@ class AskConfig:
     recon_k: int = 8
     #: max_tokens per model turn. Comfortably above a structured answer.
     max_tokens: int = 8000
-    #: Anthropic SDK auto-retries 429/5xx/connection with exponential backoff;
+    #: Provider retries cover 429/5xx/connection with exponential backoff;
     #: this raises its default 2 for the slow-substrate environment.
     max_retries: int = 4
-    #: Per-Anthropic-call timeout, seconds. Kept under the wall clock so a
+    #: Per-model-call timeout, seconds. Kept under the wall clock so a
     #: single hung call can't blow the whole budget.
     request_timeout_s: float = 40.0
     #: Adaptive thinking in the retrieval loop. Default OFF: with thinking on,
     #: each retrieval turn spent ~2x as long thinking and the run still blew the
     #: wall-clock budget; off, the same question finishes cleanly and faster.
     #: (Also a no-op-to-error guard on Haiku, which doesn't take adaptive
-    #: thinking.) Re-enable with MYCELIUM_ASK_THINKING=on on a model that
-    #: supports it.
+    #: thinking.) Enable in AI settings on a model that supports it.
     thinking: bool = False
     #: Prompt caching. The loop re-sends a growing conversation every turn; with
     #: caching on, the static prefix (tools + system) and the conversation so far
     #: are read from cache on turns 2..N instead of re-ingested — a large latency
     #: and cost win on a multi-turn run. Disabled by an off-switch for A/B.
     cache: bool = True
-    #: Haiku pricing, $ / 1M tokens — used only to stamp an estimated cost on
-    #: the trace. Override via MYCELIUM_ASK_INPUT_PER_MTOK / _OUTPUT_PER_MTOK
-    #: when running a non-default model (Sonnet is 3.0 / 15.0).
-    input_per_mtok: float = 1.0
-    output_per_mtok: float = 5.0
+    #: Cost rates are populated only for the known default Claude model.
+    input_per_mtok: float | None = None
+    output_per_mtok: float | None = None
     #: JSONL sink for the eval-harness trace. None → resolved by the caller to
     #: a default under the data dir (see server wiring).
     trace_log_path: str | None = None
@@ -93,22 +91,30 @@ class AskConfig:
             v = os.environ.get(name)
             return float(v) if v else default
 
-        def _i(name: str, default: int) -> int:
-            v = os.environ.get(name)
-            return int(v) if v else default
+        limits = product_settings.get(product_settings.AskSettings)
+        selected = model_settings.get("ask")
 
         return cls(
-            model=os.environ.get("MYCELIUM_ASK_MODEL") or DEFAULT_MODEL,
-            op_cap=_i("MYCELIUM_ASK_OP_CAP", 25),
-            wall_clock_s=_f("MYCELIUM_ASK_WALL_CLOCK_S", 90.0),
-            recon_k=_i("MYCELIUM_ASK_RECON_K", 8),
-            max_tokens=_i("MYCELIUM_ASK_MAX_TOKENS", 8000),
-            max_retries=_i("MYCELIUM_ASK_MAX_RETRIES", 4),
-            request_timeout_s=_f("MYCELIUM_ASK_REQUEST_TIMEOUT_S", 75.0),
-            thinking=(os.environ.get("MYCELIUM_ASK_THINKING", "off").lower() == "on"),
-            cache=(os.environ.get("MYCELIUM_ASK_CACHE", "on").lower() != "off"),
-            input_per_mtok=_f("MYCELIUM_ASK_INPUT_PER_MTOK", 1.0),
-            output_per_mtok=_f("MYCELIUM_ASK_OUTPUT_PER_MTOK", 5.0),
+            model=selected.model,
+            provider=selected.provider,
+            op_cap=limits.op_cap,
+            wall_clock_s=limits.wall_clock_s,
+            recon_k=limits.recon_k,
+            max_tokens=limits.max_tokens,
+            max_retries=limits.max_retries,
+            request_timeout_s=limits.request_timeout_s,
+            thinking=limits.thinking,
+            cache=limits.cache,
+            input_per_mtok=(
+                _f("MYCELIUM_ASK_INPUT_PER_MTOK", 1.0)
+                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
+                else None
+            ),
+            output_per_mtok=(
+                _f("MYCELIUM_ASK_OUTPUT_PER_MTOK", 5.0)
+                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
+                else None
+            ),
             trace_log_path=os.environ.get("MYCELIUM_ASK_TRACE_LOG"),
             trace_dir=(
                 os.environ.get("MYCELIUM_ASK_TRACE_DIR")
@@ -121,7 +127,7 @@ def for_depth(config: AskConfig, depth: str) -> AskConfig:
     """Return `config` adjusted for the requested `depth`. Pure.
 
     `quick` drops the floor and lowers the op-cap / wall-clock / per-call timeout
-    to *ceilings* (via min, so an already-lower env override still wins), so the
+    to *ceilings* (via min, so an already-lower saved limit still wins), so the
     loop is structurally shorter and finishes well inside a tight client window.
     Anything other than `quick` (incl. `standard`) returns `config` unchanged.
     """

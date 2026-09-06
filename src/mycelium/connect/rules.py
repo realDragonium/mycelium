@@ -31,49 +31,27 @@ RESOLVE_THRESHOLD_UNANCHORED = 0.75
 TARGET_NEIGHBOURS_K = 10
 
 #: The instance's shipped rule set — pattern name -> kinds it may fire for
-#: (None = any kind). Derived from the original selection in
-#: docs/reports/2026-08-15-link-pattern-hit-rate.md and revised by the alias-aware
-#: docs/reports/2026-08-27-link-pattern-hit-rate.md run.
+#: (None = any kind). Eligibility retains historical choices pending evaluation
+#: against source prose; the retired corpus hit-rate reports did not test that
+#: workflow.
 SHIPPED_PATTERNS: dict[str, frozenset[str] | None] = {
-    # Selection criterion (from the report's by-pattern table): statement precision
-    # >= 50% with >= 3 statements fired, OR precision >= 30% with >= 4 link hits;
-    # kind-restricted to where the report shows the signal.
-    "configures-capability": frozenset({"capability"}),  # 26/29 (89.7%), 55 link hits
-    # 33/86 (38.4%) overall, but the signal is the capability subset; elsewhere ~12%.
+    "configures-capability": frozenset({"capability"}),
     "configures-configured-on": frozenset({"capability"}),
-    "composes-formula": frozenset({"rule"}),  # 6/12 (50.0%), 21 link hits
-    # Alias-aware restricts-limits: 2/2 -> 6/9 (66.7%), 8 -> 12 link hits, once
-    # seeded restricts vocabulary reached the bare slot; rule 2/2, state 4/5,
-    # capability 0/2. Its state fires duplicate restricts-state-covered statements.
+    "composes-formula": frozenset({"rule"}),
     # Bare disabled / locked / frozen / read-only / limit stays for restricts-state's
     # framed slot; restricts-limits' rule restriction makes them inert outside rule on
     # the bare slot.
     "restricts-limits": frozenset({"rule"}),
-    "restricts-state": frozenset({"state"}),  # 5/6 (83.3%)
+    "restricts-state": frozenset({"state"}),
     # Carved out of restricts-state's shipped live phrasing: the passive agent
     # already fired there, but with the edge direction reversed.
     "restricts-state-by": frozenset({"state"}),
-    "proceeds-redirected": frozenset({"event"}),  # 3/9 (33.3%), 4 link hits
-    # Not shipped: establishes-event-state (1/2) is too thin; proceeds-then is
-    # undecidable between proceeds and triggers (2 event fires: 1 outgoing proceeds,
-    # 1 outgoing triggers); composes-determined-by (27.3%) and composes-combines
-    # (22.2%) miss the precision criterion, as do all 0%-precision patterns and every
-    # pattern whose link type has no ground truth in this snapshot. The alias-aware
-    # 2026-08-27 run found zero governed-by-phrase fires across all 1644 statements
-    # and no usable lexical surface on any of the 104 governed-by link endpoints, so
-    # it stays unshipped rather than receiving a criterion exception.
-    # Shipped outside the report (2026-08-20): the frame postdates the measured
-    # catalog, so it has no ground truth either way. It exists so "X is a part
-    # of Y" yields the edge the words state — Y contains X — rather than none.
+    "proceeds-redirected": frozenset({"event"}),
+    # These frames place the far-side phrase in the source slot:
+    # "X is a part of Y" and "X belongs to Y" both express Y contains X.
     "contains-part-of": None,
-    # Shipped outside the report: this frame postdates the measured catalog, so
-    # it has no ground truth either way and the next run scores it. "X belongs
-    # to Y" yields Y contains X rather than no edge.
     "contains-belongs-to": None,
-    # The alias-aware 2026-08-27 run scored this 0/19 as a to-role frame, but
-    # all 19 fires (all `rule`) carry an incoming `cases` link, so read from-role
-    # it is 19/19; see docs/reports/2026-08-27-link-pattern-hit-rate.md.
-    "cases-level-for": frozenset({"rule"}),
+    "cases-one-of": frozenset({"rule"}),
 }
 
 
@@ -313,6 +291,12 @@ def propose_links(
             if doc is None:
                 doc = phrasing.get_nlp()(statement.text)
                 docs[statement.index] = doc
+            if cue.pattern == "cases-one-of" and cue.phrase_span is not None:
+                parent_span = doc.char_span(*cue.phrase_span, alignment_mode="expand")
+                if parent_span is None or any(
+                    token.dep_ in {"cc", "conj"} for token in parent_span
+                ):
+                    continue
             negator = (
                 negated_verb(doc, cue.cue_span) if cue.cue_span is not None else None
             ) or (
@@ -320,6 +304,20 @@ def propose_links(
                 if cue.phrase_span is not None
                 else None
             )
+            if cue.pattern == "cases-one-of" and cue.cue_span is not None:
+                subject_span = (0, cue.cue_span[0])
+                negator = negator or negated_phrase_root(doc, subject_span)
+                subject = doc.char_span(*subject_span, alignment_mode="expand")
+                if subject is not None:
+                    negator = negator or next(
+                        (
+                            token.text
+                            for token in subject
+                            if token.dep_ == "neg"
+                            or token.lemma_.casefold() == "neither"
+                        ),
+                        None,
+                    )
             if negator is not None:
                 suppressed_negations.append(
                     SuppressedNegation(

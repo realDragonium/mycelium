@@ -12,6 +12,7 @@ import contextlib
 import cProfile
 import datetime as _dt
 import functools
+import hashlib
 import inspect
 import json as _json
 import logging
@@ -19,7 +20,6 @@ import os
 import re
 import sqlite3
 import sys
-import threading
 import time
 import uuid
 from collections.abc import Iterator, Sequence
@@ -31,9 +31,11 @@ import anyio
 import anyio.to_thread
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
+from pydantic import JsonValue
 
 from . import (
     embed,
+    link_authoring,
     link_rules,
     mentions,
     ops_ledger,
@@ -63,6 +65,7 @@ from .connect.funnel import BatchStatement
 from .connect.proposals import Proposal, ProposalSet, proposals_from
 from .connect.substrate import HintedView, LiveSubstrate
 from .layout_baker import LayoutBaker
+from .model_capacity import Capacity
 from .require import require
 from .tracing import trace_span
 
@@ -277,7 +280,9 @@ _MODEL_LOOP_MAX_CONCURRENT_ENV = "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT"
 
 
 def _model_loop_max_concurrent() -> int:
-    return int(os.environ.get(_MODEL_LOOP_MAX_CONCURRENT_ENV) or 2)
+    from . import product_settings
+
+    return product_settings.get(product_settings.ConcurrencySettings).model_loops
 
 
 # Two primitives, one number, because the model loops do not all start from the
@@ -289,23 +294,20 @@ def _model_loop_max_concurrent() -> int:
 #
 # So the semaphore is the real budget — every model loop holds one of its slots
 # while it runs, whatever started it — and the limiter is the front door that
-# keeps request-shaped callers from piling up on threads to reach it. Both are
-# sized from MYCELIUM_MODEL_LOOP_MAX_CONCURRENT, so at most that many loops run
+# keeps request-shaped callers from piling up on threads to reach it. Both follow
+# the saved shared concurrency limit, so at most that many loops run
 # and at most that many threads are ever parked waiting for one.
 
 
 @functools.cache
 def _model_loop_limiter() -> anyio.CapacityLimiter:
-    """Built on first use so the env var is read after the process has its
-    environment (import order puts this module ahead of the server's own env
-    loading), then cached because a limiter only bounds anything if all its
-    callers hold the same one."""
+    """One request-side limiter; limiter_for refreshes its saved capacity."""
     return anyio.CapacityLimiter(_model_loop_max_concurrent())
 
 
 @functools.cache
-def _model_loop_budget() -> threading.BoundedSemaphore:
-    return threading.BoundedSemaphore(_model_loop_max_concurrent())
+def _model_loop_budget() -> "Capacity":
+    return Capacity(_model_loop_max_concurrent)
 
 
 @contextlib.contextmanager
@@ -350,7 +352,11 @@ def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
     which does not care which transport asked, so a caller must not be able to
     slip past it by calling `/ingest` instead of the MCP tool.
     """
-    return _model_loop_limiter() if tool_name in _MODEL_LOOP_TOOLS else None
+    if tool_name not in _MODEL_LOOP_TOOLS:
+        return None
+    limiter = _model_loop_limiter()
+    limiter.total_tokens = _model_loop_max_concurrent()
+    return limiter
 
 
 def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
@@ -392,6 +398,7 @@ def tool(
     *,
     role: str | None = None,
     real_role: bool = False,
+    capture_request: bool = True,
 ) -> Callable[..., Any]:
     """Register `func` as both an MCP tool and an HTTP endpoint.
 
@@ -460,6 +467,14 @@ def tool(
                 else:
                     draft_id = None
 
+                if func.__name__ == "add_links":
+                    bound = _ORIG_SIGNATURES[func.__name__].bind_partial(
+                        *args, **kwargs
+                    )
+                    link_authoring.reject_entity_statement_additions(
+                        bound.arguments.get("links")
+                    )
+
                 if is_mutation:
                     redirect = _resolve_draft_target(principal, draft_id)
                     if redirect is not None:
@@ -489,7 +504,11 @@ def tool(
             # Snapshot the request kwargs before _dispatch pops draft_id. Drop
             # draft_id from the captured request — it has its own ledger column,
             # and it shouldn't be duplicated into the free-form request summary.
-            captured = {k: v for k, v in kwargs.items() if k != "draft_id"}
+            captured = (
+                {k: v for k, v in kwargs.items() if k != "draft_id"}
+                if capture_request
+                else {}
+            )
             ctx = ops_ledger.CallContext(
                 tool=func.__name__,
                 actor=getattr(_auth.current_principal.get(), "id", None),
@@ -718,7 +737,13 @@ def _queue_draft_op(
             payload=clean,
             created_by=actor,
         )
-    return {"draft_id": draft_id, "seq": seq, "queued": kind}
+        revision = drafts_store.get_draft(_drafts_db(), draft_id)["revision"]
+    return {
+        "draft_id": draft_id,
+        "seq": seq,
+        "queued": kind,
+        "revision": revision,
+    }
 
 
 class LinkSpec(TypedDict):
@@ -771,12 +796,10 @@ class IncomingLinkSpec(TypedDict):
 class EdgeSpec(TypedDict):
     """A typed edge with both endpoints addressed.
 
-    Used by `add_links` and `remove_links`. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination — the substrate
-    routes statement↔statement edges to `statement_links` and any edge
-    touching an entity to `entity_statement_links` (which also accepts a
-    `when` condition with the same grammar). Externally, callers see a
-    single uniform link API; the distinction is internal storage only.
+    Used by `add_links` and `remove_links`. `add_links` accepts only statement
+    endpoints (`stm_…`). `remove_links` also accepts entity endpoints (`ent_…`)
+    so callers can remove legacy entity↔statement edges. Those legacy edges may
+    carry a `when` condition with the same grammar.
 
     Entity↔entity edges are **not** handled here — those live in their
     own vocabulary and are managed by `add_entity_links` /
@@ -938,6 +961,22 @@ def init(data_dir: Path) -> None:
     from . import auth_store, docs_store, drafts_store, prompt_store, research_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    prompt_store.configure(data_dir / "mycelium-prompts.db")
+    prompts = _prompts_db()
+    existing_settings_instance = (data_dir / "mycelium.db").exists() or prompts.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('prompt_texts', 'model_settings', 'draft_review_settings')"
+    ).fetchone() is not None
+    # Persist fresh-instance provenance before other databases can make a
+    # retry after interrupted startup look like a legacy upgrade.
+    prompt_store.prepare_settings(
+        prompts, import_environment=existing_settings_instance
+    )
+    prompt_store.migrate(prompts)
+    prompt_store.initialize_settings(
+        prompts, import_environment=existing_settings_instance
+    )
+
     store.configure_substrate(
         data_dir / "mycelium.db",
         history_path=data_dir / "mycelium-history.db",
@@ -954,14 +993,20 @@ def init(data_dir: Path) -> None:
 
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
+    from . import draft_review_store
+
+    draft_review_store.mark_orphaned(
+        _drafts_db(),
+        lambda application_id: (
+            _substrate_application_result(application_id) is not None
+        ),
+    )
     research_store.migrate(_drafts_db())
     docs_store.migrate(_drafts_db())
+    from .docgen import destinations
 
-    # Prompt texts are instance configuration, so they get their own file:
-    # dropping the substrate or wiping drafts leaves an instance's steering
-    # texts intact.
-    prompt_store.configure(data_dir / "mycelium-prompts.db")
-    prompt_store.migrate(_prompts_db())
+    destinations.bind_legacy_deliveries(_drafts_db())
+
     _seed_prompt_texts()
 
     # Operation ledger: a bounded, best-effort record of attempted tool calls,
@@ -991,26 +1036,37 @@ def init(data_dir: Path) -> None:
 
     # The .vec files are re-derivable from the substrate, so backup.sh omits
     # them while keeping the *_vector_ids mappings in the DB. When a .vec is
-    # missing (a fresh checkout, or a restore of such a backup) rebuild the
-    # index by re-embedding, or search would silently return nothing against a
-    # populated substrate.
+    # missing (a fresh checkout, or a restore of such a backup) or marked dirty
+    # after an interrupted write, rebuild the index by re-embedding, or search
+    # could silently use vectors that diverge from the populated substrate.
     index_path = data_dir / "mycelium.vec"
-    if index_path.exists():
+    index_dirty = _dirty_marker_path(index_path).exists()
+    if index_path.exists() and not index_dirty:
         index = vector.Index.load(index_path)
     else:
+        if index_dirty:
+            logger.warning(
+                "rebuilding statement vector index: dirty marker indicates a "
+                "crash before the index was persisted"
+            )
+        _write_dirty_marker(index_path)
         index = vector.Index.empty()
-        _rebuild_vector_index(
-            index,
-            store.all_statements_with_text(_db()),
-            store.get_vector_id,
-            store.next_vector_id,
-            store.set_vector_id,
-            label="statement",
-        )
+        with store.transaction(_db()):
+            _rebuild_vector_index(
+                index,
+                store.all_statements_with_text(_db()),
+                store.get_vector_id,
+                store.next_vector_id,
+                store.set_vector_id,
+                label="statement",
+            )
         index.save(index_path)
+        _fsync_file(index_path)
+        _clear_dirty_marker(index_path)
 
     name_index_path = data_dir / "mycelium-names.vec"
-    if name_index_path.exists():
+    name_index_dirty = _dirty_marker_path(name_index_path).exists()
+    if name_index_path.exists() and not name_index_dirty:
         name_index = vector.Index.load(name_index_path)
         # A migration can drop name rows and their vector mappings while
         # the persisted index keeps the vectors (v6's case-variant merge
@@ -1023,20 +1079,32 @@ def init(data_dir: Path) -> None:
         ]
         if stranded:
             logger.info("pruning %d stranded name vector(s)", len(stranded))
+            _write_dirty_marker(name_index_path)
             for vid in stranded:
                 name_index.delete(vid)
             name_index.save(name_index_path)
+            _fsync_file(name_index_path)
+            _clear_dirty_marker(name_index_path)
     else:
+        if name_index_dirty:
+            logger.warning(
+                "rebuilding name vector index: dirty marker indicates a crash "
+                "before the index was persisted"
+            )
+        _write_dirty_marker(name_index_path)
         name_index = vector.Index.empty()
-        _rebuild_vector_index(
-            name_index,
-            store.list_all_names(_db()),
-            store.get_name_vector_id,
-            store.next_name_vector_id,
-            store.set_name_vector_id,
-            label="name",
-        )
+        with store.transaction(_db()):
+            _rebuild_vector_index(
+                name_index,
+                store.list_all_names(_db()),
+                store.get_name_vector_id,
+                store.next_name_vector_id,
+                store.set_name_vector_id,
+                label="name",
+            )
         name_index.save(name_index_path)
+        _fsync_file(name_index_path)
+        _clear_dirty_marker(name_index_path)
 
     _ctx = AppContext(
         data_dir=data_dir,
@@ -1199,19 +1267,130 @@ def _persist_name_index() -> None:
     _name_idx().save(_name_idx_path())
 
 
+def _dirty_marker_path(index_path: Path) -> Path:
+    return index_path.with_name(index_path.name + ".dirty")
+
+
+def _fsync_file(path: Path) -> None:
+    file_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(file_fd)
+    finally:
+        os.close(file_fd)
+
+    parent_fd = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _write_dirty_marker(index_path: Path) -> None:
+    marker_path = _dirty_marker_path(index_path)
+    marker_fd = os.open(marker_path, os.O_CREAT | os.O_WRONLY)
+    try:
+        os.fsync(marker_fd)
+    finally:
+        os.close(marker_fd)
+
+    parent_fd = os.open(marker_path.parent, os.O_RDONLY)
+    try:
+        os.fsync(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+
+def _clear_dirty_marker(index_path: Path) -> None:
+    _dirty_marker_path(index_path).unlink(missing_ok=True)
+
+
+def _fsync_and_clear_marker(index_path: Path, *, keep_marker: bool) -> None:
+    """Post-commit marker teardown for one index; never raises.
+
+    `keep_marker=True` preserves a marker inherited from an earlier failed
+    write (sticky until startup reconciliation)."""
+    try:
+        _fsync_file(index_path)
+        if not keep_marker:
+            _clear_dirty_marker(index_path)
+    except OSError:
+        logger.warning(
+            "could not fsync %s or clear its dirty marker; next startup will rebuild",
+            index_path,
+            exc_info=True,
+        )
+
+
+@contextlib.contextmanager
+def _persisted_index_write(
+    *, statements: bool = False, names: bool = False
+) -> Iterator[None]:
+    """Run one write operation's substrate and index mutations, then persist
+    them before releasing the write lock.
+
+    This is the persist-inside-lock guarantee apply_draft got in DRA-373. A
+    dirty marker covers the window from the first index mutation through a
+    successful persist and outermost commit, so a hard crash triggers a startup
+    rebuild. Nested writes persist but leave marker ownership to the outer
+    transaction, which clears only after its real COMMIT. A marker inherited
+    from an earlier failed write is sticky: later writes may persist and commit,
+    but only startup reconciliation clears it. If commit fails, DRA-418 rolls
+    the DB back and the next startup heals the divergent index.
+    """
+    with store.write_lock():
+        conn = _db()
+        outermost = not store.in_transaction(conn)
+        statement_marker_preexisting = (
+            outermost and statements and _dirty_marker_path(_idx_path()).exists()
+        )
+        name_marker_preexisting = (
+            outermost and names and _dirty_marker_path(_name_idx_path()).exists()
+        )
+        with store.transaction(conn):
+            if statements:
+                _write_dirty_marker(_idx_path())
+            if names:
+                _write_dirty_marker(_name_idx_path())
+            yield
+            if statements:
+                _persist_index()
+            if names:
+                _persist_name_index()
+        # The outer transaction committed; still under the reentrant lock so
+        # no other writer can interleave between commit and marker clear.
+        # Best-effort from here: the write succeeded the moment commit
+        # returned, so a failed fsync or marker unlink must not surface as a
+        # failed operation (apply_draft would wrongly restore pre-apply
+        # indexes over a committed replay). A kept marker just means the next
+        # startup rebuilds.
+        if outermost:
+            if statements:
+                _fsync_and_clear_marker(
+                    _idx_path(), keep_marker=statement_marker_preexisting
+                )
+            if names:
+                _fsync_and_clear_marker(
+                    _name_idx_path(), keep_marker=name_marker_preexisting
+                )
+
+
 def _restore_index_snapshots(
     snapshots: tuple[tuple[vector.Index, Path, Path], ...],
 ) -> None:
     """Best-effort restore each index without hiding the replay failure.
 
     Restore indexes independently so one damaged snapshot cannot prevent the
-    other from recovering. Keep any snapshot whose restore, persistence, or
-    cleanup fails so an operator still has the recovery artifact.
+    other from recovering. Keep every dirty marker set so startup rebuilds both
+    indexes after a failed apply, and keep any snapshot whose restore,
+    persistence, or cleanup fails so an operator still has the recovery
+    artifact.
     """
     for index, snapshot_path, live_path in snapshots:
         try:
+            _write_dirty_marker(live_path)
             index.restore(snapshot_path)
             index.save(live_path)
+            _fsync_file(live_path)
             snapshot_path.unlink(missing_ok=True)
         except Exception:
             logger.exception(
@@ -1224,17 +1403,21 @@ def _restore_index_snapshots(
 
 
 def _index_name(name_id: str, text: str) -> None:
-    """Embed `text` and register the vector under `name_id`. Used on
-    name creation."""
+    """Embed `text` and register its in-memory vector under `name_id`.
+
+    The wrapping `_persisted_index_write` persists the index.
+    """
     vid = store.next_name_vector_id(_db())
     vec = embed.embed(text)
     _name_idx().add(vid, vec)
     store.set_name_vector_id(_db(), name_id, vid)
-    _persist_name_index()
 
 
 def _reindex_name(name_id: str, new_text: str) -> None:
-    """Replace the vector for an existing indexed name (rename)."""
+    """Replace an indexed name's in-memory vector.
+
+    The wrapping `_persisted_index_write` persists the index.
+    """
     vid = store.get_name_vector_id(_db(), name_id)
     vec = embed.embed(new_text)
     if vid is None:
@@ -1245,16 +1428,17 @@ def _reindex_name(name_id: str, new_text: str) -> None:
         store.set_name_vector_id(_db(), name_id, vid)
     else:
         _name_idx().replace(vid, vec)
-    _persist_name_index()
 
 
 def _drop_name_from_index(name_id: str) -> None:
-    """Remove a name's vector. Idempotent."""
+    """Remove a name's in-memory vector. Idempotent.
+
+    The wrapping `_persisted_index_write` persists the index.
+    """
     vid = store.get_name_vector_id(_db(), name_id)
     if vid is not None:
         _name_idx().delete(vid)
         store.delete_name_vector_mapping(_db(), name_id)
-        _persist_name_index()
 
 
 def _derive_statement_mentions(statement_id: str, text: str) -> None:
@@ -2079,7 +2263,7 @@ def _resolve_research_source(name: str | None) -> str:
         return name
 
     if not configured:
-        raise ValueError("no research sources configured (set MYCELIUM_SOURCES)")
+        raise ValueError("no research sources configured (add one in AI settings)")
     if len(configured) == 1:
         return next(iter(configured))
     raise ValueError(
@@ -2200,6 +2384,7 @@ def request_documentation(
     prompt: str,
     guideline_set: str | None = None,
     document_type: str | None = None,
+    provider: Literal["claude", "openai"] | None = None,
 ) -> dict[str, Any]:
     """Request a background documentation run: generate one document from
     `prompt` and store it as a generated document.
@@ -2215,10 +2400,13 @@ def request_documentation(
     picks the writing guidance (see `list_prompt_texts(type="guideline-set")`)
     and `document_type` the template within it; left out, they stay null on
     the row and the run resolves them. Raises when the active-run cap is
-    reached (MYCELIUM_DOCGEN_MAX_ACTIVE, default 2), when `guideline_set` is
+    reached (saved documentation active-run limit, default 2), when `guideline_set` is
     unknown, when `document_type` is not one that set can write, or when
-    `prompt` is blank or longer than MYCELIUM_DOCGEN_MAX_PROMPT_CHARS.
-    Returns {run row: id, prompt, guideline_set, document_type, status,
+    `prompt` is blank or longer than the saved prompt length limit.
+    `provider` selects claude or openai; omitted uses saved documentation settings
+    (default claude). The configured model is captured for writing and review.
+    Use list_documentation_models for available choices.
+    Returns {run row: id, prompt, guideline_set, document_type, provider, model, status,
     created_at, created_by, started_at, finished_at, outcome, document_id,
     error}."""
     from . import auth as _auth
@@ -2232,7 +2420,7 @@ def request_documentation(
     if len(text) > max_chars:
         raise ValueError(
             f"prompt is {len(text)} characters; the limit is {max_chars} "
-            "(MYCELIUM_DOCGEN_MAX_PROMPT_CHARS)"
+            "(documentation prompt limit)"
         )
 
     guideline_set = _optional_name(guideline_set)
@@ -2247,11 +2435,20 @@ def request_documentation(
         document_type=document_type,
         created_by=created_by,
         conn=_drafts_db(),
+        provider=provider,
     )
     row = require(
         docs_store.get_run(_drafts_db(), run_id), "documentation run just created"
     )
     return docs_store.serialize_run(row)
+
+
+@tool
+def list_documentation_models() -> dict[str, object]:
+    """List configured documentation providers and safe availability reasons."""
+    from .docgen.config import model_choices, resolve_provider
+
+    return {"default_provider": resolve_provider(), "models": model_choices()}
 
 
 @tool
@@ -2325,6 +2522,93 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     return docs_store.serialize_document(row)
 
 
+@tool(role="writer", real_role=True, capture_request=False)
+def deliver_document(document_id: str, destination: str) -> dict[str, str]:
+    """Deliver a generated document into a configured destination's review flow.
+
+    Records the destination only after delivery succeeds. Raises for an unknown
+    document, destination configuration, or delivery failure.
+    """
+    from . import docs_store
+    from .docgen import destinations
+
+    row = docs_store.get_document(_drafts_db(), document_id)
+    if row is None:
+        raise ValueError("generated document not found")
+    try:
+        configured = destinations.get_destination(destination)
+        is_same_destination = row["delivery_destination"] == destination
+        if is_same_destination:
+            destinations.require_recorded_target(configured, row["delivery_target"])
+    except destinations.DestinationError as exc:
+        raise ValueError(str(exc)) from None
+    document = destinations.DeliveryDocument(
+        id=str(row["id"]),
+        slug=str(row["slug"]),
+        title=str(row["title"]),
+        body=str(row["body"]),
+        guideline_set=str(row["guideline_set"]),
+        document_type=str(row["document_type"]),
+        statement_ids=tuple(_json.loads(row["statement_ids"])),
+        delivered_path=(
+            str(row["delivery_path"])
+            if is_same_destination and row["delivery_path"] is not None
+            else None
+        ),
+        delivered_content_revision=(
+            str(row["delivery_content_revision"])
+            if is_same_destination and row["delivery_content_revision"] is not None
+            else None
+        ),
+        revision_source_content_revision=(
+            str(row["revision_source_content_revision"])
+            if is_same_destination
+            and row["revision_source_content_revision"] is not None
+            else None
+        ),
+    )
+    try:
+        delivery = destinations.deliver_document(configured, document)
+    except destinations.DestinationError as exc:
+        raise ValueError(str(exc)) from None
+    docs_store.record_delivery(
+        _drafts_db(),
+        document_id,
+        destination=delivery.destination,
+        path=delivery.path,
+        reference=delivery.reference,
+        content_revision=delivery.content_revision,
+        expected_body_digest=docs_store.body_digest(str(row["body"])),
+        target=destinations.target_identity(configured),
+    )
+    return delivery.serialize()
+
+
+@tool
+def list_documentation_destinations() -> dict[str, Any]:
+    """List configured documentation destinations by generic identity.
+
+    Returns no credential and no credential environment variable name.
+    """
+    from .docgen import destinations
+
+    try:
+        configured = destinations.load_destinations()
+    except destinations.DestinationError as exc:
+        raise ValueError(str(exc)) from None
+    return {
+        "destinations": [
+            {
+                "name": destination.name,
+                "type": destination.type,
+                "path_template": destination.path_template,
+                "coordinates": destinations.destination_coordinates(destination),
+            }
+            for destination in configured.values()
+        ]
+    }
+
+
 @tool
 def list_research_sources() -> dict[str, Any]:
     """List the configured research sources a run can target (names and repo
@@ -2360,7 +2644,7 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     new entity AND a name pointing at it.
     """
     existing = store.get_name_by_text(_db(), name)
-    with store.transaction(_db()):
+    with _persisted_index_write(names=existing is None):
         if existing is not None:
             store.update_entity_description(_db(), existing["entity_id"], description)
             return {"entity_id": existing["entity_id"]}
@@ -2505,7 +2789,7 @@ def upsert_statement(
         (item["to_id"], item["link_type"], item.get("when")) for item in links
     ]
 
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         if id is not None:
             store.update_statement(_db(), id, kind, text)
             vector_id = require(
@@ -2531,7 +2815,6 @@ def upsert_statement(
             ]
             store.insert_links(_db(), edges)
 
-    _persist_index()
     response: dict[str, Any] = {
         "statement_id": statement_id,
         "near_duplicates": _near_duplicates(vec, exclude_id=statement_id),
@@ -2942,7 +3225,7 @@ def upsert_statements(
     # don't create names), so build it once.
     name_index = store.build_name_index(_db())
     statement_ids: dict[int, str] = {}
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         for i, spec in enumerate(statements):
             if i in plan.rejected:
                 continue
@@ -2966,8 +3249,6 @@ def upsert_statements(
         )
         if edges:
             store.insert_links(_db(), edges)
-
-    _persist_index()
 
     # Near-duplicate warnings per newly-inserted statement.
     near_dups: dict[str, list[dict[str, Any]]] = {}
@@ -3861,11 +4142,10 @@ def replace_text(
         return reject
 
     vec = embed.embed(text)
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         store.update_statement_text(_db(), id, text)
         vector_id = require(store.get_vector_id(_db(), id), "vector_id for statement")
         _idx().replace(vector_id, vec)
-        _persist_index()
         # Text changed → re-derive mentions.
         _derive_statement_mentions(id, text)
     response: dict[str, Any] = {"statement_id": id}
@@ -3936,7 +4216,7 @@ def patch_statement(
         vec = embed.embed(text)
 
     # Mutate field-by-field so omitted fields stay untouched.
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=vec is not None):
         if text is not None and kind is not None:
             store.update_statement(_db(), id, kind, text)
         elif text is not None:
@@ -3949,8 +4229,6 @@ def patch_statement(
                 store.get_vector_id(_db(), id), "vector_id for statement"
             )
             _idx().replace(vector_id, vec)
-            _persist_index()
-
         # Re-derive mentions only when the text changed (kind-only patches
         # don't affect what entities the text mentions).
         if text is not None:
@@ -3984,7 +4262,7 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
             f"name {text!r} already belongs to entity {existing['entity_id']!r}; "
             "use move_name or merge_entities"
         )
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         name_id = _create_name_with_plural(text, entity_id)
     return {"name_id": name_id}
 
@@ -4088,7 +4366,7 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     # still contains the OLD label, which is no longer a name) — recompute
     # them. Regenerate the name's plural from the new text. Scan for the new
     # text so statements containing it pick up the mention.
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         affected = list(store.statements_mentioning_name(_db(), name_id))
         store.rename_name(_db(), name_id, new_text)
         _reindex_name(name_id, new_text)
@@ -4120,7 +4398,7 @@ def delete_name(name_id: str) -> dict[str, Any]:
     # Cascade through the name and any generated plurals, then recompute the
     # statements that mentioned them — a removed name may have been the
     # representative for an entity another of whose names still matches.
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         mentions_removed, affected = _delete_name_cascade(name_id)
         store.enqueue_recompute_statements(_db(), affected)
     return {
@@ -4150,7 +4428,7 @@ def delete_entity(id: str) -> dict[str, Any]:
     if store.get_entity_by_id(_db(), id) is None:
         raise ValueError(f"entity {id!r} does not exist")
 
-    with store.transaction(_db()):
+    with _persisted_index_write(names=True):
         name_rows = store.get_names_by_entity(_db(), id)
         name_ids = [r["id"] for r in name_rows]
         affected: list[str] = []
@@ -4247,7 +4525,7 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     # unchanged) and the source's derived rows are cleared so the source
     # can be deleted under FK enforcement. Nothing is moved.
     mentions_moved = 0
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         store.clear_derived_for_statement(_db(), from_id)
         outgoing_moved = store.merge_outgoing_links_into(_db(), from_id, into_id)
         incoming_moved = store.merge_incoming_links_into(_db(), from_id, into_id)
@@ -4267,8 +4545,6 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
         if vector_id is not None:
             _idx().delete(vector_id)
         store.delete_statement(_db(), from_id)
-    _persist_index()
-
     return {
         "into_id": into_id,
         "mentions_moved": mentions_moved,
@@ -4321,7 +4597,7 @@ def delete_statement(id: str) -> dict[str, Any]:
     # and incoming statement_links, any statement_links / entity_statement_links
     # whose when-tree references it, and entity↔statement edges with it as an
     # endpoint (see the helper for the exact ordering and counting rules).
-    with store.transaction(_db()):
+    with _persisted_index_write(statements=True):
         (
             outgoing_removed,
             incoming_removed,
@@ -4334,8 +4610,6 @@ def delete_statement(id: str) -> dict[str, Any]:
         if vector_id is not None:
             _idx().delete(vector_id)
         store.delete_statement(_db(), id)
-    _persist_index()
-
     return {
         "deleted": True,
         "mentions_removed": mentions_removed,
@@ -4421,9 +4695,10 @@ def _validate_edge_endpoints(links: list[EdgeSpec]) -> dict[str, sqlite3.Row]:
 
 @tool
 def add_links(links: list[EdgeSpec]) -> dict[str, int]:
-    """Insert one or more typed edges. Endpoints may be statements
-    (`stm_…`) or entities (`ent_…`) in any combination except
-    entity↔entity (use `add_entity_links` for those).
+    """Insert one or more statement-to-statement typed edges.
+
+    Existing entity↔statement links remain readable and removable, but new
+    ones cannot be authored. Use `add_entity_links` for entity↔entity edges.
 
     Direction note: source is the bigger/earlier/wrapping/primary side;
     target is the smaller/later/contained/dependent side. Before
@@ -4448,6 +4723,8 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     """
     if not links:
         return {"inserted": 0}
+
+    link_authoring.reject_entity_statement_additions(links)
 
     stmt_edges, es_edges = _split_edges(links)
 
@@ -5799,7 +6076,64 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
     with store.transaction(_drafts_db()):
         drafts_store.set_submitted(_drafts_db(), draft_id)
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
+    from . import draft_review_runs
+
+    draft_review_runs.on_submitted(draft_id)
     return {"draft_id": draft_id, "op_count": len(ops)}
+
+
+@tool(role="writer", real_role=True)
+def request_draft_review(draft_id: str, rerun: bool = False) -> dict[str, JsonValue]:
+    """Start internal GPT review, or return its latest run; rerun starts a new attempt.
+
+    Requires an identified curator. Mode off refuses requests; configuration and
+    execution failures remain visible on the draft's review_assessment.
+    """
+    from . import draft_review_runs
+
+    _identified_principal()
+    return draft_review_runs.start(draft_id, rerun=rerun).model_dump(mode="json")
+
+
+@tool
+def get_draft_review_run(run_id: str) -> dict[str, JsonValue]:
+    """Inspect an internal review attempt, including failure and staleness."""
+    from . import draft_review_store
+
+    return draft_review_store.get(_drafts_db(), run_id).model_dump(mode="json")
+
+
+@tool(role="drafter")
+def set_draft_review_evidence(
+    draft_id: str, evidence: str, expected_revision: int
+) -> dict[str, JsonValue]:
+    """Replace evidence supplied by the draft creator and invalidate old assessments.
+
+    Supply source excerpts, change descriptions, or concrete supporting facts,
+    up to 30000 characters. URLs alone do not provide their contents.
+    """
+    from . import drafts_store
+
+    principal = _identified_principal()
+    if len(evidence) > 30000:
+        raise ValueError("review evidence exceeds 30000 characters")
+    conn = _drafts_db()
+    with store.transaction(conn):
+        row = _require_mutable_draft(draft_id)
+        if row["created_by"] != principal.id:
+            from . import auth as _auth
+
+            raise _auth.RoleRequired(
+                "only the draft creator can supply review evidence"
+            )
+        drafts_store._check_revision(row, expected_revision)
+        if row["review_evidence"] != evidence:
+            conn.execute(
+                "UPDATE drafts SET review_evidence = ?, revision = revision + 1 "
+                "WHERE id = ?",
+                (evidence, draft_id),
+            )
+    return get_draft(draft_id)
 
 
 @tool
@@ -5882,15 +6216,146 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
-    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    row, ops = drafts_store.get_draft_snapshot(_drafts_db(), draft_id)
     if row is None:
         return {"id": draft_id, "missing": [draft_id]}
-    ops = drafts_store.list_ops(_drafts_db(), draft_id)
     return {**drafts_store.serialize_draft(row, ops=ops), "missing": []}
 
 
+class DraftSourceInput(TypedDict):
+    repository: str
+    pull_request: int
+    merged_commit: str
+    workflow_run_id: int
+    workflow_run_attempt: int
+
+
+class DraftMutationReceipt(TypedDict):
+    draft_id: str
+    operation_ref: str
+    revision: int
+
+
+def _identified_principal():
+    from . import auth as _auth
+
+    principal = _auth.current_principal.get()
+    if principal is None:
+        raise _auth.RoleRequired("draft source operations require an identified caller")
+    return principal
+
+
+def _require_mutable_draft(draft_id: str):
+    from . import drafts_store
+
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    if row is None:
+        raise ValueError(f"draft '{draft_id}' not found")
+    status = drafts_store.status_for(row)
+    if status not in ("open", "submitted"):
+        raise ValueError(f"cannot modify operations on a {status} draft")
+    if drafts_store.active_application(_drafts_db(), draft_id) is not None:
+        raise drafts_store.ActiveApplicationError(
+            f"draft '{draft_id}' has an active reviewed application"
+        )
+    return row
+
+
+@tool(role="drafter")
+def attach_draft_source(
+    draft_id: str,
+    source: DraftSourceInput,
+    expected_revision: int | None = None,
+) -> dict[str, JsonValue]:
+    """Attach complete PR and workflow evidence to the caller's draft."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    conn = _drafts_db()
+    with store.transaction(conn):
+        row = _require_mutable_draft(draft_id)
+        if row["created_by"] != principal.id:
+            from . import auth as _auth
+
+            raise _auth.RoleRequired(
+                "draft source evidence may only be set by its creator"
+            )
+        try:
+            drafts_store.set_source(
+                conn, draft_id, source, expected_revision=expected_revision
+            )
+        except sqlite3.IntegrityError as ex:
+            existing = drafts_store.find_draft_by_source(conn, principal.id, source)
+            owner = existing["id"] if existing is not None else "another draft"
+            detail = f"source evidence already belongs to draft '{owner}'"
+            raise ValueError(detail) from ex
+    return get_draft(draft_id)
+
+
+@tool(role="drafter")
+def find_my_draft_by_source(source: DraftSourceInput) -> dict[str, JsonValue]:
+    """Locate the caller's draft from its complete PR workflow identity."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    row = drafts_store.find_draft_by_source(_drafts_db(), principal.id, source)
+    if row is None:
+        return {"draft": None}
+    return {"draft": get_draft(row["id"])}
+
+
+@tool(role="writer", real_role=True)
+def revise_draft_operation(
+    draft_id: str,
+    operation_ref: str,
+    payload: dict[str, JsonValue],
+    expected_revision: int | None = None,
+) -> DraftMutationReceipt:
+    """Replace one operation payload using its stable reference."""
+    from . import drafts_store
+
+    conn = _drafts_db()
+    with store.transaction(conn):
+        _require_mutable_draft(draft_id)
+        revision = drafts_store.update_op_payload_by_ref(
+            conn,
+            draft_id,
+            operation_ref,
+            payload,
+            expected_revision=expected_revision,
+        )
+    if revision is None:
+        raise ValueError(f"operation '{operation_ref}' not found in draft '{draft_id}'")
+    return {"draft_id": draft_id, "operation_ref": operation_ref, "revision": revision}
+
+
+@tool(role="writer", real_role=True)
+def strike_draft_operation(
+    draft_id: str,
+    operation_ref: str,
+    expected_revision: int | None = None,
+) -> DraftMutationReceipt:
+    """Remove one operation using its stable reference."""
+    from . import drafts_store
+
+    conn = _drafts_db()
+    with store.transaction(conn):
+        _require_mutable_draft(draft_id)
+        revision = drafts_store.remove_op_by_ref(
+            conn,
+            draft_id,
+            operation_ref,
+            expected_revision=expected_revision,
+        )
+    if revision is None:
+        raise ValueError(f"operation '{operation_ref}' not found in draft '{draft_id}'")
+    return {"draft_id": draft_id, "operation_ref": operation_ref, "revision": revision}
+
+
 @tool
-def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
+def discard_draft_op(
+    draft_id: str, seq: int, expected_revision: int | None = None
+) -> dict[str, Any]:
     """Remove a queued op from an open draft by its seq number.
 
     Lets a drafter self-correct a mistake without abandoning the whole
@@ -5909,10 +6374,416 @@ def discard_draft_op(draft_id: str, seq: int) -> dict[str, Any]:
             f"can't modify ops on a non-open draft"
         )
     with store.transaction(_drafts_db()):
-        removed = drafts_store.remove_op(_drafts_db(), draft_id, seq)
-    if not removed:
+        revision = drafts_store.remove_op(
+            _drafts_db(), draft_id, seq, expected_revision=expected_revision
+        )
+    if revision is None:
         raise ValueError(f"no op with seq {seq} in draft '{draft_id}'")
-    return {"draft_id": draft_id, "seq": seq, "removed": True}
+    return {
+        "draft_id": draft_id,
+        "seq": seq,
+        "removed": True,
+        "revision": revision,
+    }
+
+
+class KnowledgePrecondition(TypedDict):
+    kind: Literal["entity", "statement"]
+    id: str
+    fingerprint: str
+
+
+class DraftOperationFinding(TypedDict):
+    operation_ref: str
+    kind: str
+    finding: str
+
+
+class DraftReviewRecord(TypedDict):
+    review_id: str
+    draft_id: str
+    outcome: Literal["accepted", "refined", "rejected", "needs_context"]
+    rationale: str
+    draft_revision: int
+    knowledge_preconditions: list[KnowledgePrecondition]
+    unresolved_questions: list[str]
+    reviewed_at: str
+    reviewed_by: str
+
+
+class DraftReviewInspection(TypedDict):
+    draft: dict[str, JsonValue]
+    draft_revision: int
+    knowledge_preconditions: list[KnowledgePrecondition]
+    operation_findings: list[DraftOperationFinding]
+    unresolved: bool
+    reviews: list[DraftReviewRecord]
+    applications: list[dict[str, JsonValue]]
+
+
+class ReviewedApplicationReceipt(TypedDict):
+    application_id: str
+    applied: int
+    skipped: int
+    results: list[dict[str, JsonValue]]
+    recovered: NotRequired[bool]
+
+
+class DraftCorrectionReceipt(TypedDict):
+    draft_id: str
+    operation_ref: str
+    seq: int
+    revision: int
+
+
+def _payload_knowledge_ids(
+    value: JsonValue,
+) -> tuple[set[str], set[str], set[str]]:
+    entities: set[str] = set()
+    statements: set[str] = set()
+    names: set[str] = set()
+
+    def visit(item: JsonValue) -> None:
+        if isinstance(item, dict):
+            for nested in item.values():
+                visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+        elif isinstance(item, str):
+            if item.startswith("ent_"):
+                entities.add(item)
+            elif item.startswith("stm_"):
+                statements.add(item)
+            elif item.startswith("nam_"):
+                names.add(item)
+
+    visit(value)
+    return entities, statements, names
+
+
+def _fingerprint(value: JsonValue) -> str:
+    encoded = _json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePrecondition]:
+    entity_ids: set[str] = set()
+    statement_ids: set[str] = set()
+    all_names = store.list_all_names(_db())
+    for op in ops:
+        payload = _json.loads(op["payload_json"])
+        entities, statements, names = _payload_knowledge_ids(payload)
+        entity_ids.update(entities)
+        statement_ids.update(statements)
+        texts: list[str] = []
+        if isinstance(payload.get("text"), str):
+            texts.append(payload["text"])
+        texts.extend(
+            item["text"]
+            for item in payload.get("statements", [])
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        )
+        for name_row in all_names:
+            if any(
+                mentions.text_contains_name(text, name_row["text"]) for text in texts
+            ):
+                entity_ids.add(name_row["entity_id"])
+        for name_id in names:
+            row = store.get_name_by_id(_db(), name_id)
+            if row is not None:
+                entity_ids.add(row["entity_id"])
+        names = []
+        if op["kind"] == "upsert_entity" and isinstance(payload.get("name"), str):
+            names.append(payload["name"])
+        if op["kind"] == "upsert_entities":
+            names.extend(
+                item["name"]
+                for item in payload.get("entities", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
+        for name in names:
+            row = store.get_name_by_text(_db(), name)
+            if row is not None:
+                entity_ids.add(row["entity_id"])
+
+    for entity_id in entity_ids:
+        for name_row in store.get_names_by_entity(_db(), entity_id):
+            statement_ids.update(
+                store.statements_mentioning_name(_db(), name_row["id"])
+            )
+
+    out: list[KnowledgePrecondition] = []
+    for entity_id in sorted(entity_ids):
+        entity = get_entity(entity_id)
+        out.append(
+            {"kind": "entity", "id": entity_id, "fingerprint": _fingerprint(entity)}
+        )
+    ordered_statement_ids = sorted(statement_ids)
+    statements = get_statements(ordered_statement_ids)["statements"]
+    statements_by_id = {statement["id"]: statement for statement in statements}
+    for statement_id in ordered_statement_ids:
+        hydrated = statements_by_id.get(statement_id)
+        statement = (
+            {"statements": [hydrated], "missing": []}
+            if hydrated is not None
+            else {"statements": [], "missing": [statement_id]}
+        )
+        out.append(
+            {
+                "kind": "statement",
+                "id": statement_id,
+                "fingerprint": _fingerprint(statement),
+            }
+        )
+    return out
+
+
+def _review_knowledge_preconditions(
+    ops: list[sqlite3.Row], expected: list[KnowledgePrecondition]
+) -> list[KnowledgePrecondition]:
+    """Include supporting records actually inspected beyond operation targets."""
+    current = {
+        (item["kind"], item["id"]): item for item in _knowledge_preconditions(ops)
+    }
+    for item in expected:
+        key = (item["kind"], item["id"])
+        if key in current:
+            continue
+        value = (
+            get_entity(item["id"])
+            if item["kind"] == "entity"
+            else get_statements([item["id"]])
+        )
+        current[key] = {
+            "kind": item["kind"],
+            "id": item["id"],
+            "fingerprint": _fingerprint(value),
+        }
+    return [current[key] for key in sorted(current)]
+
+
+def _batch_nested_parameter_findings(payload: dict) -> list[str]:
+    findings: list[str] = []
+    allowed = set(BatchStatementSpec.__annotations__)
+    for index, item in enumerate(payload.get("statements", [])):
+        if not isinstance(item, dict):
+            continue
+        unknown = sorted(set(item) - allowed)
+        if unknown:
+            findings.append(
+                f"unknown_parameters:statements[{index}]." + ",".join(unknown)
+            )
+        for path, link_allowed in (
+            ("links", set(LinkSpec.__annotations__)),
+            ("incoming_links", set(IncomingLinkSpec.__annotations__)),
+        ):
+            for link_index, link in enumerate(item.get(path, [])):
+                if isinstance(link, dict):
+                    unknown_link = sorted(set(link) - link_allowed)
+                    if unknown_link:
+                        findings.append(
+                            f"unknown_parameters:statements[{index}]."
+                            f"{path}[{link_index}]." + ",".join(unknown_link)
+                        )
+    return findings
+
+
+def _nested_parameter_findings(kind: str, payload: dict) -> list[str]:
+    specs: list[tuple[str, JsonValue, set[str]]] = []
+    if kind in ("add_links", "remove_links"):
+        specs.append(("links", payload.get("links", []), set(EdgeSpec.__annotations__)))
+    elif kind in ("add_entity_links", "remove_entity_links"):
+        specs.append(
+            ("links", payload.get("links", []), set(EntityEdgeSpec.__annotations__))
+        )
+    elif kind == "upsert_statement":
+        specs.extend(
+            (
+                ("links", payload.get("links", []), set(LinkSpec.__annotations__)),
+                (
+                    "incoming_links",
+                    payload.get("incoming_links", []),
+                    set(IncomingLinkSpec.__annotations__),
+                ),
+            )
+        )
+    findings: list[str] = []
+    for path, items, allowed in specs:
+        if isinstance(items, list):
+            for index, item in enumerate(items):
+                if isinstance(item, dict):
+                    unknown = sorted(set(item) - allowed)
+                    if unknown:
+                        findings.append(
+                            f"unknown_parameters:{path}[{index}]." + ",".join(unknown)
+                        )
+    if kind == "upsert_statements":
+        findings.extend(_batch_nested_parameter_findings(payload))
+    return findings
+
+
+def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFinding]:
+    from . import drafts_store
+
+    findings: list[DraftOperationFinding] = []
+    tools_by_name = {wrapper.__name__: wrapper for wrapper in TOOLS}
+    available_sequences = {int(op["seq"]) for op in ops}
+    producers = {int(op["seq"]): op for op in ops}
+    for op in ops:
+        kind = op["kind"]
+        operation_ref = op["id"]
+        if kind == "flag":
+            messages = ["unresolved_flag"]
+        elif kind in drafts_store.NON_REPLAYING_OP_KINDS:
+            messages = []
+        elif kind not in tools_by_name or kind not in _ORIG_SIGNATURES:
+            messages = ["obsolete_tool"]
+        else:
+            payload = _json.loads(op["payload_json"])
+            unknown = sorted(set(payload) - set(_ORIG_SIGNATURES[kind].parameters))
+            messages = ["unknown_parameters:" + ",".join(unknown)] if unknown else []
+            messages.extend(_nested_parameter_findings(kind, payload))
+        for reference, result_index_text in re.findall(
+            r'"@(\d+):(\d+)"', op["payload_json"]
+        ):
+            producer = int(reference)
+            producer_op = producers.get(producer)
+            result_index = int(result_index_text)
+            if producer not in available_sequences or producer >= int(op["seq"]):
+                messages.append(f"unresolved_operation_reference:@{reference}")
+            elif producer_op["kind"] != "upsert_statements" or result_index >= len(
+                _json.loads(producer_op["payload_json"]).get("statements", [])
+            ):
+                messages.append(
+                    f"unresolved_operation_reference:@{reference}:{result_index_text}"
+                )
+        findings.extend(
+            {"operation_ref": operation_ref, "kind": kind, "finding": message}
+            for message in messages
+        )
+    return findings
+
+
+@tool(role="writer", real_role=True)
+def inspect_draft_review(draft_id: str) -> DraftReviewInspection:
+    """Inspect exact draft content and affected knowledge for review."""
+    from . import drafts_store
+
+    _identified_principal()
+    row, ops = drafts_store.get_draft_snapshot(_drafts_db(), draft_id)
+    if row is None:
+        raise ValueError(f"draft '{draft_id}' not found")
+    findings = _draft_operation_findings(ops)
+    reviews = drafts_store.list_reviews(_drafts_db(), draft_id)
+    applications = drafts_store.list_applications(_drafts_db(), draft_id)
+    return {
+        "draft": drafts_store.serialize_draft(row, ops=ops),
+        "draft_revision": int(row["revision"]),
+        "knowledge_preconditions": _knowledge_preconditions(ops),
+        "operation_findings": findings,
+        "unresolved": bool(findings),
+        "reviews": [drafts_store.serialize_review(review) for review in reviews],
+        "applications": [
+            drafts_store.serialize_application(application)
+            for application in applications
+        ],
+    }
+
+
+@tool(role="writer", real_role=True)
+def append_draft_correction(
+    draft_id: str,
+    tool_name: str,
+    payload: dict[str, JsonValue],
+    expected_revision: int | None = None,
+) -> DraftCorrectionReceipt:
+    """Append one supported substrate mutation to an open or submitted draft."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    wrapper = next((item for item in TOOLS if item.__name__ == tool_name), None)
+    if wrapper is None or not tool_name.startswith(_MUTATION_PREFIXES):
+        raise ValueError(f"unsupported correction tool '{tool_name}'")
+    signature = _ORIG_SIGNATURES[tool_name]
+    signature.bind(**payload)
+    conn = _drafts_db()
+    with store.transaction(conn):
+        row = _require_mutable_draft(draft_id)
+        drafts_store._check_revision(row, expected_revision)
+        seq = drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind=tool_name,
+            payload=payload,
+            created_by=principal.id,
+        )
+        updated = drafts_store.get_draft(conn, draft_id)
+        operation = next(
+            op for op in drafts_store.list_ops(conn, draft_id) if op["seq"] == seq
+        )
+    return {
+        "draft_id": draft_id,
+        "operation_ref": operation["id"],
+        "seq": seq,
+        "revision": int(updated["revision"]),
+    }
+
+
+_REVIEW_OUTCOMES = ("accepted", "refined", "rejected", "needs_context")
+
+
+@tool(role="writer", real_role=True)
+def record_draft_review(
+    draft_id: str,
+    outcome: Literal["accepted", "refined", "rejected", "needs_context"],
+    rationale: str,
+    draft_revision: int,
+    knowledge_preconditions: list[KnowledgePrecondition],
+    unresolved_questions: list[str] | None = None,
+) -> DraftReviewRecord:
+    """Record a durable outcome against exact inspected draft and knowledge state."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    if outcome not in _REVIEW_OUTCOMES:
+        raise ValueError("invalid review outcome")
+    if not rationale.strip():
+        raise ValueError("review rationale is required")
+    conn = _drafts_db()
+    with store.write_lock():
+        inspected = inspect_draft_review(draft_id)
+        if inspected["draft"]["status"] != "submitted":
+            raise ValueError("only submitted drafts can be reviewed")
+        if inspected["draft_revision"] != draft_revision:
+            raise drafts_store.StaleDraftRevisionError("draft changed since inspection")
+        current_knowledge = _review_knowledge_preconditions(
+            drafts_store.list_ops(conn, draft_id), knowledge_preconditions
+        )
+        if current_knowledge != knowledge_preconditions:
+            raise ValueError("affected knowledge changed since inspection")
+        unresolved = list(unresolved_questions or [])
+        unresolved.extend(
+            finding["finding"] for finding in inspected["operation_findings"]
+        )
+        if outcome in ("accepted", "refined") and unresolved:
+            raise ValueError("accepted reviews cannot contain unresolved findings")
+        with store.transaction(conn):
+            review_id = drafts_store.create_review(
+                conn,
+                draft_id=draft_id,
+                outcome=outcome,
+                rationale=rationale.strip(),
+                draft_revision=draft_revision,
+                preconditions=knowledge_preconditions,
+                unresolved_questions=unresolved,
+                reviewed_by=principal.id,
+            )
+            if outcome == "rejected":
+                drafts_store.set_decision(
+                    conn, draft_id, decision="rejected", by=principal.id
+                )
+    return drafts_store.serialize_review(drafts_store.get_review(conn, review_id))
 
 
 _DRAFT_RESULT_REF = re.compile(r"^@(\d+):(\d+)$")
@@ -5958,6 +6829,8 @@ def _replay_draft_op(
     op: sqlite3.Row,
     tools_by_name: dict[str, Callable[..., Any]],
     results_by_seq: dict[int, Any],
+    *,
+    strict: bool = False,
 ) -> dict[str, Any]:
     """Resolve and replay one draft operation with contextual errors."""
     from . import drafts_store
@@ -5979,6 +6852,14 @@ def _replay_draft_op(
     except ValueError as ex:
         raise RuntimeError(f"op seq={seq} references {ex}") from ex
 
+    if kind == "add_links":
+        try:
+            link_authoring.reject_entity_statement_additions(payload.get("links"))
+        except ValueError as ex:
+            raise RuntimeError(
+                f"op seq={seq} ({kind}) failed during replay: {ex}"
+            ) from ex
+
     # Drop payload keys the tool no longer accepts (e.g. a stale `mentions` /
     # `strict_mentions` on a queued upsert_statement) so an old draft replays
     # cleanly instead of raising on an unexpected kwarg.
@@ -5990,11 +6871,25 @@ def _replay_draft_op(
         result = wrapper(**payload)
     except Exception as ex:
         raise RuntimeError(f"op seq={seq} ({kind}) failed during replay: {ex}") from ex
+    rejected = isinstance(result, dict) and result.get("rejected") is True
+    items = result.get("results") if isinstance(result, dict) else None
+    if isinstance(items, list):
+        rejected = rejected or any(
+            isinstance(item, dict) and item.get("rejected") is True for item in items
+        )
+    if strict and rejected:
+        raise RuntimeError(f"op seq={seq} ({kind}) was rejected during replay")
     results_by_seq[seq] = result
     return {"seq": seq, "kind": kind, "result": result}
 
 
-def apply_draft(draft_id: str) -> dict[str, Any]:
+def apply_draft(
+    draft_id: str,
+    *,
+    application_id: str | None = None,
+    review_id: str | None = None,
+    strict: bool = False,
+) -> dict[str, Any]:
     """Replay an `open` or `submitted` draft's ops against the substrate.
 
     Caller is responsible for having already verified the principal is
@@ -6010,6 +6905,9 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     """
     from . import drafts_store
 
+    if (application_id is None) != (review_id is None):
+        raise ValueError("application_id and review_id must be supplied together")
+
     row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
         raise ValueError(f"draft '{draft_id}' not found")
@@ -6019,8 +6917,16 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
             f"draft '{draft_id}' is {status}; only open or submitted "
             f"drafts can be approved"
         )
+    active = drafts_store.active_application(_drafts_db(), draft_id)
+    if active is not None and active["id"] != application_id:
+        raise drafts_store.ActiveApplicationError(
+            f"draft '{draft_id}' has an active reviewed application"
+        )
 
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
+    findings = _draft_operation_findings(ops)
+    if strict and findings:
+        raise ValueError("draft has unresolved operation findings")
     tools_by_name = {w.__name__: w for w in TOOLS}
     results: list[dict[str, Any]] = []
     results_by_seq: dict[int, Any] = {}
@@ -6042,11 +6948,14 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
     # joins this outer one (reentrant), so a single op raising rolls the
     # whole draft back. Per-attempt paths preserve recovery artifacts across
     # retries; the write lock serializes snapshots and both recovery paths
-    # against index mutations in this process.
+    # against index mutations in this process. The persisted-write wrapper
+    # marks both indexes before the snapshots. A successful replay clears them
+    # only after the outer commit; a failed replay leaves them for startup to
+    # rebuild even when its best-effort snapshot restore succeeds.
     snapshots_taken = False
     restored = False
     try:
-        with store.transaction(_db()):
+        with _persisted_index_write(statements=True, names=True):
             try:
                 _idx().save(index_snapshot_path)
                 _name_idx().save(name_index_snapshot_path)
@@ -6058,7 +6967,29 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
             snapshots_taken = True
             try:
                 for op in ops:
-                    results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
+                    results.append(
+                        _replay_draft_op(
+                            op, tools_by_name, results_by_seq, strict=strict
+                        )
+                    )
+                if application_id is not None:
+                    replay_result = {
+                        "applied": sum("result" in item for item in results),
+                        "skipped": sum("skipped" in item for item in results),
+                        "results": results,
+                    }
+                    _db().execute(
+                        "INSERT OR IGNORE INTO reviewed_draft_applications "
+                        "(application_id, draft_id, review_id, committed_at, result_json) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (
+                            application_id,
+                            draft_id,
+                            review_id,
+                            timestamps.now(),
+                            _json.dumps(replay_result),
+                        ),
+                    )
             except BaseException:
                 restored = True
                 _restore_index_snapshots(snapshots)
@@ -6083,6 +7014,131 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
         "skipped": sum("skipped" in item for item in results),
         "results": results,
     }
+
+
+def _reviewed_apply_enabled() -> bool:
+    from . import draft_review_settings
+
+    return draft_review_settings.load_controls(_prompts_db()).application_enabled
+
+
+def _substrate_application_result(
+    application_id: str,
+) -> dict[str, JsonValue] | None:
+    row = (
+        _db()
+        .execute(
+            "SELECT result_json FROM reviewed_draft_applications WHERE application_id = ?",
+            (application_id,),
+        )
+        .fetchone()
+    )
+    return None if row is None else _json.loads(row["result_json"])
+
+
+@tool(role="writer", real_role=True)
+def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationReceipt:
+    """Apply an accepted exact-version review with durable replay recovery."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    conn = _drafts_db()
+    with store.write_lock():
+        if not _reviewed_apply_enabled():
+            raise ValueError("reviewed draft application is disabled")
+        stale_knowledge = False
+        with store.transaction(conn):
+            draft = drafts_store.get_draft(conn, draft_id)
+            review = drafts_store.get_review(conn, review_id)
+            if draft is None or review is None or review["draft_id"] != draft_id:
+                raise ValueError("draft or review not found")
+            existing = drafts_store.application_for_review(conn, draft_id, review_id)
+            if existing is not None and existing["status"] == "committed":
+                stored = _json.loads(existing["result_json"])
+                return {"application_id": existing["id"], **stored, "recovered": True}
+            if drafts_store.status_for(draft) != "submitted":
+                raise ValueError("only submitted drafts can be applied")
+            if review["outcome"] not in ("accepted", "refined"):
+                raise ValueError("review outcome does not permit application")
+            if _json.loads(review["unresolved_json"]):
+                raise ValueError("review has unresolved questions")
+            if int(draft["revision"]) != int(review["draft_revision"]):
+                raise drafts_store.StaleDraftRevisionError(
+                    "draft changed after the recorded review"
+                )
+            application_id = drafts_store.claim_application(
+                conn,
+                draft_id=draft_id,
+                review_id=review_id,
+                claimed_by=principal.id,
+            )
+            result = _substrate_application_result(application_id)
+            if result is None:
+                current = _review_knowledge_preconditions(
+                    drafts_store.list_ops(conn, draft_id),
+                    _json.loads(review["preconditions_json"]),
+                )
+                if current != _json.loads(review["preconditions_json"]):
+                    stale_knowledge = True
+
+        if stale_knowledge:
+            failure = "affected knowledge changed after the recorded review"
+            with store.transaction(conn):
+                drafts_store.finish_application(
+                    conn, application_id, status="failed", failure=failure
+                )
+            raise ValueError(failure)
+
+        if result is None:
+            try:
+                result = apply_draft(
+                    draft_id,
+                    application_id=application_id,
+                    review_id=review_id,
+                    strict=True,
+                )
+            except BaseException as exc:
+                committed = _substrate_application_result(application_id)
+                if committed is None:
+                    with store.transaction(conn):
+                        drafts_store.finish_application(
+                            conn, application_id, status="failed", failure=str(exc)
+                        )
+                    raise
+                with store.transaction(conn):
+                    drafts_store.note_application_failure(
+                        conn,
+                        application_id,
+                        f"replay returned after substrate commit: {exc}",
+                    )
+                result = {**committed, "recovered": True}
+        else:
+            result = {**result, "recovered": True}
+
+        try:
+            with store.transaction(conn):
+                drafts_store.finish_application(
+                    conn, application_id, status="committed", result=result
+                )
+                drafts_store.set_decision(
+                    conn,
+                    draft_id,
+                    decision="approved",
+                    by=principal.id,
+                    application_id=application_id,
+                )
+        except BaseException as exc:
+            with store.transaction(conn):
+                drafts_store.note_application_failure(
+                    conn, application_id, f"draft finalization failed: {exc}"
+                )
+            logger.warning(
+                "reviewed draft application %s for %s awaits recovery",
+                application_id,
+                draft_id,
+            )
+            raise
+    return {"application_id": application_id, **result}
 
 
 def run() -> None:

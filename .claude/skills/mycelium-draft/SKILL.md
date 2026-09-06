@@ -201,18 +201,8 @@ Edges to add where both endpoints are already in the substrate.
 
 ## Entity links
 
-Edges anchored on an entity, not between two statements — the statement-link tables above can't hold these (their endpoints are `Sn`/`stm_`). Two kinds, two tools.
-
-### Entity → statement (`add_links`, `from_id=ent_…`)
-
-Entity-level schema: which `property` records an entity `requires` / `accepts`, etc. (Properties are still anchored to the entity by `mentions` in the New statements table; these edges are the recommended schema-discovery layer on top — authoring §4c.)
-
-| From entity | Link type | To (ref / id) |
-|-------------|-----------|---------------|
-| User Invite | requires | S1 · "Email" |
-| User Invite | accepts | S4 · "Default role" |
-
-[Omit section if none.]
+Only entity↔entity links can be authored. Legacy entity↔statement links remain
+readable and removable but must not appear in a new draft.
 
 ### Entity ↔ entity (`add_entity_links`)
 
@@ -260,7 +250,7 @@ Conventions:
 - **One node per statement.** Label `<ref> · <kind><br/>short text` — draft ref (`S1`) for new statements, the real id (`stm_4196`) for existing ones. Keep the text short; strip any `"` and avoid `()` `[]` `{}` inside the label (they break mermaid) — paraphrase if needed, the full text is in the table.
 - **Colour by kind; dash existing nodes.** Existing statements are reused, not added — dashing them shows the reviewer at a glance how much is new vs. anchored to what's already there. Apply the `classDef`s below verbatim. New nodes use inline `:::kind`; existing nodes use `class <id> <kind>,existing;`.
 - **One edge per proposed link, labelled with the link type.** Append any `when` condition in parentheses, and wrap the whole edge label in quotes so mermaid parses the parens: `-->|"triggers (when S8)"|`. Draw *every* proposed edge, including links between two existing statements (both nodes dashed). Existing edges already in the substrate that you are not changing are normally omitted; include one faintly only if it's needed to make a new attachment legible.
-- **Entities are not nodes** by default (they are mention-anchors, shown in the table). Show an entity only when you propose an entity↔statement or entity↔entity link, styled `:::entity`.
+- **Entities are not nodes** by default (they are mention-anchors, shown in the table). Show an entity only when you propose an entity↔entity link, styled `:::entity`.
 - **No grouping.** Do not wrap nodes in `subgraph`s or phase boxes. The substrate has no global structure — any statement is a valid entry point, traversal is local — so visual phases would draw a structure that isn't stored and mislead the reviewer about what gets written. Layout direction (`TD`/`LR`) is fine; invented grouping is not.
 
 Template (fill from the tables — this is illustrative, not a fixed shape):

@@ -22,9 +22,11 @@ from mycelium import guidelines, prompt_store
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 from mycelium.docgen import DocgenConfig, DocumentWritten, NothingWritten
 from mycelium.docgen.loop import _slug, run_docgen
+from mycelium.docgen.schema import CurrentDocument, ExistingDocument
 from mycelium.docgen.tools import (
     EMIT_TOOL,
     GAP_TOOL,
+    MATCH_TOOL,
     RESOLVE_TOOL,
     REVIEW_TOOL,
     build_tools,
@@ -93,6 +95,12 @@ def _review_ok(*, check_exposure: bool = True):
                 payload,
             )
         ]
+    )
+
+
+def _match(document_id: str | None):
+    return _message(
+        [_tool_use(MATCH_TOOL, {"document_id": document_id, "reason": "same topic"})]
     )
 
 
@@ -310,6 +318,79 @@ def _execute_with(*, load_texts, client, guideline_set, document_type, catalogue
         catalogue=catalogue or {guideline_set: [document_type]},
         load_texts=load_texts,
     )
+
+
+def test_an_existing_document_is_listed_matched_and_given_to_the_writer(kb_set):
+    existing = ExistingDocument(
+        id="gdc_sso",
+        title="Configuring SSO",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        slug="configuring-sso",
+    )
+    client = FakeAnthropic([_match("gdc_sso"), _emit(), _review_ok()])
+
+    result = _run(
+        client,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        existing_documents=(existing,),
+        load_current_document=lambda document_id: CurrentDocument(
+            body="# Current review-edited text\n", content_revision="a" * 40
+        ),
+    )
+
+    assert isinstance(result, DocumentWritten)
+    assert result.matched_document_id == "gdc_sso"
+    assert result.matched_content_revision == "a" * 40
+    assert "gdc_sso" in client.calls[0]["messages"][0]["content"]
+    assert "# Current review-edited text" in client.calls[1]["messages"][0]["content"]
+
+
+def test_an_unmatched_request_keeps_the_new_document_path(kb_set):
+    existing = ExistingDocument(
+        id="gdc_billing",
+        title="Configuring billing",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+    client = FakeAnthropic([_match(None), _emit(), _review_ok()])
+
+    result = _run(
+        client,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        existing_documents=(existing,),
+        load_current_document=lambda document_id: (_ for _ in ()).throw(
+            AssertionError("unmatched document must not be loaded")
+        ),
+    )
+
+    assert isinstance(result, DocumentWritten)
+    assert result.matched_document_id is None
+
+
+def test_a_review_refusal_still_reports_the_matched_document(kb_set):
+    existing = ExistingDocument(
+        id="gdc_sso",
+        title="Configuring SSO",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+    client = FakeAnthropic(
+        [_match("gdc_sso"), _emit(), _review_fail(), _emit(), _review_fail()]
+    )
+
+    result = _run(
+        client,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        existing_documents=(existing,),
+        load_current_document=lambda document_id: CurrentDocument(body="# Current\n"),
+    )
+
+    assert isinstance(result, NothingWritten)
+    assert result.matched_document_id == "gdc_sso"
 
 
 # --------------------------------------------------------------------------- #

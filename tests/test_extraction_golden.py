@@ -66,6 +66,14 @@ def _observed_links(result: ex.Extraction) -> tuple[tuple[str, str, str], ...]:
 
 
 GOLDEN: dict[str, Golden] = {
+    "named-finite-cases": Golden(
+        "The alert priority has three levels. "
+        "High is one of the three levels of the alert priority.",
+        statements=(
+            ("state", "The alert priority has three levels"),
+            ("rule", "High is one of the three levels of the alert priority"),
+        ),
+    ),
     # -- conditionals: the condition becomes its own statement and the claim
     #    requires it, whichever side of the sentence it sits on.
     "conditional-initial": Golden(
@@ -99,6 +107,13 @@ GOLDEN: dict[str, Golden] = {
             ("event", "the draft is created"),
         ),
         links=(("the draft is created", "requires", "the substrate is locked"),),
+    ),
+    # -- passive ownership: "own" is stative, so the passive states a relation.
+    #    Before DRA-427 this sentence flagged "unmatched" and never became a
+    #    statement, capping the contains-belongs-to frame to embedded phrasings.
+    "plain-passive-owned-by": Golden(
+        "The audit log is owned by the compliance charter.",
+        statements=(("state", "The audit log is owned by the compliance charter"),),
     ),
     # -- untyped cuts: the sentence splits but no relation is inferred.
     "semicolon": Golden(
@@ -518,23 +533,25 @@ SUBSTRATE_GOLDEN: dict[str, SubstrateGolden] = {
             ),
         ),
     ),
-    "cases-level-existing-parent-is-the-link-source": SubstrateGolden(
-        "The escalation priority is high for the incident severity policy.",
-        existing=(("s-policy", "rule", "The incident severity policy applies"),),
+    # The owner fills the "from" slot, so the existing owner is the contains source.
+    # The plain passive now reaches the same frame as the embedded phrasing.
+    "plain-passive-owned-by-existing-owner-is-the-link-source": SubstrateGolden(
+        "The audit log is owned by the compliance charter.",
+        existing=(("s-charter", "rule", "The compliance charter applies"),),
         candidates=(
             (
-                "The escalation priority is high for the incident severity policy",
+                "The audit log is owned by the compliance charter",
                 "related",
-                "s-policy",
-                0.645,
+                "s-charter",
+                0.603,
             ),
         ),
         proposals=(
             (
-                "s-policy",
-                "cases",
-                "The escalation priority is high for the incident severity policy",
-                "is high for",
+                "s-charter",
+                "contains",
+                "The audit log is owned by the compliance charter",
+                "is owned by",
             ),
         ),
     ),

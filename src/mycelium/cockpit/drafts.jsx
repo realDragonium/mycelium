@@ -17,6 +17,7 @@ function toSummary(d) {
     id: d.id,
     title: d.title || Myc.titleOf(''),
     status: d.status,
+    review_assessment: d.review_assessment || null,
     createdAt: Date.parse(d.created_at),
     origin: d.created_by || 'ingest',
     opCount: d.op_count || 0,
@@ -255,6 +256,7 @@ function adaptDraft(raw) {
     id: d.id,
     title: d.title,
     status: d.status,
+    review_assessment: d.review_assessment || null,
     createdAt: Date.parse(d.created_at),
     submittedAt: Date.parse(d.submitted_at),
     source: null,
@@ -263,12 +265,74 @@ function adaptDraft(raw) {
   };
 }
 
+function DraftAssessment({ assessment, compact = false }) {
+  if (!assessment) return null;
+  const labels = {
+    good: 'Good',
+    changes_suggested: 'Changes suggested',
+    reject: 'Reject suggested',
+    needs_context: 'Needs context',
+  };
+  const result = assessment.status === 'running' ? 'Running'
+    : assessment.status === 'failed' ? 'Failed'
+    : labels[assessment.label] || 'Completed';
+  const badge = <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600 }}>
+    AI review: {result}{assessment.stale ? ' · Stale' : ''}
+  </span>;
+  if (compact) return <div style={{ marginTop: 6, color: 'var(--ink-3)' }}>{badge}</div>;
+
+  return (
+    <section aria-label="AI review" style={{ padding: 14, marginBottom: 18, border: '1px solid var(--line)', borderRadius: 6, color: 'var(--ink-3)', fontSize: 12, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
+      {badge}
+      <div style={{ marginTop: 4 }}>Reviewer: {draftReviewProviderName(assessment.provider)} · {assessment.model || 'Model not recorded'}</div>
+      <div style={{ marginTop: 4 }}>
+        {assessment.mode === 'review-only' ? 'Review only. This review does not edit, reject, or apply the draft.' : 'Review and apply.'}
+        {' '}Status: {assessment.status}.{' '}
+        {assessment.application === 'applied' ? 'Draft applied by this review.'
+          : assessment.application === 'rejected' ? 'Draft rejected by this review.'
+          : 'No automatic application or rejection.'}
+      </div>
+      {assessment.stale && <p>This assessment is stale: it reviewed revision {assessment.draft_revision}, and the draft has changed.</p>}
+      {assessment.rationale && <p style={{ whiteSpace: 'pre-wrap' }}>{assessment.rationale}</p>}
+      {assessment.detail && <p style={{ whiteSpace: 'pre-wrap' }}>{assessment.detail}</p>}
+      {assessment.questions.length > 0 && <div>
+        <strong>Questions</strong>
+        <ul style={{ margin: '6px 0', paddingLeft: 20 }}>{assessment.questions.map((question, i) => <li key={i}>{question}</li>)}</ul>
+      </div>}
+      {assessment.corrections.length > 0 && <div>
+        <strong>Suggested corrections</strong>
+        <ul style={{ margin: '6px 0', paddingLeft: 20 }}>{assessment.corrections.map((correction, i) => (
+          <li key={i} style={{ marginTop: 6 }}>
+            <strong>{correction.action}</strong>{correction.operation_ref ? ` ${correction.operation_ref}` : ''}{correction.tool_name ? ` · ${correction.tool_name}` : ''}: {correction.reason}
+            {correction.payload_json && <details><summary>Proposed payload</summary><pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{correction.payload_json}</pre></details>}
+          </li>
+        ))}</ul>
+      </div>}
+    </section>
+  );
+}
+
+
 function DraftReview({ id }) {
   const router = useRouter();
   const [state, setState] = useStateD({ loading: true, draft: null, error: null });
   const [filter, setFilter] = useStateD('all');
   const [activeQuote, setActiveQuote] = useStateD(null);
   const [busy, setBusy] = useStateD(false);
+  const [reviewSettings, setReviewSettings] = useStateD(null);
+
+  useEffectD(() => {
+    let cancelled = false;
+    const loadSettings = () => Myc.drafts.reviewSettings().then(settings => {
+      if (!cancelled) setReviewSettings(settings);
+    }).catch(error => {
+      if (!cancelled) { setReviewSettings(null); setState(s => ({ ...s, error })); }
+    });
+    loadSettings();
+    window.addEventListener('focus', loadSettings);
+    window.addEventListener('draft-review-settings-changed', loadSettings);
+    return () => { cancelled = true; window.removeEventListener('focus', loadSettings); window.removeEventListener('draft-review-settings-changed', loadSettings); };
+  }, [id]);
 
   const load = () => {
     setState(s => ({ ...s, loading: true, error: null }));
@@ -277,11 +341,31 @@ function DraftReview({ id }) {
       .catch(err => setState({ loading: false, draft: null, error: err }));
   };
   useEffectD(() => { load(); }, [id]);
+  useEffectD(() => {
+    if (state.draft?.review_assessment?.status !== 'running' || busy) return;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      try {
+        const res = await Myc.drafts.get(id);
+        if (cancelled) return;
+        setState({ loading: false, draft: adaptDraft(res && res.draft), error: null });
+        refreshDrafts();
+      } catch (error) {
+        if (!cancelled) {
+          setState(s => ({ ...s, error }));
+          timer = setTimeout(poll, 3000);
+        }
+      }
+    };
+    timer = setTimeout(poll, 3000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [id, state.draft, busy]);
 
   if (state.loading) {
     return <main className="page narrow"><div className="rail-empty" style={{ padding: '48px 2px', fontFamily: 'var(--mono)', fontSize: 'var(--fs-xs)', color: 'var(--ink-4)' }}>// loading draft {id}…</div></main>;
   }
-  if (state.error) {
+  if (state.error && !state.draft) {
     const e = state.error;
     const unauth = e.status === 401 || e.status === 403;
     return <main className="page narrow"><EmptyState title={unauth ? 'Sign in to view this draft' : 'Could not load draft'} blurb={unauth ? 'Your session lacks the role needed to read drafts.' : (e.message || 'The draft request failed.')} /></main>;
@@ -296,6 +380,23 @@ function DraftReview({ id }) {
   const counts = { all: ops.length, statements: 0, entities: 0, names: 0, links: 0, flagged: 0 };
   ops.forEach(o => { const c = categoryOf(o); if (c !== 'flagged') counts[c]++; if (o.flagged) counts.flagged++; });
   const shown = ops.filter(o => filter === 'all' ? true : filter === 'flagged' ? o.flagged : categoryOf(o) === filter);
+
+  const runReview = async () => {
+    setBusy(true);
+    setState(s => ({ ...s, error: null }));
+    try {
+      const settings = await Myc.drafts.reviewSettings();
+      setReviewSettings(settings);
+      if (settings.mode === 'off' || !settings.can_review) return;
+      await Myc.drafts.review(id);
+      await load();
+      await refreshDrafts();
+    } catch (error) {
+      setState(s => ({ ...s, error }));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const onDiscardOp = (seq) => {
     setBusy(true);
@@ -330,7 +431,28 @@ function DraftReview({ id }) {
         )}
       </div>
 
-      {readOnly && <div className="draft-banner"><span className="dbi"><I.check width="15" height="15" /></span><span><b>Submitted {relTime(draft.submittedAt)}.</b> These {ops.length} ops are queued for the curator and are read-only until reviewed. Nothing has landed in the substrate yet.</span></div>}
+      {draft.status === 'submitted' && <div className="draft-banner"><span className="dbi"><I.check width="15" height="15" /></span><span><b>Submitted {relTime(draft.submittedAt)}.</b> These {ops.length} ops are queued for review. Nothing has landed in the substrate yet.</span></div>}
+      {draft.status === 'approved' && <div className="draft-banner">Approved. The draft has been applied to the substrate.</div>}
+      {(draft.status === 'rejected' || draft.status === 'withdrawn') && <div className="draft-banner">{draft.status === 'rejected' ? 'Rejected' : 'Withdrawn'}. The draft is closed without applying its operations.</div>}
+      {state.error && <p role="alert" style={{ color: 'var(--red, #dc2626)', fontSize: 13 }}>{state.error.message || 'The draft request failed.'}</p>}
+      {draft.status === 'submitted' && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+          <button onClick={runReview} disabled={busy || draft.review_assessment?.status === 'running' || !reviewSettings?.can_review || reviewSettings.mode === 'off'}
+                  className="btn submit">
+            {draft.review_assessment?.status === 'running' ? 'Review running…' : draft.review_assessment ? 'Run again' : 'Run review'}
+          </button>
+          <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+            {!reviewSettings ? 'Review settings unavailable.'
+              : !reviewSettings.can_review ? 'A real curator role is required to run reviews.'
+              : reviewSettings.mode === 'off' ? 'Review is off. An administrator can enable it in draft review settings.'
+              : reviewSettings.mode === 'review-only' ? 'Current mode: Review only.' : 'Current mode: Review and apply.'}
+            {reviewSettings?.can_review && reviewSettings.mode !== 'off' && reviewSettings.provider && ` ${draftReviewProviderName(reviewSettings.provider)} · ${reviewSettings.model || 'No model configured'}.`}
+          </span>
+        </div>
+      )}
+
+      <p style={{ marginBottom: 20, fontSize: 13 }}><a href="#/settings">AI settings</a></p>
+      <DraftAssessment assessment={draft.review_assessment} />
 
       <div className="draft-grid">
         <div>
@@ -354,6 +476,20 @@ function DraftReview({ id }) {
 function DraftsList() {
   const router = useRouter();
   const drafts = useMycDrafts();
+  useEffectD(() => {
+    if (!draftsInFlight) refreshDrafts();
+  }, []);
+  useEffectD(() => {
+    if (!drafts.some(d => d.review_assessment?.status === 'running')) return;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      await refreshDrafts();
+      if (!cancelled) timer = setTimeout(poll, 3000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [drafts]);
   const sorted = [...drafts].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   const open = sorted.filter(d => d.status === 'open');
   const submitted = sorted.filter(d => d.status === 'submitted');
@@ -369,6 +505,8 @@ function DraftsList() {
         <button className="ingest-btn" onClick={() => window.MYC_GO_INGEST(null)}><I.ingest width="15" height="15" />New from ingest</button>
       </div>
 
+      <p style={{ marginBottom: 20, fontSize: 13 }}><a href="#/settings">AI settings</a></p>
+
       <div className="drafts-summary">
         <div className="ds-cell"><div className="ds-n write">{open.length}</div><div className="ds-l">open drafts</div></div>
         <div className="ds-cell"><div className="ds-n write">{pendingOps}</div><div className="ds-l">queued ops · dirty queue</div></div>
@@ -382,6 +520,7 @@ function DraftsList() {
               <span className={`dr-dot ${d.status}`} />
               <div className="dr-body">
                 <div className="dr-title">{d.title}</div>
+                <DraftAssessment assessment={d.review_assessment} compact />
                 <div className="dr-meta">
                   <span className="did">{d.id}</span><span>·</span><span>{d.origin}</span><span>·</span>
                   <span>{d.opCount} op{d.opCount === 1 ? '' : 's'}</span>
