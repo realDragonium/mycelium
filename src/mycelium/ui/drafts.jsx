@@ -34,6 +34,15 @@ async function _fetchDraftDetail(draftId) {
   return r.json();
 }
 
+async function _fetchDraftReviewSettings() {
+  const r = await fetch('/api/draft-review/settings');
+  if (!r.ok) {
+    let d; try { d = (await r.json()).detail; } catch (_) { d = r.statusText; }
+    throw new Error(d || `Review settings → ${r.status}`);
+  }
+  return r.json();
+}
+
 async function _draftAction(draftId, action) {
   const r = await fetch(`/api/drafts/${draftId}/${action}`, { method: 'POST' });
   if (!r.ok) {
@@ -387,6 +396,53 @@ function DraftStatusBadge({ status }) {
 }
 
 
+function DraftAssessment({ assessment, compact = false }) {
+  if (!assessment) return null;
+  const labels = {
+    good: 'Good',
+    changes_suggested: 'Changes suggested',
+    reject: 'Reject suggested',
+    needs_context: 'Needs context',
+  };
+  const result = assessment.status === 'running' ? 'Running'
+    : assessment.status === 'failed' ? 'Failed'
+    : labels[assessment.label] || 'Completed';
+  const badge = <span style={{ fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600 }}>
+    GPT review: {result}{assessment.stale ? ' · Stale' : ''}
+  </span>;
+  if (compact) return <div style={{ marginTop: 6, color: 'var(--ink-3)' }}>{badge}</div>;
+
+  return (
+    <section aria-label="GPT review" style={{ padding: 14, marginBottom: 18, border: '1px solid var(--rule)', borderRadius: 6, color: 'var(--ink-3)', fontSize: 12, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
+      {badge}
+      <div style={{ marginTop: 4 }}>
+        {assessment.mode === 'review-only' ? 'Review only. This review does not edit, reject, or apply the draft.' : 'Review and apply.'}
+        {' '}Status: {assessment.status}.{' '}
+        {assessment.application === 'applied' ? 'Draft applied by this review.'
+          : assessment.application === 'rejected' ? 'Draft rejected by this review.'
+          : 'No automatic application or rejection.'}
+      </div>
+      {assessment.stale && <p>This assessment is stale: it reviewed revision {assessment.draft_revision}, and the draft has changed.</p>}
+      {assessment.rationale && <p style={{ whiteSpace: 'pre-wrap' }}>{assessment.rationale}</p>}
+      {assessment.detail && <p style={{ whiteSpace: 'pre-wrap' }}>{assessment.detail}</p>}
+      {assessment.questions.length > 0 && <div>
+        <strong>Questions</strong>
+        <ul style={{ margin: '6px 0', paddingLeft: 20 }}>{assessment.questions.map((question, i) => <li key={i}>{question}</li>)}</ul>
+      </div>}
+      {assessment.corrections.length > 0 && <div>
+        <strong>Suggested corrections</strong>
+        <ul style={{ margin: '6px 0', paddingLeft: 20 }}>{assessment.corrections.map((correction, i) => (
+          <li key={i} style={{ marginTop: 6 }}>
+            <strong>{correction.action}</strong>{correction.operation_ref ? ` ${correction.operation_ref}` : ''}{correction.tool_name ? ` · ${correction.tool_name}` : ''}: {correction.reason}
+            {correction.payload_json && <details><summary>Proposed payload</summary><pre style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{correction.payload_json}</pre></details>}
+          </li>
+        ))}</ul>
+      </div>}
+    </section>
+  );
+}
+
+
 function DraftRow({ draft, onOpen }) {
   const when = (draft.created_at || '').slice(0, 16).replace('T', ' ');
   const author = (draft.created_by || '').slice(0, 8) || '—';
@@ -402,6 +458,7 @@ function DraftRow({ draft, onOpen }) {
           <div style={{ fontSize: 11.5, color: 'var(--ink-3)', marginTop: 4, fontFamily: 'var(--mono)' }}>
             {draft.op_count} op{draft.op_count === 1 ? '' : 's'} · filed {when} by {author}
           </div>
+          <DraftAssessment assessment={draft.review_assessment} compact />
         </div>
         <DraftStatusBadge status={draft.status} />
       </div>
@@ -541,6 +598,19 @@ function DraftDetail({ draftId, onBack }) {
   const [data, setData] = useD(null);
   const [err, setErr] = useD(null);
   const [busy, setBusy] = useD(false);
+  const [reviewSettings, setReviewSettings] = useD(null);
+
+  useED(() => {
+    let cancelled = false;
+    const loadSettings = () => _fetchDraftReviewSettings().then(settings => {
+      if (!cancelled) setReviewSettings(settings);
+    }).catch(e => {
+      if (!cancelled) { setReviewSettings(null); setErr(e.message); }
+    });
+    loadSettings();
+    window.addEventListener('focus', loadSettings);
+    return () => { cancelled = true; window.removeEventListener('focus', loadSettings); };
+  }, [draftId]);
 
   const reload = useCBD(async () => {
     setErr(null);
@@ -554,6 +624,25 @@ function DraftDetail({ draftId, onBack }) {
 
   useED(() => { reload(); }, [reload]);
 
+  useED(() => {
+    if (data?.review_assessment?.status !== 'running' || busy) return;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      try {
+        const result = await _fetchDraftDetail(draftId);
+        if (!cancelled) { setData(result.draft); setErr(null); }
+      } catch (e) {
+        if (!cancelled) {
+          setErr(e.message);
+          timer = setTimeout(poll, 3000);
+        }
+      }
+    };
+    timer = setTimeout(poll, 3000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [draftId, data, busy]);
+
   const act = async (action) => {
     if (action === 'approve' && !confirm('Replay this draft against the substrate?')) return;
     if (action === 'reject' && !confirm('Reject this draft? Ops will not be applied.')) return;
@@ -561,6 +650,21 @@ function DraftDetail({ draftId, onBack }) {
     setBusy(true); setErr(null);
     try {
       await _draftAction(draftId, action);
+      await reload();
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runReview = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const settings = await _fetchDraftReviewSettings();
+      setReviewSettings(settings);
+      if (settings.mode === 'off' || !settings.can_review) return;
+      await _draftAction(draftId, 'review');
       await reload();
     } catch (e) {
       setErr(e.message);
@@ -636,6 +740,23 @@ function DraftDetail({ draftId, onBack }) {
 
         {err && <div style={{ color: 'var(--red, #dc2626)', fontSize: 13, marginBottom: 12 }}>{err}</div>}
 
+        {data.status === 'submitted' && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+            <button onClick={runReview} disabled={busy || data.review_assessment?.status === 'running' || !reviewSettings?.can_review || reviewSettings.mode === 'off'}
+                    style={{ padding: '6px 14px', fontSize: 12 }}>
+              {data.review_assessment?.status === 'running' ? 'Review running…' : data.review_assessment ? 'Run again' : 'Run review'}
+            </button>
+            <span style={{ fontSize: 12, color: 'var(--ink-3)' }}>
+              {!reviewSettings ? 'Review settings unavailable.'
+                : !reviewSettings.can_review ? 'A real curator role is required to run reviews.'
+                : reviewSettings.mode === 'off' ? 'Review is off. Enable it in server settings to run a review.'
+                : reviewSettings.mode === 'review-only' ? 'Current mode: Review only.' : 'Current mode: Review and apply.'}
+            </span>
+          </div>
+        )}
+
+        <DraftAssessment assessment={data.review_assessment} />
+
         {canDecide && (
           <div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
             <button onClick={() => act('approve')} disabled={busy}
@@ -694,21 +815,34 @@ function DraftsScreen({ selected }) {
   const [err, setErr] = useD(null);
   const [loading, setLoading] = useD(true);
 
-  const reload = useCBD(async (statusFilter) => {
-    setLoading(true); setErr(null);
+  const reload = useCBD(async (statusFilter, quiet = false) => {
+    if (!quiet) setLoading(true);
+    setErr(null);
     try {
       const data = await _fetchDrafts(statusFilter);
       setDrafts(data.drafts || []);
     } catch (e) {
       setErr(e.message);
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   }, []);
 
   useED(() => {
     if (!selected) reload(filter);
   }, [filter, reload, selected]);
+
+  useED(() => {
+    if (selected || !drafts.some(d => d.review_assessment?.status === 'running')) return;
+    let cancelled = false;
+    let timer;
+    const poll = async () => {
+      await reload(filter, true);
+      if (!cancelled) timer = setTimeout(poll, 3000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [drafts, selected, filter, reload]);
 
   if (selected) {
     return <DraftDetail draftId={selected} onBack={() => router.go({ view: 'drafts' })} />;

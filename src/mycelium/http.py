@@ -26,7 +26,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, JsonValue, create_model
 from pydantic import Field as PydField
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -1244,6 +1244,25 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
 # pattern as knowledge_gaps.
 
 
+@app.get("/api/draft-review/settings")
+def draft_review_settings(request: Request) -> dict[str, str | bool]:
+    from . import draft_review_runs
+
+    principal = _require_principal(request)
+    return {
+        "mode": draft_review_runs.mode(),
+        "can_review": auth.principal_has_real_role(principal, "writer"),
+    }
+
+
+@app.post("/api/drafts/{draft_id}/review")
+def run_draft_review_http(
+    draft_id: str, request: Request
+) -> dict[str, dict[str, JsonValue]]:
+    _enforce_curator(request, action="running an internal draft review")
+    return {"review": server.request_draft_review(draft_id, rerun=True)}
+
+
 def _serialize_draft(row, *, ops=None) -> dict[str, Any]:
     from . import drafts_store
 
@@ -1419,6 +1438,9 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
         )
     with store.transaction(conn):
         drafts_store.set_submitted(conn, draft_id)
+    from . import draft_review_runs
+
+    draft_review_runs.on_submitted(draft_id)
     return {"ok": True}
 
 

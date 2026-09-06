@@ -316,6 +316,8 @@
     },
     // Raw draft REST — drafts.jsx owns the op-shape adaptation/rendering.
     drafts: {
+      reviewSettings: () => get('/api/draft-review/settings'),
+      review: (id) => http('POST', '/api/drafts/' + encodeURIComponent(id) + '/review'),
       list: (status) => get('/api/drafts?status=' + encodeURIComponent(status || 'all')),
       get: (id) => get('/api/drafts/' + encodeURIComponent(id)),
       discardOp: (id, seq) => http('DELETE', '/api/drafts/' + encodeURIComponent(id) + '/ops/' + seq),
