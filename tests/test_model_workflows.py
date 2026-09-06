@@ -163,7 +163,19 @@ def test_research_worker_keeps_model_selected_at_admission(monkeypatch, tmp_path
         return NothingFound(reason="fixture", topic=topic)
 
     monkeypatch.setattr(research, "run_research", run)
-    runner = research_runs._default_runner(str(tmp_path))
+    from mycelium import product_settings
+    from product_settings_helpers import set_product
+
+    set_product(
+        product_settings.SourcesSettings(
+            sources=(
+                product_settings.SourceSettings(
+                    name="fixture", owner="acme", repo="api"
+                ),
+            )
+        )
+    )
+    runner = research_runs._default_runner(str(tmp_path), "fixture")
     save_model("research", openai_model="changed-model")
     runner("topic", source="fixture")
     assert observed[0].provider == "openai"

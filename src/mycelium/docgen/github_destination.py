@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import json
 import logging
 import os
 import re
@@ -202,21 +201,12 @@ def read(
 
 def _configured_credentials(env: Mapping[str, str], token: str | None) -> list[str]:
     credentials = [token] if token else []
-    raw = env.get("MYCELIUM_DOC_DESTINATIONS")
-    if not raw:
-        return credentials
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return credentials
-    if not isinstance(parsed, dict):
-        return credentials
-    for entry in parsed.values():
-        if not isinstance(entry, dict) or not isinstance(entry.get("config"), dict):
-            continue
-        token_env = entry["config"].get("token_env")
-        if isinstance(token_env, str) and env.get(token_env):
-            credentials.append(env[token_env])
+    from .. import github_credentials
+
+    for binding in github_credentials.load(env=env).values():
+        value = env.get(binding.token_env)
+        if value:
+            credentials.append(value)
     return list(dict.fromkeys(credentials))
 
 

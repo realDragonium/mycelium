@@ -228,6 +228,7 @@ function AISettings() {
       : !data ? <p>Loading AI settings…</p>
       : data.actions.filter(action => action.action !== 'draft_review').map(action => <ActionModelSettings key={action.action} settings={action} canConfigure={data.can_configure} />)}
     <DraftReviewSettings />
+    <ProductSettings />
   </div>;
 }
 

@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS generated_documents (
     statement_ids TEXT NOT NULL DEFAULT '[]',
     review        TEXT NOT NULL DEFAULT '{}',
     delivery_destination TEXT,
+    delivery_target TEXT,
     delivery_path        TEXT,
     delivery_reference   TEXT,
     delivery_content_revision TEXT,
@@ -182,6 +183,7 @@ def _add_generated_document_delivery(conn: sqlite3.Connection) -> None:
     }
     delivery_columns = (
         "delivery_destination",
+        "delivery_target",
         "delivery_path",
         "delivery_reference",
         "delivery_content_revision",
@@ -233,6 +235,7 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
                 statement_ids TEXT NOT NULL DEFAULT '[]',
                 review        TEXT NOT NULL DEFAULT '{}',
                 delivery_destination TEXT,
+                delivery_target TEXT,
                 delivery_path        TEXT,
                 delivery_reference   TEXT,
                 delivery_content_revision TEXT,
@@ -247,12 +250,12 @@ def _rekey_generated_documents(conn: sqlite3.Connection) -> None:
             """
             INSERT INTO generated_documents_rekeyed
                 (id, slug, title, guideline_set, document_type, body,
-                statement_ids, review, delivery_destination, delivery_path,
+                statement_ids, review, delivery_destination, delivery_target, delivery_path,
                 delivery_reference, delivery_content_revision, created_at,
                 revision_source_content_revision, updated_at, last_run_id)
             SELECT id, slug, title, COALESCE(guideline_set, ''),
                    COALESCE(document_type, ''), body, statement_ids, review,
-                   delivery_destination, delivery_path, delivery_reference,
+                   delivery_destination, delivery_target, delivery_path, delivery_reference,
                    delivery_content_revision, created_at,
                    revision_source_content_revision, updated_at, last_run_id
             FROM generated_documents
@@ -720,6 +723,7 @@ def record_delivery(
     reference: str,
     content_revision: str,
     expected_body_digest: str | None = None,
+    target: str | None = None,
 ) -> None:
     """Record a completed delivery without accepting or rewriting content."""
     try:
@@ -737,9 +741,9 @@ def record_delivery(
         cursor = conn.execute(
             "UPDATE generated_documents SET delivery_destination = ?, "
             "delivery_path = ?, delivery_reference = ?, "
-            "delivery_content_revision = ? "
+            "delivery_content_revision = ?, delivery_target = ? "
             "WHERE id = ?",
-            (destination, path, reference, content_revision, document_id),
+            (destination, path, reference, content_revision, target, document_id),
         )
         if cursor.rowcount != 1:
             raise ValueError(f"generated document not found: {document_id}")

@@ -1,18 +1,9 @@
 """Configured code sources for research runs.
 
-A source is a codebase this Mycelium instance derives knowledge from. Sources
-are configured through `MYCELIUM_SOURCES`, a JSON object keyed by source name:
-
-    {"acme-api": {"owner": "acme", "repo": "api", "ref": "main",
-                  "token_env": "ACME_GH_TOKEN"}}
-
-`token_env` is the name of the environment variable holding the GitHub PAT,
-not the PAT itself. Production can inject that secret through Secrets Manager
-without ever placing it in the JSON config.
-
-Deployments must provide `MYCELIUM_SOURCES`, each token env var named by
-configured sources, and may provide `MYCELIUM_RESEARCH_CLONE_TIMEOUT_S` to
-override the default clone timeout.
+A source is a codebase this instance derives knowledge from. Administrators
+configure repository/ref entries in AI settings and select deployment-owned
+GitHub credential bindings. Explicit environment mappings are accepted only by
+the legacy import parser; normal runtime reads use saved settings.
 
 All git/GitHub mechanics live in this module only. The rest of the research
 package sees a directory, and credentials never appear in logs, traces, or
@@ -68,7 +59,31 @@ class Source:
 
 
 def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
-    e = env or os.environ
+    if env is None:
+        from .. import github_credentials, product_settings
+
+        try:
+            settings = product_settings.get(product_settings.SourcesSettings)
+            sources = {}
+            for item in settings.sources:
+                binding = (
+                    github_credentials.resolve(item.binding) if item.binding else None
+                )
+                sources[item.name] = Source(
+                    name=item.name,
+                    owner=item.owner,
+                    repo=item.repo,
+                    ref=item.ref,
+                    token_env=binding.token_env if binding else None,
+                    host=binding.host if binding else item.host,
+                )
+        except ValueError:
+            raise SourceError(
+                "Saved research sources or GitHub credential bindings are unavailable. "
+                "Check AI settings and server credential configuration."
+            ) from None
+        return sources
+    e = env
     raw = e.get("MYCELIUM_SOURCES")
     if not raw:
         return {}

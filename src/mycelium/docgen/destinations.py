@@ -1,12 +1,8 @@
 """Configured delivery destinations for generated documents.
 
 A destination is a reviewable place a generated document can be submitted to.
-Destinations are configured through `MYCELIUM_DOC_DESTINATIONS`, a JSON object
-keyed by destination name:
-
-    {"knowledge-base": {"type": "github",
-                        "path_template": "docs/kb/{slug}.md",
-                        "config": {...}}}
+Administrators configure repositories, branches, and path templates in saved
+settings. Explicit environment mappings are accepted by the legacy import parser.
 
 The generic configuration carries destination-specific settings without
 interpreting them. Each implementation validates and uses its own settings.
@@ -15,7 +11,7 @@ interpreting them. Each implementation validates and uses its own settings.
 from __future__ import annotations
 
 import json
-import os
+import sqlite3
 import string
 from dataclasses import dataclass
 from typing import Mapping, Protocol, cast
@@ -98,7 +94,12 @@ class DestinationBackend(Protocol):
 def load_destinations(
     env: Mapping[str, str] | None = None,
 ) -> dict[str, DestinationConfig]:
-    e = os.environ if env is None else env
+    if env is None:
+        from .. import product_settings
+
+        settings = product_settings.get(product_settings.DocumentationSettings)
+        return {item.name: item.destination() for item in settings.destinations}
+    e = env
     raw = e.get("MYCELIUM_DOC_DESTINATIONS")
     if not raw:
         return {}
@@ -283,3 +284,34 @@ def _scrub(text: str, secrets: list[str]) -> str:
         if secret:
             out = out.replace(secret, "***")
     return out
+
+
+def target_identity(config: DestinationConfig) -> str:
+    return json.dumps(destination_coordinates(config), sort_keys=True)
+
+
+def require_recorded_target(config: DestinationConfig, recorded: str | None) -> None:
+    if recorded != target_identity(config):
+        raise DestinationError(
+            "The document destination has changed. Use a new destination name to deliver to a different repository or branch."
+        )
+
+
+def bind_legacy_deliveries(conn: sqlite3.Connection) -> None:
+    """Pin older delivery records once; unresolved targets remain disabled."""
+    rows = conn.execute(
+        "SELECT id, delivery_destination FROM generated_documents WHERE delivery_destination IS NOT NULL AND delivery_target IS NULL"
+    ).fetchall()
+    if not rows:
+        return
+    try:
+        configured = load_destinations()
+    except (ValueError, RuntimeError):
+        configured = {}
+    with conn:
+        for row in rows:
+            destination = configured.get(row["delivery_destination"])
+            conn.execute(
+                "UPDATE generated_documents SET delivery_target = ? WHERE id = ?",
+                (target_identity(destination) if destination else "{}", row["id"]),
+            )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import json as _json
+import os
 import subprocess
 from pathlib import Path
 
@@ -266,7 +267,7 @@ def test_load_sources_rejects_injection_shaped_fields(monkeypatch, entry):
 
     monkeypatch.setenv("MYCELIUM_SOURCES", _json.dumps({"s": entry}))
     with _pytest.raises(SourceError):
-        load_sources()
+        load_sources(os.environ)
 
 
 @_pytest.mark.parametrize(
@@ -287,7 +288,7 @@ def test_load_sources_rejects_a_trailing_newline_in_repo_ref_and_host(
 
     monkeypatch.setenv("MYCELIUM_SOURCES", _json.dumps({"s": entry}))
     with _pytest.raises(SourceError):
-        load_sources()
+        load_sources(os.environ)
 
 
 def test_load_sources_accepts_normal_and_enterprise_hosts(monkeypatch):
@@ -311,7 +312,7 @@ def test_load_sources_accepts_normal_and_enterprise_hosts(monkeypatch):
             }
         ),
     )
-    srcs = load_sources()
+    srcs = load_sources(os.environ)
     assert srcs["a"].ref == "release/1.2"
     assert srcs["b"].host == "ghe.corp.example:8443"
 
@@ -350,3 +351,50 @@ def test_fetch_fails_closed_when_git_dir_survives(monkeypatch, tmp_path):
             pass
     assert ".git" in str(exc.value)
     assert "tok" not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "failure", ["invalid_sources", "missing_binding", "unreadable_bindings"]
+)
+def test_saved_source_errors_return_nothing_found(failure, monkeypatch):
+    from mycelium import product_settings, prompt_store
+    from mycelium.research import NothingFound, ResearchConfig, run_research
+
+    monkeypatch.delenv("MYCELIUM_GITHUB_CREDENTIALS", raising=False)
+    conn = prompt_store.connect(":memory:")
+    prompt_store.migrate(conn)
+    prompt_store.use_connection(conn)
+    try:
+        body = product_settings.SourcesSettings(
+            sources=(
+                product_settings.SourceSettings(
+                    name="private", owner="acme", repo="api", binding="removed"
+                ),
+            )
+        ).model_dump_json()
+        if failure == "invalid_sources":
+            body = '{"kind":"sources","sources":"private-evidence"}'
+        conn.execute("INSERT INTO product_settings VALUES ('sources', 1, ?)", (body,))
+        if failure == "unreadable_bindings":
+            conn.execute("DROP TABLE github_credential_bindings")
+        with pytest.raises(SourceError) as caught:
+            load_sources()
+        assert caught.value.__cause__ is None
+        assert caught.value.__suppress_context__
+        assert "private-evidence" not in str(caught.value)
+        result = run_research("topic", "private", config=ResearchConfig())
+        assert isinstance(result, NothingFound)
+        assert result.reason == f"source error: {caught.value}"
+    finally:
+        conn.close()
+
+
+def test_saved_source_loading_preserves_programming_errors(monkeypatch):
+    from mycelium import product_settings
+
+    def broken_settings(model):
+        raise TypeError("programming error")
+
+    monkeypatch.setattr(product_settings, "get", broken_settings)
+    with pytest.raises(TypeError, match="programming error"):
+        load_sources()

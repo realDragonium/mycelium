@@ -11,11 +11,13 @@ from mycelium import (
     auth_store,
     drafts_store,
     embed,
+    product_settings,
     research_runs,
     research_store,
     server,
     store,
 )
+from product_settings_helpers import import_product_environment, set_product
 
 
 def fake_embed_factory():
@@ -72,6 +74,7 @@ def test_start_research_roundtrip(tmp_path, monkeypatch):
     research_runs.RUNNER = _draft_created_runner
 
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
+        import_product_environment()
         r = client.post("/start-research", json={"topic": "t"})
         assert r.status_code == 200
         body = r.json()
@@ -106,6 +109,7 @@ def test_start_research_source_rules(tmp_path, monkeypatch):
     research_runs.RUNNER = _draft_created_runner
 
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
+        import_product_environment()
         r = client.post("/start-research", json={"topic": "t"})
         assert r.status_code == 400
         assert "src-a" in r.json()["detail"]
@@ -142,13 +146,21 @@ def test_start_research_capacity_400(tmp_path, monkeypatch):
         "MYCELIUM_SOURCES",
         json.dumps({"src-a": {"owner": "o", "repo": "r"}}),
     )
-    monkeypatch.setenv("MYCELIUM_RESEARCH_MAX_ACTIVE", "0")
     research_runs.RUNNER = _draft_created_runner
 
     with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
+        import_product_environment()
+        set_product(product_settings.ConcurrencySettings(research_runs=1))
+        active = research_store.create_run(
+            server._drafts_db(),
+            topic="Already running",
+            source="src-a",
+            created_by=None,
+        )
+        research_store.mark_started(server._drafts_db(), active)
         r = client.post("/start-research", json={"topic": "t"})
         assert r.status_code == 400
-        assert "max 0" in r.json()["detail"]
+        assert "max 1" in r.json()["detail"]
 
 
 def test_get_research_run_unknown_400(tmp_path, monkeypatch):
@@ -174,6 +186,7 @@ def test_list_research_sources_names_only(tmp_path, monkeypatch):
     )
 
     with _client(tmp_path, monkeypatch, deterministic_embed) as client:
+        import_product_environment()
         r = client.get("/list-research-sources")
         assert r.status_code == 200
         assert r.json() == {
