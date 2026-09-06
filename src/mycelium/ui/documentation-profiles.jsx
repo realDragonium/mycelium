@@ -93,7 +93,7 @@ function DocumentationProfiles() {
   const save = async event => {
     event.preventDefault(); setBusy(true); setError(null); setMessage(null);
     try {
-      const value = await profileRequest(`/api/documentation/profiles/${encodeURIComponent(form.name)}`, 'PUT', { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates });
+      const value = await profileRequest(`/api/documentation/profiles/${encodeURIComponent(form.name)}`, 'PUT', { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })) });
       setForm(value); setOriginal(value); setCreating(false); setRetry(value => value + 1); setMessage('Profile saved. New runs use these settings.');
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
@@ -133,15 +133,16 @@ function DocumentationProfiles() {
           <h3>Document templates</h3>
           {form.templates.length === 0 && <p>Add a template to make this profile available for generation.</p>}
           {form.templates.map((item, index) => <section key={index} style={profileStyle.section}>
-            <label style={profileStyle.field}>Template name<input style={profileStyle.input} value={item.name} required maxLength={200} pattern="[^/]+" disabled={!creating && !!original?.templates.some(saved => saved.name === item.name)} onChange={event => templateChange(index, 'name', event.target.value)} /></label>
+            <label style={profileStyle.field}>Template name<input style={profileStyle.input} value={item.name} required maxLength={200} pattern="[^/]+" disabled={!creating && !item.isNew} onChange={event => templateChange(index, 'name', event.target.value)} /></label>
             <label style={profileStyle.field}>Template text<textarea rows={10} style={profileStyle.input} value={item.text} required onChange={event => templateChange(index, 'text', event.target.value)} /></label>
             <div style={profileStyle.buttons}>
-              {!creating && original?.templates.some(saved => saved.name === item.name) && <button type="button" style={profileStyle.button} onClick={() => setHistory(item.name)}>Template history</button>}
-              {(data.can_retire || !original?.templates.some(saved => saved.name === item.name)) && <button type="button" style={profileStyle.button} onClick={() => change('templates', form.templates.filter((_, i) => i !== index))}>Remove template</button>}
+              {!creating && !item.isNew && <button type="button" style={profileStyle.button} onClick={() => setHistory(item.name)}>Template history</button>}
+              <button type="button" style={profileStyle.button} onClick={() => change('templates', [...form.templates, { name: `${item.name}-copy`, text: item.text, isNew: true }])}>Duplicate template</button>
+              {(data.can_retire || creating || item.isNew) && <button type="button" style={profileStyle.button} onClick={() => change('templates', form.templates.filter((_, i) => i !== index))}>Remove template</button>}
             </div>
           </section>)}
           <div style={profileStyle.buttons}>
-            <button type="button" style={profileStyle.button} onClick={() => change('templates', [...form.templates, { name: '', text: '' }])}>Add template</button>
+            <button type="button" style={profileStyle.button} onClick={() => change('templates', [...form.templates, { name: '', text: '', isNew: true }])}>Add template</button>
             <button type="submit" style={profileStyle.button}>{busy ? 'Saving…' : 'Save profile'}</button>
           </div>
         </fieldset></form>
