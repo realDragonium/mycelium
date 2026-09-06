@@ -108,6 +108,17 @@ function DocumentationProfiles() {
     finally { setBusy(false); }
   };
   const templateChange = (index, key, value) => change('templates', form.templates.map((item, i) => i === index ? { ...item, [key]: value } : item));
+  const duplicateTemplate = item => {
+    setForm(previous => {
+      const names = new Set(previous.templates.map(template => template.name));
+      const base = `${item.name}-copy`;
+      let name = base;
+      let suffix = 2;
+      while (names.has(name)) name = `${base}-${suffix++}`;
+      return { ...previous, templates: [...previous.templates, { name, text: item.text, isNew: true }] };
+    });
+    setMessage(null);
+  };
   return <section style={profileStyle.section} aria-label="Documentation profiles">
     <h2>Documentation profiles</h2>
     <p>Configure writing guidance, disclosure rules, and document templates. Changes are stored here and need no deployment. Audience guidance does not change who can access generated documents.</p>
@@ -137,7 +148,7 @@ function DocumentationProfiles() {
             <label style={profileStyle.field}>Template text<textarea rows={10} style={profileStyle.input} value={item.text} required onChange={event => templateChange(index, 'text', event.target.value)} /></label>
             <div style={profileStyle.buttons}>
               {!creating && !item.isNew && <button type="button" style={profileStyle.button} onClick={() => setHistory(item.name)}>Template history</button>}
-              <button type="button" style={profileStyle.button} onClick={() => change('templates', [...form.templates, { name: `${item.name}-copy`, text: item.text, isNew: true }])}>Duplicate template</button>
+              <button type="button" style={profileStyle.button} onClick={() => duplicateTemplate(item)}>Duplicate template</button>
               {(data.can_retire || creating || item.isNew) && <button type="button" style={profileStyle.button} onClick={() => change('templates', form.templates.filter((_, i) => i !== index))}>Remove template</button>}
             </div>
           </section>)}
