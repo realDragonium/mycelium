@@ -19,7 +19,7 @@ Four prescriptive kinds:
 - **`check`** — a verification step for a diagnostic agent. *"Verify the user's authentication provider matches the login method attempted."* Anchors via `verifies` to a `state` statement (the condition being inspected).
 - **`cause`** — a named failure mode worth investigating. *"User is attempting password login on a social-only account."* Optionally anchors via `violates` to a `state` (when the failure mode is "a required state isn't met"). Free-standing when the failure is environmental, historical, referential, or compound.
 
-**Configurable values the user supplies are not prescriptive.** They live in the descriptive layer as `property` records (`belongs-to` their entity, `valued-by` a rule for format/value-space). The procedure references them through `requires` (mandatory in this guide) or `accepts` (optional in this guide). They are *not* pseudo-actions — see §3.
+**Configurable values the user supplies are not prescriptive.** They live in the descriptive layer as `property` records whose text names their entity, producing a derived mention (`valued-by` a rule for format/value-space when applicable). The procedure references them through `requires` (mandatory in this guide) or `accepts` (optional in this guide). They are *not* pseudo-actions — see §3.
 
 Pick the kind first, write the text second. **Statement text carries no trailing punctuation** — no period, question mark, or exclamation. Statements are labels in a graph. **One statement = one atomic claim** — compound clauses destroy the substrate's ability to link related knowledge.
 
@@ -49,7 +49,7 @@ A named root (`procedure`) composing user-supplied inputs (`property`) and a cha
 Sketch:
 
 - **Procedure root** — one `procedure` statement names what the user accomplishes (*"How to connect an MCP client to a Mycelium server"*). Anchors to the `capability` it teaches via `teaches`. Every guide has exactly one root.
-- **Properties** — the configurable values the user supplies. Each is one `property` record on the descriptive side (`belongs-to` its entity, `valued-by` its value-space rule when applicable). The procedure links to them via `requires` (mandatory) or `accepts` (optional). When a property has a non-trivial lookup ("open Settings → Users & invites and create a service account"), that lookup is itself an `action` or sub-`procedure`, hung off the property via `obtained-by`.
+- **Properties** — the configurable values the user supplies. Each is one `property` record on the descriptive side whose text names its entity so a derived mention anchors it (`valued-by` its value-space rule when applicable). The procedure links to them via `requires` (mandatory) or `accepts` (optional). When a property has a non-trivial lookup ("open Settings → Users & invites and create a service account"), that lookup is itself an `action` or sub-`procedure`, hung off the property via `obtained-by`.
 - **Entry point** — what state must the user be in to start? (Logged in as an admin, on a specific settings page, with a prerequisite procedure already completed.) Each prerequisite is a `state` reference (descriptive layer), attached via `when` on the first action's incoming edge if it's a hard gate. **Procedure-to-procedure ordering:** if Guide 1 must complete before Guide 2 can start, gate Guide 2's first action via `when` on the descriptive state Guide 1 establishes. There is no procedure→procedure link type — the existing `when` machinery covers it.
 - **Linear actions** — the happy-path UI sequence. Each is one `action` statement; the procedure `contains` them (or chains them via `next`). Only real UI interactions belong here: clicks, navigations, entries, copies, sends.
 - **Branches** — when a step has variants. Reify the condition as a state, branch with `on-success` / `on-failure`, or with two `next` edges each carrying a mutually exclusive `when`.
@@ -414,20 +414,16 @@ When a guide is mostly about *gathering values and submitting them* (an admin fi
 [procedure]  "How to connect an MCP client to a Mycelium server"
    teaches  → [capability]  "An MCP client can be connected to a Mycelium server"
 
-   requires → [property]    "Server base URL"
-                belongs-to  → [entity] MCP Connection
+   requires → [property]    "MCP Connection server base URL"
                 obtained-by → [action] "Open the server's Connect page and copy the base URL"
 
-   requires → [property]    "Service account token"
-                belongs-to  → [entity] MCP Connection
+   requires → [property]    "MCP Connection service account token"
                 obtained-by → [action] "Open Settings → Users & invites and create a service account"
 
-   accepts  → [property]    "Role to grant the service account"
-                belongs-to  → [entity] MCP Connection
+   accepts  → [property]    "MCP Connection role to grant the service account"
                 valued-by   → [rule] "Role to grant is one of reader, writer, admin"
 
-   accepts  → [property]    "Client display name"
-                belongs-to  → [entity] MCP Connection
+   accepts  → [property]    "MCP Connection client display name"
 
    contains → [action]      "Paste the base URL and token into the MCP client configuration"
                 performs → [event] "An MCP initialize request is submitted"
@@ -503,7 +499,7 @@ Watch for cases where the wrong layer is doing the work:
 
 - **A "check" that has no underlying state to verify.** If you can't name the state the check inspects, either the state belongs in the descriptive layer (write it first) or the check is misnamed and is actually an action. *"Check that the user reads the warning"* doesn't verify a system state — it's not a check.
 - **An "action" that doesn't perform an event.** If you can't name the event triggered, the action may not be modeling anything observable. *"Action: think carefully about the choice"* isn't an action; it's user advice that doesn't belong as a substrate record.
-- **An "action" that's a mental verb.** *"Identify the stage name"*, *"Decide which flow to use"*, *"Determine the rejection reason"* — these aren't UI interactions. The user is *supplying a value*, which means a `property` is missing from the descriptive layer. Write the property first (with `belongs-to` and, if relevant, `valued-by`); have the procedure `requires` / `accepts` it. If finding the value involves real UI work, that UI work becomes an `action` hung off the property via `obtained-by` — not the procedure's main chain. See §3.
+- **An "action" that's a mental verb.** *"Identify the stage name"*, *"Decide which flow to use"*, *"Determine the rejection reason"* — these aren't UI interactions. The user is *supplying a value*, which means a `property` is missing from the descriptive layer. Write the property first, name its entity in the text for a derived mention, and add `valued-by` when relevant; have the procedure `requires` / `accepts` it. If finding the value involves real UI work, that UI work becomes an `action` hung off the property via `obtained-by` — not the procedure's main chain. See §3.
 - **A "procedure" that just restates a capability.** *"How to log in"* with no inputs and one action *"Click the login button"* adds nothing the `login` capability doesn't already convey. Write the procedure record only when there is real composition (multiple inputs, multi-step UI walkthrough, branching). Otherwise the capability alone is enough.
 - **A "cause" that's just a negated state.** If the cause text is exactly the negation of a descriptive state and nothing more, you can skip writing the cause record — a diagnostic agent can derive it by traversing the capability's `requires` edges and inspecting their states. Only write the cause record when it carries information beyond the negation (narrative wording for user-facing communication, additional checks, environmental/historical context).
 
@@ -543,14 +539,14 @@ Mentions auto-create on first use, but in a batch the order is sequential per it
 1. **Shape identified?** (§1) — procedure or diagnostic. Topology sketched (procedure root + properties + actions; or capability + causes + checks + resolutions).
 2. **Discovered?** (§2) — searched existing prescriptive content for the same procedure or diagnostic tree. Searched descriptive layer for anchor targets (capability for the procedure's `teaches`; properties the procedure will require/accept; events / states for action / check anchors). Entities pre-created with descriptions.
 3. **Procedure root present?** (§1, §3) — every how-to guide starts with one `procedure` statement, `teaches` a capability, composes properties via `requires` / `accepts`, and contains/sequences its actions. A guide that is just a chain of actions is missing its root.
-4. **Configurable inputs modeled as properties, not pseudo-actions?** (§3) — no actions of the form *"Identify X"* / *"Decide Y"* / *"Determine Z"* — those are property tells. Properties live in the descriptive layer with `belongs-to` (and `valued-by` when applicable). Lookups hang off properties via `obtained-by`.
+4. **Configurable inputs modeled as properties, not pseudo-actions?** (§3) — no actions of the form *"Identify X"* / *"Decide Y"* / *"Determine Z"* — those are property tells. Properties live in the descriptive layer, name their entity for a derived mention, and use `valued-by` when applicable. Lookups hang off properties via `obtained-by`.
 5. **Anchors exist, flagged, or legitimately absent?** (§4) — every `procedure` has a `teaches` capability; every `action` in the modeled product has (or has a flagged need for) a `performs` event; actions in third-party UIs have no anchor and need no flag; every `check` has (or needs) a `verifies` state; every non-free-standing `cause` has a `violates` state.
 6. **Right `kind` per statement?** (§3) — procedure / action / check / cause picked by the routing test, not by what feels close.
 7. **Phrasing matches the kind?** (§7) — *"How to X"* for procedure, imperative for action, imperative-verification for check, declarative-condition for cause. No conditions in text. No compound steps. One atomic claim per statement.
 8. **Within-layer links wired?** (§6) — checks `confirms` / `refutes` causes; actions `resolves` causes. Diagnostic loops close.
 9. **Sequencing correct?** (§5) — `next` for linear flow, `on-success` / `on-failure` for branching after checks/actions, `when` on edges for preconditions. Procedure-to-procedure ordering is via `when` on a descriptive state established by the prerequisite procedure — there is no procedure→procedure link.
 10. **Boundary check?** (§10) — no checks-without-states, no actions-without-events, no causes-that-are-just-negated-states, no actions-that-are-property-tells, no procedures-that-just-restate-a-capability.
-11. **Connected?** (§11) — at least one link in or out per record. Every procedure has `teaches`; every property the procedure consumes has `belongs-to`.
+11. **Connected?** (§11) — at least one statement link in or out per record. Every procedure has `teaches`; every property the procedure consumes is linked through `requires` or `accepts` and names its entity for a derived mention.
 12. **Batch ordered?** (§12) — descriptive anchors (capability, properties, events, states) at lower indices than prescriptive statements (procedure, action, check, cause) that reference them.
 13. **Operator approved?** (§0) — no mutation has run yet.
 
