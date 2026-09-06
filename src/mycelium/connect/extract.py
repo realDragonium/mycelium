@@ -184,7 +184,7 @@ def _cue_detail(resolution: CueResolution) -> str:
             "direction is the open question"
         )
     elif resolution.decision == "negated":
-        lead = (
+        return (
             f'connective "{resolution.cue}" is negated; '
             "the words deny the relation, so no edge is proposed"
         )

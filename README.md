@@ -9,7 +9,7 @@ setup, and `docs/mycelium.md` for detailed contracts.
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.11.4+
 - [`uv`](https://docs.astral.sh/uv/)
 - Ollama with the configured embedding model (default: `nomic-embed-text`)
 
@@ -58,9 +58,16 @@ directory.
 | `EMBED_MODEL` | `nomic-embed-text` | 768-dimensional embedding model |
 | `MYCELIUM_HTTP_HOST` | `127.0.0.1` | HTTP bind host |
 | `MYCELIUM_HTTP_PORT` | `8765` | HTTP bind port |
+| `MYCELIUM_AUTH` | `off` | Require authenticated HTTP and remote MCP requests when `on` |
+| `MYCELIUM_SESSION_SECRET` | unset | Cookie-signing secret; required when authentication is on |
 | `MYCELIUM_INSTRUCTIONS` | unset | Deployment-specific MCP guidance |
 
-The same substrate backs both transports and supports one writer at a time.
+Keep the default loopback bind for unauthenticated use. Before binding HTTP to a
+non-loopback address, set `MYCELIUM_AUTH=on` and provide a strong, private
+`MYCELIUM_SESSION_SECRET`.
+
+The same substrate backs both transports, but write serialization is
+process-local. Only one server process may use a data directory at a time.
 
 ## Current tool model
 

@@ -4,7 +4,7 @@ This guide starts a local Mycelium substrate over MCP and HTTP.
 
 ## 1. Install requirements
 
-Install Python 3.11 or later, [`uv`](https://docs.astral.sh/uv/), and
+Install Python 3.11.4 or later, [`uv`](https://docs.astral.sh/uv/), and
 [Ollama](https://ollama.com/download). Start Ollama:
 
 ```sh
@@ -39,11 +39,21 @@ For HTTP and the browser UI:
 uv run mycelium-http
 ```
 
+Keep HTTP on its default loopback address for unauthenticated local use. Before
+binding it to a non-loopback address, enable authentication and supply a strong,
+private session secret to the server process:
+
+```sh
+MYCELIUM_AUTH=on MYCELIUM_SESSION_SECRET='<random-secret>' uv run mycelium-http
+```
+
 Open <http://127.0.0.1:8765/ui/> for the UI or
 <http://127.0.0.1:8765/docs> for the generated HTTP API reference.
 
 Both transports use `./.mycelium` unless `MYCELIUM_DATA_DIR` points elsewhere.
-They may share the directory, but Mycelium supports one writer at a time.
+Write serialization is process-local, so run only one server process against a
+data directory at a time. Stop one transport before starting the other with the
+same directory.
 
 ## 3. Connect an MCP client
 
@@ -105,8 +115,9 @@ active vocabularies before authoring unfamiliar edges or kinds.
 
 - If the MCP tools do not appear, run the configured command in a terminal and
   fix any path or dependency error it prints.
-- If embeddings fail, confirm `curl http://localhost:11434/api/tags` succeeds
-  and that the configured model is present.
+- If embeddings fail, confirm
+  `curl "${OLLAMA_URL:-http://localhost:11434}/api/tags"` succeeds and that the
+  configured model is present.
 - If the UI reports a data-load failure, confirm `mycelium-http` is running and
   open <http://127.0.0.1:8765/api/data> directly.
 - If a write is rejected, inspect its phrasing violations or submit prose
