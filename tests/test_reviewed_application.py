@@ -252,6 +252,13 @@ def test_inspection_rejects_dangling_operation_references(tmp_path, monkeypatch)
     with _app(tmp_path, monkeypatch):
         draft_id = _submitted_entity_draft()
         conn = server._drafts_db()
+        producer_seq = drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_statements",
+            payload={"statements": [{"kind": "state", "text": "one"}]},
+            created_by="drafter-1",
+        )
         drafts_store.add_op(
             conn,
             draft_id=draft_id,
@@ -259,7 +266,7 @@ def test_inspection_rejects_dangling_operation_references(tmp_path, monkeypatch)
             payload={
                 "links": [
                     {
-                        "from_id": "@99:0",
+                        "from_id": f"@{producer_seq}:99",
                         "to_id": "stm_target",
                         "link_type": "requires",
                     }
@@ -275,6 +282,33 @@ def test_inspection_rejects_dangling_operation_references(tmp_path, monkeypatch)
         assert evidence["operation_findings"][-1]["finding"].startswith(
             "unresolved_operation_reference"
         )
+
+
+def test_statement_text_captures_name_resolution_precondition(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        entity_id = server.upsert_entity("Mycelium", "system")["entity_id"]
+        conn = server._drafts_db()
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="upsert_statement",
+            payload={
+                "kind": "state",
+                "text": "Mycelium is available",
+                "links": [],
+            },
+            created_by="drafter-1",
+        )
+        drafts_store.set_submitted(conn, draft_id)
+        token = _principal()
+        try:
+            evidence = server.inspect_draft_review(draft_id)
+        finally:
+            auth.current_principal.reset(token)
+        assert evidence["knowledge_preconditions"][0]["id"] == entity_id
 
 
 def test_apply_rechecks_affected_knowledge_and_real_tool_role(tmp_path, monkeypatch):

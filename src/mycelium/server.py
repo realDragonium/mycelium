@@ -6212,6 +6212,43 @@ class DraftOperationFinding(TypedDict):
     finding: str
 
 
+class DraftReviewRecord(TypedDict):
+    review_id: str
+    draft_id: str
+    outcome: Literal["accepted", "refined", "rejected", "needs_context"]
+    rationale: str
+    draft_revision: int
+    knowledge_preconditions: list[KnowledgePrecondition]
+    unresolved_questions: list[str]
+    reviewed_at: str
+    reviewed_by: str
+
+
+class DraftReviewInspection(TypedDict):
+    draft: dict[str, JsonValue]
+    draft_revision: int
+    knowledge_preconditions: list[KnowledgePrecondition]
+    operation_findings: list[DraftOperationFinding]
+    unresolved: bool
+    reviews: list[DraftReviewRecord]
+    applications: list[dict[str, JsonValue]]
+
+
+class ReviewedApplicationReceipt(TypedDict):
+    application_id: str
+    applied: int
+    skipped: int
+    results: list[dict[str, JsonValue]]
+    recovered: NotRequired[bool]
+
+
+class DraftCorrectionReceipt(TypedDict):
+    draft_id: str
+    operation_ref: str
+    seq: int
+    revision: int
+
+
 def _payload_knowledge_ids(
     value: JsonValue,
 ) -> tuple[set[str], set[str], set[str]]:
@@ -6251,6 +6288,19 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
         entities, statements, names = _payload_knowledge_ids(payload)
         entity_ids.update(entities)
         statement_ids.update(statements)
+        texts: list[str] = []
+        if isinstance(payload.get("text"), str):
+            texts.append(payload["text"])
+        texts.extend(
+            item["text"]
+            for item in payload.get("statements", [])
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        )
+        for name_row in store.list_all_names(_db()):
+            if any(
+                mentions.text_contains_name(text, name_row["text"]) for text in texts
+            ):
+                entity_ids.add(name_row["entity_id"])
         for name_id in names:
             row = store.get_name_by_id(_db(), name_id)
             if row is not None:
@@ -6365,6 +6415,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
     findings: list[DraftOperationFinding] = []
     tools_by_name = {wrapper.__name__: wrapper for wrapper in TOOLS}
     available_sequences = {int(op["seq"]) for op in ops}
+    producers = {int(op["seq"]): op for op in ops}
     for op in ops:
         kind = op["kind"]
         operation_ref = op["id"]
@@ -6379,10 +6430,20 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
             unknown = sorted(set(payload) - set(_ORIG_SIGNATURES[kind].parameters))
             messages = ["unknown_parameters:" + ",".join(unknown)] if unknown else []
             messages.extend(_nested_parameter_findings(kind, payload))
-        for reference in re.findall(r'"@(\d+):\d+"', op["payload_json"]):
+        for reference, result_index_text in re.findall(
+            r'"@(\d+):(\d+)"', op["payload_json"]
+        ):
             producer = int(reference)
+            producer_op = producers.get(producer)
+            result_index = int(result_index_text)
             if producer not in available_sequences or producer >= int(op["seq"]):
                 messages.append(f"unresolved_operation_reference:@{reference}")
+            elif producer_op["kind"] != "upsert_statements" or result_index >= len(
+                _json.loads(producer_op["payload_json"]).get("statements", [])
+            ):
+                messages.append(
+                    f"unresolved_operation_reference:@{reference}:{result_index_text}"
+                )
         findings.extend(
             {"operation_ref": operation_ref, "kind": kind, "finding": message}
             for message in messages
@@ -6391,7 +6452,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
 
 
 @tool(role="writer", real_role=True)
-def inspect_draft_review(draft_id: str) -> dict[str, JsonValue]:
+def inspect_draft_review(draft_id: str) -> DraftReviewInspection:
     """Inspect exact draft content and affected knowledge for review."""
     from . import drafts_store
 
@@ -6422,7 +6483,7 @@ def append_draft_correction(
     tool_name: str,
     payload: dict[str, JsonValue],
     expected_revision: int | None = None,
-) -> dict[str, JsonValue]:
+) -> DraftCorrectionReceipt:
     """Append one supported substrate mutation to an open or submitted draft."""
     from . import drafts_store
 
@@ -6466,7 +6527,7 @@ def record_draft_review(
     draft_revision: int,
     knowledge_preconditions: list[KnowledgePrecondition],
     unresolved_questions: list[str] = [],
-) -> dict[str, JsonValue]:
+) -> DraftReviewRecord:
     """Record a durable outcome against exact inspected draft and knowledge state."""
     from . import drafts_store
 
@@ -6754,7 +6815,7 @@ def _substrate_application_result(
 
 
 @tool(role="writer", real_role=True)
-def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, JsonValue]:
+def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationReceipt:
     """Apply an accepted exact-version review with durable replay recovery."""
     from . import drafts_store
 
@@ -6821,6 +6882,12 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, JsonValue]:
                             conn, application_id, status="failed", failure=str(exc)
                         )
                     raise
+                with store.transaction(conn):
+                    drafts_store.note_application_failure(
+                        conn,
+                        application_id,
+                        f"replay returned after substrate commit: {exc}",
+                    )
                 result = {**committed, "recovered": True}
         else:
             result = {**result, "recovered": True}
