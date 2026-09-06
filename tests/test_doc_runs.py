@@ -129,6 +129,34 @@ def test_runner_resolution_lands_on_the_run_and_the_document(tmp_path):
     assert document["statement_ids"] == ["stm_1", "stm_2"]
 
 
+def test_a_matched_run_updates_the_document_and_reports_its_id(tmp_path):
+    conn = _conn(tmp_path)
+    first_run_id = _start(
+        conn, tmp_path, lambda prompt, *, guideline_set, document_type: _document()
+    )
+    doc_runs.wait_all()
+    document_id = docs_store.get_run(conn, first_run_id)["document_id"]
+
+    second_run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            title="How to X safely",
+            slug="how-to-x-safely",
+            body="# How to X\n\nRevised.\n",
+            matched_document_id=document_id,
+        ),
+    )
+    doc_runs.wait_all()
+
+    run = docs_store.serialize_run(docs_store.get_run(conn, second_run_id))
+    assert run["matched_document_id"] == document_id
+    assert run["document_id"] == document_id
+    assert docs_store.get_document(conn, document_id)["slug"] == "how-to-x"
+    assert docs_store.get_document(conn, document_id)["title"] == "How to X safely"
+    assert docs_store.get_document(conn, document_id)["body"].endswith("Revised.\n")
+
+
 def test_review_record_round_trips_onto_the_stored_document(tmp_path):
     """The review that accepted a document remains readable with that page,
     rather than surviving only in the runner's transient result."""

@@ -20,6 +20,8 @@ import string
 from dataclasses import dataclass
 from typing import Mapping, Protocol, cast
 
+from .schema import CurrentDocument
+
 
 class DestinationError(RuntimeError):
     """Raised for config or delivery failures. Messages are ALWAYS pre-scrubbed."""
@@ -46,6 +48,9 @@ class DeliveryDocument:
     guideline_set: str
     document_type: str
     statement_ids: tuple[str, ...]
+    delivered_path: str | None = None
+    delivered_content_revision: str | None = None
+    revision_source_content_revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +84,15 @@ class DestinationBackend(Protocol):
         document: DeliveryDocument,
         env: Mapping[str, str] | None = None,
     ) -> Delivery: ...
+
+    def read(
+        self,
+        destination: DestinationConfig,
+        path: str,
+        document_id: str,
+        slug: str,
+        env: Mapping[str, str] | None = None,
+    ) -> CurrentDocument: ...
 
 
 def load_destinations(
@@ -191,6 +205,16 @@ def deliver_document(
 
 def destination_coordinates(config: DestinationConfig) -> dict[str, str]:
     return _backend(config).coordinates(config)
+
+
+def read_document(
+    config: DestinationConfig,
+    path: str,
+    document_id: str,
+    slug: str,
+    env: Mapping[str, str] | None = None,
+) -> CurrentDocument:
+    return _backend(config).read(config, path, document_id, slug, env)
 
 
 def _backend(config: DestinationConfig) -> DestinationBackend:

@@ -300,6 +300,15 @@ def resolution_message(
     )
 
 
+def match_message(prompt: str, documents: list[dict[str, str]]) -> str:
+    return (
+        "Decide whether this request asks to revise one existing document. "
+        "Choose null when none is the same topic.\n\nREQUEST:\n-----\n"
+        f"{prompt}\n-----\n\nEXISTING DOCUMENTS:\n"
+        f"{json.dumps(documents, ensure_ascii=False, indent=2)}"
+    )
+
+
 def resolution_retry_message(chosen_set: str, chosen_type: str, available: list) -> str:
     return (
         f"'{chosen_type}' is not a document type '{chosen_set}' has a template "
@@ -320,7 +329,14 @@ def initial_user_message(
     *,
     guideline_set: str,
     document_type: str,
+    current_document: str | None = None,
 ) -> str:
+    revision = (
+        "\n\nCURRENT DOCUMENT TO REVISE (verbatim):\n=== CURRENT DOCUMENT ===\n"
+        f"{current_document}\n=== END CURRENT DOCUMENT ==="
+        if current_document is not None
+        else ""
+    )
     return (
         f"DOCUMENTATION REQUEST:\n-----\n{prompt}\n-----\n\n"
         f"You are writing a `{document_type}` against the `{guideline_set}` "
@@ -331,8 +347,9 @@ def initial_user_message(
         f"{format_recon(recon)}\n\n"
         "Gather from here: follow the links out of what looks relevant, "
         "hydrate the ids you intend to cite, and re-search on the concepts "
-        "you gather rather than on the request's wording. File a "
-        "report_knowledge_gap for anything the template needs and the "
+        "you gather rather than on the request's wording."
+        + revision
+        + "\n\nFile a report_knowledge_gap for anything the template needs and the "
         "substrate does not hold. Then call emit_document once."
     )
 
