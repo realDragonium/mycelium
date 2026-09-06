@@ -161,7 +161,7 @@ def get_destination(
     except KeyError:
         names = ", ".join(sorted(configured)) or "(none)"
         raise DestinationError(
-            f"unknown destination {name!r}; configured destinations: {names}"
+            f"unknown destination; configured destinations: {names}"
         ) from None
 
 

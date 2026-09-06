@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import traceback
 from collections.abc import Callable
 from dataclasses import replace
 from functools import partial
@@ -15,6 +16,7 @@ from mycelium.docgen.destinations import (
     DeliveryDocument,
     DestinationConfig,
     DestinationError,
+    get_destination,
     load_destinations,
 )
 from mycelium.docgen.github_destination import deliver
@@ -1256,6 +1258,57 @@ def test_malformed_configuration_scrubs_a_credential_from_its_name(monkeypatch):
 
     assert TOKEN not in str(excinfo.value)
     assert "***" in str(excinfo.value)
+
+
+def test_unknown_destination_does_not_reflect_a_configured_credential(monkeypatch):
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+
+    with pytest.raises(DestinationError) as excinfo:
+        get_destination(TOKEN)
+
+    rendered_traceback = "".join(
+        traceback.format_exception(
+            excinfo.type, excinfo.value, excinfo.value.__traceback__
+        )
+    )
+    assert TOKEN not in str(excinfo.value)
+    assert TOKEN not in rendered_traceback
+    assert "configured destinations: knowledge-base" in str(excinfo.value)
+
+
+def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
+    tmp_path, monkeypatch
+):
+    conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
+    docs_store.migrate(conn)
+    document_id = docs_store.upsert_document(
+        conn, slug="example", title="Example", body="Body"
+    )
+    drafts_store.use_connection(conn)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps({"knowledge-base": _entry()}),
+    )
+    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+
+    try:
+        with pytest.raises(ValueError) as excinfo:
+            server.deliver_document(document_id, TOKEN)
+    finally:
+        drafts_store.reset()
+        conn.close()
+
+    rendered_traceback = "".join(
+        traceback.format_exception(
+            excinfo.type, excinfo.value, excinfo.value.__traceback__
+        )
+    )
+    assert TOKEN not in str(excinfo.value)
+    assert TOKEN not in rendered_traceback
 
 
 def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(
