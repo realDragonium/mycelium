@@ -2374,7 +2374,7 @@ def list_documentation_destinations() -> dict[str, Any]:
     try:
         configured = destinations.load_destinations()
     except destinations.DestinationError as exc:
-        raise ValueError(str(exc)) from exc
+        raise ValueError(str(exc)) from None
     return {
         "destinations": [
             {

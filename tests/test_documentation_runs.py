@@ -755,6 +755,22 @@ def test_record_delivery_updates_only_the_delivery_columns(tmp_path):
     assert summary["delivery_content_revision"] == "abc123"
 
 
+def test_record_delivery_rejects_an_unknown_document_without_writing(tmp_path):
+    conn = _conn(tmp_path)
+
+    with pytest.raises(ValueError, match="generated document not found: gdc_missing"):
+        docs_store.record_delivery(
+            conn,
+            "gdc_missing",
+            destination="knowledge-base",
+            path="docs/topic.md",
+            reference="https://github.com/acme/docs/pull/17",
+            content_revision="abc123",
+        )
+
+    assert docs_store.list_documents(conn) == []
+
+
 def test_upsert_document_updates_same_slug_in_place(tmp_path):
     conn = _conn(tmp_path)
     first_id = docs_store.upsert_document(
