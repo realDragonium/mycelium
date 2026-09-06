@@ -315,6 +315,7 @@ def test_nli_proposals_include_directional_evidence(
             "budget": 400,
         }
         assert response["suppressed_conflicts"] == 0
+        assert response["suppressed_negations"] == 0
         assert len(response[proposal_key]) == 1
         proposal = response[proposal_key][0]
         target_key = "into" if proposal_key == "merges" else "statement_id"
@@ -360,6 +361,7 @@ def test_nli_contradiction_without_shared_entity_is_related(tmp_path, monkeypatc
         )
 
         assert response["conflicts"] == []
+        assert response["suppressed_negations"] == 0
         assert response["suppressed_conflicts"] == 1
         assert len(response["related"]) == 1
         related = response["related"][0]
@@ -389,6 +391,7 @@ def test_http_transport_and_mcp_registration(tmp_path, monkeypatch):
             "links",
             "merges",
             "conflicts",
+            "suppressed_negations",
             "suppressed_conflicts",
             "related",
             "dropped_merges",
@@ -490,6 +493,7 @@ def test_empty_batch_returns_early(tmp_path, monkeypatch):
             "links": [],
             "merges": [],
             "conflicts": [],
+            "suppressed_negations": 0,
             "suppressed_conflicts": 0,
             "related": [],
             "dropped_merges": [],

@@ -3498,6 +3498,7 @@ def _connected_response(
             for proposal in proposals
             if proposal.kind == "conflict"
         ],
+        "suppressed_negations": len(run.pipeline_result.suppressed_negations),
         "suppressed_conflicts": run.proposal_set.suppressed_conflicts,
         "related": _connected_related(
             run.pipeline_result, run.proposal_set, run.text_of
@@ -3533,6 +3534,7 @@ def _empty_connected_batch() -> dict[str, Any]:
         "links": [],
         "merges": [],
         "conflicts": [],
+        "suppressed_negations": 0,
         "suppressed_conflicts": 0,
         "related": [],
         "dropped_merges": [],
@@ -3570,6 +3572,8 @@ def submit_connected_batch(
     `mention_hints`; suppressed contradictions are
     counted in `suppressed_conflicts`, and the candidate still surfaces under
     `related` unless another proposal already names it.
+    Negated catalog matches are counted in `suppressed_negations`; they never
+    become affirmative link proposals.
 
     What it will not do is infer a relation the text doesn't state: emergent
     behaviour and cross-feature interaction are still yours to author in
@@ -3625,6 +3629,7 @@ def submit_connected_batch(
             {"batch_index": 0, "statement_id": "stm_...", "text": "...",
              "nli": {...}, "score": 0.0}
           ],
+          "suppressed_negations": 0,
           "suppressed_conflicts": 0,
           "related": [
             {"batch_index": 0, "statement_id": "stm_...", "text": "...",
@@ -3756,6 +3761,7 @@ def _cue_response(
         "low_confidence": 0,
         "unresolved": 0,
         "direction_conflict": 0,
+        "negated": 0,
         "strict": 0,
     }
     rendered: list[dict[str, Any]] = []
@@ -3764,6 +3770,8 @@ def _cue_response(
             counts["low_confidence"] += 1
         elif resolution.decision == "direction-conflict":
             counts["direction_conflict"] += 1
+        elif resolution.decision == "negated":
+            counts["negated"] += 1
         else:
             counts[resolution.decision] += 1
         rendered.append(
@@ -3792,6 +3800,7 @@ def _empty_ingest_text() -> dict[str, Any]:
             "low_confidence": 0,
             "unresolved": 0,
             "direction_conflict": 0,
+            "negated": 0,
             "strict": 0,
         },
         "cue_resolutions": [],
@@ -3832,6 +3841,7 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
     close to becomes a `flag` op carrying the cue and its nearest types; it never
     creates a link type. Set `MYCELIUM_CUE_RESOLUTION=strict` to flag every
     unknown cue instead of resolving it.
+    A negated connective is also flagged and never reaches embedding resolution.
 
     A decision is not an absorption: `cues` and `cue_resolutions` report every
     decision the gate made, while a cue whose statements were all rejected in
@@ -3856,7 +3866,7 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
           "condition_links": 0,
           # every gate decision, absorbed or not
           "cues": {"auto": 0, "low_confidence": 0, "unresolved": 0,
-                   "direction_conflict": 0, "strict": 0},
+                   "direction_conflict": 0, "negated": 0, "strict": 0},
           "cue_resolutions": [
             {"cue": "...", "decision": "auto", "link_type": "...",
              "alias": "...", "score": 0.0, "candidates": [["...", "...", 0.0]]}
@@ -3864,6 +3874,7 @@ def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
           "results": [...],
           "proposals": {"links": 0, "merges": 0, "conflicts": 0},
           "links": [...], "merges": [...], "conflicts": [...],
+          "suppressed_negations": 0,
           "suppressed_conflicts": 0,
           "related": [...], "dropped_merges": [...],
           "unresolved_hints": [...],

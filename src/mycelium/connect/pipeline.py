@@ -18,7 +18,7 @@ from mycelium.connect.funnel import (
     find_candidates,
 )
 from mycelium.connect.nli import NliModel, NliUnavailable, PairVerdict
-from mycelium.connect.rules import LinkProposal, propose_links
+from mycelium.connect.rules import LinkProposal, SuppressedNegation, propose_links
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,7 @@ class NliPairs:
 class PipelineResult:
     funnel: FunnelResult
     link_proposals: list[LinkProposal]
+    suppressed_negations: list[SuppressedNegation]
     verdicts: list[PairVerdict] | None
     nli: Literal["ran", "unavailable", "nothing_to_classify"]
     nli_reason: str | None
@@ -49,7 +50,7 @@ def run(
 ) -> PipelineResult:
     """Run candidate, rule, and optional NLI discovery without writing."""
     funnel = find_candidates(batch, view)
-    link_proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type())
+    rule_proposals = propose_links(batch, funnel, view, aliases=view.aliases_by_type())
     pair_budget = nli.max_pairs()
     # Resolve text before budgeting so each candidate counted here costs two pairs.
     # The request-scoped reader is memoized, so classify_candidates can read it again.
@@ -61,7 +62,8 @@ def run(
     if not resolvable_candidates:
         return PipelineResult(
             funnel,
-            link_proposals,
+            rule_proposals.links,
+            rule_proposals.suppressed_negations,
             [],
             "nothing_to_classify",
             None,
@@ -84,7 +86,8 @@ def run(
         logger.warning("NLI unavailable: %s", reason)
         return PipelineResult(
             funnel,
-            link_proposals,
+            rule_proposals.links,
+            rule_proposals.suppressed_negations,
             None,
             "unavailable",
             reason,
@@ -93,7 +96,8 @@ def run(
     classified_pairs = 2 * len(verdicts)
     return PipelineResult(
         funnel,
-        link_proposals,
+        rule_proposals.links,
+        rule_proposals.suppressed_negations,
         verdicts,
         "ran",
         None,
