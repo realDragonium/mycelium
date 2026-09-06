@@ -12,6 +12,7 @@ import contextlib
 import cProfile
 import datetime as _dt
 import functools
+import hashlib
 import inspect
 import json as _json
 import logging
@@ -6195,6 +6196,231 @@ def discard_draft_op(
     }
 
 
+class KnowledgePrecondition(TypedDict):
+    kind: Literal["entity", "statement"]
+    id: str
+    fingerprint: str
+
+
+class DraftOperationFinding(TypedDict):
+    operation_ref: str
+    kind: str
+    finding: str
+
+
+def _payload_knowledge_ids(value: Any) -> tuple[set[str], set[str]]:
+    entities: set[str] = set()
+    statements: set[str] = set()
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            for nested in item.values():
+                visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+        elif isinstance(item, str):
+            if item.startswith("ent_"):
+                entities.add(item)
+            elif item.startswith("stm_"):
+                statements.add(item)
+
+    visit(value)
+    return entities, statements
+
+
+def _fingerprint(value: Any) -> str:
+    encoded = _json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePrecondition]:
+    entity_ids: set[str] = set()
+    statement_ids: set[str] = set()
+    for op in ops:
+        payload = _json.loads(op["payload_json"])
+        entities, statements = _payload_knowledge_ids(payload)
+        entity_ids.update(entities)
+        statement_ids.update(statements)
+        names = []
+        if op["kind"] == "upsert_entity" and isinstance(payload.get("name"), str):
+            names.append(payload["name"])
+        if op["kind"] == "upsert_entities":
+            names.extend(
+                item["name"]
+                for item in payload.get("entities", [])
+                if isinstance(item, dict) and isinstance(item.get("name"), str)
+            )
+        for name in names:
+            row = (
+                _db()
+                .execute(
+                    "SELECT entity_id FROM names WHERE text = ? COLLATE NOCASE", (name,)
+                )
+                .fetchone()
+            )
+            if row is not None:
+                entity_ids.add(row["entity_id"])
+
+    out: list[KnowledgePrecondition] = []
+    for entity_id in sorted(entity_ids):
+        entity = get_entity(entity_id)
+        out.append(
+            {"kind": "entity", "id": entity_id, "fingerprint": _fingerprint(entity)}
+        )
+    for statement_id in sorted(statement_ids):
+        statement = get_statements([statement_id])
+        out.append(
+            {
+                "kind": "statement",
+                "id": statement_id,
+                "fingerprint": _fingerprint(statement),
+            }
+        )
+    return out
+
+
+def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFinding]:
+    from . import drafts_store
+
+    findings: list[DraftOperationFinding] = []
+    tools_by_name = {wrapper.__name__: wrapper for wrapper in TOOLS}
+    for op in ops:
+        kind = op["kind"]
+        operation_ref = op["id"]
+        if kind in {"flag"}:
+            findings.append(
+                {
+                    "operation_ref": operation_ref,
+                    "kind": kind,
+                    "finding": "unresolved_flag",
+                }
+            )
+            continue
+        if kind in drafts_store.NON_REPLAYING_OP_KINDS:
+            continue
+        if kind not in tools_by_name or kind not in _ORIG_SIGNATURES:
+            findings.append(
+                {
+                    "operation_ref": operation_ref,
+                    "kind": kind,
+                    "finding": "obsolete_tool",
+                }
+            )
+            continue
+        payload = _json.loads(op["payload_json"])
+        unknown = sorted(set(payload) - set(_ORIG_SIGNATURES[kind].parameters))
+        if unknown:
+            findings.append(
+                {
+                    "operation_ref": operation_ref,
+                    "kind": kind,
+                    "finding": "unknown_parameters:" + ",".join(unknown),
+                }
+            )
+    return findings
+
+
+@tool(role="writer", real_role=True)
+def inspect_draft_review(draft_id: str) -> dict[str, Any]:
+    """Inspect exact draft content and affected knowledge for review."""
+    from . import drafts_store
+
+    _identified_principal()
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    if row is None:
+        raise ValueError(f"draft '{draft_id}' not found")
+    ops = drafts_store.list_ops(_drafts_db(), draft_id)
+    findings = _draft_operation_findings(ops)
+    return {
+        "draft": drafts_store.serialize_draft(row, ops=ops),
+        "draft_revision": int(row["revision"]),
+        "knowledge_preconditions": _knowledge_preconditions(ops),
+        "operation_findings": findings,
+        "unresolved": bool(findings),
+    }
+
+
+@tool(role="writer", real_role=True)
+def add_draft_correction(
+    draft_id: str,
+    tool_name: str,
+    payload: dict[str, Any],
+    expected_revision: int | None = None,
+) -> dict[str, Any]:
+    """Append one supported substrate mutation to an open or submitted draft."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    wrapper = next((item for item in TOOLS if item.__name__ == tool_name), None)
+    if wrapper is None or not tool_name.startswith(_MUTATION_PREFIXES):
+        raise ValueError(f"unsupported correction tool '{tool_name}'")
+    signature = _ORIG_SIGNATURES[tool_name]
+    signature.bind(**payload)
+    conn = _drafts_db()
+    with store.transaction(conn):
+        row = _require_mutable_draft(draft_id)
+        drafts_store._check_revision(row, expected_revision)
+        seq = drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind=tool_name,
+            payload=payload,
+            created_by=principal.id,
+        )
+    updated = drafts_store.get_draft(conn, draft_id)
+    return {
+        "draft_id": draft_id,
+        "operation_ref": drafts_store.list_ops(conn, draft_id)[-1]["id"],
+        "seq": seq,
+        "revision": int(updated["revision"]),
+    }
+
+
+_REVIEW_OUTCOMES = ("accepted", "refined", "rejected", "needs_context")
+
+
+@tool(role="writer", real_role=True)
+def record_draft_review(
+    draft_id: str,
+    outcome: Literal["accepted", "refined", "rejected", "needs_context"],
+    rationale: str,
+    draft_revision: int,
+    knowledge_preconditions: list[KnowledgePrecondition],
+    unresolved_questions: list[str] = [],
+) -> dict[str, Any]:
+    """Record a durable outcome against exact inspected draft and knowledge state."""
+    from . import drafts_store
+
+    principal = _identified_principal()
+    if outcome not in _REVIEW_OUTCOMES:
+        raise ValueError("invalid review outcome")
+    if not rationale.strip():
+        raise ValueError("review rationale is required")
+    inspected = inspect_draft_review(draft_id)
+    if inspected["draft_revision"] != draft_revision:
+        raise drafts_store.StaleDraftRevisionError("draft changed since inspection")
+    if inspected["knowledge_preconditions"] != knowledge_preconditions:
+        raise ValueError("affected knowledge changed since inspection")
+    unresolved = list(unresolved_questions)
+    unresolved.extend(finding["finding"] for finding in inspected["operation_findings"])
+    if outcome in ("accepted", "refined") and unresolved:
+        raise ValueError("accepted reviews cannot contain unresolved findings")
+    conn = _drafts_db()
+    with store.transaction(conn):
+        review_id = drafts_store.create_review(
+            conn,
+            draft_id=draft_id,
+            outcome=outcome,
+            rationale=rationale.strip(),
+            draft_revision=draft_revision,
+            preconditions=knowledge_preconditions,
+            unresolved_questions=unresolved,
+            reviewed_by=principal.id,
+        )
+    return drafts_store.serialize_review(drafts_store.get_review(conn, review_id))
+
+
 _DRAFT_RESULT_REF = re.compile(r"^@(\d+):(\d+)$")
 
 
@@ -6282,7 +6508,13 @@ def _replay_draft_op(
     return {"seq": seq, "kind": kind, "result": result}
 
 
-def apply_draft(draft_id: str) -> dict[str, Any]:
+def apply_draft(
+    draft_id: str,
+    *,
+    application_id: str | None = None,
+    review_id: str | None = None,
+    strict: bool = False,
+) -> dict[str, Any]:
     """Replay an `open` or `submitted` draft's ops against the substrate.
 
     Caller is responsible for having already verified the principal is
@@ -6307,8 +6539,16 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
             f"draft '{draft_id}' is {status}; only open or submitted "
             f"drafts can be approved"
         )
+    active = drafts_store.active_application(_drafts_db(), draft_id)
+    if active is not None and active["id"] != application_id:
+        raise drafts_store.ActiveApplicationError(
+            f"draft '{draft_id}' has an active reviewed application"
+        )
 
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
+    findings = _draft_operation_findings(ops)
+    if strict and findings:
+        raise ValueError("draft has unresolved operation findings")
     tools_by_name = {w.__name__: w for w in TOOLS}
     results: list[dict[str, Any]] = []
     results_by_seq: dict[int, Any] = {}
@@ -6350,6 +6590,13 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
             try:
                 for op in ops:
                     results.append(_replay_draft_op(op, tools_by_name, results_by_seq))
+                if application_id is not None:
+                    _db().execute(
+                        "INSERT OR IGNORE INTO reviewed_draft_applications "
+                        "(application_id, draft_id, review_id, committed_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (application_id, draft_id, review_id, timestamps.now()),
+                    )
             except BaseException:
                 restored = True
                 _restore_index_snapshots(snapshots)
@@ -6374,6 +6621,79 @@ def apply_draft(draft_id: str) -> dict[str, Any]:
         "skipped": sum("skipped" in item for item in results),
         "results": results,
     }
+
+
+def _reviewed_apply_enabled() -> bool:
+    return (os.environ.get("MYCELIUM_REVIEWED_APPLY") or "off").lower() == "on"
+
+
+def _substrate_application_exists(application_id: str) -> bool:
+    return (
+        _db()
+        .execute(
+            "SELECT 1 FROM reviewed_draft_applications WHERE application_id = ?",
+            (application_id,),
+        )
+        .fetchone()
+        is not None
+    )
+
+
+@tool(role="writer", real_role=True)
+def apply_reviewed_draft(draft_id: str, review_id: str) -> dict[str, Any]:
+    """Apply an accepted exact-version review with durable replay recovery."""
+    from . import drafts_store
+
+    if not _reviewed_apply_enabled():
+        raise ValueError("reviewed draft application is disabled")
+    principal = _identified_principal()
+    conn = _drafts_db()
+    with store.transaction(conn):
+        draft = drafts_store.get_draft(conn, draft_id)
+        review = drafts_store.get_review(conn, review_id)
+        if draft is None or review is None or review["draft_id"] != draft_id:
+            raise ValueError("draft or review not found")
+        if review["outcome"] not in ("accepted", "refined"):
+            raise ValueError("review outcome does not permit application")
+        if _json.loads(review["unresolved_json"]):
+            raise ValueError("review has unresolved questions")
+        if int(draft["revision"]) != int(review["draft_revision"]):
+            raise drafts_store.StaleDraftRevisionError(
+                "draft changed after the recorded review"
+            )
+        current = _knowledge_preconditions(drafts_store.list_ops(conn, draft_id))
+        if current != _json.loads(review["preconditions_json"]):
+            raise ValueError("affected knowledge changed after the recorded review")
+        application_id = drafts_store.claim_application(
+            conn,
+            draft_id=draft_id,
+            review_id=review_id,
+            claimed_by=principal.id,
+        )
+
+    if _substrate_application_exists(application_id):
+        result = {"applied": 0, "skipped": 0, "results": [], "recovered": True}
+    else:
+        try:
+            result = apply_draft(
+                draft_id,
+                application_id=application_id,
+                review_id=review_id,
+                strict=True,
+            )
+        except BaseException as exc:
+            with store.transaction(conn):
+                drafts_store.finish_application(
+                    conn, application_id, status="failed", failure=str(exc)
+                )
+            raise
+
+    with store.transaction(conn):
+        drafts_store.finish_application(
+            conn, application_id, status="committed", result=result
+        )
+        drafts_store.set_decision(conn, draft_id, decision="approved", by=principal.id)
+    return {"application_id": application_id, **result}
 
 
 def run() -> None:

@@ -246,6 +246,16 @@ CREATE TABLE IF NOT EXISTS statements (
     updated_by TEXT
 );
 
+-- Idempotency marker for reviewed draft replay. It commits in the same
+-- transaction as substrate mutations; the separate drafts database can then
+-- recover finalization without replaying those mutations.
+CREATE TABLE IF NOT EXISTS reviewed_draft_applications (
+    application_id TEXT PRIMARY KEY,
+    draft_id       TEXT NOT NULL,
+    review_id      TEXT NOT NULL,
+    committed_at   TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS statement_vector_ids (
     statement_id TEXT PRIMARY KEY REFERENCES statements(id),
     vector_id   INTEGER NOT NULL UNIQUE

@@ -87,6 +87,35 @@ AFTER DELETE ON draft_ops
 BEGIN
     UPDATE drafts SET revision = revision + 1 WHERE id = OLD.draft_id;
 END;
+
+CREATE TABLE IF NOT EXISTS draft_reviews (
+    id                 TEXT PRIMARY KEY,
+    draft_id           TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+    outcome            TEXT NOT NULL CHECK (
+        outcome IN ('accepted', 'refined', 'rejected', 'needs_context')
+    ),
+    rationale          TEXT NOT NULL,
+    draft_revision     INTEGER NOT NULL,
+    preconditions_json TEXT NOT NULL,
+    unresolved_json    TEXT NOT NULL,
+    reviewed_at        TEXT NOT NULL,
+    reviewed_by        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS draft_reviews_draft ON draft_reviews (draft_id, reviewed_at);
+
+CREATE TABLE IF NOT EXISTS draft_applications (
+    id             TEXT PRIMARY KEY,
+    draft_id       TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+    review_id      TEXT NOT NULL REFERENCES draft_reviews(id),
+    status         TEXT NOT NULL CHECK (status IN ('claimed', 'committed', 'failed')),
+    claimed_at     TEXT NOT NULL,
+    finished_at    TEXT,
+    claimed_by     TEXT NOT NULL,
+    result_json    TEXT,
+    failure        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS draft_application_active
+ON draft_applications (draft_id) WHERE status IN ('claimed', 'committed');
 """
 
 DRAFTS_SOURCE_INDEX = (
@@ -110,6 +139,10 @@ class DraftSource(TypedDict):
 
 
 class StaleDraftRevisionError(ValueError):
+    pass
+
+
+class ActiveApplicationError(ValueError):
     pass
 
 
@@ -551,6 +584,109 @@ def set_decision(
         "WHERE id = ? AND decided_at IS NULL",
         (_now(), by, decision, draft_id),
     )
+
+
+def create_review(
+    conn: sqlite3.Connection,
+    *,
+    draft_id: str,
+    outcome: str,
+    rationale: str,
+    draft_revision: int,
+    preconditions: list[dict],
+    unresolved_questions: list[str],
+    reviewed_by: str,
+) -> str:
+    review_id = "rev_" + _uuid.uuid4().hex[:12]
+    conn.execute(
+        "INSERT INTO draft_reviews (id, draft_id, outcome, rationale, "
+        "draft_revision, preconditions_json, unresolved_json, reviewed_at, "
+        "reviewed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            review_id,
+            draft_id,
+            outcome,
+            rationale,
+            draft_revision,
+            _json.dumps(preconditions, sort_keys=True),
+            _json.dumps(unresolved_questions),
+            _now(),
+            reviewed_by,
+        ),
+    )
+    return review_id
+
+
+def get_review(conn: sqlite3.Connection, review_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM draft_reviews WHERE id = ?", (review_id,)
+    ).fetchone()
+
+
+def active_application(conn: sqlite3.Connection, draft_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM draft_applications WHERE draft_id = ? "
+        "AND status IN ('claimed', 'committed') ORDER BY claimed_at DESC LIMIT 1",
+        (draft_id,),
+    ).fetchone()
+
+
+def claim_application(
+    conn: sqlite3.Connection,
+    *,
+    draft_id: str,
+    review_id: str,
+    claimed_by: str,
+) -> str:
+    active = active_application(conn, draft_id)
+    if active is not None:
+        if active["review_id"] == review_id:
+            return str(active["id"])
+        raise ActiveApplicationError(
+            f"draft '{draft_id}' already has an active application"
+        )
+    application_id = "app_" + _uuid.uuid4().hex[:12]
+    conn.execute(
+        "INSERT INTO draft_applications (id, draft_id, review_id, status, "
+        "claimed_at, claimed_by) VALUES (?, ?, ?, 'claimed', ?, ?)",
+        (application_id, draft_id, review_id, _now(), claimed_by),
+    )
+    return application_id
+
+
+def finish_application(
+    conn: sqlite3.Connection,
+    application_id: str,
+    *,
+    status: str,
+    result: dict | None = None,
+    failure: str | None = None,
+) -> None:
+    conn.execute(
+        "UPDATE draft_applications SET status = ?, finished_at = ?, "
+        "result_json = ?, failure = ? WHERE id = ?",
+        (
+            status,
+            _now(),
+            _json.dumps(result) if result is not None else None,
+            failure,
+            application_id,
+        ),
+    )
+
+
+def serialize_review(row: sqlite3.Row) -> dict:
+    return {
+        "review_id": row["id"],
+        "draft_id": row["draft_id"],
+        "outcome": row["outcome"],
+        "rationale": row["rationale"],
+        "draft_revision": row["draft_revision"],
+        "knowledge_preconditions": _json.loads(row["preconditions_json"]),
+        "unresolved_questions": _json.loads(row["unresolved_json"]),
+        "reviewed_at": row["reviewed_at"],
+        "reviewed_by": row["reviewed_by"],
+    }
 
 
 def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -> dict:
