@@ -187,7 +187,7 @@ def test_openai_preserves_reasoning_parallel_calls_and_result_order() -> None:
     assert sent[0]["store"] is False
     assert sent[0]["parallel_tool_calls"] is True
     assert sent[0]["include"] == ["reasoning.encrypted_content"]
-    assert result.usage.input_tokens == 8
+    assert result.usage.input_tokens == 11 - 3
     assert result.usage.cache_read_input_tokens == 3
 
 
@@ -434,6 +434,7 @@ def test_existing_terminal_schemas_cross_the_shared_boundary(
 @pytest.mark.parametrize("provider", ["claude", "openai"])
 def test_malformed_structured_output_does_not_echo_evidence(
     provider: ai.Provider,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     blocks: list[dict[str, JsonValue]] = (
         [{"type": "text", "text": '{"secret evidence":true}'}]
@@ -460,3 +461,12 @@ def test_malformed_structured_output_does_not_echo_evidence(
                 client=client,
             )
     assert "secret evidence" not in str(caught.value)
+    assert "secret evidence" not in caplog.text
+    diagnostic = next(
+        record for record in caplog.records if record.name == "mycelium.ai"
+    )
+    assert (
+        f"provider={provider} operation=structured category=validation"
+        in diagnostic.message
+    )
+    assert diagnostic.exc_info is None

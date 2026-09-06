@@ -211,6 +211,11 @@ def save(
 ) -> ModelSnapshot:
     if not principal.is_admin:
         raise auth.RoleRequired("admin role required")
+    selected_model = (
+        request.claude_model if request.provider == "claude" else request.openai_model
+    )
+    if not selected_model:
+        raise ValueError("Choose a model ID for the selected provider.")
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):
         return save_in_transaction(conn, action, request)

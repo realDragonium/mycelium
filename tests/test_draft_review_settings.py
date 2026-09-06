@@ -602,6 +602,42 @@ def test_model_settings_writes_require_admin(configured_app, role):
     assert response.status_code == (200 if role == "admin" else 403)
 
 
+@pytest.mark.parametrize("provider", ["claude", "openai"])
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_selected_model_required_but_alternate_optional(
+    configured_app, provider, blank
+):
+    client, _ = configured_app
+    body = _model_body(client, "docgen")
+    body.update(provider=provider, claude_model="", openai_model="")
+    selected = "claude_model" if provider == "claude" else "openai_model"
+    body[selected] = blank
+    before = model_settings.get("docgen")
+    response = client.patch("/api/model-settings/docgen", json=body)
+    assert response.status_code == 400
+    assert model_settings.get("docgen") == before
+    body[selected] = "chosen-model"
+    assert client.patch("/api/model-settings/docgen", json=body).status_code == 200
+    assert model_settings.get("docgen").model == "chosen-model"
+
+
+def test_empty_legacy_review_model_cannot_create_a_run(configured_app):
+    draft_id = _draft()
+    _set_review_controls(mode="review-only")
+    current = model_settings.get("draft_review")
+    selection = model_settings.Selection(
+        provider="openai", claude_model=current.claude_model, openai_model=""
+    )
+    with prompt_store._writing(prompt_store.connection()):
+        prompt_store.connection().execute(
+            "UPDATE model_settings SET body_json = ? WHERE action = 'draft_review'",
+            (selection.model_dump_json(),),
+        )
+    with pytest.raises(ValueError, match="Choose a model ID"):
+        _request(draft_id)
+    assert draft_review_store.latest(server._drafts_db(), draft_id) is None
+
+
 def test_model_setting_change_alone_invalidates_automatic_review(
     configured_app, monkeypatch
 ):

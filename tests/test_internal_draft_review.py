@@ -45,6 +45,7 @@ def running_app(tmp_path, monkeypatch):
                 server._auth_db(), name="Reviewer", role="writer", type="service"
             )
         _set_review_controls(reviewer_id=reviewer)
+        _set_review_model("gpt-fixture")
         yield client, reviewer
         draft_review_runs.wait_all()
 

@@ -89,6 +89,8 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
     settings = draft_review_settings.load()
     if settings.mode == "off":
         raise ValueError("internal draft review is off")
+    if not settings.model:
+        raise ValueError("Choose a model ID before starting an internal draft review.")
     conn = server._drafts_db()
     with _spawn_lock, store.transaction(conn):
         row = drafts_store.get_draft(conn, draft_id)

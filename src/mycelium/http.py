@@ -1273,6 +1273,8 @@ def save_ai_model_settings(
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except model_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.get("/api/draft-review/settings")
