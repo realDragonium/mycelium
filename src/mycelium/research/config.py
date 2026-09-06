@@ -1,7 +1,7 @@
 """Tunables for the `research` write-harness loop.
 
 Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Other task budgets come from `MYCELIUM_RESEARCH_*` variables.
+once on upgrade. Task budgets come from saved AI settings.
 
 The built-in model default matches ingest's `DEFAULT_MODEL`. Research runs much hotter than ingest: the
 loop explores a whole codebase before it ever reconciles, so the op cap and

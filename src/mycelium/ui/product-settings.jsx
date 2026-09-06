@@ -39,7 +39,7 @@ function RepositorySettingsFields({ kind, items, bindings, onChange }) {
       const selectedBinding = bindings.find(binding => binding.name === item.binding);
       const textFields = destination
         ? [['name', 'Name'], ['owner', 'Repository owner'], ['repo', 'Repository name'], ['base_branch', 'Base branch'], ['path_template', 'File path template']]
-        : [['name', 'Name'], ['owner', 'Repository owner'], ['repo', 'Repository name'], ['ref', 'Branch, tag or commit (optional)']];
+        : [['name', 'Name'], ['owner', 'Repository owner'], ['repo', 'Repository name'], ['ref', 'Branch or tag (optional)']];
       return <fieldset key={index} style={{ padding: 14, margin: '12px 0', minWidth: 0, border: '1px solid var(--rule, var(--line))', borderRadius: 4 }}>
         <legend>{destination ? 'Destination' : 'Source'} {index + 1}</legend>
         <div style={productSettingsStyle.grid}>
@@ -69,7 +69,7 @@ function RepositorySettingsFields({ kind, items, bindings, onChange }) {
   </>;
 }
 
-function ProductSettingsSection({ snapshot, canConfigure, bindings, onBindings }) {
+function ProductSettingsSection({ snapshot, canConfigure, bindings, guidelineSets, onOptions }) {
   const [current, setCurrent] = React.useState(snapshot);
   const [form, setForm] = React.useState(snapshot.settings);
   const [busy, setBusy] = React.useState(false);
@@ -88,7 +88,7 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, onBindings }
       if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Settings could not be loaded.');
       const section = data.sections.find(item => item.settings.kind === kind);
       if (!section) throw new Error('These settings are unavailable.');
-      accept(section); onBindings(data.github_bindings); setConflict(false);
+      accept(section); onOptions(data); setConflict(false);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -117,7 +117,11 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, onBindings }
       <fieldset disabled={busy || conflict || !canConfigure} style={{ border: 0, padding: 0, margin: '16px 0 0', minWidth: 0 }}>
         {kind === 'documentation' ? <>
           <label style={productSettingsStyle.field}>Default guideline set
-            <input style={productSettingsStyle.input} value={form.guideline_set} required maxLength={200} onChange={event => change('guideline_set', event.target.value)} />
+            <select style={productSettingsStyle.input} value={form.guideline_set} required onChange={event => change('guideline_set', event.target.value)}>
+              <option value="">Select a guideline set</option>
+              {form.guideline_set && !guidelineSets.includes(form.guideline_set) && <option value={form.guideline_set}>{form.guideline_set} (unavailable)</option>}
+              {guidelineSets.map(name => <option key={name} value={name}>{name}</option>)}
+            </select>
           </label>
           <RepositorySettingsFields kind={kind} items={form.destinations} bindings={bindings} onChange={items => change('destinations', items)} />
         </> : kind === 'sources' ? <RepositorySettingsFields kind={kind} items={form.sources} bindings={bindings} onChange={items => change('sources', items)} /> : <>
@@ -146,23 +150,23 @@ function ProductSettings() {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [retry, setRetry] = React.useState(0);
-  const [bindings, setBindings] = React.useState([]);
   React.useEffect(() => {
     let cancelled = false;
     setError(null);
     fetch('/api/product-settings').then(async response => {
       const value = await response.json();
       if (!response.ok) throw new Error(typeof value.detail === 'string' ? value.detail : 'Product settings could not be loaded.');
-      if (!cancelled) { setData(value); setBindings(value.github_bindings); }
+      if (!cancelled) setData(value);
     }).catch(e => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [retry]);
   return <section aria-label="AI limits and repositories" style={{ color: 'var(--ink-3)', fontSize: 13, lineHeight: 1.5 }}>
     <h2 style={{ color: 'var(--ink)', fontSize: 18 }}>AI limits and repositories</h2>
     <p>Configure each action’s limits, research repositories, and documentation delivery separately.</p>
+    {data?.github_configuration_error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{data.github_configuration_error}</p>}
     {error ? <><p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p><button onClick={() => setRetry(value => value + 1)} style={productSettingsStyle.button}>Reload product settings</button></>
       : !data ? <p>Loading product settings…</p>
-      : data.sections.map(snapshot => <ProductSettingsSection key={snapshot.settings.kind} snapshot={snapshot} canConfigure={data.can_configure} bindings={bindings} onBindings={setBindings} />)}
+      : data.sections.map(snapshot => <ProductSettingsSection key={snapshot.settings.kind} snapshot={snapshot} canConfigure={data.can_configure} bindings={data.github_bindings} guidelineSets={data.guideline_sets} onOptions={setData} />)}
   </section>;
 }
 

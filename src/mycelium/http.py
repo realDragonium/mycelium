@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+import anyio.from_thread
 import anyio.to_thread
 import uvicorn
 from dotenv import load_dotenv
@@ -1268,7 +1269,10 @@ def save_product_settings(
 
     principal = _require_admin(request)
     try:
-        return product_settings.save(body, principal)
+        saved = product_settings.save(body, principal)
+        if isinstance(body.settings, product_settings.ConcurrencySettings):
+            anyio.from_thread.run_sync(lambda: server.limiter_for("ask"))
+        return saved
     except model_settings.Conflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except model_settings.Unavailable as exc:

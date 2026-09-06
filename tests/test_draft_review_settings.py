@@ -234,8 +234,8 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
     entered, release = threading.Event(), threading.Event()
     calls = []
 
-    def model(context, *, model, provider):
-        calls.append((model, provider))
+    def model(context, *, model, provider, limits):
+        calls.append((model, provider, limits.max_tokens))
         entered.set()
         assert release.wait(5)
         return _assessment()
@@ -254,6 +254,10 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
         first = _draft()
         assert entered.wait(5)
         second = _draft()
+        from mycelium import product_settings
+        from product_settings_helpers import set_product
+
+        set_product(product_settings.ReviewSettings(max_tokens=1000))
         assert (
             client.patch(
                 "/api/draft-review/settings",
@@ -265,7 +269,7 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
         release.set()
         draft_review_runs.wait_all()
         executor.shutdown()
-    assert calls == [("gpt-fixture", "openai"), ("gpt-fixture", "openai")]
+    assert calls == [("gpt-fixture", "openai", 6000), ("gpt-fixture", "openai", 6000)]
     for draft_id in (first, second):
         result = _result(draft_id)
         assert result["provider"] == "openai"

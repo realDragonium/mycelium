@@ -16,12 +16,14 @@ from __future__ import annotations
 import json
 import types
 
+from mycelium import product_settings
 from mycelium.ask.substrate import SubstrateError, ToolSpec
 from mycelium.ingest.tools import EMIT_TOOL
 from mycelium.research import NothingFound, ResearchConfig, ResearchDraftCreated
 from mycelium.research.loop import run_research
 from mycelium.research.sources import Source, SourceError
 from mycelium.research.workspace import WorkspaceError
+from product_settings_helpers import set_product
 from settings_helpers import save_model
 
 # --------------------------------------------------------------------------- #
@@ -630,10 +632,9 @@ def test_no_source_and_no_workspace_returns_nothing_found():
 # --------------------------------------------------------------------------- #
 
 
-def test_config_from_env_reads_research_vars(monkeypatch):
+def test_config_reads_saved_research_limits():
     save_model("research", claude_model="claude-test-1")
-    monkeypatch.setenv("MYCELIUM_RESEARCH_OP_CAP", "42")
-    monkeypatch.setenv("MYCELIUM_RESEARCH_WALL_CLOCK_S", "99.5")
+    set_product(product_settings.ResearchSettings(op_cap=42, wall_clock_s=99.5))
     cfg = ResearchConfig.from_env()
     assert cfg.model == "claude-test-1"
     assert cfg.op_cap == 42

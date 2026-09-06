@@ -1,12 +1,8 @@
 """Configured delivery destinations for generated documents.
 
 A destination is a reviewable place a generated document can be submitted to.
-Destinations are configured through `MYCELIUM_DOC_DESTINATIONS`, a JSON object
-keyed by destination name:
-
-    {"knowledge-base": {"type": "github",
-                        "path_template": "docs/kb/{slug}.md",
-                        "config": {...}}}
+Administrators configure repositories, branches, and path templates in saved
+settings. Explicit environment mappings are accepted by the legacy import parser.
 
 The generic configuration carries destination-specific settings without
 interpreting them. Each implementation validates and uses its own settings.
@@ -303,11 +299,17 @@ def require_recorded_target(config: DestinationConfig, recorded: str | None) -> 
 
 def bind_legacy_deliveries(conn: sqlite3.Connection) -> None:
     """Pin older delivery records once; unresolved targets remain disabled."""
-    configured = load_destinations()
+    rows = conn.execute(
+        "SELECT id, delivery_destination FROM generated_documents WHERE delivery_destination IS NOT NULL AND delivery_target IS NULL"
+    ).fetchall()
+    if not rows:
+        return
+    try:
+        configured = load_destinations()
+    except (ValueError, RuntimeError):
+        configured = {}
     with conn:
-        for row in conn.execute(
-            "SELECT id, delivery_destination FROM generated_documents WHERE delivery_destination IS NOT NULL AND delivery_target IS NULL"
-        ):
+        for row in rows:
             destination = configured.get(row["delivery_destination"])
             conn.execute(
                 "UPDATE generated_documents SET delivery_target = ? WHERE id = ?",

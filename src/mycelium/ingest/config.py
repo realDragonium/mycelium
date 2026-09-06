@@ -1,7 +1,7 @@
 """Tunables for the `ingest` write-harness loop.
 
 Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Other task budgets come from `MYCELIUM_INGEST_*` variables.
+once on upgrade. Task budgets come from saved AI settings.
 
 The model default is **Sonnet** (`claude-sonnet-4-6`) — one model, one context
 drives extract -> reconcile -> classify -> link -> emit. The id is config,

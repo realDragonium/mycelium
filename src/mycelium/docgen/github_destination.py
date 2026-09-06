@@ -203,7 +203,7 @@ def _configured_credentials(env: Mapping[str, str], token: str | None) -> list[s
     credentials = [token] if token else []
     from .. import github_credentials
 
-    for binding in github_credentials.load().values():
+    for binding in github_credentials.load(env=env).values():
         value = env.get(binding.token_env)
         if value:
             credentials.append(value)

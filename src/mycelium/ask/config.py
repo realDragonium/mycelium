@@ -1,7 +1,7 @@
 """Tunables for the `ask` reasoning loop.
 
 Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Other task budgets come from `MYCELIUM_ASK_*` variables.
+once on upgrade. Task budgets come from saved AI settings.
 
 The model default is **Haiku** (`claude-haiku-4-5`). The spec originally
 mandated one model (Sonnet), but the ask loop's latency is dominated by
@@ -29,7 +29,7 @@ DEFAULT_MODEL = "claude-haiku-4-5"
 #: retrieve -> re-search -> re-search dance. `quick` drops the floor and tightens
 #: the caps so the loop collapses to recon -> a targeted read or two -> answer,
 #: returning a real (not degraded) answer inside the window. These are *ceilings*
-#: applied via min(), so a lower global env override still wins.
+#: applied via min(), so a lower saved limit still wins.
 QUICK_OP_CAP = 8
 QUICK_WALL_CLOCK_S = 25.0
 QUICK_REQUEST_TIMEOUT_S = 20.0
@@ -46,7 +46,7 @@ class AskConfig:
     #: connection window in front of us: the /mcp transport has no keepalive, so
     #: an Ask that runs past the Cloudflare/ALB idle timeout is dropped mid-flight
     #: and the client sees a generic error. 45s returns a fast partial instead.
-    #: Raise with MYCELIUM_ASK_WALL_CLOCK_S once /mcp gets its own keepalive.
+    #: The saved run time limit controls the runtime budget.
     wall_clock_s: float = 45.0
     #: The anti-premature-closure floor (loop.py: recon + a targeted retrieval +
     #: a concept-seeded adjacency re-search before an answer is accepted). ON by
@@ -67,8 +67,7 @@ class AskConfig:
     #: each retrieval turn spent ~2x as long thinking and the run still blew the
     #: wall-clock budget; off, the same question finishes cleanly and faster.
     #: (Also a no-op-to-error guard on Haiku, which doesn't take adaptive
-    #: thinking.) Re-enable with MYCELIUM_ASK_THINKING=on on a model that
-    #: supports it.
+    #: thinking.) Enable in AI settings on a model that supports it.
     thinking: bool = False
     #: Prompt caching. The loop re-sends a growing conversation every turn; with
     #: caching on, the static prefix (tools + system) and the conversation so far
@@ -128,7 +127,7 @@ def for_depth(config: AskConfig, depth: str) -> AskConfig:
     """Return `config` adjusted for the requested `depth`. Pure.
 
     `quick` drops the floor and lowers the op-cap / wall-clock / per-call timeout
-    to *ceilings* (via min, so an already-lower env override still wins), so the
+    to *ceilings* (via min, so an already-lower saved limit still wins), so the
     loop is structurally shorter and finishes well inside a tight client window.
     Anything other than `quick` (incl. `standard`) returns `config` unchanged.
     """

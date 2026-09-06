@@ -130,10 +130,11 @@ def initialize_settings(
     conn: sqlite3.Connection, *, import_environment: bool = True
 ) -> None:
     """Import legacy product configuration once, preserving every saved row."""
-    from . import draft_review_settings, model_settings
+    from . import draft_review_settings, model_settings, product_settings
 
     prepare_settings(conn, import_environment=import_environment)
     with _writing(conn):
+        product_settings.initialize(conn, import_environment=import_environment)
         if conn.execute(
             "SELECT 1 FROM instance_settings_migrations WHERE name = 'models-and-review-controls'"
         ).fetchone():

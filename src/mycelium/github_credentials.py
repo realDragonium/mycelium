@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+from collections.abc import Mapping
 
 from pydantic import (
     BaseModel,
@@ -52,7 +53,9 @@ class Choice(BaseModel):
 BINDINGS = TypeAdapter(dict[str, Binding])
 
 
-def load(conn: sqlite3.Connection | None = None) -> dict[str, Binding]:
+def load(
+    conn: sqlite3.Connection | None = None, *, env: Mapping[str, str] | None = None
+) -> dict[str, Binding]:
     result: dict[str, Binding] = {}
     try:
         if conn is not None or prompt_store.is_configured():
@@ -61,7 +64,8 @@ def load(conn: sqlite3.Connection | None = None) -> dict[str, Binding]:
                 "SELECT name, body_json FROM github_credential_bindings"
             ):
                 result[row["name"]] = Binding.model_validate_json(row["body_json"])
-        raw = os.environ.get("MYCELIUM_GITHUB_CREDENTIALS")
+        environment = os.environ if env is None else env
+        raw = environment.get("MYCELIUM_GITHUB_CREDENTIALS")
         if raw:
             result.update(BINDINGS.validate_json(raw))
         return result

@@ -9,6 +9,7 @@ from mycelium import auth, github_credentials, prompt_store
 from mycelium import product_settings as settings
 from mycelium.ask.config import AskConfig, for_depth
 from mycelium.model_capacity import Capacity
+from test_internal_draft_review import running_app as running_app
 
 
 @pytest.fixture
@@ -20,6 +21,12 @@ def db(tmp_path):
     )
     conn.commit()
     prompt_store.use_connection(conn)
+    prompt_store.save(
+        conn,
+        type="guideline-set",
+        name="kb-authoring/guidance",
+        text="Write useful documents.",
+    )
     yield conn
     conn.close()
 
@@ -242,3 +249,172 @@ def test_archive_round_trip_and_corruption_fails_closed(db, tmp_path):
     with pytest.raises(ValidationError):
         settings.archive(db)
     other.close()
+
+
+def test_http_saves_typed_lists_and_rejects_invalid_input(running_app, monkeypatch):
+    client, _ = running_app
+    monkeypatch.setenv(
+        "MYCELIUM_GITHUB_CREDENTIALS",
+        json.dumps({"github": {"token_env": "GITHUB_TEST_TOKEN"}}),
+    )
+    initial = client.get("/api/product-settings")
+    assert initial.status_code == 200
+    current = next(
+        item
+        for item in initial.json()["sections"]
+        if item["settings"]["kind"] == "sources"
+    )
+    body = {
+        "revision": current["revision"],
+        "settings": {
+            "kind": "sources",
+            "sources": [
+                {"name": "api", "owner": "acme", "repo": "api", "binding": "github"}
+            ],
+        },
+    }
+    response = client.patch("/api/product-settings", json=body)
+    assert response.status_code == 200, response.text
+    assert response.json()["settings"]["sources"][0]["binding"] == "github"
+    assert client.patch("/api/product-settings", json=body).status_code == 409
+    assert (
+        client.patch(
+            "/api/product-settings",
+            json={"revision": 1, "settings": {"kind": "ask", "max_tokens": 0}},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.patch(
+            "/api/product-settings",
+            json={
+                "revision": 1,
+                "settings": {
+                    "kind": "sources",
+                    "sources": [{"name": "bad", "owner": "../acme", "repo": "api"}],
+                },
+            },
+        ).status_code
+        == 422
+    )
+
+
+def test_research_runner_keeps_admitted_source_and_limits(db, tmp_path, monkeypatch):
+    from mycelium import research, research_runs
+
+    source = settings.SourceSettings(
+        name="api", owner="acme", repo="original", ref="main"
+    )
+    save(settings.SourcesSettings(sources=(source,)))
+    save(settings.ResearchSettings(max_tokens=1234))
+    runner = research_runs._default_runner(str(tmp_path), "api")
+    save(
+        settings.SourcesSettings(
+            sources=(
+                settings.SourceSettings(
+                    name="api", owner="acme", repo="replacement", ref="dev"
+                ),
+            )
+        )
+    )
+    save(settings.ResearchSettings(max_tokens=9876))
+    observed = []
+
+    def execute(topic, source, *, config, emitter):
+        observed.append((source.repo, source.ref, config.max_tokens))
+
+    monkeypatch.setattr(research, "run_research", execute)
+    runner("topic", source="api")
+    assert observed == [("original", "main", 1234)]
+
+
+def test_document_destination_change_refuses_old_delivery_coordinates(db, monkeypatch):
+    from mycelium import doc_runs, docs_store
+    from mycelium.docgen import destinations
+    from mycelium.docgen.schema import CurrentDocument
+
+    monkeypatch.setenv(
+        "MYCELIUM_GITHUB_CREDENTIALS",
+        json.dumps({"github": {"token_env": "GITHUB_TEST_TOKEN"}}),
+    )
+    original = settings.DestinationSettings(
+        name="docs",
+        owner="acme",
+        repo="original",
+        base_branch="main",
+        path_template="docs/{slug}.md",
+        binding="github",
+    )
+    save(settings.DocumentationSettings(destinations=(original,)))
+    admitted = destinations.load_destinations()
+    conn = docs_store.connect(":memory:")
+    docs_store.migrate(conn)
+    document_id = docs_store.upsert_document(
+        conn, slug="page", title="Page", body="Old"
+    )
+    docs_store.record_delivery(
+        conn,
+        document_id,
+        destination="docs",
+        path="docs/page.md",
+        reference="https://github.com/acme/original/pull/1",
+        content_revision="a" * 40,
+        target=destinations.target_identity(admitted["docs"]),
+    )
+    changed = settings.DestinationSettings(
+        name="docs",
+        owner="acme",
+        repo="replacement",
+        base_branch="main",
+        path_template="docs/{slug}.md",
+        binding="github",
+    )
+    save(settings.DocumentationSettings(destinations=(changed,)))
+    observed = []
+
+    def read(config, *args):
+        observed.append(destinations.destination_coordinates(config)["repo"])
+        return CurrentDocument(body="Remote")
+
+    monkeypatch.setattr(destinations, "read_document", read)
+    assert doc_runs._load_current_document(conn, document_id, admitted).body == "Remote"
+    assert observed == ["original"]
+    with pytest.raises(destinations.DestinationError, match="destination has changed"):
+        doc_runs._load_current_document(conn, document_id)
+    conn.close()
+
+
+def test_invalid_bindings_do_not_disable_unrelated_settings(db, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_GITHUB_CREDENTIALS", "invalid")
+    view = settings.view(ADMIN)
+    assert view.github_bindings == []
+    assert view.github_configuration_error
+    assert len(view.sections) == len(settings.DEFAULTS)
+    save(settings.AskSettings(max_tokens=99))
+    assert settings.get(settings.AskSettings).max_tokens == 99
+
+
+def test_documentation_default_must_name_existing_guidelines(db):
+    with pytest.raises(ValueError, match="existing guideline set"):
+        save(settings.DocumentationSettings(guideline_set="misspelled"))
+    assert settings.view(ADMIN).guideline_sets == ["kb-authoring"]
+
+
+def test_http_concurrency_save_updates_existing_request_limiter(running_app):
+    from mycelium import server
+
+    client, _ = running_app
+    assert client.portal is not None
+    limiter = client.portal.call(server._model_loop_limiter)
+    response = client.patch(
+        "/api/product-settings",
+        json={"revision": 1, "settings": {"kind": "concurrency", "model_loops": 3}},
+    )
+    assert response.status_code == 200, response.text
+    assert limiter.total_tokens == 3
+    assert client.portal.call(server._model_loop_limiter) is limiter
+    response = client.patch(
+        "/api/product-settings",
+        json={"revision": 2, "settings": {"kind": "concurrency", "model_loops": 2}},
+    )
+    assert response.status_code == 200, response.text

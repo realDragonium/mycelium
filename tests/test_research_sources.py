@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import json as _json
+import os
 import subprocess
 from pathlib import Path
 
@@ -266,7 +267,7 @@ def test_load_sources_rejects_injection_shaped_fields(monkeypatch, entry):
 
     monkeypatch.setenv("MYCELIUM_SOURCES", _json.dumps({"s": entry}))
     with _pytest.raises(SourceError):
-        load_sources()
+        load_sources(os.environ)
 
 
 @_pytest.mark.parametrize(
@@ -287,7 +288,7 @@ def test_load_sources_rejects_a_trailing_newline_in_repo_ref_and_host(
 
     monkeypatch.setenv("MYCELIUM_SOURCES", _json.dumps({"s": entry}))
     with _pytest.raises(SourceError):
-        load_sources()
+        load_sources(os.environ)
 
 
 def test_load_sources_accepts_normal_and_enterprise_hosts(monkeypatch):
@@ -311,7 +312,7 @@ def test_load_sources_accepts_normal_and_enterprise_hosts(monkeypatch):
             }
         ),
     )
-    srcs = load_sources()
+    srcs = load_sources(os.environ)
     assert srcs["a"].ref == "release/1.2"
     assert srcs["b"].host == "ghe.corp.example:8443"
 

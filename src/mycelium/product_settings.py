@@ -16,7 +16,7 @@ from pydantic import (
     model_validator,
 )
 
-from . import auth, github_credentials, prompt_store, store
+from . import auth, github_credentials, guidelines, prompt_store, store
 from .model_settings import Conflict, Unavailable
 
 if TYPE_CHECKING:
@@ -255,6 +255,8 @@ class SettingsView(SettingsModel):
     can_configure: bool
     sections: list[Snapshot]
     github_bindings: list[github_credentials.Choice]
+    github_configuration_error: str | None = None
+    guideline_sets: list[str]
 
 
 T = TypeVar(
@@ -280,7 +282,12 @@ def get(model: type[T], *, conn: sqlite3.Connection | None = None) -> T:
         row = db.execute(
             "SELECT body_json FROM product_settings WHERE section = ?", (section,)
         ).fetchone()
-        return model.model_validate_json(row["body_json"]) if row else default
+        if row is None:
+            return default
+        loaded = BODY.validate_json(row["body_json"])
+        if not isinstance(loaded, model):
+            raise ValueError("Product settings section mismatch.")
+        return loaded
     except (sqlite3.Error, ValidationError, RuntimeError, ValueError):
         raise Unavailable(
             "Saved product settings cannot be read; the action is disabled."
@@ -306,12 +313,20 @@ def editable(default: Body, conn: sqlite3.Connection) -> Snapshot:
 
 
 def view(principal: auth.Principal) -> SettingsView:
+    binding_error = None
+    try:
+        bindings = github_credentials.choices()
+    except Unavailable as exc:
+        bindings = []
+        binding_error = str(exc)
     try:
         db = prompt_store.connection()
         return SettingsView(
             can_configure=principal.is_admin,
             sections=[editable(default, db) for default in DEFAULTS],
-            github_bindings=github_credentials.choices(),
+            github_bindings=bindings,
+            github_configuration_error=binding_error,
+            guideline_sets=sorted(guidelines.catalogue(db)),
         )
     except (sqlite3.Error, RuntimeError):
         raise Unavailable("Instance product configuration cannot be read.") from None
@@ -323,6 +338,10 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
     validate_secrets(request.settings)
     db = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(db):
+        if isinstance(
+            request.settings, DocumentationSettings
+        ) and request.settings.guideline_set not in guidelines.catalogue(db):
+            raise ValueError("Choose an existing guideline set for documentation.")
         current = editable(request.settings, db)
         if current.revision != request.revision:
             raise Conflict("Settings changed; reload before saving.")
@@ -356,10 +375,16 @@ def validate_secrets(settings: Body, *, conn: sqlite3.Connection | None = None) 
         if isinstance(settings, DocumentationSettings)
         else ()
     )
+    if not entries:
+        return
+    bindings = github_credentials.load(conn)
+    for item in entries:
+        if item.binding and item.binding not in bindings:
+            raise ValueError(
+                "GitHub credential binding is unavailable. Choose a configured binding."
+            )
     credentials = [
-        os.environ.get(github_credentials.resolve(item.binding, conn).token_env, "")
-        for item in entries
-        if item.binding
+        os.environ.get(binding.token_env, "") for binding in bindings.values()
     ]
     if any(secret and secret in settings.model_dump_json() for secret in credentials):
         raise ValueError(

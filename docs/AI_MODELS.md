@@ -86,3 +86,75 @@ inside the adapter and cannot switch provider halfway through a run. Embeddings
 remain a separate Ollama configuration; local NLI classification also retains
 its existing model contract. Neither search indexes nor classifier models are
 changed by this screen.
+
+## Limits and repository integrations
+
+AI settings also provides independent limits for Ask, Ingest, Research,
+Documentation, and Draft review. Output tokens, request timeouts, and retries
+apply to each provider request. The four tool loops additionally expose operation
+and run time limits and adaptive thinking; Ask exposes its existing cache switch.
+Input limits and retrieval widths appear only on the actions that support them.
+Draft review is a single structured assessment, so it has no tool-operation or
+thinking control. Provider support for adaptive thinking depends on the chosen
+model.
+
+The defaults preserve the existing runtime budgets, including Ask's 90-second
+run and 75-second request budgets. Quick Ask still applies ceilings of 8
+operations, 25 seconds per run, and 20 seconds per request, and disables its
+retrieval floor. Smaller saved limits remain effective.
+
+Shared model concurrency and the documentation/research active-run limits are
+editable. Lowering shared concurrency lets current work finish and holds new
+work until capacity becomes available. Increasing it wakes waiting workers.
+There is one shared counting gate; changing its limit does not create a second
+pool. Per-action active-run limits count admitted unfinished runs, including
+those waiting for shared capacity.
+
+Documentation settings selects the default guideline set and configures named
+GitHub destinations using an owner, repository, base branch, and path template.
+Path templates support `{slug}`, `{guideline_set}`, and `{document_type}` and
+must remain relative to the repository root. Research sources specify a name,
+owner, repository, and optional branch/ref. Both lists use structured forms.
+
+Authenticated integrations select a named credential binding. Deployment
+configuration defines bindings in `MYCELIUM_GITHUB_CREDENTIALS`, for example:
+
+```json
+{"company-github":{"host":"github.com","token_env":"COMPANY_GITHUB_TOKEN"}}
+```
+
+The referenced variable contains the token. The UI displays binding names,
+hosts, and whether the referenced credential is present; it never accepts token
+values or arbitrary environment-variable names. A binding fixes the host to
+which its credential can be sent. Public research sources can omit a binding
+and supply a validated host. Documentation destinations require a binding.
+Changing a token value rotates credentials without changing saved repository
+settings.
+
+Existing instances import legacy task budgets, `MYCELIUM_SOURCES`,
+`MYCELIUM_DOC_DESTINATIONS`, and `MYCELIUM_DOCGEN_GUIDELINE_SET` once. Their
+credential host/reference pairs become stable `imported-` bindings in a separate
+registry that the settings API cannot edit. Explicit deployment bindings override
+a registry entry with the same name. Fresh and restored instances never import
+unrelated legacy environment configuration. Invalid legacy sections are recorded
+as disabled without storing their raw text; an administrator must repair that
+section. Ports, storage and trace paths, authentication, credentials, and other
+deployment configuration remain on the server.
+
+Admitted research jobs capture their source coordinates and AI budgets before
+queuing. Documentation jobs capture AI budgets, the guideline preference, and
+destination coordinates used to read existing documents. Draft reviews capture
+their request limits. Subsequent settings changes affect later admissions.
+Delivery records pin their repository, host, and base branch: editing a destination
+under the same name cannot redirect an existing document's recorded path or
+revision. Use a new destination name when deliberately delivering to a different
+repository or branch. Older delivery records are pinned once during upgrade;
+a target that cannot be resolved remains disabled.
+
+`GET /api/product-settings` returns typed sections, individual revisions, and
+safe binding choices. Admin-only `PATCH /api/product-settings` accepts
+`{revision, settings: {kind, ...}}`; stale writes return 409. Each section saves
+independently. Backup includes product sections and imported credential
+references in `product-settings.json`, validates them before restore, and
+refuses to silently omit corrupt saved configuration. Tokens remain outside the
+archive.

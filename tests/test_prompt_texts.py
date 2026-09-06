@@ -538,11 +538,17 @@ def test_a_restore_brings_back_the_edits_instead_of_re_seeding(tmp_path, monkeyp
         assert [v["deleted"] for v in retired] == [True, False]
 
 
-def test_a_malformed_loop_setting_does_not_block_startup(tmp_path, monkeypatch):
+def test_a_malformed_saved_loop_setting_does_not_block_startup(tmp_path, monkeypatch):
     """Resolving where a doctrine comes from parses that loop's whole config,
     so an unrelated bad tunable must degrade to an unseeded doctrine rather
     than abort the server."""
-    monkeypatch.setenv("MYCELIUM_INGEST_OP_CAP", "not-a-number")
+    conn = prompt_store.connect(tmp_path / "mycelium-prompts.db")
+    prompt_store.migrate(conn)
+    conn.execute(
+        "INSERT INTO product_settings VALUES ('ingest', 1, ?)",
+        ('{"kind":"ingest","op_cap":"not-a-number"}',),
+    )
+    conn.close()
     client = _app(tmp_path, monkeypatch)
     with client:
         names = [

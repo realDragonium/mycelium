@@ -1,7 +1,7 @@
 """Tunables for the documentation-generation loop.
 
 Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Other task budgets come from `MYCELIUM_DOCGEN_*` variables.
+once on upgrade. Task budgets come from saved AI settings.
 
 Claude remains the default, with the same built-in model as ingest. GPT uses an
 explicitly configured model ID. A generation

@@ -24,6 +24,7 @@ from mycelium.docgen.destinations import (
     load_destinations,
 )
 from mycelium.docgen.github_destination import deliver, read
+from product_settings_helpers import import_product_environment
 
 TOKEN = "credential-sentinel-8d76"
 REFLECTION_TOKEN = "dec0de00" * 5
@@ -808,7 +809,7 @@ def test_document_coordinates_cannot_expose_a_configured_credential():
             _config(),
             document,
             {
-                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
                 "DOCS_GITHUB_TOKEN": TOKEN,
                 "OTHER_GITHUB_TOKEN": other_token,
             },
@@ -841,6 +842,7 @@ def test_a_failed_review_can_be_retried_against_the_existing_remote_branch(
         json.dumps({"knowledge-base": _entry()}),
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
     requests: list[httpx.Request] = []
     remote = {
         "branch_sha": None,
@@ -1133,7 +1135,7 @@ def test_delivery_scrubs_every_configured_destinations_credential(caplog):
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     env = {
-        "MYCELIUM_DOC_DESTINATIONS": raw,
+        "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
         "DOCS_GITHUB_TOKEN": TOKEN,
         "OTHER_GITHUB_TOKEN": other_token,
     }
@@ -1169,7 +1171,7 @@ def test_delivery_scrubs_credentials_from_child_logger_handlers(caplog):
                 _config(),
                 _document(),
                 {
-                    "MYCELIUM_DOC_DESTINATIONS": raw,
+                    "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
                     "DOCS_GITHUB_TOKEN": TOKEN,
                     "OTHER_GITHUB_TOKEN": other_token,
                 },
@@ -1204,7 +1206,7 @@ def test_delivery_scrubs_credentials_from_logged_exceptions(caplog):
                 _config(),
                 _document(),
                 {
-                    "MYCELIUM_DOC_DESTINATIONS": raw,
+                    "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
                     "DOCS_GITHUB_TOKEN": TOKEN,
                     "OTHER_GITHUB_TOKEN": other_token,
                 },
@@ -1258,7 +1260,7 @@ def test_review_reference_cannot_expose_a_configured_credential():
             _config(),
             _document(),
             {
-                "MYCELIUM_DOC_DESTINATIONS": raw,
+                "MYCELIUM_GITHUB_CREDENTIALS": _bindings(raw),
                 "DOCS_GITHUB_TOKEN": TOKEN,
                 "OTHER_GITHUB_TOKEN": other_token,
             },
@@ -1420,6 +1422,7 @@ def test_the_delivery_tool_records_a_completed_delivery(tmp_path, monkeypatch):
         json.dumps({"knowledge-base": _entry()}),
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
     _, handler = _responses()
     monkeypatch.setattr(
         github_destination,
@@ -1457,6 +1460,7 @@ def test_listing_destinations_returns_only_generic_configuration(monkeypatch):
         json.dumps({"knowledge-base": _entry()}),
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
 
     listed = server.list_documentation_destinations()
 
@@ -1489,8 +1493,8 @@ def test_listing_refuses_public_configuration_that_contains_the_credential(
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
 
-    with pytest.raises(ValueError) as excinfo:
-        server.list_documentation_destinations()
+    with pytest.raises(DestinationError) as excinfo:
+        import_product_environment()
 
     assert TOKEN not in str(excinfo.value)
 
@@ -1502,8 +1506,8 @@ def test_malformed_configuration_scrubs_a_credential_from_its_name(monkeypatch):
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
 
-    with pytest.raises(ValueError) as excinfo:
-        server.list_documentation_destinations()
+    with pytest.raises(DestinationError) as excinfo:
+        import_product_environment()
 
     assert TOKEN not in str(excinfo.value)
     assert "***" in str(excinfo.value)
@@ -1515,6 +1519,7 @@ def test_unknown_destination_does_not_reflect_a_configured_credential(monkeypatc
         json.dumps({"knowledge-base": _entry()}),
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
 
     with pytest.raises(DestinationError) as excinfo:
         get_destination(TOKEN)
@@ -1543,6 +1548,7 @@ def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
         json.dumps({"knowledge-base": _entry()}),
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
 
     try:
         with pytest.raises(ValueError) as excinfo:
@@ -1573,6 +1579,7 @@ def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
         json.dumps({"knowledge-base": _entry()}),
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
 
     try:
@@ -1620,6 +1627,7 @@ def test_delivery_tool_never_captures_credentials_in_request_traces(monkeypatch)
         json.dumps({"knowledge-base": _entry()}),
     )
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
+    import_product_environment()
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     monkeypatch.setenv("MYCELIUM_OPS_CAPTURE", "summary")
     monkeypatch.setattr(ops_ledger, "enabled", lambda: True)
@@ -1680,8 +1688,8 @@ def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(
     entry["config"] = None
     monkeypatch.setenv("MYCELIUM_DOC_DESTINATIONS", json.dumps({"broken": entry}))
 
-    with pytest.raises(ValueError, match="config must be a JSON object"):
-        server.list_documentation_destinations()
+    with pytest.raises(DestinationError, match="config must be a JSON object"):
+        load_destinations({"MYCELIUM_DOC_DESTINATIONS": json.dumps({"broken": entry})})
 
 
 def test_delivering_an_unknown_document_refuses_before_contacting_a_destination(
@@ -1723,3 +1731,15 @@ def test_a_drafter_cannot_trigger_document_delivery():
             server.deliver_document("gdc_missing", "knowledge-base")
     finally:
         auth.current_principal.reset(token)
+
+
+def _bindings(raw: str) -> str:
+    return json.dumps(
+        {
+            name: {
+                "host": entry["config"].get("host", "github.com"),
+                "token_env": entry["config"]["token_env"],
+            }
+            for name, entry in json.loads(raw).items()
+        }
+    )
