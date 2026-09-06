@@ -328,6 +328,13 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
         assert options.json()["models"][1]["model"] == "configured-gpt"
         assert options.json()["guideline_sets"] == {"public": ["how-to"]}
         assert "test-key" not in options.text
+        for path, detail in (
+            ("runs", "documentation run not found: missing"),
+            ("documents", "generated document not found: missing"),
+        ):
+            missing = client.get(f"/api/documentation/{path}/missing")
+            assert missing.status_code == 404
+            assert missing.json() == {"detail": detail}
         response = client.post(
             "/api/documentation/runs", json={"prompt": "SSO", "provider": "openai"}
         )

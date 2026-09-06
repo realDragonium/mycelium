@@ -1288,13 +1288,23 @@ def documentation_runs_http(request: Request) -> dict[str, object]:
 @app.get("/api/documentation/runs/{run_id}")
 def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
     _require_principal(request)
-    return server.get_documentation_run(run_id)
+    try:
+        return server.get_documentation_run(run_id)
+    except ValueError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/documentation/documents/{document_id}")
 def generated_document_http(document_id: str, request: Request) -> dict[str, object]:
     _require_principal(request)
-    return server.get_generated_document(document_id)
+    try:
+        return server.get_generated_document(document_id)
+    except ValueError as exc:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/api/drafts")
