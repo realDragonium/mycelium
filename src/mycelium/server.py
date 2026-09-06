@@ -392,6 +392,7 @@ def tool(
     *,
     role: str | None = None,
     real_role: bool = False,
+    capture_request: bool = True,
 ) -> Callable[..., Any]:
     """Register `func` as both an MCP tool and an HTTP endpoint.
 
@@ -489,7 +490,11 @@ def tool(
             # Snapshot the request kwargs before _dispatch pops draft_id. Drop
             # draft_id from the captured request — it has its own ledger column,
             # and it shouldn't be duplicated into the free-form request summary.
-            captured = {k: v for k, v in kwargs.items() if k != "draft_id"}
+            captured = (
+                {k: v for k, v in kwargs.items() if k != "draft_id"}
+                if capture_request
+                else {}
+            )
             ctx = ops_ledger.CallContext(
                 tool=func.__name__,
                 actor=getattr(_auth.current_principal.get(), "id", None),
@@ -2325,7 +2330,7 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     return docs_store.serialize_document(row)
 
 
-@tool(role="writer", real_role=True)
+@tool(role="writer", real_role=True, capture_request=False)
 def deliver_document(document_id: str, destination: str) -> dict[str, str]:
     """Deliver a generated document into a configured destination's review flow.
 
