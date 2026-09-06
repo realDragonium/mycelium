@@ -42,6 +42,7 @@ function parseHash() {
   if (parts[0] === 'ask') return { view: 'ask', query: p.q || '' };
   if (parts[0] === 'ingest') return { view: 'ingest' };
   if (parts[0] === 'research') return { view: 'research' };
+  if (parts[0] === 'documentation') return { view: 'documentation', id: p.run || null };
   if (parts[0] === 'coverage') return { view: 'coverage' };
   if (parts[0] === 'mentions') return { view: 'mentions' };
   if (parts[0] === 'drafts') return { view: 'drafts' };
@@ -55,6 +56,7 @@ function routeToHash(n) {
   if (n.view === 'ask') return `#/ask?q=${encodeURIComponent(n.query || '')}`;
   if (n.view === 'ingest') return '#/ingest';
   if (n.view === 'research') return '#/research';
+  if (n.view === 'documentation') return '#/documentation' + (n.id ? '?run=' + encodeURIComponent(n.id) : '');
   if (n.view === 'coverage') return '#/coverage';
   if (n.view === 'mentions') return '#/mentions';
   if (n.view === 'drafts') return '#/drafts';

@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS documentation_runs (
     error         TEXT,
     draft_title   TEXT,
     draft_body    TEXT,
-    matched_document_id TEXT
+    matched_document_id TEXT,
+    provider      TEXT,
+    model         TEXT
 );
 CREATE INDEX IF NOT EXISTS documentation_runs_created ON documentation_runs (created_at);
 CREATE INDEX IF NOT EXISTS documentation_runs_active ON documentation_runs (started_at) WHERE finished_at IS NULL;
@@ -106,6 +108,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(GENERATED_DOCUMENTS_SCHEMA)
     _add_refused_draft_columns(conn)
     _add_matched_document_column(conn)
+    _add_model_columns(conn)
     _add_generated_document_review(conn)
     _add_generated_document_delivery(conn)
     _rekey_generated_documents(conn)
@@ -136,6 +139,15 @@ def _add_matched_document_column(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE documentation_runs ADD COLUMN matched_document_id TEXT"
         )
+
+
+def _add_model_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    for column in ("provider", "model"):
+        if column not in columns:
+            conn.execute(f"ALTER TABLE documentation_runs ADD COLUMN {column} TEXT")
 
 
 def _add_generated_document_review(conn: sqlite3.Connection) -> None:
@@ -323,13 +335,24 @@ def create_run(
     guideline_set: str | None = None,
     document_type: str | None = None,
     created_by: str | None,
+    provider: str | None = None,
+    model: str | None = None,
 ) -> str:
     run_id = "drn_" + _uuid.uuid4().hex[:12]
     conn.execute(
         "INSERT INTO documentation_runs "
-        "(id, prompt, guideline_set, document_type, created_at, created_by) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (run_id, prompt, guideline_set, document_type, _now(), created_by),
+        "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            run_id,
+            prompt,
+            guideline_set,
+            document_type,
+            _now(),
+            created_by,
+            provider,
+            model,
+        ),
     )
     conn.commit()
     return run_id
@@ -463,6 +486,8 @@ def serialize_run(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "prompt": row["prompt"],
+        "provider": row["provider"],
+        "model": row["model"],
         "guideline_set": row["guideline_set"],
         "document_type": row["document_type"],
         "status": status_for(row),

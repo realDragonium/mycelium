@@ -27,6 +27,7 @@ class TraceBuilder:
     op_cap: int
     wall_clock_s: float
     #: the request the run was asked to document.
+    provider: str = "claude"
     prompt: str = ""
     #: what the request named, before the run resolved anything.
     requested_set: str | None = None
@@ -83,7 +84,11 @@ class TraceBuilder:
     def add_usage(self, usage: Any) -> None:
         agentloop.add_usage(self, usage)
 
-    def cost_usd(self, input_per_mtok: float, output_per_mtok: float) -> float:
+    def cost_usd(
+        self, input_per_mtok: float | None, output_per_mtok: float | None
+    ) -> float | None:
+        if input_per_mtok is None or output_per_mtok is None:
+            return None
         return agentloop.cost_usd(self.tokens, input_per_mtok, output_per_mtok)
 
     def build(
@@ -92,8 +97,8 @@ class TraceBuilder:
         outcome: str,
         latency_ms: float,
         grounding: dict,
-        input_per_mtok: float,
-        output_per_mtok: float,
+        input_per_mtok: float | None,
+        output_per_mtok: float | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
@@ -102,6 +107,7 @@ class TraceBuilder:
         return {
             "prompt": self.prompt,
             "model": self.model,
+            "provider": self.provider,
             "outcome": outcome,
             "requested_set": self.requested_set,
             "requested_type": self.requested_type,

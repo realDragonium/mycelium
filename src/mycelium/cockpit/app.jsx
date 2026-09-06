@@ -177,6 +177,7 @@ function App() {
     case 'ask': screen = <AskSurface key={router.query} query={router.query} />; break;
     case 'ingest': screen = <IngestSurface key={igNonce} />; break;
     case 'research': screen = <ResearchSurface key="research" />; break;
+    case 'documentation': screen = <DocumentationSurface runId={router.id} />; break;
     case 'coverage': screen = <CoverageScreen />; break;
     case 'mentions': screen = <MentionsScreen />; break;
     case 'drafts': screen = <DraftsList />; break;
@@ -203,6 +204,7 @@ function App() {
             <button className={`nav-btn${router.view === 'mentions' ? ' on' : ''}`} onClick={() => router.go({ view: 'mentions' })}><I.interp width="15" height="15" />Mentions{openMentions > 0 && <span className="nb-badge">{openMentions}</span>}</button>
             <button className={`drafts-btn${openDrafts ? ' has-open' : ''}`} onClick={() => router.go({ view: 'drafts' })}><I.prov width="15" height="15" />Drafts{openDrafts > 0 && <span className="db-badge">{openDrafts}</span>}</button>
             <button className={`nav-btn${router.view === 'research' ? ' on' : ''}`} onClick={() => router.go({ view: 'research' })}><I.find width="15" height="15" />Research</button>
+            <button className={`nav-btn${router.view === 'documentation' ? ' on' : ''}`} onClick={() => router.go({ view: 'documentation' })}><I.prov width="15" height="15" />Documentation</button>
             <button className="ingest-btn" onClick={() => window.MYC_GO_INGEST(null)}><I.ingest width="15" height="15" />Ingest</button>
             {isLanding && <div className="topbar-meta">
               <span><span className="dot" style={{ display: 'inline-block', marginRight: 6 }} /><b>writes</b> → drafts</span>
