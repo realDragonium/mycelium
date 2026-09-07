@@ -54,17 +54,13 @@ def test_sql_reader_preserves_parallel_conditions_and_filters_types(
     )
 
 
-def test_sql_reader_can_start_at_a_negated_condition_and_excludes_entity_edges(
+def test_sql_reader_can_start_at_a_negated_condition(
     conn: sqlite3.Connection,
 ):
     a, b = pair(conn)
     condition = store.create_statement(conn, "state", "The form is invalid.")
     when = {"op": "not", "of": [{"statement_id": condition}]}
     store.insert_links(conn, [(a, b, "performs", when)])
-    entity = store.create_entity(conn, "A decorative entity")
-    store.insert_entity_statement_links(
-        conn, [(entity, condition, "se", "legacy", None)]
-    )
     conn.commit()
     result = Result.model_validate(server.find_statement_connections(condition, b))
     assert result.status == "found"
@@ -74,7 +70,6 @@ def test_sql_reader_can_start_at_a_negated_condition_and_excludes_entity_edges(
     )
     assert selected.when is not None
     assert selected.when.model_dump() == when
-    assert entity not in {s.id for s in result.statements}
 
 
 def test_real_vector_resolution_reuses_search_ranking_without_hydrating_links(

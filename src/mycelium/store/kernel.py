@@ -337,27 +337,20 @@ CREATE INDEX IF NOT EXISTS statement_links_to_id
 -- Leaves have `statement_id` set and `op` NULL. The CHECK constraint
 -- enforces exactly one of the two columns. The root of a link's tree
 -- is the node with parent_id = NULL; other nodes nest under it via
--- parent_id. `link_kind` discriminates which link table `link_id`
--- belongs to: 'statement' for statement_links, 'entity_statement' for
--- entity_statement_links. We can't express a conditional FK in SQLite,
--- so the link tables don't FK here — cascade-on-link-delete is enforced
--- in app code (delete the when_nodes rows when the owning link goes
--- away). ON DELETE RESTRICT on statement_id makes deleting a statement
--- referenced anywhere in a when-tree fail loudly — the writer must
--- rewrite or remove the references first.
+-- parent_id. Deleting the owning statement link cascades to its tree.
+-- ON DELETE RESTRICT on statement_id requires writers to rewrite or remove
+-- conditions before deleting the statements they reference.
 CREATE TABLE IF NOT EXISTS when_nodes (
     node_id     INTEGER PRIMARY KEY AUTOINCREMENT,
-    link_id     INTEGER NOT NULL,
-    link_kind   TEXT NOT NULL DEFAULT 'statement',
+    link_id     INTEGER NOT NULL REFERENCES statement_links(link_id) ON DELETE CASCADE,
     parent_id   INTEGER REFERENCES when_nodes(node_id) ON DELETE CASCADE,
     op          TEXT,
     statement_id TEXT REFERENCES statements(id) ON DELETE RESTRICT,
     child_index INTEGER NOT NULL,
     CHECK ((op IS NULL) <> (statement_id IS NULL)),
-    CHECK (op IS NULL OR op IN ('and', 'or', 'not')),
-    CHECK (link_kind IN ('statement', 'entity_statement'))
+    CHECK (op IS NULL OR op IN ('and', 'or', 'not'))
 );
-CREATE INDEX IF NOT EXISTS when_nodes_link_id     ON when_nodes (link_kind, link_id);
+CREATE INDEX IF NOT EXISTS when_nodes_link_id     ON when_nodes (link_id);
 CREATE INDEX IF NOT EXISTS when_nodes_statement_id ON when_nodes (statement_id);
 CREATE INDEX IF NOT EXISTS when_nodes_statement_link
     ON when_nodes (statement_id, link_id);
@@ -376,50 +369,6 @@ CREATE TABLE IF NOT EXISTS entity_links (
     created_by     TEXT,
     PRIMARY KEY (from_entity_id, to_entity_id, link_type)
 );
-
--- Mixed entity↔statement directed edges. Same vocabulary and `when`
--- semantics as statement_links — externally, callers see a single uniform
--- link API where endpoints may be statements or entities. We keep a
--- separate table (rather than overloading statement_links) because
--- endpoints are strongly typed by column: exactly one entity and one
--- statement per row, with `direction` recording which side is the source.
---   direction = 'es' → entity is the source, statement is the target
---   direction = 'se' → statement is the source, entity is the target
--- `when_hash` mirrors statement_links; its tree lives in `when_nodes`
--- under `link_kind = 'entity_statement'`.
-CREATE TABLE IF NOT EXISTS entity_statement_links (
-    link_id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    entity_id    TEXT NOT NULL REFERENCES entities(id),
-    statement_id TEXT NOT NULL REFERENCES statements(id),
-    direction    TEXT NOT NULL CHECK (direction IN ('es', 'se')),
-    link_type    TEXT NOT NULL,
-    when_hash    TEXT NOT NULL,
-    created_at   TEXT,
-    created_by   TEXT,
-    UNIQUE (entity_id, statement_id, direction, link_type, when_hash)
-);
-CREATE INDEX IF NOT EXISTS entity_statement_links_entity
-    ON entity_statement_links (entity_id);
-CREATE INDEX IF NOT EXISTS entity_statement_links_statement
-    ON entity_statement_links (statement_id);
-
--- Triggers replace the FK-driven cascade we used to have on
--- `when_nodes.link_id`. The FK had to go (the column is polymorphic
--- now), so each link table fires its own AFTER DELETE trigger that
--- scopes the cleanup by `link_kind`.
-CREATE TRIGGER IF NOT EXISTS statement_links_delete_cascade_when
-AFTER DELETE ON statement_links
-BEGIN
-    DELETE FROM when_nodes
-    WHERE link_id = OLD.link_id AND link_kind = 'statement';
-END;
-
-CREATE TRIGGER IF NOT EXISTS entity_statement_links_delete_cascade_when
-AFTER DELETE ON entity_statement_links
-BEGIN
-    DELETE FROM when_nodes
-    WHERE link_id = OLD.link_id AND link_kind = 'entity_statement';
-END;
 
 -- Vocabulary glossaries — DB-backed catalogs that document the
 -- meaning of each statement `kind`, statement-link `link_type`, and
@@ -691,6 +640,7 @@ def migrate(conn: sqlite3.Connection) -> None:
             is None
         )
 
+    migrations.require_rescued_entity_statement_links(conn)
     new_glossary_tables = absent_glossary_tables()
     if new_glossary_tables:
         # Close any pending implicit transaction, as executescript did here.
@@ -726,19 +676,12 @@ def _insert_when_tree(
     conn: sqlite3.Connection,
     link_id: int,
     expr: dict[str, Any],
-    *,
-    link_kind: str = "statement",
 ) -> int:
     """Insert every node of the (already-canonicalized) `expr` under
     `link_id`. Returns the root node_id. The caller is responsible for
     canonicalizing first; this function preserves whatever shape it
-    receives.
-
-    `link_kind` discriminates which link table owns this tree
-    ('statement' for statement_links, 'entity_statement' for
-    entity_statement_links) — the column is part of how we look the
-    tree back up."""
-    return _insert_when_node(conn, link_id, None, 0, expr, link_kind=link_kind)
+    receives."""
+    return _insert_when_node(conn, link_id, None, 0, expr)
 
 
 def _insert_when_node(
@@ -747,42 +690,37 @@ def _insert_when_node(
     parent_id: int | None,
     child_index: int,
     expr: dict[str, Any],
-    *,
-    link_kind: str = "statement",
 ) -> int:
     if "statement_id" in expr:
         cur = conn.execute(
             "INSERT INTO when_nodes "
-            "(link_id, link_kind, parent_id, op, statement_id, child_index) "
-            "VALUES (?, ?, ?, NULL, ?, ?)",
-            (link_id, link_kind, parent_id, expr["statement_id"], child_index),
+            "(link_id, parent_id, op, statement_id, child_index) "
+            "VALUES (?, ?, NULL, ?, ?)",
+            (link_id, parent_id, expr["statement_id"], child_index),
         )
         return cur.lastrowid
     cur = conn.execute(
         "INSERT INTO when_nodes "
-        "(link_id, link_kind, parent_id, op, statement_id, child_index) "
-        "VALUES (?, ?, ?, ?, NULL, ?)",
-        (link_id, link_kind, parent_id, expr["op"], child_index),
+        "(link_id, parent_id, op, statement_id, child_index) "
+        "VALUES (?, ?, ?, NULL, ?)",
+        (link_id, parent_id, expr["op"], child_index),
     )
     node_id = cur.lastrowid
     for i, child in enumerate(expr["of"]):
-        _insert_when_node(conn, link_id, node_id, i, child, link_kind=link_kind)
+        _insert_when_node(conn, link_id, node_id, i, child)
     return node_id
 
 
 def _load_when_tree(
     conn: sqlite3.Connection,
     link_id: int,
-    *,
-    link_kind: str = "statement",
 ) -> dict[str, Any] | None:
     """Reconstruct the when-expression tree for `link_id`, or None if
-    the link is unconditional (no when_nodes rows). `link_kind` selects
-    which link table the tree belongs to."""
+    the link is unconditional (no when_nodes rows)."""
     rows = conn.execute(
         "SELECT node_id, parent_id, op, statement_id, child_index "
-        "FROM when_nodes WHERE link_id = ? AND link_kind = ?",
-        (link_id, link_kind),
+        "FROM when_nodes WHERE link_id = ?",
+        (link_id,),
     ).fetchall()
     if not rows:
         return None

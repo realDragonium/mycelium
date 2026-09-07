@@ -780,6 +780,97 @@ def _migration_v13_preferred_names(conn: sqlite3.Connection) -> None:
         )
 
 
+def require_rescued_entity_statement_links(conn: sqlite3.Connection) -> None:
+    mixed_links = 0
+    mixed_conditions = 0
+    if _has_table(conn, "entity_statement_links"):
+        mixed_links = conn.execute(
+            "SELECT COUNT(*) FROM entity_statement_links"
+        ).fetchone()[0]
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(when_nodes)")}
+    if "link_kind" in columns:
+        mixed_conditions = conn.execute(
+            "SELECT COUNT(*) FROM when_nodes WHERE link_kind != 'statement'"
+        ).fetchone()[0]
+    if mixed_links or mixed_conditions:
+        raise RuntimeError(
+            "entity↔statement migration requires a completed knowledge rescue: "
+            f"{mixed_links} legacy links and {mixed_conditions} condition nodes "
+            "remain. Keep the previous build running, preserve their meaning in "
+            "statement text or statement links, and explicitly remove the rescued "
+            "legacy links before upgrading. Back up the original database first. "
+            "See docs/ENTITY_STATEMENT_MIGRATION.md. No legacy links were deleted."
+        )
+
+
+def _migration_v14_statement_link_conditions(conn: sqlite3.Connection) -> None:
+    require_rescued_entity_statement_links(conn)
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(when_nodes)")}
+    # SQLite ignores foreign_keys changes inside transactions. The rebuild
+    # itself must be transactional so failed integrity checks restore the old tree.
+    conn.commit()
+    foreign_keys = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        require_rescued_entity_statement_links(conn)
+        conn.execute(
+            "DROP TRIGGER IF EXISTS entity_statement_links_delete_cascade_when"
+        )
+        conn.execute("DROP TRIGGER IF EXISTS statement_links_delete_cascade_when")
+        conn.execute("DROP TABLE IF EXISTS entity_statement_links")
+        if "link_kind" in columns:
+            sequence = conn.execute(
+                "SELECT seq FROM sqlite_sequence WHERE name = 'when_nodes'"
+            ).fetchone()
+            conn.execute("""
+                CREATE TABLE when_nodes_v14 (
+                    node_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    link_id INTEGER NOT NULL REFERENCES statement_links(link_id)
+                        ON DELETE CASCADE,
+                    parent_id INTEGER REFERENCES when_nodes_v14(node_id)
+                        ON DELETE CASCADE,
+                    op TEXT,
+                    statement_id TEXT REFERENCES statements(id) ON DELETE RESTRICT,
+                    child_index INTEGER NOT NULL,
+                    CHECK ((op IS NULL) <> (statement_id IS NULL)),
+                    CHECK (op IS NULL OR op IN ('and', 'or', 'not'))
+                )
+            """)
+            conn.execute(
+                "INSERT INTO when_nodes_v14 "
+                "(node_id, link_id, parent_id, op, statement_id, child_index) "
+                "SELECT node_id, link_id, parent_id, op, statement_id, child_index "
+                "FROM when_nodes"
+            )
+            conn.execute("DROP TABLE when_nodes")
+            conn.execute("ALTER TABLE when_nodes_v14 RENAME TO when_nodes")
+            if sequence is not None:
+                conn.execute(
+                    "UPDATE sqlite_sequence SET seq = MAX(seq, ?) WHERE name = 'when_nodes'",
+                    (sequence["seq"],),
+                )
+            conn.execute("CREATE INDEX when_nodes_link_id ON when_nodes (link_id)")
+            conn.execute(
+                "CREATE INDEX when_nodes_statement_id ON when_nodes (statement_id)"
+            )
+            conn.execute(
+                "CREATE INDEX when_nodes_statement_link "
+                "ON when_nodes (statement_id, link_id)"
+            )
+            if conn.execute("PRAGMA foreign_key_check(when_nodes)").fetchone():
+                raise RuntimeError(
+                    "condition tree integrity failed; migration rolled back"
+                )
+        _set_user_version(conn, 14)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.execute(f"PRAGMA foreign_keys = {int(foreign_keys)}")
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -797,6 +888,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (11, _migration_v11_passive_by_aliases),
     (12, _migration_v12_connection_indexes),
     (13, _migration_v13_preferred_names),
+    (14, _migration_v14_statement_link_conditions),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -829,6 +921,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             f"latest known version {CURRENT_VERSION}; aborting to avoid running "
             "against an unknown-future schema (downgrade or upgrade the build)"
         )
+    if current < 14:
+        require_rescued_entity_statement_links(conn)
     if current == 0 and _looks_like_fresh_db(conn):
         _set_user_version(conn, CURRENT_VERSION)
         conn.commit()
@@ -888,7 +982,7 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
     legacy shape that needs migrations.
 
     The sentinel checks one column added in a representative past
-    migration — `entities.created_at` (v1), `when_nodes.link_kind` (v3),
+    migration — `entities.created_at` (v1), absence of `when_nodes.link_kind` (v14),
     `names.generated_from_name_id` (v5), the NOCASE collation on
     `names.text` (v6), and `link_type_aliases.direction` (v9). A fresh DB
     will have all of them (created in one
@@ -915,7 +1009,9 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
     return (
         _has("entities", "created_at")
         and _has("entities", "preferred_name_id")
-        and _has("when_nodes", "link_kind")
+        and _has("when_nodes", "link_id")
+        and not _has("when_nodes", "link_kind")
+        and not _has_table(conn, "entity_statement_links")
         and _has("names", "generated_from_name_id")
         and "NOCASE" in _table_sql("names").upper()
         and _has("link_type_aliases", "direction")

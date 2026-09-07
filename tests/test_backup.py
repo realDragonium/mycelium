@@ -1198,3 +1198,105 @@ def test_historical_mention_approval_survives_archive_and_recompute(tmp_path):
         assert store.list_pending_mentions(conn, "approved")[0]["name"] == "SSO"
     finally:
         conn.close()
+def test_import_v12_statement_conditions_preserves_tree(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    ids = _seed_substrate(src)
+    conn = store.connect(src / "mycelium.db")
+    a, b = ids["statements"]
+    when = {"op": "not", "of": [{"statement_id": a}]}
+    with store.transaction(conn):
+        store.insert_links(conn, [(a, b, "triggers", when)])
+    conn.close()
+    archive = tmp_path / "snapshot.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def legacy_conditions(work: Path) -> None:
+        path = work / "data.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            if row["_kind"] == "when_node":
+                row["link_kind"] = "statement"
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
+        path = work / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["schema_version"] = 12
+        path.write_text(json.dumps(manifest))
+
+    archive = _repack(
+        archive, tmp_path / "work", tmp_path / "legacy.tar.gz", legacy_conditions
+    )
+    dst = tmp_path / "restored"
+    backup.import_substrate(archive, dst)
+    conn = store.connect(dst / "mycelium.db")
+    assert (b, "triggers", when) in store.get_links(conn, a)
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.close()
+
+
+@pytest.mark.parametrize("legacy_shape", ["link", "condition", "manifest"])
+def test_import_refuses_unrescued_legacy_knowledge_before_force_restore(
+    tmp_path, legacy_shape
+):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    archive = tmp_path / "snapshot.tar.gz"
+    backup.export_substrate(src, archive)
+
+    def add_legacy_knowledge(work: Path) -> None:
+        if legacy_shape == "manifest":
+            path = work / "manifest.json"
+            manifest = json.loads(path.read_text())
+            manifest["row_counts"]["entity_statement_links"] = 1
+            path.write_text(json.dumps(manifest))
+        else:
+            row = (
+                {"_kind": "entity_statement_link", "link_id": 1}
+                if legacy_shape == "link"
+                else {
+                    "_kind": "when_node",
+                    "link_id": 1,
+                    "link_kind": "entity_statement",
+                }
+            )
+            with (work / "data.jsonl").open("a") as output:
+                output.write(json.dumps(row) + "\n")
+
+    archive = _repack(
+        archive, tmp_path / "work", tmp_path / "legacy.tar.gz", add_legacy_knowledge
+    )
+    dst = tmp_path / "existing"
+    dst.mkdir()
+    _seed_substrate(dst)
+    before = {path.name: path.read_bytes() for path in dst.iterdir() if path.is_file()}
+    with pytest.raises(ValueError, match="complete the knowledge rescue"):
+        backup.import_substrate(archive, dst, force=True)
+    after = {path.name: path.read_bytes() for path in dst.iterdir() if path.is_file()}
+    assert after == before
+    assert not list(tmp_path.glob("existing.before-restore.*"))
+
+
+def test_export_refuses_to_omit_unrescued_legacy_links(tmp_path):
+    from mycelium import migrations
+
+    src = tmp_path / "src"
+    src.mkdir()
+    ids = _seed_substrate(src)
+    conn = store.connect(src / "mycelium.db")
+    migrations._migration_v3_entity_statement_links(conn)
+    conn.execute(
+        "INSERT INTO entity_statement_links "
+        "(entity_id, statement_id, direction, link_type, when_hash) "
+        "VALUES (?, ?, 'es', 'performs', 'NONE')",
+        (ids["entities"][0], ids["statements"][0]),
+    )
+    conn.execute("PRAGMA user_version = 12")
+    conn.commit()
+    before = list(conn.iterdump())
+    archive = tmp_path / "snapshot.tar.gz"
+    with pytest.raises(RuntimeError, match="completed knowledge rescue"):
+        backup.export_substrate(src, archive)
+    assert list(conn.iterdump()) == before
+    assert not archive.exists()
+    conn.close()

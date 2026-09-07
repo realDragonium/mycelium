@@ -28,8 +28,8 @@ to use types coherently and adds new vocabulary as the data forces it.
 ## Data model
 
 The substrate stores three record kinds (entities, names, statements)
-and three link kinds (statement↔statement, entity↔entity,
-entity↔statement). That is the whole substrate.
+and two link kinds (statement↔statement and entity↔entity). Names connect
+entities to statement text through derived mentions.
 
 An **entity** is a record holding an opaque id and a description. Entities
 are the nouns of the domain — features, concepts, capabilities, surfaces.
@@ -304,9 +304,7 @@ Returns `{statements: [{id, kind, text, mentions, links,
 incoming_links, when_references}, ...], missing}` in the same order
 as the input ids, where `mentions` is `[{name_id, name, entity_id}]`,
 `links` is the outgoing edges this statement owns, and `incoming_links`
-is `[{from_id, link_type}]` listing every node that points at this one
-(statement *or* entity — the substrate treats them uniformly on
-hydration). Unknown ids appear in `missing` while known records are still
+is `[{from_id, link_type}]` listing every statement that points at this one. Unknown ids appear in `missing` while known records are still
 returned; an empty input returns empty `statements` and `missing` lists. Used by
 callers that already have ids in hand (from a search hit's links field, an
 entity mention chain, etc.) and want the full hydrated records.
@@ -314,14 +312,10 @@ entity mention chain, etc.) and want the full hydrated records.
 ### get_entity
 
 `get_entity(id)` returns one entity hydrated with its names and every
-kind of link it participates in: `{id, description, names: [{id, text}],
-links, incoming_links, statement_links, incoming_statement_links}`.
-`links` / `incoming_links` are the entity↔entity edges (separate
-vocabulary, see `list_entity_link_types`). `statement_links` /
-`incoming_statement_links` are mixed entity↔statement edges with the
-same `{to_id|from_id, link_type, when?}` shape that `add_links`
-produces. The response always includes `missing`: it is empty for a resolved
-entity, while an unknown id returns only `{id, missing: [id]}`. To find
+entity relationship it participates in: `{id, description, names: [{id, text}],
+links, incoming_links}`. `links` / `incoming_links` are entity↔entity edges
+(separate vocabulary, see `list_entity_link_types`). The response always
+includes `missing`: it is empty for a resolved entity, while an unknown id returns only `{id, missing: [id]}`. To find
 statements that mention an entity by name (rather than via a direct edge), use
 `search_statements` with the `mentions` filter.
 
@@ -440,9 +434,8 @@ ValueError on unknown id.
 ### add_links
 
 `add_links(links)` accepts a list of `{from_id, to_id, link_type,
-when?}` items and inserts each as a statement↔statement edge. New
-entity↔statement edges are rejected. Existing mixed edges remain stored,
-readable, removable, and transferable during merges. Entity↔entity links use
+when?}` items and inserts each as a statement↔statement edge.
+Entity↔statement edges are unsupported. Entity↔entity links use
 their own vocabulary and live behind `add_entity_links`.
 
 The operation is bulk-by-default — passing a single edge is just a
@@ -457,8 +450,7 @@ endpoint, plus every `statement_id` leaf inside any `when` tree) exists
 in the substrate. If any is unknown the call raises `ValueError` and
 inserts nothing, so a typo cannot half-apply a bulk insert. `when`
 leaves are always statement ids — an entity has no notion of
-"holding." The grammar applies to statement links and to legacy mixed edges
-addressed by `remove_links`; entity↔entity links do not accept `when`.
+"holding." Entity↔entity links do not accept `when`.
 
 No embedding work is performed — this is the cheap path for adding
 relationships between nodes that already exist. By contrast,
@@ -469,7 +461,7 @@ changing.
 ### remove_links
 
 `remove_links(links)` accepts the same `{from_id, to_id, link_type,
-when?}` shape and deletes each matching row. Match is exact on `when` — omitting the field
+when?}` shape with statement endpoints and deletes each matching row. Match is exact on `when` — omitting the field
 removes only the unconditional edge, leaving any same-typed conditional
 edges in place. Missing edges are a no-op rather than an error, which
 makes the call idempotent — calling it twice with the same input is

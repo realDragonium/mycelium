@@ -62,7 +62,7 @@ class ConnectionGraph:
                     (
                         "wn.link_id",
                         "when_nodes wn JOIN statement_links sl ON sl.link_id = wn.link_id",
-                        "wn.statement_id = ? AND wn.link_kind = 'statement'",
+                        "wn.statement_id = ?",
                     ),
                 ]
             )
@@ -108,8 +108,7 @@ class ConnectionGraph:
         condition = None
         if row["when_hash"] != "NONE":
             nodes = self.conn.execute(
-                "SELECT node_id FROM when_nodes WHERE link_kind = 'statement' "
-                "AND link_id = ? LIMIT ?",
+                "SELECT node_id FROM when_nodes WHERE link_id = ? LIMIT ?",
                 (edge_id, MAX_CONDITION_NODES + 1),
             ).fetchall()
             if len(nodes) > MAX_CONDITION_NODES:

@@ -529,3 +529,96 @@ def test_v7_carries_a_pre_matrix_db_forward_without_reseeding():
     assert store.admissible_link_types(conn, "event", "state") == frozenset(
         {"triggers"}
     )
+
+
+def _v12_with_condition() -> tuple[sqlite3.Connection, str, str, str]:
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    migrations._migration_v3_entity_statement_links(conn)
+    conn.commit()
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA user_version = 12")
+    a = store.create_statement(conn, "action", "Click Save.")
+    b = store.create_statement(conn, "event", "Changes are saved.")
+    condition = store.create_statement(conn, "state", "The user is signed in.")
+    store.insert_links(
+        conn,
+        [(a, b, "performs", {"op": "not", "of": [{"statement_id": condition}]})],
+    )
+    conn.commit()
+    return conn, a, b, condition
+
+
+def test_v14_preserves_condition_tree_and_restores_link_foreign_key():
+    conn, a, b, condition = _v12_with_condition()
+    before = [
+        tuple(r)
+        for r in conn.execute(
+            "SELECT node_id, link_id, parent_id, op, statement_id, child_index FROM when_nodes"
+        )
+    ]
+    conn.execute("UPDATE sqlite_sequence SET seq = 100 WHERE name = 'when_nodes'")
+    conn.commit()
+    store.migrate(conn)
+    assert (
+        conn.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'when_nodes'"
+        ).fetchone()[0]
+        == 100
+    )
+    assert not _has_column(conn, "when_nodes", "link_kind")
+    assert [tuple(r) for r in conn.execute("SELECT * FROM when_nodes")] == before
+    assert store.get_links(conn, a) == [
+        (b, "performs", {"op": "not", "of": [{"statement_id": condition}]})
+    ]
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    conn.execute("DELETE FROM statement_links")
+    assert conn.execute("SELECT COUNT(*) FROM when_nodes").fetchone()[0] == 0
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO when_nodes (link_id, statement_id, child_index) VALUES (?, ?, 0)",
+            (999, condition),
+        )
+    conn.close()
+
+
+@pytest.mark.parametrize("legacy_condition_only", [False, True])
+def test_v14_refuses_unrescued_knowledge_without_changing_database(
+    legacy_condition_only,
+):
+    conn, a, b, condition = _v12_with_condition()
+    entity = store.create_entity(conn, "Reviewer")
+    if legacy_condition_only:
+        conn.execute(
+            "INSERT INTO when_nodes (link_id, link_kind, statement_id, child_index) "
+            "VALUES (999, 'entity_statement', ?, 0)",
+            (condition,),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO entity_statement_links "
+            "(entity_id, statement_id, direction, link_type, when_hash) "
+            "VALUES (?, ?, 'es', 'performs', 'NONE')",
+            (entity, a),
+        )
+    conn.commit()
+    before = list(conn.iterdump())
+    with pytest.raises(RuntimeError, match="completed knowledge rescue"):
+        store.migrate(conn)
+    assert list(conn.iterdump()) == before
+    assert _user_version(conn) == 12
+    conn.close()
+
+
+def test_v14_failed_rebuild_rolls_back_schema_and_tree():
+    conn, a, b, condition = _v12_with_condition()
+    conn.execute("UPDATE when_nodes SET link_id = 999")
+    conn.commit()
+    before = list(conn.iterdump())
+    with pytest.raises(RuntimeError, match="condition tree integrity failed"):
+        migrations.apply_migrations(conn)
+    assert list(conn.iterdump()) == before
+    assert _user_version(conn) == 12
+    assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+    conn.close()

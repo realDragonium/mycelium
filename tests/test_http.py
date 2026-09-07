@@ -1753,7 +1753,6 @@ def test_delete_statement_cascades_mentions_and_links(tmp_path, monkeypatch):
             "incoming_links_removed": 1,  # parent --contains--> target
             "outgoing_links_removed": 1,  # target --triggers--> child
             "when_references_removed": 1,  # x --triggers (when target)--> y
-            "entity_statement_links_removed": 0,  # none were created
         }
 
         # Statement is gone — reported as missing, not raised
@@ -2499,7 +2498,6 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
             "mentions_removed": 2,  # one text-derived mention per statement
             "outgoing_entity_links_removed": 1,
             "incoming_entity_links_removed": 1,
-            "entity_statement_links_removed": 0,  # none were created
         }
 
         # Entity is gone.
