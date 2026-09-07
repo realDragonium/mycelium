@@ -1,6 +1,6 @@
 # Alias suggestions
 
-Open **Names & aliases → Suggestions** in either UI. AI proposes alternative
+Open **Names & aliases → AI suggestions** in either UI. AI proposes alternative
 names for existing concepts; names recognized in statement text support discovery
 without creating explicit entity-to-statement links.
 
@@ -12,6 +12,10 @@ whether it actually supports equivalence.
 
 To scan existing knowledge, expand **Discover aliases in existing statements**,
 search for statements, select up to 50 across searches, and start discovery.
+Manual scans use the Alias discovery model configuration; proposals made during
+ingestion use the Ingestion model configuration. Both support Claude and OpenAI
+and their configured reasoning effort.
+
 The scan uses one structured model request with existing names and descriptions
 as context. It creates a normal submitted draft containing the suggestions.
 Names or source changes during the scan prevent stale suggestions from landing.
