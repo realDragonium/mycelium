@@ -4535,11 +4535,20 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
     # entity so the plural stays attached to the same concept.
     with store.transaction(_db()):
         children = store.get_generated_children(_db(), name_id)
-        store.set_name_entity(_db(), name_id, to_entity_id)
         affected = list(store.statements_mentioning_name(_db(), name_id))
+        row = store.get_name_by_id(_db(), name_id)
+        if row is not None and row["entity_id"] != to_entity_id:
+            store.invalidate_name_decisions(
+                _db(), name_id, "name_moved_to_different_concept"
+            )
+        store.set_name_entity(_db(), name_id, to_entity_id)
         for child in children:
-            store.set_name_entity(_db(), child["id"], to_entity_id)
             affected.extend(store.statements_mentioning_name(_db(), child["id"]))
+            if child["entity_id"] != to_entity_id:
+                store.invalidate_name_decisions(
+                    _db(), child["id"], "name_moved_to_different_concept"
+                )
+            store.set_name_entity(_db(), child["id"], to_entity_id)
         store.enqueue_recompute_statements(_db(), affected)
     return {"name_id": name_id, "entity_id": to_entity_id}
 
@@ -4569,6 +4578,14 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     # text so statements containing it pick up the mention.
     with _persisted_index_write(names=True):
         affected = list(store.statements_mentioning_name(_db(), name_id))
+        old = store.get_name_by_id(_db(), name_id)
+        if old is not None and old["text"].casefold() != new_text.casefold():
+            store.invalidate_name_decisions(_db(), name_id, "name_spelling_corrected")
+            for child in store.get_generated_children(_db(), name_id):
+                affected.extend(store.statements_mentioning_name(_db(), child["id"]))
+                store.invalidate_name_decisions(
+                    _db(), child["id"], "source_name_spelling_corrected"
+                )
         store.rename_name(_db(), name_id, new_text)
         _reindex_name(name_id, new_text)
         affected.extend(_regenerate_plurals(name_id, new_text))
@@ -5062,7 +5079,7 @@ def get_entity(id: str) -> dict[str, Any]:
     Returns `{id, description, names, links, incoming_links,
     statement_links, incoming_statement_links}`:
 
-    - `names` is `[{id, text}]` sorted alphabetically.
+    - `names` is `[{id, text}]`, preferred name first, then alphabetical aliases.
     - `links` / `incoming_links` are the entity↔entity edges
       (`[{to_entity_id|from_entity_id, link_type}]`). Separate
       vocabulary from statement links; see `list_entity_link_types`.
@@ -5089,6 +5106,7 @@ def get_entity(id: str) -> dict[str, Any]:
         "id": row["id"],
         "missing": [],
         "description": row["description"] or "",
+        "preferred_name_id": row["preferred_name_id"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "created_by": row["created_by"],
@@ -5166,7 +5184,7 @@ def search_entities(
     entities; each entity is reported once, under its best-scoring
     name. Returns `{entities: [{id, name, matched_name, score,
     description}]}` sorted by score descending, capped at `k`. `name`
-    is the entity's alphabetically-first attached name (as in
+    is the entity's preferred name, with an alphabetical fallback (as in
     `list_entities`); `matched_name` is the alias that actually
     matched. Follow up with `get_entity(id)` for all aliases.
     """

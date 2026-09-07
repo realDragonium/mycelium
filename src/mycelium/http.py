@@ -37,6 +37,7 @@ from . import (
     connect_page,
     documentation_profiles,
     model_settings,
+    names_workspace,
     oauth_server,
     oidc,
     ops_ledger,
@@ -1256,6 +1257,43 @@ async def _profile_conflict(
     request: Request, exc: documentation_profiles.Conflict
 ) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(names_workspace.Conflict)
+async def _names_conflict(
+    request: Request, exc: names_workspace.Conflict
+) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.get("/api/names-workspace")
+def names_catalogue_http(request: Request, q: str = "") -> names_workspace.Catalogue:
+    principal = _require_principal(request)
+    result = names_workspace.catalogue(server._db(), q)
+    result.can_write = auth.principal_has_real_role(principal, "writer")
+    return result
+
+
+@app.post("/api/names-workspace/preview")
+def names_preview_http(
+    body: names_workspace.PreviewRequest, request: Request
+) -> names_workspace.Preview:
+    _enforce_curator(request, "editing names and aliases")
+    return names_workspace.preview(server._db(), body.action)
+
+
+@app.post("/api/names-workspace/apply")
+def names_apply_http(
+    body: names_workspace.ApplyRequest, request: Request
+) -> names_workspace.Applied:
+    _enforce_curator(request, "editing names and aliases")
+    return names_workspace.apply(body)
+
+
+@app.get("/api/names-workspace/{entity_id}")
+def names_detail_http(entity_id: str, request: Request) -> names_workspace.Detail:
+    _require_principal(request)
+    return names_workspace.detail(server._db(), entity_id)
 
 
 @app.get("/api/documentation/profiles")

@@ -16,6 +16,7 @@ function useHashRoute() {
     if (parts[0] === 'entities') return { view: 'entities', focus: params.focus || null };
     if (parts[0] === 'browse') return { view: 'browse' };
     if (parts[0] === 'glossary') return { view: 'glossary' };
+    if (parts[0] === 'names') return { view: 'names' };
     if (parts[0] === 'documentation') return { view: 'documentation' };
     if (parts[0] === 'settings') return { view: 'settings' };
     if (parts[0] === 'gaps') return { view: 'gaps' };
@@ -51,6 +52,7 @@ function useHashRoute() {
     else if (next.view === 'entities') h = next.focus ? `#/entities?focus=${next.focus}` : `#/entities`;
     else if (next.view === 'browse') h = `#/browse`;
     else if (next.view === 'glossary') h = `#/glossary`;
+    else if (next.view === 'names') h = '#/names';
     else if (next.view === 'documentation') h = '#/documentation';
     else if (next.view === 'settings') h = `#/settings`;
     else if (next.view === 'gaps') h = `#/gaps`;
@@ -127,6 +129,7 @@ function App() {
     case 'entities': screen = <EntitiesGraph focusId={router.focus} />; break;
     case 'browse': screen = <BrowseIndex />; break;
     case 'glossary': screen = <GlossaryScreen />; break;
+    case 'names': screen = <NamesWorkspace />; break;
     case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'settings': screen = <SettingsScreen />; break;
     case 'gaps': screen = <GapsScreen />; break;
@@ -141,7 +144,7 @@ function App() {
     <RouterCtx.Provider value={router}>
       <TweaksCtx.Provider value={tweaksValue}>
        <DataCtx.Provider value={dataCtxValue}>
-        <div className={`shell${router.view === 'documentation' ? ' documentation-shell' : ''}`}>
+        <div className={`shell${['documentation', 'names'].includes(router.view) ? ' documentation-shell' : ''}`}>
           <TopBar small={true} />
           {screen}
           <Footer />

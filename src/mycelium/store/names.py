@@ -66,9 +66,10 @@ def get_name_by_id(conn: sqlite3.Connection, name_id: str) -> sqlite3.Row | None
 
 
 def get_names_by_entity(conn: sqlite3.Connection, entity_id: str) -> list[sqlite3.Row]:
-    """All names attached to an entity, sorted by text alphabetically."""
+    """List names with the preferred name first, then alphabetical aliases."""
     return conn.execute(
-        "SELECT id, text FROM names WHERE entity_id = ? ORDER BY text",
+        "SELECT n.id, n.text FROM names n JOIN entities e ON e.id = n.entity_id "
+        "WHERE n.entity_id = ? ORDER BY (n.id = e.preferred_name_id) DESC, n.text",
         (entity_id,),
     ).fetchall()
 
@@ -112,7 +113,7 @@ def list_entities(
     limit: int = 50,
     offset: int = 0,
 ) -> list[sqlite3.Row]:
-    """Entities with their alphabetically-first name. The optional case-
+    """Entities with their preferred name, falling back to alphabetical order. The optional case-
     insensitive prefix filter matches ANY name attached to the entity —
     an entity found via an alias is still listed under its primary
     name."""
@@ -120,7 +121,7 @@ def list_entities(
         rows = conn.execute(
             """
             SELECT e.id AS id, e.description AS description,
-                   MIN(n.text) AS primary_name
+                   COALESCE(MAX(CASE WHEN n.id = e.preferred_name_id THEN n.text END), MIN(n.text)) AS primary_name
             FROM entities e
             LEFT JOIN names n ON n.entity_id = e.id
             WHERE EXISTS (
@@ -137,7 +138,7 @@ def list_entities(
         rows = conn.execute(
             """
             SELECT e.id AS id, e.description AS description,
-                   MIN(n.text) AS primary_name
+                   COALESCE(MAX(CASE WHEN n.id = e.preferred_name_id THEN n.text END), MIN(n.text)) AS primary_name
             FROM entities e
             LEFT JOIN names n ON n.entity_id = e.id
             GROUP BY e.id
@@ -370,6 +371,9 @@ def reassign_names(
     conn: sqlite3.Connection, from_entity_id: str, to_entity_id: str
 ) -> int:
     """Move every name from one entity to another. Returns rows affected."""
+    conn.execute(
+        "UPDATE entities SET preferred_name_id = NULL WHERE id = ?", (from_entity_id,)
+    )
     affected = conn.execute(
         "SELECT id FROM names WHERE entity_id = ?", (from_entity_id,)
     ).fetchall()
@@ -394,6 +398,10 @@ def reassign_names(
 
 def set_name_entity(conn: sqlite3.Connection, name_id: str, entity_id: str) -> None:
     before = _row_dict(get_name_by_id(conn, name_id))
+    conn.execute(
+        "UPDATE entities SET preferred_name_id = NULL WHERE preferred_name_id = ? AND id != ?",
+        (name_id, entity_id),
+    )
     conn.execute(
         "UPDATE names SET entity_id = ?, updated_at = ?, updated_by = ? WHERE id = ?",
         (entity_id, _now(), kernel.get_actor(), name_id),
@@ -448,3 +456,20 @@ def rename_name(conn: sqlite3.Connection, name_id: str, new_text: str) -> None:
         after=_row_dict(get_name_by_id(conn, name_id)),
         context={"reason": "rename_name"},
     )
+
+
+def invalidate_name_decisions(
+    conn: sqlite3.Connection, name_id: str, reason: str
+) -> None:
+    for row in conn.execute(
+        "SELECT * FROM pending_mentions WHERE name_id = ?", (name_id,)
+    ).fetchall():
+        _record(
+            conn,
+            "delete",
+            "mention_decision",
+            f"{row['statement_id']}|{name_id}",
+            before=_row_dict(row),
+            context={"reason": reason},
+        )
+    delete_name_mentions(conn, name_id)

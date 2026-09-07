@@ -223,6 +223,7 @@ SCHEMA = (
 CREATE TABLE IF NOT EXISTS entities (
     id          TEXT PRIMARY KEY,
     description TEXT,
+    preferred_name_id TEXT REFERENCES names(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
     created_at  TEXT,
     updated_at  TEXT,
     created_by  TEXT,
