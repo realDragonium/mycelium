@@ -3,20 +3,20 @@
 .names-workspace h2 {font-size: 22px;}.names-workspace h3 {font-size: 17px;}
 .names-workspace p {line-height: 1.55; margin: 10px 0;}
 .names-workspace nav {display: flex; gap: 8px; margin: 20px 0;}
-.names-workspace button {border: 1px solid var(--line, #ccd4cf); border-radius: 6px; background: var(--surface, #fff); color: inherit; padding: 8px 12px; cursor: pointer; margin: 3px;}
+.names-workspace button {border: 1px solid var(--line, var(--rule, #ccd4cf)); border-radius: 6px; background: var(--bg-1, #fff); color: inherit; padding: 8px 12px; cursor: pointer; margin: 3px;}
 .names-workspace button:disabled {opacity: .5; cursor: default;}
-.names-workspace [aria-pressed="true"], .names-workspace [aria-current="true"] {border-color: var(--accent, #338567); background: var(--accent-soft, #e7f2ec);}
+.names-workspace [aria-pressed="true"], .names-workspace [aria-current="true"] {border-color: var(--bio, var(--accent, #338567)); background: var(--bio-bg, var(--bg-selected, #e7f2ec));}
 .names-layout {display: grid; grid-template-columns: minmax(210px, 300px) minmax(0, 1fr); gap: 24px; align-items: start;}
 .names-workspace label {display: grid; gap: 6px; margin: 12px 0; font-weight: 500;}
-.names-workspace input:not([type="checkbox"]), .names-workspace select, .names-workspace textarea {width: 100%; box-sizing: border-box; min-width: 0; padding: 9px; border: 1px solid var(--line, #ccd4cf); border-radius: 5px; color: inherit; background: var(--surface, #fff); font: inherit;}
+.names-workspace input:not([type="checkbox"]), .names-workspace select, .names-workspace textarea {width: 100%; box-sizing: border-box; min-width: 0; padding: 9px; border: 1px solid var(--line, var(--rule, #ccd4cf)); border-radius: 5px; color: inherit; background: var(--bg-1, #fff); font: inherit;}
 .names-workspace textarea {min-height: 100px;}
 .names-workspace fieldset {border: 0; padding: 0; min-width: 0;}
-.names-panel {border: 1px solid var(--line, #ccd4cf); border-radius: 8px; padding: 20px; margin-bottom: 20px; overflow-wrap: anywhere;}
+.names-panel {border: 1px solid var(--line, var(--rule, #ccd4cf)); border-radius: 8px; padding: 20px; margin-bottom: 20px; overflow-wrap: anywhere;}
 .names-catalogue {list-style: none; padding: 0; max-height: 70vh; overflow: auto;}
 .names-catalogue button {display: block; text-align: left; width: calc(100% - 6px);}
 .names-catalogue small {display: block; margin-top: 4px; opacity: .7; overflow-wrap: anywhere;}
 .names-examples {padding-left: 20px;}.names-examples li {margin-bottom: 12px;}.names-examples small {opacity: .65;}
-.names-preview {border-top: 2px solid var(--accent, #338567); margin-top: 20px; padding-top: 12px;}
+.names-preview {border-top: 2px solid var(--bio, var(--accent, #338567)); margin-top: 20px; padding-top: 12px;}
 .names-workspace .names-check {display: flex; align-items: center; gap: 8px;}
 .names-workspace pre {white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 300px; overflow: auto;}
 .names-workspace [role="alert"] {color: #a52d27;}

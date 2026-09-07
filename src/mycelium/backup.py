@@ -615,6 +615,12 @@ def import_substrate(
                     )
                 if history_db_path is not None and (staging / "history.jsonl").exists():
                     _load_history_jsonl(conn, staging / "history.jsonl")
+                for entity in conn.execute(
+                    "SELECT id FROM entities WHERE preferred_name_id IS NULL"
+                ).fetchall():
+                    store.ensure_preferred_name(
+                        conn, entity["id"], preserve_fallback=True
+                    )
         finally:
             conn.close()
 

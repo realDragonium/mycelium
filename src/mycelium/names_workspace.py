@@ -16,7 +16,7 @@ from pydantic import (
     TypeAdapter,
 )
 
-from . import store
+from . import plurals, store
 from .store.kernel import _load_when_tree, _record
 
 NameText = Annotated[
@@ -114,6 +114,9 @@ class Catalogue(Model):
     revision: str
     entities: list[Concept]
     can_write: bool = False
+    allowed_actions: list[
+        Literal["add", "correct", "prefer", "move", "split", "merge", "remove"]
+    ] = Field(default_factory=list)
 
 
 class Example(Model):
@@ -343,6 +346,16 @@ def _authored(entity: Concept, name_id: str) -> Name:
     return name
 
 
+def _proposed_names(conn: sqlite3.Connection, text: str) -> list[Name]:
+    names = [Name(id="proposed", text=text, generated_from_name_id=None)]
+    plural = plurals.regular_plural(text)
+    if plural and store.get_name_by_text(conn, plural) is None:
+        names.append(
+            Name(id="proposed-plural", text=plural, generated_from_name_id="proposed")
+        )
+    return names
+
+
 def _validate(conn: sqlite3.Connection, action: Action, entity: Concept) -> list[Name]:
     if isinstance(action, (AddAlias, CorrectAlias)):
         existing = store.get_name_by_text(conn, action.text)
@@ -383,7 +396,7 @@ def _validate(conn: sqlite3.Connection, action: Action, entity: Concept) -> list
             or name.generated_from_name_id in action.name_ids
         ]
     if isinstance(action, AddAlias):
-        return [Name(id="proposed", text=action.text, generated_from_name_id=None)]
+        return _proposed_names(conn, action.text)
     _authored(entity, action.name_id)
     selected = [
         name
@@ -391,9 +404,7 @@ def _validate(conn: sqlite3.Connection, action: Action, entity: Concept) -> list
         if name.id == action.name_id or name.generated_from_name_id == action.name_id
     ]
     if isinstance(action, CorrectAlias):
-        selected.append(
-            Name(id="proposed", text=action.text, generated_from_name_id=None)
-        )
+        selected.extend(_proposed_names(conn, action.text))
     return selected
 
 
@@ -427,6 +438,14 @@ def preview(conn: sqlite3.Connection, action: Action) -> Preview:
             "merge": "Combine names and relationships under the destination concept and chosen description.",
             "remove": "Stop recognizing this name and its generated plural.",
         }
+        if (
+            isinstance(action, CorrectAlias)
+            and _authored(entity, action.name_id).text.casefold()
+            == action.text.casefold()
+        ):
+            summaries["correct"] = (
+                "Update capitalization while retaining name matches and historical approvals."
+            )
         examples, count = _examples(conn, names)
         return Preview(
             revision=revision(conn),
@@ -454,6 +473,7 @@ def _perform(conn: sqlite3.Connection, action: Action) -> str:
         store.set_preferred_name(conn, action.entity_id, action.name_id)
     elif isinstance(action, MoveAlias):
         server.move_name(action.name_id, action.target_entity_id)
+        return action.target_entity_id
     elif isinstance(action, RemoveAlias):
         server.delete_name(action.name_id)
     elif isinstance(action, SplitConcept):
@@ -488,14 +508,40 @@ def apply(body: ApplyRequest) -> Applied:
             )
         with server._persisted_index_write(names=True):
             before = concept(conn, body.action.entity_id).model_dump()
+            destination_before = before
+            if isinstance(body.action, (MoveAlias, MergeConcepts)):
+                destination_before = concept(
+                    conn, body.action.target_entity_id
+                ).model_dump()
+            elif isinstance(body.action, SplitConcept):
+                destination_before = None
             entity_id = _perform(conn, body.action)
             _record(
                 conn,
                 "update",
                 "entity",
                 entity_id,
-                before=before,
+                before=destination_before,
                 after=concept(conn, entity_id).model_dump(),
-                context={"vocabulary_action": body.action.model_dump()},
+                context={
+                    "vocabulary_action": body.action.model_dump(),
+                    "source_before": before,
+                },
             )
+            if (
+                entity_id != body.action.entity_id
+                and store.get_entity_by_id(conn, body.action.entity_id) is not None
+            ):
+                _record(
+                    conn,
+                    "update",
+                    "entity",
+                    body.action.entity_id,
+                    before=before,
+                    after=concept(conn, body.action.entity_id).model_dump(),
+                    context={
+                        "vocabulary_action": body.action.model_dump(),
+                        "destination_entity_id": entity_id,
+                    },
+                )
         return Applied(entity_id=entity_id, revision=revision(conn))

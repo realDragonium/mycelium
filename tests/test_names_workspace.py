@@ -266,5 +266,143 @@ def test_preferred_name_migration_preserves_legacy_names():
     conn.execute("INSERT INTO entities VALUES ('ent_old', 'Old description')")
     conn.execute("INSERT INTO names VALUES ('nam_old', 'Old name', 'ent_old')")
     _migration_v13_preferred_names(conn)
-    assert conn.execute("SELECT preferred_name_id FROM entities").fetchone()[0] is None
+    assert (
+        conn.execute("SELECT preferred_name_id FROM entities").fetchone()[0]
+        == "nam_old"
+    )
     assert conn.execute("SELECT text FROM names").fetchone()[0] == "Old name"
+
+
+@pytest.mark.parametrize("operation", ["move", "correct"])
+def test_changed_alias_does_not_transfer_historical_approval(srv, operation):
+    from mycelium import mention_candidates
+
+    source = entity("SSO")
+    target = entity("Accounts")
+    name_id = store.get_name_by_text(srv._db(), "SSO")["id"]
+    statement_id = srv.upsert_statement(
+        kind="state", text="SSO and API are enabled.", links=[]
+    )["statement_id"]
+    conn = srv._db()
+    conn.execute(
+        "INSERT INTO pending_mentions (statement_id, name_id, created_at, approved_at) VALUES (?, ?, 'old', 'old')",
+        (statement_id, name_id),
+    )
+    conn.commit()
+    assert (
+        mention_candidates.find_candidates(conn, source).matches[0].match == "approved"
+    )
+    if operation == "move":
+        apply(
+            names.MoveAlias(
+                kind="move", entity_id=source, name_id=name_id, target_entity_id=target
+            )
+        )
+        changed_entity = target
+    else:
+        apply(
+            names.CorrectAlias(
+                kind="correct", entity_id=source, name_id=name_id, text="API"
+            )
+        )
+        changed_entity = source
+    mention_worker.drain(conn)
+    assert (
+        mention_candidates.find_candidates(conn, changed_entity).matches[0].match
+        == "possible"
+    )
+    assert (
+        conn.execute(
+            "SELECT * FROM pending_mentions WHERE name_id = ?", (name_id,)
+        ).fetchall()
+        == []
+    )
+    archived = conn.execute(
+        "SELECT before_json FROM history.history_events WHERE target_kind = 'mention_decision'"
+    ).fetchone()
+    assert json.loads(archived["before_json"])["approved_at"] == "old"
+
+
+def test_alias_addition_preserves_display_name_and_replacement_is_stable(srv):
+    eid = entity("Identity gateway")
+    assert names.concept(srv._db(), eid).label == "Identity gateway"
+    apply(names.AddAlias(kind="add", entity_id=eid, text="Authentication hub"))
+    assert names.concept(srv._db(), eid).label == "Identity gateway"
+    preferred = names.concept(srv._db(), eid).preferred_name_id
+    apply(names.RemoveAlias(kind="remove", entity_id=eid, name_id=preferred))
+    assert names.concept(srv._db(), eid).label == "Authentication hub"
+    apply(names.AddAlias(kind="add", entity_id=eid, text="Account login"))
+    assert names.concept(srv._db(), eid).label == "Authentication hub"
+
+
+def test_case_only_correction_retains_generated_plural_identity_and_approval(srv):
+    eid = entity("API")
+    conn = srv._db()
+    name_id = store.get_name_by_text(conn, "API")["id"]
+    plural_id = store.get_name_by_text(conn, "APIs")["id"]
+    statement_id = srv.upsert_statement(
+        kind="state", text="APIs are enabled.", links=[]
+    )["statement_id"]
+    conn.execute(
+        "INSERT INTO pending_mentions (statement_id, name_id, created_at, approved_at) VALUES (?, ?, 'old', 'old')",
+        (statement_id, plural_id),
+    )
+    conn.commit()
+    apply(
+        names.CorrectAlias(kind="correct", entity_id=eid, name_id=name_id, text="api")
+    )
+    assert store.get_name_by_text(conn, "apis")["id"] == plural_id
+    assert (
+        conn.execute(
+            "SELECT approved_at FROM pending_mentions WHERE name_id = ?", (plural_id,)
+        ).fetchone()[0]
+        == "old"
+    )
+
+
+def test_writer_capabilities_and_preview_enforce_admin_actions(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "names-workspace-test-secret")
+    with _app(tmp_path, monkeypatch, auth_mode="on") as client:
+        user_id = auth.create_user(
+            server._auth_db(), name="Writer", role="writer", type="human"
+        )
+        token, _ = auth.issue_token(
+            server._auth_db(), user_id=user_id, name="Writer", scope="writer"
+        )
+        server._auth_db().commit()
+        headers = {"Authorization": f"Bearer {token}"}
+        capabilities = client.get("/api/names-workspace", headers=headers).json()
+        assert capabilities["can_write"]
+        assert capabilities["allowed_actions"] == [
+            "add",
+            "correct",
+            "prefer",
+            "move",
+            "split",
+        ]
+        for action in [
+            {"kind": "remove", "entity_id": "ent_missing", "name_id": "nam_missing"},
+            {
+                "kind": "merge",
+                "entity_id": "ent_missing",
+                "target_entity_id": "ent_target",
+                "preferred_name_id": "nam_missing",
+                "description": "",
+            },
+        ]:
+            assert (
+                client.post(
+                    "/api/names-workspace/preview",
+                    json={"action": action},
+                    headers=headers,
+                ).status_code
+                == 403
+            )
+            assert (
+                client.post(
+                    "/api/names-workspace/apply",
+                    json={"action": action, "expected_revision": "x"},
+                    headers=headers,
+                ).status_code
+                == 403
+            )

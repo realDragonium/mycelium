@@ -82,3 +82,41 @@ def set_preferred_name(conn: sqlite3.Connection, entity_id: str, name_id: str) -
         before=before,
         after=_row_dict(get_entity_by_id(conn, entity_id)),
     )
+
+
+def ensure_preferred_name(
+    conn: sqlite3.Connection, entity_id: str, *, preserve_fallback: bool = False
+) -> None:
+    entity = get_entity_by_id(conn, entity_id)
+    if entity is None:
+        return
+    current = conn.execute(
+        "SELECT id FROM names WHERE id = ? AND entity_id = ?",
+        (entity["preferred_name_id"], entity_id),
+    ).fetchone()
+    if current is not None:
+        return
+    order = (
+        "text COLLATE BINARY"
+        if preserve_fallback
+        else "generated_from_name_id IS NOT NULL, text COLLATE BINARY"
+    )
+    name = conn.execute(
+        f"SELECT id FROM names WHERE entity_id = ? ORDER BY {order} LIMIT 1",
+        (entity_id,),
+    ).fetchone()
+    selected = name["id"] if name else None
+    if selected == entity["preferred_name_id"]:
+        return
+    conn.execute(
+        "UPDATE entities SET preferred_name_id = ?, updated_at = ?, updated_by = ? WHERE id = ?",
+        (selected, _now(), kernel.get_actor(), entity_id),
+    )
+    _record(
+        conn,
+        "update",
+        "entity",
+        entity_id,
+        before=_row_dict(entity),
+        after=_row_dict(get_entity_by_id(conn, entity_id)),
+    )

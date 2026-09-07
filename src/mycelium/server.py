@@ -1463,12 +1463,15 @@ def _delete_name_cascade(name_id: str) -> tuple[int, list[str]]:
 
 
 def _regenerate_plurals(source_name_id: str, new_text: str) -> list[str]:
-    """A renamed name's old generated plurals are stale — delete them and
-    generate a fresh plural from `new_text`. Returns statement ids affected
-    by the removed children, for recompute."""
+    """Regenerate stale plurals, preserving identities across casing corrections."""
     affected: list[str] = []
+    plural = plurals.regular_plural(new_text)
     for child in store.get_generated_children(_db(), source_name_id):
         affected.extend(store.statements_mentioning_name(_db(), child["id"]))
+        if plural is not None and child["text"].casefold() == plural.casefold():
+            store.rename_name(_db(), child["id"], plural)
+            _reindex_name(child["id"], plural)
+            continue
         store.delete_name_mentions(_db(), child["id"])
         _drop_name_from_index(child["id"])
         store.delete_name(_db(), child["id"])
@@ -4573,22 +4576,14 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
 
 @tool
 def rename_name(name_id: str, new_text: str) -> dict[str, str]:
-    """Change a name's text in place — same name_id, same entity, new label.
+    """Correct a name's spelling while keeping its id and concept binding.
 
-    Use when an entity has been renamed in the product (e.g. "Vector Index"
-    → "ANN Index") and you want every statement that mentions this
-    entity to render under the new label without losing mention links.
-    `statement_mentions` is keyed on name_id, so it keeps pointing at the
-    same name and immediately starts showing the new text.
+    The old spelling stops matching. Statement text stays unchanged, and
+    discovery is recomputed for both the old and new spellings. Historical
+    occurrence approvals are invalidated when the spelling changes meaning.
 
-    Statement *text* is NOT rewritten — references in free-form text
-    still read the old name. Use `replace_text` per record to update
-    those (see mycelium-maintenance §1c on stale text after entity
-    rename).
-
-    Raises ValueError if `name_id` does not exist or if `new_text` is
-    already used by a different name (resolve with `merge_entities` or
-    `move_name` first).
+    To adopt a new preferred display name while preserving old references,
+    add the new alias and select it in Names & aliases instead.
     """
     # Statements mentioning this name may now match differently (their text
     # still contains the OLD label, which is no longer a name) — recompute
@@ -4598,11 +4593,16 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
         affected = list(store.statements_mentioning_name(_db(), name_id))
         old = store.get_name_by_id(_db(), name_id)
         if old is not None and old["text"].casefold() != new_text.casefold():
-            store.invalidate_name_decisions(_db(), name_id, "name_spelling_corrected")
+            store.invalidate_name_decisions(
+                _db(), name_id, "name_spelling_corrected", clear_all_mentions=True
+            )
             for child in store.get_generated_children(_db(), name_id):
                 affected.extend(store.statements_mentioning_name(_db(), child["id"]))
                 store.invalidate_name_decisions(
-                    _db(), child["id"], "source_name_spelling_corrected"
+                    _db(),
+                    child["id"],
+                    "source_name_spelling_corrected",
+                    clear_all_mentions=True,
                 )
         store.rename_name(_db(), name_id, new_text)
         _reindex_name(name_id, new_text)

@@ -43,6 +43,7 @@ function parseHash() {
   if (parts[0] === 'ingest') return { view: 'ingest' };
   if (parts[0] === 'settings') return { view: 'settings' };
   if (parts[0] === 'research') return { view: 'research' };
+  if (['mentions', 'pending'].includes(parts[0])) return { view: 'names' };
   if (parts[0] === 'names') return { view: 'names' };
   if (parts[0] === 'documentation') return { view: 'documentation', id: p.run || null };
   if (parts[0] === 'coverage') return { view: 'coverage' };

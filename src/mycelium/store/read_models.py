@@ -28,7 +28,7 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
 
     Returns:
         - entities: [{id, name, description}] — `name` is one of the
-          entity's names (alphabetically first); falls back to the id if
+          entity's preferred name (alphabetical fallback); falls back to the id if
           the entity has no names.
         - names: [{id, text, entity}] — `entity` is the entity_id.
         - statements: [{id, kind, text, mentions: [entity_id]}] — entity_ids

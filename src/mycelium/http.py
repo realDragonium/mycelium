@@ -1186,6 +1186,10 @@ def names_catalogue_http(request: Request, q: str = "") -> names_workspace.Catal
     principal = _require_principal(request)
     result = names_workspace.catalogue(server._db(), q)
     result.can_write = auth.principal_has_real_role(principal, "writer")
+    if result.can_write:
+        result.allowed_actions = ["add", "correct", "prefer", "move", "split"]
+    if auth.principal_has_real_role(principal, "admin"):
+        result.allowed_actions.extend(("merge", "remove"))
     return result
 
 
@@ -1194,6 +1198,8 @@ def names_preview_http(
     body: names_workspace.PreviewRequest, request: Request
 ) -> names_workspace.Preview:
     _enforce_curator(request, "editing names and aliases")
+    if body.action.kind in {"merge", "remove"}:
+        _require_admin(request)
     return names_workspace.preview(server._db(), body.action)
 
 
@@ -1202,6 +1208,8 @@ def names_apply_http(
     body: names_workspace.ApplyRequest, request: Request
 ) -> names_workspace.Applied:
     _enforce_curator(request, "editing names and aliases")
+    if body.action.kind in {"merge", "remove"}:
+        _require_admin(request)
     return names_workspace.apply(body)
 
 

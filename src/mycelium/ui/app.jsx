@@ -16,6 +16,7 @@ function useHashRoute() {
     if (parts[0] === 'entities') return { view: 'entities', focus: params.focus || null };
     if (parts[0] === 'browse') return { view: 'browse' };
     if (parts[0] === 'glossary') return { view: 'glossary' };
+    if (['mentions', 'pending'].includes(parts[0])) return { view: 'names' };
     if (parts[0] === 'names') return { view: 'names' };
     if (parts[0] === 'documentation') return { view: 'documentation' };
     if (parts[0] === 'settings') return { view: 'settings' };
@@ -127,7 +128,7 @@ function App() {
     case 'entities': screen = <EntitiesGraph focusId={router.focus} />; break;
     case 'browse': screen = <BrowseIndex />; break;
     case 'glossary': screen = <GlossaryScreen />; break;
-    case 'names': screen = <NamesWorkspace />; break;
+    case 'names': screen = <NamesWorkspace onDataChanged={refresh} />; break;
     case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'settings': screen = <SettingsScreen />; break;
     case 'gaps': screen = <GapsScreen />; break;

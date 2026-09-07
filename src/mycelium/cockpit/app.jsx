@@ -151,6 +151,8 @@ function Landing() {
 /* ---------------- App ---------------- */
 function App() {
   const router = useRouterState();
+  const [, setDataVersion] = useStateApp(0);
+  const refreshData = async () => {await window.Myc.loadData(); setDataVersion(value => value + 1);};
   const data = window.MYCELIUM_DATA;
   useMemoApp(() => { window.MYCELIUM_INDEX = buildIndex(data); }, [data]);
   const [igNonce, setIgNonce] = useStateApp(0);
@@ -176,7 +178,7 @@ function App() {
     case 'ingest': screen = <IngestSurface key={igNonce} />; break;
     case 'settings': screen = <main className="page narrow"><div className="crumbs"><a href="#/">~</a><span className="sep">/</span><span>settings</span></div><h1>AI settings</h1><AISettings /></main>; break;
     case 'research': screen = <ResearchSurface key="research" />; break;
-    case 'names': screen = <NamesWorkspace />; break;
+    case 'names': screen = <NamesWorkspace onDataChanged={refreshData} />; break;
     case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'coverage': screen = <CoverageScreen />; break;
     case 'drafts': screen = <DraftsList />; break;

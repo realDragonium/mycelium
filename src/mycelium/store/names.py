@@ -7,6 +7,7 @@ import uuid
 from typing import Any, Callable
 
 from . import kernel
+from .entities import ensure_preferred_name
 from .kernel import _now, _record, _row_dict
 
 # --- names ------------------------------------------------------------------
@@ -21,6 +22,7 @@ def create_name(
     """Create a name row. `generated_from_name_id` marks it as an
     auto-generated plural derived from another name (see
     `mycelium.plurals`); NULL means human-authored."""
+    ensure_preferred_name(conn, entity_id, preserve_fallback=True)
     name_id = f"nam_{uuid.uuid4().hex}"
     conn.execute(
         "INSERT INTO names (id, text, entity_id, generated_from_name_id, created_at, created_by) "
@@ -34,6 +36,7 @@ def create_name(
         name_id,
         after=_row_dict(get_name_by_id(conn, name_id)),
     )
+    ensure_preferred_name(conn, entity_id)
     return name_id
 
 
@@ -89,7 +92,10 @@ def delete_name(conn: sqlite3.Connection, name_id: str) -> None:
     """Delete a single name row. The caller must have cleared its derived
     mention rows (`delete_name_mentions`) and any generated-plural
     self-reference pointing at it first."""
+    row = get_name_by_id(conn, name_id)
     conn.execute("DELETE FROM names WHERE id = ?", (name_id,))
+    if row is not None:
+        ensure_preferred_name(conn, row["entity_id"])
 
 
 def delete_names_clearing_generated_refs(
@@ -100,11 +106,18 @@ def delete_names_clearing_generated_refs(
     (the self-reference is a RESTRICT FK), then drop the rows."""
     if not name_ids:
         return
+    entity_ids = {
+        row["entity_id"]
+        for name_id in name_ids
+        if (row := get_name_by_id(conn, name_id)) is not None
+    }
     conn.executemany(
         "UPDATE names SET generated_from_name_id = NULL WHERE id = ?",
         [(nid,) for nid in name_ids],
     )
     conn.executemany("DELETE FROM names WHERE id = ?", [(nid,) for nid in name_ids])
+    for entity_id in entity_ids:
+        ensure_preferred_name(conn, entity_id)
 
 
 def list_entities(
@@ -371,6 +384,7 @@ def reassign_names(
     conn: sqlite3.Connection, from_entity_id: str, to_entity_id: str
 ) -> int:
     """Move every name from one entity to another. Returns rows affected."""
+    ensure_preferred_name(conn, to_entity_id, preserve_fallback=True)
     conn.execute(
         "UPDATE entities SET preferred_name_id = NULL WHERE id = ?", (from_entity_id,)
     )
@@ -393,10 +407,12 @@ def reassign_names(
             after=_row_dict(get_name_by_id(conn, nid)),
             context={"reason": "reassign_names", "from_entity_id": from_entity_id},
         )
+    ensure_preferred_name(conn, to_entity_id)
     return cur.rowcount
 
 
 def set_name_entity(conn: sqlite3.Connection, name_id: str, entity_id: str) -> None:
+    ensure_preferred_name(conn, entity_id, preserve_fallback=True)
     before = _row_dict(get_name_by_id(conn, name_id))
     conn.execute(
         "UPDATE entities SET preferred_name_id = NULL WHERE preferred_name_id = ? AND id != ?",
@@ -415,6 +431,10 @@ def set_name_entity(conn: sqlite3.Connection, name_id: str, entity_id: str) -> N
         after=_row_dict(get_name_by_id(conn, name_id)),
         context={"reason": "set_name_entity"},
     )
+
+    ensure_preferred_name(conn, entity_id)
+    if before is not None:
+        ensure_preferred_name(conn, before["entity_id"])
 
 
 def rename_name(conn: sqlite3.Connection, name_id: str, new_text: str) -> None:
@@ -459,7 +479,11 @@ def rename_name(conn: sqlite3.Connection, name_id: str, new_text: str) -> None:
 
 
 def invalidate_name_decisions(
-    conn: sqlite3.Connection, name_id: str, reason: str
+    conn: sqlite3.Connection,
+    name_id: str,
+    reason: str,
+    *,
+    clear_all_mentions: bool = False,
 ) -> None:
     for row in conn.execute(
         "SELECT * FROM pending_mentions WHERE name_id = ?", (name_id,)
@@ -472,4 +496,12 @@ def invalidate_name_decisions(
             before=_row_dict(row),
             context={"reason": reason},
         )
-    delete_name_mentions(conn, name_id)
+    if clear_all_mentions:
+        conn.execute("DELETE FROM statement_mentions WHERE name_id = ?", (name_id,))
+    else:
+        conn.execute(
+            "DELETE FROM statement_mentions WHERE name_id = ? AND statement_id IN "
+            "(SELECT statement_id FROM pending_mentions WHERE name_id = ? AND approved_at IS NOT NULL)",
+            (name_id, name_id),
+        )
+    conn.execute("DELETE FROM pending_mentions WHERE name_id = ?", (name_id,))

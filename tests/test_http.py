@@ -935,9 +935,8 @@ def test_list_entities_prefix_matches_aliases(tmp_path, monkeypatch):
         ).json()
         assert body["total"] == 1
         assert [e["id"] for e in body["entities"]] == [eid]
-        # listed under its alphabetically-first name (the alias's
-        # auto-plural, here), not the matching alias itself
-        assert body["entities"][0]["name"] == "Aivies"
+        # An alias match retains the concept's chosen display name.
+        assert body["entities"][0]["name"] == "Assistant"
 
 
 def test_upsert_entity_and_name_are_case_insensitive(tmp_path, monkeypatch):

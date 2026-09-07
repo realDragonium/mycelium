@@ -17,6 +17,7 @@ from .. import mentions
 from .entities import (
     create_entity,
     delete_entity,
+    ensure_preferred_name,
     get_entity_by_id,
     set_preferred_name,
     update_entity_description,
@@ -252,6 +253,7 @@ __all__ = [
     "finish_alias_embeddings",
     "get_actor",
     "get_entity_by_id",
+    "ensure_preferred_name",
     "set_preferred_name",
     "get_entity_link_type_glossary",
     "get_entity_links_incoming",
