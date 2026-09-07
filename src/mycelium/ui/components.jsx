@@ -191,7 +191,7 @@ function TopBar({ small = false }) {
         <button className="brand" onClick={() => router.go({ view: 'landing' })} title="Mycelium home">
           <BrandMark />
           <span>Mycelium</span>
-          <span className="brand-sub">read-only</span>
+          <span className="brand-sub">workspace</span>
         </button>
 
         {small && (
@@ -353,7 +353,7 @@ function Footer() {
   return (
     <footer className="footer">
       <div className="ftr-inner">
-        <span>mycelium · v0.1 · read-only</span>
+        <span>mycelium · v0.1 · workspace</span>
         <span>
           {data.entities.length}e · {data.statements.length}b · {data.names.length}n · {data.links.length}l
         </span>
