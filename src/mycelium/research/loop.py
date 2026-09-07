@@ -29,13 +29,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .. import tracing
+from .. import ai_prompts, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
 from ..agentloop import (
     check_budget,
-    load_doctrine,
 )
 from ..agentloop import (
     first_tool_use as _first_tool_use,
@@ -90,6 +89,7 @@ def run_research(
     workspace: Any | None = None,
     emitter: DraftEmitter | None = None,
     config: ResearchConfig | None = None,
+    instructions: ai_prompts.Snapshot | None = None,
 ) -> ResearchResult:
     """Research `topic` in `source`'s codebase and produce a reviewable DRAFT.
 
@@ -120,9 +120,10 @@ def run_research(
     if emitter is None:
         emitter = InProcessDraftEmitter()
 
-    doctrine_text, doctrine_note = load_doctrine(
-        config.doctrine_path, name=DOCTRINE_NAME
+    instructions = instructions or ai_prompts.resolve(
+        DOCTRINE_NAME, default_path=config.doctrine_path
     )
+    doctrine_text, doctrine_note = instructions.text, instructions.note
 
     with tracing.profile_to_html("research", f"{source_name}: {topic[:40]}"):
         if workspace is None:
@@ -164,6 +165,8 @@ def run_research(
                 doctrine_text,
                 doctrine_note,
             )
+
+    result.trace["prompts"] = [instructions.reference().model_dump(mode="json")]
 
     if config.trace_log_path:
         from ..ingest.trace import write_record

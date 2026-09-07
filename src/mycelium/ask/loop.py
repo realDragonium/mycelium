@@ -28,7 +28,7 @@ from typing import Any
 import httpx
 from pydantic import JsonValue, TypeAdapter
 
-from .. import ai, tracing
+from .. import ai, ai_prompts, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -129,6 +129,7 @@ def run_ask(
 @dataclass
 class _RunContext:
     question: str
+    system_prompt: str
     client: ai.ClaudeClient | httpx.Client | None
     substrate: SubstrateReader
     config: AskConfig
@@ -168,10 +169,13 @@ def _execute(
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
     )
+    instructions = ai_prompts.resolve("ask")
+    trace.prompts.append(instructions.reference())
     tools = build_tools(substrate.tool_specs(), enforce_floor=config.enforce_floor)
     evidence = Evidence()
     ctx = _RunContext(
         question=question,
+        system_prompt=prompts.build_system_prompt(instructions.text),
         evidence=evidence,
         targeted_ids=set(),
         stream=stream,
@@ -248,7 +252,13 @@ def _drive(ctx: _RunContext) -> AskResult:
         try:
             with trace.span("model_turn"):
                 resp = _model_turn(
-                    client, config, messages, tools, force=False, deltas=ctx.deltas
+                    client,
+                    config,
+                    messages,
+                    tools,
+                    force=False,
+                    deltas=ctx.deltas,
+                    system=ctx.system_prompt,
                 )
         except AskCancelled:
             raise
@@ -565,6 +575,7 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> Answered:
                 ctx.tools,
                 force=True,
                 deltas=ctx.deltas,
+                system=ctx.system_prompt,
             )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -726,10 +737,11 @@ def _model_turn(
     *,
     force: bool,
     deltas: AnswerDeltas,
+    system: str,
 ) -> ai.ModelResponse:
     return ai.turn(
         ai.ToolTask(
-            system=prompts.SYSTEM_PROMPT,
+            system=system,
             messages=messages,
             tools=tools,
             force_tool=SUBMIT_TOOL if force else None,

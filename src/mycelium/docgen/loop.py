@@ -39,7 +39,7 @@ import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Callable
 
-from .. import ai, tracing
+from .. import ai, ai_prompts, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -47,7 +47,6 @@ from ..agentloop import (
     check_budget,
     collect_statement_ids,
     ids_present_in,
-    load_doctrine,
 )
 from ..agentloop import (
     first_tool_use as _first_tool_use,
@@ -117,6 +116,8 @@ def run_docgen(
     load_current_document: Callable[[str], CurrentDocument] | None = None,
     revision_target: RevisionTarget | None = None,
     profiles: CatalogueSnapshot | None = None,
+    instructions: ai_prompts.Snapshot | None = None,
+    review_instructions: ai_prompts.Snapshot | None = None,
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
@@ -134,9 +135,11 @@ def run_docgen(
     if report_gap is None:
         report_gap = _default_gap_reporter
 
-    doctrine_text, doctrine_note = load_doctrine(
-        config.doctrine_path, name=DOCTRINE_NAME
+    instructions = instructions or ai_prompts.resolve(
+        DOCTRINE_NAME, default_path=config.doctrine_path
     )
+    doctrine_text, doctrine_note = instructions.text, instructions.note
+    review_instructions = review_instructions or ai_prompts.resolve("document_review")
 
     with tracing.profile_to_html("docgen", prompt[:40]):
         result = _execute(
@@ -149,6 +152,7 @@ def run_docgen(
             config=config,
             doctrine_text=doctrine_text,
             doctrine_note=doctrine_note,
+            review_instructions=review_instructions.text,
             catalogue=profiles.catalogue()
             if profiles is not None
             else _store_catalogue(),
@@ -157,6 +161,11 @@ def run_docgen(
             load_current_document=load_current_document,
             revision_target=revision_target,
         )
+
+    result.trace["prompts"] = [
+        instructions.reference().model_dump(mode="json"),
+        review_instructions.reference().model_dump(mode="json"),
+    ]
 
     if config.trace_log_path:
         from .trace import write_record
@@ -242,6 +251,7 @@ def _execute(
     existing_documents: tuple[ExistingDocument, ...] = (),
     load_current_document: Callable[[str], CurrentDocument] | None = None,
     revision_target: RevisionTarget | None = None,
+    review_instructions: str = prompts.DEFAULT_REVIEW_INSTRUCTIONS,
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -266,6 +276,7 @@ def _execute(
         start=start,
         messages=[],
         system_prompt="",
+        review_instructions=review_instructions,
         tools=[],
         guideline_set=None,
         document_type=None,
@@ -840,6 +851,7 @@ def _review(
 
     check_exposure = bool((ctx.exposure or "").strip())
     system = prompts.build_review_system_prompt(
+        instructions=ctx.review_instructions,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
         exposure=ctx.exposure,

@@ -7,6 +7,7 @@ hnswlib indexes backed by Ollama embeddings.
 See `project_vision.md` for the product direction, `SETUP.md` for a guided local
 setup, and `docs/mycelium.md` for detailed contracts.
 See [AI model configuration](docs/AI_MODELS.md) to select Claude or GPT independently for each action.
+See [AI prompts](docs/AI_PROMPTS.md) to edit per-action instructions in the UI without redeploying.
 
 See [the documentation workflow](docs/DOCUMENTATION_MODELS.md) to configure writing profiles,
 generate and revise documents, and publish GitHub pull requests from either UI.

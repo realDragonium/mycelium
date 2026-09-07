@@ -30,13 +30,12 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .. import ai, tracing, when_expression
+from .. import ai, ai_prompts, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
 from ..agentloop import (
     check_budget,
-    load_doctrine,
 )
 from ..agentloop import (
     first_tool_use as _first_tool_use,
@@ -129,14 +128,15 @@ def run_ingest(
     if emitter is None:
         emitter = InProcessDraftEmitter()
 
-    doctrine_text, doctrine_note = load_doctrine(
-        config.doctrine_path, name=DOCTRINE_NAME
-    )
+    instructions = ai_prompts.resolve(DOCTRINE_NAME, default_path=config.doctrine_path)
+    doctrine_text, doctrine_note = instructions.text, instructions.note
 
     with tracing.profile_to_html("ingest", f"{len(text)} chars"):
         result = _execute(
             text, client, substrate, emitter, config, doctrine_text, doctrine_note
         )
+
+    result.trace["prompts"] = [instructions.reference().model_dump(mode="json")]
 
     if config.trace_log_path:
         from .trace import write_record

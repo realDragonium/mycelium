@@ -320,7 +320,8 @@ def test_research_runner_keeps_admitted_source_and_limits(db, tmp_path, monkeypa
     save(settings.ResearchSettings(max_tokens=9876))
     observed = []
 
-    def execute(topic, source, *, config, emitter):
+    def execute(topic, source, *, config, emitter, instructions):
+        assert instructions.action == "research"
         observed.append((source.repo, source.ref, config.max_tokens))
 
     monkeypatch.setattr(research, "run_research", execute)

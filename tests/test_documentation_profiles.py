@@ -7,7 +7,7 @@ from dataclasses import asdict
 
 import pytest
 
-from mycelium import auth, guidelines, prompt_store, server
+from mycelium import ai_prompts, auth, guidelines, prompt_store, server
 from mycelium import documentation_profiles as profiles
 from test_prompt_texts import _app, _as
 
@@ -214,11 +214,9 @@ def test_ui_and_mcp_share_versions_validation_and_roles(tmp_path, monkeypatch):
             },
         )
         assert restored.status_code == 200 and restored.json()["version"] == 3
-        assert client.get("/api/ai-instructions").json()["names"] == [
-            "ingest",
-            "research",
-            "docgen",
-        ]
+        assert client.get("/api/ai-instructions").json()["names"] == list(
+            ai_prompts.ACTIONS
+        )
 
 
 def test_generic_mcp_restore_preserves_writer_permission(tmp_path, monkeypatch):

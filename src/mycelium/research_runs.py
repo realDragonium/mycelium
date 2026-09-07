@@ -120,10 +120,12 @@ def _default_runner(data_dir: str, source_name: str) -> Callable[..., Any]:
     """
     import dataclasses
 
+    from . import ai_prompts
     from .research.config import ResearchConfig
     from .research.sources import get_source
 
     config = ResearchConfig.from_env()
+    instructions = ai_prompts.resolve("research", default_path=config.doctrine_path)
     selected_source = get_source(source_name)
     if not config.trace_log_path:
         config = dataclasses.replace(config, trace_log_path=_trace_log_path(data_dir))
@@ -134,7 +136,11 @@ def _default_runner(data_dir: str, source_name: str) -> Callable[..., Any]:
         from .research import run_research
 
         return run_research(
-            topic, selected_source, config=config, emitter=InProcessDraftEmitter(server)
+            topic,
+            selected_source,
+            config=config,
+            emitter=InProcessDraftEmitter(server),
+            instructions=instructions,
         )
 
     return run

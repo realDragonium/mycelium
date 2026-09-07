@@ -12,9 +12,9 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from . import auth, guidelines, prompt_store, store
+from . import ai_prompts, auth, guidelines, prompt_store, store
 
-INSTRUCTIONS = ("ingest", "research", "docgen")
+INSTRUCTIONS = ai_prompts.ACTIONS
 
 
 class Conflict(ValueError):

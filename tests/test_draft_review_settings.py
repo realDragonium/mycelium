@@ -233,8 +233,17 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
     executor = ThreadPoolExecutor(max_workers=1)
     entered, release = threading.Event(), threading.Event()
     calls = []
+    from mycelium import prompt_store
 
-    def model(context, *, model, provider, limits, reasoning_effort):
+    prompt_store.save(
+        prompt_store.connection(),
+        type="doctrine",
+        name="draft_review",
+        text="Admitted instructions",
+    )
+
+    def model(context, *, model, provider, limits, reasoning_effort, instructions):
+        assert instructions.text == "Admitted instructions"
         calls.append((model, provider, limits.max_tokens, reasoning_effort))
         entered.set()
         assert release.wait(5)
@@ -255,6 +264,12 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
         first = _draft()
         assert entered.wait(5)
         second = _draft()
+        prompt_store.save(
+            prompt_store.connection(),
+            type="doctrine",
+            name="draft_review",
+            text="Edited while queued",
+        )
         from mycelium import product_settings
         from product_settings_helpers import set_product
 
@@ -281,6 +296,7 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
     ]
     for draft_id in (first, second):
         result = _result(draft_id)
+        assert result["prompt"]["version"] == 1
         assert result["provider"] == "openai"
         assert result["model"] == "gpt-fixture"
         assert result["reasoning_effort"] == "high"
