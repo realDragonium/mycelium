@@ -20,7 +20,6 @@ function useHashRoute() {
     if (parts[0] === 'documentation') return { view: 'documentation' };
     if (parts[0] === 'settings') return { view: 'settings' };
     if (parts[0] === 'gaps') return { view: 'gaps' };
-    if (parts[0] === 'pending') return { view: 'pending' };
     if (parts[0] === 'drafts') return {
       view: 'drafts',
       selected: parts[1] || null,
@@ -56,7 +55,6 @@ function useHashRoute() {
     else if (next.view === 'documentation') h = '#/documentation';
     else if (next.view === 'settings') h = `#/settings`;
     else if (next.view === 'gaps') h = `#/gaps`;
-    else if (next.view === 'pending') h = `#/pending`;
     else if (next.view === 'drafts') h = next.selected ? `#/drafts/${next.selected}` : `#/drafts`;
     else if (next.view === 'activity') {
       const qs = new URLSearchParams();
@@ -133,7 +131,6 @@ function App() {
     case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'settings': screen = <SettingsScreen />; break;
     case 'gaps': screen = <GapsScreen />; break;
-    case 'pending': screen = <PendingMentionsScreen />; break;
     case 'drafts': screen = <DraftsScreen selected={router.selected} />; break;
     case 'activity': screen = <ActivityScreen page={router.page} selected={router.selected} ops={router.ops} kinds={router.kinds} q={router.q} />; break;
     case 'landing':

@@ -35,12 +35,12 @@ Matching rules
   `is_suspect_name`) are too ambiguous to auto-link — the same word can be a
   real reference in one statement and noise in another. A *surviving* suspect
   match (one that won its span under maximal munch) does not become a mention;
-  it is reported as a suspect occurrence for per-occurrence human review. A
+  it is reported as a possible match for read-only discovery. A
   suspect match that loses its span to a longer match is simply dropped.
   Suspect-ness never changes match priority — only span length does. Under the
   default rule suspect names are single short tokens, so in practice they never
   outrank a longer match; the algorithm does not depend on that, though — a
-  suspect that does win its span is queued for review rather than linked.
+  suspect that does win its span remains a possible match rather than an asserted mention.
 
 Suspect-ness is treated as an *input* to the matcher: `build_index` stamps
 each name via a pluggable predicate (default `is_suspect_name`), so the
@@ -106,8 +106,7 @@ class Mention:
 
 @dataclass(frozen=True)
 class SuspectOccurrence:
-    """A surviving suspect match held for human review. Not a link until a
-    human approves this (statement, name) occurrence."""
+    """An ambiguous text occurrence for discovery, never an asserted link."""
 
     entity_id: str
     name_id: str
@@ -120,8 +119,8 @@ class SuspectOccurrence:
 class MatchResult:
     """The full outcome of matching one statement's text.
 
-    `mentions` become stored edges directly. `suspects` are enqueued for
-    per-occurrence review and only become edges once approved.
+    `mentions` become derived index rows. `suspects` stay available to
+    query-time discovery without creating review tasks.
     """
 
     mentions: list[Mention]
@@ -200,9 +199,9 @@ def is_suspect_name(text: str) -> bool:
     match the *verb*, not the entity: a status enum named "Rejected"
     matches "a webhook is rejected" / "the request was declined" all over a
     corpus. A semantic audit found such aliases ~96% wrong, so each occurrence
-    is routed to human review instead of auto-linked. It is a deliberate
+    remains a possible match instead of auto-linked. It is a deliberate
     heuristic — a genuine entity whose name happens to end in "-ed" is rare and
-    is merely reviewed rather than silently auto-linked.
+    remains available for discovery without being auto-linked.
 
     Pure and computable from the name alone; no corpus scan. The matcher takes
     suspect-ness as an input, so a richer (e.g. frequency-based) refinement can
@@ -313,7 +312,7 @@ def match_text(text: str, index: dict[str, list[IndexedName]]) -> MatchResult:
     Distinctive matches become `mentions`, deduped to one per entity (the
     leftmost, then longest, match supplies the representative alias). An entity
     reached only through suspect matches contributes no mention; instead each
-    distinct suspect (statement, name) is reported for review. An entity with
+    distinct suspect (statement, name) is reported for discovery. An entity with
     even one distinctive hit is auto-linked, and its suspect hits are not
     queued — it is already mentioned.
     """
@@ -343,7 +342,7 @@ def match_text(text: str, index: dict[str, list[IndexedName]]) -> MatchResult:
                 )
             )
             continue
-        # Entity reached only through suspect names → review, one per name.
+        # Entity reached only through suspect names: candidates, one per name.
         seen: set[str] = set()
         for c in sorted(cands, key=lambda c: (c.char_start, c.indexed.name_id)):
             if c.indexed.name_id in seen:

@@ -1170,3 +1170,31 @@ def test_force_restore_replaces_prompt_texts(tmp_path):
         assert prompt_store.latest_text(conn, "doctrine", "ingest") == "local drift"
     finally:
         conn.close()
+
+
+def test_historical_mention_approval_survives_archive_and_recompute(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    conn = store.connect(src / "mycelium.db")
+    store.migrate(conn)
+    eid = store.create_entity(conn, "authentication")
+    nid = store.create_name(conn, "SSO", eid)
+    sid = store.create_statement(conn, "state", "SSO is enabled")
+    conn.execute(
+        "INSERT INTO pending_mentions (statement_id, name_id, created_at, approved_at, approved_by) "
+        "VALUES (?, ?, '2026-08-01', '2026-08-01', 'curator')",
+        (sid, nid),
+    )
+    conn.commit()
+    conn.close()
+    archive = tmp_path / "archive.tar.gz"
+    backup.export_substrate(src, archive)
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+    conn = store.connect(dst / "mycelium.db")
+    try:
+        store.derive_mentions(conn, sid, "SSO is enabled", store.build_name_index(conn))
+        assert [r["name"] for r in store.get_mentions(conn, sid)] == ["SSO"]
+        assert store.list_pending_mentions(conn, "approved")[0]["name"] == "SSO"
+    finally:
+        conn.close()

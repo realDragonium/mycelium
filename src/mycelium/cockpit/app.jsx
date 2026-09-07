@@ -160,8 +160,6 @@ function App() {
   const [t, setTweak] = useTweaks(defaults);
   const draftsArr = window.useMycDrafts ? window.useMycDrafts() : [];
   const openDrafts = draftsArr.filter(d => d.status === 'open').length;
-  const pendingArr = window.useMycPending ? window.useMycPending() : null;
-  const openMentions = (pendingArr || []).filter(p => p.status === 'open').length;
 
   useEffectApp(() => {
     const r = document.documentElement;
@@ -181,7 +179,6 @@ function App() {
     case 'names': screen = <NamesWorkspace />; break;
     case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'coverage': screen = <CoverageScreen />; break;
-    case 'mentions': screen = <MentionsScreen />; break;
     case 'drafts': screen = <DraftsList />; break;
     case 'draft': screen = <DraftReview id={router.id} />; break;
     case 'statement': screen = <StatementDetail id={router.id} />; break;
@@ -203,7 +200,6 @@ function App() {
             </div>
             <div className="topbar-spacer" />
             <button className={`nav-btn${router.view === 'coverage' ? ' on' : ''}`} onClick={() => router.go({ view: 'coverage' })}><I.gap width="15" height="15" />Coverage{window.MYCELIUM_COVERAGE && window.MYCELIUM_COVERAGE.summary.gaps > 0 && <span className="nb-badge">{window.MYCELIUM_COVERAGE.summary.gaps}</span>}</button>
-            <button className={`nav-btn${router.view === 'mentions' ? ' on' : ''}`} onClick={() => router.go({ view: 'mentions' })}><I.interp width="15" height="15" />Mentions{openMentions > 0 && <span className="nb-badge">{openMentions}</span>}</button>
             <button className={`drafts-btn${openDrafts ? ' has-open' : ''}`} onClick={() => router.go({ view: 'drafts' })}><I.prov width="15" height="15" />Drafts{openDrafts > 0 && <span className="db-badge">{openDrafts}</span>}</button>
             <button className={`nav-btn${router.view === 'research' ? ' on' : ''}`} onClick={() => router.go({ view: 'research' })}><I.find width="15" height="15" />Research</button>
             <button className={`nav-btn${router.view === 'names' ? ' on' : ''}`} onClick={() => router.go({ view: 'names' })}>Names &amp; aliases</button>

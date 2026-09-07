@@ -1925,6 +1925,24 @@ def _search_statement_candidates(
 
 
 @tool
+def get_mention_candidates(
+    entity_id: str, after: int = 0, limit: int = 50
+) -> dict[str, JsonValue]:
+    """Find text matches across a concept's aliases, including ambiguous ones.
+
+    Matches are labeled derived, approved, or possible. Possible matches are
+    discovery evidence, never asserted relationships or graph edges. Follow
+    next_after while has_more is true, even if a bounded scan returns no hits.
+    Statement edits may change results between pages. Nothing is written.
+    """
+    from .mention_candidates import find_candidates
+
+    return find_candidates(_db(), entity_id, after=after, limit=limit).model_dump(
+        mode="json"
+    )
+
+
+@tool
 def search_statements(
     query: str,
     limit: int = 10,

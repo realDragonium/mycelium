@@ -217,7 +217,6 @@ function TopBar({ small = false }) {
           <button className={router.view === 'activity' ? 'is-active' : ''} onClick={() => router.go({ view: 'activity' })}>Activity</button>
           <button className={router.view === 'glossary' ? 'is-active' : ''} onClick={() => router.go({ view: 'glossary' })}>Glossary</button>
           <button className={router.view === 'gaps' ? 'is-active' : ''} onClick={() => router.go({ view: 'gaps' })}>Gaps</button>
-          <button className={router.view === 'pending' ? 'is-active' : ''} onClick={() => router.go({ view: 'pending' })}>Pending</button>
           <button className={router.view === 'drafts' ? 'is-active' : ''} onClick={() => router.go({ view: 'drafts' })}>Drafts</button>
           <button onClick={() => { window.location.href = '/connect'; }}>Connect</button>
           <button className={router.view === 'names' ? 'is-active' : ''} onClick={() => router.go({ view: 'names' })}>Names &amp; aliases</button>

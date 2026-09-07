@@ -2875,72 +2875,26 @@ def test_grep_statements_matched_via_both(tmp_path, monkeypatch):
         assert rows[sid]["matched_via"] == "both"
 
 
-def test_pending_mentions_review_surface(tmp_path, monkeypatch):
-    """A suspect (short) name match is held in the pending-mentions queue,
-    surfaced over HTTP, and approving it materializes the real mention."""
+def test_mention_candidates_include_short_aliases(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch, deterministic_embed) as client:
-        # "flow" is 4 chars → suspect; it is queued, not auto-linked.
-        client.post("/upsert-entity", json={"name": "flow", "description": "a flow"})
+        eid = client.post(
+            "/upsert-entity",
+            json={"name": "single sign-on", "description": "Authentication"},
+        ).json()["entity_id"]
+        client.post("/upsert-name", json={"text": "SSO", "entity_id": eid})
         sid = client.post(
             "/upsert-statement",
-            json={
-                "kind": "state",
-                "text": "the flow halts",
-                "links": [],
-            },
+            json={"kind": "state", "text": "SSO is enabled", "links": []},
         ).json()["statement_id"]
-
-        # Not yet a mention.
-        stmt = client.post("/get-statements", json={"ids": [sid]}).json()["statements"][
-            0
-        ]
-        assert stmt["mentions"] == []
-
-        # It is in the open review queue.
-        pend = client.get("/api/pending-mentions?status=open").json()[
-            "pending_mentions"
-        ]
-        assert len(pend) == 1
-        assert pend[0]["name"] == "flow"
-        assert pend[0]["statement_id"] == sid
-        pid = pend[0]["id"]
-
-        # Approving materializes the mention and clears the open queue.
-        r = client.patch(f"/api/pending-mentions/{pid}", json={"action": "approve"})
-        assert r.status_code == 200 and r.json()["status"] == "approved"
-        stmt = client.post("/get-statements", json={"ids": [sid]}).json()["statements"][
-            0
-        ]
-        assert [m["name"] for m in stmt["mentions"]] == ["flow"]
+        response = client.get("/api/mention-candidates", params={"entity_id": eid})
+        assert response.status_code == 200
+        assert response.json()["matches"][0]["statement_id"] == sid
+        assert response.json()["matches"][0]["match"] == "possible"
         assert (
-            client.get("/api/pending-mentions?status=open").json()["pending_mentions"]
-            == []
-        )
-
-
-def test_pending_mention_reject_writes_no_mention(tmp_path, monkeypatch):
-    with _client(tmp_path, monkeypatch, deterministic_embed) as client:
-        client.post("/upsert-entity", json={"name": "data", "description": "x"})
-        sid = client.post(
-            "/upsert-statement",
-            json={
-                "kind": "state",
-                "text": "the data is stale",
-                "links": [],
-            },
-        ).json()["statement_id"]
-        pid = client.get("/api/pending-mentions?status=open").json()[
-            "pending_mentions"
-        ][0]["id"]
-        r = client.patch(f"/api/pending-mentions/{pid}", json={"action": "reject"})
-        assert r.status_code == 200 and r.json()["status"] == "rejected"
-        stmt = client.post("/get-statements", json={"ids": [sid]}).json()["statements"][
-            0
-        ]
-        assert stmt["mentions"] == []
-        assert (
-            client.get("/api/pending-mentions?status=open").json()["pending_mentions"]
-            == []
+            client.get(
+                "/api/mention-candidates", params={"entity_id": eid, "limit": 0}
+            ).status_code
+            == 400
         )
 
 
