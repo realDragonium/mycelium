@@ -385,8 +385,10 @@ def test_templated_cue_slots_take_forward_aliases_only(fresh_conn):
 
 
 def test_migrate_sets_alias_schema_version(fresh_conn):
-    assert fresh_conn.execute("PRAGMA user_version").fetchone()[0] == 11
-    assert migrations.CURRENT_VERSION == 11
+    assert (
+        fresh_conn.execute("PRAGMA user_version").fetchone()[0]
+        == migrations.CURRENT_VERSION
+    )
 
 
 def test_carrier_embedding_drain_round_trips_and_skips_deleted_target(fresh_conn):

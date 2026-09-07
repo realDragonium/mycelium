@@ -32,6 +32,34 @@ def test_fresh_db_fast_forwards_to_current():
     assert _has_column(conn, "statements", "updated_by")
 
 
+def test_connection_indexes_upgrade_existing_stores_without_changing_edges():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    indexes = {
+        "statement_links_from_id",
+        "statement_links_to_id",
+        "when_nodes_statement_link",
+    }
+    for name in indexes:
+        conn.execute(f"DROP INDEX {name}")
+    a = store.create_statement(conn, "action", "Click Save.")
+    b = store.create_statement(conn, "event", "The changes are saved.")
+    store.insert_links(conn, [(a, b, "performs", None)])
+    conn.execute("PRAGMA user_version = 11")
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    installed = {
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert indexes <= installed
+    assert store.get_links(conn, a) == [(b, "performs", None)]
+    assert _user_version(conn) == migrations.CURRENT_VERSION
+    conn.close()
+
+
 def test_fresh_db_seeds_all_glossaries():
     conn = store.connect(":memory:")
 
