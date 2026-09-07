@@ -23,13 +23,14 @@ write tool and never touches `server._conn`.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from .. import ai, tracing
+from .. import ai, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -691,6 +692,7 @@ def _normalize_and_check(
 
         try:
             reject_entity_statement_additions(payload.get("links"))
+            _validate_statement_link_references(payload.get("links"))
         except ValueError as ex:
             flagged.append(f"op[{idx}] (add_links) dropped: {ex}")
             return payload, rationale, True
@@ -706,6 +708,27 @@ def _normalize_and_check(
         return payload, rationale, False
 
     return payload, rationale, False
+
+
+def _validate_statement_link_references(links: object) -> None:
+    if not isinstance(links, list):
+        raise ValueError("links must be a list")
+    for index, edge in enumerate(links):
+        if not isinstance(edge, dict):
+            raise ValueError(f"links[{index}] must be an object")
+        references: list[object] = [edge.get("from_id"), edge.get("to_id")]
+        if "when" in edge:
+            expression = edge["when"]
+            when_expression.validate(expression)
+            references.extend(when_expression.leaves(expression))
+        for reference in references:
+            if not isinstance(reference, str) or not re.fullmatch(
+                r"stm_.+|@\d+:\d+", reference
+            ):
+                raise ValueError(
+                    f"links[{index}] reference {reference!r} must be a statement ID "
+                    "(stm_…) or draft statement result (@seq:index)"
+                )
 
 
 def _check_edges(links: Any, required: tuple[str, ...]) -> str | None:

@@ -15,6 +15,8 @@ from __future__ import annotations
 import json
 import types
 
+import pytest
+
 from mycelium.ask.substrate import SubstrateError, ToolSpec
 from mycelium.ingest import (
     DraftCreated,
@@ -486,6 +488,67 @@ def test_entity_statement_addition_is_an_ingest_finding():
     assert isinstance(result, DraftCreated)
     assert emitter.queued == []
     assert any("statement-to-statement" in finding for finding in result.flagged)
+
+
+@pytest.mark.parametrize(
+    "edge",
+    [
+        {"from_id": "bad_id", "to_id": "stm_target"},
+        {"from_id": "stm_source", "to_id": 7},
+        {"from_id": "stm_source", "to_id": "stm_"},
+        {
+            "from_id": "stm_source",
+            "to_id": "stm_target",
+            "when": {"op": "not", "of": [{"statement_id": "ent_condition"}]},
+        },
+        {
+            "from_id": "stm_source",
+            "to_id": "stm_target",
+            "when": {"op": "and", "of": []},
+        },
+    ],
+)
+def test_invalid_statement_link_references_do_not_poison_other_ingest_ops(edge):
+    valid = _op("upsert_statement", {"kind": "event", "text": "an invite is sent"})
+    emit = _emit_input(
+        ops=[valid, _op("add_links", {"links": [{**edge, "link_type": "triggers"}]})],
+        ledger=[
+            _ledger_row(
+                "an invite is sent", "new", matched=["stm_1"], considered=["stm_1"]
+            )
+        ],
+    )
+    responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+    result, _client, _sub, emitter = _run(responses)
+    assert isinstance(result, DraftCreated)
+    assert [kind for _draft, kind, _payload in emitter.queued] == ["upsert_statement"]
+    assert any("(add_links) dropped" in finding for finding in result.flagged)
+
+
+def test_ingest_preserves_statement_and_draft_result_references_in_conditions():
+    edge = {
+        "from_id": "stm_source",
+        "to_id": "@1:0",
+        "link_type": "triggers",
+        "when": {
+            "op": "and",
+            "of": [
+                {"statement_id": "stm_condition"},
+                {"op": "not", "of": [{"statement_id": "@1:1"}]},
+            ],
+        },
+    }
+    from mycelium.ingest.loop import _normalize_and_check
+
+    flagged: list[str] = []
+    payload = {"links": [edge]}
+    normalized, rationale, dropped = _normalize_and_check(
+        "add_links", payload, "existing and newly drafted statements", flagged, 1
+    )
+    assert normalized == payload
+    assert rationale == "existing and newly drafted statements"
+    assert not dropped
+    assert flagged == []
 
 
 # --------------------------------------------------------------------------- #
