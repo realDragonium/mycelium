@@ -195,8 +195,7 @@ Conclude by calling `emit_draft` **exactly once** with:
   kind and carrying that tool's kwargs as a JSON-object string in
   `payload_json`, with a `rationale` and the existing ids it targets. Edge key
   names differ by op: `add_links` edges are `{from_id, to_id, link_type, when?}`
-  (statement↔statement only; legacy entity↔statement edges are readable and
-  removable but cannot be added); `add_entity_links` edges are
+  (statement↔statement only); `add_entity_links` edges are
   `{from_entity_id, to_entity_id, link_type}` (entity↔entity) — do not mix them;
 - the per-candidate **ledger** — every extracted candidate, its classification,
   what it was matched against, and which existing statements you considered

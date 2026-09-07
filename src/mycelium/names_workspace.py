@@ -11,13 +11,11 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    JsonValue,
     StringConstraints,
-    TypeAdapter,
 )
 
 from . import plurals, store
-from .store.kernel import _load_when_tree, _record
+from .store.kernel import _record
 
 NameText = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)
@@ -129,9 +127,6 @@ class Relationship(Model):
     source: str
     target: str
     link_type: str
-    family: Literal["concept", "statement"] = "concept"
-    statement_text: str | None = None
-    condition: JsonValue = None
 
 
 class History(Model):
@@ -179,8 +174,6 @@ def revision(conn: sqlite3.Connection) -> str:
     digest = hashlib.sha256()
     # Include prose and relationships because they are part of the impact preview.
     tables = ["entities", "names", "statements", "entity_links"]
-    if _has_mixed_links(conn):
-        tables.extend(("entity_statement_links", "when_nodes"))
     for table in tables:
         for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid"):
             digest.update(json.dumps(dict(row), sort_keys=True).encode())
@@ -230,15 +223,6 @@ def catalogue(conn: sqlite3.Connection, query: str = "") -> Catalogue:
         )
 
 
-def _has_mixed_links(conn: sqlite3.Connection) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE name = 'entity_statement_links' AND type = 'table'"
-        ).fetchone()
-        is not None
-    )
-
-
 def _relationships(
     conn: sqlite3.Connection, entity_ids: set[str]
 ) -> list[Relationship]:
@@ -253,30 +237,6 @@ def _relationships(
         )
         if row["from_entity_id"] in entity_ids or row["to_entity_id"] in entity_ids
     ]
-    if _has_mixed_links(conn):
-        for row in conn.execute(
-            "SELECT l.*, s.text FROM entity_statement_links l JOIN statements s ON s.id = l.statement_id"
-        ):
-            if row["entity_id"] not in entity_ids:
-                continue
-            source, target = (
-                (row["entity_id"], row["statement_id"])
-                if row["direction"] == "es"
-                else (row["statement_id"], row["entity_id"])
-            )
-            condition = TypeAdapter(JsonValue).validate_python(
-                _load_when_tree(conn, row["link_id"], link_kind="entity_statement")
-            )
-            result.append(
-                Relationship(
-                    source=source,
-                    target=target,
-                    link_type=row["link_type"],
-                    family="statement",
-                    statement_text=row["text"],
-                    condition=condition,
-                )
-            )
     return sorted(result, key=lambda item: item.model_dump_json())
 
 

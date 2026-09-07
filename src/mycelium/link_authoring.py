@@ -5,8 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 MIXED_LINK_ERROR = (
-    "add_links only creates statement-to-statement links; entity endpoints are "
-    "legacy and may only be read or removed. Use add_entity_links for "
+    "add_links only creates statement-to-statement links. Use add_entity_links for "
     "entity-to-entity links."
 )
 

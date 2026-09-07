@@ -242,7 +242,7 @@ rather than guessing. The link vocabularies (`list_link_types()` for
 statement↔statement edges, `list_entity_link_types()` for
 entity↔entity edges) are provided at the start of the session — choose an
 existing type that fits, and propose a new one only when nothing returned does.
-Legacy entity↔statement edges remain readable and removable but cannot be added.
+Entity↔statement edges are unsupported.
 The returned list is your menu; the type names in this doctrine are
 illustrations of method, not the set to choose from — the live vocabulary is
 larger and grows.

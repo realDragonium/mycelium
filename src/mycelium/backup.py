@@ -178,6 +178,7 @@ def export_substrate(
     # the running server (if any) may be using.
     conn = store.connect(db_path)
     try:
+        migrations.require_rescued_entity_statement_links(conn)
         with tempfile.TemporaryDirectory() as staging_str:
             staging = Path(staging_str)
 
@@ -574,6 +575,9 @@ def import_substrate(
         documentation = documentation_archive.prepare(
             staging, required=bool(manifest.get("includes_documentation"))
         )
+        _validate_legacy_link_archive(
+            staging / "data.jsonl", manifest.get("row_counts")
+        )
         _prepare_restore_target(data_dir, force=force)
         from . import prompt_store
 
@@ -712,6 +716,31 @@ def _insert_archived_row(
     )
 
 
+def _validate_legacy_link_archive(path: Path, row_counts: object) -> None:
+    message = (
+        "archive contains unrescued entity↔statement links or conditions; restore "
+        "with the previous build and complete the knowledge rescue before upgrading. "
+        "The restore target has not been changed. See docs/ENTITY_STATEMENT_MIGRATION.md."
+    )
+    if (
+        isinstance(row_counts, dict)
+        and row_counts.get("entity_statement_links", 0) != 0
+    ):
+        raise ValueError(message)
+    with path.open(encoding="utf-8") as source:
+        for line in source:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError("data.jsonl records must be JSON objects")
+            if row.get("_kind") == "entity_statement_link" or (
+                row.get("_kind") == "when_node"
+                and row.get("link_kind", "statement") != "statement"
+            ):
+                raise ValueError(message)
+
+
 def _load_data_jsonl(
     conn: sqlite3.Connection,
     path: Path,
@@ -733,6 +762,12 @@ def _load_data_jsonl(
             if kind in _LEGACY_ANNOTATION_KINDS:
                 legacy_skipped += 1
                 continue
+            if kind == "when_node":
+                legacy_kind = row.pop("link_kind", "statement")
+                if legacy_kind != "statement":
+                    raise ValueError(
+                        "archive contains unrescued entity↔statement conditions"
+                    )
             table = _KIND_TO_TABLE.get(kind)
             if table is None:
                 raise ValueError(f"unknown record kind in archive: {kind!r}")

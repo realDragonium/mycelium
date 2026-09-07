@@ -201,8 +201,7 @@ Edges to add where both endpoints are already in the substrate.
 
 ## Entity links
 
-Only entity↔entity links can be authored. Legacy entity↔statement links remain
-readable and removable but must not appear in a new draft.
+Entity links connect entities to entities. Entity↔statement links are unsupported.
 
 ### Entity ↔ entity (`add_entity_links`)
 

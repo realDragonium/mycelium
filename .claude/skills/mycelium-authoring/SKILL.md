@@ -179,7 +179,7 @@ An edge holds unconditionally by default. When it only fires under a preconditio
 
 ### Which tool, and isolation
 
-- **statement↔statement** edges → `add_links` (`{from_id, to_id, link_type, when?}`). Legacy entity↔statement edges remain readable and removable, but cannot be added.
+- **statement↔statement** edges → `add_links` (`{from_id, to_id, link_type, when?}`). Entity↔statement edges are unsupported.
 - **entity↔entity** structural edges → `add_entity_links` (separate vocabulary, no `when`).
 
 A statement with **no** incoming and **no** outgoing links is almost always wrong — either unwired or shouldn't exist. The one exception: a `state` used only as a `when` leaf is intentionally link-free; do **not** add `enables` to "fix" it.
