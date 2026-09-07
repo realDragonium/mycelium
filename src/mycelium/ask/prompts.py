@@ -19,11 +19,14 @@ precision and explicit gaps matter more than fluency.
 THE SUBSTRATE
 - It holds atomic `statement`s (kinds like event/state/capability/rule/property \
 and prescriptive procedure/action/check/cause). Statements carry typed `links` \
-to other statements/entities (each `{link_type, to_id, when?}`) and `mentions` \
+to other statements (each `{link_type, to_id, when?}`) and `mentions` \
 of named entities.
-- You FOLLOW A LINK by calling `get_statements` on the linked `to_id`/`from_id` \
-(ids are `stm_...` for statements, `ent_...` for entities). There is no special \
-expander — links are followed mechanically, but you decide which to follow.
+- Preserve stored edge direction and full conditions, including AND/OR/NOT.
+  Fetch condition leaf statements when their meaning matters. Incoming links
+  and condition references do not reverse the original edge.
+- Follow statement links by passing linked to_id/from_id values to get_statements.
+  retrieve_context also follows one bounded frontier, including condition leaves.
+  Statement IDs start with stm_; entity IDs start with ent_ and use get_entity.
 - The link/kind vocabularies are open and grow. If a link_type or kind is \
 unfamiliar, look it up with `list_link_types` / `list_entity_link_types` / \
 `list_statement_kinds` rather than guessing its meaning.
@@ -41,7 +44,7 @@ THE LOOP
    - clean map -> proceed to retrieve.
    - wrong/misframed premise but still resolvable to ONE strong real referent -> \
      reframe to the question that serves the caller's underlying goal, proceed, \
-     and set interpretation.reframed = true with a reason.
+     and report the interpretation change with a reason.
    - genuinely ambiguous (two or more plausible distinct referents, or you can't \
      tell which question serves the goal) -> `request_clarification` and STOP. \
      The candidates are real because recon ran; name what each would pull.
@@ -57,11 +60,19 @@ THE LOOP
 3. SYNTHESISE — call `submit_answer`.
 
 ANTI-PREMATURE-CLOSURE (the failure this tool exists to prevent)
-- Before concluding you MUST: enumerate the sub-questions the question contains \
-  and mark each resolved / partial / unresolved (the `sub_questions` ledger); \
-  and report what your adjacency re-search surfaced in `adjacency_note` (even if \
-  "nothing new"). "I followed the links" is NOT sufficient — the missing-but-\
-  relevant unlinked statement is the exact gap that matters.
+- Before concluding, check coverage of the question and preserve unresolved parts,
+  contradictions and interpretation changes in gaps and the answer. Code records
+  retrieval checks; do not generate a sub-question ledger or adjacency report.
+- Prefer retrieve_context(query, names) to resolve aliases, fetch entities,
+  relevant statements and one linked frontier together. Respect explicit limits,
+  missing targets and truncation. Fetch only omitted context relevant to the answer.
+- For concept-seeded search_statements/survey_statements, pass adjacency_sources:
+  short statement refs already supplied by a PREVIOUS targeted retrieval turn.
+  Seed the query with those statements' concepts, not the original question.
+  Same-turn reads and bundled link traversal do not satisfy adjacency research.
+- Cite the short ref on each supplied statement (s1, s2, ...) in provenance.
+  Use refs only in provenance, not as unexplained codes in answer prose.
+  Unread link targets and entity IDs are not statement evidence.
 - ABSENCE IS A SIGNAL, NEVER INFERENCE. Zero results on a term means "not found \
   here" -> record it as a gap. Never infer a fact from a naming convention, from \
   what "should" exist, or from your own prior knowledge of similar systems.
@@ -88,11 +99,7 @@ near-identical queries."""
 def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
     """Trim a hydrated statement for the recon context — keep the signal
     (id, kind, text, score, link targets, mentioned entities), drop the bulk."""
-    links = [
-        {"link_type": link.get("link_type"), "to_id": link.get("to_id")}
-        for link in hit.get("links", [])
-        if isinstance(link, dict)
-    ]
+    links = hit.get("links", [])
     mentions = [m.get("name") for m in hit.get("mentions", []) if isinstance(m, dict)]
     out: dict[str, Any] = {
         "id": hit.get("id"),
@@ -109,6 +116,15 @@ def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
         out["links"] = links
     if mentions:
         out["mentions"] = mentions
+    for key in (
+        "ref",
+        "incoming_links",
+        "when_references",
+        "incoming_links_truncated",
+        "when_references_truncated",
+    ):
+        if key in hit:
+            out[key] = hit[key]
     return out
 
 
@@ -130,7 +146,7 @@ QUICK_CLOSING = (
     "block your answer for it. Orient on recon, do at most one or two targeted "
     "retrievals to confirm the key facts, then submit_answer. Skip the adjacency "
     "re-search unless recon left the core genuinely unresolved; if you skip it, "
-    "put 'skipped — quick mode' in adjacency_note. Stay honest: mark real gaps "
+    "record any resulting coverage gaps. Stay honest: mark real gaps "
     "and do not round up confidence."
 )
 
@@ -145,7 +161,7 @@ def initial_user_message(question: str, recon: Any, *, quick: bool = False) -> s
     return (
         f"QUESTION: {question}\n\n"
         f"RECON (survey_statements of the question — a wide starting map, not an answer):\n"
-        f"{format_recon(recon)}\n\n"
+        f"{recon if isinstance(recon, str) else format_recon(recon)}\n\n"
         f"{QUICK_CLOSING if quick else STANDARD_CLOSING}"
     )
 
@@ -156,14 +172,14 @@ def floor_block_message(detail: str) -> str:
         "Not yet — you cannot conclude before the floor is met. " + detail + " "
         "Do at least one more targeted retrieval and one concept-seeded "
         "adjacency re-search (search_statements / survey_statements on the "
-        "concepts you've gathered), then submit with a filled adjacency_note."
+        "concepts you've gathered), using adjacency_sources from the earlier targeted results."
     )
 
 
 #: Appended when the model stops without calling a terminal tool.
 NO_TERMINAL_NUDGE = (
     "You stopped without finishing. Call exactly one terminal tool now: "
-    "submit_answer (with the sub_questions ledger and adjacency_note filled) or "
+    "submit_answer (with honest gaps and evidence references) or "
     "request_clarification."
 )
 
@@ -172,7 +188,7 @@ def forced_finalize_message(reason: str) -> str:
     return (
         f"Budget reached ({reason}). Submit your answer NOW with submit_answer "
         "using only what you have gathered. Mark every unresolved sub-question in "
-        "the ledger and in gaps, and lower confidence accordingly — do not round up."
+        "gaps, and lower confidence accordingly — do not round up."
     )
 
 

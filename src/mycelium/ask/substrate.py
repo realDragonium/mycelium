@@ -18,6 +18,8 @@ from typing import Any, Callable, Protocol
 
 from pydantic import create_model
 
+from .events import AskCancelled
+
 #: Reader-role tools the inner model loop is not offered, for one of two
 #: reasons.
 #:
@@ -175,8 +177,12 @@ class InProcessSubstrate:
             raise SubstrateError(f"unknown read primitive: {name!r}")
         try:
             return func(**arguments)
+        except AskCancelled:
+            raise
         except Exception:  # noqa: BLE001 — transient substrate/index/Ollama; retry once
             try:
                 return func(**arguments)
+            except AskCancelled:
+                raise
             except Exception as exc:  # noqa: BLE001
                 raise SubstrateError(f"{name} failed after retry: {exc}") from exc

@@ -93,7 +93,7 @@ function Answered({ r, idx }) {
         <Panel icon="prov" title="Provenance" count={`${r.provenance.length} statement${r.provenance.length === 1 ? '' : 's'}`} cls="reveal-3">
           <Provenance items={r.provenance} idx={idx} />
         </Panel>
-        <Panel icon="trace" title="Reasoning trace" count={`${r.trace.length} steps`} cls="trace reveal-3" collapsible openDefault={false}>
+        <Panel icon="trace" title="Retrieval trace" count={`${r.trace.length} steps`} cls="trace reveal-3" collapsible openDefault={false}>
           <Trace steps={r.trace} idx={idx} />
         </Panel>
       </div>
@@ -139,19 +139,20 @@ function NeedsClarification({ r, idx, onPick }) {
 }
 
 /* ---- working + timeout ---- */
-function Working({ elapsed }) {
+function Working({ elapsed, progress, onCancel }) {
   return (
     <div className="ask-working">
       <div className="aw-row">
         <div className="aw-orb"><span className="ring" /><span className="core" /></div>
         <div className="aw-text">
-          <div className="aw-title">Reasoning over the substrate…</div>
-          <div className="aw-sub">recon → graph traversal + bridging → synthesis</div>
+          <div className="aw-title">Checking the knowledge base…</div>
+          <div className="aw-sub" role="status" aria-live="polite">{progress || 'Waiting for retrieval to start…'}</div>
         </div>
         <div className="aw-clock">{elapsed.toFixed(1)}s</div>
       </div>
+      <button className="btn" onClick={onCancel}>Cancel</button>
       <div className="aw-bar" />
-      <div className="aw-note">// the ask tool returns only when the loop completes — no partial thinking is streamed.</div>
+      <div className="aw-note">Progress reports completed checks. Answer text remains provisional until the result is complete.</div>
     </div>
   );
 }
@@ -160,7 +161,7 @@ function AskError({ r, onRetry }) {
   return (
     <div className="ask-error reveal">
       <I.timeout className="ae-icon" width="34" height="34" />
-      <div className="ae-title">The substrate timed out</div>
+      <div className="ae-title">{r.cancelled ? 'Ask cancelled' : 'Ask did not complete'}</div>
       <div className="ae-detail">{r.detail || 'No response within the deadline. The store is single-writer and can stall under load.'}</div>
       <div className="ae-actions">
         <button className="btn primary" onClick={onRetry}>Retry</button>
@@ -178,34 +179,45 @@ function AskSurface({ query }) {
   const [elapsed, setElapsed] = useStateA(0);
   const [attempt, setAttempt] = useStateA(0);
   const timers = useRefA([]);
+  const active = useRefA(null);
+  const [progress, setProgress] = useStateA('');
+  const [partial, setPartial] = useStateA('');
 
   const clear = () => { timers.current.forEach(clearInterval); timers.current = []; };
 
-  // Drives the real agentic Ask: start the elapsed clock, await Myc.ask, and
-  // fold the resolved union (answered | needs_clarification) into `done`. Only a
-  // real thrown transport/role error renders AskError — the backend has no
-  // separate timeout outcome (it folds into a low-confidence answered).
   const ask = (question) => {
+    if (active.current) active.current.abort();
+    const controller = new AbortController(); active.current = controller;
     clear();
-    setPhase('working'); setElapsed(0); setResult(null);
+    setPhase('working'); setElapsed(0); setResult(null); setProgress(''); setPartial('');
     const t0 = Date.now();
-    const tick = setInterval(() => setElapsed((Date.now() - t0) / 1000), 100);
-    timers.current.push(tick);
-    window.Myc.ask(question).then((res) => {
+    timers.current.push(setInterval(() => setElapsed((Date.now() - t0) / 1000), 100));
+    window.Myc.ask(question, {
+      signal: controller.signal,
+      onEvent: event => {
+        if (active.current !== controller) return;
+        if (event.type === 'progress') setProgress(event.message);
+        if (event.type === 'answer_delta') setPartial(text => text + event.text);
+        if (event.type === 'answer_reset') setPartial('');
+      },
+    }).then(res => {
+      if (active.current !== controller) return;
+      clear(); setPartial(''); setResult(res); setPhase('done');
+    }).catch(err => {
+      if (active.current !== controller) return;
       clear();
-      setResult(res);
-      setPhase('done');
-    }).catch((err) => {
-      clear();
-      const detail = (err && (err.status === 401 || err.status === 403))
-        ? 'You need an authenticated session to ask.'
+      const cancelled = err && err.name === 'AbortError';
+      const detail = cancelled ? 'The request was cancelled. Any text shown is incomplete.'
+        : (err && (err.status === 401 || err.status === 403)) ? 'You need an authenticated session to ask.'
         : ((err && err.message) || 'The substrate did not respond.');
-      setResult({ detail });
-      setPhase('error');
+      setResult({ detail, cancelled }); setPhase('error');
     });
   };
 
-  useEffectA(() => { ask(query); return clear; /* eslint-disable-next-line */ }, [query, attempt]);
+  useEffectA(() => {
+    ask(query);
+    return () => { if (active.current) active.current.abort(); active.current = null; clear(); };
+  }, [query, attempt]);
 
   // Re-ask a refined question grounded in the picked interpretation.
   const onPick = (io) => ask(`${query} — interpreted as: ${io.label}. ${io.note}`);
@@ -225,7 +237,8 @@ function AskSurface({ query }) {
           <div className="aq-text">{shownQuestion || query}</div>
         </div>
 
-        {phase === 'working' && <Working elapsed={elapsed} />}
+        {phase === 'working' && <Working elapsed={elapsed} progress={progress} onCancel={() => active.current && active.current.abort()} />}
+        {partial && phase !== 'done' && <section className="answer-card"><div className="answer-top">{phase === 'working' ? 'Composing answer · provisional' : 'Incomplete answer'}</div><div className="answer-prose" style={{ whiteSpace: 'pre-wrap' }}>{partial}</div></section>}
         {phase === 'error' && <AskError r={result} onRetry={() => setAttempt(a => a + 1)} />}
         {phase === 'done' && result && result.outcome === 'answered' && <Answered r={result} idx={idx} />}
         {phase === 'done' && result && result.outcome === 'needs_clarification' && <NeedsClarification r={result} idx={idx} onPick={onPick} />}

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Generic, Literal, TypeVar
 
@@ -53,6 +53,8 @@ class ToolTask:
     tools: Sequence[Mapping[str, object]]
     force_tool: str | None = None
     parallel_tools: bool = False
+    on_tool_delta: Callable[[str, str, str], None] | None = None
+    check_cancel: Callable[[], None] | None = None
 
 
 @dataclass(frozen=True)

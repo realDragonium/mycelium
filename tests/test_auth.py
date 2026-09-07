@@ -449,7 +449,12 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
         # overrides: report_knowledge_gap (a write anyone may do),
         # survey_statements (a read whose name isn't a read-prefix), and
         # ask (the higher-level read entry point, likewise un-prefixed).
-        READER_OVERRIDES = {"report_knowledge_gap", "survey_statements", "ask"}
+        READER_OVERRIDES = {
+            "report_knowledge_gap",
+            "survey_statements",
+            "ask",
+            "retrieve_context",
+        }
         assert all(
             n.startswith(("list_", "get_", "search_", "grep_", "discover_", "find_"))
             or n in READER_OVERRIDES

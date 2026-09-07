@@ -25,13 +25,13 @@ import uuid
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Callable, Literal, NotRequired, TypedDict
 
 import anyio
 import anyio.to_thread
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 
 from . import (
     documentation_profiles,
@@ -384,6 +384,16 @@ def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(wrapper)
     async def offloaded(*args: Any, **kwargs: Any) -> Any:
+        if name == "ask":
+            from .ask.events import run_cancellable
+
+            return await run_cancellable(
+                lambda: anyio.to_thread.run_sync(
+                    functools.partial(wrapper, *args, **kwargs),
+                    limiter=limiter_for(name),
+                    abandon_on_cancel=True,
+                )
+            )
         return await anyio.to_thread.run_sync(
             functools.partial(wrapper, *args, **kwargs), limiter=limiter_for(name)
         )
@@ -4989,6 +4999,62 @@ def get_statements(ids: list[str]) -> dict[str, Any]:
     # `_hydrate_statement_full`).
     statements = [_hydrate_statement_full(sid, score=None) for sid in ids]
     return {"statements": statements, "missing": missing}
+
+
+@tool(role="reader")
+def retrieve_context(
+    query: Annotated[str, Field(min_length=1)],
+    names: Annotated[list[str], Field(min_length=1, max_length=3)],
+    entity_limit: Annotated[int, Field(ge=1, le=3)] = 3,
+    statement_limit: Annotated[int, Field(ge=1, le=8)] = 6,
+    linked_limit: Annotated[int, Field(ge=1, le=12)] = 8,
+) -> dict[str, JsonValue]:
+    """Resolve 1–3 names/aliases and retrieve relevant entity and statement context
+    in one bounded operation. Prefer this to separate name lookup, entity fetch,
+    mention-filtered search and linked-statement fetch turns. Prefix candidates
+    (semantic name search if absent) are candidates, not confirmed referents.
+
+    Searches each selected entity using query, then follows ONE hop including
+    outgoing, incoming and condition-state references. Statements are deduplicated
+    by ID; separate conditional edges and full AND/OR/NOT trees are preserved.
+    Read stored direction from from_id/to_id, never infer it from traversal.
+    Limits: 1–3 entities, 1–8 direct statements, 1–12 linked statements, 20 items
+    per edge/name/mention list. Truncation and missing targets are explicit;
+    get_statements/get_entity can fetch omitted context. This is targeted
+    retrieval, NOT concept-seeded adjacency research. Re-search gathered concepts
+    separately when required. `reads` records the primitives actually performed.
+    """
+    from .ai.types import JSON_OBJECT
+    from .ask.retrieval import retrieve_context as retrieve
+
+    readers: dict[str, Callable[..., object]] = {
+        "list_entities": list_entities,
+        "search_entities": search_entities,
+        "get_entity": get_entity,
+        "search_statements": search_statements,
+        "get_statements": get_statements,
+    }
+
+    def read(name: str, arguments: dict[str, JsonValue]) -> JsonValue:
+        from pydantic import TypeAdapter
+
+        from .ask.events import current_stream
+
+        stream = current_stream.get()
+        if stream:
+            stream.check()
+        return TypeAdapter(JsonValue).validate_python(readers[name](**arguments))
+
+    return JSON_OBJECT.validate_python(
+        retrieve(
+            read,
+            query=query,
+            names=names,
+            entity_limit=entity_limit,
+            statement_limit=statement_limit,
+            linked_limit=linked_limit,
+        )
+    )
 
 
 @tool

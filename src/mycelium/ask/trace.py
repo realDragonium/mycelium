@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import JsonValue
+
 from .. import agentloop
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
 from ..ai import Provider
@@ -40,6 +42,8 @@ class TraceBuilder:
     )
     sub_question_ledger: list[dict] = field(default_factory=list)
     adjacency_note: str | None = None
+    evidence_checks: list[dict[str, JsonValue]] = field(default_factory=list)
+    combined_reads: list[JsonValue] = field(default_factory=list)
     forced_finalize: str | None = None
     degraded: bool = False
     notes: list[str] = field(default_factory=list)
@@ -94,6 +98,7 @@ class TraceBuilder:
         phase_ms = {name: round(sum(spans), 1) for name, spans in per_span.items()}
         model_turn_ms = [round(d, 1) for d in per_span.get("model_turn", [])]
         return {
+            "version": 2,
             "question": self.question,
             "model": self.model,
             "provider": self.provider,
@@ -109,6 +114,8 @@ class TraceBuilder:
             "sub_question_ledger": self.sub_question_ledger,
             "adjacency_note": self.adjacency_note,
             "floor": floor,
+            "evidence_checks": self.evidence_checks,
+            "combined_reads": self.combined_reads,
             "tokens": tokens,
             "cost_usd": self.cost_usd(input_per_mtok, output_per_mtok),
             "forced_finalize": self.forced_finalize,

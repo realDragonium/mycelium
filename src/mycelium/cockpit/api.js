@@ -247,8 +247,62 @@
     };
   }
 
-  async function ask(question) {
-    const raw = await post('/ask', { question });
+  function completedAsk(raw) {
+    if (!raw || !['answered', 'needs_clarification'].includes(raw.outcome)) {
+      throw new Error((raw && raw.detail) || 'Ask returned no complete result.');
+    }
+    if (raw.outcome === 'answered' && (typeof raw.answer !== 'string' ||
+        !['high', 'medium', 'low'].includes(raw.confidence) || !Array.isArray(raw.provenance) ||
+        !Array.isArray(raw.gaps) || !raw.interpretation)) throw new Error('Ask returned an invalid answer.');
+    if (raw.outcome === 'needs_clarification' && (typeof raw.question !== 'string' ||
+        !Array.isArray(raw.candidates) || raw.candidates.length < 2)) throw new Error('Ask returned an invalid clarification.');
+    return raw;
+  }
+
+  async function readAskStream(res, onEvent, signal) {
+    if (!res.body) throw new Error('This client cannot read the Ask stream.');
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (signal && signal.aborted) throw new DOMException('Ask cancelled.', 'AbortError');
+        buffer += decoder.decode(value, { stream: !done });
+        buffer = buffer.replace(/\r\n/g, '\n');
+        let boundary;
+        while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+          const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+          const data = frame.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trimStart()).join('\n');
+          if (!data) continue;
+          const event = JSON.parse(data);
+          if (event.type === 'complete') return completedAsk(event.result);
+          if (event.type === 'error') throw new Error(event.message || 'Ask failed.');
+          if (event.type === 'cancelled') throw new DOMException('Ask cancelled.', 'AbortError');
+          if (event.type === 'answer_delta' && typeof event.text !== 'string') throw new Error('Invalid Ask answer delta.');
+          if (['progress', 'answer_delta', 'answer_reset'].includes(event.type)) onEvent(event);
+        }
+        if (done) throw new Error('The connection ended before Ask completed. Any text shown is incomplete.');
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  }
+
+  async function ask(question, { signal, onEvent } = {}) {
+    if (!onEvent) return adaptAsk(completedAsk(await http('POST', '/ask', { question }, signal)), question);
+    const res = await fetch('/ask', {
+      method: 'POST', credentials: 'same-origin', signal,
+      headers: { accept: 'text/event-stream', 'content-type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    if (!res.ok) {
+      const err = new Error('Ask failed (HTTP ' + res.status + ').');
+      err.status = res.status; throw err;
+    }
+    const raw = (res.headers.get('content-type') || '').includes('text/event-stream')
+      ? await readAskStream(res, onEvent, signal) : completedAsk(await res.json());
     return adaptAsk(raw, question);
   }
 

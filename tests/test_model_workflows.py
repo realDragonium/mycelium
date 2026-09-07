@@ -67,6 +67,15 @@ def test_openai_question_batches_reads_and_retains_grounded_answer(monkeypatch):
             ]
         ),
         ask_fixtures._message(
+            [
+                ask_fixtures._tool_use(
+                    "survey_statements",
+                    {"query": "retry conditions", "adjacency_sources": ["s1"]},
+                    "adj",
+                )
+            ]
+        ),
+        ask_fixtures._message(
             [ask_fixtures._tool_use("submit_answer", ask_fixtures._submit_input())]
         ),
     ]
@@ -76,7 +85,10 @@ def test_openai_question_batches_reads_and_retains_grounded_answer(monkeypatch):
             "why does it retry?",
             client=client,
             substrate=ask_fixtures.FakeSubstrate(
-                {"survey_statements": [{"id": "stm_1", "text": "retry"}]}
+                {
+                    "survey_statements": [{"id": "stm_1", "text": "retry"}],
+                    "search_statements": [{"id": "stm_1", "text": "retry"}],
+                }
             ),
             config=AskConfig(provider="openai", model="question-model", trace_dir=""),
         )

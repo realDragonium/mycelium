@@ -147,3 +147,5 @@ uv run pytest
 uv run ruff check
 uv run ruff format --check
 ```
+
+Ask streaming, combined retrieval, provenance and client compatibility are documented in [docs/ASK.md](docs/ASK.md).

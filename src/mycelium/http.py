@@ -9,7 +9,6 @@ Add a tool in `server.py` with `@tool` and you'll find it here too at
 `/<kebab-case-name>` after a server restart — no edits needed in this file.
 """
 
-import asyncio
 import functools
 import inspect
 import json
@@ -25,7 +24,7 @@ import anyio.to_thread
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, JsonValue, create_model
 from pydantic import Field as PydField
@@ -395,8 +394,8 @@ def _make_post_handler(
 # The path in front of us is Cloudflare -> ALB -> task; the ALB drops a
 # connection after 60s of *no bytes flowing* (its default idle timeout), and a
 # single multi-turn `ask` can exceed that. The fix is to keep bytes moving: the
-# handler below drips whitespace while the blocking tool runs, then emits the
-# normal JSON body last. Leading whitespace is ignored by `JSON.parse`, so the
+# JSON path drips whitespace while the blocking tool runs, then emits the
+# normal JSON body last. Accept: text/event-stream opts into factual Ask events. Leading whitespace is ignored by `JSON.parse`, so the
 # browser (and any `res.json()` caller) parses the result unchanged — no client
 # edit needed.
 _STREAMING_TOOLS = {"ask"}
@@ -452,30 +451,14 @@ def _make_streaming_post_handler(
         _enforce_role(
             request, required_role, getattr(func, "_mycelium_real_role", False)
         )
-        kwargs = body.model_dump()
-        task = asyncio.ensure_future(_offload(func, kwargs))
+        from .ask.transport import respond
 
-        done, _ = await asyncio.wait({task}, timeout=_STREAM_GRACE_SECONDS)
-        if task in done:
-            # Returning .result() here re-raises any error, so FastAPI's
-            # exception handlers still produce the correct 4xx/5xx — the
-            # fast path is byte-for-byte the old behaviour.
-            return JSONResponse(task.result())
-
-        async def gen():
-            while True:
-                done, _ = await asyncio.wait({task}, timeout=_STREAM_HEARTBEAT_SECONDS)
-                if task in done:
-                    break
-                yield b" "  # keepalive: ignored by JSON.parse on the client
-            try:
-                yield json.dumps(task.result()).encode()
-            except Exception as exc:  # noqa: BLE001
-                # Headers (200) are already on the wire, so a late failure can
-                # only come back as a JSON error body, not a status code.
-                yield json.dumps({"detail": str(exc)}).encode()
-
-        return StreamingResponse(gen(), media_type="application/json")
+        return await respond(
+            request,
+            lambda: _offload(func, body.model_dump()),
+            grace=_STREAM_GRACE_SECONDS,
+            heartbeat=_STREAM_HEARTBEAT_SECONDS,
+        )
 
     handler.__name__ = func.__name__
     handler.__doc__ = func.__doc__

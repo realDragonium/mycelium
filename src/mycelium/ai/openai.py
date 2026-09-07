@@ -135,6 +135,105 @@ def _request(
     raise ModelError("OpenAI request did not complete")
 
 
+def _request_turn(
+    task: ToolTask,
+    payload: dict[str, JsonValue],
+    config: ModelConfig,
+    client: httpx.Client | None,
+) -> Response:
+    if task.on_tool_delta is None:
+        return _request(payload, config, client)
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key:
+        raise ModelError("OPENAI_API_KEY is required on the server")
+    payload = {**payload, "stream": True}
+    if config.reasoning_effort is not None:
+        payload["reasoning"] = {"effort": config.reasoning_effort}
+    owned = client is None
+    transport = client or httpx.Client()
+    try:
+        for attempt in range(config.max_retries + 1):
+            if task.check_cancel:
+                task.check_cancel()
+            started: list[bool] = []
+            try:
+                with transport.stream(
+                    "POST",
+                    "https://api.openai.com/v1/responses",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=config.request_timeout_s,
+                ) as response:
+                    retryable = (
+                        response.status_code in (408, 409, 429)
+                        or response.status_code >= 500
+                    )
+                    if not response.is_error:
+                        return _stream_events(task, response, started)
+                    if not retryable or attempt == config.max_retries:
+                        raise ModelError(
+                            f"OpenAI streaming request failed (HTTP {response.status_code})"
+                        )
+            except httpx.RequestError:
+                if started or attempt == config.max_retries:
+                    raise ModelError("OpenAI answer stream disconnected") from None
+            # Retry only before the stream starts; replaying deltas is unsafe.
+            time.sleep(min(0.5 * 2**attempt, 8.0))
+    finally:
+        if owned:
+            transport.close()
+    raise ModelError("OpenAI stream did not complete")
+
+
+def _stream_events(
+    task: ToolTask, response: httpx.Response, started: list[bool]
+) -> Response:
+    calls: dict[str, tuple[str, str]] = {}
+    for line in response.iter_lines():
+        if task.check_cancel:
+            task.check_cancel()
+        if not line.startswith("data: ") or line == "data: [DONE]":
+            continue
+        if not started:
+            started.append(True)
+        event = JSON_OBJECT.validate_json(line[6:])
+        kind = event.get("type")
+        item = event.get("item")
+        if (
+            kind == "response.output_item.added"
+            and isinstance(item, dict)
+            and item.get("type") == "function_call"
+        ):
+            identity, call_id, name = (
+                item.get("id"),
+                item.get("call_id"),
+                item.get("name"),
+            )
+            if (
+                isinstance(identity, str)
+                and isinstance(call_id, str)
+                and isinstance(name, str)
+            ):
+                calls[identity] = (call_id, name)
+        elif kind == "response.function_call_arguments.delta":
+            identity, delta = event.get("item_id"), event.get("delta")
+            if (
+                isinstance(identity, str)
+                and identity in calls
+                and isinstance(delta, str)
+                and task.on_tool_delta
+            ):
+                task.on_tool_delta(*calls[identity], delta)
+        elif kind == "response.completed":
+            parsed = Response.model_validate(event.get("response"))
+            if parsed.status != "completed":
+                raise ModelError("OpenAI response was incomplete or unsuccessful")
+            return parsed
+        elif kind in ("response.failed", "response.incomplete", "error"):
+            raise ModelError("OpenAI response was incomplete or unsuccessful")
+    raise ModelError("OpenAI stream ended without a completed response")
+
+
 def turn(
     task: ToolTask, config: ModelConfig, client: httpx.Client | None
 ) -> ModelResponse:
@@ -152,7 +251,8 @@ def turn(
         }
         for tool in tools
     ]
-    response = _request(
+    response = _request_turn(
+        task,
         {
             "model": config.model,
             "store": False,
