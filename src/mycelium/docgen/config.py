@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider
+from ..ai import Provider, ReasoningEffort
 from ..guidelines import SET_NAME
 from ..ingest.config import DEFAULT_MODEL
 from ..model_credentials import (
@@ -53,6 +53,7 @@ class ModelChoice(TypedDict):
     provider: Provider
     label: str
     model: str | None
+    reasoning_effort: ReasoningEffort | None
     available: bool
     reason: str | None
 
@@ -78,6 +79,7 @@ def model_choices() -> list[ModelChoice]:
                 "provider": config.provider,
                 "label": "Claude" if provider == "claude" else "GPT",
                 "model": config.model or None,
+                "reasoning_effort": config.reasoning_effort,
                 "available": reason is None,
                 "reason": reason,
             }
@@ -89,6 +91,7 @@ def model_choices() -> list[ModelChoice]:
 class DocgenConfig:
     model: str = DEFAULT_MODEL
     provider: Provider = "claude"
+    reasoning_effort: ReasoningEffort | None = None
     #: The set this instance prefers when the request named none. It is a
     #: preference the resolution step is told about, not an override: the
     #: request wins, and a prompt that plainly asks for another configured
@@ -152,6 +155,7 @@ class DocgenConfig:
 
         return cls(
             provider=selected_provider,
+            reasoning_effort=selected.effort_for(selected_provider),
             model=selected_model,
             guideline_set=product_settings.get(
                 product_settings.DocumentationSettings

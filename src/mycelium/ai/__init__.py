@@ -18,6 +18,7 @@ from .types import (
     Output,
     Provider,
     ProviderHistory,
+    ReasoningEffort,
     StructuredTask,
     ToolTask,
     ToolUse,
@@ -31,6 +32,7 @@ __all__ = [
     "ModelResponse",
     "Provider",
     "ProviderHistory",
+    "ReasoningEffort",
     "StructuredTask",
     "ToolTask",
     "ToolUse",
@@ -76,7 +78,12 @@ def _provider_failure(
     if isinstance(exc, APITimeoutError):
         return ModelError("Claude request timed out")
     if isinstance(exc, APIStatusError):
-        return ModelError(f"Claude request failed (HTTP {exc.status_code})")
+        guidance = (
+            " Check the model ID, reasoning effort and thinking settings in AI settings."
+            if exc.status_code == 400
+            else ""
+        )
+        return ModelError(f"Claude request failed (HTTP {exc.status_code}).{guidance}")
     return ModelError(
         "Claude request failed; check server credentials and model configuration"
     )

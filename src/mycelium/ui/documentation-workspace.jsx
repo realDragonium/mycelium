@@ -28,7 +28,7 @@ const docDate = value => value ? new Date(value).toLocaleString() : 'Not recorde
 
 function DocumentationModel({ options, value, onChange, disabled }) {
   return <label>Model for this run<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled}>
-    {options.models.map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.label} · {model.model}{model.available ? '' : ' (unavailable)'}</option>)}
+    {options.models.map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.label} · {model.model} · {model.reasoning_effort ?? 'Model default'} effort{model.available ? '' : ' (unavailable)'}</option>)}
   </select></label>;
 }
 
@@ -177,7 +177,7 @@ function DocumentationRun({ id, onCompleted }) {
   }, [id, retry, onCompleted]);
   if (error) return <p role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Reload run</button></p>;
   if (!run) return <p role="status">Loading run…</p>;
-  return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run.status)}</h2><p className="docw-meta">{run.provider} · {run.model} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
+  return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run.status)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
     {docActive(run) && <p role="status">You can leave this screen while generation and review finish.</p>}
     {run.error && <p role="alert">{run.error}</p>}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}

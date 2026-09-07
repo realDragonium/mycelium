@@ -470,3 +470,51 @@ def test_malformed_structured_output_does_not_echo_evidence(
         in diagnostic.message
     )
     assert diagnostic.exc_info is None
+
+
+@pytest.mark.parametrize(
+    "provider,effort",
+    [
+        ("claude", None),
+        ("claude", "low"),
+        ("claude", "xhigh"),
+        ("openai", None),
+        ("openai", "none"),
+        ("openai", "minimal"),
+        ("openai", "max"),
+    ],
+)
+@pytest.mark.parametrize("structured", [False, True])
+def test_native_effort_reaches_both_transports(
+    provider: ai.Provider, effort: ai.ReasoningEffort | None, structured: bool
+) -> None:
+    sent: list[dict[str, JsonValue]] = []
+    call = _claude_call if provider == "claude" else _openai_call
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(_OBJECT.validate_json(request.content))
+        return httpx.Response(
+            200,
+            json=_structured_envelope(provider)
+            if structured
+            else _envelope(provider, [call("one")]),
+        )
+
+    config = replace(_config(provider), reasoning_effort=effort)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        if structured:
+            assert ai.structured(
+                ai.StructuredTask("Judge", "Evidence", Result), config, client=client
+            ) == Result(answer="yes")
+        else:
+            ai.turn(_task(force="read"), config, client=client)
+    key = "output_config" if provider == "claude" else "reasoning"
+    options = sent[0].get(key, {})
+    assert isinstance(options, dict)
+    if effort is None:
+        assert "effort" not in options
+    else:
+        assert options["effort"] == effort
+    if structured and provider == "claude":
+        assert isinstance(options["format"], dict)
+        assert options["format"]["type"] == "json_schema"

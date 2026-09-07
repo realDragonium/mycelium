@@ -134,7 +134,7 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, guidelineSet
             })}
           </div>
           {kind === 'ask' && <p>Quick questions keep their smaller built-in limits. Claude thinking and caching options apply when Claude is selected.</p>}
-          {['ingest', 'research', 'docgen'].includes(kind) && <p>Extended thinking applies when Claude is selected.</p>}
+          {['ingest', 'research', 'docgen'].includes(kind) && <p>Extended thinking applies when Claude is selected. Reasoning effort is configured alongside each action’s model and also works without extended thinking.</p>}
           {kind === 'concurrency' ? <p>Lower limits let active work finish and restrict new runs until capacity is available.</p> : <p>Saved limits apply to new runs.</p>}
         </>}
         {canConfigure && <button type="submit" style={{ ...productSettingsStyle.button, marginTop: 12, fontWeight: 600 }}>{busy ? 'Saving…' : `Save ${title.toLowerCase()}`}</button>}

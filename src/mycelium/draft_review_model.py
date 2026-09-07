@@ -34,6 +34,7 @@ def assess(
     *,
     model: str,
     provider: ai.Provider = "openai",
+    reasoning_effort: ai.ReasoningEffort | None = None,
     client: httpx.Client | None = None,
     limits: product_settings.ReviewSettings | None = None,
 ) -> Assessment:
@@ -42,6 +43,7 @@ def assess(
         ai.StructuredTask(system=SYSTEM, prompt=context, output_type=Assessment),
         ai.ModelConfig(
             provider=provider,
+            reasoning_effort=reasoning_effort,
             model=model,
             max_tokens=limits.max_tokens,
             request_timeout_s=limits.request_timeout_s,

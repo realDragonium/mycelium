@@ -20,7 +20,10 @@ def test_document_history_and_publication_roundtrip_without_draft_operations(tmp
         conn.execute("INSERT INTO private_draft_operations VALUES ('excluded')")
         conn.commit()
         run = docs_store.create_run(
-            conn, prompt="Explain invitations", created_by="writer"
+            conn,
+            prompt="Explain invitations",
+            created_by="writer",
+            reasoning_effort="high",
         )
         document = docs_store.upsert_document(
             conn, slug="invitations", title="Invitations", body="First", run_id=run

@@ -318,7 +318,7 @@ def _add_model_columns(conn: sqlite3.Connection) -> None:
     columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
     }
-    for column in ("provider", "model"):
+    for column in ("provider", "model", "reasoning_effort"):
         if column not in columns:
             conn.execute(f"ALTER TABLE documentation_runs ADD COLUMN {column} TEXT")
 
@@ -512,6 +512,7 @@ def create_run(
     created_by: str | None,
     provider: str | None = None,
     model: str | None = None,
+    reasoning_effort: str | None = None,
     target_document_id: str | None = None,
     target_revision: int | None = None,
 ) -> str:
@@ -526,8 +527,8 @@ def create_run(
             require_revision(conn, target_document_id, target_revision)
         conn.execute(
             "INSERT INTO documentation_runs "
-            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, target_document_id, target_revision) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 prompt,
@@ -537,6 +538,7 @@ def create_run(
                 created_by,
                 provider,
                 model,
+                reasoning_effort,
                 target_document_id,
                 target_revision,
             ),
@@ -676,6 +678,7 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "prompt": row["prompt"],
         "provider": row["provider"],
         "model": row["model"],
+        "reasoning_effort": row["reasoning_effort"],
         "guideline_set": row["guideline_set"],
         "document_type": row["document_type"],
         "status": status_for(row),

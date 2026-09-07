@@ -1091,6 +1091,7 @@ def _model_turn(
             request_timeout_s=config.request_timeout_s,
             max_retries=config.max_retries,
             thinking=config.thinking,
+            reasoning_effort=config.reasoning_effort,
         ),
         client=ctx.client,
     )

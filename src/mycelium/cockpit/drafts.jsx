@@ -284,7 +284,7 @@ function DraftAssessment({ assessment, compact = false }) {
   return (
     <section aria-label="AI review" style={{ padding: 14, marginBottom: 18, border: '1px solid var(--line)', borderRadius: 6, color: 'var(--ink-3)', fontSize: 12, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
       {badge}
-      <div style={{ marginTop: 4 }}>Reviewer: {draftReviewProviderName(assessment.provider)} · {assessment.model || 'Model not recorded'}</div>
+      <div style={{ marginTop: 4 }}>Reviewer: {draftReviewProviderName(assessment.provider)} · {assessment.model || 'Model not recorded'} · Effort: {assessment.reasoning_effort ?? 'Model default'}</div>
       <div style={{ marginTop: 4 }}>
         {assessment.mode === 'review-only' ? 'Review only. This review does not edit, reject, or apply the draft.' : 'Review and apply.'}
         {' '}Status: {assessment.status}.{' '}

@@ -110,6 +110,7 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
         run = draft_review_store.new(draft_id, settings.mode, int(row["revision"]))
         run.provider = settings.provider
         run.model = settings.model
+        run.reasoning_effort = settings.reasoning_effort
         run.reviewer_id = settings.reviewer_id
         run.settings_revision = settings.revision
         run.model_settings_revision = settings.model_revision
@@ -300,7 +301,11 @@ def _assess(
     if RUNNER is not None:
         return RUNNER(context)
     return draft_review_model.assess(
-        context, model=settings.model, provider=settings.provider, limits=limits
+        context,
+        model=settings.model,
+        provider=settings.provider,
+        limits=limits,
+        reasoning_effort=settings.reasoning_effort,
     )
 
 

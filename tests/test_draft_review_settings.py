@@ -234,8 +234,8 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
     entered, release = threading.Event(), threading.Event()
     calls = []
 
-    def model(context, *, model, provider, limits):
-        calls.append((model, provider, limits.max_tokens))
+    def model(context, *, model, provider, limits, reasoning_effort):
+        calls.append((model, provider, limits.max_tokens, reasoning_effort))
         entered.set()
         assert release.wait(5)
         return _assessment()
@@ -245,7 +245,8 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
     monkeypatch.setattr(draft_review_model, "assess", model)
     assert (
         client.patch(
-            "/api/draft-review/settings", json=_body(client, mode="review-and-apply")
+            "/api/draft-review/settings",
+            json=_body(client, mode="review-and-apply", reasoning_effort="high"),
         ).status_code
         == 200
     )
@@ -261,7 +262,12 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
         assert (
             client.patch(
                 "/api/draft-review/settings",
-                json=_body(client, provider="claude", model="claude-new"),
+                json=_body(
+                    client,
+                    provider="claude",
+                    model="claude-new",
+                    reasoning_effort="low",
+                ),
             ).status_code
             == 200
         )
@@ -269,11 +275,15 @@ def test_queued_runs_keep_admitted_provider_model_and_reviewer(
         release.set()
         draft_review_runs.wait_all()
         executor.shutdown()
-    assert calls == [("gpt-fixture", "openai", 6000), ("gpt-fixture", "openai", 6000)]
+    assert calls == [
+        ("gpt-fixture", "openai", 6000, "high"),
+        ("gpt-fixture", "openai", 6000, "high"),
+    ]
     for draft_id in (first, second):
         result = _result(draft_id)
         assert result["provider"] == "openai"
         assert result["model"] == "gpt-fixture"
+        assert result["reasoning_effort"] == "high"
         assert result["reviewer_id"] == reviewer
         assert result["application"] == "unapplied"
 
@@ -533,6 +543,8 @@ def test_actions_persist_independent_models_and_remember_alternate(
             provider="openai",
             claude_model=f"claude-{index}",
             openai_model=f"gpt-{index}",
+            openai_reasoning_effort="high",
+            claude_reasoning_effort="low",
         )
         saved = client.patch(f"/api/model-settings/{action}", json=body)
         assert saved.status_code == 200, saved.text
@@ -557,7 +569,10 @@ def test_actions_persist_independent_models_and_remember_alternate(
         configured = config_type.from_env()
         assert configured.provider == "openai"
         assert configured.model == f"gpt-{index}"
+        assert configured.reasoning_effort == "high"
     assert DocgenConfig.from_env(provider="claude").model == "claude-3"
+    assert DocgenConfig.from_env(provider="claude").reasoning_effort == "low"
+    assert settings.load().reasoning_effort == "high"
     assert settings.load().model == "gpt-4"
     review = client.get("/api/draft-review/settings").json()
     assert review["model"] == "gpt-4"
@@ -690,6 +705,8 @@ def test_all_model_settings_backup_round_trip(tmp_path):
             provider="openai",
             claude_model=f"claude-{index}",
             openai_model=f"gpt-{index}",
+            openai_reasoning_effort="none",
+            claude_reasoning_effort="medium",
         )
         conn.execute(
             "INSERT INTO model_settings VALUES (?, ?, ?)",
@@ -705,6 +722,11 @@ def test_all_model_settings_backup_round_trip(tmp_path):
     try:
         for index, action in enumerate(model_settings.ACTIONS):
             assert model_settings.get(action, conn=restored).model == f"gpt-{index}"
+            assert model_settings.get(action, conn=restored).reasoning_effort == "none"
+            assert (
+                model_settings.get(action, conn=restored).claude_reasoning_effort
+                == "medium"
+            )
             assert model_settings.get(action, conn=restored).revision == index + 1
     finally:
         restored.close()
@@ -996,3 +1018,76 @@ def test_manual_application_checks_permission_after_waiting_for_write_lock(
         with pytest.raises(ValueError, match="disabled"):
             result.result(timeout=5)
     assert server.get_draft(draft_id)["status"] == "submitted"
+
+
+def test_effort_preserved_by_legacy_saves_and_reset_explicitly(configured_app):
+    client, _ = configured_app
+    saved = client.patch(
+        "/api/model-settings/ask",
+        json=_model_body(
+            client, "ask", openai_reasoning_effort="none", claude_reasoning_effort="low"
+        ),
+    )
+    assert saved.status_code == 200
+    revision = saved.json()["revision"]
+    unchanged = client.patch("/api/model-settings/ask", json=_model_body(client, "ask"))
+    assert unchanged.status_code == 200
+    assert unchanged.json()["revision"] == revision
+    assert unchanged.json()["openai_reasoning_effort"] == "none"
+    assert unchanged.json()["claude_reasoning_effort"] == "low"
+    reset = client.patch(
+        "/api/model-settings/ask",
+        json=_model_body(client, "ask", claude_reasoning_effort=None),
+    )
+    assert reset.status_code == 200
+    assert reset.json()["revision"] == revision + 1
+    assert reset.json()["claude_reasoning_effort"] is None
+    assert reset.json()["openai_reasoning_effort"] == "none"
+
+
+def test_review_effort_remembers_provider_and_control_only_save(configured_app):
+    client, _ = configured_app
+    for provider, effort in [("openai", "high"), ("claude", "low")]:
+        saved = client.patch(
+            "/api/draft-review/settings",
+            json=_body(
+                client,
+                provider=provider,
+                model="configured-model",
+                reasoning_effort=effort,
+            ),
+        )
+        assert saved.status_code == 200
+        assert saved.json()["reasoning_effort"] == effort
+    saved = client.patch(
+        "/api/draft-review/settings", json=_body(client, provider="openai")
+    )
+    assert saved.status_code == 200
+    assert saved.json()["reasoning_effort"] == "high"
+    assert saved.json()["claude_reasoning_effort"] == "low"
+    unchanged = client.patch("/api/draft-review/settings", json=_body(client))
+    assert unchanged.json()["model_revision"] == saved.json()["model_revision"]
+    invalid = client.patch(
+        "/api/draft-review/settings",
+        json=_body(client, provider="claude", reasoning_effort="none"),
+    )
+    assert invalid.status_code == 422
+    assert settings.load().reasoning_effort == "high"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("claude_reasoning_effort", "none"),
+        ("openai_reasoning_effort", "adaptive"),
+        ("openai_reasoning_effort", 42),
+    ],
+)
+def test_invalid_native_effort_is_rejected(configured_app, field, value):
+    client, _ = configured_app
+    before = model_settings.get("ask")
+    response = client.patch(
+        "/api/model-settings/ask", json=_model_body(client, "ask", **{field: value})
+    )
+    assert response.status_code == 422
+    assert model_settings.get("ask") == before
