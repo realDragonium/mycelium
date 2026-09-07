@@ -31,8 +31,7 @@ continue. Statement wording is never rewritten by a vocabulary edit.
   stay with the source.
 - **Merge concepts:** choose the destination, surviving description, and preferred
   name. Names and relationships move to the destination. Duplicate relationships
-  and self-links created by the merge are removed. While legacy mixed links
-  still exist, the preview includes their statement text and conditions.
+  and self-links created by the merge are removed.
 - **Remove alias:** stop recognizing a name and its generated plural. The concept
   can remain without names and will then be displayed by its identifier.
 

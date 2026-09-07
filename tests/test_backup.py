@@ -1198,6 +1198,8 @@ def test_historical_mention_approval_survives_archive_and_recompute(tmp_path):
         assert store.list_pending_mentions(conn, "approved")[0]["name"] == "SSO"
     finally:
         conn.close()
+
+
 def test_import_v12_statement_conditions_preserves_tree(tmp_path):
     src = tmp_path / "src"
     src.mkdir()

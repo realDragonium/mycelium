@@ -619,6 +619,6 @@ def test_v14_failed_rebuild_rolls_back_schema_and_tree():
     with pytest.raises(RuntimeError, match="condition tree integrity failed"):
         migrations.apply_migrations(conn)
     assert list(conn.iterdump()) == before
-    assert _user_version(conn) == 12
+    assert _user_version(conn) == 13
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     conn.close()

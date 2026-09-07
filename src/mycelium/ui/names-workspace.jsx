@@ -16,7 +16,7 @@ function NamesExamples({examples, count}) {
 
 function NamesRelationships({items, entities}) {
   const label = id => entities.find(entity => entity.id === id)?.label || id;
-  return items.length ? <ul>{items.map((item, index) => <li key={index}>{item.family === 'statement' && item.source.startsWith('stm_') ? item.statement_text : label(item.source)} → {item.link_type} → {item.family === 'statement' && item.target.startsWith('stm_') ? item.statement_text : label(item.target)}{item.condition && <pre>Condition: {JSON.stringify(item.condition)}</pre>}</li>)}</ul> : <p>No concept relationships.</p>;
+  return items.length ? <ul>{items.map((item, index) => <li key={index}>{label(item.source)} → {item.link_type} → {label(item.target)}</li>)}</ul> : <p>No concept relationships.</p>;
 }
 
 function NamesEditor({entity, entities, allowedActions, onChanged}) {
