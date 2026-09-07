@@ -776,7 +776,7 @@ def _migration_v13_preferred_names(conn: sqlite3.Connection) -> None:
 
     if _has_table(conn, "names"):
         conn.execute(
-            "UPDATE entities SET preferred_name_id = (SELECT n.id FROM names n WHERE n.entity_id = entities.id ORDER BY n.text COLLATE BINARY LIMIT 1) WHERE preferred_name_id IS NULL"
+            "UPDATE entities SET preferred_name_id = (SELECT n.id FROM names n WHERE n.entity_id = entities.id ORDER BY n.text COLLATE NOCASE, n.id LIMIT 1) WHERE preferred_name_id IS NULL"
         )
 
 

@@ -97,9 +97,9 @@ def ensure_preferred_name(
     if current is not None:
         return
     order = (
-        "text COLLATE BINARY"
+        "text COLLATE NOCASE, id"
         if preserve_fallback
-        else "generated_from_name_id IS NOT NULL, text COLLATE BINARY"
+        else "generated_from_name_id IS NOT NULL, text COLLATE NOCASE, id"
     )
     name = conn.execute(
         f"SELECT id FROM names WHERE entity_id = ? ORDER BY {order} LIMIT 1",

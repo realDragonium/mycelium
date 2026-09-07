@@ -406,3 +406,35 @@ def test_writer_capabilities_and_preview_enforce_admin_actions(tmp_path, monkeyp
                 ).status_code
                 == 403
             )
+
+
+@pytest.mark.parametrize("selection", ["migration", "legacy_fallback", "replacement"])
+def test_preferred_name_selection_matches_existing_nocase_order(selection):
+    from mycelium.migrations import _migration_v13_preferred_names
+
+    conn = store.connect(":memory:")
+    try:
+        store.migrate(conn)
+        conn.execute(
+            "INSERT INTO entities (id, description) VALUES ('ent_fruit', 'Fruit')"
+        )
+        conn.executemany(
+            "INSERT INTO names (id, text, entity_id) VALUES (?, ?, 'ent_fruit')",
+            [("nam_banana", "Banana"), ("nam_apple", "apple")],
+        )
+        previous_label = conn.execute("SELECT MIN(text) FROM names").fetchone()[0]
+        assert previous_label == "apple"
+        if selection == "migration":
+            _migration_v13_preferred_names(conn)
+        else:
+            store.ensure_preferred_name(
+                conn, "ent_fruit", preserve_fallback=selection == "legacy_fallback"
+            )
+        assert (
+            store.get_entity_by_id(conn, "ent_fruit")["preferred_name_id"]
+            == "nam_apple"
+        )
+        assert names.concept(conn, "ent_fruit").label == previous_label
+        assert store.substrate_dump(conn)["entities"][0]["name"] == previous_label
+    finally:
+        conn.close()
