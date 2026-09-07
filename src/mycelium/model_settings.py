@@ -9,7 +9,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import auth, prompt_store, store
-from .ai import Provider
+from .ai import Provider, ReasoningEffort
+from .ai.types import ClaudeEffort
 from .model_credentials import claude_configuration_error
 
 Action = Literal["ask", "ingest", "research", "docgen", "draft_review"]
@@ -30,6 +31,19 @@ class Selection(BaseModel):
     provider: Provider
     claude_model: str = Field(max_length=200)
     openai_model: str = Field(max_length=200)
+    claude_reasoning_effort: ClaudeEffort | None = None
+    openai_reasoning_effort: ReasoningEffort | None = None
+
+    def effort_for(self, provider: Provider) -> ReasoningEffort | None:
+        return (
+            self.claude_reasoning_effort
+            if provider == "claude"
+            else self.openai_reasoning_effort
+        )
+
+    @property
+    def reasoning_effort(self) -> ReasoningEffort | None:
+        return self.effort_for(self.provider)
 
 
 class ModelSnapshot(Selection):
@@ -192,9 +206,14 @@ def save_in_transaction(
     current, error = editable(action, conn=conn)
     if current.revision != request.revision:
         raise Conflict("Model settings changed; reload before saving.")
-    desired = Selection.model_validate(request.model_dump(exclude={"revision"}))
     before = Selection.model_validate(
-        current.model_dump(include={"provider", "claude_model", "openai_model"})
+        current.model_dump(include=set(Selection.model_fields))
+    )
+    desired = Selection.model_validate(
+        {
+            **before.model_dump(),
+            **request.model_dump(exclude={"revision"}, exclude_unset=True),
+        }
     )
     if error is None and desired == before and current.source == "saved":
         return current

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider
+from ..ai import Provider, ReasoningEffort
 from ..ingest.config import DEFAULT_MODEL
 
 #: The research doctrine the inner model reads, shipped beside this package.
@@ -31,6 +31,7 @@ DOCTRINE_NAME = "research"
 class ResearchConfig:
     model: str = DEFAULT_MODEL
     provider: Provider = "claude"
+    reasoning_effort: ReasoningEffort | None = None
     #: Hard ceiling on tool operations per run. Vocab fetch, every workspace
     #: read, and every reconcile read all count toward it.
     op_cap: int = 150
@@ -74,6 +75,7 @@ class ResearchConfig:
         return cls(
             model=selected.model,
             provider=selected.provider,
+            reasoning_effort=selected.reasoning_effort,
             op_cap=limits.op_cap,
             wall_clock_s=limits.wall_clock_s,
             max_tokens=limits.max_tokens,

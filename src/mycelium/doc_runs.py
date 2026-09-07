@@ -121,6 +121,7 @@ def start_run(
             created_by=created_by,
             provider=config.provider,
             model=config.model,
+            reasoning_effort=config.reasoning_effort,
             target_document_id=target_document_id,
             target_revision=expected_revision,
         )

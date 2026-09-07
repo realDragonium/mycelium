@@ -11,9 +11,9 @@ provider and model:
 - Draft review: assess submitted knowledge drafts.
 
 Choose Claude or OpenAI GPT independently for each action. Each action remembers
-one model ID per provider, so switching providers preserves the other model ID.
+one model ID and reasoning effort per provider, so switching providers preserves the other provider’s settings.
 The documentation generation screen can still override the default provider for
-a particular document; it uses that action's configured model for the chosen
+a particular document; it uses that action's configured model and effort for the chosen
 provider. Draft review also has its own off/advisory/automatic mode and independent
 reviewer account, described in [Draft review](DRAFT_REVIEW.md).
 
@@ -21,6 +21,30 @@ Saving takes effect for new runs without restarting the service. Existing runs
 keep their admitted model selection. Changing either the draft-review controls
 or its model settings prevents an older review from applying automatically; run
 it again to use the new settings. Saving configuration does not start work.
+
+## Reasoning effort
+
+Choose **Reasoning effort** alongside each action’s model, including Draft review
+and Documentation → Models & GitHub. **Model default** sends no effort override
+and preserves existing behavior. OpenAI **None** is different: it explicitly
+requests no reasoning, on models that support it.
+
+OpenAI accepts `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max` through
+`reasoning.effort`. Claude uses `low`, `medium`, `high`, `xhigh`, or `max` through
+`output_config.effort`. These are provider options, not a guarantee that every
+model accepts every level. Check the selected model’s
+[OpenAI](https://developers.openai.com/api/docs/guides/reasoning) or
+[Claude](https://platform.claude.com/docs/en/build-with-claude/effort) documentation.
+An unsupported combination fails explicitly without changing models or effort.
+
+Claude’s existing extended-thinking toggle remains separate: effort controls
+response work even without thinking blocks. Forced final tool calls retain the
+existing thinking policy and still receive the configured effort. Increasing
+effort does not raise token, timeout, or whole-run limits automatically.
+
+Effort is captured when work starts and included in saved draft-review attempts
+and documentation runs. Existing settings and backups without effort use Model
+default; changing an environment variable does not configure effort.
 
 ## Server credentials and initial defaults
 
@@ -63,11 +87,11 @@ sections before replacing the target. Older archives without settings receive bu
 Authenticated `GET /api/model-settings` returns all five actions, their effective
 provider, selected model, remembered model IDs, source, and revision. Admin-only
 `PATCH /api/model-settings/{action}` accepts `provider`, `claude_model`,
-`openai_model`, and the current `revision`. Concurrent or stale saves return 409
+`openai_model`, optional `claude_reasoning_effort` and `openai_reasoning_effort`, and the current `revision`. Omitted effort fields preserve saved values; explicit `null` restores Model default. Concurrent or stale saves return 409
 and require reloading. Model settings contain no credentials.
 
 Draft review's combined settings endpoint saves its controls and selected model
-in one transaction. Its request requires both the control `revision` and
+in one transaction. It accepts `reasoning_effort` for the selected provider, with the same omission/null behavior. Its request requires both the control `revision` and
 `model_revision`; another administrator's model change cannot be overwritten by
 a stale review-settings form.
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 import sqlite3
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from . import auth, model_settings, prompt_store, store
+from .ai.types import CLAUDE_EFFORT, ClaudeEffort, ReasoningEffort
 from .draft_review_store import Mode
 from .model_settings import Conflict, Provider, ProviderAvailability, Unavailable
 
@@ -37,6 +38,13 @@ class ControlSnapshot(Controls):
 class Settings(Controls):
     provider: Provider = "openai"
     model: str = Field(default="", max_length=200)
+    reasoning_effort: ReasoningEffort | None = None
+
+    @model_validator(mode="after")
+    def validate_effort(self) -> Settings:
+        if self.provider == "claude" and self.reasoning_effort is not None:
+            CLAUDE_EFFORT.validate_python(self.reasoning_effort)
+        return self
 
 
 class Snapshot(Settings):
@@ -67,6 +75,8 @@ class SettingsView(Snapshot):
     reviewers: list[ReviewerChoice]
     claude_model: str
     openai_model: str
+    claude_reasoning_effort: ClaudeEffort | None = None
+    openai_reasoning_effort: ReasoningEffort | None = None
 
 
 def load_controls(conn: sqlite3.Connection) -> ControlSnapshot:
@@ -112,6 +122,7 @@ def load(conn: sqlite3.Connection | None = None) -> Snapshot:
                 **controls.model_dump(exclude={"source"}),
                 provider=model.provider,
                 model=model.model,
+                reasoning_effort=model.reasoning_effort,
                 model_revision=model.revision,
                 source="saved"
                 if controls.source == "saved" or model.source == "saved"
@@ -149,6 +160,7 @@ def view(principal: auth.Principal) -> SettingsView:
             **controls.model_dump(exclude={"source"}),
             provider=model.provider,
             model=model.model,
+            reasoning_effort=model.reasoning_effort,
             model_revision=model.revision,
             source="saved"
             if controls.source == "saved" or model.source == "saved"
@@ -169,6 +181,8 @@ def view(principal: auth.Principal) -> SettingsView:
         configuration_error=configuration_error,
         claude_model=model.claude_model,
         openai_model=model.openai_model,
+        claude_reasoning_effort=model.claude_reasoning_effort,
+        openai_reasoning_effort=model.openai_reasoning_effort,
         can_review=auth.principal_has_real_role(principal, "writer"),
         can_configure=principal.is_admin,
         ready=not issues,
@@ -201,11 +215,25 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         if current.revision != request.revision:
             raise Conflict("Review settings changed; reload before saving.")
         models, _ = model_settings.editable("draft_review", conn=db)
+        effort = (
+            request.reasoning_effort
+            if "reasoning_effort" in request.model_fields_set
+            else models.effort_for(request.provider)
+        )
+        claude_effort = (
+            (CLAUDE_EFFORT.validate_python(effort) if effort is not None else None)
+            if request.provider == "claude"
+            else models.claude_reasoning_effort
+        )
         model_settings.save_in_transaction(
             db,
             "draft_review",
             model_settings.SaveSelection(
                 provider=request.provider,
+                claude_reasoning_effort=claude_effort,
+                openai_reasoning_effort=effort
+                if request.provider == "openai"
+                else models.openai_reasoning_effort,
                 revision=request.model_revision,
                 claude_model=request.model
                 if request.provider == "claude"

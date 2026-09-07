@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 from typing_extensions import TypedDict
 
 from . import timestamps
+from .ai.types import ReasoningEffort
 
 Mode = Literal["off", "review-only", "review-and-apply"]
 
@@ -47,6 +48,7 @@ class ReviewRun(BaseModel):
     draft_revision: int
     provider: Literal["claude", "openai"] | None = None
     model: str | None = None
+    reasoning_effort: ReasoningEffort | None = None
     reviewer_id: str | None = None
     settings_revision: int | None = None
     model_settings_revision: int | None = None

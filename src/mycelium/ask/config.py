@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, replace
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider
+from ..ai import Provider, ReasoningEffort
 
 #: Current Haiku model id (confirmed against Anthropic's model catalog:
 #: claude-haiku-4-5, 200K context, $1/$5 per MTok).
@@ -39,6 +39,7 @@ QUICK_REQUEST_TIMEOUT_S = 20.0
 class AskConfig:
     model: str = DEFAULT_MODEL
     provider: Provider = "claude"
+    reasoning_effort: ReasoningEffort | None = None
     #: Hard ceiling on substrate operations per call. Recon counts toward it.
     op_cap: int = 25
     #: Whole-call wall-clock budget, seconds. On exhaustion we degrade to a
@@ -97,6 +98,7 @@ class AskConfig:
         return cls(
             model=selected.model,
             provider=selected.provider,
+            reasoning_effort=selected.reasoning_effort,
             op_cap=limits.op_cap,
             wall_clock_s=limits.wall_clock_s,
             recon_k=limits.recon_k,

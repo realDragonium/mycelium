@@ -10,6 +10,7 @@ import httpx
 from anthropic import Anthropic
 from anthropic.types import (
     MessageParam,
+    OutputConfigParam,
     TextBlockParam,
     ThinkingConfigParam,
     ToolChoiceParam,
@@ -18,6 +19,7 @@ from anthropic.types import (
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from .types import (
+    CLAUDE_EFFORT,
     MESSAGES,
     TOOLS,
     ModelConfig,
@@ -46,6 +48,7 @@ class ClaudeMessages(Protocol):
         tools: Iterable[ToolUnionParam],
         tool_choice: ToolChoiceParam,
         thinking: ThinkingConfigParam = ...,
+        output_config: OutputConfigParam = ...,
     ) -> object: ...
 
 
@@ -68,6 +71,7 @@ class _RequiredRequest(TypedDict):
 
 class _Request(_RequiredRequest, total=False):
     thinking: ThinkingConfigParam
+    output_config: OutputConfigParam
 
 
 class _StructuredRequired(TypedDict):
@@ -79,6 +83,7 @@ class _StructuredRequired(TypedDict):
 
 class _StructuredRequest(_StructuredRequired, total=False):
     thinking: ThinkingConfigParam
+    output_config: OutputConfigParam
 
 
 class _Response(BaseModel):
@@ -225,6 +230,10 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         ),
         "tool_choice": choice,
     }
+    if config.reasoning_effort is not None:
+        request["output_config"] = {
+            "effort": CLAUDE_EFFORT.validate_python(config.reasoning_effort)
+        }
     if config.thinking and not task.force_tool:
         request["thinking"] = {"type": "adaptive"}
     response = _Response.model_validate(
@@ -272,6 +281,10 @@ def structured(
         "system": task.system,
         "messages": [{"role": "user", "content": task.prompt}],
     }
+    if config.reasoning_effort is not None:
+        request["output_config"] = {
+            "effort": CLAUDE_EFFORT.validate_python(config.reasoning_effort)
+        }
     if config.thinking:
         request["thinking"] = {"type": "adaptive"}
     with transport(config, client) as sdk:

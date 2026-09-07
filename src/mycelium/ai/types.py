@@ -16,6 +16,10 @@ from pydantic import (
 )
 
 Provider = Literal["claude", "openai"]
+ClaudeEffort = Literal["low", "medium", "high", "xhigh", "max"]
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+CLAUDE_EFFORT = TypeAdapter(ClaudeEffort)
+REASONING_EFFORT = TypeAdapter(ReasoningEffort)
 Output = TypeVar("Output", bound=BaseModel)
 
 
@@ -28,8 +32,12 @@ class ModelConfig:
     max_retries: int = 0
     thinking: bool = False
     cache: bool = False
+    reasoning_effort: ReasoningEffort | None = None
 
     def __post_init__(self) -> None:
+        if self.reasoning_effort is not None:
+            adapter = CLAUDE_EFFORT if self.provider == "claude" else REASONING_EFFORT
+            adapter.validate_python(self.reasoning_effort)
         if self.provider not in ("claude", "openai"):
             raise ValueError("Model provider must be claude or openai")
         if not self.model.strip():

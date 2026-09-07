@@ -10,7 +10,7 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from mycelium import ai, doc_runs, docgen, docs_store
+from mycelium import ai, auth, doc_runs, docgen, docs_store, model_settings
 from mycelium.docgen.config import DocgenConfig, model_choices, resolve_provider
 from mycelium.docgen.loop import _execute
 from mycelium.docgen.schema import DocumentWritten, NothingWritten
@@ -274,6 +274,21 @@ def test_configuration_keeps_claude_default_and_requires_gpt_model(monkeypatch):
 
 def test_admission_captures_model_before_worker_wait(monkeypatch, tmp_path):
     save_model("docgen", openai_model="gpt-at-admission")
+
+    def set_effort(effort: ai.ReasoningEffort) -> None:
+        current = model_settings.get("docgen")
+        model_settings.save(
+            "docgen",
+            model_settings.SaveSelection(
+                **current.model_dump(
+                    include={"provider", "claude_model", "openai_model", "revision"}
+                ),
+                openai_reasoning_effort=effort,
+            ),
+            auth.LOCAL_ADMIN,
+        )
+
+    set_effort("high")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     conn = docs_store.connect(tmp_path / "drafts.db")
     docs_store.migrate(conn)
@@ -298,9 +313,11 @@ def test_admission_captures_model_before_worker_wait(monkeypatch, tmp_path):
         )
         assert entered.wait(5)
         save_model("docgen", openai_model="gpt-after-admission")
+        set_effort("low")
         release.set()
         doc_runs.wait_all()
         row = docs_store.serialize_run(docs_store.get_run(conn, run_id))
+        assert row["reasoning_effort"] == observed[0].reasoning_effort == "high"
         assert row["model"] == observed[0].model == "gpt-at-admission"
         assert row["provider"] == observed[0].provider == "openai"
     finally:

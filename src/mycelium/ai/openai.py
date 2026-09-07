@@ -83,6 +83,8 @@ def _input(task: ToolTask) -> list[dict[str, JsonValue]]:
 def _request(
     payload: dict[str, JsonValue], config: ModelConfig, client: httpx.Client | None
 ) -> Response:
+    if config.reasoning_effort is not None:
+        payload = {**payload, "reasoning": {"effort": config.reasoning_effort}}
     key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not key:
         raise ModelError("OPENAI_API_KEY is required on the server")
@@ -108,7 +110,7 @@ def _request(
                 if not retryable or attempt == config.max_retries:
                     if response.is_error:
                         guidance = {
-                            400: "Check that the model supports the requested Responses API features.",
+                            400: "Check the model ID and reasoning effort in AI settings, and its support for the requested Responses API features.",
                             401: "Check OPENAI_API_KEY on the server.",
                             403: "Check the OpenAI project's access to the configured model.",
                             404: "Check the configured model ID and model access.",

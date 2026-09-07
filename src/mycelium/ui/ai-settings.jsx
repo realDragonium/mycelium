@@ -1,3 +1,14 @@
+function ReasoningEffortField({ provider, value, onChange, label = 'Reasoning effort', style }) {
+  const levels = provider === 'claude' ? ['low', 'medium', 'high', 'xhigh', 'max'] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+  return <label style={{ display: 'grid', gap: 6, minWidth: 0 }}>{label}
+    <select aria-label={label} style={style} value={value ?? ''} onChange={event => onChange(event.target.value || null)}>
+      <option value="">Model default</option>
+      {levels.map(level => <option key={level} value={level}>{level === 'xhigh' ? 'Extra high' : level[0].toUpperCase() + level.slice(1)}</option>)}
+    </select>
+    <span>Supported levels depend on the model. Higher effort can use more tokens and time; existing limits still apply.</span>
+  </label>;
+}
+
 function draftReviewProviderName(provider) {
   return provider === 'claude' ? 'Claude' : provider === 'openai' ? 'GPT (OpenAI)' : 'Unknown provider';
 }
@@ -13,7 +24,7 @@ function DraftReviewSettings() {
 
   const accept = data => {
     setSettings(data);
-    setForm({ application_enabled: data.application_enabled, mode: data.mode, provider: data.provider, model: data.model, reviewer_id: data.reviewer_id, revision: data.revision, model_revision: data.model_revision });
+    setForm({ application_enabled: data.application_enabled, mode: data.mode, provider: data.provider, model: data.model, reasoning_effort: data[data.provider === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort'] ?? null, reviewer_id: data.reviewer_id, revision: data.revision, model_revision: data.model_revision });
   };
   const reload = React.useCallback(async () => {
     setBusy(true); setError(null); setSaved(false);
@@ -80,6 +91,7 @@ function DraftReviewSettings() {
       <p style={{ marginTop: 0 }}>
         Current: {settings.mode === 'off' ? 'Off' : settings.mode === 'review-only' ? 'Review only' : 'Review and apply'}
         {' · '}{draftReviewProviderName(settings.provider)}{settings.model ? ` · ${settings.model}` : ' · No model configured'}.
+        {' · Effort: '}{settings.reasoning_effort ?? 'Model default'}.
         {' '}{settings.source === 'saved' ? 'Saved in Mycelium.' : 'Using built-in defaults.'}
       </p>
       {settings.issues.length > 0 && <ul style={{ paddingLeft: 20 }}>{settings.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}
@@ -98,13 +110,14 @@ function DraftReviewSettings() {
               </select>
             </label>
             <label style={fieldStyle}>Provider
-              <select aria-label="Provider" style={inputStyle} value={form.provider} onChange={event => { setForm(current => ({ ...current, provider: event.target.value, model: settings[event.target.value === 'claude' ? 'claude_model' : 'openai_model'] })); setSaved(false); }}>
+              <select aria-label="Provider" style={inputStyle} value={form.provider} onChange={event => { setForm(current => ({ ...current, provider: event.target.value, model: settings[event.target.value === 'claude' ? 'claude_model' : 'openai_model'], reasoning_effort: settings[event.target.value === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort'] ?? null })); setSaved(false); }}>
                 <option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option>
               </select>
             </label>
             <label style={fieldStyle}>Model ID
               <input style={inputStyle} value={form.model} onChange={event => change('model', event.target.value)} placeholder="Enter a model ID for this provider" required={form.mode !== 'off'} />
             </label>
+            <ReasoningEffortField provider={form.provider} value={form.reasoning_effort} onChange={value => change('reasoning_effort', value)} label="Draft review reasoning effort" style={inputStyle} />
             <label style={fieldStyle}>Reviewer account
               <select aria-label="Reviewer account" style={inputStyle} value={form.reviewer_id} onChange={event => change('reviewer_id', event.target.value)} required={form.mode !== 'off'}>
                 <option value="">Select an active writer or administrator</option>
@@ -140,18 +153,19 @@ function DraftReviewSettings() {
 
 function ActionModelSettings({ settings, canConfigure }) {
   const [current, setCurrent] = React.useState(settings);
-  const [form, setForm] = React.useState({ provider: settings.provider, claude_model: settings.claude_model, openai_model: settings.openai_model, revision: settings.revision });
+  const [form, setForm] = React.useState({ provider: settings.provider, claude_model: settings.claude_model, openai_model: settings.openai_model, claude_reasoning_effort: settings.claude_reasoning_effort ?? null, openai_reasoning_effort: settings.openai_reasoning_effort ?? null, revision: settings.revision });
   const [error, setError] = React.useState(null);
   const [saved, setSaved] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [conflict, setConflict] = React.useState(false);
   const titles = { ask: 'Questions', ingest: 'Ingestion', research: 'Research', docgen: 'Document generation' };
   const title = titles[settings.action];
+  const effortKey = form.provider === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort';
   const modelKey = form.provider === 'claude' ? 'claude_model' : 'openai_model';
   const selectedProvider = current.providers.find(item => item.provider === form.provider);
   const accept = value => {
     setCurrent(value);
-    setForm({ provider: value.provider, claude_model: value.claude_model, openai_model: value.openai_model, revision: value.revision });
+    setForm({ provider: value.provider, claude_model: value.claude_model, openai_model: value.openai_model, claude_reasoning_effort: value.claude_reasoning_effort ?? null, openai_reasoning_effort: value.openai_reasoning_effort ?? null, revision: value.revision });
   };
   const reload = async () => {
     setBusy(true); setError(null); setSaved(false);
@@ -188,9 +202,10 @@ function ActionModelSettings({ settings, canConfigure }) {
   return <section aria-label={`${title} model settings`} style={{ padding: '18px 20px', marginBottom: 16, border: '1px solid var(--rule, var(--line))', borderRadius: 6, color: 'var(--ink-3)', fontSize: 13, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
     <h2 style={{ margin: 0, fontSize: 16, color: 'var(--ink)' }}>{title}</h2>
     <p>Current: {draftReviewProviderName(current.provider)} · {current.model || 'No model configured'}.
+      {' · Effort: '}{current[current.provider === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort'] ?? 'Model default'}.
       {' '}{current.source === 'saved' ? 'Saved in Mycelium.' : 'Using built-in defaults.'}
     </p>
-    {settings.action === 'docgen' && <p>This is the default for new documents. You can choose a different provider in the generation screen.</p>}
+    {settings.action === 'docgen' && <p>These are the model and effort defaults for new documents. Choosing a different provider in the generation screen uses its saved model and effort.</p>}
     {current.configuration_error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{current.configuration_error} Save valid settings to enable this action.</p>}
     {error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p>}
     {canConfigure ? <>
@@ -198,6 +213,7 @@ function ActionModelSettings({ settings, canConfigure }) {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
           <label style={fieldStyle}>Provider<select aria-label={`${title} provider`} style={inputStyle} value={form.provider} onChange={event => { setForm(value => ({ ...value, provider: event.target.value })); setSaved(false); }}><option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option></select></label>
           <label style={fieldStyle}>Model ID<input aria-label={`${title} model ID`} style={inputStyle} value={form[modelKey]} onChange={event => { setForm(value => ({ ...value, [modelKey]: event.target.value })); setSaved(false); }} placeholder="Enter a model ID for this provider" required /></label>
+          <ReasoningEffortField provider={form.provider} value={form[effortKey]} onChange={value => { setForm(current => ({ ...current, [effortKey]: value })); setSaved(false); }} label={`${title} reasoning effort`} style={inputStyle} />
         </div>
         <p>{selectedProvider?.available ? 'Provider credentials are configured on the server.' : selectedProvider?.reason || 'Provider credentials are unavailable.'}</p>
         <button type="submit" disabled={!form[modelKey].trim()} style={{ ...buttonStyle, fontWeight: 600 }}>{busy ? 'Saving…' : `Save ${title.toLowerCase()} settings`}</button>

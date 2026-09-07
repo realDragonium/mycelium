@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider
+from ..ai import Provider, ReasoningEffort
 
 #: Current Sonnet model id (confirmed against Anthropic's model catalog).
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -36,6 +36,7 @@ DOCTRINE_NAME = "ingest"
 class IngestConfig:
     model: str = DEFAULT_MODEL
     provider: Provider = "claude"
+    reasoning_effort: ReasoningEffort | None = None
     #: Hard ceiling on substrate operations per call. Vocab fetch + every
     #: reconcile read counts toward it. Higher than ask's: ingest reconciles
     #: per-candidate, so it spends far more reads.
@@ -81,6 +82,7 @@ class IngestConfig:
         return cls(
             model=selected.model,
             provider=selected.provider,
+            reasoning_effort=selected.reasoning_effort,
             op_cap=limits.op_cap,
             wall_clock_s=limits.wall_clock_s,
             max_tokens=limits.max_tokens,

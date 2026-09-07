@@ -461,6 +461,8 @@ def _restore_model_settings(db_path: Path, settings: list[ModelSnapshot]) -> Non
                     provider=item.provider,
                     claude_model=item.claude_model,
                     openai_model=item.openai_model,
+                    claude_reasoning_effort=item.claude_reasoning_effort,
+                    openai_reasoning_effort=item.openai_reasoning_effort,
                 )
                 conn.execute(
                     "INSERT INTO model_settings VALUES (?, ?, ?)",
