@@ -466,6 +466,18 @@ def _assemble_draft(
     valid_kinds = _safe_valid_kinds(emitter)
     validated: list[ProposedOp] = []
     for idx, op in enumerate(ops):
+        if op.get("op") == "alias_suggestion":
+            from ..alias_suggestions import Proposal
+
+            try:
+                proposal = Proposal.model_validate(op.get("payload"))
+                if proposal.statement_id is not None or proposal.quote not in ctx.text:
+                    raise ValueError(
+                        "Ingest alias evidence must quote the input text; omit statement_id."
+                    )
+            except ValueError as exc:
+                flagged.append(f"op[{idx}] alias suggestion dropped: {exc}")
+                continue
         kept = _validate_op(op, idx, valid_kinds, flagged, emitter)
         if kept is not None:
             validated.append(kept)
@@ -508,7 +520,10 @@ def _assemble_draft(
     queued: list[ProposedOp] = []
     for i, p in enumerate(validated):
         try:
-            emitter.add_op(draft_id, p.op, p.payload)
+            if p.op == "alias_suggestion":
+                emitter.add_op(draft_id, p.op, p.payload, source_text=ctx.text)
+            else:
+                emitter.add_op(draft_id, p.op, p.payload)
             queued.append(p)
         except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
             flagged.append(

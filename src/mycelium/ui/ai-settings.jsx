@@ -158,7 +158,7 @@ function ActionModelSettings({ settings, canConfigure }) {
   const [saved, setSaved] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [conflict, setConflict] = React.useState(false);
-  const titles = { ask: 'Questions', ingest: 'Ingestion', research: 'Research', docgen: 'Document generation' };
+  const titles = { ask: 'Questions', ingest: 'Ingestion', research: 'Research', docgen: 'Document generation', alias_discovery: 'Alias discovery' };
   const title = titles[settings.action];
   const effortKey = form.provider === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort';
   const modelKey = form.provider === 'claude' ? 'claude_model' : 'openai_model';

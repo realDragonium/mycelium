@@ -81,7 +81,7 @@ function categoryOf(op) {
   if (k === 'flag') return 'flagged'; // a record for the curator, not a queued write
   if (k === 'upsert_statement' || k === 'upsert_statements' || k === 'patch_statement' || k === 'replace_text' || k === 'merge_statements') return 'statements';
   if (k === 'upsert_entity') return 'entities';
-  if (k === 'upsert_name') return 'names';
+  if (k === 'upsert_name' || k === 'alias_suggestion') return 'names';
   return 'links'; // add_links | add_entity_links
 }
 
@@ -118,6 +118,8 @@ function ResolvedRef({ id }) {
 
 function OpBody({ op }) {
   const p = op.payload || {};
+
+  if (op.type === 'alias_suggestion') return <div><p>Alias “{p.proposal?.alias}” → <ResolvedRef id={p.proposal?.entity_id} /></p><p>{p.status === 'pending' ? 'Needs human review' : p.status}. <a href="#/names">Review in Names &amp; aliases</a></p><blockquote>{p.evidence?.quote}</blockquote><p>{p.proposal?.reason}</p></div>;
 
   if (op.type === 'upsert_statement') {
     return (<><div style={{ marginBottom: 8 }}><KindTag kind={p.kind} /></div><div className="op-stmt-text">{p.text}</div></>);
@@ -377,6 +379,8 @@ function DraftReview({ id }) {
 
   const ops = draft.ops;
   const readOnly = draft.status !== 'open';
+  const hasAliases = ops.some(op => op.type === 'alias_suggestion');
+  const pendingAliases = ops.some(op => op.type === 'alias_suggestion' && op.payload?.status === 'pending');
   const counts = { all: ops.length, statements: 0, entities: 0, names: 0, links: 0, flagged: 0 };
   ops.forEach(o => { const c = categoryOf(o); if (c !== 'flagged') counts[c]++; if (o.flagged) counts.flagged++; });
   const shown = ops.filter(o => filter === 'all' ? true : filter === 'flagged' ? o.flagged : categoryOf(o) === filter);
@@ -425,15 +429,16 @@ function DraftReview({ id }) {
         <span className="dh-spacer" />
         {!readOnly && (
           <div className="draft-actions">
-            <button className="btn ghost-danger" disabled={busy} onClick={onWithdraw}>Discard draft</button>
+            <button className="btn ghost-danger" disabled={busy || pendingAliases} onClick={onWithdraw}>Discard draft</button>
             <button className="btn submit" disabled={busy || ops.length === 0} onClick={onSubmit}><I.check width="15" height="15" />Submit for review</button>
           </div>
         )}
       </div>
 
-      {draft.status === 'submitted' && <div className="draft-banner"><span className="dbi"><I.check width="15" height="15" /></span><span><b>Submitted {relTime(draft.submittedAt)}.</b> These {ops.length} ops are queued for review. Nothing has landed in the substrate yet.</span></div>}
+      {draft.status === 'submitted' && <div className="draft-banner"><span className="dbi"><I.check width="15" height="15" /></span><span><b>Submitted {relTime(draft.submittedAt)}.</b> {hasAliases ? 'Alias decisions are recorded individually; remaining operations are queued for review.' : `These ${ops.length} ops are queued for review. Nothing has landed in the substrate yet.`}</span></div>}
       {draft.status === 'approved' && <div className="draft-banner">Approved. The draft has been applied to the substrate.</div>}
-      {(draft.status === 'rejected' || draft.status === 'withdrawn') && <div className="draft-banner">{draft.status === 'rejected' ? 'Rejected' : 'Withdrawn'}. The draft is closed without applying its operations.</div>}
+      {(draft.status === 'rejected' || draft.status === 'withdrawn') && <div className="draft-banner">{draft.status === 'rejected' ? 'Rejected' : 'Withdrawn'}. {hasAliases ? 'The draft is closed. Earlier accepted aliases remain recorded in Names & aliases.' : 'The draft is closed without applying its operations.'}</div>}
+      {pendingAliases && <p>Review each alias suggestion in <a href="#/names">Names &amp; aliases</a> before applying or closing this draft. Automatic review stays advisory.</p>}
       {state.error && <p role="alert" style={{ color: 'var(--red, #dc2626)', fontSize: 13 }}>{state.error.message || 'The draft request failed.'}</p>}
       {draft.status === 'submitted' && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 18 }}>
@@ -464,7 +469,7 @@ function DraftReview({ id }) {
           </div>
           {ops.length === 0 ? <EmptyState title="Draft is empty" blurb="Every op was discarded." />
             : shown.length === 0 ? <div className="rail-empty" style={{ padding: '24px 2px', fontFamily: 'var(--mono)', fontSize: 'var(--fs-xs)', color: 'var(--ink-4)' }}>// no ops match this filter</div>
-            : <div className="ops">{shown.map(op => <OpCard key={op.seq} op={op} active={activeQuote === op.quote} onHover={setActiveQuote} onDiscard={onDiscardOp} readOnly={readOnly} />)}</div>}
+            : <div className="ops">{shown.map(op => <OpCard key={op.seq} op={op} active={activeQuote === op.quote} onHover={setActiveQuote} onDiscard={onDiscardOp} readOnly={readOnly || op.type === 'alias_suggestion'} />)}</div>}
         </div>
         <SourceRail source={draft.source} sourceType={draft.sourceType} activeQuote={activeQuote} />
       </div>

@@ -6,7 +6,7 @@ the caller-facing shapes; the inner model fills the `emit_draft` *tool* schema
 models, attaching the machine-readable `trace`.
 
 The op vocabulary (`OpKind`) is the set of substrate *write*-tool function
-names a draft op may carry — but `ingest` itself never calls those tools. It
+names and the non-replaying `alias_suggestion` record a draft op may carry — but `ingest` itself never calls those tools. It
 queues ops into a draft via `drafts_store`; a curator's all-or-nothing replay
 is the only thing that ever runs them live (see `draft.py`).
 """
@@ -18,7 +18,7 @@ from typing import Literal, Union
 from pydantic import BaseModel, Field
 
 #: The substrate mutation tools a draft op may target. A draft op's `kind` is
-#: exactly one of these function names; its payload is that tool's kwargs.
+#: one of these function names, or a human-reviewed alias suggestion.
 OpKind = Literal[
     "upsert_statement",
     "upsert_statements",
@@ -28,6 +28,7 @@ OpKind = Literal[
     "patch_statement",
     "replace_text",
     "merge_statements",
+    "alias_suggestion",
 ]
 
 

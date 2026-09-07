@@ -24,7 +24,7 @@ import anyio.from_thread
 import anyio.to_thread
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, JsonValue, create_model
@@ -33,6 +33,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import (
+    alias_suggestions,
     auth,
     connect_page,
     documentation_profiles,
@@ -2063,6 +2064,58 @@ def _ui_redirect() -> RedirectResponse:
 @app.get("/cockpit", include_in_schema=False)
 def _cockpit_redirect() -> RedirectResponse:
     return RedirectResponse(url="/cockpit/")
+
+
+@app.exception_handler(alias_suggestions.Conflict)
+async def alias_suggestion_conflict(
+    request: Request, exc: alias_suggestions.Conflict
+) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.get("/api/alias-suggestions")
+def alias_suggestions_http(
+    request: Request, status: str = "pending"
+) -> dict[str, object]:
+    _enforce_role(request, "reader")
+    return {
+        "suggestions": [
+            entry.model_dump(mode="json")
+            for entry in alias_suggestions.list_entries(status)
+        ]
+    }
+
+
+@app.post("/api/alias-suggestions/scan")
+def scan_alias_suggestions_http(
+    request: Request, body: alias_suggestions.ScanRequest
+) -> dict[str, object]:
+    _enforce_role(request, "writer", real_role=True)
+    return alias_suggestions.scan(body, _require_principal(request)).model_dump(
+        mode="json"
+    )
+
+
+@app.post("/api/alias-suggestions/{draft_id}/{operation_ref}/review")
+def review_alias_suggestion_http(
+    draft_id: str,
+    operation_ref: str,
+    request: Request,
+    body: alias_suggestions.ReviewRequest,
+) -> dict[str, object]:
+    _enforce_role(request, "writer", real_role=True)
+    from . import drafts_store
+
+    try:
+        entry = alias_suggestions.review(
+            draft_id, operation_ref, body, _require_principal(request)
+        )
+    except (
+        drafts_store.StaleDraftRevisionError,
+        drafts_store.ActiveApplicationError,
+    ) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return entry.model_dump(mode="json")
 
 
 # --- MCP transport mount --------------------------------------------------

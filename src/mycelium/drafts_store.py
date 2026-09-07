@@ -127,7 +127,8 @@ DRAFTS_SOURCE_INDEX = (
 
 #: Op kinds that are records for the curator, not tool calls: replay skips them
 #: by membership rather than by name-matching scattered through the replayer.
-NON_REPLAYING_OP_KINDS = frozenset({"flag"})
+ALIAS_SUGGESTION_KIND = "alias_suggestion"
+NON_REPLAYING_OP_KINDS = frozenset({"flag", ALIAS_SUGGESTION_KIND})
 
 
 class DraftSource(TypedDict):
@@ -462,6 +463,13 @@ def remove_op(
 ) -> int | None:
     _check_no_active_application(conn, draft_id)
     revision_clause = "" if expected_revision is None else " AND revision = ?"
+    protected = conn.execute(
+        "SELECT kind FROM draft_ops WHERE draft_id = ? AND seq = ?", (draft_id, seq)
+    ).fetchone()
+    if protected is not None and protected["kind"] == ALIAS_SUGGESTION_KIND:
+        raise ValueError(
+            "Reject alias suggestions through the alias suggestion review screen."
+        )
     params: tuple[object, ...] = (draft_id, seq, draft_id)
     if expected_revision is not None:
         params = (*params, expected_revision)
@@ -488,6 +496,14 @@ def remove_op_by_ref(
     expected_revision: int | None = None,
 ) -> int | None:
     revision_clause = "" if expected_revision is None else " AND revision = ?"
+    protected = conn.execute(
+        "SELECT kind FROM draft_ops WHERE draft_id = ? AND id = ?",
+        (draft_id, operation_ref),
+    ).fetchone()
+    if protected is not None and protected["kind"] == ALIAS_SUGGESTION_KIND:
+        raise ValueError(
+            "Reject alias suggestions through the alias suggestion review screen."
+        )
     params: tuple[object, ...] = (draft_id, operation_ref, draft_id)
     if expected_revision is not None:
         params = (*params, expected_revision)
@@ -519,6 +535,10 @@ def update_op_payload(
         "SELECT kind FROM draft_ops WHERE draft_id = ? AND seq = ?",
         (draft_id, seq),
     ).fetchone()
+    if row is not None and row["kind"] == ALIAS_SUGGESTION_KIND:
+        raise ValueError(
+            "Use the alias suggestion review screen to change this operation."
+        )
     if row is not None and row["kind"] == "add_links":
         reject_entity_statement_additions(payload.get("links"))
     revision_clause = "" if expected_revision is None else " AND revision = ?"
@@ -557,6 +577,10 @@ def update_op_payload_by_ref(
         if draft is not None:
             _check_revision(draft, expected_revision)
         return None
+    if row["kind"] == ALIAS_SUGGESTION_KIND:
+        raise ValueError(
+            "Use the alias suggestion review screen to change this operation."
+        )
     if row["kind"] == "add_links":
         reject_entity_statement_additions(payload.get("links"))
     revision_clause = "" if expected_revision is None else " AND revision = ?"
@@ -598,6 +622,14 @@ def set_decision(
     by: str | None,
     application_id: str | None = None,
 ) -> None:
+    from . import (
+        alias_suggestions,  # local import: suggestion records depend on this store
+    )
+
+    if alias_suggestions.pending(list_ops(conn, draft_id)):
+        raise ValueError(
+            "Review alias suggestions individually before closing this draft."
+        )
     if decision not in ("approved", "rejected", "withdrawn"):
         raise ValueError(f"invalid decision: {decision}")
     active = active_application(conn, draft_id)
