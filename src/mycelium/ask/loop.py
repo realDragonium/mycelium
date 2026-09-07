@@ -19,11 +19,14 @@ two terminals, and the semantic-adjacency floor.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from pydantic import JsonValue, TypeAdapter
 
 from .. import ai, tracing
 from ..agentloop import (
@@ -33,13 +36,7 @@ from ..agentloop import (
     check_budget,
 )
 from ..agentloop import (
-    collect_statement_ids as _collect_ids,
-)
-from ..agentloop import (
     first_tool_use as _first_tool_use,
-)
-from ..agentloop import (
-    ids_present_in as _ids_present_in,
 )
 from ..agentloop import (
     serialize as _serialize,
@@ -49,12 +46,16 @@ from ..agentloop import (
 )
 from . import prompts
 from .config import AskConfig
+from .events import AnswerDeltas, AskCancelled, AskEvent, AskStream, current_stream
+from .evidence import Evidence
 from .schema import Answered, AskResult, Interpretation, NeedsClarification
 from .substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from .tools import (
     CLARIFY_TOOL,
     SUBMIT_TOOL,
     TERMINAL_TOOLS,
+    AnswerInput,
+    ClarificationInput,
     answered_from_tool_input,
     build_tools,
     clarification_from_tool_input,
@@ -75,9 +76,10 @@ _TURN_HEADROOM = 12
 def run_ask(
     question: str,
     *,
-    client: Any | None = None,
+    client: ai.ClaudeClient | httpx.Client | None = None,
     substrate: SubstrateReader | None = None,
     config: AskConfig | None = None,
+    stream: AskStream | None = None,
 ) -> AskResult:
     """Resolve `question` against the substrate. Returns `Answered` or
     `NeedsClarification` — never raises for retrieval/closure reasons.
@@ -90,8 +92,27 @@ def run_ask(
     if substrate is None:
         substrate = InProcessSubstrate()
 
-    with tracing.profile_to_html("ask", question):
-        result = _execute(question, client, substrate, config)
+    stream = stream or current_stream.get() or AskStream()
+    stream.check()
+    token = current_stream.set(stream)
+    try:
+        with tracing.profile_to_html("ask", question):
+            result = _execute(question, client, substrate, config, stream)
+    finally:
+        current_stream.reset(token)
+    stream.check()
+    stream.timings.setdefault(
+        "completion_ms", round((time.monotonic() - stream.started) * 1000, 2)
+    )
+    result.trace["stream_timing_ms"] = dict(stream.timings)
+    stream.send(
+        AskEvent(
+            type="complete",
+            result=TypeAdapter(dict[str, JsonValue]).validate_python(
+                result.model_dump()
+            ),
+        )
+    )
 
     if config.trace_log_path:
         from .trace import write_record
@@ -105,35 +126,39 @@ def run_ask(
 # --------------------------------------------------------------------------- #
 
 
+@dataclass
 class _RunContext:
-    """Plain bag of per-run harness state, so the finalizers/handlers below
-    don't each need ten-plus positional parameters (mirrors research/loop.py)."""
+    question: str
+    client: ai.ClaudeClient | httpx.Client | None
+    substrate: SubstrateReader
+    config: AskConfig
+    tools: list[dict]
+    messages: list[dict[str, object]]
+    trace: TraceBuilder
+    start: float
+    ops_after_recon: list[ReadCheck]
+    evidence: Evidence
+    targeted_ids: set[str]
+    stream: AskStream
+    deltas: AnswerDeltas
+    nudged: bool = False
+    floor_blocks: int = 0
+    clarify_retries: int = 0
+    malformed_retries: int = 0
 
-    def __init__(self, **kw: Any) -> None:
-        self.__dict__.update(kw)
 
-
-def _note_collected_ids(result: Any, sent: str, collected_ids: set[str]) -> None:
-    """Record which statements this read actually put in front of the model.
-
-    Two filters matter. The structural one (`_collect_ids`) takes only `id` keys,
-    so a link's `to_id`, a pointer to something not fetched, is not counted as
-    read. The second is an identity test over the text actually sent, because tool
-    serialization can truncate large results and recon formatting can omit result
-    shapes entirely. An id absent from that text never reached the model. A
-    substring test is wrong because a longer id sharing its prefix could vouch for
-    one that was cut, letting guessed provenance pass the fallback gate.
-    """
-    seen: set[str] = set()
-    _collect_ids(result, seen)
-    collected_ids.update(_ids_present_in(sent, seen))
+@dataclass(frozen=True)
+class ReadCheck:
+    name: str
+    adjacency: bool = False
 
 
 def _execute(
     question: str,
-    client: Any,
+    client: ai.ClaudeClient | httpx.Client | None,
     substrate: SubstrateReader,
     config: AskConfig,
+    stream: AskStream,
 ) -> AskResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -144,50 +169,94 @@ def _execute(
         wall_clock_s=config.wall_clock_s,
     )
     tools = build_tools(substrate.tool_specs(), enforce_floor=config.enforce_floor)
-    collected_ids: set[str] = set()
-    ops_after_recon: list[str] = []  # substrate read names after recon, for the floor
-
-    # ---- Step 0: recon (counts toward the op cap) ----
-    recon = _recon(question, substrate, config, trace)
-    initial_message = prompts.initial_user_message(
-        question, recon, quick=not config.enforce_floor
-    )
-    _note_collected_ids(recon, prompts.format_recon(recon), collected_ids)
-
-    messages: list[dict[str, Any]] = [{"role": "user", "content": initial_message}]
-
-    max_turns = config.op_cap + _TURN_HEADROOM
-
+    evidence = Evidence()
     ctx = _RunContext(
         question=question,
-        recon=recon,
-        collected_ids=collected_ids,
+        evidence=evidence,
+        targeted_ids=set(),
+        stream=stream,
+        deltas=AnswerDeltas(stream, allowed=False),
         client=client,
         substrate=substrate,
         config=config,
         tools=tools,
-        messages=messages,
+        messages=[],
         trace=trace,
         start=start,
-        ops_after_recon=ops_after_recon,
+        ops_after_recon=[],
         nudged=False,
         floor_blocks=0,
         clarify_retries=0,
         malformed_retries=0,
     )
 
+    try:
+        _prepare(ctx)
+        return _drive(ctx)
+    except Exception as exc:
+        outcome = "cancelled" if isinstance(exc, AskCancelled) else "error"
+        trace.notes.append(f"run ended: {outcome}")
+        record = _build_trace(ctx, outcome)
+        if config.trace_log_path:
+            from .trace import write_record
+
+            write_record(config.trace_log_path, record)
+        raise
+
+
+def _prepare(ctx: _RunContext) -> None:
+    ctx.stream.progress("retrieval", "Surveying statements relevant to the question.")
+    recon = _recon(ctx.question, ctx.substrate, ctx.config, ctx.trace)
+    ctx.stream.check()
+    formatted = prompts.format_recon(recon)
+    # Only the compact, bounded recon reaches the model and can support citations.
+    supplied = (
+        ctx.evidence.supply(json.loads(formatted))
+        if formatted.startswith("[")
+        else formatted
+    )
+    ctx.messages.append(
+        {
+            "role": "user",
+            "content": prompts.initial_user_message(
+                ctx.question, supplied, quick=not ctx.config.enforce_floor
+            ),
+        }
+    )
+
+
+def _drive(ctx: _RunContext) -> AskResult:
+    stream, trace, config = ctx.stream, ctx.trace, ctx.config
+    client, messages, tools = ctx.client, ctx.messages, ctx.tools
+    start = ctx.start
+    max_turns = config.op_cap + _TURN_HEADROOM
     while True:
         # Budget gates — forced finalize bypasses the floor and degrades.
+        stream.check()
         reason = check_budget(trace, config, start, max_turns)
         if reason:
             return _forced_finalize(reason, ctx)
 
+        floor = _floor_state(ctx)
+        stream.progress(
+            "evidence_check",
+            f"Completed {floor['targeted_retrievals']} targeted retrievals and {floor['adjacency_research']} grounded adjacency searches.",
+        )
+        ctx.deltas = AnswerDeltas(
+            stream, allowed=not config.enforce_floor or floor["satisfied"]
+        )
         try:
             with trace.span("model_turn"):
-                resp = _model_turn(client, config, messages, tools, force=False)
+                resp = _model_turn(
+                    client, config, messages, tools, force=False, deltas=ctx.deltas
+                )
+        except AskCancelled:
+            raise
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
+            ctx.deltas.reset()
             trace.notes.append(f"model error: {exc}")
             return _forced_finalize("api_error", ctx)
+        stream.check()
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
         messages.append({"role": "assistant", "content": resp.content})
@@ -211,12 +280,22 @@ def _execute(
         # sibling terminal then finishes or degrades the loop.
         _run_reads(tool_uses, ctx)
 
-        # A terminal tool finishes (or degrades) the loop; with none, loop again
-        # to keep retrieving. If the model emitted several, the first wins.
+        # Synthesis must consume earlier results, not sibling reads from this turn.
         tool_use = next((t for t in tool_uses if t.name in TERMINAL_TOOLS), None)
         if tool_use is None:
             continue
+        if len(tool_uses) != 1:
+            ctx.deltas.reset()
+            for terminal in tool_uses:
+                if terminal.name in TERMINAL_TOOLS:
+                    _append_tool_error(
+                        messages,
+                        terminal.id,
+                        "Finish in a separate turn after reading the tool results; call exactly one terminal.",
+                    )
+            continue
         if tool_use.name == CLARIFY_TOOL:
+            ctx.deltas.reset()
             result = _handle_clarify(tool_use, ctx)
         else:
             result = _handle_submit(tool_use, ctx)
@@ -224,42 +303,108 @@ def _execute(
             return result
 
 
-def _run_reads(tool_uses: list[Any], ctx: _RunContext) -> None:
-    """Execute this turn's substrate reads. With parallel tool use a turn may
-    carry several reads (and, rarely, a terminal alongside them); the API needs
-    a tool_result for each tool_use before the next turn, so every read's result
-    goes back in one user message here, whether or not a sibling terminal then
-    finishes the loop."""
+def _run_reads(tool_uses: list[ai.ToolUse], ctx: _RunContext) -> None:
     read_results: list[dict[str, Any]] = []
+    previous_targeted = bool(ctx.ops_after_recon)
+    available_ids = set(ctx.targeted_ids)
     for tu in tool_uses:
         if tu.name in TERMINAL_TOOLS:
             continue
-        if _dispatch_read(
+        ctx.stream.check()
+        arguments = dict(tu.input or {})
+        sources = (
+            arguments.pop("adjacency_sources", []) if tu.name in _SEARCH_TOOLS else []
+        )
+        try:
+            source_ids = ctx.evidence.expand(
+                TypeAdapter(list[str]).validate_python(sources, strict=True)
+            )
+            if source_ids and not set(source_ids) <= available_ids:
+                raise ValueError(
+                    "Adjacency sources must have been supplied by a completed targeted retrieval in an earlier turn."
+                )
+        except ValueError as exc:
+            ctx.trace.evidence_checks.append(
+                {
+                    "tool": tu.name,
+                    "turn": ctx.trace.model_turns,
+                    "sources": [],
+                    "adjacency": False,
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+            read_results.append(_tool_result_block(tu.id, str(exc), is_error=True))
+            continue
+        if check_budget(
+            ctx.trace, ctx.config, ctx.start, ctx.config.op_cap + _TURN_HEADROOM
+        ):
+            read_results.append(
+                _tool_result_block(tu.id, "Retrieval budget exhausted", is_error=True)
+            )
+            continue
+        ctx.stream.progress("retrieval", f"Retrieving evidence with {tu.name}.")
+        ok = _dispatch_read(
             tu.name,
-            dict(tu.input or {}),
+            arguments,
             tu.id,
             ctx.substrate,
             ctx.trace,
             read_results,
-            ctx.collected_ids,
-        ):
-            ctx.ops_after_recon.append(tu.name)
+            ctx.evidence,
+        )
+        adjacency = False
+        if ok:
+            if tu.name in {
+                "search_statements",
+                "survey_statements",
+                "get_statements",
+                "grep_statements",
+                "get_entity",
+                "retrieve_context",
+                "find_statement_connections",
+            }:
+                adjacency = bool(
+                    tu.name in _SEARCH_TOOLS
+                    and previous_targeted
+                    and source_ids
+                    and set(source_ids) <= available_ids
+                    and arguments.get("query", "").strip().casefold()
+                    != ctx.question.strip().casefold()
+                )
+                ctx.ops_after_recon.append(ReadCheck(tu.name, adjacency))
+                ctx.targeted_ids.update(ctx.evidence.last_ids)
+        ctx.trace.evidence_checks.append(
+            {
+                "tool": tu.name,
+                "turn": ctx.trace.model_turns,
+                "sources": source_ids,
+                "adjacency": adjacency,
+                "ok": ok,
+            }
+        )
+        ctx.stream.progress(
+            "retrieval",
+            f"{tu.name} {'completed' if ok else 'failed'}. {len(ctx.evidence.ids)} statements supplied so far.",
+        )
+        ctx.stream.check()
     if read_results:
         ctx.messages.append({"role": "user", "content": read_results})
 
 
-def _handle_clarify(tool_use: Any, ctx: _RunContext) -> AskResult | None:
+def _handle_clarify(tool_use: ai.ToolUse, ctx: _RunContext) -> AskResult | None:
     """Terminal: request_clarification (allowed any time after recon). Returns a
     result to finish, or None to keep looping after a re-prompt."""
     tool_input = dict(tool_use.input or {})
-    candidates = tool_input.get("candidates") or []
-    if len(candidates) < 2:
+    try:
+        ClarificationInput.model_validate(tool_input)
+    except ValueError:
         if ctx.clarify_retries < _MAX_CLARIFY_RETRIES:
             ctx.clarify_retries += 1
             _append_tool_error(
                 ctx.messages,
                 tool_use.id,
-                "request_clarification needs at least two genuinely distinct "
+                "request_clarification needs a non-empty question and at least two genuinely distinct "
                 "candidates, each naming what it would pull. If it isn't "
                 "genuinely ambiguous, retrieve and submit_answer instead.",
             )
@@ -277,24 +422,18 @@ def _handle_clarify(tool_use: Any, ctx: _RunContext) -> AskResult | None:
     return _finish_clarification(tool_input, ctx)
 
 
-def _handle_submit(tool_use: Any, ctx: _RunContext) -> AskResult | None:
+def _handle_submit(tool_use: ai.ToolUse, ctx: _RunContext) -> AskResult | None:
     """Terminal: submit_answer (gated by the floor). Returns a result to finish,
     or None to keep looping after a re-prompt."""
     tool_input = dict(tool_use.input or {})
-    floor = _floor_state(ctx.ops_after_recon)
-    adjacency_note = (tool_input.get("adjacency_note") or "").strip()
+    floor = _floor_state(ctx)
     # `quick` depth (enforce_floor off) skips the gate entirely: accept the first
     # well-formed answer instead of forcing the re-search dance.
-    if ctx.config.enforce_floor and (not floor["satisfied"] or not adjacency_note):
+    if ctx.config.enforce_floor and not floor["satisfied"]:
+        ctx.deltas.reset()
         if ctx.floor_blocks < _MAX_FLOOR_BLOCKS:
             ctx.floor_blocks += 1
-            if not floor["satisfied"]:
-                detail = prompts.floor_block_message(_floor_detail(floor))
-            else:
-                detail = (
-                    "adjacency_note is empty — report what your concept-seeded "
-                    "re-search surfaced, or 'nothing new'."
-                )
+            detail = prompts.floor_block_message(_floor_detail(floor))
             _append_tool_error(ctx.messages, tool_use.id, detail)
             return None
         # Stuck below the floor: never accept a floorless answer. Respond
@@ -308,7 +447,10 @@ def _handle_submit(tool_use: Any, ctx: _RunContext) -> AskResult | None:
         return _forced_finalize("floor_stuck", ctx)
     try:
         return _finish_answer(tool_input, ctx, degraded=False)
+    except AskCancelled:
+        raise
     except Exception as exc:  # noqa: BLE001 — malformed submit input
+        ctx.deltas.reset()
         if ctx.malformed_retries < _MAX_MALFORMED_RETRIES:
             ctx.malformed_retries += 1
             _append_tool_error(
@@ -353,7 +495,7 @@ def _dispatch_read(
     substrate: SubstrateReader,
     trace: TraceBuilder,
     result_blocks: list[dict[str, Any]],
-    collected_ids: set[str],
+    evidence: Evidence,
 ) -> bool:
     """Execute one read; return True only if it succeeded (so the caller knows
     whether it counts toward the floor).
@@ -374,8 +516,11 @@ def _dispatch_read(
         with trace.span(f"tool:{name}"):
             result = substrate.call(name, arguments)
         trace.record_tool_call(name, arguments, result, ok=True, counts_as_op=True)
-        sent = _serialize(result)
-        _note_collected_ids(result, sent, collected_ids)
+        sent = evidence.supply(result)
+        if name == "retrieve_context" and isinstance(result, dict):
+            trace.combined_reads.append(
+                TypeAdapter(JsonValue).validate_python(result.get("reads", []))
+            )
         result_blocks.append(_tool_result_block(tool_use_id, sent, is_error=False))
         return True
     except SubstrateError as exc:
@@ -392,18 +537,34 @@ def _dispatch_read(
 
 
 def _forced_finalize(reason: str, ctx: _RunContext) -> Answered:
-    """Last resort: force one structured submit (floor bypassed), else synthesise
-    a low-confidence partial. Never throws."""
+    """Force one low-confidence submit, or return a synthetic fallback.
+
+    Cancellation still propagates; it never triggers another model call.
+    """
     trace: TraceBuilder = ctx.trace
+    ctx.stream.check()
+    ctx.deltas.reset()
     trace.forced_finalize = reason
     trace.degraded = True
+    ctx.stream.progress(
+        "evidence_check", f"Finalizing with limited confidence: {reason}."
+    )
+    ctx.deltas = AnswerDeltas(
+        ctx.stream,
+        allowed=not ctx.config.enforce_floor or _floor_state(ctx)["satisfied"],
+    )
     ctx.messages.append(
         {"role": "user", "content": prompts.forced_finalize_message(reason)}
     )
     try:
         with trace.span("model_turn:forced"):
             resp = _model_turn(
-                ctx.client, ctx.config, ctx.messages, ctx.tools, force=True
+                ctx.client,
+                ctx.config,
+                ctx.messages,
+                ctx.tools,
+                force=True,
+                deltas=ctx.deltas,
             )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -411,7 +572,10 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> Answered:
         if tool_use is not None and tool_use.name == SUBMIT_TOOL:
             return _finish_answer(dict(tool_use.input or {}), ctx, degraded=True)
         trace.notes.append("forced finalize: model did not emit submit_answer")
+    except AskCancelled:
+        raise
     except Exception as exc:  # noqa: BLE001
+        ctx.deltas.reset()
         trace.notes.append(f"forced finalize failed: {exc}")
     return _fallback_answer(
         ctx, gap=f"forced finalize ({reason}) — core left unresolved"
@@ -430,9 +594,28 @@ def _finish_answer(
     degraded: bool,
 ) -> Answered:
     trace: TraceBuilder = ctx.trace
-    trace.sub_question_ledger = list(tool_input.get("sub_questions") or [])
-    trace.adjacency_note = tool_input.get("adjacency_note")
+    parsed = AnswerInput.model_validate(tool_input)
+    expanded = ctx.evidence.expand(parsed.provenance)
+    tool_input = {**parsed.model_dump(), "provenance": expanded}
+    if ctx.evidence.omitted:
+        tool_input["gaps"] = [
+            *parsed.gaps,
+            "Retrieved context exceeded configured limits; some evidence or relationships were omitted.",
+        ]
+        if parsed.confidence == "high":
+            tool_input["confidence"] = "medium"
+    if not expanded:
+        tool_input["confidence"] = "low"
+        tool_input["gaps"] = [*tool_input["gaps"], "No statement evidence was cited."]
+    trace.sub_question_ledger = []
+    trace.adjacency_note = f"{_floor_state(ctx)['adjacency_research']} grounded adjacency searches completed"
+    if ctx.deltas.text and ctx.deltas.text != parsed.answer:
+        ctx.deltas.reset()
     if degraded:
+        tool_input["gaps"] = [
+            *tool_input["gaps"],
+            f"Finalization was forced ({trace.forced_finalize}); evidence checks or answer completion may be incomplete.",
+        ]
         trace.degraded = True
         # A degraded finalize aborted the normal loop — the answer cannot be
         # high/medium confidence (acceptance: "degrade to a low-confidence
@@ -466,8 +649,14 @@ def _fallback_answer(ctx: _RunContext, *, gap: str) -> Answered:
             reframed=False,
             reframe_reason=None,
         ),
-        gaps=[gap, "core sub-questions were unresolved when the call ended"],
-        provenance=sorted(ctx.collected_ids),
+        gaps=[gap, "core sub-questions were unresolved when the call ended"]
+        + (
+            ["Retrieved context was truncated; some evidence was omitted."]
+            if ctx.evidence.omitted
+            else []
+        )
+        + (["No statement evidence was supplied."] if not ctx.evidence.ids else []),
+        provenance=sorted(ctx.evidence.ids),
         trace=trace_dict,
     )
 
@@ -479,10 +668,17 @@ def _build_trace(ctx: _RunContext, outcome: str) -> dict:
     record = trace.build(
         outcome=outcome,
         latency_ms=latency_ms,
-        floor=_floor_state(ctx.ops_after_recon),
+        floor=_floor_state(ctx),
         input_per_mtok=config.input_per_mtok,
         output_per_mtok=config.output_per_mtok,
     )
+    record["evidence_refs"] = dict(ctx.evidence.by_ref)
+    record["supplied_context_chars"] = ctx.evidence.supplied_chars
+    if outcome in {"answered", "needs_clarification"}:
+        ctx.stream.timings["completion_ms"] = round(
+            (time.monotonic() - ctx.stream.started) * 1000, 2
+        )
+    record["stream_timing_ms"] = dict(ctx.stream.timings)
     tracing.emit_trace(
         trace.spans,
         kind="ask",
@@ -498,23 +694,15 @@ def _build_trace(ctx: _RunContext, outcome: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-def _floor_state(ops_after_recon: list[str]) -> dict:
-    """The structural anti-premature-closure floor.
-
-    Satisfied requires: recon ran (always, by construction), at least one
-    targeted post-recon retrieval, and at least one semantic-adjacency
-    re-search that is NOT the first post-recon move (i.e. the model retrieved,
-    then came back and re-searched on gathered concepts).
-    """
-    targeted = len(ops_after_recon)
-    adjacency = sum(
-        1 for i in range(1, len(ops_after_recon)) if ops_after_recon[i] in _SEARCH_TOOLS
-    )
+def _floor_state(ctx: _RunContext) -> dict:
+    targeted = len(ctx.ops_after_recon)
+    adjacency = sum(check.adjacency for check in ctx.ops_after_recon)
+    recon_ok = bool(ctx.trace.tool_calls and ctx.trace.tool_calls[0].ok)
     return {
-        "recon": True,
+        "recon": recon_ok,
         "targeted_retrievals": targeted,
         "adjacency_research": adjacency,
-        "satisfied": targeted >= 1 and adjacency >= 1,
+        "satisfied": recon_ok and targeted >= 1 and adjacency >= 1,
     }
 
 
@@ -537,6 +725,7 @@ def _model_turn(
     tools: Sequence[Mapping[str, object]],
     *,
     force: bool,
+    deltas: AnswerDeltas,
 ) -> ai.ModelResponse:
     return ai.turn(
         ai.ToolTask(
@@ -545,6 +734,8 @@ def _model_turn(
             tools=tools,
             force_tool=SUBMIT_TOOL if force else None,
             parallel_tools=not force,
+            on_tool_delta=deltas.receive if deltas.stream.emit else None,
+            check_cancel=deltas.stream.check,
         ),
         ai.ModelConfig(
             provider=config.provider,
@@ -560,14 +751,8 @@ def _model_turn(
     )
 
 
-def _tool_uses(resp: Any) -> list[Any]:
-    """Every tool_use block in the response, in order. With parallel tool use a
-    single turn can carry more than one."""
-    return [
-        block
-        for block in getattr(resp, "content", None) or []
-        if getattr(block, "type", None) == "tool_use"
-    ]
+def _tool_uses(resp: ai.ModelResponse) -> list[ai.ToolUse]:
+    return [block for block in resp.content if isinstance(block, ai.ToolUse)]
 
 
 def _tool_result_block(

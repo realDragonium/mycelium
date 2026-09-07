@@ -95,22 +95,9 @@ def _submit_input(**over):
     data = {
         "answer": "Because the worker retries once on a transient embed failure.",
         "confidence": "high",
-        "interpretation": {
-            "as_asked": "the question",
-            "resolved_to": "the question",
-            "reframed": False,
-            "reframe_reason": None,
-        },
-        "sub_questions": [
-            {
-                "sub_question": "what triggers retry",
-                "status": "resolved",
-                "note": "found",
-            }
-        ],
-        "adjacency_note": "Re-searched on 'retry'/'embed' concepts; nothing new surfaced.",
+        "interpretation": None,
         "gaps": [],
-        "provenance": ["stm_1"],
+        "provenance": ["s1"],
     }
     data.update(over)
     return data
@@ -135,7 +122,11 @@ def _clarify_input(**over):
 def _run(responses, results=None, *, question="why does it retry?", **config_over):
     client = FakeAnthropic(responses)
     substrate = FakeSubstrate(
-        results or {"survey_statements": [{"id": "stm_1", "text": "x"}]}
+        results
+        or {
+            "survey_statements": [{"id": "stm_1", "text": "retry"}],
+            "search_statements": [{"id": "stm_1", "text": "retry"}],
+        }
     )
     cfg = AskConfig(thinking=True, trace_log_path=None, **config_over)
     result = run_ask(question, client=client, substrate=substrate, config=cfg)
@@ -152,7 +143,12 @@ def test_well_formed_question_returns_answered_with_provenance_and_confidence():
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
         _message(
-            [_tool_use("survey_statements", {"query": "embed retry"})]
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "embed retry", "adjacency_sources": ["s1"]},
+                )
+            ]
         ),  # adjacency
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
@@ -170,14 +166,19 @@ def test_well_formed_question_returns_answered_with_provenance_and_confidence():
 def test_misframed_but_resolvable_returns_reframed_answer():
     """#2 — answered with interpretation.reframed True and a reason."""
     reframed_interp = {
-        "as_asked": "how do I disable the cache?",
         "resolved_to": "how the cache invalidates (there is no disable switch)",
-        "reframed": True,
-        "reframe_reason": "no disable capability exists; the real goal is invalidation",
+        "reason": "no disable capability exists; the real goal is invalidation",
     }
     responses = [
         _message([_tool_use("search_statements", {"query": "cache"})]),
-        _message([_tool_use("survey_statements", {"query": "cache invalidate"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "cache invalidate", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message(
             [_tool_use("submit_answer", _submit_input(interpretation=reframed_interp))]
         ),
@@ -216,7 +217,13 @@ def test_clarification_with_too_few_candidates_is_reprompted():
         ),
         # after the re-prompt, the model retrieves and answers instead
         _message([_tool_use("search_statements", {"query": "x"})]),
-        _message([_tool_use("survey_statements", {"query": "x adj"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements", {"query": "x adj", "adjacency_sources": ["s1"]}
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     result, client, _sub = _run(responses)
@@ -231,14 +238,13 @@ def test_absent_subject_returns_low_confidence_with_absence_gap_no_fabrication()
         confidence="low",
         provenance=[],
         gaps=["'kafka' returned zero results — not found in the substrate"],
-        adjacency_note="Re-searched gathered concepts; still nothing.",
     )
     responses = [
         _message([_tool_use("search_statements", {"query": "kafka"})]),
         _message([_tool_use("survey_statements", {"query": "kafka queue"})]),
         _message([_tool_use("submit_answer", submit)]),
     ]
-    result, _client, _sub = _run(responses, results=results)
+    result, _client, _sub = _run(responses, results=results, op_cap=3)
 
     assert isinstance(result, Answered)
     assert result.confidence == "low"
@@ -251,7 +257,14 @@ def test_floor_prevents_premature_conclusion():
         # premature: no retrieval yet -> floor must block this
         _message([_tool_use("submit_answer", _submit_input(), id="early")]),
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "retry adj"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "retry adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input(), id="real")]),
     ]
     result, client, substrate = _run(responses)
@@ -301,21 +314,10 @@ def test_quick_depth_tool_defs_drop_the_adjacency_requirement():
         if t["name"] == "submit_answer"
     )
 
-    # floor-on: unchanged — still demands the re-search in both the tool
-    # description and the adjacency_note field.
     assert "adjacency re-search" in floor["description"]
-    assert (
-        "loop will"
-        in floor["input_schema"]["properties"]["adjacency_note"]["description"]
-    )
-
-    # quick: neither the description nor the field claims it's required/gating.
-    quick_note = quick["input_schema"]["properties"]["adjacency_note"]["description"]
     assert "no adjacency re-search is required in quick mode" in quick["description"]
-    assert "OPTIONAL in quick mode" in quick_note
-    assert "loop will" not in quick_note
-    # still a required schema field in both modes (model must fill it)
-    assert "adjacency_note" in quick["input_schema"]["required"]
+    assert floor["input_schema"] == quick["input_schema"]
+    assert "adjacency_note" not in quick["input_schema"]["properties"]
 
 
 def test_quick_depth_config_drops_floor_and_tightens_caps():
@@ -426,7 +428,7 @@ def test_fallback_provenance_excludes_read_ids_cut_by_serialization():
     result, _client, _sub = _run(responses, results=results, op_cap=2)
 
     assert isinstance(result, Answered)
-    assert kept_id in result.provenance
+    assert kept_id not in result.provenance  # an incomplete statement is not evidence
     assert cut_id not in result.provenance
 
 
@@ -454,7 +456,7 @@ def test_fallback_provenance_rejects_cut_id_sharing_surviving_prefix():
     result, _client, _sub = _run(responses, results=results, op_cap=2)
 
     assert isinstance(result, Answered)
-    assert kept_id in result.provenance
+    assert kept_id not in result.provenance  # an incomplete statement is not evidence
     assert cut_id not in result.provenance
 
 
@@ -510,7 +512,14 @@ def test_trace_record_is_complete():
     """#7 — every run emits one complete machine-readable trace."""
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "retry adj"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "retry adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     result, _client, _sub = _run(responses)
@@ -540,7 +549,10 @@ def test_trace_record_is_complete():
     assert trace["tool_calls"][0]["counts_as_op"] is True
     assert trace["op_count"] >= 3  # recon + search + survey
     assert trace["tokens"]["total"] > 0
-    assert trace["sub_question_ledger"]  # ledger captured from the submit
+    assert (
+        trace["sub_question_ledger"] == []
+    )  # compatibility field, no generated ledger
+    assert trace["adjacency_note"] == "1 grounded adjacency searches completed"
     # trace must be JSON-serialisable (it's the eval-harness record)
     json.dumps(trace)
 
@@ -550,7 +562,14 @@ def test_trace_written_to_jsonl_file(tmp_path):
     log = tmp_path / "ask_trace.jsonl"
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "retry adj"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "retry adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     client = FakeAnthropic(responses)
@@ -569,7 +588,14 @@ def test_malformed_submit_is_reprompted_then_degrades():
     bad = _submit_input(confidence="excellent")  # not in the enum
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "retry adj"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "retry adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", bad)]),
         _message([_tool_use("submit_answer", bad)]),  # still bad after re-prompt
     ]
@@ -601,7 +627,14 @@ def test_interleaved_text_turn_does_not_prematurely_degrade():
         _message(
             [_text("hmm, one more thought")], stop="end_turn"
         ),  # nudge again, not doom
-        _message([_tool_use("survey_statements", {"query": "retry adj"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "retry adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     result, _client, _sub = _run(responses)
@@ -634,8 +667,22 @@ def test_substrate_read_failure_is_surfaced_not_fabricated():
     }
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),  # fails
-        _message([_tool_use("survey_statements", {"query": "retry adj"})]),
-        _message([_tool_use("survey_statements", {"query": "more adj"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "retry adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "more adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     result, _client, _sub = _run(responses, results=results)
@@ -799,6 +846,7 @@ def test_the_inner_loop_is_offered_exactly_the_domain_readers():
         "find_entity_duplicates",
         "find_statement_connections",
         "get_entity",
+        "retrieve_context",
         "get_mention_candidates",
         "get_statements",
         "grep_statements",
@@ -832,7 +880,14 @@ def test_caching_marks_static_and_rolling_breakpoints():
     breakpoint on the end of the conversation so turns 2..N read from cache."""
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "embed retry"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "embed retry", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     _result, client, _sub = _run(responses, cache=True)
@@ -867,7 +922,14 @@ def test_trace_records_per_phase_and_per_turn_timings():
     the flamegraph."""
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "embed retry"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "embed retry", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     result, _client, _sub = _run(responses)
@@ -885,7 +947,14 @@ def test_adaptive_turns_allow_parallel_tool_use():
     (which forces a single tool) disables it."""
     responses = [
         _message([_tool_use("search_statements", {"query": "retry"})]),
-        _message([_tool_use("survey_statements", {"query": "embed retry"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "embed retry", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     _result, client, _sub = _run(responses)
@@ -908,7 +977,11 @@ def test_parallel_reads_in_one_turn_all_get_results():
             [
                 _tool_use("search_statements", {"query": "retry"}, id="a"),
                 _tool_use("get_statements", {"ids": ["stm_3"]}, id="b"),
-                _tool_use("survey_statements", {"query": "embed retry"}, id="c"),
+                _tool_use(
+                    "survey_statements",
+                    {"query": "embed retry", "adjacency_sources": ["s1"]},
+                    id="c",
+                ),
             ]
         ),
         _message([_tool_use("submit_answer", _submit_input())]),

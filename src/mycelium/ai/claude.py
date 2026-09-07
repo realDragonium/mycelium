@@ -236,11 +236,15 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         }
     if config.thinking and not task.force_tool:
         request["thinking"] = {"type": "adaptive"}
-    response = _Response.model_validate(
-        client.with_options(
-            timeout=config.request_timeout_s, max_retries=config.max_retries
-        ).messages.create(**request)
+    configured = client.with_options(
+        timeout=config.request_timeout_s, max_retries=config.max_retries
     )
+    if task.on_tool_delta is not None:
+        if not isinstance(configured, Anthropic):
+            raise ModelError("Streaming Claude turns require an Anthropic transport")
+        response = _stream_turn(task, request, configured)
+    else:
+        response = _Response.model_validate(configured.messages.create(**request))
     if response.stop_reason not in ("end_turn", "tool_use"):
         raise ModelError("Claude response was incomplete or unsuccessful")
     output = [_block(block) for block in response.content]
@@ -261,6 +265,33 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         usage=response.usage,
         stop_reason=response.stop_reason,
     )
+
+
+def _stream_turn(task: ToolTask, request: _Request, client: Anthropic) -> _Response:
+    calls: dict[int, tuple[str, str]] = {}
+    stopped = False
+    with client.messages.stream(**request) as stream:
+        for event in stream:
+            if task.check_cancel:
+                task.check_cancel()
+            if event.type == "message_stop":
+                stopped = True
+            if (
+                event.type == "content_block_start"
+                and event.content_block.type == "tool_use"
+            ):
+                block = event.content_block
+                calls[event.index] = (block.id, block.name)
+            elif (
+                event.type == "content_block_delta"
+                and event.delta.type == "input_json_delta"
+            ):
+                identity = calls.get(event.index)
+                if identity and task.on_tool_delta:
+                    task.on_tool_delta(*identity, event.delta.partial_json)
+        if not stopped:
+            raise ModelError("Claude stream ended without a completed response")
+        return _Response.model_validate(stream.get_final_message())
 
 
 def turn(
