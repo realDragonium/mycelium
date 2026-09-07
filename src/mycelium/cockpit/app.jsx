@@ -180,7 +180,7 @@ function App() {
     case 'research': screen = <ResearchSurface key="research" />; break;
     case 'names': screen = <NamesWorkspace onDataChanged={refreshData} />; break;
     case 'documentation': screen = <DocumentationWorkspace />; break;
-    case 'coverage': screen = <CoverageScreen />; break;
+    case 'gaps': screen = <KnowledgeGapsScreen />; break;
     case 'drafts': screen = <DraftsList />; break;
     case 'draft': screen = <DraftReview id={router.id} />; break;
     case 'statement': screen = <StatementDetail id={router.id} />; break;
@@ -192,7 +192,7 @@ function App() {
 
   return (
     <RouterCtx.Provider value={router}>
-      <div className={`shell${['documentation', 'names'].includes(router.view) ? ' documentation-shell' : ''}`}>
+      <div className={`shell${['documentation', 'names', 'gaps'].includes(router.view) ? ' documentation-shell' : ''}`}>
         <header className="topbar">
           <div className="topbar-inner">
             <div className="brand" onClick={() => router.go({ view: 'landing' })}>
@@ -201,7 +201,7 @@ function App() {
               <span className="brand-tag">cockpit</span>
             </div>
             <div className="topbar-spacer" />
-            <button className={`nav-btn${router.view === 'coverage' ? ' on' : ''}`} onClick={() => router.go({ view: 'coverage' })}><I.gap width="15" height="15" />Coverage{window.MYCELIUM_COVERAGE && window.MYCELIUM_COVERAGE.summary.gaps > 0 && <span className="nb-badge">{window.MYCELIUM_COVERAGE.summary.gaps}</span>}</button>
+            <button className={`nav-btn${router.view === 'gaps' ? ' on' : ''}`} onClick={() => router.go({ view: 'gaps' })}><I.gap width="15" height="15" />Knowledge gaps</button>
             <button className={`drafts-btn${openDrafts ? ' has-open' : ''}`} onClick={() => router.go({ view: 'drafts' })}><I.prov width="15" height="15" />Drafts{openDrafts > 0 && <span className="db-badge">{openDrafts}</span>}</button>
             <button className={`nav-btn${router.view === 'research' ? ' on' : ''}`} onClick={() => router.go({ view: 'research' })}><I.find width="15" height="15" />Research</button>
             <button className={`nav-btn${router.view === 'names' ? ' on' : ''}`} onClick={() => router.go({ view: 'names' })}>Names &amp; aliases</button>

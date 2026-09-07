@@ -21,7 +21,7 @@
 //   POST /get-research-run              — one research run by id
 //   GET  /list-research-sources         — configured research sources
 //   GET/POST/PATCH/DELETE /api/drafts/* — draft spine
-//   GET  /api/knowledge-gaps            — reported gaps (Coverage)
+//   GET  /api/knowledge-gaps            — reported knowledge gaps
 
 (function () {
   // Kinds carry no `layer` over the wire, but the layer split is a stable part
@@ -378,6 +378,7 @@
       withdraw: (id) => post('/api/drafts/' + encodeURIComponent(id) + '/withdraw'),
     },
     knowledgeGaps: (status) => get('/api/knowledge-gaps?status=' + encodeURIComponent(status || 'open')),
+    updateKnowledgeGap: (id, action) => http('PATCH', '/api/knowledge-gaps/' + encodeURIComponent(id), { action }),
     // Vocabulary edits that make the matcher derive new mentions. Creating an
     // entity or attaching an alias enqueues a recompute-scan server-side, so any
     // existing statement whose text contains the new name picks up the mention
