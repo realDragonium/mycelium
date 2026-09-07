@@ -37,12 +37,13 @@ continue. Statement wording is never rewritten by a vocabulary edit.
   can remain without names and will then be displayed by its identifier.
 
 Generated plurals follow their source name and cannot be independently moved,
-removed, or selected as preferred names. New concepts use their first authored name for display. Existing concepts retain
-their previous display name when migrated, even when that name was a generated
-plural. Adding an alias does not rename the concept. Moving or deleting a preferred
-name selects and retains a remaining authored name, or another remaining name if
-no authored name remains. Bare concepts have no preference.
-Existing name and entity readers use the preferred name consistently.
+removed, or selected as preferred names. New concepts use their first authored
+name for display. Existing concepts receive a stable preference using the existing
+case-insensitive name ordering, even when that name is a generated plural. Adding
+an alias does not rename the concept. Moving or deleting a preferred name selects
+and retains a remaining authored name, or another remaining name if no authored
+name remains. Bare concepts have no preference. Existing name and entity readers
+use the preferred name consistently.
 
 Moving a name to a different concept or correcting its spelling does not carry
 historical per-occurrence approvals into the new interpretation. Those decisions
@@ -50,8 +51,8 @@ are archived in change history before they are invalidated. Merging equivalent
 concepts preserves those decisions.
 
 Preferred-name references are included in substrate backups. Older archives
-without a preference restore with their previous alphabetical display name. The reference is a
-deferred foreign key so an archive can restore entities before their names in one
+without a preference restore using the same case-insensitive ordering. The
+reference is a deferred foreign key so an archive can restore entities before their names in one
 transaction.
 
 ## API
