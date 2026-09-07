@@ -32,6 +32,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import (
+    ai_prompts,
     alias_suggestions,
     auth,
     connect_page,
@@ -1275,8 +1276,32 @@ def ai_instructions_http(request: Request) -> dict[str, object]:
     principal = _require_principal(request)
     return {
         "names": documentation_profiles.INSTRUCTIONS,
+        "actions": [
+            {"name": name, "title": ai_prompts.TITLES[name]}
+            for name in ai_prompts.ACTIONS
+        ],
         "can_write": auth.principal_has_real_role(principal, "writer"),
     }
+
+
+@app.get("/api/ai-instructions/{action}")
+def ai_instruction_http(
+    action: ai_prompts.Action, request: Request
+) -> ai_prompts.EditorView:
+    _require_principal(request)
+    return ai_prompts.editor(action)
+
+
+class PromptPreviewBody(BaseModel):
+    text: str = PydField(max_length=100000)
+
+
+@app.post("/api/ai-instructions/{action}/preview")
+def ai_instruction_preview_http(
+    action: ai_prompts.Action, body: PromptPreviewBody, request: Request
+) -> dict[str, str]:
+    _require_principal(request)
+    return {"preview": ai_prompts.preview(action, body.text)}
 
 
 @app.get("/api/product-settings")

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from pydantic import JsonValue, TypeAdapter
 
 from . import (
+    ai_prompts,
     auth,
     draft_review_model,
     draft_review_settings,
@@ -107,7 +108,9 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
         ).fetchone()
         if active:
             return draft_review_store.get(conn, active["id"])
+        instructions = ai_prompts.resolve("draft_review")
         run = draft_review_store.new(draft_id, settings.mode, int(row["revision"]))
+        run.prompt = instructions.reference()
         run.provider = settings.provider
         run.model = settings.model
         run.reasoning_effort = settings.reasoning_effort
@@ -128,7 +131,7 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
         run.knowledge_preconditions = inspection["knowledge_preconditions"]
         _save(run)
         future = _executor.submit(
-            context.run, _execute, run, inspection, settings, limits
+            context.run, _execute, run, inspection, settings, limits, instructions
         )
         _futures[run.run_id] = future
         future.add_done_callback(lambda _: _futures.pop(run.run_id, None))
@@ -239,6 +242,7 @@ def _execute(
     inspection: DraftReviewInspection,
     settings: draft_review_settings.Snapshot,
     limits: product_settings.ReviewSettings | None = None,
+    instructions: ai_prompts.Snapshot | None = None,
 ) -> None:
     from . import server  # local import: server registers the review tools
 
@@ -247,7 +251,9 @@ def _execute(
         auth.current_principal.set(principal)
         with server.model_loop_slot():
             context, reads = _context(inspection)
-            result = _assess(context, inspection, settings, limits)
+            instructions = instructions or ai_prompts.resolve("draft_review")
+            run.prompt = instructions.reference()
+            result = _assess(context, inspection, settings, limits, instructions)
         draft_review_model.validate_assessment(result)
         _validate_corrections(result, inspection)
         run.label = result.label
@@ -276,6 +282,7 @@ def _assess(
     inspection: DraftReviewInspection,
     settings: draft_review_settings.Snapshot,
     limits: product_settings.ReviewSettings | None = None,
+    instructions: ai_prompts.Snapshot | None = None,
 ) -> Assessment:
     ops = inspection["draft"].get("ops")
     if not isinstance(ops, list):
@@ -306,6 +313,7 @@ def _assess(
         provider=settings.provider,
         limits=limits,
         reasoning_effort=settings.reasoning_effort,
+        instructions=instructions,
     )
 
 

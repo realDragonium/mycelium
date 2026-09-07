@@ -126,6 +126,23 @@ following the chain and on concept-seeded re-search, not on repeating \
 near-identical queries."""
 
 
+DEFAULT_REVIEW_INSTRUCTIONS = """Every finding names WHERE — a section heading or a quoted phrase — and WHAT \
+failed. A finding the writer cannot locate cannot be fixed. Fail only on \
+something you can point at; unease is not a finding.
+
+THE FINDINGS LIST IS NOT A NOTEPAD. Anything you put in it rejects this \
+document, whatever status you set alongside it: findings are the evidence and \
+the label is not, so a check carrying findings fails. Write a finding ONLY for \
+something that must change. Never record what you examined and accepted, why a \
+borderline case is acceptable, or that a check turned up nothing — a line \
+saying "this passes" or "no finding on this point" throws the document away as \
+surely as a real defect does.
+
+A check with nothing to fix reports zero findings. Passing a document you have \
+doubts about is a decision; padding the findings list to look diligent sends a \
+correct document back for no reason and spends the run's one retry."""
+
+
 _REVIEW_PROTOCOL = """\
 You are reviewing ONE finished document that another context wrote. You did \
 not write it, and you are deliberately not being shown how it was produced: \
@@ -140,21 +157,7 @@ material the document was standing on when it revealed something, and \
 whether a required section is populated or padded — not so you can verify \
 the product's behaviour. Do not fail a claim for being unfamiliar.
 
-Every finding names WHERE — a section heading or a quoted phrase — and WHAT \
-failed. A finding the writer cannot locate cannot be fixed. Fail only on \
-something you can point at; unease is not a finding.
-
-THE FINDINGS LIST IS NOT A NOTEPAD. Anything you put in it rejects this \
-document, whatever status you set alongside it: findings are the evidence and \
-the label is not, so a check carrying findings fails. Write a finding ONLY for \
-something that must change. Never record what you examined and accepted, why a \
-borderline case is acceptable, or that a check turned up nothing — a line \
-saying "this passes" or "no finding on this point" throws the document away as \
-surely as a real defect does.
-
-A check with nothing to fix reports zero findings. Passing a document you have \
-doubts about is a decision; padding the findings list to look diligent sends a \
-correct document back for no reason and spends the run's one retry.
+{instructions}
 
 Call `record_review` exactly once."""
 
@@ -219,6 +222,7 @@ def build_system_prompt(
 
 def build_review_system_prompt(
     *,
+    instructions: str = DEFAULT_REVIEW_INSTRUCTIONS,
     guideline_set: str,
     document_type: str,
     exposure: str | None,
@@ -245,7 +249,7 @@ def build_review_system_prompt(
             "below and the content expectations of a "
             f"`{document_type}`? Report that check separately."
         )
-    parts = [_REVIEW_PROTOCOL.format(checks=checks)]
+    parts = [_REVIEW_PROTOCOL.format(checks=checks, instructions=instructions)]
     if exposure_text:
         parts.append(
             f"\n\n=== `{guideline_set}` EXPOSURE RULES ===\n"

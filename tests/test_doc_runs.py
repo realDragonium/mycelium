@@ -616,8 +616,12 @@ def test_the_default_runner_is_the_generation_loop(tmp_path, monkeypatch):
         load_current_document=None,
         revision_target=None,
         profiles=None,
+        instructions=None,
+        review_instructions=None,
     ):
         assert config.provider == "claude"
+        assert instructions.action == "docgen"
+        assert review_instructions.action == "document_review"
         seen.update(
             prompt=prompt, guideline_set=guideline_set, document_type=document_type
         )

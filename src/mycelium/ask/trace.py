@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import JsonValue
 
-from .. import agentloop
+from .. import agentloop, ai_prompts
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
 from ..ai import Provider
 from ..tracing import SpanRecorder
@@ -29,6 +29,7 @@ class TraceBuilder:
     op_cap: int
     wall_clock_s: float
     provider: Provider = "claude"
+    prompts: list[ai_prompts.Reference] = field(default_factory=list)
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
     op_count: int = 0
     model_turns: int = 0
@@ -102,6 +103,7 @@ class TraceBuilder:
             "question": self.question,
             "model": self.model,
             "provider": self.provider,
+            "prompts": [prompt.model_dump(mode="json") for prompt in self.prompts],
             "outcome": outcome,
             "op_count": self.op_count,
             "op_cap": self.op_cap,

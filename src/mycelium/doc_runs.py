@@ -28,7 +28,7 @@ import sqlite3
 import threading
 from typing import TYPE_CHECKING, Any, Callable
 
-from . import docs_store, product_settings, prompt_store
+from . import ai_prompts, docs_store, product_settings, prompt_store
 from .docgen.config import DocgenConfig, Provider
 from .docgen.destinations import DestinationConfig, load_destinations
 from .docgen.schema import CurrentDocument, ExistingDocument, RevisionTarget
@@ -62,6 +62,8 @@ def start_run(
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
     selected_runner = runner or RUNNER or _default_runner
     config = DocgenConfig.from_env(provider=provider)
+    instructions = ai_prompts.resolve("docgen", default_path=config.doctrine_path)
+    review_instructions = ai_prompts.resolve("document_review")
     if not config.model:
         raise ValueError(
             f"Choose a {config.provider} documentation model in AI settings."
@@ -156,6 +158,8 @@ def start_run(
                     target,
                     profiles,
                     match_existing,
+                    instructions,
+                    review_instructions,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -231,6 +235,8 @@ def _default_runner(
     config: DocgenConfig | None = None,
     revision_target: RevisionTarget | None = None,
     profiles: CatalogueSnapshot | None = None,
+    instructions: ai_prompts.Snapshot | None = None,
+    review_instructions: ai_prompts.Snapshot | None = None,
 ) -> Any:
     """The real generation loop.
 
@@ -250,6 +256,8 @@ def _default_runner(
         load_current_document=load_current_document,
         revision_target=revision_target,
         profiles=profiles,
+        instructions=instructions,
+        review_instructions=review_instructions,
     )
 
 
@@ -265,6 +273,8 @@ def _execute_run(
     revision_target: RevisionTarget | None = None,
     profiles: CatalogueSnapshot | None = None,
     match_existing: bool = True,
+    instructions: ai_prompts.Snapshot | None = None,
+    review_instructions: ai_prompts.Snapshot | None = None,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -303,6 +313,8 @@ def _execute_run(
                     else (),
                     revision_target=revision_target,
                     profiles=profiles,
+                    instructions=instructions,
+                    review_instructions=review_instructions,
                     load_current_document=lambda document_id: _load_current_document(
                         conn, document_id, destinations
                     ),

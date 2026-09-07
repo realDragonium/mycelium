@@ -3,7 +3,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from mycelium import ai, auth, drafts_store, model_settings, server, store
+from mycelium import ai, auth, drafts_store, model_settings, prompt_store, server, store
 from mycelium import alias_suggestions as aliases
 from mycelium.ingest.draft import InProcessDraftEmitter
 from test_reviewed_application import _app
@@ -215,6 +215,12 @@ def test_manual_scan_uses_independent_model_and_rejects_external_evidence(
             ),
             auth.LOCAL_ADMIN,
         )
+        prompt_store.save(
+            prompt_store.connection(),
+            type="doctrine",
+            name="alias_discovery",
+            text="Look for explicit equivalence.",
+        )
         seen = []
 
         def fake_structured(task, config):
@@ -227,6 +233,12 @@ def test_manual_scan_uses_independent_model_and_rejects_external_evidence(
         )
         assert response.status_code == 200, response.text
         entry = aliases.Entry.model_validate(response.json()["suggestions"][0])
+        assert entry.suggestion.prompt.version == 1
+        assert "Look for explicit equivalence." in seen[0][0].system
+        assert (
+            "Every suggestion requires an individual human decision"
+            in seen[0][0].system
+        )
         assert entry.suggestion.status == "pending"
         assert entry.suggestion.model == "gpt-fixture"
         assert seen[0][1].provider == "openai"

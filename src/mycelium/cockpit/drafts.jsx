@@ -481,6 +481,7 @@ function DraftReview({ id }) {
 function DraftsList() {
   const router = useRouter();
   const drafts = useMycDrafts();
+  const [filter, setFilter] = useStateD(/** @type {'active' | 'completed' | 'all'} */ ('active'));
   useEffectD(() => {
     if (!draftsInFlight) refreshDrafts();
   }, []);
@@ -499,6 +500,17 @@ function DraftsList() {
   const open = sorted.filter(d => d.status === 'open');
   const submitted = sorted.filter(d => d.status === 'submitted');
   const pendingOps = open.reduce((n, d) => n + (d.opCount || 0), 0);
+  const activeCount = open.length + submitted.length;
+  const shown = sorted.filter(d => {
+    const active = d.status === 'open' || d.status === 'submitted';
+    return filter === 'all' || (filter === 'active' ? active : !active);
+  });
+  /** @type {ReadonlyArray<{id: 'active' | 'completed' | 'all', label: string, count: number}>} */
+  const filters = [
+    { id: 'active', label: 'Active', count: activeCount },
+    { id: 'completed', label: 'Completed', count: sorted.length - activeCount },
+    { id: 'all', label: 'All', count: sorted.length },
+  ];
 
   return (
     <main className="page narrow">
@@ -518,9 +530,22 @@ function DraftsList() {
         <div className="ds-cell"><div className="ds-n">{submitted.length}</div><div className="ds-l">awaiting curator</div></div>
       </div>
 
-      {sorted.length === 0 ? <div style={{ marginTop: 24 }}><EmptyState title="No drafts yet" blurb="Ingest raw text or author a statement — every change stages here as a draft before it reaches the substrate." /></div> : (
+      <div className="draft-filters" role="group" aria-label="Filter drafts">
+        {filters.map(item => (
+          <button key={item.id} className={`fchip${filter === item.id ? ' on' : ''}`}
+            aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>
+            {item.label}<span className="fc-ct">{item.count}</span>
+          </button>
+        ))}
+      </div>
+
+      {sorted.length === 0 ? <div style={{ marginTop: 24 }}><EmptyState title="No drafts yet" blurb="Ingest raw text or author a statement — every change stages here as a draft before it reaches the substrate." /></div> : shown.length === 0 ? (
+        <EmptyState title={`No ${filter} drafts`} blurb={filter === 'active'
+          ? 'No open or submitted drafts. Choose Completed or All to see closed drafts.'
+          : 'Approved, rejected, and withdrawn drafts will appear here.'} />
+      ) : (
         <div className="draft-list">
-          {sorted.map(d => (
+          {shown.map(d => (
             <div key={d.id} className="draft-row" onClick={() => router.go({ view: 'draft', id: d.id })}>
               <span className={`dr-dot ${d.status}`} />
               <div className="dr-body">

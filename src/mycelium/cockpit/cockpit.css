@@ -843,3 +843,14 @@ footer.foot b { color: var(--ink-3); font-weight: 500; }
   .reveal-2 { animation: reveal 0.4s cubic-bezier(0.2,0.7,0.2,1) 0.06s both; }
   .reveal-3 { animation: reveal 0.4s cubic-bezier(0.2,0.7,0.2,1) 0.12s both; }
 }
+
+
+/* Shared navigation and compact buttons. */
+.btn-sm { display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; border: 1px solid var(--line); background: var(--bg-1); color: var(--ink-3); transition: all 0.12s; }
+.btn-sm:hover { border-color: var(--line-strong); color: var(--ink); }
+.btn-sm.find { color: var(--cyan); border-color: var(--cyan-line); background: var(--cyan-bg); }
+.btn-sm.find:hover { background: var(--cyan-bg-2); }
+.btn-sm.warn { color: var(--warn); border-color: color-mix(in oklab, var(--warn) 42%, var(--line)); background: var(--warn-bg); }
+.nav-btn { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: var(--r-md); font-weight: 500; font-size: var(--fs-sm); color: var(--ink-2); border: 1px solid transparent; background: transparent; transition: all 0.12s; white-space: nowrap; }
+.nav-btn:hover { color: var(--ink); background: var(--bg-2); }
+.nav-btn.on { color: var(--bio); border-color: var(--bio-line); background: var(--bio-bg); }

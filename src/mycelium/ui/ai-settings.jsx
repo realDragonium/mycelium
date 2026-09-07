@@ -239,6 +239,7 @@ function AISettings() {
     return () => { cancelled = true; };
   }, [retry]);
   return <div>
+    <AIInstructions />
     <p style={{ color: 'var(--ink-3)', fontSize: 13, lineHeight: 1.5 }}>Choose the provider and model for each action independently. Saved choices apply to new runs. API credentials stay on the server; model access is checked when a run starts.</p>
     {error ? <div><p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p><button onClick={() => setRetry(value => value + 1)}>Reload AI settings</button></div>
       : !data ? <p>Loading AI settings…</p>
@@ -246,7 +247,6 @@ function AISettings() {
     <DraftReviewSettings />
     <ProductSettings />
     <DocumentationProfiles />
-    <AIInstructions />
   </div>;
 }
 

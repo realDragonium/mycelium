@@ -9,7 +9,7 @@ from pydantic import JsonValue, TypeAdapter
 import test_ask as ask_fixtures
 import test_ingest as ingest_fixtures
 import test_research as research_fixtures
-from mycelium import ai, research, research_runs
+from mycelium import ai, ai_prompts, prompt_store, research, research_runs
 from mycelium.ask import run_ask
 from mycelium.ask.config import AskConfig
 from mycelium.ask.schema import Answered
@@ -169,9 +169,15 @@ def test_research_worker_keeps_model_selected_at_admission(monkeypatch, tmp_path
     observed: list[ResearchConfig] = []
 
     def run(
-        topic: str, source: str | None, *, config: ResearchConfig, emitter: DraftEmitter
+        topic: str,
+        source: str | None,
+        *,
+        config: ResearchConfig,
+        emitter: DraftEmitter,
+        instructions: ai_prompts.Snapshot,
     ) -> NothingFound:
         observed.append(config)
+        assert instructions.text == "admitted research instructions"
         return NothingFound(reason="fixture", topic=topic)
 
     monkeypatch.setattr(research, "run_research", run)
@@ -187,7 +193,19 @@ def test_research_worker_keeps_model_selected_at_admission(monkeypatch, tmp_path
             )
         )
     )
+    prompt_store.save(
+        prompt_store.connection(),
+        type="doctrine",
+        name="research",
+        text="admitted research instructions",
+    )
     runner = research_runs._default_runner(str(tmp_path), "fixture")
+    prompt_store.save(
+        prompt_store.connection(),
+        type="doctrine",
+        name="research",
+        text="later instructions",
+    )
     save_model("research", openai_model="changed-model")
     runner("topic", source="fixture")
     assert observed[0].provider == "openai"

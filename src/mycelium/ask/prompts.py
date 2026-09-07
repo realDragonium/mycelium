@@ -11,31 +11,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-SYSTEM_PROMPT = """\
+DEFAULT_INSTRUCTIONS = """\
 You resolve a question against a knowledge substrate and are HONEST ABOUT \
 UNCERTAINTY. The caller is itself an AI consuming your structured output, so \
 precision and explicit gaps matter more than fluency.
-
-THE SUBSTRATE
-- It holds atomic `statement`s (kinds like event/state/capability/rule/property \
-and prescriptive procedure/action/check/cause). Statements carry typed `links` \
-to other statements (each `{link_type, to_id, when?}`) and `mentions` \
-of named entities.
-- Preserve stored edge direction and full conditions, including AND/OR/NOT.
-  Fetch condition leaf statements when their meaning matters. Incoming links
-  and condition references do not reverse the original edge.
-- Follow statement links by passing linked to_id/from_id values to get_statements.
-  retrieve_context also follows one bounded frontier, including condition leaves.
-  Statement IDs start with stm_; entity IDs start with ent_ and use get_entity.
-- The link/kind vocabularies are open and grow. If a link_type or kind is \
-unfamiliar, look it up with `list_link_types` / `list_entity_link_types` / \
-`list_statement_kinds` rather than guessing its meaning.
-
-YOUR TOOLS
-You are given the substrate's read primitives as tools (search_statements, \
-survey_statements, get_statements, get_entity, grep_statements, the list_* and \
-glossary tools, and more). Use them freely. You finish by calling exactly ONE \
-terminal tool: `submit_answer` or `request_clarification`.
 
 THE LOOP
 0. RECON has already run: a wide `survey_statements` map of the question is in \
@@ -59,6 +38,42 @@ THE LOOP
      correct-looking answer and a complete one.
 3. SYNTHESISE — call `submit_answer`.
 
+CONFIDENCE (derive from gaps, do not round up)
+- high: derivation chain walked, key terms resolved, no open contradictions.
+- medium: supported but with non-trivial gaps / partial coverage.
+- low: key terms returned nothing, the question references things absent from \
+  the substrate, or you were forced to conclude with the core unresolved.
+
+WRONG-BUT-ANSWERABLE PREMISE: answer what they asked AND, inside `answer`, note \
+that a more relevant thing exists and what it is. Withholding is only for genuine \
+ambiguity -> `request_clarification`.
+
+Work efficiently: there is a hard cap on total substrate operations. Spend them \
+on following the derivation chain and on adjacency re-search, not on repeating \
+near-identical queries."""
+
+
+_FIXED_PROTOCOL = """THE SUBSTRATE
+- It holds atomic `statement`s (kinds like event/state/capability/rule/property \
+and prescriptive procedure/action/check/cause). Statements carry typed `links` \
+to other statements (each `{link_type, to_id, when?}`) and `mentions` \
+of named entities.
+- Preserve stored edge direction and full conditions, including AND/OR/NOT.
+  Fetch condition leaf statements when their meaning matters. Incoming links
+  and condition references do not reverse the original edge.
+- Follow statement links by passing linked to_id/from_id values to get_statements.
+  retrieve_context also follows one bounded frontier, including condition leaves.
+  Statement IDs start with stm_; entity IDs start with ent_ and use get_entity.
+- The link/kind vocabularies are open and grow. If a link_type or kind is \
+unfamiliar, look it up with `list_link_types` / `list_entity_link_types` / \
+`list_statement_kinds` rather than guessing its meaning.
+
+YOUR TOOLS
+You are given the substrate's read primitives as tools (search_statements, \
+survey_statements, get_statements, get_entity, grep_statements, the list_* and \
+glossary tools, and more). Use them freely. You finish by calling exactly ONE \
+terminal tool: `submit_answer` or `request_clarification`.
+
 ANTI-PREMATURE-CLOSURE (the failure this tool exists to prevent)
 - Before concluding, check coverage of the question and preserve unresolved parts,
   contradictions and interpretation changes in gaps and the answer. Code records
@@ -81,19 +96,14 @@ ANTI-PREMATURE-CLOSURE (the failure this tool exists to prevent)
 - Do NOT fabricate. If the substrate doesn't support a claim, say so and lower \
   confidence.
 
-CONFIDENCE (derive from gaps, do not round up)
-- high: derivation chain walked, key terms resolved, no open contradictions.
-- medium: supported but with non-trivial gaps / partial coverage.
-- low: key terms returned nothing, the question references things absent from \
-  the substrate, or you were forced to conclude with the core unresolved.
+"""
 
-WRONG-BUT-ANSWERABLE PREMISE: answer what they asked AND, inside `answer`, note \
-that a more relevant thing exists and what it is. Withholding is only for genuine \
-ambiguity -> `request_clarification`.
 
-Work efficiently: there is a hard cap on total substrate operations. Spend them \
-on following the derivation chain and on adjacency re-search, not on repeating \
-near-identical queries."""
+def build_system_prompt(instructions: str) -> str:
+    return _FIXED_PROTOCOL + "\n\n=== BEHAVIORAL INSTRUCTIONS ===\n" + instructions
+
+
+SYSTEM_PROMPT = build_system_prompt(DEFAULT_INSTRUCTIONS)
 
 
 def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
