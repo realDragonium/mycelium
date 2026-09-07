@@ -229,6 +229,8 @@ function AISettings() {
       : data.actions.filter(action => action.action !== 'draft_review').map(action => <ActionModelSettings key={action.action} settings={action} canConfigure={data.can_configure} />)}
     <DraftReviewSettings />
     <ProductSettings />
+    <DocumentationProfiles />
+    <AIInstructions />
   </div>;
 }
 
