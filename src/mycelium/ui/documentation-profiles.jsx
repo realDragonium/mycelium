@@ -34,8 +34,10 @@ function PromptHistory({ type, name, canRestore, onRestored, onBusyChange }) {
     onBusyChange?.(true);
     setBusy(true); setError(null);
     try {
-      await profileRequest('/api/documentation/prompts/restore', 'POST', { type, name, version: version.version, revision: versions[0].version });
-      setReload(value => value + 1); onRestored();
+      const saved = await profileRequest('/api/documentation/prompts/restore', 'POST', { type, name, version: version.version, revision: versions[0].version });
+      setVersions(previous => [saved, ...previous.filter(item => item.version !== saved.version)]);
+      setSelected(String(saved.version));
+      await onRestored(saved);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); onBusyChange?.(false); }
   };
@@ -43,7 +45,7 @@ function PromptHistory({ type, name, canRestore, onRestored, onBusyChange }) {
     <h3>History: {name}</h3>
     {error && <p role="alert">{error}</p>}
     {!versions ? <p>Loading history…</p> : versions.length === 0 ? <p>No saved versions.</p> : <>
-      <label style={profileStyle.field}>Version<select value={selected} style={profileStyle.input} onChange={event => setSelected(event.target.value)}>
+      <label style={profileStyle.field}>Version<select value={selected} disabled={busy} style={profileStyle.input} onChange={event => setSelected(event.target.value)}>
         {versions.map(item => <option key={item.id} value={item.version}>Version {item.version} · {item.created_at} · {item.created_by || 'Unknown author'}{item.deleted ? ' · Retired' : ''}</option>)}
       </select></label>
       <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 320, overflow: 'auto' }}>{version?.deleted ? 'This version retired the text.' : version?.text}</pre>
@@ -165,12 +167,12 @@ function DocumentationProfiles() {
         </div>
         {form.name === data.default_profile && <p>Choose another default under Documentation delivery before retiring this profile or its last template.</p>}
         {!data.can_write && <p>Writers can edit these profiles. Administrators can retire them.</p>}
-        {!creating && <label style={profileStyle.field}>Text history<select style={profileStyle.input} value={history || ''} onChange={event => setHistory(event.target.value || null)}>
+        {!creating && <label style={profileStyle.field}>Text history<select style={profileStyle.input} disabled={busy} value={history || ''} onChange={event => setHistory(event.target.value || null)}>
           <option value="">Choose text to inspect</option><option value="guidance">Writing guidance</option><option value="exposure">Disclosure rules</option>
           {original?.templates.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
           {original?.retired_templates?.map(name => <option key={name} value={name}>{name} (retired)</option>)}
         </select></label>}
-        {history && !creating && <><p>{dirty ? 'Save or reload your edits before restoring history.' : ''}</p><PromptHistory key={`${form.name}/${history}`} type="guideline-set" name={`${form.name}/${history}`} canRestore={data.can_write && !dirty} onRestored={reloadProfile} /></>}
+        {history && !creating && <><p>{dirty ? 'Save or reload your edits before restoring history.' : ''}</p><PromptHistory key={`${form.name}/${history}`} type="guideline-set" name={`${form.name}/${history}`} canRestore={data.can_write && !dirty && !busy} onBusyChange={setBusy} onRestored={reloadProfile} /></>}
       </>}
     </>}
     {!data && <button type="button" style={profileStyle.button} onClick={() => { setError(null); setRetry(value => value + 1); }}>Retry loading profiles</button>}
@@ -212,11 +214,16 @@ function AIInstructions() {
     if (dirty && !window.confirm('Discard unsaved instruction changes?')) return;
     setError(null); setReload(value => value + 1);
   };
+  const applySaved = saved => {
+    setHead({ version: saved.version, text: saved.text, source: 'saved' });
+    setText(saved.text); setPreview(null);
+    setMessage('Instructions saved. New runs use this version; running actions keep their captured instructions.');
+  };
   const save = async event => {
     event.preventDefault(); setBusy(true); setError(null); setMessage(null);
     try {
-      await profileRequest('/api/documentation/prompts', 'PUT', { type: 'doctrine', name, text, revision: head.version });
-      setReload(value => value + 1); setMessage('Instructions saved. New runs use this version; running actions keep their captured instructions.');
+      const saved = await profileRequest('/api/documentation/prompts', 'PUT', { type: 'doctrine', name, text, revision: head.version });
+      applySaved(saved);
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
@@ -259,7 +266,7 @@ function AIInstructions() {
       {preview !== null && <details><summary>Combined prompt preview</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 420, overflow: 'auto' }}>{preview}</pre></details>}
       <button type="button" style={profileStyle.button} disabled={busy} onClick={() => setHistory(value => !value)}>Version history</button>
       {history && <PromptHistory key={`${name}/${head.version}`} type="doctrine" name={name}
-        canRestore={options?.can_write && !dirty && !busy} onBusyChange={setBusy} onRestored={refresh} />}
+        canRestore={options?.can_write && !dirty && !busy} onBusyChange={setBusy} onRestored={applySaved} />}
       {history && dirty && <p>Save or reload your edits before restoring history.</p>}
     </>}
     <button type="button" style={profileStyle.button} disabled={busy} onClick={refresh}>Reload instructions</button>
