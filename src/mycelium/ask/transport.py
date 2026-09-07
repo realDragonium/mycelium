@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import queue
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 
 from fastapi import Request
@@ -23,16 +24,22 @@ async def respond(
     *,
     grace: float,
     heartbeat: float,
+    delivery_timeout: float = 30,
 ) -> JSONResponse | StreamingResponse:
     sse = "text/event-stream" in request.headers.get("accept", "")
     events: queue.Queue[AskEvent] = queue.Queue(maxsize=64)
     stream = AskStream()
 
     def emit(event: AskEvent) -> None:
+        deadline = time.monotonic() + delivery_timeout
         while True:
             stream.check()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                stream.cancelled.set()
+                stream.check()
             try:
-                events.put(event, timeout=0.1)
+                events.put(event, timeout=min(0.1, remaining))
                 return
             except queue.Full:
                 continue

@@ -6,6 +6,7 @@ import asyncio
 import json
 import threading
 
+import anyio
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -182,6 +183,53 @@ def test_mcp_cancellation_marks_the_worker_context():
             await task
         assert captured[0].cancelled.is_set()
         assert current_stream.get() is None
+
+    asyncio.run(scenario())
+
+
+def test_stalled_connected_consumer_cancels_worker_and_releases_slot():
+    async def scenario():
+        finished = asyncio.Event()
+        limiter = anyio.CapacityLimiter(1)
+        captured = []
+
+        async def receive():
+            return {"type": "http.request", "body": b""}
+
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/ask",
+                "headers": [(b"accept", b"text/event-stream")],
+            },
+            receive,
+        )
+
+        def worker():
+            stream = current_stream.get()
+            captured.append(stream)
+            for _ in range(1000):
+                stream.progress("retrieval", "Synthetic read")
+            pytest.fail("A stalled consumer must cancel before all events are sent")
+
+        async def run():
+            try:
+                await anyio.to_thread.run_sync(worker, limiter=limiter)
+            finally:
+                finished.set()
+
+        response = await respond(
+            request, run, grace=0, heartbeat=1, delivery_timeout=0.01
+        )
+        # Keep the socket connected without consuming the response body.
+        await asyncio.wait_for(finished.wait(), timeout=1)
+        assert captured[0].cancelled.is_set()
+        assert limiter.borrowed_tokens == 0
+        assert isinstance(response, StreamingResponse)
+        chunks = [chunk async for chunk in response.body_iterator]
+        assert b"event: cancelled" in chunks[-1]
+        assert not any(b"event: complete" in chunk for chunk in chunks)
 
     asyncio.run(scenario())
 

@@ -69,3 +69,21 @@ test('cancelled stream rejects even if a completion is buffered', async () => {
   controller.abort();
   await assert.rejects(api.ask('Q', { signal: controller.signal, onEvent() {} }), { name: 'AbortError' });
 });
+
+test('JSON and streaming requests preserve HTTP error details and status', async () => {
+  for (const options of [{}, { onEvent() {} }]) {
+    for (const [body, message] of [
+      [JSON.stringify({ detail: 'Ask access is restricted.' }), 'Ask access is restricted.'],
+      [JSON.stringify({ detail: { reason: 'Rate limit reached' } }), '{"reason":"Rate limit reached"}'],
+      ['<html>Unavailable</html>', '429 Too Many Requests'],
+    ]) {
+      const api = client(async () => new Response(body, { status: 429, statusText: 'Too Many Requests' }));
+      await assert.rejects(api.ask('Q', options), err => {
+        assert.equal(err.message, message);
+        assert.equal(err.status, 429);
+        assert.equal(err.path, '/ask');
+        return true;
+      });
+    }
+  }
+});

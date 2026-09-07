@@ -55,8 +55,11 @@ if no prefix candidates exist, entity hydration, query-relevant statement search
 filtered by each selected entity, and one linked-statement fetch. Candidate
 matches are explicitly candidates; they do not resolve ambiguity by themselves.
 
-Bounds are global: 1–3 supplied names, 1–3 selected entities, 1–8 direct statements,
-1–12 linked statements, one hop, and 20 entries per edge/name/mention list.
+Input ranges are 1–3 supplied names, `entity_limit` 1–3, `statement_limit` 1–8,
+and `linked_limit` 1–12. Output caps are global: up to 3 selected entities,
+8 direct statements and 12 linked statements, with zero results possible when
+nothing resolves or matches. Retrieval follows one hop and retains at most
+20 entries per edge/name/mention list.
 A call makes at most 13 primitive reads before the existing substrate retry.
 It counts as one bounded tool operation in `op_count`; `combined_reads` records
 the successful underlying primitive calls separately.
@@ -91,8 +94,11 @@ Complete supplied statement records receive short run-local refs (`s1`, `s2`, �
 Only those records can support provenance or subsequent adjacency sources.
 Reference expansion rejects unknown refs, unknown statement IDs, entity IDs and
 unread pointers. Known full statement IDs remain accepted for injected/older
-model clients. Refs are not stable across runs and are used in `provenance`, not
-as unexplained codes in answer prose.
+model clients. Before returning the completed `Answered` result, `_finish_answer`
+expands run-local provenance refs into full statement IDs. Clients receive those
+IDs, not refs such as `s1`. These refs are internal evidence identifiers for
+provenance and adjacency sources; they are not stable across runs and must not
+appear as unexplained codes in answer prose or other final answer values.
 
 Ask's 20,000-character tool-context budget omits whole entries and reports
 `omitted_items`; it never slices a statement or condition tree. Omitted records
@@ -118,9 +124,11 @@ SSE progress or answer deltas, and a client's own timeout may end the call first
 MCP request cancellation and HTTP disconnects signal the worker to stop. Sync
 retrieval/model I/O is cooperative: an in-flight blocking call may finish or reach
 its configured timeout before cancellation is observed; no further model
-finalization is started once it is observed. HTTP stream queues are bounded, and
-disconnect releases a producer blocked on that queue. A disconnected client
-cannot receive a cancellation event and must mark its own result incomplete.
+finalization is started once it is observed. HTTP stream queues are bounded.
+Disconnect releases a producer blocked on that queue; a connected consumer that
+blocks event delivery for 30 seconds also cancels the run and releases the worker
+slot. A disconnected client cannot receive a cancellation event and must mark
+its own result incomplete.
 
 No deployed instance, private data or real model credentials are required for
 verification:

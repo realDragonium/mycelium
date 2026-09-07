@@ -165,22 +165,26 @@ def ids_present_in(text: str, ids: Iterable[str]) -> set[str]:
 def append_tool_error(
     messages: list[dict[str, Any]], tool_use_id: str, message: str
 ) -> None:
-    """Answer a single (terminal) tool_use with an error, as its own user
-    message. Reads are batched by the caller; terminals are handled one at a
-    time, so a per-message append is correct here."""
-    messages.append(
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": message,
-                    "is_error": True,
-                }
-            ],
-        }
-    )
+    """Keep all results for one assistant turn in its following user message."""
+    block = {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": message,
+        "is_error": True,
+    }
+    pending = messages[-1] if messages else {}
+    content = pending.get("content")
+    if (
+        pending.get("role") == "user"
+        and isinstance(content, list)
+        and any(
+            isinstance(item, dict) and item.get("type") == "tool_result"
+            for item in content
+        )
+    ):
+        content.append(block)
+    else:
+        messages.append({"role": "user", "content": [block]})
 
 
 # --------------------------------------------------------------------------- #

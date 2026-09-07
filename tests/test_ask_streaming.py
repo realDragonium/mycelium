@@ -313,6 +313,38 @@ def test_clarification_has_no_answer_deltas(monkeypatch):
     assert events[-1].result["outcome"] == "needs_clarification"
 
 
+@pytest.mark.parametrize("read_count,terminal_count", [(1, 1), (0, 2), (1, 2)])
+def test_mixed_turn_results_share_one_following_user_message(
+    monkeypatch, read_count, terminal_count
+):
+    mixed = [call("get_statements", {"ids": ["stm_2"]}, "read")] * read_count + [
+        call("submit_answer", _submit_input(), f"terminal{i}")
+        for i in range(terminal_count)
+    ]
+    result, events, requests = execute(
+        monkeypatch,
+        [mixed, [call("submit_answer", _submit_input(), "accepted")]],
+    )
+    assert result.outcome == "answered"
+    assert len(requests) == 2
+    messages = requests[1].messages
+    index = next(
+        i for i, message in enumerate(messages) if message["role"] == "assistant"
+    )
+    results = messages[index + 1]
+    assert results["role"] == "user"
+    assert {block["tool_use_id"] for block in results["content"]} == {
+        tool.id for tool in mixed
+    }
+    assert all(
+        block["is_error"]
+        for block in results["content"]
+        if block["tool_use_id"].startswith("terminal")
+    )
+    assert messages[index + 2]["role"] == "assistant"
+    assert any(event.type == "answer_reset" for event in events)
+
+
 def test_cancel_after_answer_delta_never_forces_another_model_call(monkeypatch):
     requests = scripted_turns(monkeypatch, [[call("submit_answer", _submit_input())]])
     stream = AskStream()

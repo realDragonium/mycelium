@@ -35,6 +35,15 @@
   const layerOf = (kind) => KIND_LAYER[kind] || 'descriptive';
 
   /* ----------------------------- transport ----------------------------- */
+  async function httpError(res, path) {
+    let detail = res.status + ' ' + res.statusText;
+    try { const j = await res.json(); if (j && j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch (e) { /* non-json body */ }
+    const err = new Error(detail);
+    err.status = res.status;
+    err.path = path;
+    return err;
+  }
+
   async function http(method, path, body, signal) {
     const opts = { method, headers: { accept: 'application/json' }, credentials: 'same-origin', signal };
     if (body !== undefined) {
@@ -42,14 +51,7 @@
       opts.body = JSON.stringify(body);
     }
     const res = await fetch(path, opts);
-    if (!res.ok) {
-      let detail = res.status + ' ' + res.statusText;
-      try { const j = await res.json(); if (j && j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch (e) { /* non-json body */ }
-      const err = new Error(detail);
-      err.status = res.status;
-      err.path = path;
-      throw err;
-    }
+    if (!res.ok) throw await httpError(res, path);
     if (res.status === 204) return null;
     const ct = res.headers.get('content-type') || '';
     return ct.includes('json') ? res.json() : res.text();
@@ -297,10 +299,7 @@
       headers: { accept: 'text/event-stream', 'content-type': 'application/json' },
       body: JSON.stringify({ question }),
     });
-    if (!res.ok) {
-      const err = new Error('Ask failed (HTTP ' + res.status + ').');
-      err.status = res.status; throw err;
-    }
+    if (!res.ok) throw await httpError(res, '/ask');
     const raw = (res.headers.get('content-type') || '').includes('text/event-stream')
       ? await readAskStream(res, onEvent, signal) : completedAsk(await res.json());
     return adaptAsk(raw, question);
