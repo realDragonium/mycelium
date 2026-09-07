@@ -606,7 +606,17 @@ def test_the_default_runner_is_the_generation_loop(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
     seen = {}
 
-    def fake_run_docgen(prompt, *, guideline_set=None, document_type=None, config=None):
+    def fake_run_docgen(
+        prompt,
+        *,
+        guideline_set=None,
+        document_type=None,
+        config=None,
+        existing_documents=(),
+        load_current_document=None,
+        revision_target=None,
+        profiles=None,
+    ):
         assert config.provider == "claude"
         seen.update(
             prompt=prompt, guideline_set=guideline_set, document_type=document_type

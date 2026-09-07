@@ -8,6 +8,9 @@ See `project_vision.md` for the product direction, `SETUP.md` for a guided local
 setup, and `docs/mycelium.md` for detailed contracts.
 See [AI model configuration](docs/AI_MODELS.md) to select Claude or GPT independently for each action.
 
+See [the documentation workflow](docs/DOCUMENTATION_MODELS.md) to configure writing profiles,
+generate and revise documents, and publish GitHub pull requests from either UI.
+
 See [internal draft review](docs/DRAFT_REVIEW.md) for configurable Claude/GPT assessment and
 automatic application configuration.
 

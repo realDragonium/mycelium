@@ -37,7 +37,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from .. import ai, tracing
 from ..agentloop import (
@@ -68,6 +68,7 @@ from .schema import (
     ExistingDocument,
     NothingWritten,
     ReviewRecord,
+    RevisionTarget,
 )
 from .tools import (
     EMIT_TOOL,
@@ -99,6 +100,9 @@ _MAX_REVIEW_FINDINGS = 8
 #: Longest slug the harness will derive from a title.
 _MAX_SLUG_CHARS = 80
 
+if TYPE_CHECKING:
+    from ..documentation_profiles import CatalogueSnapshot
+
 
 def run_docgen(
     prompt: str,
@@ -111,6 +115,8 @@ def run_docgen(
     config: DocgenConfig | None = None,
     existing_documents: tuple[ExistingDocument, ...] = (),
     load_current_document: Callable[[str], CurrentDocument] | None = None,
+    revision_target: RevisionTarget | None = None,
+    profiles: CatalogueSnapshot | None = None,
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
@@ -143,10 +149,13 @@ def run_docgen(
             config=config,
             doctrine_text=doctrine_text,
             doctrine_note=doctrine_note,
-            catalogue=_store_catalogue(),
-            load_texts=_store_texts,
+            catalogue=profiles.catalogue()
+            if profiles is not None
+            else _store_catalogue(),
+            load_texts=profiles.texts if profiles is not None else _store_texts,
             existing_documents=existing_documents,
             load_current_document=load_current_document,
+            revision_target=revision_target,
         )
 
     if config.trace_log_path:
@@ -232,6 +241,7 @@ def _execute(
     load_texts: Callable[[str, str], tuple[str | None, str | None, str | None]],
     existing_documents: tuple[ExistingDocument, ...] = (),
     load_current_document: Callable[[str], CurrentDocument] | None = None,
+    revision_target: RevisionTarget | None = None,
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -283,7 +293,11 @@ def _execute(
         if (requested_set is None or item.guideline_set == requested_set)
         and (requested_type is None or item.document_type == requested_type)
     )
-    if candidates:
+    if revision_target is not None:
+        matched_document = revision_target.document
+        ctx.matched_document_id = matched_document.id
+        ctx.matched_body_digest = matched_document.body_digest
+    elif candidates:
         matched, matched_document_id = _match_existing(ctx, candidates)
         if not matched:
             return _nothing(ctx, ctx.unresolved)
@@ -305,8 +319,12 @@ def _execute(
         return _nothing(ctx, ctx.unresolved)
     ctx.guideline_set, ctx.document_type = resolved
     trace.guideline_set, trace.document_type = resolved
-    current_document = None
-    if ctx.matched_document_id is not None and load_current_document is not None:
+    current_document = (
+        revision_target.current.body if revision_target is not None else None
+    )
+    if revision_target is not None:
+        ctx.matched_content_revision = revision_target.current.content_revision
+    elif ctx.matched_document_id is not None and load_current_document is not None:
         try:
             loaded_document = load_current_document(ctx.matched_document_id)
         except Exception as exc:  # noqa: BLE001

@@ -21,16 +21,21 @@ run drives `docgen.run_docgen`; tests set it to a stub, and an explicit
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import os
 import sqlite3
 import threading
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
-from . import docs_store, product_settings
+from . import docs_store, product_settings, prompt_store
 from .docgen.config import DocgenConfig, Provider
 from .docgen.destinations import DestinationConfig, load_destinations
-from .docgen.schema import CurrentDocument, ExistingDocument
+from .docgen.schema import CurrentDocument, ExistingDocument, RevisionTarget
+
+if TYPE_CHECKING:
+    from .documentation_profiles import CatalogueSnapshot
+
 
 logger = logging.getLogger(__name__)
 MAX_ACTIVE_ENV = "MYCELIUM_DOCGEN_MAX_ACTIVE"
@@ -49,6 +54,9 @@ def start_run(
     conn: sqlite3.Connection,
     provider: Provider | None = None,
     runner: Callable[..., Any] | None = None,
+    target_document_id: str | None = None,
+    expected_revision: int | None = None,
+    match_existing: bool = True,
 ) -> str:
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
@@ -64,7 +72,40 @@ def start_run(
     max_active = product_settings.get(
         product_settings.ConcurrencySettings
     ).documentation_runs
-    destinations = load_destinations()
+    destinations = (
+        load_destinations() if target_document_id is None and match_existing else {}
+    )
+    from . import documentation_profiles
+
+    profiles = (
+        documentation_profiles.capture() if prompt_store.is_configured() else None
+    )
+    target = None
+    if target_document_id is not None:
+        if expected_revision is None:
+            raise ValueError("expected_revision is required to revise a document")
+        row = docs_store.require_revision(conn, target_document_id, expected_revision)
+        target = RevisionTarget(
+            document=ExistingDocument(
+                id=target_document_id,
+                slug=str(row["slug"]),
+                title=str(row["title"]),
+                guideline_set=str(row["guideline_set"]),
+                document_type=str(row["document_type"]),
+                body_digest=docs_store.body_digest(str(row["body"])),
+            ),
+            revision=expected_revision,
+            current=CurrentDocument(
+                body=str(row["body"]),
+                content_revision=str(row["delivery_content_revision"])
+                if row["delivery_content_revision"] is not None
+                else None,
+            ),
+        )
+        guideline_set = target.document.guideline_set
+        document_type = target.document.document_type
+    elif expected_revision is not None:
+        raise ValueError("expected_revision requires a target document")
 
     with _spawn_lock:
         if docs_store.count_active(conn) >= max_active:
@@ -80,10 +121,14 @@ def start_run(
             created_by=created_by,
             provider=config.provider,
             model=config.model,
+            target_document_id=target_document_id,
+            target_revision=expected_revision,
         )
         # Anything failing between here and thread.start() must not strand
         # the freshly committed row: finish it as failed, then re-raise.
         try:
+            if profiles is not None and guideline_set and document_type:
+                _record_profile(conn, run_id, profiles, guideline_set, document_type)
             docs_store.mark_started(conn, run_id)
             rows = conn.execute("PRAGMA database_list").fetchall()
             main = next((row for row in rows if row["name"] == "main"), None)
@@ -107,6 +152,9 @@ def start_run(
                     selected_runner,
                     config,
                     destinations,
+                    target,
+                    profiles,
+                    match_existing,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -129,6 +177,44 @@ def start_run(
         return run_id
 
 
+def _record_profile(
+    conn: sqlite3.Connection,
+    run_id: str,
+    profiles: CatalogueSnapshot,
+    set_name: str,
+    document_type: str,
+) -> None:
+    from dataclasses import asdict
+
+    references = {
+        name: asdict(ref)
+        for name, ref in profiles.references(set_name, document_type).items()
+    }
+    texts = dict(
+        zip(
+            ("guidance", "exposure", "template"),
+            profiles.texts(set_name, document_type),
+            strict=True,
+        )
+    )
+    conn.execute(
+        "UPDATE documentation_runs SET profile_revisions = ?, profile_snapshot = ? WHERE id = ?",
+        (
+            json.dumps(references),
+            json.dumps(
+                {
+                    "guideline_set": set_name,
+                    "document_type": document_type,
+                    "texts": texts,
+                    "references": references,
+                }
+            ),
+            run_id,
+        ),
+    )
+    conn.commit()
+
+
 def wait_all(timeout: float = 10.0) -> None:
     for thread in list(_threads.values()):
         thread.join(timeout)
@@ -142,6 +228,8 @@ def _default_runner(
     existing_documents: tuple[ExistingDocument, ...] = (),
     load_current_document: Callable[[str], CurrentDocument] | None = None,
     config: DocgenConfig | None = None,
+    revision_target: RevisionTarget | None = None,
+    profiles: CatalogueSnapshot | None = None,
 ) -> Any:
     """The real generation loop.
 
@@ -152,17 +240,15 @@ def _default_runner(
     which is where a caller polling the run will read it."""
     from .docgen import run_docgen
 
-    if existing_documents:
-        return run_docgen(
-            prompt,
-            guideline_set=guideline_set,
-            document_type=document_type,
-            existing_documents=existing_documents,
-            load_current_document=load_current_document,
-            config=config,
-        )
     return run_docgen(
-        prompt, guideline_set=guideline_set, document_type=document_type, config=config
+        prompt,
+        guideline_set=guideline_set,
+        document_type=document_type,
+        config=config,
+        existing_documents=existing_documents,
+        load_current_document=load_current_document,
+        revision_target=revision_target,
+        profiles=profiles,
     )
 
 
@@ -175,6 +261,9 @@ def _execute_run(
     runner: Callable[..., Any],
     config: DocgenConfig | None = None,
     destinations: dict[str, DestinationConfig] | None = None,
+    revision_target: RevisionTarget | None = None,
+    profiles: CatalogueSnapshot | None = None,
+    match_existing: bool = True,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -208,7 +297,11 @@ def _execute_run(
                     guideline_set=guideline_set,
                     document_type=document_type,
                     config=config,
-                    existing_documents=_existing_documents(conn),
+                    existing_documents=_existing_documents(conn)
+                    if match_existing and revision_target is None
+                    else (),
+                    revision_target=revision_target,
+                    profiles=profiles,
                     load_current_document=lambda document_id: _load_current_document(
                         conn, document_id, destinations
                     ),
@@ -226,11 +319,32 @@ def _execute_run(
         docs_store.mark_started(
             conn,
             run_id,
-            guideline_set=payload.get("guideline_set"),
-            document_type=payload.get("document_type"),
+            guideline_set=guideline_set
+            if revision_target is not None
+            else payload.get("guideline_set"),
+            document_type=document_type
+            if revision_target is not None
+            else payload.get("document_type"),
         )
         reported = payload.get("outcome")
-        matched_document_id = payload.get("matched_document_id")
+        matched_document_id = (
+            revision_target.document.id
+            if revision_target is not None
+            else payload.get("matched_document_id")
+        )
+        if profiles is not None:
+            selected_set = (
+                guideline_set
+                if revision_target is not None
+                else payload.get("guideline_set") or guideline_set
+            )
+            selected_type = (
+                document_type
+                if revision_target is not None
+                else payload.get("document_type") or document_type
+            )
+            if selected_set and selected_type:
+                _record_profile(conn, run_id, profiles, selected_set, selected_type)
         if reported not in ("document_written", "nothing_written"):
             # Not folded into `nothing_written`: a runner that returns junk, or
             # reports its own failure, would otherwise be recorded as a clean
@@ -258,6 +372,8 @@ def _execute_run(
             )
             if matched_document_id is not None and matched_row is None:
                 raise ValueError("matched generated document no longer exists")
+            draft_title = payload["title"]
+            draft_body = payload["body"]
             document_id = docs_store.upsert_document(
                 conn,
                 slug=(
@@ -269,8 +385,12 @@ def _execute_run(
                 body=payload["body"],
                 # The run may resolve what the request left unnamed; what it
                 # actually wrote against belongs on the document.
-                guideline_set=payload.get("guideline_set") or guideline_set,
-                document_type=payload.get("document_type") or document_type,
+                guideline_set=guideline_set
+                if revision_target is not None
+                else payload.get("guideline_set") or guideline_set,
+                document_type=document_type
+                if revision_target is not None
+                else payload.get("document_type") or document_type,
                 statement_ids=payload.get("statement_ids"),
                 # The loop and DocumentWritten enforce that review ran. This
                 # overridable runner seam accepts older canned runners instead
@@ -278,20 +398,31 @@ def _execute_run(
                 review=payload.get("review"),
                 run_id=run_id,
                 updates=matched_document_id,
+                expected_revision=revision_target.revision
+                if revision_target is not None
+                else None,
                 replacing=(
-                    str(payload["matched_body_digest"])
-                    if payload.get("matched_body_digest") is not None
+                    revision_target.document.body_digest
+                    if revision_target is not None
                     else (
-                        docs_store.body_digest(str(matched_row["body"]))
-                        if matched_row is not None
-                        else None
+                        str(payload["matched_body_digest"])
+                        if payload.get("matched_body_digest") is not None
+                        else (
+                            docs_store.body_digest(str(matched_row["body"]))
+                            if matched_row is not None
+                            else None
+                        )
                     )
                 ),
-                revision_source_content_revision=payload.get(
-                    "matched_content_revision"
+                revision_source_content_revision=(
+                    revision_target.current.content_revision
+                    if revision_target is not None
+                    else payload.get("matched_content_revision")
                 ),
             )
             outcome = "document_written"
+            draft_title = None
+            draft_body = None
         else:
             outcome = "nothing_written"
             # Keeping the reason verbatim is how a rejected document's review

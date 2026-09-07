@@ -13,6 +13,7 @@ Archive layout
                                 discriminated by `_kind`, dependency-ordered
     history.jsonl              audit log events (omit with --no-history)
     prompts.jsonl              editable prompt texts, every version
+    documentation.json         generated documents, revisions, runs and deliveries
     draft-review-settings.json saved review controls (when configured)
     model-settings.json        saved per-action models (when configured)
     vectors/mycelium.vec       statement vector index (omit with --no-vectors)
@@ -52,7 +53,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from . import migrations, store
+from . import documentation_archive, migrations, store
 
 logger = logging.getLogger(__name__)
 
@@ -194,6 +195,10 @@ def export_substrate(
             if prompts_count is not None:
                 row_counts["prompt_texts"] = prompts_count
 
+            documentation_counts = documentation_archive.write(data_dir, staging)
+            if documentation_counts is not None:
+                row_counts.update(documentation_counts)
+
             models_included, settings_included, products_included = (
                 _archive_instance_settings(prompts_db_path, staging)
             )
@@ -214,6 +219,7 @@ def export_substrate(
                 "includes_draft_review_settings": settings_included,
                 "includes_model_settings": models_included,
                 "includes_product_settings": products_included,
+                "includes_documentation": documentation_counts is not None,
                 "includes_vectors": include_vectors,
                 "row_counts": row_counts,
             }
@@ -477,11 +483,20 @@ def _make_archive(staging: Path, out_path: Path) -> None:
 
 def _prepare_restore_target(data_dir: Path, *, force: bool) -> None:
     db_path = data_dir / "mycelium.db"
-    if db_path.exists() or (data_dir / PROMPTS_DB_NAME).exists():
+    if (
+        db_path.exists()
+        or (data_dir / PROMPTS_DB_NAME).exists()
+        or (data_dir / documentation_archive.DB_NAME).exists()
+    ):
         if not force:
             raise FileExistsError(
                 f"data dir {data_dir!r} already contains an instance; "
                 "pass force=True to clobber (auto-snapshots first)"
+            )
+        if not db_path.exists() and (data_dir / documentation_archive.DB_NAME).exists():
+            raise ValueError(
+                "Cannot safely overwrite documentation without its substrate database. "
+                "Restore into an empty directory instead."
             )
         if db_path.exists():
             _safety_snapshot(data_dir)
@@ -552,6 +567,9 @@ def import_substrate(
         products = _archived_product_settings(
             staging, bool(manifest.get("includes_product_settings"))
         )
+        documentation = documentation_archive.prepare(
+            staging, required=bool(manifest.get("includes_documentation"))
+        )
         _prepare_restore_target(data_dir, force=force)
         from . import prompt_store
 
@@ -606,6 +624,7 @@ def import_substrate(
             _restore_review_settings(data_dir / PROMPTS_DB_NAME, review_settings)
         _restore_model_settings(data_dir / PROMPTS_DB_NAME, models)
         _restore_product_settings(data_dir / PROMPTS_DB_NAME, products)
+        documentation_archive.restore(data_dir, documentation)
 
         settings_db = prompt_store.connect(data_dir / PROMPTS_DB_NAME)
         try:

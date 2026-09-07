@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import string
+import threading
 from dataclasses import dataclass
 from typing import Mapping, Protocol, cast
 
@@ -308,6 +309,8 @@ def bind_legacy_deliveries(conn: sqlite3.Connection) -> None:
         configured = load_destinations()
     except (ValueError, RuntimeError):
         configured = {}
+    from .. import docs_store
+
     with conn:
         for row in rows:
             destination = configured.get(row["delivery_destination"])
@@ -315,3 +318,68 @@ def bind_legacy_deliveries(conn: sqlite3.Connection) -> None:
                 "UPDATE generated_documents SET delivery_target = ? WHERE id = ?",
                 (target_identity(destination) if destination else "{}", row["id"]),
             )
+        docs_store.backfill_delivery_receipts(conn)
+
+
+_publication_locks: dict[str, threading.Lock] = {}
+_publication_locks_guard = threading.Lock()
+
+
+def publication_lock(document_id: str) -> threading.Lock:
+    with _publication_locks_guard:
+        if document_id not in _publication_locks:
+            _publication_locks[document_id] = threading.Lock()
+        return _publication_locks[document_id]
+
+
+def publishing_destination(
+    row: sqlite3.Row, name: str
+) -> tuple[DestinationConfig, str]:
+    """Resolve a new target or reuse its recorded coordinates and approved binding."""
+    from pydantic import BaseModel, ConfigDict, ValidationError
+
+    from .. import github_credentials, product_settings
+
+    class Coordinates(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        host: str
+        owner: str
+        repo: str
+        base_branch: str
+
+    recorded_name = row["delivery_destination"]
+    if recorded_name is not None and recorded_name != name:
+        raise DestinationError(
+            "This document already has a publishing destination. Use its recorded destination."
+        )
+    binding_name = row["delivery_binding"]
+    if binding_name is not None and recorded_name is not None:
+        try:
+            coordinates = Coordinates.model_validate_json(
+                row["delivery_target"] or "{}"
+            )
+            binding = github_credentials.resolve(str(binding_name))
+            if binding.host != coordinates.host:
+                raise DestinationError(
+                    "The recorded publishing credential is no longer authorized for this host."
+                )
+            config = DestinationConfig(
+                name=str(recorded_name),
+                type="github",
+                path_template=str(row["delivery_path"]),
+                settings={**coordinates.model_dump(), "token_env": binding.token_env},
+            )
+            _backend(config).parse_config(config)
+            return config, str(binding_name)
+        except (ValidationError, ValueError):
+            raise DestinationError(
+                "The recorded publishing target or credential binding is unavailable."
+            ) from None
+    settings = product_settings.get(product_settings.DocumentationSettings)
+    selected = next((item for item in settings.destinations if item.name == name), None)
+    if selected is None:
+        raise DestinationError("The publishing destination is unavailable.")
+    configured = selected.destination()
+    if recorded_name is not None:
+        require_recorded_target(configured, row["delivery_target"])
+    return configured, selected.binding

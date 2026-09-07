@@ -22,7 +22,7 @@ from mycelium import guidelines, prompt_store
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 from mycelium.docgen import DocgenConfig, DocumentWritten, NothingWritten
 from mycelium.docgen.loop import _slug, run_docgen
-from mycelium.docgen.schema import CurrentDocument, ExistingDocument
+from mycelium.docgen.schema import CurrentDocument, ExistingDocument, RevisionTarget
 from mycelium.docgen.tools import (
     EMIT_TOOL,
     GAP_TOOL,
@@ -317,6 +317,60 @@ def _execute_with(*, load_texts, client, guideline_set, document_type, catalogue
         doctrine_note=None,
         catalogue=catalogue or {guideline_set: [document_type]},
         load_texts=load_texts,
+    )
+
+
+def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_set):
+    from mycelium import docs_store, documentation_profiles
+
+    selected = ExistingDocument(
+        id="gdc_selected",
+        title="Selected policy",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        slug="selected-policy",
+        body_digest=docs_store.body_digest("Internal body the user selected"),
+    )
+    profiles = documentation_profiles.capture()
+    prompt_store.save(
+        prompt_store.connection(),
+        type=guidelines.TYPE,
+        name="kb-authoring/how-to",
+        text="Changed template after admission",
+    )
+    client = FakeAnthropic([_emit(), _review_ok()])
+
+    def unexpected_external_read(document_id: str) -> CurrentDocument:
+        raise AssertionError("explicit internal iteration must not read Git")
+
+    result = _run(
+        client,
+        profiles=profiles,
+        existing_documents=(
+            ExistingDocument(
+                "gdc_competing", "Selected policy", "kb-authoring", "how-to"
+            ),
+        ),
+        revision_target=RevisionTarget(
+            selected,
+            3,
+            CurrentDocument(
+                "Internal body the user selected", content_revision="b" * 40
+            ),
+        ),
+        load_current_document=unexpected_external_read,
+    )
+    assert isinstance(result, DocumentWritten)
+    assert result.matched_document_id == "gdc_selected"
+    assert result.matched_content_revision == "b" * 40
+    assert result.matched_body_digest == selected.body_digest
+    assert (
+        "Internal body the user selected" in client.calls[0]["messages"][0]["content"]
+    )
+    assert "Changed template after admission" not in json.dumps(client.calls)
+    assert all(
+        MATCH_TOOL not in [tool["name"] for tool in call["tools"]]
+        for call in client.calls
     )
 
 
