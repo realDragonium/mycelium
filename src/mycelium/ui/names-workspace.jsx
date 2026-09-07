@@ -4,8 +4,15 @@ async function namesRequest(path = '', body, signal) {
     headers: body === undefined ? undefined : {'content-type': 'application/json'},
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Check the values and try again.');
+  const recovery = `Request failed (${response.status}). Check the values and try again.`;
+  let data;
+  try {
+    data = await response.json();
+  } catch (error) {
+    if (!response.ok) throw new Error(recovery);
+    throw error;
+  }
+  if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : recovery);
   return data;
 }
 
