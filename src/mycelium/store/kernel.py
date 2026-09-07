@@ -326,6 +326,10 @@ CREATE TABLE IF NOT EXISTS statement_links (
     created_by        TEXT,
     UNIQUE (from_statement_id, to_statement_id, link_type, when_hash)
 );
+CREATE INDEX IF NOT EXISTS statement_links_from_id
+    ON statement_links (from_statement_id, link_id);
+CREATE INDEX IF NOT EXISTS statement_links_to_id
+    ON statement_links (to_statement_id, link_id);
 
 -- Tree storage for `when` expressions. Each row is a node. Internal
 -- nodes have `op` set ("and" | "or" | "not") and `statement_id` NULL.
@@ -354,6 +358,8 @@ CREATE TABLE IF NOT EXISTS when_nodes (
 );
 CREATE INDEX IF NOT EXISTS when_nodes_link_id     ON when_nodes (link_kind, link_id);
 CREATE INDEX IF NOT EXISTS when_nodes_statement_id ON when_nodes (statement_id);
+CREATE INDEX IF NOT EXISTS when_nodes_statement_link
+    ON when_nodes (statement_id, link_id);
 
 -- Entity-to-entity directed edges with an open `link_type` vocabulary.
 -- Use case: a parent corporation `contains` its subsidiaries; a product

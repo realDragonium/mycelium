@@ -228,6 +228,17 @@ Each hit's `mentions` field is a list of `{name_id, name, entity_id}`
 objects so that a caller can address the underlying name and entity
 directly without a follow-up lookup.
 
+### find_statement_connections
+
+`find_statement_connections(source, target, direction="both", max_hops=4,
+max_routes=5, max_expansions=2000, link_types=None, required=None)` finds several bounded routes
+between statement IDs or semantic text matches. It preserves stored edge
+directions and conditions, includes condition context, and reports ambiguous
+endpoints and incomplete searches explicitly. See [connection search](CONNECTIONS.md)
+for examples, result fields, and traversal semantics. A nonempty `required` list
+accepts additional IDs or texts and returns one connecting graph with branches,
+explicitly reporting partial coverage when some requested statements are unconnected.
+
 ### upsert_entity
 
 `upsert_entity(name, description)` looks up the name text in the names

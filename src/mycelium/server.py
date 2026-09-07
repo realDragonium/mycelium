@@ -42,6 +42,7 @@ from . import (
     ops_ledger,
     phrasing,
     plurals,
+    statement_connections,
     store,
     survey,
     timestamps,
@@ -69,6 +70,7 @@ from .connect.substrate import HintedView, LiveSubstrate
 from .layout_baker import LayoutBaker
 from .model_capacity import Capacity
 from .require import require
+from .store.connection_graph import ConnectionGraph
 from .tracing import trace_span
 
 logger = logging.getLogger(__name__)
@@ -1891,6 +1893,37 @@ def _expand_graph(seen: set[str], depth: int, direction: str) -> list[dict[str, 
     return expanded
 
 
+def _search_statement_candidates(
+    query: str,
+    limit: int,
+    min_score: float,
+    mentions: list[str] = [],
+    kind: str | None = None,
+    name_boost: float = 0.3,
+    name_top_k: int = 5,
+    name_min_score: float = 0.5,
+) -> list[tuple[str, float, float]]:
+    """Rank semantic hits without hydrating their graph neighborhoods."""
+    required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
+    with trace_span("embed"):
+        vec = embed.embed(query)
+    entity_boost = _alias_entity_boost(vec, name_boost, name_top_k, name_min_score)
+    # Filtering and alias boosts need a wider pool before ranking.
+    fetch_k = (
+        max(limit * 4, 40) if entity_boost or required_entity_ids or kind else limit
+    )
+    with trace_span("vector_search"):
+        raw_hits = _idx().search(vec, k=fetch_k)
+    return _score_candidates(
+        raw_hits,
+        required_entity_ids=required_entity_ids,
+        kind=kind,
+        entity_boost=entity_boost,
+        name_boost=name_boost,
+        min_score=min_score,
+    )[:limit]
+
+
 @tool
 def search_statements(
     query: str,
@@ -1965,45 +1998,158 @@ def search_statements(
                          clearly relevant.
     """
 
-    required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
-
-    with trace_span("embed"):
-        vec = embed.embed(query)
-
-    entity_boost = _alias_entity_boost(vec, name_boost, name_top_k, name_min_score)
-
-    # Widen the candidate set so boost-driven re-ranking has material
-    # to lift. Without boost, we keep the historical narrow fetch.
-    if entity_boost or required_entity_ids or kind:
-        fetch_k = max(limit * 4, 40)
-    else:
-        fetch_k = limit
-    with trace_span("vector_search"):
-        raw_hits = _idx().search(vec, k=fetch_k)
-
-    scored = _score_candidates(
-        raw_hits,
-        required_entity_ids=required_entity_ids,
-        kind=kind,
-        entity_boost=entity_boost,
-        name_boost=name_boost,
-        min_score=min_score,
+    scored = _search_statement_candidates(
+        query,
+        limit,
+        min_score,
+        mentions,
+        kind,
+        name_boost,
+        name_top_k,
+        name_min_score,
     )
 
     direct: list[dict[str, Any]] = []
-    for statement_id, final, _cos in scored[:limit]:
+    for statement_id, final, _cos in scored:
         direct.append(
             _hydrate_statement_full(
                 statement_id, score=final, reverse_cap=_REVERSE_EDGE_CAP
             )
         )
-    seen = {item[0] for item in scored[:limit]}
+    seen = {item[0] for item in scored}
 
     if depth <= 0:
         return direct
 
     expanded = _expand_graph(seen, depth, direction)
     return direct + expanded
+
+
+@tool
+def find_statement_connections(
+    source: str,
+    target: str,
+    direction: Literal["both", "forward"] = "both",
+    max_hops: int = 4,
+    max_routes: int = 5,
+    max_expansions: int = 2000,
+    link_types: list[str] | None = None,
+    required: list[str] | None = None,
+) -> dict[str, JsonValue]:
+    """Find bounded routes, optionally connecting required statements on branches.
+
+    `required` accepts up to 8 additional IDs or search texts, in any order.
+    With requirements, return one graph connecting source, target and those
+    statements. Each branch follows a shortest discovered route from source,
+    within max_hops; stop once all are covered. `found` means all requested
+    statements connected; `partial` retains some connections. Inspect
+    connected_ids, unconnected_ids and stop_reasons. Context-only statements
+    do not count as connected. All branches share the same work/output limits.
+    Without requirements, return several alternative source-to-target routes.
+
+    Each endpoint is a `stm_...` ID or search text. Text uses alias-aware
+    semantic search with a score floor of 0.5. The best match is selected
+    only if it leads the runner-up by at least 0.05. Otherwise status is
+    `needs_resolution`: inspect the endpoint candidates and retry with IDs.
+    Scores are ranking values, not probabilities. IDs never need embeddings.
+
+    Returns matched endpoints, routes, and their merged statements and edges.
+    Routes retain ordered steps; each step references an edge by `edge_id`.
+    Edges retain their stored from_id, to_id, link_type and full `when` tree.
+    `both` follows either arrow direction and condition participation, labeled
+    separately as `forward`, `reverse`, or `condition` steps. `forward` follows
+    only stored source-to-target arrows; conditions remain attached context.
+    Condition participation does not imply truth, enablement or execution.
+    Referenced condition statements are included, even off the route.
+
+    Routes are found breadth-first, with stable edge-ID ordering, not ranked
+    by relevance. `link_types` filters traversed edges (None means all, []
+    means none). Entities and shared mentions never create graph hops.
+    `found` may still be truncated. `not_found_within_limits` means no route
+    under the chosen direction, types and hop limit; `incomplete` means a
+    budget stopped a search that found none. Always inspect `stop_reasons`.
+
+    Bounds: hops 0–8, routes 1–20, expansions 1–10000. The expansion budget
+    also separately caps loaded adjacency rows. Output is capped near 64K
+    characters; statement text is capped at 2000 with `text_truncated`.
+    Conditions over 128 tree nodes are skipped with `condition_limit`.
+    Fetch full text through get_statements. Nothing is written.
+    """
+    limits = statement_connections.Limits(
+        max_hops=max_hops,
+        max_routes=max_routes,
+        max_expansions=max_expansions,
+    )
+    if direction not in ("both", "forward"):
+        raise ValueError("direction must be 'both' or 'forward'")
+    if required is not None and len(required) > 8:
+        raise ValueError("required must contain at most 8 statements")
+    if any(
+        not value.strip() or len(value) > 2000
+        for value in (source, target, *(required or []))
+    ):
+        raise ValueError("endpoints must contain 1–2000 characters")
+    if link_types is not None and (
+        len(link_types) > 100
+        or any(not lt.strip() or len(lt) > 200 for lt in link_types)
+    ):
+        raise ValueError(
+            "link_types must contain at most 100 nonblank names of at most 200 characters"
+        )
+    conn = _db()
+    graph = ConnectionGraph(conn, direction, link_types)
+
+    def candidates(query: str) -> list[statement_connections.Candidate]:
+        matches: list[statement_connections.Candidate] = []
+        for sid, score, _cosine in _search_statement_candidates(query, 3, 0.5):
+            statement = graph.statement(sid)
+            if statement is not None:
+                matches.append(
+                    statement_connections.Candidate(
+                        **statement.model_dump(),
+                        score=score,
+                    )
+                )
+        return matches
+
+    resolved: dict[str, statement_connections.Endpoint] = {}
+    for value in (source, target, *(required or [])):
+        value = value.strip()
+        if value not in resolved:
+            resolved[value] = statement_connections.resolve_endpoint(
+                value,
+                graph.statement,
+                candidates,
+            )
+    result = statement_connections.Result(
+        source=resolved[source.strip()],
+        target=resolved[target.strip()],
+        required=[resolved[value.strip()] for value in (required or [])],
+        status="needs_resolution",
+        direction=direction,
+        link_types=link_types,
+        limits=limits,
+    )
+    if len(result.model_dump_json()) > statement_connections.MAX_OUTPUT_CHARS - 2048:
+        raise ValueError(
+            "endpoint candidates and filters exceed the response limit; "
+            "use statement IDs or fewer link types"
+        )
+    # Embedding happens above; hold a consistent read snapshot only for the walk.
+    conn.execute("SAVEPOINT find_statement_connections")
+    try:
+        for endpoint in result.endpoints:
+            if endpoint.selected_id and graph.statement(endpoint.selected_id) is None:
+                endpoint.selected_id = None
+                endpoint.status = "missing"
+                endpoint.candidates = []
+        return (
+            statement_connections.Search(graph.neighbors, graph.statement, result)
+            .run()
+            .model_dump(mode="json")
+        )
+    finally:
+        conn.execute("RELEASE SAVEPOINT find_statement_connections")
 
 
 _SURVEY_LOG = logging.getLogger("mycelium.survey")

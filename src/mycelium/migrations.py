@@ -745,6 +745,25 @@ def _migration_v11_passive_by_aliases(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v12_connection_indexes(conn: sqlite3.Connection) -> None:
+    # Earlier migrations rebuild when_nodes, dropping indexes installed by
+    # SCHEMA. Install these after those rebuilds as well as on fresh stores.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS statement_links_from_id "
+        "ON statement_links (from_statement_id, link_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS statement_links_to_id "
+        "ON statement_links (to_statement_id, link_id)"
+    )
+    # The runner also supports partial legacy schemas without when_nodes.
+    if _has_table(conn, "when_nodes"):
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS when_nodes_statement_link "
+            "ON when_nodes (statement_id, link_id)"
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -760,6 +779,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (9, _migration_v9_alias_direction),
     (10, _migration_v10_belongs_to_aliases),
     (11, _migration_v11_passive_by_aliases),
+    (12, _migration_v12_connection_indexes),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

@@ -797,6 +797,7 @@ def test_the_inner_loop_is_offered_exactly_the_domain_readers():
         "discover_facts",
         "find_duplicates",
         "find_entity_duplicates",
+        "find_statement_connections",
         "get_entity",
         "get_statements",
         "grep_statements",

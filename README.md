@@ -86,6 +86,9 @@ The main read path is:
 
 - `search_statements` for semantic retrieval and shallow graph expansion.
 - `get_statements` for full hydration of known statement IDs.
+- `find_statement_connections` for several bounded routes between two IDs or
+  text-matched statements, or a graph connecting additional `required` statements
+  on branches. See [connection search](docs/CONNECTIONS.md).
 - `survey_statements` and `ask` for broader retrieval and synthesized answers.
 - `search_entities`, `list_entities`, and `get_entity` for entity discovery.
 - `list_link_types`, `list_statement_kinds`, and `list_entity_link_types` for
