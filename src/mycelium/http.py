@@ -37,6 +37,7 @@ from . import (
     connect_page,
     documentation_profiles,
     model_settings,
+    names_workspace,
     oauth_server,
     oidc,
     ops_ledger,
@@ -939,97 +940,12 @@ def update_knowledge_gap(
     return {"gap": _serialize_gap(updated)}
 
 
-# --- pending mentions (suspect-match review) -------------------------------
-# A statement matched a short/common ("suspect") entity name, which is too
-# ambiguous to auto-link, so it is held here for per-occurrence human
-# approval. This is the review surface for derived mentions. It is HTTP-only
-# by design — never an MCP tool — so the substrate's write API gives no hint
-# that mentions are derived. Approving materializes the real mention.
-
-
-def _serialize_pending_mention(row) -> dict[str, Any]:
-    if row["approved_at"]:
-        status = "approved"
-    elif row["rejected_at"]:
-        status = "rejected"
-    else:
-        status = "open"
-    return {
-        "id": row["id"],
-        "statement_id": row["statement_id"],
-        "statement_text": row["statement_text"],
-        "statement_kind": row["statement_kind"],
-        "name_id": row["name_id"],
-        "name": row["name"],
-        "entity_id": row["entity_id"],
-        "status": status,
-        "created_at": row["created_at"],
-        "approved_at": row["approved_at"],
-        "rejected_at": row["rejected_at"],
-    }
-
-
-@app.get("/api/pending-mentions")
-def list_pending_mentions(
-    request: Request, status: str | None = None, limit: int = 200, offset: int = 0
-) -> dict[str, Any]:
-    """Suspect mention matches awaiting review.
-
-    `status` filters to open / approved / rejected / all (default open). Each
-    row carries the statement text and the suspect name so a reviewer can
-    judge whether this occurrence is a real reference to the entity.
-    """
+@app.get("/api/mention-candidates")
+def mention_candidates(
+    request: Request, entity_id: str, after: int = 0, limit: int = 50
+) -> dict[str, JsonValue]:
     _require_principal(request)
-    conn = store.substrate_connection()
-    status = status or "open"
-    if status not in ("open", "approved", "rejected", "all"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail="status must be one of: open, approved, rejected, all",
-        )
-    rows = store.list_pending_mentions(conn, status=status, limit=limit, offset=offset)
-    return {"pending_mentions": [_serialize_pending_mention(r) for r in rows]}
-
-
-class PendingMentionUpdateBody(BaseModel):
-    # {"action": "approve"} → materialize the mention; {"action": "reject"} → drop it.
-    action: str
-
-
-@app.patch("/api/pending-mentions/{pending_id}")
-def update_pending_mention(
-    pending_id: int, body: PendingMentionUpdateBody, request: Request
-) -> dict[str, Any]:
-    """Approve (materialize the mention) or reject (write nothing) one
-    suspect occurrence. The principal is stamped as approved_by/rejected_by
-    via the per-request actor."""
-    _require_principal(request)
-    conn = store.substrate_connection()
-    if body.action not in ("approve", "reject"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400, detail="action must be one of: approve, reject"
-        )
-    with store.transaction(conn):
-        if body.action == "approve":
-            ok = store.approve_pending_mention(conn, pending_id)
-        else:
-            ok = store.reject_pending_mention(conn, pending_id)
-    if not ok:
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=404, detail="pending mention not found or already resolved"
-        )
-    row = store.get_pending_mention(conn, pending_id)
-    return {
-        "resolved": True,
-        "id": pending_id,
-        "status": "approved" if row["approved_at"] else "rejected",
-    }
+    return server.get_mention_candidates(entity_id=entity_id, after=after, limit=limit)
 
 
 @app.get("/api/entity-positions", include_in_schema=False)
@@ -1256,6 +1172,51 @@ async def _profile_conflict(
     request: Request, exc: documentation_profiles.Conflict
 ) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(names_workspace.Conflict)
+async def _names_conflict(
+    request: Request, exc: names_workspace.Conflict
+) -> JSONResponse:
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.get("/api/names-workspace")
+def names_catalogue_http(request: Request, q: str = "") -> names_workspace.Catalogue:
+    principal = _require_principal(request)
+    result = names_workspace.catalogue(server._db(), q)
+    result.can_write = auth.principal_has_real_role(principal, "writer")
+    if result.can_write:
+        result.allowed_actions = ["add", "correct", "prefer", "move", "split"]
+    if auth.principal_has_real_role(principal, "admin"):
+        result.allowed_actions.extend(("merge", "remove"))
+    return result
+
+
+@app.post("/api/names-workspace/preview")
+def names_preview_http(
+    body: names_workspace.PreviewRequest, request: Request
+) -> names_workspace.Preview:
+    _enforce_curator(request, "editing names and aliases")
+    if body.action.kind in {"merge", "remove"}:
+        _require_admin(request)
+    return names_workspace.preview(server._db(), body.action)
+
+
+@app.post("/api/names-workspace/apply")
+def names_apply_http(
+    body: names_workspace.ApplyRequest, request: Request
+) -> names_workspace.Applied:
+    _enforce_curator(request, "editing names and aliases")
+    if body.action.kind in {"merge", "remove"}:
+        _require_admin(request)
+    return names_workspace.apply(body)
+
+
+@app.get("/api/names-workspace/{entity_id}")
+def names_detail_http(entity_id: str, request: Request) -> names_workspace.Detail:
+    _require_principal(request)
+    return names_workspace.detail(server._db(), entity_id)
 
 
 @app.get("/api/documentation/profiles")

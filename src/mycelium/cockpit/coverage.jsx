@@ -12,14 +12,12 @@
 const { useState: useStateC, useEffect: useEffectC, useMemo: useMemoC, useRef: useRefC } = React;
 
 /* ---------------- maturity vocabulary (derived from real signals) ---------------- */
-// Maturity is NOT a human label here — it is DERIVED from the bound statement
-// count: not-started (0) · stub (1-2) · partial (3-5) · solid (6+). The
-// label/gloss/step map is local to this surface.
+// Buckets describe mention counts only; they do not assess documentation quality.
 const MATURITY_META = {
-  "not-started": { label: "not started", gloss: "No statement mentions this entity — declared on the map but undocumented.", step: 0 },
-  stub: { label: "stub", gloss: "1–2 statements mention this entity — barely begun.", step: 1 },
-  partial: { label: "partial", gloss: "3–5 statements mention this entity — taking shape.", step: 2 },
-  solid: { label: "solid", gloss: "6+ statements mention this entity — substantially documented.", step: 4 },
+  "not-started": { label: "0 matches", gloss: "No indexed statement mentions this entity. Other relevant prose may exist.", step: 0 },
+  stub: { label: "1–2 matches", gloss: "1–2 indexed statements mention this entity.", step: 1 },
+  partial: { label: "3–5 matches", gloss: "3–5 indexed statements mention this entity.", step: 2 },
+  solid: { label: "6+ matches", gloss: "6 or more indexed statements mention this entity.", step: 4 },
 };
 function maturityFromCount(n) {
   if (n === 0) return "not-started";
@@ -156,7 +154,7 @@ function AutoSignals({ signals, compact }) {
   if (s.statements === 0) {
     return (
       <div className="csig empty">
-        <span className="nothing"><span className="n-glyph" />nothing documented</span>
+        <span className="nothing"><span className="n-glyph" />no indexed mentions</span>
       </div>
     );
   }
@@ -212,7 +210,7 @@ function MaturityCell({ maturity }) {
 /* ---------------- binding pill (real bound / honest unbound) ---------------- */
 function BindPill({ binding }) {
   if (binding.kind === "unbound") return (
-    <span className="bind unbound" title="No statement mentions this entity — nothing is bound.">unbound</span>
+    <span className="bind unbound" title="No indexed mention was found. Ambiguous matches may still exist.">unbound</span>
   );
   return (
     <span className="bind bound" title="Coverage tracks the statements that mention this entity — a real, derived binding.">
@@ -231,7 +229,7 @@ function TopicDrawer({ topic }) {
     return (
       <div className="cov-drawer">
         <div className="cd-empty">
-          <div className="cde-title">No statement mentions this entity.</div>
+          <div className="cde-title">No indexed mention was found.</div>
           <div className="cde-blurb">The entity exists in the substrate but nothing has been written about it yet. This is the gap — surfaced so it isn't mistaken for complete. Writing happens through ingest, then review; this surface only reports.</div>
           <div className="cd-actions" style={{ justifyContent: "center" }}>
             <button className="btn-sm find" onClick={() => router.go({ view: "entity", id: topic.id })}><I.arrow width="13" height="13" />Open this entity</button>
@@ -245,7 +243,7 @@ function TopicDrawer({ topic }) {
     <div className="cov-drawer">
       <div className="cd-banner">
         <span className="cdb-icon"><I.prov width="16" height="16" /></span>
-        <span>Coverage tracks <b>{stmts.length} bound statement{stmts.length === 1 ? "" : "s"}</b> — the statements that mention this entity. Both maturity and the signals are derived from the substrate.</span>
+        <span>Coverage tracks <b>{stmts.length} bound statement{stmts.length === 1 ? "" : "s"}</b> — the statements that mention this entity. These matches do not measure completeness or quality.</span>
       </div>
       {stmts.map((s) => (
         <div key={s.id} className="cd-stmt" onClick={() => router.go({ view: "statement", id: s.id })}>
@@ -295,7 +293,7 @@ function UndocumentedBand({ topics, onOpen }) {
         <span className="gb-icon"><I.gap width="22" height="22" /></span>
         <div className="gb-titles">
           <div className="gb-title">Entities with <em>nothing</em> written about them</div>
-          <div className="gb-desc">an entity exists in the substrate but no statement mentions it · absence, surfaced — not silence</div>
+          <div className="gb-desc">No indexed mentions for these concepts. Check Names & aliases for possible text matches.</div>
         </div>
         <span className="gb-count">{topics.length}</span>
       </div>
@@ -349,7 +347,7 @@ function Ledger({ summary, filter, onFilter }) {
   const seg = (key) => (filter === key ? " on" : "");
   return (
     <div className="cov-ledger">
-      <div className="cov-meter" title="entities by derived maturity, plus undocumented and reported gaps">
+      <div className="cov-meter" title="entities by indexed mention count, plus reported gaps">
         <span className="m-solid" style={{ width: pct(summary.solid) }} />
         <span className="m-partial" style={{ width: pct(summary.partial) }} />
         <span className="m-stub" style={{ width: pct(summary.stub) }} />
@@ -358,12 +356,12 @@ function Ledger({ summary, filter, onFilter }) {
       <div className="cov-buckets">
         <button className={`cov-bucket b-doc${seg("documented")}`} onClick={() => onFilter(filter === "documented" ? "all" : "documented")}>
           <div className="cb-top"><span className="cb-dot" /><span className="cb-n">{summary.documented}</span></div>
-          <span className="cb-l">Documented</span>
-          <span className="cb-sub">{summary.solid} solid · {summary.partial} partial · {summary.stub} stub</span>
+          <span className="cb-l">With indexed mentions</span>
+          <span className="cb-sub">{summary.solid} with 6+ · {summary.partial} with 3–5 · {summary.stub} with 1–2 matches</span>
         </button>
         <button className={`cov-bucket b-gap${seg("undocumented")}`} onClick={() => onFilter(filter === "undocumented" ? "all" : "undocumented")}>
           <div className="cb-top"><span className="cb-dot" /><span className="cb-n">{summary.undocumented}</span></div>
-          <span className="cb-l">Undocumented</span>
+          <span className="cb-l">Without indexed mentions</span>
           <span className="cb-sub">entity · no mentioning statement</span>
         </button>
         <button className={`cov-bucket b-untracked${seg("gaps")}`} onClick={() => onFilter(filter === "gaps" ? "all" : "gaps")}>
@@ -374,7 +372,7 @@ function Ledger({ summary, filter, onFilter }) {
       </div>
       <div className="cov-ledger-foot">
         <span className="lf-dot" />
-        <span><b>{summary.entities}</b> entit{summary.entities === 1 ? "y" : "ies"} treated as topics · <b>{summary.totalStatements}</b> statements in the substrate · maturity is derived from the mentioning-statement count, not a human label</span>
+        <span><b>{summary.entities}</b> entit{summary.entities === 1 ? "y" : "ies"} treated as topics · <b>{summary.totalStatements}</b> statements in the substrate · counts describe indexed mentions, not documentation completeness</span>
       </div>
     </div>
   );
@@ -431,7 +429,7 @@ function CoverageScreen() {
   const [model, setModel] = useStateC(null);
   const [gaps, setGaps] = useStateC([]);
   const [filter, setFilter] = useStateC("all"); // all | documented | undocumented | gaps
-  const [sortMode, setSortMode] = useStateC("maturity"); // maturity | volume | name
+  const [sortMode, setSortMode] = useStateC("volume"); // volume | name
   const [compact, setCompact] = useStateC(false);
   const [openId, setOpenId] = useStateC(null);
   const tickRef = useRefC(null);
@@ -490,10 +488,7 @@ function CoverageScreen() {
 
   const sorted = useMemoC(() => {
     const arr = [...pool];
-    if (sortMode === "maturity") {
-      const rank = { solid: 0, partial: 1, stub: 2, "not-started": 3 };
-      arr.sort((a, b) => (rank[a.maturity] - rank[b.maturity]) || (b.signals.statements - a.signals.statements));
-    } else if (sortMode === "volume") {
+    if (sortMode === "volume") {
       arr.sort((a, b) => b.signals.statements - a.signals.statements);
     } else {
       arr.sort((a, b) => a.title.localeCompare(b.title));
@@ -534,7 +529,6 @@ function CoverageScreen() {
       <div className="cov-controls">
         <div className="cov-seg">
           <span className="seg-label">sort</span>
-          <button className={sortMode === "maturity" ? "on" : ""} onClick={() => setSortMode("maturity")}>maturity</button>
           <button className={sortMode === "volume" ? "on" : ""} onClick={() => setSortMode("volume")}>volume</button>
           <button className={sortMode === "name" ? "on" : ""} onClick={() => setSortMode("name")}>name</button>
         </div>
@@ -548,17 +542,17 @@ function CoverageScreen() {
       {sortMode === "volume" && (
         <div className="cov-ledger-foot" style={{ marginTop: 12, border: "1px solid var(--line)", borderRadius: "var(--r-md)" }}>
           <span className="lf-dot" style={{ background: "var(--warn)" }} />
-          <span>Ranked by statement count — <b>volume is not a measure of quality.</b> A high count never implies the topic is well documented; read the maturity badge, not the number.</span>
+          <span>Ranked by statement count — <b>volume is not a measure of quality.</b> These counts do not establish whether the topic is adequately documented.</span>
         </div>
       )}
 
-      {showGapBand && <UndocumentedBand topics={model.emptyTopics} onOpen={(id) => { setFilter("all"); setSortMode("maturity"); setOpenId(id); }} />}
+      {showGapBand && <UndocumentedBand topics={model.emptyTopics} onOpen={(id) => { setFilter("all"); setSortMode("volume"); setOpenId(id); }} />}
 
       {showList && (
         <div className="cov-section">
           <div className="cov-sec-head">
             <span className="csh-title">
-              {filter === "documented" ? "Documented entities" : filter === "undocumented" ? "Undocumented entities" : "Entities as topics"}
+              {filter === "documented" ? "Entities with indexed mentions" : filter === "undocumented" ? "Entities without indexed mentions" : "Entities as topics"}
             </span>
             <span className="csh-count">{sorted.length} shown</span>
           </div>
@@ -580,9 +574,9 @@ function CoverageHeader({ onReload, loading }) {
   return (
     <div className="cov-head">
       <div className="cov-eyebrow">Mycelium · documentation map</div>
-      <h1 className="cov-title">What's <em>documented</em> — and what isn't, yet.</h1>
+      <h1 className="cov-title">Where concepts <em>appear</em> in statements.</h1>
       <p className="cov-sub">
-        Every entity in the substrate, treated as a topic, laid over what the substrate <b>actually</b> holds about it. Three things fall out: what's covered and how deeply (derived from the count of statements that mention it), the entities <b>nobody has written about</b> yet, and the <b>open knowledge gaps</b> that have been reported. A read-only map — writing happens through ingest, then review.
+        Entities grouped by indexed mentions, alongside reported <b>knowledge gaps</b>. A mention count does not establish how well a subject is documented. Ambiguous alias matches are available in Names & aliases.
         {!loading && <button className="btn-sm" style={{ marginLeft: 12, verticalAlign: "middle" }} onClick={onReload}><I.timeout width="13" height="13" />Re-read substrate</button>}
       </p>
     </div>

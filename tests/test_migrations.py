@@ -306,10 +306,10 @@ def test_v5_upgrade_enqueues_existing_statements_for_rederive():
     # Every statement was enqueued for recompute.
     assert store.count_open_recompute(conn) == 1
     # Draining re-derives: "result" is suspect, so the stale auto-link is
-    # removed and the occurrence is queued for review instead.
+    # removed. Ambiguity no longer creates a review task.
     mention_worker.drain(conn)
     assert store.get_mentions(conn, sid) == []
-    assert [p["name"] for p in store.list_pending_mentions(conn)] == ["result"]
+    assert store.list_pending_mentions(conn) == []
 
 
 def _downgrade_names_to_case_sensitive(conn):

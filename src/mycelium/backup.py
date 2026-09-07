@@ -91,6 +91,7 @@ _DATA_TABLES: tuple[str, ...] = (
     "names",
     "statements",
     "statement_mentions",
+    "pending_mentions",
     "statement_links",
     "when_nodes",
     "entity_links",
@@ -133,6 +134,7 @@ _TABLE_TO_KIND: dict[str, str] = {
     "names": "name",
     "statements": "statement",
     "statement_mentions": "statement_mention",
+    "pending_mentions": "legacy_mention_decision",
     "statement_links": "statement_link",
     "when_nodes": "when_node",
     "entity_links": "entity_link",
@@ -613,6 +615,12 @@ def import_substrate(
                     )
                 if history_db_path is not None and (staging / "history.jsonl").exists():
                     _load_history_jsonl(conn, staging / "history.jsonl")
+                for entity in conn.execute(
+                    "SELECT id FROM entities WHERE preferred_name_id IS NULL"
+                ).fetchall():
+                    store.ensure_preferred_name(
+                        conn, entity["id"], preserve_fallback=True
+                    )
         finally:
             conn.close()
 

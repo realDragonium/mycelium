@@ -16,10 +16,11 @@ function useHashRoute() {
     if (parts[0] === 'entities') return { view: 'entities', focus: params.focus || null };
     if (parts[0] === 'browse') return { view: 'browse' };
     if (parts[0] === 'glossary') return { view: 'glossary' };
+    if (['mentions', 'pending'].includes(parts[0])) return { view: 'names' };
+    if (parts[0] === 'names') return { view: 'names' };
     if (parts[0] === 'documentation') return { view: 'documentation' };
     if (parts[0] === 'settings') return { view: 'settings' };
     if (parts[0] === 'gaps') return { view: 'gaps' };
-    if (parts[0] === 'pending') return { view: 'pending' };
     if (parts[0] === 'drafts') return {
       view: 'drafts',
       selected: parts[1] || null,
@@ -51,10 +52,10 @@ function useHashRoute() {
     else if (next.view === 'entities') h = next.focus ? `#/entities?focus=${next.focus}` : `#/entities`;
     else if (next.view === 'browse') h = `#/browse`;
     else if (next.view === 'glossary') h = `#/glossary`;
+    else if (next.view === 'names') h = '#/names';
     else if (next.view === 'documentation') h = '#/documentation';
     else if (next.view === 'settings') h = `#/settings`;
     else if (next.view === 'gaps') h = `#/gaps`;
-    else if (next.view === 'pending') h = `#/pending`;
     else if (next.view === 'drafts') h = next.selected ? `#/drafts/${next.selected}` : `#/drafts`;
     else if (next.view === 'activity') {
       const qs = new URLSearchParams();
@@ -127,10 +128,10 @@ function App() {
     case 'entities': screen = <EntitiesGraph focusId={router.focus} />; break;
     case 'browse': screen = <BrowseIndex />; break;
     case 'glossary': screen = <GlossaryScreen />; break;
+    case 'names': screen = <NamesWorkspace onDataChanged={refresh} />; break;
     case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'settings': screen = <SettingsScreen />; break;
     case 'gaps': screen = <GapsScreen />; break;
-    case 'pending': screen = <PendingMentionsScreen />; break;
     case 'drafts': screen = <DraftsScreen selected={router.selected} />; break;
     case 'activity': screen = <ActivityScreen page={router.page} selected={router.selected} ops={router.ops} kinds={router.kinds} q={router.q} />; break;
     case 'landing':
@@ -141,7 +142,7 @@ function App() {
     <RouterCtx.Provider value={router}>
       <TweaksCtx.Provider value={tweaksValue}>
        <DataCtx.Provider value={dataCtxValue}>
-        <div className={`shell${router.view === 'documentation' ? ' documentation-shell' : ''}`}>
+        <div className={`shell${['documentation', 'names'].includes(router.view) ? ' documentation-shell' : ''}`}>
           <TopBar small={true} />
           {screen}
           <Footer />

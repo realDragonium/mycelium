@@ -43,9 +43,10 @@ function parseHash() {
   if (parts[0] === 'ingest') return { view: 'ingest' };
   if (parts[0] === 'settings') return { view: 'settings' };
   if (parts[0] === 'research') return { view: 'research' };
+  if (['mentions', 'pending'].includes(parts[0])) return { view: 'names' };
+  if (parts[0] === 'names') return { view: 'names' };
   if (parts[0] === 'documentation') return { view: 'documentation', id: p.run || null };
   if (parts[0] === 'coverage') return { view: 'coverage' };
-  if (parts[0] === 'mentions') return { view: 'mentions' };
   if (parts[0] === 'drafts') return { view: 'drafts' };
   if (parts[0] === 'draft' && parts[1]) return { view: 'draft', id: parts[1] };
   if (parts[0] === 's' && parts[1]) return { view: 'statement', id: parts[1] };
@@ -58,9 +59,9 @@ function routeToHash(n) {
   if (n.view === 'ingest') return '#/ingest';
   if (n.view === 'settings') return '#/settings';
   if (n.view === 'research') return '#/research';
+  if (n.view === 'names') return '#/names';
   if (n.view === 'documentation') return '#/documentation' + (n.id ? '?run=' + encodeURIComponent(n.id) : '');
   if (n.view === 'coverage') return '#/coverage';
-  if (n.view === 'mentions') return '#/mentions';
   if (n.view === 'drafts') return '#/drafts';
   if (n.view === 'draft') return `#/draft/${n.id}`;
   if (n.view === 'statement') return `#/s/${n.id}`;

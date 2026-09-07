@@ -28,7 +28,7 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
 
     Returns:
         - entities: [{id, name, description}] — `name` is one of the
-          entity's names (alphabetically first); falls back to the id if
+          entity's preferred name (alphabetical fallback); falls back to the id if
           the entity has no names.
         - names: [{id, text, entity}] — `entity` is the entity_id.
         - statements: [{id, kind, text, mentions: [entity_id]}] — entity_ids
@@ -47,7 +47,14 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
     for r in sorted(name_rows, key=lambda r: r["text"]):
         primary_name.setdefault(r["entity_id"], r["text"])
 
-    entity_rows = conn.execute("SELECT id, description FROM entities").fetchall()
+    entity_rows = conn.execute(
+        "SELECT id, description, preferred_name_id FROM entities"
+    ).fetchall()
+    by_name_id = {r["id"]: r for r in name_rows}
+    for entity in entity_rows:
+        preferred = by_name_id.get(entity["preferred_name_id"])
+        if preferred is not None and preferred["entity_id"] == entity["id"]:
+            primary_name[entity["id"]] = preferred["text"]
     entities = [
         {
             "id": r["id"],

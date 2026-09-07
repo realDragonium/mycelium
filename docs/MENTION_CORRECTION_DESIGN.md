@@ -1,5 +1,8 @@
 # Adding mentions from the cockpit
 
+Historical design note. The per-occurrence review queue is retired; see
+[alias-based discovery](MENTIONS.md). Vocabulary editing belongs in Names & aliases.
+
 Milestone 02. The need: while reviewing, be able to **add new names/aliases for
 entities, or new entities**, so statements get proper mentions — because the
 matcher is only as good as its vocabulary.

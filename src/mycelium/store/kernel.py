@@ -223,6 +223,7 @@ SCHEMA = (
 CREATE TABLE IF NOT EXISTS entities (
     id          TEXT PRIMARY KEY,
     description TEXT,
+    preferred_name_id TEXT REFERENCES names(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
     created_at  TEXT,
     updated_at  TEXT,
     created_by  TEXT,
@@ -536,17 +537,8 @@ CREATE TABLE IF NOT EXISTS mention_recompute_queue (
 CREATE INDEX IF NOT EXISTS mention_recompute_queue_open
     ON mention_recompute_queue (id) WHERE claimed_at IS NULL;
 
--- Review queue for SUSPECT mention matches. Short/common names (see
--- `mentions.is_suspect_name`) are too ambiguous to auto-link, so a match
--- on one is held here for per-occurrence human approval rather than
--- written as a mention. Terminal-timestamp status, mirroring
--- `knowledge_gaps`: open while both approved_at and rejected_at are NULL;
--- approving inserts the real statement_mentions row. On recompute, an
--- APPROVED occurrence whose name still matches is preserved (a human
--- approval is asserted truth, re-asserted, not destroyed); open and
--- rejected occurrences carry no memory and are re-queued fresh if they
--- still match (the deliberately-dumb rule — no text-diffing). Never
--- exposed through MCP. UNIQUE keeps one open decision per (statement, name).
+-- Historical mention decisions. New ambiguous occurrences are query-time
+-- candidates, not review tasks. Still-matching approvals survive recompute.
 CREATE TABLE IF NOT EXISTS pending_mentions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     statement_id TEXT NOT NULL REFERENCES statements(id),

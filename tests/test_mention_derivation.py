@@ -1,5 +1,5 @@
 """Integration tests for derived mentions: the sync statement-upsert path,
-auto-plural generation, the suspect review queue, and the async recompute
+auto-plural generation, historical approvals, and the async recompute
 worker. Exercises the real server functions with a stubbed embedder.
 """
 
@@ -84,25 +84,28 @@ def test_editing_text_rederives(srv):
 # ─── suspect review queue ──────────────────────────────────────────────────
 
 
-def test_suspect_name_is_queued_not_linked(srv):
-    srv.upsert_entity(name="flow", description="a flow")  # 4 chars → suspect
+def test_suspect_name_is_a_candidate_without_a_review_task(srv):
+    entity = srv.upsert_entity(name="flow", description="a flow")["entity_id"]
     sid = srv.upsert_statement(kind="state", text="the flow halts", links=[])[
         "statement_id"
     ]
     assert _mentions(sid) == []
-    assert _pending() == ["flow"]
-
-
-def test_approving_pending_creates_the_mention(srv):
-    srv.upsert_entity(name="flow", description="a flow")
-    sid = srv.upsert_statement(kind="state", text="the flow halts", links=[])[
-        "statement_id"
+    assert _pending() == []
+    page = srv.get_mention_candidates(entity)
+    assert [(m["statement_id"], m["match"]) for m in page["matches"]] == [
+        (sid, "possible")
     ]
-    pid = store.list_pending_mentions(store.substrate_connection())[0]["id"]
-    assert store.approve_pending_mention(store.substrate_connection(), pid) is True
-    assert _mentions(sid) == ["flow"]
-    assert _pending("open") == []
-    assert _pending("approved") == ["flow"]
+
+
+def _legacy_approve(sid: str, name: str) -> None:
+    conn = store.substrate_connection()
+    nid = store.get_name_by_text(conn, name)["id"]
+    conn.execute(
+        "INSERT INTO pending_mentions (statement_id, name_id, created_at) VALUES (?, ?, '2026-08-01')",
+        (sid, nid),
+    )
+    pid = store.list_pending_mentions(conn)[0]["id"]
+    store.approve_pending_mention(conn, pid)
 
 
 def test_approved_mention_survives_unrelated_recompute(srv):
@@ -114,8 +117,7 @@ def test_approved_mention_survives_unrelated_recompute(srv):
         kind="state", text="the flow drives the dashboard", links=[]
     )["statement_id"]
     assert _mentions(sid) == ["dashboard"]
-    pid = store.list_pending_mentions(store.substrate_connection())[0]["id"]
-    store.approve_pending_mention(store.substrate_connection(), pid)
+    _legacy_approve(sid, "flow")
     assert _mentions(sid) == ["dashboard", "flow"]
     # Unrelated name change anywhere → this statement gets recomputed.
     srv.upsert_entity(name="invoice", description="elsewhere")
@@ -133,8 +135,7 @@ def test_approved_mention_dropped_when_text_no_longer_matches(srv):
     sid = srv.upsert_statement(kind="state", text="the flow halts", links=[])[
         "statement_id"
     ]
-    pid = store.list_pending_mentions(store.substrate_connection())[0]["id"]
-    store.approve_pending_mention(store.substrate_connection(), pid)
+    _legacy_approve(sid, "flow")
     assert _mentions(sid) == ["flow"]
     srv.replace_text(id=sid, text="the system halts")  # "flow" gone from text
     assert _mentions(sid) == []
@@ -226,13 +227,14 @@ def test_merge_entities_recomputes(srv):
 
 
 def test_delete_statement_clears_derived_rows(srv):
-    srv.upsert_entity(name="flow", description="x")  # suspect → pending
+    srv.upsert_entity(name="flow", description="x")  # historical approval fixture
     srv.upsert_entity(name="dashboard", description="y")  # distinctive → mention
     sid = srv.upsert_statement(
         kind="state", text="the dashboard and the flow", links=[]
     )["statement_id"]
     assert _mentions(sid) == ["dashboard"]
-    assert _pending() == ["flow"]
+    _legacy_approve(sid, "flow")
+    assert _pending("approved") == ["flow"]
     srv.delete_statement(id=sid)
     assert store.get_mentions(store.substrate_connection(), sid) == []
     assert store.count_pending_mentions(store.substrate_connection()) == 0

@@ -24,11 +24,11 @@ function Landing() {
     <main className="page landing">
       <section className="landing-hero">
         <div className="landing-pre">
-          mycelium <b>v0.1</b> · read-only browser · {data.entities.length + data.statements.length + data.names.length} records · {data.links.length} links
+          mycelium <b>v0.1</b> · workspace · {data.entities.length + data.statements.length + data.names.length} records · {data.links.length} links
         </div>
         <h1 className="landing-title">Browse the substrate.</h1>
         <p className="landing-blurb">
-          Read-only inspection of entities, statements, names and the typed links between them.
+          Browse entities, statements, names and the typed links between them.
           Search resolves across all three record kinds.
         </p>
       </section>

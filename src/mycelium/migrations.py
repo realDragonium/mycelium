@@ -764,6 +764,22 @@ def _migration_v12_connection_indexes(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v13_preferred_names(conn: sqlite3.Connection) -> None:
+    if not _has_table(conn, "entities"):
+        return
+    _ensure_column(
+        conn,
+        "entities",
+        "preferred_name_id",
+        "TEXT REFERENCES names(id) ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED",
+    )
+
+    if _has_table(conn, "names"):
+        conn.execute(
+            "UPDATE entities SET preferred_name_id = (SELECT n.id FROM names n WHERE n.entity_id = entities.id ORDER BY n.text COLLATE NOCASE, n.id LIMIT 1) WHERE preferred_name_id IS NULL"
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -780,6 +796,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (10, _migration_v10_belongs_to_aliases),
     (11, _migration_v11_passive_by_aliases),
     (12, _migration_v12_connection_indexes),
+    (13, _migration_v13_preferred_names),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -897,6 +914,7 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
 
     return (
         _has("entities", "created_at")
+        and _has("entities", "preferred_name_id")
         and _has("when_nodes", "link_kind")
         and _has("names", "generated_from_name_id")
         and "NOCASE" in _table_sql("names").upper()

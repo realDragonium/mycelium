@@ -17,7 +17,9 @@ from .. import mentions
 from .entities import (
     create_entity,
     delete_entity,
+    ensure_preferred_name,
     get_entity_by_id,
+    set_preferred_name,
     update_entity_description,
 )
 from .entity_links import (
@@ -137,6 +139,7 @@ from .names import (
     get_names_by_entity,
     grep_statements,
     grep_statements_via_mentions,
+    invalidate_name_decisions,
     list_entities,
     list_statements,
     reassign_names,
@@ -250,6 +253,8 @@ __all__ = [
     "finish_alias_embeddings",
     "get_actor",
     "get_entity_by_id",
+    "ensure_preferred_name",
+    "set_preferred_name",
     "get_entity_link_type_glossary",
     "get_entity_links_incoming",
     "get_entity_links_outgoing",
@@ -266,6 +271,7 @@ __all__ = [
     "get_name_id_by_vector_id",
     "get_name_vector_id",
     "get_names_by_entity",
+    "invalidate_name_decisions",
     "get_pending_mention",
     "get_statement",
     "get_statement_id_by_vector_id",

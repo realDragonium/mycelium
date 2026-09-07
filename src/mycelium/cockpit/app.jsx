@@ -151,6 +151,8 @@ function Landing() {
 /* ---------------- App ---------------- */
 function App() {
   const router = useRouterState();
+  const [, setDataVersion] = useStateApp(0);
+  const refreshData = async () => {await window.Myc.loadData(); setDataVersion(value => value + 1);};
   const data = window.MYCELIUM_DATA;
   useMemoApp(() => { window.MYCELIUM_INDEX = buildIndex(data); }, [data]);
   const [igNonce, setIgNonce] = useStateApp(0);
@@ -160,8 +162,6 @@ function App() {
   const [t, setTweak] = useTweaks(defaults);
   const draftsArr = window.useMycDrafts ? window.useMycDrafts() : [];
   const openDrafts = draftsArr.filter(d => d.status === 'open').length;
-  const pendingArr = window.useMycPending ? window.useMycPending() : null;
-  const openMentions = (pendingArr || []).filter(p => p.status === 'open').length;
 
   useEffectApp(() => {
     const r = document.documentElement;
@@ -178,9 +178,9 @@ function App() {
     case 'ingest': screen = <IngestSurface key={igNonce} />; break;
     case 'settings': screen = <main className="page narrow"><div className="crumbs"><a href="#/">~</a><span className="sep">/</span><span>settings</span></div><h1>AI settings</h1><AISettings /></main>; break;
     case 'research': screen = <ResearchSurface key="research" />; break;
+    case 'names': screen = <NamesWorkspace onDataChanged={refreshData} />; break;
     case 'documentation': screen = <DocumentationWorkspace />; break;
     case 'coverage': screen = <CoverageScreen />; break;
-    case 'mentions': screen = <MentionsScreen />; break;
     case 'drafts': screen = <DraftsList />; break;
     case 'draft': screen = <DraftReview id={router.id} />; break;
     case 'statement': screen = <StatementDetail id={router.id} />; break;
@@ -192,7 +192,7 @@ function App() {
 
   return (
     <RouterCtx.Provider value={router}>
-      <div className={`shell${router.view === 'documentation' ? ' documentation-shell' : ''}`}>
+      <div className={`shell${['documentation', 'names'].includes(router.view) ? ' documentation-shell' : ''}`}>
         <header className="topbar">
           <div className="topbar-inner">
             <div className="brand" onClick={() => router.go({ view: 'landing' })}>
@@ -202,9 +202,9 @@ function App() {
             </div>
             <div className="topbar-spacer" />
             <button className={`nav-btn${router.view === 'coverage' ? ' on' : ''}`} onClick={() => router.go({ view: 'coverage' })}><I.gap width="15" height="15" />Coverage{window.MYCELIUM_COVERAGE && window.MYCELIUM_COVERAGE.summary.gaps > 0 && <span className="nb-badge">{window.MYCELIUM_COVERAGE.summary.gaps}</span>}</button>
-            <button className={`nav-btn${router.view === 'mentions' ? ' on' : ''}`} onClick={() => router.go({ view: 'mentions' })}><I.interp width="15" height="15" />Mentions{openMentions > 0 && <span className="nb-badge">{openMentions}</span>}</button>
             <button className={`drafts-btn${openDrafts ? ' has-open' : ''}`} onClick={() => router.go({ view: 'drafts' })}><I.prov width="15" height="15" />Drafts{openDrafts > 0 && <span className="db-badge">{openDrafts}</span>}</button>
             <button className={`nav-btn${router.view === 'research' ? ' on' : ''}`} onClick={() => router.go({ view: 'research' })}><I.find width="15" height="15" />Research</button>
+            <button className={`nav-btn${router.view === 'names' ? ' on' : ''}`} onClick={() => router.go({ view: 'names' })}>Names &amp; aliases</button>
             <button className={`nav-btn${router.view === 'documentation' ? ' on' : ''}`} onClick={() => router.go({ view: 'documentation' })}><I.prov width="15" height="15" />Documentation</button>
             <button className={`nav-btn${router.view === 'settings' ? ' on' : ''}`} onClick={() => router.go({ view: 'settings' })}>AI settings</button>
             <button className="ingest-btn" onClick={() => window.MYC_GO_INGEST(null)}><I.ingest width="15" height="15" />Ingest</button>

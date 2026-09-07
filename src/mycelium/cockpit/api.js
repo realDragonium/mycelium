@@ -325,15 +325,6 @@
       withdraw: (id) => post('/api/drafts/' + encodeURIComponent(id) + '/withdraw'),
     },
     knowledgeGaps: (status) => get('/api/knowledge-gaps?status=' + encodeURIComponent(status || 'open')),
-    // Derived-mention review queue. A match on a short/ambiguous entity name is
-    // held for per-occurrence human judgement: approve → materialize the real
-    // mention, reject → write nothing. HTTP-only (deliberately not an MCP tool).
-    pendingMentions: (status, limit, offset) =>
-      get('/api/pending-mentions?status=' + encodeURIComponent(status || 'open')
-        + '&limit=' + (limit || 200) + '&offset=' + (offset || 0))
-        .then((r) => (r && r.pending_mentions) || []),
-    actOnMention: (id, action) =>
-      http('PATCH', '/api/pending-mentions/' + encodeURIComponent(id), { action }),
     // Vocabulary edits that make the matcher derive new mentions. Creating an
     // entity or attaching an alias enqueues a recompute-scan server-side, so any
     // existing statement whose text contains the new name picks up the mention

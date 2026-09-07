@@ -191,7 +191,7 @@ function TopBar({ small = false }) {
         <button className="brand" onClick={() => router.go({ view: 'landing' })} title="Mycelium home">
           <BrandMark />
           <span>Mycelium</span>
-          <span className="brand-sub">read-only</span>
+          <span className="brand-sub">workspace</span>
         </button>
 
         {small && (
@@ -217,9 +217,9 @@ function TopBar({ small = false }) {
           <button className={router.view === 'activity' ? 'is-active' : ''} onClick={() => router.go({ view: 'activity' })}>Activity</button>
           <button className={router.view === 'glossary' ? 'is-active' : ''} onClick={() => router.go({ view: 'glossary' })}>Glossary</button>
           <button className={router.view === 'gaps' ? 'is-active' : ''} onClick={() => router.go({ view: 'gaps' })}>Gaps</button>
-          <button className={router.view === 'pending' ? 'is-active' : ''} onClick={() => router.go({ view: 'pending' })}>Pending</button>
           <button className={router.view === 'drafts' ? 'is-active' : ''} onClick={() => router.go({ view: 'drafts' })}>Drafts</button>
           <button onClick={() => { window.location.href = '/connect'; }}>Connect</button>
+          <button className={router.view === 'names' ? 'is-active' : ''} onClick={() => router.go({ view: 'names' })}>Names &amp; aliases</button>
           <button className={router.view === 'documentation' ? 'is-active' : ''} onClick={() => router.go({ view: 'documentation' })}>Documentation</button>
           <button className={router.view === 'settings' ? 'is-active' : ''} onClick={() => router.go({ view: 'settings' })}>Settings</button>
           <ThemeToggle />
@@ -353,7 +353,7 @@ function Footer() {
   return (
     <footer className="footer">
       <div className="ftr-inner">
-        <span>mycelium · v0.1 · read-only</span>
+        <span>mycelium · v0.1 · workspace</span>
         <span>
           {data.entities.length}e · {data.statements.length}b · {data.names.length}n · {data.links.length}l
         </span>

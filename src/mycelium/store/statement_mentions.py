@@ -1,4 +1,4 @@
-"""Statement mentions, derived matches, recompute queue, pending review."""
+"""Derived matches, recomputation, and historical mention decisions."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def remove_mentions(
 #
 # Mentions are not asserted; they are derived from statement text by the
 # pure matcher in `mycelium.mentions`. The functions below are the only
-# writers of `statement_mentions` and `pending_mentions` in normal
+# writers of `statement_mentions` in normal
 # operation — the sync statement-upsert path, the async recompute worker,
 # and the one-shot backfill all funnel through `derive_mentions`.
 
@@ -85,41 +85,20 @@ def build_name_index(
     return mention_index.build_index((r["id"], r["entity_id"], r["text"]) for r in rows)
 
 
-def _sync_pending(
-    conn: sqlite3.Connection,
-    statement_id: str,
-    suspect_name_ids: list[str],
-    keep_name_ids: list[str],
+def _retain_legacy_approvals(
+    conn: sqlite3.Connection, statement_id: str, keep_name_ids: list[str]
 ) -> None:
-    """Re-queue a statement's suspect occurrences.
-
-    Approved occurrences in `keep_name_ids` are left untouched — their
-    decision and the materialized mention persist, because a human approval
-    is asserted truth, not a re-derivable guess. Every other pending row for
-    the statement is dropped, and each still-matching suspect that isn't
-    already approved is re-inserted as a fresh OPEN row. So open and rejected
-    occurrences carry no memory — a suspect that still matches is always
-    re-surfaced for review (the 'keep it dumb' rule); only explicit approvals
-    survive a recompute."""
     keep = set(keep_name_ids)
-    for r in conn.execute(
-        "SELECT name_id FROM pending_mentions WHERE statement_id = ?",
+    for row in conn.execute(
+        "SELECT name_id FROM pending_mentions WHERE statement_id = ? "
+        "AND approved_at IS NOT NULL",
         (statement_id,),
     ).fetchall():
-        if r["name_id"] not in keep:
+        if row["name_id"] not in keep:
             conn.execute(
                 "DELETE FROM pending_mentions WHERE statement_id = ? AND name_id = ?",
-                (statement_id, r["name_id"]),
+                (statement_id, row["name_id"]),
             )
-    now = _now()
-    for nid in suspect_name_ids:
-        if nid in keep:
-            continue
-        conn.execute(
-            "INSERT OR IGNORE INTO pending_mentions "
-            "(statement_id, name_id, created_at) VALUES (?, ?, ?)",
-            (statement_id, nid, now),
-        )
 
 
 def derive_mentions(
@@ -128,15 +107,11 @@ def derive_mentions(
     text: str,
     index: dict[str, list[mention_index.IndexedName]],
 ) -> mention_index.MatchResult:
-    """Run the matcher over `text` and materialize the result.
+    """Recompute distinctive matches and still-matching historical approvals.
 
-    Distinctive matches become `statement_mentions` rows. Suspect matches go
-    to the `pending_mentions` review queue. A previously-APPROVED suspect
-    whose name still matches the text is preserved — its decision stands and
-    its materialized mention is re-asserted — so an unrelated recompute (a
-    name change elsewhere, a typo fix) never silently destroys a human's
-    review work. Open and rejected suspects carry no memory and are re-queued
-    fresh (the 'keep it dumb' rule). Returns the raw `MatchResult`."""
+    Ambiguous matches remain query-time discovery candidates. No new review
+    tasks are created; the legacy table only preserves existing decisions.
+    """
     result = mention_index.match_text(text, index)
     auto_ids = [m.name_id for m in result.mentions]
     suspect_ids = [s.name_id for s in result.suspects]
@@ -150,7 +125,7 @@ def derive_mentions(
     }
     keep_approved = [nid for nid in suspect_ids if nid in approved]
     replace_mentions(conn, statement_id, auto_ids + keep_approved)
-    _sync_pending(conn, statement_id, suspect_ids, keep_approved)
+    _retain_legacy_approvals(conn, statement_id, keep_approved)
     return result
 
 
