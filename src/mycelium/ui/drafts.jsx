@@ -888,7 +888,6 @@ function DraftsScreen({ selected }) {
           ))}
         </div>
 
-        {pendingAliases && <p>Review each alias suggestion in <a href="#/names">Names &amp; aliases</a> before applying or closing this draft. Automatic review stays advisory; accepting a suggestion applies only its alias.</p>}
         {err && <div style={{ color: 'var(--red, #dc2626)', fontSize: 13, marginBottom: 12 }}>{err}</div>}
 
         {loading ? (

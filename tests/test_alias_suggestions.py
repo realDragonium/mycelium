@@ -450,3 +450,223 @@ def test_review_record_cannot_close_pending_aliases(tmp_path, monkeypatch):
             )
         assert drafts_store.list_reviews(server._drafts_db(), entry.draft_id) == []
         assert server.get_draft(entry.draft_id)["status"] == "submitted"
+
+
+def test_conflicting_ownership_is_reported_before_preparation_and_review(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (client, entity_id, statement_id):
+        entry = queue(entity_id, statement_id)
+        other = server.upsert_entity(
+            name="Other concept", description="A different meaning"
+        )["entity_id"]
+        server.upsert_name(text="sso", entity_id=other)
+        source = store.get_statement(server._db(), statement_id)["text"]
+        with pytest.raises(aliases.Conflict, match="already belongs"):
+            aliases.prepare(server._db(), proposal(entity_id, statement_id), source)
+        for action in ("accept", "refresh", "retarget"):
+            response = client.post(
+                f"/api/alias-suggestions/{entry.draft_id}/{entry.operation_ref}/review",
+                json={
+                    "action": action,
+                    "expected_revision": entry.revision,
+                    **({"entity_id": entity_id} if action == "retarget" else {}),
+                },
+            )
+            assert response.status_code == 409, response.text
+            assert other in response.json()["detail"]
+        assert store.get_name_by_text(server._db(), "SSO")["entity_id"] == other
+        assert aliases.list_entries()[0].revision == entry.revision
+        assert (
+            server._db()
+            .execute(
+                "SELECT 1 FROM reviewed_draft_applications WHERE application_id = ?",
+                ("alias:" + entry.operation_ref,),
+            )
+            .fetchone()
+            is None
+        )
+        retargeted = decide(entry, "retarget", entity_id=other)
+        accepted = decide(retargeted)
+        assert accepted.suggestion.status == "accepted"
+        assert store.get_name_by_text(server._db(), "SSO")["entity_id"] == other
+
+
+def test_accepting_an_alias_already_added_to_the_same_concept_is_idempotent(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (_, entity_id, statement_id):
+        entry = queue(entity_id, statement_id)
+        name_id = server.upsert_name(text="SSO", entity_id=entity_id)["name_id"]
+        refreshed = decide(entry, "refresh")
+        accepted = decide(refreshed)
+        assert accepted.suggestion.status == "accepted"
+        assert store.get_name_by_text(server._db(), "SSO")["id"] == name_id
+
+
+def test_receipt_recovery_preserves_the_original_decision_after_alias_moves(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (_, entity_id, statement_id):
+        other = server.upsert_entity(
+            name="Other concept", description="A different meaning"
+        )["entity_id"]
+        entry = queue(entity_id, statement_id)
+        decision = aliases._accept(
+            entry.draft_id, entry.operation_ref, entry.suggestion, auth.LOCAL_ADMIN
+        )
+        name_id = store.get_name_by_text(server._db(), "SSO")["id"]
+        server.move_name(name_id=name_id, to_entity_id=other)
+        recovered = decide(entry)
+        assert recovered.suggestion.history[-1] == decision
+        assert store.get_name_by_text(server._db(), "SSO")["entity_id"] == other
+
+
+def test_scan_preserves_valid_proposals_and_reports_individual_rejections(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (client, entity_id, statement_id):
+        server.upsert_name(text="SSO", entity_id=entity_id)
+        other = server.upsert_entity(
+            name="Continuous integration", description="Build validation"
+        )["entity_id"]
+        with store.transaction(server._db()):
+            second_id = store.create_statement(
+                server._db(),
+                "state",
+                "Continuous integration (CI) validates every commit",
+            )
+        valid = aliases.Proposal(
+            entity_id=other,
+            alias="CI",
+            quote="Continuous integration (CI)",
+            reason="Explicit abbreviation",
+            ambiguity="",
+            statement_id=second_id,
+        )
+        monkeypatch.setattr(
+            ai,
+            "structured",
+            lambda task, config: aliases.Discovery(
+                suggestions=[
+                    proposal(entity_id, statement_id),
+                    proposal(other, statement_id),
+                    valid.model_copy(update={"quote": "Invented (CI)"}),
+                    valid,
+                ]
+            ),
+        )
+        response = client.post(
+            "/api/alias-suggestions/scan",
+            json={"statement_ids": [statement_id, second_id]},
+        )
+        assert response.status_code == 200, response.text
+        result = aliases.ScanResult.model_validate(response.json())
+        assert [entry.suggestion.proposal.alias for entry in result.suggestions] == [
+            "CI"
+        ]
+        assert len(result.skipped) == 3
+        assert "already an alias" in result.skipped[0].reason
+        assert "already belongs" in result.skipped[1].reason
+        assert "quote" in result.skipped[2].reason
+        assert result.skipped[1].proposal.entity_id == other
+        assert store.get_name_by_text(server._db(), "CI") is None
+        assert (
+            len(
+                drafts_store.list_ops(
+                    server._drafts_db(), result.suggestions[0].draft_id
+                )
+            )
+            == 1
+        )
+
+
+def test_scan_skips_changed_source_without_losing_other_proposals(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (_, entity_id, statement_id):
+        with store.transaction(server._db()):
+            second_id = store.create_statement(
+                server._db(), "state", "Single sign-on (SSO) is required"
+            )
+
+        def respond(task, config):
+            with store.transaction(server._db()):
+                store.update_statement_text(
+                    server._db(), statement_id, "The old abbreviation is removed"
+                )
+            return aliases.Discovery(
+                suggestions=[
+                    proposal(entity_id, statement_id),
+                    proposal(entity_id, second_id),
+                ]
+            )
+
+        monkeypatch.setattr(ai, "structured", respond)
+        result = aliases.scan(
+            aliases.ScanRequest(statement_ids=[statement_id, second_id]),
+            auth.LOCAL_ADMIN,
+        )
+        assert len(result.suggestions) == len(result.skipped) == 1
+        assert result.suggestions[0].suggestion.evidence.statement_id == second_id
+        assert "supporting statement changed" in result.skipped[0].reason
+
+
+def test_all_skipped_scan_returns_reasons_without_creating_an_empty_draft(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (client, entity_id, statement_id):
+        server.upsert_name(text="SSO", entity_id=entity_id)
+        monkeypatch.setattr(
+            ai,
+            "structured",
+            lambda task, config: aliases.Discovery(
+                suggestions=[proposal(entity_id, statement_id)]
+            ),
+        )
+        response = client.post(
+            "/api/alias-suggestions/scan", json={"statement_ids": [statement_id]}
+        )
+        assert response.status_code == 200, response.text
+        result = aliases.ScanResult.model_validate(response.json())
+        assert result.suggestions == []
+        assert len(result.skipped) == 1
+        assert drafts_store.list_drafts(server._drafts_db(), status="all") == []
+
+
+def test_unknown_scan_evidence_aborts_before_any_valid_proposal_is_saved(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (_, entity_id, statement_id):
+        monkeypatch.setattr(
+            ai,
+            "structured",
+            lambda task, config: aliases.Discovery(
+                suggestions=[
+                    proposal(entity_id, statement_id),
+                    proposal(entity_id, "stm_outside"),
+                ]
+            ),
+        )
+        with pytest.raises(ValueError, match="outside"):
+            aliases.scan(
+                aliases.ScanRequest(statement_ids=[statement_id]), auth.LOCAL_ADMIN
+            )
+        assert drafts_store.list_drafts(server._drafts_db(), status="all") == []
+
+
+def test_pending_filter_does_not_query_statement_examples_for_resolved_aliases(
+    tmp_path, monkeypatch
+):
+    with vocabulary(tmp_path, monkeypatch) as (_, entity_id, statement_id):
+        entry = queue(entity_id, statement_id)
+        decide(entry, "reject")
+        queries = []
+        server._db().set_trace_callback(queries.append)
+        try:
+            assert aliases.list_entries("pending") == []
+            assert not any("FROM statements" in query for query in queries)
+            assert len(aliases.list_entries("rejected")) == 1
+            assert any("FROM statements" in query for query in queries)
+        finally:
+            server._db().set_trace_callback(None)

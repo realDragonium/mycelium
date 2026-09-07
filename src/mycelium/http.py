@@ -2091,12 +2091,9 @@ def scan_alias_suggestions_http(
     request: Request, body: alias_suggestions.ScanRequest
 ) -> dict[str, object]:
     _enforce_role(request, "writer", real_role=True)
-    return {
-        "suggestions": [
-            entry.model_dump(mode="json")
-            for entry in alias_suggestions.scan(body, _require_principal(request))
-        ]
-    }
+    return alias_suggestions.scan(body, _require_principal(request)).model_dump(
+        mode="json"
+    )
 
 
 @app.post("/api/alias-suggestions/{draft_id}/{operation_ref}/review")

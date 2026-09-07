@@ -127,7 +127,8 @@ DRAFTS_SOURCE_INDEX = (
 
 #: Op kinds that are records for the curator, not tool calls: replay skips them
 #: by membership rather than by name-matching scattered through the replayer.
-NON_REPLAYING_OP_KINDS = frozenset({"flag", "alias_suggestion"})
+ALIAS_SUGGESTION_KIND = "alias_suggestion"
+NON_REPLAYING_OP_KINDS = frozenset({"flag", ALIAS_SUGGESTION_KIND})
 
 
 class DraftSource(TypedDict):
@@ -465,7 +466,7 @@ def remove_op(
     protected = conn.execute(
         "SELECT kind FROM draft_ops WHERE draft_id = ? AND seq = ?", (draft_id, seq)
     ).fetchone()
-    if protected is not None and protected["kind"] == "alias_suggestion":
+    if protected is not None and protected["kind"] == ALIAS_SUGGESTION_KIND:
         raise ValueError(
             "Reject alias suggestions through the alias suggestion review screen."
         )
@@ -499,7 +500,7 @@ def remove_op_by_ref(
         "SELECT kind FROM draft_ops WHERE draft_id = ? AND id = ?",
         (draft_id, operation_ref),
     ).fetchone()
-    if protected is not None and protected["kind"] == "alias_suggestion":
+    if protected is not None and protected["kind"] == ALIAS_SUGGESTION_KIND:
         raise ValueError(
             "Reject alias suggestions through the alias suggestion review screen."
         )
@@ -534,7 +535,7 @@ def update_op_payload(
         "SELECT kind FROM draft_ops WHERE draft_id = ? AND seq = ?",
         (draft_id, seq),
     ).fetchone()
-    if row is not None and row["kind"] == "alias_suggestion":
+    if row is not None and row["kind"] == ALIAS_SUGGESTION_KIND:
         raise ValueError(
             "Use the alias suggestion review screen to change this operation."
         )
@@ -576,7 +577,7 @@ def update_op_payload_by_ref(
         if draft is not None:
             _check_revision(draft, expected_revision)
         return None
-    if row["kind"] == "alias_suggestion":
+    if row["kind"] == ALIAS_SUGGESTION_KIND:
         raise ValueError(
             "Use the alias suggestion review screen to change this operation."
         )
