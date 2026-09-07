@@ -20,7 +20,7 @@ from . import (
 )
 from .require import require
 
-KIND = "alias_suggestion"
+KIND = drafts_store.ALIAS_SUGGESTION_KIND
 
 
 class Conflict(ValueError):
@@ -94,6 +94,16 @@ class Entry(BaseModel):
     examples: list[Evidence]
 
 
+class SkippedProposal(BaseModel):
+    proposal: Proposal
+    reason: str
+
+
+class ScanResult(BaseModel):
+    suggestions: list[Entry]
+    skipped: list[SkippedProposal]
+
+
 class Acceptance(BaseModel):
     operation_ref: str
     entity_id: str
@@ -134,6 +144,18 @@ def target_names(conn: sqlite3.Connection, entity_id: str) -> list[str]:
     return [str(row["text"]) for row in store.get_names_by_entity(conn, entity_id)]
 
 
+def _check_alias_owner(
+    conn: sqlite3.Connection, proposal: Proposal
+) -> sqlite3.Row | None:
+    existing = store.get_name_by_text(conn, proposal.alias)
+    if existing is not None and existing["entity_id"] != proposal.entity_id:
+        raise Conflict(
+            f"Alias {proposal.alias!r} already belongs to concept {existing['entity_id']}. "
+            "Use Names & aliases to move an existing name."
+        )
+    return existing
+
+
 def prepare(
     conn: sqlite3.Connection, proposal: Proposal, source_text: str
 ) -> Suggestion:
@@ -146,8 +168,8 @@ def prepare(
         if row is None or row["text"] != source_text:
             raise Conflict("The supporting statement changed; scan it again.")
     names = target_names(conn, proposal.entity_id)
-    existing = store.get_name_by_text(conn, proposal.alias)
-    if existing is not None and existing["entity_id"] == proposal.entity_id:
+    existing = _check_alias_owner(conn, proposal)
+    if existing is not None:
         raise ValueError("This name is already an alias of the suggested concept.")
     return Suggestion(
         proposal=proposal,
@@ -226,9 +248,12 @@ def list_entries(status: str = "pending") -> list[Entry]:
         for op in drafts_store.list_ops(drafts, draft["id"]):
             if op["kind"] != KIND:
                 continue
-            entry = _entry(conn, draft, op)
-            if status == "all" or entry.suggestion.status == status:
-                result.append(entry)
+            if (
+                status != "all"
+                and Suggestion.model_validate_json(op["payload_json"]).status != status
+            ):
+                continue
+            result.append(_entry(conn, draft, op))
     return result
 
 
@@ -245,7 +270,7 @@ All suggestions require a human decision.
 """
 
 
-def scan(request: ScanRequest, principal: auth.Principal) -> list[Entry]:
+def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
     from . import server  # local import: server owns AI admission and connections
 
     if not principal.can_write:
@@ -287,6 +312,7 @@ def scan(request: ScanRequest, principal: auth.Principal) -> list[Entry]:
             ),
         )
     prepared: list[Suggestion] = []
+    skipped: list[SkippedProposal] = []
     with store.write_lock():
         if vocabulary_revision(conn) != revision:
             raise Conflict("Names changed during discovery; scan again.")
@@ -298,9 +324,19 @@ def scan(request: ScanRequest, principal: auth.Principal) -> list[Entry]:
                 )
             key = proposal.entity_id, proposal.alias.casefold()
             if key in seen:
+                skipped.append(
+                    SkippedProposal(
+                        proposal=proposal,
+                        reason="This scan already contains a suggestion for the same alias and concept.",
+                    )
+                )
+                continue
+            try:
+                suggestion = prepare(conn, proposal, statements[proposal.statement_id])
+            except ValueError as exc:
+                skipped.append(SkippedProposal(proposal=proposal, reason=str(exc)))
                 continue
             seen.add(key)
-            suggestion = prepare(conn, proposal, statements[proposal.statement_id])
             prepared.append(
                 suggestion.model_copy(
                     update={
@@ -311,7 +347,7 @@ def scan(request: ScanRequest, principal: auth.Principal) -> list[Entry]:
                 )
             )
         if not prepared:
-            return []
+            return ScanResult(suggestions=[], skipped=skipped)
         drafts = server._drafts_db()
         with store.transaction(drafts):
             draft_id = drafts_store.create_draft(
@@ -330,9 +366,13 @@ def scan(request: ScanRequest, principal: auth.Principal) -> list[Entry]:
                 )
             drafts_store.set_submitted(drafts, draft_id)
         draft = require(drafts_store.get_draft(drafts, draft_id), "created alias draft")
-        return [
-            _entry(conn, draft, op) for op in drafts_store.list_ops(drafts, draft_id)
-        ]
+        return ScanResult(
+            suggestions=[
+                _entry(conn, draft, op)
+                for op in drafts_store.list_ops(drafts, draft_id)
+            ],
+            skipped=skipped,
+        )
 
 
 def _require_human(principal: auth.Principal) -> None:
@@ -361,6 +401,7 @@ def _accept(
         ):
             raise Conflict("This suggestion was already applied to a different target.")
         return accepted.decision
+    _check_alias_owner(conn, suggestion.proposal)
     if suggestion.vocabulary_revision != proposal_revision(
         conn, suggestion.proposal
     ) or not _source_current(conn, suggestion):
@@ -481,6 +522,8 @@ def _review_change(
         raise Conflict(
             "The supporting statement changed. Reject this suggestion and scan the current statement."
         )
+    target_proposal = suggestion.proposal.model_copy(update={"entity_id": entity_id})
+    _check_alias_owner(server._db(), target_proposal)
     names = target_names(server._db(), entity_id)
     decision = Decision(
         action="retargeted" if request.action == "retarget" else "refreshed",
@@ -490,11 +533,11 @@ def _review_change(
     )
     return suggestion.model_copy(
         update={
-            "proposal": suggestion.proposal.model_copy(update={"entity_id": entity_id}),
+            "proposal": target_proposal,
             "target_names": names,
             "vocabulary_revision": proposal_revision(
                 server._db(),
-                suggestion.proposal.model_copy(update={"entity_id": entity_id}),
+                target_proposal,
             ),
             "history": [*suggestion.history, decision],
         }

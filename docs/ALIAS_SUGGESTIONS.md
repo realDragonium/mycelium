@@ -19,7 +19,9 @@ and their configured reasoning effort.
 The scan uses one structured model request with existing names and descriptions
 as context. It creates a normal submitted draft containing the suggestions.
 Names or source changes during the scan prevent stale suggestions from landing.
-No live knowledge is changed by discovery.
+No live knowledge is changed by discovery. Invalid individual proposals are
+skipped with their reasons while valid proposals remain available for review.
+Evidence outside the selected statements aborts the scan without saving a draft.
 
 ## Review
 
@@ -57,7 +59,8 @@ Mycelium and included in configuration backups; no new environment variables
 configure this action. Ingestion uses its own model selection.
 
 - `GET /api/alias-suggestions?status=pending|accepted|rejected|all` lists records.
-- `POST /api/alias-suggestions/scan` accepts `{"statement_ids": ["stm_..."]}`.
+- `POST /api/alias-suggestions/scan` accepts `{"statement_ids": ["stm_..."]}`
+  and returns `suggestions` plus `skipped` proposals with their reasons.
 - `POST /api/alias-suggestions/{draft_id}/{operation_ref}/review` accepts an
   `action` of `accept`, `reject`, `retarget`, or `refresh`, the displayed
   `expected_revision`, and `entity_id` for retargeting.

@@ -9,6 +9,7 @@ function AliasSuggestions({ canWrite, onChanged }) {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
   const [notice, setNotice] = React.useState(null);
+  const [skipped, setSkipped] = React.useState([]);
   const field = { width: '100%', minWidth: 0, padding: 8, boxSizing: 'border-box', background: 'var(--surface-2, var(--paper))', color: 'var(--ink)', border: '1px solid var(--rule, var(--line))', borderRadius: 4 };
   const request = async (url, options) => {
     const response = await fetch(url, options);
@@ -35,7 +36,9 @@ function AliasSuggestions({ canWrite, onChanged }) {
     });
   };
   const scan = () => act(async () => {
+    setSkipped([]);
     const value = await request('/api/alias-suggestions/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ statement_ids: selected.map(item => item.id) }) });
+    setSkipped(value.skipped || []);
     setNotice(value.suggestions.length ? `${value.suggestions.length} alias suggestion${value.suggestions.length === 1 ? '' : 's'} created for human review.` : 'No supported new aliases were found in the selected statements.');
     setStatus('pending');
     const pending = await request('/api/alias-suggestions?status=pending'); setEntries(pending.suggestions);
@@ -54,6 +57,7 @@ function AliasSuggestions({ canWrite, onChanged }) {
     <p>AI suggests names that may identify an existing concept. A human writer must accept each suggestion, even when automatic draft review is enabled. Acceptance adds only this alias.</p>
     {error && <p role="alert">{error} <button disabled={busy} onClick={() => act(reload)}>Reload suggestions</button></p>}
     {notice && <p role="status">{notice}</p>}
+    {skipped.length > 0 && <div role="status"><p>{skipped.length} suggestion{skipped.length === 1 ? ' was' : 's were'} skipped:</p><ul>{skipped.map((item, index) => <li key={index}>“{item.proposal.alias}”: {item.reason}</li>)}</ul></div>}
     {canWrite && <details><summary>Discover aliases in existing statements</summary>
       <p>Select up to 50 statements. Discovery uses the independent Alias discovery model configured in AI settings.</p>
       <form onSubmit={search} style={{ display: 'flex', gap: 8 }}><input style={field} aria-label="Find statements for alias discovery" value={query} onChange={event => setQuery(event.target.value)} required /><button disabled={busy}>Search statements</button></form>

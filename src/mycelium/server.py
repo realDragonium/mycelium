@@ -6803,7 +6803,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
     for op in ops:
         kind = op["kind"]
         operation_ref = op["id"]
-        if kind == "alias_suggestion":
+        if kind == drafts_store.ALIAS_SUGGESTION_KIND:
             from .alias_suggestions import Suggestion
 
             suggestion = Suggestion.model_validate_json(op["payload_json"])

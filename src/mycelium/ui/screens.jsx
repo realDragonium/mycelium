@@ -28,7 +28,7 @@ function Landing() {
         </div>
         <h1 className="landing-title">Browse the substrate.</h1>
         <p className="landing-blurb">
-          Read-only inspection of entities, statements, names and the typed links between them.
+          Browse entities, statements, names and the typed links between them.
           Search resolves across all three record kinds.
         </p>
       </section>
