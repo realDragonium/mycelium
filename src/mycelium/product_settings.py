@@ -92,6 +92,14 @@ class ReviewSettings(RequestLimits):
     request_timeout_s: float = Field(default=90.0, gt=0)
 
 
+class AliasDiscoverySettings(RequestLimits):
+    kind: Literal["alias_discovery"] = "alias_discovery"
+    max_tokens: int = Field(default=6000, gt=0)
+    max_retries: int = Field(default=0, ge=0)
+    request_timeout_s: float = Field(default=90.0, gt=0)
+    max_input_chars: int = Field(default=100000, gt=0)
+
+
 class ConcurrencySettings(SettingsModel):
     kind: Literal["concurrency"] = "concurrency"
     model_loops: int = Field(default=2, gt=0)
@@ -212,6 +220,7 @@ Section = Literal[
     "research",
     "docgen",
     "draft_review",
+    "alias_discovery",
     "concurrency",
     "documentation",
     "sources",
@@ -222,6 +231,7 @@ Body = Annotated[
     | ResearchSettings
     | DocgenSettings
     | ReviewSettings
+    | AliasDiscoverySettings
     | ConcurrencySettings
     | DocumentationSettings
     | SourcesSettings,
@@ -234,6 +244,7 @@ DEFAULTS: tuple[Body, ...] = (
     ResearchSettings(),
     DocgenSettings(),
     ReviewSettings(),
+    AliasDiscoverySettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
     SourcesSettings(),
@@ -282,6 +293,7 @@ T = TypeVar(
     | ResearchSettings
     | DocgenSettings
     | ReviewSettings
+    | AliasDiscoverySettings
     | ConcurrencySettings
     | DocumentationSettings
     | SourcesSettings,
@@ -409,6 +421,8 @@ def validate_secrets(settings: Body, *, conn: sqlite3.Connection | None = None) 
 
 
 def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
+    if isinstance(default, AliasDiscoverySettings):
+        return default
     if isinstance(default, DocumentationSettings):
         from .docgen.destinations import load_destinations
         from .docgen.github_destination import parse_config

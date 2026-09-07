@@ -351,6 +351,15 @@ def _finish(
 
     with store.write_lock():
         _validate_snapshot(inspection, reads)
+        from . import alias_suggestions
+
+        if alias_suggestions.contains(
+            drafts_store.list_ops(drafts_store.connection(), run.draft_id)
+        ):
+            run.detail = (
+                "Advisory assessment only; alias suggestions require human review."
+            )
+            return
         if run.mode != "review-and-apply" or draft_review_settings.load() != settings:
             run.detail = "Advisory assessment only; automatic action disabled by mode or changed settings."
             return

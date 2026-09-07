@@ -95,6 +95,16 @@ CLASSIFICATION CONTRACT
 - CONTRADICTION — the text conflicts with an existing statement. FLAG it, naming \
   BOTH sides, and propose NO automatic resolution. Never silently pick one.
 
+ALIAS DISCOVERY
+Before proposing a new entity, look up existing concepts and their names. When
+the input explicitly supports another name for an existing concept, emit an
+`alias_suggestion` operation instead of duplicating the concept. Its payload is
+{entity_id, alias, quote, reason, ambiguity}; quote must be an exact excerpt of
+the input containing the alias. Explain equivalence, not mere similarity; put
+uncertainty in ambiguity (empty string when none known). Omit statement_id.
+Alias suggestions never replay as writes: a human reviews each individually.
+Never propose upsert_name or disguise aliases as entity updates.
+
 PHRASING
 Every statement carries a `kind` selecting the phrasing rules a validator \
 enforces; a statement that fails them cannot be applied. Pick the kind first \

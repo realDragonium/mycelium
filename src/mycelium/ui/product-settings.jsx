@@ -1,6 +1,6 @@
 const productSettingsTitles = {
   ask: 'Question limits', ingest: 'Ingestion limits', research: 'Research limits',
-  docgen: 'Document generation limits', draft_review: 'Draft review limits',
+  docgen: 'Document generation limits', draft_review: 'Draft review limits', alias_discovery: 'Alias discovery limits',
   concurrency: 'Concurrent runs', documentation: 'Documentation delivery', sources: 'Research repositories',
 };
 

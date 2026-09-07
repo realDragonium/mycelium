@@ -13,8 +13,17 @@ from .ai import Provider, ReasoningEffort
 from .ai.types import ClaudeEffort
 from .model_credentials import claude_configuration_error
 
-Action = Literal["ask", "ingest", "research", "docgen", "draft_review"]
-ACTIONS: tuple[Action, ...] = ("ask", "ingest", "research", "docgen", "draft_review")
+Action = Literal[
+    "ask", "ingest", "research", "docgen", "draft_review", "alias_discovery"
+]
+ACTIONS: tuple[Action, ...] = (
+    "ask",
+    "ingest",
+    "research",
+    "docgen",
+    "draft_review",
+    "alias_discovery",
+)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS model_settings (
     action TEXT PRIMARY KEY,
@@ -99,6 +108,12 @@ def defaults(action: Action) -> Selection:
 def legacy_selection(action: Action) -> dict[str, str]:
     """Capture legacy values without hiding invalid configuration during migration."""
     default = defaults(action)
+    if action == "alias_discovery":
+        return {
+            "provider": default.provider,
+            "claude_model": default.claude_model,
+            "openai_model": default.openai_model,
+        }
     prefix = "MYCELIUM_" + action.upper()
     provider = os.environ.get(prefix + "_PROVIDER", default.provider)
     if action == "draft_review":

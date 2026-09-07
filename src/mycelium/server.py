@@ -6919,7 +6919,16 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
     for op in ops:
         kind = op["kind"]
         operation_ref = op["id"]
-        if kind == "flag":
+        if kind == "alias_suggestion":
+            from .alias_suggestions import Suggestion
+
+            suggestion = Suggestion.model_validate_json(op["payload_json"])
+            messages = (
+                ["alias_requires_human_review"]
+                if suggestion.status == "pending"
+                else []
+            )
+        elif kind == "flag":
             messages = ["unresolved_flag"]
         elif kind in drafts_store.NON_REPLAYING_OP_KINDS:
             messages = []
@@ -7210,6 +7219,12 @@ def apply_draft(
         )
 
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
+    from . import alias_suggestions
+
+    if alias_suggestions.pending(ops):
+        raise ValueError(
+            "Review pending alias suggestions individually before applying this draft."
+        )
     findings = _draft_operation_findings(ops)
     if strict and findings:
         raise ValueError("draft has unresolved operation findings")

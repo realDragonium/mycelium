@@ -709,7 +709,8 @@ function DraftDetail({ draftId, onBack }) {
   }
 
   const editable = data.status === 'open' || data.status === 'submitted';
-  const canDecide = data.status === 'open' || data.status === 'submitted';
+  const pendingAliases = (data.ops || []).some(op => op.kind === 'alias_suggestion' && op.payload?.status === 'pending');
+  const canDecide = !pendingAliases && (data.status === 'open' || data.status === 'submitted');
 
   // Two-tier width: header / actions / ops stay at the readable 880px
   // column the rest of the app uses; the graph card spans much wider
@@ -740,6 +741,7 @@ function DraftDetail({ draftId, onBack }) {
           <DraftStatusBadge status={data.status} />
         </header>
 
+        {pendingAliases && <p>Review each alias suggestion in <a href="#/names">Names &amp; aliases</a> before applying or closing this draft. Automatic review stays advisory; accepting a suggestion applies only its alias.</p>}
         {err && <div style={{ color: 'var(--red, #dc2626)', fontSize: 13, marginBottom: 12 }}>{err}</div>}
 
         {data.status === 'submitted' && (
@@ -798,7 +800,7 @@ function DraftDetail({ draftId, onBack }) {
         <h2 style={{ fontSize: 13, color: 'var(--ink-3)', marginBottom: 8, letterSpacing: '0.04em', textTransform: 'uppercase' }}>Queued ops</h2>
         <ul style={{ padding: 0, margin: 0 }}>
           {(data.ops || []).map(op => (
-            <OpRow key={op.seq} op={op} busy={busy} onRemove={removeOp} onSave={saveOp} editable={editable} />
+            <OpRow key={op.seq} op={op} busy={busy} onRemove={removeOp} onSave={saveOp} editable={editable && op.kind !== 'alias_suggestion'} />
           ))}
           {(data.ops || []).length === 0 && (
             <li style={{ listStyle: 'none', color: 'var(--ink-3)', fontStyle: 'italic', fontSize: 13 }}>
@@ -886,6 +888,7 @@ function DraftsScreen({ selected }) {
           ))}
         </div>
 
+        {pendingAliases && <p>Review each alias suggestion in <a href="#/names">Names &amp; aliases</a> before applying or closing this draft. Automatic review stays advisory; accepting a suggestion applies only its alias.</p>}
         {err && <div style={{ color: 'var(--red, #dc2626)', fontSize: 13, marginBottom: 12 }}>{err}</div>}
 
         {loading ? (

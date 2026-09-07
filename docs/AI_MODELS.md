@@ -9,6 +9,7 @@ provider and model:
 - Research: investigate knowledge gaps and propose changes.
 - Documentation: generate and review documents.
 - Draft review: assess submitted knowledge drafts.
+- Alias discovery: propose alternative names from selected existing statements.
 
 Choose Claude or OpenAI GPT independently for each action. Each action remembers
 one model ID and reasoning effort per provider, so switching providers preserves the other provider’s settings.
@@ -16,6 +17,8 @@ The documentation generation screen can still override the default provider for
 a particular document; it uses that action's configured model and effort for the chosen
 provider. Draft review also has its own off/advisory/automatic mode and independent
 reviewer account, described in [Draft review](DRAFT_REVIEW.md).
+
+Alias discovery has independent model, reasoning effort, token, timeout, retry, and input-size settings. Ingestion proposes aliases within its existing run using the ingestion model. All alias suggestions require an individual human decision; the draft review automation mode cannot accept, reject, or alter them. See [Alias suggestions](ALIAS_SUGGESTIONS.md).
 
 Saving takes effect for new runs without restarting the service. Existing runs
 keep their admitted model selection. Changing either the draft-review controls

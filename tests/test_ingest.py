@@ -139,7 +139,9 @@ class FakeEmitter:
         self.created.append(title)
         return draft_id
 
-    def add_op(self, draft_id: str, kind: str, payload: dict) -> int:
+    def add_op(
+        self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None
+    ) -> int:
         # mirror InProcessDraftEmitter: drop None-valued keys at queue time
         clean = {k: v for k, v in payload.items() if v is not None}
         self.queued.append((draft_id, kind, clean))
@@ -267,7 +269,9 @@ def test_build_tools_exposes_reads_plus_emit_only_no_write_tool():
     # payload is a STRING, not a nested object (heterogeneous payloads)
     op_props = emit["input_schema"]["properties"]["ops"]["items"]["properties"]
     assert op_props["payload_json"]["type"] == "string"
-    assert set(op_props["op"]["enum"]) == set(_DEFAULT_KINDS) - {"search_statements"}
+    assert set(op_props["op"]["enum"]) == (
+        set(_DEFAULT_KINDS) - {"search_statements"}
+    ) | {"alias_suggestion"}
 
 
 def test_parse_emit_input_parses_payload_json_string():

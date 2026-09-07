@@ -10,10 +10,13 @@ That is the structural guarantee: the inner model is handed read tools plus one
 terminal `emit_draft` tool and never sees a write tool; the only write path in
 the whole package is `drafts_store.create_draft` / `add_op` against this
 thread's drafts connection (`server._drafts_db()`), reached only through here.
+Alias suggestions also read existing names and statements to capture review
+preconditions; they never invoke a substrate write.
 
 A draft op's `kind` is the substrate write-tool function name; its payload is
 that tool's kwargs with None-valued keys dropped. The kind is validated against
-`valid_kinds()` (the live `server.TOOLS` registry) before anything is queued —
+`valid_kinds()` (the live `server.TOOLS` registry plus the non-replaying
+`alias_suggestion` record) before anything is queued —
 validation can't be deferred to the model, because a bad kind would only fail
 at curator replay time.
 """
@@ -36,7 +39,9 @@ class DraftEmitter(Protocol):
 
     def create(self, *, title: str | None = None) -> str: ...
 
-    def add_op(self, draft_id: str, kind: str, payload: dict) -> int: ...
+    def add_op(
+        self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None
+    ) -> int: ...
 
 
 class InProcessDraftEmitter:
@@ -53,7 +58,9 @@ class InProcessDraftEmitter:
     def valid_kinds(self) -> set[str]:
         """The registered substrate tool function names. A draft op's kind must
         be one of these or curator replay can never run it."""
-        return {getattr(w, "__name__", "") for w in getattr(self._server, "TOOLS", [])}
+        return {
+            getattr(w, "__name__", "") for w in getattr(self._server, "TOOLS", [])
+        } | {"alias_suggestion"}
 
     def allowed_keys(self, kind: str) -> set[str]:
         """The kwarg names the real `kind` tool accepts at curator replay.
@@ -68,6 +75,10 @@ class InProcessDraftEmitter:
         SAFE FALLBACK: if `_ORIG_SIGNATURES` is missing or `kind` is not in it,
         return the empty set, which the loop reads as "unknown — do not filter",
         so we never over-drop a legitimate op. Mirrors `valid_kinds()`."""
+        if kind == "alias_suggestion":
+            from ..alias_suggestions import Proposal
+
+            return set(Proposal.model_fields)
         sigs = getattr(self._server, "_ORIG_SIGNATURES", None)
         if not sigs or kind not in sigs:
             return set()
@@ -83,8 +94,25 @@ class InProcessDraftEmitter:
                 title=title,
             )
 
-    def add_op(self, draft_id: str, kind: str, payload: dict) -> int:
+    def add_op(
+        self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None
+    ) -> int:
         clean = {k: v for k, v in payload.items() if v is not None}
+        if kind == "alias_suggestion":
+            from ..alias_suggestions import Proposal, prepare
+
+            proposal = Proposal.model_validate(clean)
+            source = source_text
+            if proposal.statement_id is not None:
+                row = store.get_statement(self._server._db(), proposal.statement_id)
+                if row is None:
+                    raise ValueError("Supporting statement not found.")
+                source = row["text"]
+            if source is None:
+                raise ValueError("Alias suggestions require their actual source text.")
+            clean = prepare(self._server._db(), proposal, source).model_dump(
+                mode="json"
+            )
         conn = self._server._drafts_db()
         with store.transaction(conn):
             return drafts_store.add_op(
