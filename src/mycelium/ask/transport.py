@@ -31,6 +31,10 @@ async def respond(
     stream = AskStream()
 
     def emit(event: AskEvent) -> None:
+        # The tool applies the caller's verbosity after the loop completes.
+        # Send that returned result, rather than the loop's internal full result.
+        if event.type == "complete":
+            return
         deadline = time.monotonic() + delivery_timeout
         while True:
             stream.check()

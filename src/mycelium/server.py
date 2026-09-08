@@ -2262,8 +2262,10 @@ def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
 
 @tool(role="asker")
 def ask(
-    question: str, depth: Literal["standard", "quick"] = "standard"
-) -> dict[str, Any]:
+    question: str,
+    depth: Literal["standard", "quick"] = "standard",
+    verbose: bool = False,
+) -> dict[str, object]:
     """Resolve a natural-language question against the substrate, honestly.
 
     The higher-level entry point for callers who don't want to compose the read
@@ -2273,12 +2275,14 @@ def ask(
     statements, and synthesises a structured answer that is explicit about gaps
     and provenance.
 
-    Returns one of two shapes (discriminated by `outcome`):
-      * `answered` — `answer`, `confidence` (high/medium/low, derived from
-        gaps), `interpretation`, `gaps`, `provenance` (statement ids), `trace`.
-      * `needs_clarification` — a clarifying `question`, ≥2 candidate
-        interpretations (each naming what it would pull), `known_so_far`,
-        `trace`. Terminal: re-ask with the disambiguated question.
+    By default returns only `outcome`, `answer`, and `confidence` for an
+    answered question, or `outcome` and `question` when clarification is needed.
+    Important limitations remain in the answer text. Re-ask with the clarified
+    question to resolve ambiguity.
+
+    Set `verbose=True` for the full result: interpretation, gaps, provenance,
+    and trace for answers; candidates, known_so_far, and trace for clarification.
+    This affects response detail only, not retrieval or reasoning effort.
 
     `depth` trades thoroughness for latency:
       * `standard` (default) — the full loop: recon, targeted retrieval, and a
@@ -2303,7 +2307,16 @@ def ask(
         config = replace(
             config, trace_log_path=str(_context().data_dir / "ask_trace.jsonl")
         )
-    return run_ask(question, config=config).model_dump()
+    result = run_ask(question, config=config)
+    if verbose:
+        return result.model_dump()
+    if result.outcome == "answered":
+        return {
+            "outcome": result.outcome,
+            "answer": result.answer,
+            "confidence": result.confidence,
+        }
+    return {"outcome": result.outcome, "question": result.question}
 
 
 @tool
