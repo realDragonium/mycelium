@@ -748,6 +748,7 @@ def test_metadata_advertises_cimd_support(tmp_path, monkeypatch):
     [
         (_CIMD_REDIRECT, _CIMD_REDIRECT),
         ("http://localhost/callback", "http://localhost:3118/callback"),
+        ("http://localhost", "http://localhost:3118"),
     ],
 )
 def test_a_cimd_client_completes_the_flow_without_registering(

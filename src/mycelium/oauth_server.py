@@ -174,7 +174,7 @@ def _loopback_without_port(uri: str) -> str | None:
     # RFC 8252 allows ephemeral HTTP loopback ports. Claude Code also uses
     # localhost; preserve every other character so this only relaxes the port.
     match = re.fullmatch(
-        r"(http://(?:localhost|127\.0\.0\.1|\[::1\]))(?::([0-9]+))?(/[^\s#]*)",
+        r"(http://(?:localhost|127\.0\.0\.1|\[::1\]))(?::([0-9]+))?((?:[/?][^\s#]*)?)",
         uri,
     )
     if match is None:
