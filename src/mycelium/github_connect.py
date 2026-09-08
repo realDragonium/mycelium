@@ -12,7 +12,7 @@ from typing import Literal
 from urllib.parse import urlencode, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import auth, github_app, github_connections
@@ -252,7 +252,29 @@ def start(body: Start, request: Request) -> dict[str, str]:
 @router.get("/setup")
 def setup(
     request: Request, state: str = "", installation_id: int | None = None
-) -> RedirectResponse:
+) -> Response:
+    if not state:
+        return HTMLResponse("""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Finish connecting GitHub · Mycelium</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:640px;margin:48px auto;
+padding:0 24px;color:#222;background:#faf9f6}a{color:#285b86}
+</style>
+</head>
+<body>
+<h1>Finish connecting GitHub</h1>
+<p>If you installed the App directly on GitHub, a Mycelium administrator can
+finish connecting it in <a href="/ui/#/documentation?tab=settings">Documentation
+settings</a> by choosing <strong>Use existing GitHub installation</strong>.</p>
+<p>If you installed it for someone else, let them know they can complete that step.
+If GitHub connection is unavailable, the server administrator must finish the
+GitHub App credentials setup first.</p>
+</body>
+</html>""")
     flow = _flow(request, "install", state=state, consume=True)
     if installation_id is None or installation_id <= 0:
         return RedirectResponse(flow.return_to + "&github=pending", status_code=303)

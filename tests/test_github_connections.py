@@ -246,6 +246,28 @@ def test_spoofed_installation_and_unwritable_repository_cannot_connect(
     assert web.get("/api/github/repositories").json() == []
 
 
+def test_direct_install_guides_user_without_connecting(
+    web: TestClient, github: FakeGitHub, db: sqlite3.Connection
+):
+    response = web.get("/api/github/setup", params={"installation_id": 99})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Use existing GitHub installation" in response.text
+    assert "/ui/#/documentation?tab=settings" in response.text
+    assert github.requests == []
+    assert github_connections.load(db) == {}
+    assert not web.cookies.get("myc_session")
+
+
+def test_unknown_setup_state_still_fails(web: TestClient, github: FakeGitHub):
+    response = web.get(
+        "/api/github/setup", params={"state": "unknown", "installation_id": 12}
+    )
+    assert response.status_code == 400
+    assert "expired" in response.json()["detail"]
+    assert github.requests == []
+
+
 def test_state_is_browser_bound_and_single_use(web: TestClient):
     start = web.post("/api/github/start", json={"existing": True}).json()
     state = parse_qs(urlsplit(start["url"]).query)["state"][0]
