@@ -27,6 +27,7 @@ boundary.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from ..ask.prompts import format_recon
@@ -360,13 +361,17 @@ def initial_user_message(
 
 def document_payload(*, title: str, body: str) -> str:
     """Frame verbatim Markdown with boundaries absent from its title and body."""
+    # Leave closing equals unconsumed so markers sharing them are both found.
+    occupied = {
+        match.group(1)
+        for text in (title, body)
+        for match in re.finditer(r"=== (?:END )?DOCUMENT ([0-9]+)(?= ===)", text)
+    }
     index = 0
-    while True:
-        start = f"=== DOCUMENT {index} ==="
-        end = f"=== END DOCUMENT {index} ==="
-        if all(marker not in text for marker in (start, end) for text in (title, body)):
-            break
+    while str(index) in occupied:
         index += 1
+    start = f"=== DOCUMENT {index} ==="
+    end = f"=== END DOCUMENT {index} ==="
     return (
         f"DOCUMENT TITLE (metadata, not document content): {json.dumps(title, ensure_ascii=False)}\n\n"
         "DOCUMENT BODY (verbatim; the boundary lines are not document content; "

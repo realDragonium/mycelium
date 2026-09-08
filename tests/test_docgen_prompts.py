@@ -46,3 +46,18 @@ def test_review_payload_preserves_complete_body_and_frontmatter(retry, title, ex
     assert document == body
     assert not suffix
     assert "DOCUMENT TITLE (metadata, not document content):" in context
+
+
+def test_document_payload_handles_many_sequential_markers():
+    body = "\n".join(
+        f"=== {'END ' if index % 2 else ''}DOCUMENT {index} ==="
+        for index in range(7000)
+    )
+    payload = prompts.document_payload(title="Many markers", body=body)
+    assert payload.endswith(f"=== DOCUMENT 7000 ===\n{body}\n=== END DOCUMENT 7000 ===")
+
+
+def test_document_payload_detects_markers_sharing_boundary_equals():
+    body = "=== DOCUMENT 0 === END DOCUMENT 1 === DOCUMENT 2 ==="
+    payload = prompts.document_payload(title="Overlapping markers", body=body)
+    assert payload.endswith(f"=== DOCUMENT 3 ===\n{body}\n=== END DOCUMENT 3 ===")
