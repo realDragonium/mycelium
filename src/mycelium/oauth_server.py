@@ -50,6 +50,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import secrets
 import sqlite3
 import uuid
@@ -152,8 +153,7 @@ class _Client:
     Registration and Client ID Metadata Documents are two ways of learning
     the same three things, so the endpoints below take this rather than
     caring which one applied. That is also what keeps the redirect_uri check
-    identical on both paths — the spec requires exact-match validation
-    whether the list came from our table or from the client's own document.
+    identical on both paths, including the native-client loopback port exception.
     """
 
     client_id: str
@@ -161,7 +161,28 @@ class _Client:
     redirect_uris: tuple[str, ...]
 
     def allows(self, redirect_uri: str) -> bool:
-        return redirect_uri in self.redirect_uris
+        if redirect_uri in self.redirect_uris:
+            return True
+        loopback = _loopback_without_port(redirect_uri)
+        return loopback is not None and any(
+            _loopback_without_port(registered) == loopback
+            for registered in self.redirect_uris
+        )
+
+
+def _loopback_without_port(uri: str) -> str | None:
+    # RFC 8252 allows ephemeral HTTP loopback ports. Claude Code also uses
+    # localhost; preserve every other character so this only relaxes the port.
+    match = re.fullmatch(
+        r"(http://(?:localhost|127\.0\.0\.1|\[::1\]))(?::([0-9]+))?((?:[/?][^\s#]*)?)",
+        uri,
+    )
+    if match is None:
+        return None
+    port = match[2]
+    if port is not None and (len(port) > 5 or not 1 <= int(port) <= 65535):
+        return None
+    return match[1] + match[3]
 
 
 def _record_client(conn: sqlite3.Connection, client: _Client) -> None:

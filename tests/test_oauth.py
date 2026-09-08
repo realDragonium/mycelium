@@ -11,6 +11,7 @@ import hashlib
 import re
 import secrets
 
+import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, server, store
@@ -742,12 +743,22 @@ def test_metadata_advertises_cimd_support(tmp_path, monkeypatch):
         assert meta["registration_endpoint"].endswith("/register")
 
 
-def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("registered_redirect", "redirect_uri"),
+    [
+        (_CIMD_REDIRECT, _CIMD_REDIRECT),
+        ("http://localhost/callback", "http://localhost:3118/callback"),
+        ("http://localhost", "http://localhost:3118"),
+    ],
+)
+def test_a_cimd_client_completes_the_flow_without_registering(
+    tmp_path, monkeypatch, registered_redirect, redirect_uri
+):
     """The point of the mechanism: no /register call, no stored credentials,
     and the token comes out the far end."""
     from urllib.parse import parse_qs, urlparse
 
-    _stub_cimd(monkeypatch)
+    _stub_cimd(monkeypatch, redirect_uris=(registered_redirect,))
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         admin_bearer, _ = _admin_bearer(server._auth_db())
@@ -755,7 +766,7 @@ def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypa
         headers = {"Authorization": f"Bearer {admin_bearer}"}
         form = {
             "client_id": _CIMD_URL,
-            "redirect_uri": _CIMD_REDIRECT,
+            "redirect_uri": redirect_uri,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
             "scope": "mcp",
@@ -768,7 +779,7 @@ def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypa
         assert consent.status_code == 200, consent.text
         # The name comes from the document, and the destination is shown.
         assert "Example Client" in consent.text
-        assert "127.0.0.1:6274" in consent.text
+        assert urlparse(redirect_uri).netloc in consent.text
 
         decided = client.post(
             "/authorize/decide",
@@ -777,6 +788,7 @@ def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypa
             follow_redirects=False,
         )
         assert decided.status_code == 302, decided.text
+        assert decided.headers["location"].startswith(redirect_uri + "?")
         code = parse_qs(urlparse(decided.headers["location"]).query)["code"][0]
 
         r = client.post(
@@ -784,7 +796,7 @@ def test_a_cimd_client_completes_the_flow_without_registering(tmp_path, monkeypa
             data={
                 "grant_type": "authorization_code",
                 "code": code,
-                "redirect_uri": _CIMD_REDIRECT,
+                "redirect_uri": redirect_uri,
                 "client_id": _CIMD_URL,
                 "code_verifier": verifier,
             },
