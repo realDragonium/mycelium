@@ -7,8 +7,11 @@ async function githubRequest(path, body) {
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'GitHub setup could not be completed. Try again.');
+  const fallback = 'GitHub setup could not be completed. Try again.';
+  let data;
+  try { data = await response.json(); }
+  catch { throw new Error(fallback); }
+  if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : fallback);
   return data;
 }
 

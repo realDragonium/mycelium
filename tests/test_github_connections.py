@@ -59,12 +59,18 @@ def db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     conn.close()
 
 
+@pytest.fixture(scope="module")
+def app_key() -> rsa.RSAPrivateKey:
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
 @pytest.fixture
-def app_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> github_app.AppConfig:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def app_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, app_key: rsa.RSAPrivateKey
+) -> github_app.AppConfig:
     path = tmp_path / "test-app.pem"
     path.write_bytes(
-        key.private_bytes(
+        app_key.private_bytes(
             serialization.Encoding.PEM,
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
