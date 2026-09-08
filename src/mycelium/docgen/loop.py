@@ -412,11 +412,10 @@ def _execute(
                     guideline_set=ctx.guideline_set,
                     document_type=ctx.document_type,
                 )
-                + "\n\nUSER-SUPPLIED TITLE: "
-                + manual_document.title
-                + "\nIMMUTABLE DOCUMENT BODY:\n=== DOCUMENT ===\n"
-                + manual_document.body
-                + "\n=== END DOCUMENT ===",
+                + "\n\nIMMUTABLE USER-SUPPLIED DOCUMENT:\n"
+                + prompts.document_payload(
+                    title=manual_document.title, body=manual_document.body
+                ),
             }
         ]
     return _write(ctx)
