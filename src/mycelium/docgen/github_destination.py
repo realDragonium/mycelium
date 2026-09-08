@@ -30,7 +30,9 @@ _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?\Z")
 _TOKEN_ENV_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 _BRANCH_PART_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _OBJECT_ID_RE = re.compile(r"^(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{64})\Z")
-_CONFIG_FIELDS = frozenset({"owner", "repo", "token_env", "host", "base_branch"})
+_CONFIG_FIELDS = frozenset(
+    {"owner", "repo", "token_env", "connection", "host", "base_branch"}
+)
 _ASCII_LOWER = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
 _ACTIVE_CREDENTIALS: ContextVar[tuple[str, ...]] = ContextVar(
     "document_delivery_credentials", default=()
@@ -47,9 +49,10 @@ class GitHubConfig:
     destination: DestinationConfig
     owner: str
     repo: str
-    token_env: str
+    token_env: str | None
     base_branch: str
     host: str = "github.com"
+    connection: str | None = None
 
     @classmethod
     def parse(cls, destination: DestinationConfig) -> GitHubConfig:
@@ -65,16 +68,30 @@ class GitHubConfig:
 
         owner = _required_string(destination.name, entry, "owner")
         repo = _required_string(destination.name, entry, "repo")
-        token_env = _required_string(destination.name, entry, "token_env")
+        if ("token_env" in entry) == ("connection" in entry):
+            raise DestinationError(
+                "A GitHub destination requires exactly one credential reference."
+            )
+        token_env = (
+            _required_string(destination.name, entry, "token_env")
+            if "token_env" in entry
+            else None
+        )
+        connection = (
+            _required_string(destination.name, entry, "connection")
+            if "connection" in entry
+            else None
+        )
         base_branch = _required_string(destination.name, entry, "base_branch")
         host = _optional_string(destination.name, entry, "host", "github.com")
         return cls(
             destination=destination,
             owner=_validate(destination.name, "owner", owner, _OWNER_REPO_RE),
             repo=_validate(destination.name, "repo", repo, _OWNER_REPO_RE),
-            token_env=_validate(
-                destination.name, "token_env", token_env, _TOKEN_ENV_RE
-            ),
+            token_env=_validate(destination.name, "token_env", token_env, _TOKEN_ENV_RE)
+            if token_env is not None
+            else None,
+            connection=connection,
             base_branch=_validate_branch(destination.name, base_branch),
             host=_validate_host(destination.name, host),
         )
@@ -104,7 +121,7 @@ def validate_config_secrets(
         config.host,
         config.owner,
         config.repo,
-        config.token_env,
+        config.token_env or config.connection or "",
         config.base_branch,
     )
     if any(
@@ -124,7 +141,7 @@ def deliver(
 ) -> Delivery:
     config = GitHubConfig.parse(destination)
     e = os.environ if env is None else env
-    token = e.get(config.token_env)
+    token = _access_token(config, e)
     credentials = tuple(_configured_credentials(e, token))
     if not token:
         raise DestinationError(
@@ -161,7 +178,7 @@ def read(
 ) -> CurrentDocument:
     config = GitHubConfig.parse(destination)
     e = os.environ if env is None else env
-    token = e.get(config.token_env)
+    token = _access_token(config, e)
     credentials = tuple(_configured_credentials(e, token))
     if not token:
         raise DestinationError(
@@ -197,6 +214,21 @@ def read(
         ) from None
     finally:
         _ACTIVE_CREDENTIALS.reset(context)
+
+
+def _access_token(config: GitHubConfig, env: Mapping[str, str]) -> str | None:
+    if config.connection is not None:
+        from .. import github_app, github_connections
+
+        if config.host != "github.com":
+            raise DestinationError("GitHub App connections only support github.com.")
+        try:
+            return github_connections.access_token(
+                config.connection, config.owner, config.repo
+            )
+        except github_app.GitHubError as exc:
+            raise DestinationError(str(exc)) from None
+    return env.get(config.token_env) if config.token_env is not None else None
 
 
 def _configured_credentials(env: Mapping[str, str], token: str | None) -> list[str]:

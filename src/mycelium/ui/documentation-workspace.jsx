@@ -104,8 +104,8 @@ function DocumentationDelivery({ document, canWrite, onUpdated, onConfigure }) {
     <h2>GitHub publication</h2>
     <p role="status">{docDeliveryStatus(document.delivery_status)}{document.published_revision ? ` · last published revision ${document.published_revision}` : ''}</p>
     {typeof reference === 'string' && /^https:\/\//i.test(reference) && <p><a href={reference} target="_blank" rel="noopener noreferrer">Open GitHub pull request ↗</a></p>}
-    <label>Destination<select value={destination} disabled={!canWrite || busy || !!document.delivery_destination} onChange={event => setDestination(event.target.value)}>
-      <option value="">Select a destination</option>
+    <label>GitHub repository<select value={destination} disabled={!canWrite || busy || !!document.delivery_destination} onChange={event => setDestination(event.target.value)}>
+      <option value="">Select a repository</option>
       {document.delivery_destination && !destinations.some(item => item.name === document.delivery_destination) && <option value={document.delivery_destination}>{document.delivery_destination} (recorded destination)</option>}
       {destinations.map(item => <option key={item.name}>{item.name}</option>)}
     </select></label>
@@ -200,7 +200,7 @@ function DocumentationConfiguration() {
     }).catch(error => { if (!cancelled) setError(error.message); });
     return () => { cancelled = true; };
   }, [retry]);
-  return <section className="docw-panel"><h2>Documentation settings</h2><p>Choose the model, generation limits, default writing profile, and GitHub repositories. Credentials are managed on the server; repository settings choose an approved connection.</p>
+  return <section className="docw-panel"><h2>Documentation settings</h2><p>Choose the model, generation limits, default writing profile, and GitHub repositories. Connect GitHub and choose where documentation pull requests should be published.</p>
     {error && <p role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Reload models</button></p>}
     {models?.actions.filter(action => action.action === 'docgen').map(action => <ActionModelSettings key={action.action} settings={action} canConfigure={models.can_configure} />)}
     <ProductSettings kinds={['documentation', 'docgen']} />

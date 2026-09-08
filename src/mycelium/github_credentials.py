@@ -104,3 +104,15 @@ def import_binding(conn: sqlite3.Connection, host: str, token_env: str) -> str:
         (name, binding.model_dump_json()),
     )
     return name
+
+
+def documentation_settings(
+    name: str, owner: str, repo: str, conn: sqlite3.Connection | None = None
+) -> dict[str, str]:
+    from . import github_connections
+
+    if name.startswith(github_connections.PREFIX):
+        connection = github_connections.resolve(name, conn)
+        connection.require_target(owner, repo)
+        return {"host": connection.host, "connection": connection.name}
+    return resolve(name, conn).model_dump()
