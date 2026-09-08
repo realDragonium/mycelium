@@ -11,12 +11,18 @@ on:
 permissions:
   contents: read
 
+# Cached hnswlib builds must work across runners with different CPUs.
+env:
+  HNSWLIB_NO_NATIVE: "1"
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          cache-suffix: hnswlib-portable-v1
       - run: uv sync --locked
       - run: uv run ruff check src tests scripts
       - run: uv run ruff format --check src tests scripts
@@ -26,5 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+        with:
+          cache-suffix: hnswlib-portable-v1
       - run: uv sync --locked
       - run: uv run pytest -q
