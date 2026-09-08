@@ -133,3 +133,164 @@ def test_delivery_requires_explicit_numeric_revision(workspace):
             ).status_code
             == 422
         )
+
+
+def test_manual_preview_uses_safe_renderer(workspace):
+    client, conn, document = workspace
+    body = docs_store.get_document(conn, document)["body"]
+    response = client.post(
+        "/api/documentation/preview", json={"title": "Title", "body": body}
+    )
+    assert response.status_code == 200
+    html = response.json()["body_html"]
+    assert "<h1>Welcome</h1>" in html
+    assert "<script>" not in html
+    assert 'href="javascript:' not in html
+    assert "<img" not in html
+
+
+@pytest.mark.parametrize("path", ["preview", "documents/page/edits", "runs/run/edits"])
+def test_manual_edit_requires_writer(workspace, monkeypatch, path):
+    client, _, _ = workspace
+
+    async def reader(*_):
+        return auth.Principal(id="reader", name="Reader", role="reader", type="human")
+
+    monkeypatch.setattr(AuthMiddleware, "_resolve", reader)
+    payload = {"title": "Title", "body": "Body"}
+    if path.startswith("documents/"):
+        payload["expected_revision"] = 1
+    assert client.post("/api/documentation/" + path, json=payload).status_code == 403
+
+
+def test_manual_edit_validates_input_and_conflict_before_start(workspace):
+    client, _, document = workspace
+    url = f"/api/documentation/documents/{document}/edits"
+    for changes in (
+        {"title": " "},
+        {"body": "\n "},
+        {"body": "x" * 200001},
+        {"expected_revision": True},
+        {"expected_revision": "1"},
+    ):
+        payload = {"title": "Title", "body": "Body", "expected_revision": 1, **changes}
+        assert client.post(url, json=payload).status_code == 422
+    assert (
+        client.post(
+            url, json={"title": "Title", "body": "Body", "expected_revision": 2}
+        ).status_code
+        == 409
+    )
+
+
+def test_manual_edit_http_preserves_exact_text_and_author(workspace, monkeypatch):
+    from mycelium import doc_runs
+
+    client, conn, document = workspace
+    captured = {}
+
+    def start(**kwargs):
+        captured.update(kwargs)
+        return docs_store.create_run(
+            conn,
+            prompt=kwargs["prompt"],
+            guideline_set=None,
+            document_type=None,
+            created_by=kwargs["created_by"],
+        )
+
+    monkeypatch.setattr(doc_runs, "start_run", start)
+    body = "---\ntitle: Title\n---\n\n  Exact body\n"
+    result = client.post(
+        f"/api/documentation/documents/{document}/edits",
+        json={"title": "Title", "body": body, "expected_revision": 1},
+    )
+    assert result.status_code == 200, result.text
+    assert captured["manual_document"].body == body
+    assert captured["created_by"] == "fixture"
+    assert captured["expected_revision"] == 1
+    assert captured["target_document_id"] == document
+    assert captured["match_existing"] is False
+
+
+def test_failed_draft_recovery_uses_original_profile_without_matching(
+    workspace, monkeypatch
+):
+    from mycelium import doc_runs
+
+    client, conn, _ = workspace
+    source = docs_store.create_run(
+        conn,
+        prompt="Original request",
+        guideline_set="internal",
+        document_type="guide",
+        created_by="first",
+    )
+    docs_store.finish_run(
+        conn,
+        source,
+        outcome="nothing_written",
+        draft_title="Draft",
+        draft_body="Original",
+    )
+    captured = {}
+
+    def start(**kwargs):
+        captured.update(kwargs)
+        return docs_store.create_run(
+            conn,
+            prompt=kwargs["prompt"],
+            guideline_set=kwargs["guideline_set"],
+            document_type=kwargs["document_type"],
+            created_by=kwargs["created_by"],
+        )
+
+    monkeypatch.setattr(doc_runs, "start_run", start)
+    result = client.post(
+        f"/api/documentation/runs/{source}/edits",
+        json={"title": "Edited", "body": "Exact\n"},
+    )
+    assert result.status_code == 200, result.text
+    assert captured["prompt"] == "Original request"
+    assert (captured["guideline_set"], captured["document_type"]) == (
+        "internal",
+        "guide",
+    )
+    assert captured["match_existing"] is False
+    assert captured["target_document_id"] is None
+    assert captured["manual_document"].body == "Exact\n"
+
+
+def test_recovery_rejects_running_draft_and_stale_revision(workspace):
+    client, conn, document = workspace
+    source = docs_store.create_run(
+        conn,
+        prompt="Original",
+        guideline_set=None,
+        document_type=None,
+        created_by=None,
+        target_document_id=document,
+        target_revision=1,
+    )
+    payload = {"title": "Edited", "body": "Exact"}
+    url = f"/api/documentation/runs/{source}/edits"
+    assert client.post(url, json=payload).status_code == 400
+    docs_store.finish_run(
+        conn,
+        source,
+        outcome="nothing_written",
+        draft_title="Draft",
+        draft_body="Original",
+    )
+    original = docs_store.get_document(conn, document)["body"]
+    docs_store.upsert_document(
+        conn,
+        slug="page",
+        title="Newer",
+        body="Newer body",
+        updates=document,
+        replacing=docs_store.body_digest(original),
+        expected_revision=1,
+    )
+    assert client.post(url, json=payload).status_code == 409
+    assert docs_store.get_document(conn, document)["body"] == "Newer body"

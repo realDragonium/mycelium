@@ -20,7 +20,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class ManualDocument(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    title: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=200_000)
+
+    @field_validator("title", "body")
+    @classmethod
+    def nonblank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Text must not be blank")
+        return value
 
 
 @dataclass(frozen=True)
