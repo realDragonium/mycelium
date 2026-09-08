@@ -58,6 +58,7 @@ test('legacy JSON remains accepted and receives cancellation signal', async () =
   const controller = new AbortController();
   const api = client(async (_, opts) => {
     assert.equal(opts.signal, controller.signal);
+    assert.equal(JSON.parse(opts.body).verbose, true);
     return Response.json(result);
   });
   assert.equal((await api.ask('Q', { signal: controller.signal })).answer[0], result.answer);
@@ -86,4 +87,12 @@ test('JSON and streaming requests preserve HTTP error details and status', async
       });
     }
   }
+});
+
+test('streaming requests opt into detailed results', async () => {
+  const api = client(async (_, opts) => {
+    assert.equal(JSON.parse(opts.body).verbose, true);
+    return response(frame({ type: 'complete', result }));
+  });
+  await api.ask('Q', { onEvent() {} });
 });

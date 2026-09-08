@@ -1,10 +1,16 @@
 # Ask retrieval and streaming
 
-`ask(question, depth="standard")` still returns `Answered | NeedsClarification`.
-HTTP JSON clients and MCP callers receive the same completed result fields:
-answer, provenance (full statement IDs), confidence, interpretation, gaps and
-trace, or the existing clarification result. Model defaults, saved settings,
-limits and deployment configuration are unchanged.
+`ask(question, depth="standard", verbose=False)` returns a compact result by
+default over MCP and HTTP JSON/SSE:
+
+- Answer: `{"outcome":"answered","answer":"…","confidence":"medium"}`.
+- Clarification: `{"outcome":"needs_clarification","question":"…"}`.
+
+Set `verbose: true` in the request arguments for the full result, including
+interpretation, gaps, provenance and trace, or clarification candidates and
+known_so_far. The cockpit requests this detailed result explicitly.
+`run_ask` and server-side traces retain the full result. Verbosity changes only
+response formatting, not reasoning, retrieval depth, or model latency.
 
 ## HTTP events
 

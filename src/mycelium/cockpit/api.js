@@ -293,11 +293,11 @@
   }
 
   async function ask(question, { signal, onEvent } = {}) {
-    if (!onEvent) return adaptAsk(completedAsk(await http('POST', '/ask', { question }, signal)), question);
+    if (!onEvent) return adaptAsk(completedAsk(await http('POST', '/ask', { question, verbose: true }, signal)), question);
     const res = await fetch('/ask', {
       method: 'POST', credentials: 'same-origin', signal,
       headers: { accept: 'text/event-stream', 'content-type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, verbose: true }),
     });
     if (!res.ok) throw await httpError(res, '/ask');
     const raw = (res.headers.get('content-type') || '').includes('text/event-stream')
