@@ -51,6 +51,7 @@ from . import (
 from . import (
     draft_review_settings as review_settings,
 )
+from .docgen.schema import ManualDocument
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -1451,6 +1452,63 @@ def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+class DocumentEditBody(ManualDocument):
+    provider: Literal["claude", "openai"] | None = None
+
+
+class SavedDocumentEditBody(DocumentEditBody):
+    expected_revision: int = PydField(ge=1, strict=True)
+
+
+@app.post("/api/documentation/preview")
+def preview_document_edit(body: ManualDocument, request: Request) -> dict[str, object]:
+    _enforce_role(request, "writer", real_role=True)
+    return _document_preview({"body": body.body})
+
+
+@app.post("/api/documentation/documents/{document_id}/edits")
+def edit_saved_document_http(
+    document_id: str, body: SavedDocumentEditBody, request: Request
+) -> dict[str, object]:
+    from . import docs_store, document_edits
+
+    _enforce_role(request, "writer", real_role=True)
+    principal = _require_principal(request)
+    try:
+        run_id = document_edits.start_document_edit(
+            server._drafts_db(),
+            document_id,
+            body.expected_revision,
+            ManualDocument(title=body.title, body=body.body),
+            created_by=principal.id,
+            provider=body.provider,
+        )
+    except docs_store.RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return server.get_documentation_run(run_id)
+
+
+@app.post("/api/documentation/runs/{run_id}/edits")
+def edit_document_draft_http(
+    run_id: str, body: DocumentEditBody, request: Request
+) -> dict[str, object]:
+    from . import docs_store, document_edits
+
+    _enforce_role(request, "writer", real_role=True)
+    principal = _require_principal(request)
+    try:
+        new_run_id = document_edits.start_draft_edit(
+            server._drafts_db(),
+            run_id,
+            ManualDocument(title=body.title, body=body.body),
+            created_by=principal.id,
+            provider=body.provider,
+        )
+    except docs_store.RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return server.get_documentation_run(new_run_id)
 
 
 class DocumentRevisionBody(BaseModel):

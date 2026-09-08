@@ -65,6 +65,7 @@ from .schema import (
     DocgenResult,
     DocumentWritten,
     ExistingDocument,
+    ManualDocument,
     NothingWritten,
     ReviewRecord,
     RevisionTarget,
@@ -115,6 +116,7 @@ def run_docgen(
     existing_documents: tuple[ExistingDocument, ...] = (),
     load_current_document: Callable[[str], CurrentDocument] | None = None,
     revision_target: RevisionTarget | None = None,
+    manual_document: ManualDocument | None = None,
     profiles: CatalogueSnapshot | None = None,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
@@ -160,6 +162,7 @@ def run_docgen(
             existing_documents=existing_documents,
             load_current_document=load_current_document,
             revision_target=revision_target,
+            manual_document=manual_document,
         )
 
     result.trace["prompts"] = [
@@ -231,6 +234,8 @@ class _RunContext:
     """Plain bag of per-run harness state, so the handlers below don't each
     need a dozen positional parameters (mirrors ask/ingest/research)."""
 
+    manual_document: ManualDocument | None
+
     def __init__(self, **kw: Any) -> None:
         self.__dict__.update(kw)
 
@@ -251,6 +256,7 @@ def _execute(
     existing_documents: tuple[ExistingDocument, ...] = (),
     load_current_document: Callable[[str], CurrentDocument] | None = None,
     revision_target: RevisionTarget | None = None,
+    manual_document: ManualDocument | None = None,
     review_instructions: str = prompts.DEFAULT_REVIEW_INSTRUCTIONS,
 ) -> DocgenResult:
     start = time.monotonic()
@@ -268,6 +274,7 @@ def _execute(
 
     ctx = _RunContext(
         prompt=prompt,
+        manual_document=manual_document,
         client=client,
         substrate=substrate,
         report_gap=report_gap,
@@ -371,6 +378,15 @@ def _execute(
         exposure=exposure,
         template=template,
     )
+    if manual_document is not None:
+        ctx.system_prompt += (
+            "\n\nMANUAL EDIT: The user supplied immutable document text. Your task is "
+            "to gather source statements supporting that text, not to write or revise it. "
+            "Return its title and body unchanged through emit_document, with source IDs. "
+            "If substantive claims lack support and are not explicitly marked uncertain, "
+            "report the knowledge gap and emit with empty statement_ids to refuse saving. "
+            "Do not cite merely related statements as support for unsupported claims."
+        )
     ctx.tools = build_tools(substrate.tool_specs())
 
     recon = _recon(ctx)
@@ -386,6 +402,22 @@ def _execute(
             ),
         }
     ]
+    if manual_document is not None:
+        ctx.messages = [
+            {
+                "role": "user",
+                "content": prompts.initial_user_message(
+                    prompt,
+                    recon,
+                    guideline_set=ctx.guideline_set,
+                    document_type=ctx.document_type,
+                )
+                + "\n\nIMMUTABLE USER-SUPPLIED DOCUMENT:\n"
+                + prompts.document_payload(
+                    title=manual_document.title, body=manual_document.body
+                ),
+            }
+        ]
     return _write(ctx)
 
 
@@ -753,10 +785,16 @@ def _handle_emit(
         trace.notes.append(f"emit_document malformed: {exc}")
         return _nothing(ctx, f"the emitted document was malformed: {exc}")
 
+    if ctx.manual_document is not None:
+        title, body = ctx.manual_document.title, ctx.manual_document.body
     problem = _emit_problem(title, body, ids, ctx.retrieved_ids)
     if problem is not None:
         trace.refused_emits.append(problem)
-        if ctx.emit_blocks < _MAX_EMIT_BLOCKS and not degraded:
+        if (
+            ctx.emit_blocks < _MAX_EMIT_BLOCKS
+            and not degraded
+            and ctx.manual_document is None
+        ):
             ctx.emit_blocks += 1
             _append_tool_error(
                 ctx.messages, tool_use.id, prompts.emit_block_message(problem)
@@ -774,7 +812,11 @@ def _handle_emit(
         # pass merely because the writer produced grounded text.
         return _nothing(ctx, f"the document could not be reviewed: {ctx.review_error}")
     if not review.passed:
-        if review.attempts <= _MAX_REVIEW_RETRIES and not degraded:
+        if (
+            review.attempts <= _MAX_REVIEW_RETRIES
+            and not degraded
+            and ctx.manual_document is None
+        ):
             # This replacement discards the pending emit_document tool_use
             # with the old conversation, so it needs no tool_result. Keeping
             # either would also keep the reasoning the findings contradict.
@@ -956,6 +998,9 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> DocgenResult:
     reason to stop gathering, never a reason to record a groundless page."""
     trace: TraceBuilder = ctx.trace
     trace.forced_finalize = reason
+    if ctx.manual_document is not None:
+        detail = ctx.model_error if reason == "api_error" else reason
+        return _nothing(ctx, f"The manual edit could not be checked: {detail}")
     trace.degraded = True
     ctx.messages.append(
         {"role": "user", "content": prompts.forced_finalize_message(reason)}
@@ -993,6 +1038,8 @@ def _nothing(
     title: str | None = None,
     body: str | None = None,
 ) -> NothingWritten:
+    if ctx.manual_document is not None:
+        title, body = ctx.manual_document.title, ctx.manual_document.body
     carried_review = review if review is not None else ctx.review
     return NothingWritten(
         reason=reason,

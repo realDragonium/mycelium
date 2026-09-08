@@ -14,6 +14,7 @@
 .docw label { display: grid; gap: 6px; margin-bottom: 16px; font-weight: 500; }
 .docw input, .docw select, .docw textarea { width: 100%; min-width: 0; box-sizing: border-box; }
 .docw textarea { min-height: 150px; resize: vertical; }
+.docw textarea.docw-editor { min-height: 360px; font-family: var(--mono, monospace); font-size: 13px; line-height: 1.6; }
 .docw fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .docw-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .docw-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 16px 0; }

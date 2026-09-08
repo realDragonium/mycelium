@@ -615,6 +615,7 @@ def test_the_default_runner_is_the_generation_loop(tmp_path, monkeypatch):
         existing_documents=(),
         load_current_document=None,
         revision_target=None,
+        manual_document=None,
         profiles=None,
         instructions=None,
         review_instructions=None,
@@ -1016,3 +1017,54 @@ def test_a_refused_draft_reaches_the_run_row_but_not_the_registry(tmp_path):
     detail = docs_store.serialize_run_detail(row)
     assert detail["draft_title"] == "Configuring single sign-on"
     assert "Provision an Auth0 organization." in detail["draft_body"]
+
+
+@pytest.mark.parametrize("failure", ["crash", "rewrite"])
+def test_manual_edit_executor_retains_input_on_failure(tmp_path, failure):
+    from mycelium.docgen.schema import ManualDocument
+
+    conn = _conn(tmp_path)
+    manual = ManualDocument(title="Manual title", body="Manual body\n")
+
+    def runner(*args, **kwargs):
+        if failure == "crash":
+            raise RuntimeError("Unavailable")
+        return _document(title="Unexpected rewrite")
+
+    run_id = _start(conn, tmp_path, runner=runner, manual_document=manual)
+    doc_runs.wait_all()
+    row = docs_store.get_run(conn, run_id)
+    assert row["outcome"] == "failed"
+    assert row["document_id"] is None
+    assert (row["draft_title"], row["draft_body"]) == (manual.title, manual.body)
+
+
+def test_manual_edit_creates_revision_with_exact_body_and_keeps_previous(tmp_path):
+    from mycelium.docgen.schema import ManualDocument
+    from mycelium.document_edits import start_document_edit
+
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="original",
+        title="Original",
+        body="Original body",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+    manual = ManualDocument(
+        title="Manual title", body="---\ntitle: Manual title\n---\n\nExact body.  \n"
+    )
+    doc_runs.RUNNER = lambda *args, **kwargs: _document(
+        title=manual.title, body=manual.body
+    )
+    run_id = start_document_edit(conn, document_id, 1, manual, created_by="writer")
+    doc_runs.wait_all()
+    saved = docs_store.get_document(conn, document_id)
+    assert (saved["current_revision"], saved["body"], saved["slug"]) == (
+        2,
+        manual.body,
+        "original",
+    )
+    assert docs_store.get_revision(conn, document_id, 1)["body"] == "Original body"
+    assert docs_store.get_run(conn, run_id)["draft_body"] is None

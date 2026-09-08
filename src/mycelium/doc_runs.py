@@ -31,7 +31,12 @@ from typing import TYPE_CHECKING, Any, Callable
 from . import ai_prompts, docs_store, product_settings, prompt_store
 from .docgen.config import DocgenConfig, Provider
 from .docgen.destinations import DestinationConfig, load_destinations
-from .docgen.schema import CurrentDocument, ExistingDocument, RevisionTarget
+from .docgen.schema import (
+    CurrentDocument,
+    ExistingDocument,
+    ManualDocument,
+    RevisionTarget,
+)
 
 if TYPE_CHECKING:
     from .documentation_profiles import CatalogueSnapshot
@@ -57,9 +62,12 @@ def start_run(
     target_document_id: str | None = None,
     expected_revision: int | None = None,
     match_existing: bool = True,
+    manual_document: ManualDocument | None = None,
 ) -> str:
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
+    if manual_document is not None:
+        match_existing = False
     selected_runner = runner or RUNNER or _default_runner
     config = DocgenConfig.from_env(provider=provider)
     instructions = ai_prompts.resolve("docgen", default_path=config.doctrine_path)
@@ -132,6 +140,12 @@ def start_run(
         try:
             if profiles is not None and guideline_set and document_type:
                 _record_profile(conn, run_id, profiles, guideline_set, document_type)
+            if manual_document is not None:
+                conn.execute(
+                    "UPDATE documentation_runs SET draft_title = ?, draft_body = ? WHERE id = ?",
+                    (manual_document.title, manual_document.body, run_id),
+                )
+                conn.commit()
             docs_store.mark_started(conn, run_id)
             rows = conn.execute("PRAGMA database_list").fetchall()
             main = next((row for row in rows if row["name"] == "main"), None)
@@ -160,6 +174,7 @@ def start_run(
                     match_existing,
                     instructions,
                     review_instructions,
+                    manual_document,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -175,6 +190,8 @@ def start_run(
                     run_id,
                     outcome="failed",
                     error=f"failed to start: {type(exc).__name__}: {exc}",
+                    draft_title=manual_document.title if manual_document else None,
+                    draft_body=manual_document.body if manual_document else None,
                 )
             except Exception:  # noqa: BLE001 — startup orphan sweep is the backstop
                 logger.exception("could not finalize failed start of %s", run_id)
@@ -234,6 +251,7 @@ def _default_runner(
     load_current_document: Callable[[str], CurrentDocument] | None = None,
     config: DocgenConfig | None = None,
     revision_target: RevisionTarget | None = None,
+    manual_document: ManualDocument | None = None,
     profiles: CatalogueSnapshot | None = None,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
@@ -255,6 +273,7 @@ def _default_runner(
         existing_documents=existing_documents,
         load_current_document=load_current_document,
         revision_target=revision_target,
+        manual_document=manual_document,
         profiles=profiles,
         instructions=instructions,
         review_instructions=review_instructions,
@@ -275,6 +294,7 @@ def _execute_run(
     match_existing: bool = True,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
+    manual_document: ManualDocument | None = None,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -282,8 +302,8 @@ def _execute_run(
     outcome = "failed"
     document_id = None
     error = None
-    draft_title = None
-    draft_body = None
+    draft_title = manual_document.title if manual_document else None
+    draft_body = manual_document.body if manual_document else None
     matched_document_id = None
 
     try:
@@ -312,6 +332,7 @@ def _execute_run(
                     if match_existing and revision_target is None
                     else (),
                     revision_target=revision_target,
+                    manual_document=manual_document,
                     profiles=profiles,
                     instructions=instructions,
                     review_instructions=review_instructions,
@@ -364,6 +385,13 @@ def _execute_run(
             # refusal with no reason. Raising lands it on `error` as what it is.
             raise ValueError(f"runner returned an unknown outcome: {reported!r}")
         if reported == "document_written":
+            if manual_document is not None and (
+                payload.get("title") != manual_document.title
+                or payload.get("body") != manual_document.body
+            ):
+                raise ValueError(
+                    "Manual document text changed during review; edit not saved"
+                )
             # The loop refuses an ungrounded document at its emit gate; this is
             # the same rule at the place that actually records one, so "a
             # stored document cites the statements it rests on" holds however
@@ -443,8 +471,8 @@ def _execute_run(
             error = payload.get("reason")
             # The findings quote a document, so the document is kept beside
             # them. Present only when one was written and refused.
-            draft_title = payload.get("title")
-            draft_body = payload.get("body")
+            draft_title = payload.get("title") or draft_title
+            draft_body = payload.get("body") or draft_body
     except Exception as exc:
         logger.exception("documentation run failed: %s", run_id)
         outcome = "failed"
