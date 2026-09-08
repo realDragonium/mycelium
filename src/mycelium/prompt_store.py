@@ -104,12 +104,18 @@ def reset() -> None:
 
 def migrate(conn: sqlite3.Connection) -> None:
     from .draft_review_settings import SCHEMA
+    from .github_connections import SCHEMA as CONNECTION_SCHEMA
     from .github_credentials import SCHEMA as CREDENTIAL_SCHEMA
     from .model_settings import SCHEMA as MODEL_SCHEMA
     from .product_settings import SCHEMA as PRODUCT_SCHEMA
 
     conn.executescript(
-        PROMPT_TEXTS_SCHEMA + SCHEMA + MODEL_SCHEMA + PRODUCT_SCHEMA + CREDENTIAL_SCHEMA
+        PROMPT_TEXTS_SCHEMA
+        + SCHEMA
+        + MODEL_SCHEMA
+        + PRODUCT_SCHEMA
+        + CREDENTIAL_SCHEMA
+        + CONNECTION_SCHEMA
     )
     conn.commit()
 

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GitHub App setup · Mycelium</title>
+<style>body{font:16px/1.6 system-ui,sans-serif;max-width:760px;margin:48px auto;padding:0 24px;color:#222;background:#faf9f6}h1,h2{line-height:1.2}pre{padding:20px;background:#eeede8;overflow:auto;font-size:13px}a{color:#285b86}li{margin:8px 0}</style></head><body>
+<h1>Connect GitHub to Mycelium</h1>
+<p>A server administrator registers a GitHub App once. Users can then connect repositories from Documentation → Models &amp; GitHub without creating personal tokens.</p>
+<h2>Register the GitHub App</h2>
+<ol><li><a href="https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app">Register an App</a> with Contents and Pull requests permissions set to <strong>Read and write</strong>.</li>
+<li>Set the callback URL to <code>https://YOUR_HOST/api/github/callback</code> and setup URL to <code>https://YOUR_HOST/api/github/setup</code>. Enable <strong>Redirect on update</strong>. Leave <strong>Request user authorization during installation</strong> disabled.</li>
+<li>Disable webhooks. Allow installation on the intended GitHub accounts.</li>
+<li>Generate a private key and save the PEM file where only the Mycelium service account can read it.</li></ol>
+<h2>Configure the server</h2>
+<p>Add the following to the server's environment. The systemd deployment uses <code>/etc/mycelium.env</code>. Restart the service after changing it.</p>
+<pre>MYCELIUM_GITHUB_APP_ID=123456
+MYCELIUM_GITHUB_APP_CLIENT_ID=Iv1.example
+MYCELIUM_GITHUB_APP_CLIENT_SECRET=&lt;app-client-secret&gt;
+MYCELIUM_GITHUB_APP_SLUG=mycelium-docs
+MYCELIUM_GITHUB_APP_PRIVATE_KEY_FILE=/etc/mycelium/github-app.pem
+MYCELIUM_GITHUB_APP_CALLBACK_URL=https://YOUR_HOST/api/github/callback</pre>
+<p>The callback origin must match the address used to open Mycelium. HTTP is supported only on localhost or loopback. Setup uses a single server process and expires after ten minutes or a server restart.</p>
+<h2>Choose a repository</h2>
+<p>Return to Documentation → Models &amp; GitHub → Documentation delivery. Choose <strong>Connect GitHub</strong>, select repositories in GitHub, and authorize access. Choose the repository and branch in Mycelium, then <strong>Use repository</strong> and <strong>Save documentation delivery</strong>.</p>
+<p>If the App is already installed or an organization has now approved your request, choose <strong>Use existing GitHub installation</strong>. Your GitHub account must have write access to the repository.</p>
+<p>Connections grant publishing access to this instance's writers. Publishing remains an explicit action. Disconnecting preserves documents and PRs; it does not uninstall the App. Restored backups require reconnection. Keep the App's private key and client secret separately from instance backups.</p>
+</body></html>

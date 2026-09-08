@@ -27,7 +27,12 @@ not change that run's instructions.
 
 ### GitHub publication
 
-Add a destination in **Models & GitHub → Documentation delivery**: name,
+Connect GitHub in **Models & GitHub → Documentation delivery** and choose a
+repository and base branch. Then save the documentation delivery settings.
+See [GitHub App setup](GITHUB_APP.md) for one-time operator configuration,
+reconnection, and access requirements.
+
+Alternatively, add a destination using existing server credentials: name,
 repository owner and name, base branch, path template, and approved credential
 binding. Use `{slug}` in the path template, for example `docs/{slug}.md`.
 Server administrators provide bindings through `MYCELIUM_GITHUB_CREDENTIALS`;

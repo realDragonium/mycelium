@@ -358,8 +358,10 @@ def publishing_destination(
             coordinates = Coordinates.model_validate_json(
                 row["delivery_target"] or "{}"
             )
-            binding = github_credentials.resolve(str(binding_name))
-            if binding.host != coordinates.host:
+            binding = github_credentials.documentation_settings(
+                str(binding_name), coordinates.owner, coordinates.repo
+            )
+            if binding["host"] != coordinates.host:
                 raise DestinationError(
                     "The recorded publishing credential is no longer authorized for this host."
                 )
@@ -367,7 +369,7 @@ def publishing_destination(
                 name=str(recorded_name),
                 type="github",
                 path_template=str(row["delivery_path"]),
-                settings={**coordinates.model_dump(), "token_env": binding.token_env},
+                settings={**coordinates.model_dump(), **binding},
             )
             _backend(config).parse_config(config)
             return config, str(binding_name)

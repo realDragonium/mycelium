@@ -16,7 +16,15 @@ from pydantic import (
     model_validator,
 )
 
-from . import auth, github_credentials, guidelines, prompt_store, store
+from . import (
+    auth,
+    github_connections,
+    github_credentials,
+    guidelines,
+    prompt_store,
+    store,
+)
+from .github_connections import Connection as GitHubConnection
 from .model_settings import Conflict, Unavailable
 
 if TYPE_CHECKING:
@@ -149,14 +157,16 @@ class DestinationSettings(SettingsModel):
     def destination(self, conn: sqlite3.Connection | None = None) -> DestinationConfig:
         from .docgen.destinations import DestinationConfig
 
-        binding = github_credentials.resolve(self.binding, conn)
+        binding = github_credentials.documentation_settings(
+            self.binding, self.owner, self.repo, conn
+        )
         return DestinationConfig(
             self.name,
             "github",
             self.path_template,
             {
                 **self.model_dump(exclude={"name", "path_template", "binding"}),
-                **binding.model_dump(),
+                **binding,
             },
         )
 
@@ -407,6 +417,15 @@ def validate_secrets(settings: Body, *, conn: sqlite3.Connection | None = None) 
         return
     bindings = github_credentials.load(conn)
     for item in entries:
+        if isinstance(item, DestinationSettings):
+            github_credentials.documentation_settings(
+                item.binding, item.owner, item.repo, conn
+            )
+            continue
+        if item.binding and item.binding.startswith(github_connections.PREFIX):
+            raise ValueError(
+                "GitHub App connections currently support documentation only."
+            )
         if item.binding and item.binding not in bindings:
             raise ValueError(
                 "GitHub credential binding is unavailable. Choose a configured binding."
@@ -540,6 +559,9 @@ class ArchivedSection(SettingsModel):
 class Archive(SettingsModel):
     sections: list[ArchivedSection]
     github_bindings: dict[str, github_credentials.Binding]
+    github_connections: dict[str, GitHubConnection] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
 
     @model_validator(mode="after")
     def validate_sections(self) -> Archive:
@@ -566,10 +588,21 @@ def archive(conn: sqlite3.Connection) -> Archive:
             "SELECT name, body_json FROM github_credential_bindings"
         )
     }
-    return Archive(sections=sections, github_bindings=bindings)
+    return Archive(
+        sections=sections,
+        github_bindings=bindings,
+        github_connections=github_connections.load(conn),
+    )
 
 
 def restore(conn: sqlite3.Connection, archived: Archive) -> None:
+    for name, connection in archived.github_connections.items():
+        if name != connection.name:
+            raise ValueError("Invalid archived GitHub connection reference.")
+        conn.execute(
+            "INSERT INTO github_app_connections VALUES (?, ?)",
+            (name, connection.model_copy(update={"enabled": False}).model_dump_json()),
+        )
     for name, binding in archived.github_bindings.items():
         conn.execute(
             "INSERT INTO github_credential_bindings VALUES (?, ?)",

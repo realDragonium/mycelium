@@ -60,12 +60,16 @@ class Source:
 
 def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
     if env is None:
-        from .. import github_credentials, product_settings
+        from .. import github_connections, github_credentials, product_settings
 
         try:
             settings = product_settings.get(product_settings.SourcesSettings)
             sources = {}
             for item in settings.sources:
+                if item.binding and item.binding.startswith(github_connections.PREFIX):
+                    raise ValueError(
+                        "GitHub App connections support documentation only."
+                    )
                 binding = (
                     github_credentials.resolve(item.binding) if item.binding else None
                 )

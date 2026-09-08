@@ -27,11 +27,15 @@ function RepositorySettingsFields({ kind, items, bindings, onChange }) {
   const change = (index, key, value) => onChange(items.map((item, i) => {
     if (i !== index) return item;
     const next = { ...item, [key]: value };
-    if (key === 'binding' && !destination && value) next.host = bindings.find(binding => binding.name === value)?.host || item.host;
+    if (key === 'binding' && value) {
+      const selected = bindings.find(binding => binding.name === value);
+      if (!destination) next.host = selected?.host || item.host;
+      if (destination && selected?.owner) { next.owner = selected.owner; next.repo = selected.repo; }
+    }
     return next;
   }));
   const add = () => onChange([...items, destination
-    ? { name: '', owner: '', repo: '', base_branch: 'main', path_template: 'docs/{slug}.md', binding: bindings[0]?.name || '' }
+    ? { name: '', owner: bindings[0]?.owner || '', repo: bindings[0]?.repo || '', base_branch: 'main', path_template: 'docs/{slug}.md', binding: bindings[0]?.name || '' }
     : { name: '', owner: '', repo: '', ref: null, binding: null, host: 'github.com' }]);
   return <>
     {items.length === 0 && <p>No {destination ? 'destinations' : 'sources'} configured.</p>}
@@ -44,28 +48,28 @@ function RepositorySettingsFields({ kind, items, bindings, onChange }) {
         <legend>{destination ? 'Destination' : 'Source'} {index + 1}</legend>
         <div style={productSettingsStyle.grid}>
           {textFields.map(([key, label]) => <label key={key} style={productSettingsStyle.field}>{label}
-            <input aria-label={`${noun} ${index + 1} ${label}`} style={productSettingsStyle.input} value={item[key] ?? ''} required={key !== 'ref'} maxLength={key === 'path_template' ? 1000 : 200} onChange={event => change(index, key, key === 'ref' ? event.target.value || null : event.target.value)} />
+            <input aria-label={`${noun} ${index + 1} ${label}`} style={productSettingsStyle.input} value={item[key] ?? ''} readOnly={destination && item.binding?.startsWith('github-app:') && ['owner', 'repo'].includes(key)} required={key !== 'ref'} maxLength={key === 'path_template' ? 1000 : 200} onChange={event => change(index, key, key === 'ref' ? event.target.value || null : event.target.value)} />
           </label>)}
-          <label style={productSettingsStyle.field}>GitHub credentials
+          <label style={productSettingsStyle.field}>GitHub connection
             <select aria-label={`${noun} ${index + 1} GitHub credentials`} style={productSettingsStyle.input} value={item.binding || ''} required={destination} onChange={event => change(index, 'binding', event.target.value || null)}>
               <option value="">{destination ? 'Select credentials' : 'Public repository (no credentials)'}</option>
               {item.binding && !selectedBinding && <option value={item.binding}>{item.binding} (unavailable)</option>}
-              {bindings.map(binding => <option key={binding.name} value={binding.name}>{binding.name} · {binding.host}{binding.available ? '' : ' (credentials unavailable)'}</option>)}
+              {bindings.map(binding => <option key={binding.name} value={binding.name}>{binding.label || binding.name} · {binding.host}{binding.available ? '' : binding.name.startsWith('github-app:') ? ' (disconnected)' : ' (credentials unavailable)'}</option>)}
             </select>
           </label>
           {!destination && !item.binding && <label style={productSettingsStyle.field}>GitHub host
             <input aria-label={`${noun} ${index + 1} GitHub host`} style={productSettingsStyle.input} value={item.host} required maxLength={200} onChange={event => change(index, 'host', event.target.value)} />
           </label>}
         </div>
-        {selectedBinding && <p>Host: {selectedBinding.host}. {!selectedBinding.available && 'The server administrator must configure these credentials before a run can use them.'}</p>}
+        {selectedBinding && <p>Host: {selectedBinding.host}. {!selectedBinding.available && (selectedBinding.name.startsWith('github-app:') ? 'Reconnect this repository above before publishing.' : 'The server administrator must configure these credentials before a run can use them.')}</p>}
         {item.binding && !selectedBinding && <p role="alert">This credential binding is unavailable. Select a configured binding.</p>}
         <button type="button" style={productSettingsStyle.button} onClick={() => onChange(items.filter((_, i) => i !== index))}>Remove {noun} {index + 1}</button>
       </fieldset>;
     })}
     <button type="button" style={productSettingsStyle.button} onClick={add} disabled={destination && bindings.length === 0}>Add {noun}</button>
-    {destination && bindings.length === 0 && <p>A server administrator must configure GitHub credentials before you can add a destination.</p>}
+    {destination && bindings.length === 0 && <p>Connect a GitHub repository above to start publishing.</p>}
     <p>{destination ? 'Use {slug} in the file path template, for example docs/{slug}.md. Delivery creates a pull request for review.' : 'An empty ref uses the repository’s default branch.'} Repository changes take effect for new runs.</p>
-    <p>Credential bindings and tokens are managed on the server. This form stores the selected binding name.</p>
+    <p>Repository connections are shared by this Mycelium instance. Existing server credentials can also be selected.</p>
   </>;
 }
 
@@ -76,7 +80,20 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, guidelineSet
   const [error, setError] = React.useState(null);
   const [saved, setSaved] = React.useState(false);
   const [conflict, setConflict] = React.useState(false);
+  const [connections, setConnections] = React.useState([]);
   const kind = snapshot.settings.kind;
+  const repositoryBindings = kind === 'documentation' ? [...bindings, ...connections.map(connection => ({ name: connection.name, owner: connection.owner, repo: connection.repo, label: `${connection.owner}/${connection.repo}`, host: 'github.com', available: connection.enabled }))] : bindings;
+  const connected = connection => {
+    setConnections(previous => [...previous.filter(item => item.name !== connection.name), { ...connection, enabled: true }]);
+    setForm(previous => {
+      if (previous.destinations.some(item => item.binding === connection.name)) return previous;
+      const names = new Set(previous.destinations.map(item => item.name));
+      let name = connection.repo, suffix = 2;
+      while (names.has(name)) name = `${connection.repo}-${suffix++}`;
+      return { ...previous, destinations: [...previous.destinations, { name, owner: connection.owner, repo: connection.repo, base_branch: connection.base_branch, path_template: 'docs/{slug}.md', binding: connection.name }] };
+    });
+    setSaved(false);
+  };
   const title = productSettingsTitles[kind];
   const change = (key, value) => { setForm(previous => ({ ...previous, [key]: value })); setSaved(false); };
   const accept = value => { setCurrent(value); setForm(value.settings); };
@@ -109,10 +126,11 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, guidelineSet
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
-  return <details style={{ border: '1px solid var(--rule, var(--line))', borderRadius: 6, padding: '16px 20px', marginBottom: 12, minWidth: 0, overflowWrap: 'anywhere' }}>
+  return <details open={kind === 'documentation' ? true : undefined} style={{ border: '1px solid var(--rule, var(--line))', borderRadius: 6, padding: '16px 20px', marginBottom: 12, minWidth: 0, overflowWrap: 'anywhere' }}>
     <summary style={{ cursor: 'pointer', color: 'var(--ink)', fontWeight: 600 }}>{title}{current.configuration_error ? ' · Needs attention' : ''}</summary>
     {current.configuration_error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{current.configuration_error}</p>}
     {error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p>}
+    {kind === 'documentation' && <GitHubConnection destinationSaved={saved} canConfigure={canConfigure} onConnected={connected} onConnections={setConnections} />}
     <form onSubmit={save}>
       <fieldset disabled={busy || conflict || !canConfigure} style={{ border: 0, padding: 0, margin: '16px 0 0', minWidth: 0 }}>
         {kind === 'documentation' ? <>
@@ -123,7 +141,7 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, guidelineSet
               {guidelineSets.map(name => <option key={name} value={name}>{name}</option>)}
             </select>
           </label>
-          <RepositorySettingsFields kind={kind} items={form.destinations} bindings={bindings} onChange={items => change('destinations', items)} />
+          <RepositorySettingsFields kind={kind} items={form.destinations} bindings={repositoryBindings} onChange={items => change('destinations', items)} />
         </> : kind === 'sources' ? <RepositorySettingsFields kind={kind} items={form.sources} bindings={bindings} onChange={items => change('sources', items)} /> : <>
           <div style={productSettingsStyle.grid}>
             {Object.keys(form).filter(key => key !== 'kind' && productSettingsFields[key]).map(key => {

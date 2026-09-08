@@ -37,6 +37,7 @@ from . import (
     auth,
     connect_page,
     documentation_profiles,
+    github_connect,
     model_settings,
     names_workspace,
     oauth_server,
@@ -340,6 +341,7 @@ app.add_middleware(
 
 app.include_router(oidc.router)
 app.include_router(oauth_server.router)
+app.include_router(github_connect.router)
 
 
 def _path_for(func_name: str) -> str:
