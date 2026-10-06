@@ -6,10 +6,12 @@ error stream.
 The handlers are exercised on a throwaway FastAPI app wired with the *real*
 handler functions from `http`, so the test needs no server lifespan or DB."""
 
+import asyncio
 import logging
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.middleware.errors import ServerErrorMiddleware
 
 from mycelium import http, tracing
 
@@ -68,3 +70,38 @@ def test_emit_error_is_structured_and_never_raises(caplog):
         tracing.ERROR_TOKEN in m and "exc=KeyError" in m and "where=unit" in m
         for m in (rec.getMessage() for rec in caplog.records)
     )
+
+
+def test_client_disconnect_without_response_is_not_an_error(monkeypatch):
+    """The MCP transport returns without responding once the client has gone;
+    the auth middleware must pass that through rather than turn it into a 500.
+    Wrapped the way FastAPI installs the `Exception` handler, so a raise here
+    would reach `emit_error` as it did in production."""
+    emitted = []
+    monkeypatch.setattr(tracing, "emit_error", lambda **kw: emitted.append(kw))
+
+    async def gone_client_app(scope, receive, send):
+        await receive()
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        raise AssertionError(f"nothing should be sent, got {message['type']}")
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [],
+        "query_string": b"",
+        "session": {},
+    }
+    app = ServerErrorMiddleware(
+        http.AuthMiddleware(gone_client_app),
+        handler=http._unhandled_error_handler,
+    )
+
+    asyncio.run(app(scope, receive, send))
+
+    assert emitted == []
