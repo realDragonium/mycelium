@@ -28,8 +28,8 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, JsonValue, create_model
 from pydantic import Field as PydField
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from . import (
     ai_prompts,
@@ -194,10 +194,21 @@ def _is_browser_navigation(request: Request) -> bool:
     return "text/html" in accept
 
 
-class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
+class AuthMiddleware:
+    # Plain ASGI rather than `BaseHTTPMiddleware`: its `call_next` raises
+    # "No response returned." when the inner app returns without responding,
+    # which the MCP transport does when the client disconnects mid-call. Here
+    # that is just a closed connection, not a 500.
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         from urllib.parse import quote
 
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
         raw_token, session_user_id = self._credentials(request)
         principal = await self._resolve(raw_token, session_user_id)
         if principal is None and auth.is_enabled() and not _is_exempt(request.url.path):
@@ -214,10 +225,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 next_path = request.url.path
                 if request.url.query:
                     next_path += "?" + request.url.query
-                return RedirectResponse(
+                redirect = RedirectResponse(
                     url=f"/auth/logout?next={quote(next_path)}",
                     status_code=302,
                 )
+                await redirect(scope, receive, send)
+                return
             # API + MCP clients get a 401. When the request is for the
             # MCP transport we additionally emit RFC 9728's
             # `WWW-Authenticate` so the client can auto-discover the
@@ -235,11 +248,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     f'Bearer realm="mycelium", scope="mcp", '
                     f'resource_metadata="{base}/.well-known/oauth-protected-resource"'
                 )
-            return JSONResponse(
+            rejection = JSONResponse(
                 status_code=401,
                 content={"detail": "authentication required"},
                 headers=headers,
             )
+            await rejection(scope, receive, send)
+            return
         # Fall back to the synthetic admin only when auth is disabled —
         # never when auth is on but the path is exempt, so exempt paths
         # don't accidentally see a fake admin and grant write power.
@@ -270,7 +285,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if principal is not None:
             store.set_actor(principal.id)
         try:
-            return await call_next(request)
+            await self.app(scope, receive, send)
         finally:
             store.set_actor(None)
             auth.current_principal.reset(ctx_token)
