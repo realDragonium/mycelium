@@ -9,6 +9,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 from mycelium import server
 from mycelium.http import _path_for, app
 
@@ -46,3 +48,22 @@ def test_manifest_documents_each_tool_on_the_side_it_is_on():
 
     assert on_mcp == server.MCP_TOOLS
     assert off_mcp == _registered() - server.MCP_TOOLS
+
+
+_BOUNDED_READS = ("search_statements", "list_statements", "list_entities")
+
+
+def test_bounded_reads_advertise_their_result_ceiling():
+    advertised = {t.name: t for t in server.mcp._tool_manager.list_tools()}
+
+    for name in _BOUNDED_READS:
+        limit = advertised[name].parameters["properties"]["limit"]
+        assert (limit["minimum"], limit["maximum"]) == (1, 100), name
+
+
+@pytest.mark.parametrize("name", _BOUNDED_READS)
+def test_bounded_reads_refuse_an_oversized_limit_in_process(name):
+    """The loops call these functions directly, past schema validation."""
+    query = {"query": "x"} if name == "search_statements" else {}
+    with pytest.raises(ValueError, match="limit must be between 1 and 100"):
+        getattr(server, name)(limit=101, **query)

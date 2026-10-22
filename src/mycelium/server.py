@@ -1928,10 +1928,22 @@ def get_mention_candidates(
     )
 
 
+#: Ceiling on rows a paged or ranked read returns: hits are hydrated, so an
+#: unbounded `limit` can overrun a caller's context in one call.
+_MAX_LIMIT = 100
+ResultLimit = Annotated[int, Field(ge=1, le=_MAX_LIMIT)]
+
+
+def _check_limit(limit: int) -> None:
+    """Enforce `ResultLimit` for in-process callers, which skip validation."""
+    if not 1 <= limit <= _MAX_LIMIT:
+        raise ValueError(f"limit must be between 1 and {_MAX_LIMIT}; got {limit}")
+
+
 @tool
 def search_statements(
     query: str,
-    limit: int = 10,
+    limit: ResultLimit = 10,
     min_score: float = -1.0,
     depth: int = 0,
     direction: Literal["both", "children", "parents"] = "both",
@@ -1943,7 +1955,7 @@ def search_statements(
 ) -> list[dict[str, Any]]:
     """Vector-search statements by semantic similarity to `query`.
 
-    Returns up to `limit` direct hits with score >= `min_score`,
+    Returns up to `limit` (at most 100) direct hits with score >= `min_score`,
     sorted by score descending. Practical floors are usually 0.5–0.8.
 
     Scoring is cosine similarity + an alias-aware boost: the query is
@@ -2001,7 +2013,7 @@ def search_statements(
                          canonical queries unaffected when no name is
                          clearly relevant.
     """
-
+    _check_limit(limit)
     scored = _search_statement_candidates(
         query,
         limit,
@@ -4286,7 +4298,7 @@ def get_entity(id: str) -> dict[str, Any]:
 @tool
 def list_entities(
     prefix: str = "",
-    limit: int = 50,
+    limit: ResultLimit = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
     """Page through entities, sorted by their alphabetically-first name.
@@ -4301,8 +4313,9 @@ def list_entities(
     `name` is the entity's alphabetically-first attached name, or the
     entity_id as a fallback if it has no names. To enumerate all aliases
     of one entity, use `get_entity(id)`. For conceptual (non-literal)
-    lookup, use `search_entities`.
+    lookup, use `search_entities`. `limit` is at most 100.
     """
+    _check_limit(limit)
     rows = store.list_entities(_db(), prefix=prefix or None, limit=limit, offset=offset)
     return {
         "total": store.count_entities(_db(), prefix=prefix or None),
@@ -4378,7 +4391,7 @@ def search_entities(
 
 @tool
 def list_statements(
-    limit: int = 50,
+    limit: ResultLimit = 50,
     offset: int = 0,
     entity_id: str | None = None,
     name: str | None = None,
@@ -4404,8 +4417,10 @@ def list_statements(
 
     Returns `{total, statements: [{id, kind, text}], missing}` — text only,
     with no mentions or links to keep the response light. To inspect a
-    single statement's full structure use `get_statements([id])`.
+    single statement's full structure use `get_statements([id])`. `limit` is
+    at most 100; page with `offset`.
     """
+    _check_limit(limit)
     if entity_id is not None and name is not None:
         raise ValueError("pass at most one of entity_id / name, not both")
     if name is not None:
