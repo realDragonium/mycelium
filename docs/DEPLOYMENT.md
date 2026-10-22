@@ -1,5 +1,15 @@
 # Deployment guide
 
+> **Which deployment this describes.** This guide covers the self-hosted VPS
+> path: `deploy/deploy.sh`, systemd and nginx on one Linux server. The live
+> production instance does not run this way. It runs as a container on AWS ECS
+> Fargate, with Litestream replicating its SQLite databases to S3, and is
+> deployed by CDK from a separate private repository. The commands below, the
+> service and file paths, and the deploy-snapshot and rollback procedures apply
+> only to a VPS install. What holds for every deployment: the environment
+> variables, the data files, `mycelium export` / `mycelium import`, and the
+> fact that schema migrations run on startup.
+
 End-to-end setup for running Mycelium on a fresh Linux VPS so Claude
 Desktop and Claude Code can connect to it remotely.
 
