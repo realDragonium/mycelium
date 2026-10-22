@@ -9,6 +9,9 @@
 # replaced, so it is exactly what the running build last wrote — and what a
 # rollback restores (docs/DEPLOYMENT.md, "Rolling back a deploy"). If it
 # fails, the current build is started again and nothing is installed.
+#
+# Layout: $MYC_SNAPSHOT_DIR/<UTC time>/data/ is the copy; BUILD beside it
+# names the build that wrote it. Both directories are root-only.
 
 set -euo pipefail
 
@@ -28,25 +31,31 @@ if ! [[ "$KEEP_SNAPSHOTS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 copy_and_verify() {
-    local dest="$1" db
-    # The uv cache lives in the data dir (see the systemd unit) but is not data.
-    sudo rsync -a --exclude='.uv-cache/' "$DATA_DIR/" "$dest/" || return 1
-    # Which build wrote this data: the one to redeploy when restoring it.
-    sudo cat "$REMOTE_DIR/BUILD" 2>/dev/null | sudo tee "$dest/BUILD" >/dev/null ||
-        echo unknown | sudo tee "$dest/BUILD" >/dev/null
-    for db in "$dest"/*.db; do
-        sudo python3 -c '
+    local dest="$1"
+    # Check the source as its owner: root never parses files the service
+    # could have shaped, and an unreadable database fails the deploy here.
+    sudo -u mycelium find "$DATA_DIR" -maxdepth 1 -type f -name '*.db' -print0 |
+        while IFS= read -r -d '' db; do
+            sudo -u mycelium python3 -c '
 import sqlite3, sys
 result = sqlite3.connect(sys.argv[1]).execute("PRAGMA quick_check").fetchone()[0]
 sys.exit(0 if result == "ok" else f"{sys.argv[1]}: {result}")
-' "$db" || return 1
-    done
+' "$db" || exit 1
+        done || return 1
+    # The uv cache lives in the data dir (see the systemd unit) but is not data.
+    sudo rsync -a --exclude='.uv-cache/' "$DATA_DIR/" "$dest/data/" || return 1
+    sudo diff -rq --no-dereference -x .uv-cache "$DATA_DIR" "$dest/data" || return 1
+    # Which build wrote this data — the one to redeploy when restoring it.
+    # Beside the copy, in the root-owned dir, so nothing in the data can
+    # redirect the write.
+    { sudo -u mycelium cat "$REMOTE_DIR/BUILD" 2>/dev/null || echo unknown; } |
+        sudo tee "$dest/BUILD" >/dev/null
 }
 
 snapshot() {
     local dest
     dest="$SNAPSHOT_ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
-    sudo install -d -m 0700 "$SNAPSHOT_ROOT" || return 1
+    sudo install -d -m 0700 "$SNAPSHOT_ROOT" "$dest" || return 1
     echo "==> snapshot $DATA_DIR → $dest"
     if ! copy_and_verify "$dest"; then
         sudo rm -rf -- "$dest"
