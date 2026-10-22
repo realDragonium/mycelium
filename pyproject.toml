@@ -151,6 +151,7 @@ module = [
     "mycelium.server.links",
     "mycelium.server.lookups",
     "mycelium.server.names",
+    "mycelium.server.prompt_texts",
     "mycelium.server.registry",
     "mycelium.server.runtime",
     "mycelium.server.search",
