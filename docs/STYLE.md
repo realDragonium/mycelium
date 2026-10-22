@@ -5,7 +5,7 @@ else is judgment. When in doubt, match the surrounding code.
 
 ## Enforced by ruff (`uv run ruff check` / `uv run ruff format`)
 
-Run over `src tests scripts bench`, by the pre-commit hook and in CI.
+Run over `src tests scripts`, by the pre-commit hook and in CI.
 
 - **Line length 88**, double quotes, spaces — ruff format defaults. The
   formatter is the sole authority on layout; don't hand-wrap code.
@@ -18,8 +18,7 @@ Run over `src tests scripts bench`, by the pre-commit hook and in CI.
   in `pytest.raises(match=)` (`RUF043`), and unpacked values never used
   (`RUF059`). Deliberately a small set — a rule earns its place by
   catching real bugs, not by generating churn.
-- **Complexity ≤ 15** (`C901`, product code only — `scripts/` and `bench/`
-  exempt).
+- **Complexity ≤ 15** (`C901`, product code only — `scripts/` exempt).
   When a function trips it, decompose along its real phase seams
   (validate → normalize → write → respond), never by line count. The
   extracted pieces should be nameable — if you can't name it, it wasn't
@@ -81,7 +80,7 @@ it's there. Two legitimate reasons in this codebase:
 
 1. **Lazy optional/heavy deps** — e.g. `anthropic` is imported inside the
    functions that use it so the package stays importable without the SDK or
-   an API key. Same idea for `spacy`, `pyinstrument`, `matplotlib`.
+   an API key. Same idea for `spacy` and `pyinstrument`.
 2. **Cycle breaking** — the `server.py` ↔ `http.py` ↔ stores seam has
    import cycles that local imports resolve.
 

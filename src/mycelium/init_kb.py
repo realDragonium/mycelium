@@ -7,7 +7,7 @@ Run via the `mycelium-init` console script:
 Creates the directory if it doesn't exist (refuses to overwrite a
 non-empty one), drops in a `.mcp.json` wired to *this* Mycelium
 installation, a `.gitignore` that excludes the substrate binary state,
-empty `data/` and `ingest/` subdirs, and a README template.
+an empty `data/` subdir, and a README template.
 
 The `.mcp.json` uses absolute paths and is gitignored — that keeps
 machine-specific paths out of any repo the user might initialise on
@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 GITIGNORE = """\
-# Mycelium substrate state — never commit. Regenerable from ingest/.
+# Mycelium substrate state — never commit; back it up with `mycelium export`.
 data/
 
 # Project-local MCP config has user-specific absolute paths.
@@ -48,10 +48,9 @@ Run `/mcp` if it doesn't appear automatically.
 - `.mcp.json` — project-scoped MCP config pointing at the Mycelium
   installation at `{mycelium_project}`. Contains absolute paths and is
   gitignored.
-- `data/` — substrate state (SQLite + hnswlib binary). Gitignored.
-  Regenerable from `ingest/` via the substrate's ingest workflow.
-- `ingest/` — JSON payloads with extracted entities and statements.
-  Commit these.
+- `data/` — substrate state (SQLite + hnswlib binary). Gitignored, and
+  not regenerable: back it up with
+  `uv run --project {mycelium_project} mycelium --data-dir data export <archive>`.
 
 ## Prerequisites
 
@@ -59,11 +58,6 @@ Run `/mcp` if it doesn't appear automatically.
 - Ollama running with `nomic-embed-text` pulled.
 
 See `{mycelium_project}/SETUP.md` for the full setup walkthrough.
-
-## Re-ingesting
-
-If `ingest/` payloads change or you wipe `data/`, re-run an ingest
-script.
 """
 
 
@@ -115,13 +109,11 @@ def main() -> None:
         )
     )
     (kb_dir / "data").mkdir()
-    (kb_dir / "ingest").mkdir()
 
     print(f"Created {kb_dir}/")
     print(f"  .mcp.json   → wired to {mycelium_project}")
     print("  .gitignore  → excludes data/ and .mcp.json")
     print("  data/       → empty (substrate writes here)")
-    print("  ingest/     → drop your JSON payloads here")
     print("  README.md   → template")
     print()
     print("Next: open Claude Code in this directory.")

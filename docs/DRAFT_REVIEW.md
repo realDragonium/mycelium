@@ -28,19 +28,15 @@ Saving `off` is possible with an empty model or reviewer and no credentials.
 Enabled modes require those prerequisites. Model IDs must support the selected
 provider's structured outputs; account access is established only by a real run.
 
-Existing instances import legacy environment values once at upgrade, preserving saved settings. Fresh instances start with reviews and reviewed application off. Subsequent environment changes do not change product settings.
+Fresh instances start with reviews and reviewed application off. The mode
+(`off`, `review-only` or `review-and-apply`), provider, model and reviewer
+account all come from saved settings; no environment variable changes them.
 The shared model settings remember a separate Claude and OpenAI model ID; see
 [AI model configuration](AI_MODELS.md).
 
-| Variable | Meaning |
-| --- | --- |
-| `MYCELIUM_DRAFT_REVIEW_MODE` | `off` (default), `review-only`, or `review-and-apply`. |
-| `MYCELIUM_DRAFT_REVIEW_PROVIDER` | `openai` (default) or `claude`. |
-| `MYCELIUM_DRAFT_REVIEW_MODEL` | Model ID supporting structured outputs for the selected provider. No model is silently selected. |
-| `OPENAI_API_KEY` | OpenAI API key supplied to the server process. |
-| Anthropic credentials | Claude uses the Anthropic SDK credential configuration, including `ANTHROPIC_API_KEY`, tokens, and profiles. |
-| `MYCELIUM_DRAFT_REVIEW_USER_ID` | Required ID of an active stored Mycelium writer/admin, independent of the draft creator. |
-| `MYCELIUM_REVIEWED_APPLY` | Imported once on upgrade into Allow applying accepted reviews; defaults off on fresh instances. |
+The server environment supplies only credentials: `OPENAI_API_KEY` for OpenAI,
+and the Anthropic SDK's credential configuration (including `ANTHROPIC_API_KEY`,
+tokens and profiles) for Claude.
 
 Use an existing service user with the required role. The synthetic `local-admin`
 identity and a drafter account do not qualify, even when authentication is off.
@@ -237,3 +233,16 @@ Both validate the same assessment schema and decision rules, reject incomplete o
 invalid output, and never fall back to another provider. The wire contracts are
 tested with isolated fake responses; live provider access and factual judgment
 have not been validated by those tests.
+
+## Upgrading from pre-settings versions
+
+Before AI settings existed, review was configured with environment variables.
+The first start of a version with saved settings imports them once; after that
+they have no effect, and fresh and restored instances never read them:
+
+| Variable | Imported into |
+| --- | --- |
+| `MYCELIUM_DRAFT_REVIEW_MODE` | The mode: `off`, `review-only` or `review-and-apply`. |
+| `MYCELIUM_DRAFT_REVIEW_USER_ID` | The reviewer account. |
+| `MYCELIUM_REVIEWED_APPLY` | **Allow applying accepted reviews** (`1`, `true`, `yes` or `on`). |
+| `MYCELIUM_DRAFT_REVIEW_PROVIDER`, `MYCELIUM_DRAFT_REVIEW_MODEL`, `MYCELIUM_DRAFT_REVIEW_CLAUDE_MODEL`, `MYCELIUM_DRAFT_REVIEW_OPENAI_MODEL` | The draft-review model; see [AI model configuration](AI_MODELS.md#upgrading-from-pre-settings-versions). |

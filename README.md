@@ -5,7 +5,7 @@ stores typed statements, named entities, and links between them in SQLite, with
 hnswlib indexes backed by Ollama embeddings.
 
 See `project_vision.md` for the product direction, `SETUP.md` for a guided local
-setup, and `docs/mycelium.md` for detailed contracts.
+setup, and `docs/mycelium.md` for the data model and its invariants.
 See [AI model configuration](docs/AI_MODELS.md) to select Claude or GPT independently for each action.
 See [AI prompts](docs/AI_PROMPTS.md) to edit per-action instructions in the UI without redeploying.
 
@@ -50,8 +50,7 @@ repository:
 uv run mycelium-init ~/work/my-new-kb
 ```
 
-The scaffolder creates a `.mcp.json`, ignored `data/`, and an `ingest/`
-directory.
+The scaffolder creates a `.mcp.json` and an ignored `data/` directory.
 
 ## Configuration
 

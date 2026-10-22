@@ -1,102 +1,133 @@
 ---
 name: mycelium-draft-review
-description: Review pending CI-submitted Mycelium substrate drafts (drf_ records) for approval. Use when the operator wants to review, merge, approve, or drain the mycelium draft queue. Verification is the agent's job; the approve/reject decision is the operator's, made in the Mycelium UI.
+description: Work through the Mycelium draft queue (submitted drf_ records) alongside the server's internal draft reviewer. Reads each draft's review_assessment, checks what the reviewer cannot (product truth against the code, cross-draft duplicates), and recommends approve / reject / answer / rerun. Use when the operator wants to review, drain, approve or triage the mycelium draft queue. The agent verifies and recommends; approving, rejecting and answering the reviewer are the operator's decisions, made in the Mycelium UI.
 ---
 
-# Mycelium draft review (CI queue)
+# Mycelium draft review
 
-A CI pipeline in a product repository submits substrate drafts — queued ops
-(`upsert_entity`, `upsert_statements`, links) — typically after each merged PR.
-Approval **replays the ops against the live substrate** and happens in the Mycelium UI;
-there is no approve/reject MCP tool. The agent verifies and recommends; the operator
-decides. A writer-role MCP credential may apply agreed fixes live (links, renames,
-merges) after approval — never before.
+Drafts are queued substrate changes: from `ingest`, research runs, drafter
+accounts (CI pipelines, the `mycelium-draft` skill) and alias suggestions. When
+a draft is submitted, the server's **internal reviewer** assesses it if review
+is switched on in AI settings (see `docs/DRAFT_REVIEW.md`). This skill works
+on top of that reviewer, not instead of it.
+
+## Who decides what
+
+- **The internal reviewer** judges how a draft fits the existing knowledge:
+  duplicates, contradictions, link type and direction, missing links to live
+  neighbours, entity variants. It **trusts the producer on what the product
+  does** and has no access to the product code. In `review-and-apply` mode,
+  with application allowed, it can correct up to eight operations and then
+  apply or reject the draft itself, or stop and ask a person a question.
+  In `review-only` mode its assessment is advice. In `off` mode there is none.
+- **You** check what the reviewer cannot: whether the claims are true in the
+  product code, and whether several queued drafts propose the same thing.
+  You recommend; you do not approve, reject or answer.
+- **The operator** approves, rejects, answers the reviewer's questions and
+  starts reruns, in the Mycelium UI's draft detail view.
+
+There is no MCP tool that approves, rejects, applies or reruns a draft. The
+HTTP routes behind the UI buttons exist (`POST /api/drafts/{id}/approve`,
+`/reject`, `/review`, `/review/answer`); do not call them unless the operator
+explicitly asks you to act for them in this session.
 
 ## Content standards come from the authoring skills
 
-Load and follow the `mycelium-authoring` skill (sibling of this one) for every content
-judgment: kinds, phrasing, decomposition depth, link direction, topology. The structural
-review method below is condensed from the `mycelium-draft` skill — when in doubt, read
-the original. Where this file appears to differ from authoring, authoring wins.
+Load and follow `mycelium-authoring` (and `mycelium-guide-authoring` for
+procedures, actions, checks and causes) for every content judgment: kinds,
+phrasing, decomposition depth, link direction, topology. Where this file
+appears to differ from them, they win.
 
-## Replay semantics (observed 2026-07 — re-verify if the substrate has changed since)
+## Phase 0 — index the queue
 
-- `upsert_entity` is name-keyed. As of writing, matching is **case-sensitive** (live
-  proof at the time: two entities differing only in case), so case/spelling variants
-  create real duplicates; a normalization change may land later — if in doubt, test.
-- Exact-name replay overwrites the description (last approved wins).
-- Same name + identical description = the CI sentinel pattern — a harmless no-op, not a defect.
-  Since late July 2026 the CI prompt discards pure no-op sentinels before submitting, so drafts
-  submitted after that change should not contain them — older queued drafts still do. A no-op
-  re-upsert in a *new* draft means the discard failed (the draft's PR comment should say so) or
-  the prompt regressed; flag it rather than shrugging it off.
-- Same name + different description = silent overwrite: decide which description wins
-  before approving.
-- Submitted drafts are immutable (`discard_draft_op` is for open drafts). A flawed
-  submitted draft is either approved-then-fixed-live or rejected whole.
-- Pending drafts are invisible to all reads and to each other — cross-draft duplication
-  is the expected failure mode of a backlog, and `add_links` cannot target queued
-  statements (no ids until applied).
+`list_drafts` is visible only to a real writer or admin; a drafter or reader
+connection cannot see the queue, so say so and stop.
 
-## Phase 0 — index the whole queue first
-
-Never judge a draft in isolation. `list_drafts(status="submitted")`, then `get_draft`
-everything (bulk via subagent; raw JSON to a scratch file). Build the duplicate map:
-entity names upserted by more than one draft (including case/spelling variants and
-variants of live entity names), same claims authored by multiple drafts, drafts sharing
-one domain. Review **oldest-first** so descriptions don't regress.
+1. `list_drafts(status="submitted")`, then `get_draft` each one (bulk through
+   a subagent; keep the raw JSON in a scratch file).
+2. For each draft, read `review_assessment`:
+   - `status`: `running`, `completed` or `failed`; `stale` is true when the
+     draft changed after the assessment.
+   - `label`: `good`, `changes_suggested`, `reject` or `needs_context`, with
+     `rationale`, `questions`, `corrections` and `contradictions`.
+   - `application`: `unapplied`, `applied`, `rejected` or `needs_human`, with
+     `detail`.
+   - `answers`: curators' earlier answers to its questions.
+3. Sort the queue into:
+   - **Waiting for an answer** (`application: needs_human`): the reviewer asked
+     a person something. These need the operator most.
+   - **Assessed, not applied**: advisory assessments (`review-only`), runs the
+     application gate held, `reject` labels in `review-only`.
+   - **Not assessed**: no assessment, a `failed` run, or a `stale` one. Failed
+     runs are retried automatically for a while; a stale or missing one needs
+     **Run again** in the UI. No assessment at all can also mean review is on
+     but no model is configured in AI settings.
+   - **Alias suggestions** (drafts holding only `alias_suggestion` operations)
+     always wait for individual human decisions and are never reviewed
+     automatically.
+4. Build the duplicate map across the queue: entity names upserted by more
+   than one draft (spelling variants included; case variants already resolve
+   to one entity), the same claim authored in several drafts, drafts sharing
+   one domain. Review **oldest first** so descriptions don't regress.
 
 ## Phase 1 — per draft
 
-1. **Boundary survey.** Before judging content, walk the substrate around the draft's
-   domain (semantic + literal search, hydrate top hits): what exists upstream (entry
-   statements), downstream (exit statements), and inside the domain already. The draft's
-   new statements should land in the interior and wire to entries/exits. Zero live hits
-   for the domain = genuinely new surface; an unanchored batch is then acceptable —
-   otherwise missing anchors are findings, with the specific live ids named.
-2. **Entities.** Classify each `upsert_entity`: new / sentinel no-op / overwrite
-   (pick the winning description) / variant duplicate (block: reject or plan immediate
-   `merge_entities`). Existence checks go beyond prefix search — stems, variants, grep of
-   live statement text, concept-match against the entity catalogue; the substrate names
-   concepts in product language, code names differ.
-3. **Statements.** `discover_facts` every text; scores measure *similarity, not sameness
-   of claim* — read each `exists`/`near` match before deciding. Same claim reworded →
-   duplicate (reject or plan merge). Mirror pairs (Low/Medium/High, above/below,
-   enable/disable) score ~0.99 and are legitimately distinct — never collapse them.
-   Cross-check the queue duplicate map for the same claim in sibling drafts.
-4. **Topology, read off the ops.** Every link type must exist in `list_link_types()` /
-   `list_entity_link_types()` fetched this session — CI can invent types, and replay is
-   the gate. A type that exists can still not fit: check the glossary's direction/kind
-   constraints and layer — types whose glossary speaks of checks, actions, causes, or
-   procedures (the prescriptive/diagnostic layer) never fit descriptive behaviour
-   statements, and zero `usage_count` means read the definition extra carefully.
-   Direction flip test on every edge (source = bigger/earlier/wrapping claim).
-   Spine vs star: can you walk entry → terminal through real intermediates, or do spokes
-   converge on a hub? No `configures`/`governed-by` edge may terminate on a bare
-   capability. `when` leaves must resolve to states in the batch or confirmed-live ids
-   (`get_statements` them — never trust an id you haven't hydrated). Flow contamination:
-   both endpoints of a link reachable in the same execution path, not welded across
-   mutually exclusive branches. Orphans wired or justified (condition-state `when`
-   leaves are correctly link-free). Watch for invented success/failure forks: if the
-   code swallows a failure with no observable difference, a success/failure branch in
-   the draft is a defect, not detail.
-5. **Truth check against code.** The product codebase is authoritative; the draft may
-   encode wrong assumptions. Verify non-obvious claims, orderings, and every proposed
-   anchor link — with file:line evidence. For drafts with substantial or surprising
-   claims, spawn an adversarial subagent per the `mycelium-draft` template: disprove the
-   claims AND enumerate unmodelled paths. Never invent a link; mark inference 💡,
-   unresolved ⚠️.
-6. **Verdict**: **Approve** / **Approve + fix after** (list the exact post-approval ops)
-   / **Reject** (say why, and what if anything should be re-authored). Present verdicts
-   in small batches (2–4, oldest first); the operator acts in the UI.
+1. **Start from the reviewer's output.** If it asked questions, your first job
+   is to find the answer in the product code or the substrate, with evidence,
+   so the operator can answer it. If it suggested corrections or listed
+   contradictions, check each.
+2. **Truth against code.** The product codebase is authoritative and the
+   reviewer never sees it. Verify non-obvious claims, orderings and every link
+   that anchors new statements to live ones, with `file:line` evidence. For
+   substantial or surprising drafts, spawn an adversarial subagent as the
+   `mycelium-draft` skill describes: disprove the claims and list the paths the
+   draft does not model. Never invent a link; mark inference 💡 and open
+   questions ⚠️.
+3. **What the reviewer cannot see across drafts.** Queued statements are
+   invisible to reads, and to other drafts, until applied. Check the duplicate
+   map: a claim another queued draft also makes, or an entity it also creates.
+4. **Structure**, where the reviewer's assessment is silent or advisory:
+   `discover_facts` every new text and read each `exists` / `near` match
+   (scores measure similarity, not sameness of claim; mirror pairs such as
+   Low/High legitimately score near 1.0). Link types must exist in
+   `list_link_types()` / `list_entity_link_types()` fetched this session.
+   Apply the flip test, look for a walkable spine rather than a star, and
+   hydrate every `when` leaf with `get_statements`.
+5. **Recommendation**, one of:
+   - **Approve** (the operator clicks Approve).
+   - **Approve, then fix**: the exact follow-up operations after it lands.
+   - **Reject**: why, and what should be re-authored.
+   - **Answer**: the text the operator should give the reviewer, with evidence.
+   - **Run again**: the assessment is stale, missing or failed.
+   - **Correct first**: an operation a curator should edit in the draft detail
+     view before approving.
+   Present recommendations in small batches (2–4, oldest first).
 
-## Phase 2 — after each approval
+## Replay facts to keep in mind
 
-Verify landed (descriptions, mentions resolved); apply the agreed fixes live; walk the
-new statements once more for orphans and spine; update the queue index — later drafts'
-duplicate upserts just became sentinels, overwrites, or rejects.
+- `upsert_entity` matches names case-insensitively. Replaying it with a
+  different description overwrites the live description: decide which one
+  wins before approving.
+- Approving replays every operation in order. An operation that errors (a
+  missing id, a flipped link) fails the whole approval and leaves the draft as
+  it was. A statement that fails the phrasing check does **not**: a manual
+  Approve leaves it out, with every statement that references it, and applies
+  the rest. The reviewer's automatic application refuses instead. Check
+  phrasing findings before recommending Approve.
+- The author cannot add or change operations on a submitted draft, but can
+  still replace its evidence, which makes the assessment stale. A curator can
+  edit or remove an operation in the UI, and the reviewer can make its own
+  corrections.
+
+## Phase 2 — after each approval or automatic application
+
+Check what landed (descriptions, mentions resolved, links where intended),
+walk the new statements once for orphans and a spine, and update the queue
+index: a later draft's duplicate entity upsert just became an overwrite or a
+no-op.
 
 ## Running state
 
-Keep a tally (approved / fixed / rejected / remaining) and persist queue-position notes
-across sessions so a later session resumes mid-queue instead of re-deriving.
+Keep a tally (applied / rejected / waiting for an answer / remaining) and
+persist queue-position notes so a later session resumes instead of
+re-deriving.

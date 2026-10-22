@@ -48,10 +48,11 @@ one statement.
 search_statements(query=<topic>, min_score=0.7, depth=2)
 ```
 
-Run this first. Then expand into the returned entities:
+Run this first. Then expand into the entities the hits mention:
 
 ```
-get_entity(name=<entity-name>)      # includes all linked statements
+list_statements(name=<entity-name>)  # statements that mention the entity, by any alias
+get_entity(id=<entity-id>)           # its names and entity-to-entity links
 ```
 
 Repeat for each entity that's central to the topic. Aim for 2–4 passes before writing.

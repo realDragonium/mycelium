@@ -18,21 +18,28 @@ tokens.
 
 ## Roles
 
+From least to most privileged:
+
 | Role | Can do |
 |---|---|
-| `reader` | Call any read tool (`list_*`, `get_*`, `search_*`, `grep_*`, `discover_*`, `find_*`). Cannot mutate the substrate. |
-| `writer` | Everything `reader` can, plus all mutating tools (`upsert_*`, `add_*`, `patch_*`, `attach_*`, `rename_*`, `move_*`, etc.). |
-| `admin` | Everything `writer` can, plus destructive ops (`delete_*`, `merge_*`) and the user-management surface. |
+| `asker` | Call `ask` only. None of the read primitives. |
+| `reader` | `ask`, plus any read tool (`list_*`, `get_*`, `search_*`, `grep_*`, `discover_*`, `find_*`). Cannot mutate the substrate. |
+| `drafter` | Everything `reader` can, and call the write, delete and merge tools — but every such call is queued as an operation on an open draft instead of changing the substrate. Without an explicit `draft_id`, a drafter's writes collect in one open draft per MCP session (or per account, when the client sends no session), which the drafter submits for review with `submit_draft`. A drafter cannot approve, reject or apply drafts. |
+| `writer` | Everything `reader` can, plus all mutating tools (`upsert_*`, `add_*`, `patch_*`, `attach_*`, `rename_*`, `move_*`, etc.), which apply directly. Writers curate drafts. |
+| `admin` | Everything `writer` can, plus destructive ops (`delete_*`, `merge_*`), the user-management surface and instance settings. |
 
-Roles are enforced **per request** in two places:
+A tool's required role follows its name prefix unless the tool declares one:
+`ask` requires `asker`, for instance, and `report_knowledge_gap` requires only
+`reader`. Roles are enforced **per request** in two places:
 
 1. The REST mirror (`http.py`) checks before calling the underlying
    function.
 2. The MCP `@tool` wrapper (`server.py`) checks via the
    `current_principal` ContextVar that the middleware populated.
 
-Both paths use the same `auth.required_role_for(func_name)`
-classification, so policy can't drift between transports.
+Both paths read the same declaration, so policy can't drift between
+transports, and `tools/list` shows a caller only the tools their role can
+invoke (see [the MCP tool manifest](MCP_TOOLS.md)).
 
 ---
 
@@ -132,9 +139,11 @@ remove someone for good.
 Every authenticated user has **Settings → MCP tokens** — list, create,
 revoke. You can mint tokens with **any scope ≤ your own role**:
 
-- An admin can mint `admin`, `writer`, or `reader` tokens.
-- A writer can mint `writer` or `reader` tokens.
-- A reader can mint `reader` tokens only.
+- An admin can mint tokens of any role.
+- A writer can mint `writer`, `drafter`, `reader` or `asker` tokens.
+- A drafter can mint `drafter`, `reader` or `asker` tokens.
+- A reader can mint `reader` or `asker` tokens.
+- An asker can mint `asker` tokens only.
 
 Why downgrade your own token? Two common reasons:
 
@@ -196,6 +205,13 @@ surface, just not the admin tools.
 **"I want a CI job to run a nightly extraction."** → Create a service
 account with role `writer`. Mint one token. Put it in your CI secrets.
 Done.
+
+**"I want an agent to propose knowledge, but not change it directly."** →
+Give it a `drafter` token. Its writes collect in a draft that goes through
+[draft review](DRAFT_REVIEW.md) once it calls `submit_draft`.
+
+**"I want a support tool that can only ask questions."** → Give it an
+`asker` token. It can call `ask` and nothing else.
 
 **"I want a Claude Code skill to do dry-run analysis without ever
 writing."** → Mint a `reader`-scoped token under your own user (or a

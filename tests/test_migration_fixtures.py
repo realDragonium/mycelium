@@ -53,6 +53,9 @@ REWRITES: dict[tuple[str, str], str] = {
     ("mycelium.db", "entity_statement_links"): (
         "v14 drops the table once its rows are rescued; startup refuses otherwise"
     ),
+    ("mycelium.db", "link_type_alias_embed_queue"): (
+        "v15 drops the queue; nothing has drained it since the connect pipeline"
+    ),
 }
 
 # Columns a migration deliberately removes, with the reason. Any other
@@ -60,6 +63,9 @@ REWRITES: dict[tuple[str, str], str] = {
 DROPPED_COLUMNS: dict[tuple[str, str, str], str] = {
     ("mycelium.db", "when_nodes", "link_kind"): (
         "v14 removes the discriminator once only statement conditions remain"
+    ),
+    ("mycelium.db", "link_type_aliases", "embedding"): (
+        "v15 removes alias embeddings; only the connect pipeline read them"
     ),
 }
 
