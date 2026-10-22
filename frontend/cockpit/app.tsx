@@ -1,5 +1,20 @@
-// app.jsx — shell: router, command bar (Ask | Find), landing, tweaks.
-const { useState: useStateApp, useEffect: useEffectApp, useMemo: useMemoApp, useRef: useRefApp } = React;
+// app.tsx — shell: router, command bar (Ask | Find), landing, tweaks.
+import { useState as useStateApp, useEffect as useEffectApp, useMemo as useMemoApp, useRef as useRefApp } from 'react';
+import { createRoot } from 'react-dom/client';
+import { AISettings } from '../ui/ai-settings';
+import { AskSurface } from './ask';
+import { DocumentationWorkspace } from '../ui/documentation-workspace';
+import { DraftReview, DraftsList, useMycDrafts } from './drafts';
+import { EntityDetail, StatementDetail } from './inspect';
+import { FindLanes, FindResults } from './find';
+import { GoIngestCtx, I, RouterCtx, parseHash, routeToHash, useGoIngest, useRouter } from './lib';
+import { IngestSurface } from './ingest';
+import { KnowledgeGapsScreen } from './gaps';
+import { NamesWorkspace } from '../ui/names-workspace';
+import { ResearchSurface } from './research';
+import { TweakColor, TweakRadio, TweakSection, TweaksPanel, useTweaks } from './tweaks-panel';
+import { buildIndex, substrate } from './data';
+import { Myc } from './api';
 
 function useRouterState() {
   const [route, setRoute] = useStateApp(parseHash);
@@ -91,9 +106,9 @@ const EXAMPLES = [
 
 function Landing() {
   const router = useRouter();
-  const data = window.MYCELIUM_DATA;
+  const data = substrate.data;
   const run = (ex) => ex.intent === 'ask' ? router.go({ view: 'ask', query: ex.q }) : router.go({ view: 'find', query: ex.q, mode: ex.mode });
-  const ingest = () => window.MYC_GO_INGEST(null);
+  const ingest = useGoIngest();
 
   return (
     <main className="page landing">
@@ -149,18 +164,25 @@ function Landing() {
 }
 
 /* ---------------- App ---------------- */
+const TWEAKS_DEFAULTS = {
+  theme: 'dark',
+  density: 'comfortable',
+  answerVoice: 'serif',
+  accent: 'oklch(0.875 0.185 146)',
+};
+
 function App() {
   const router = useRouterState();
   const [, setDataVersion] = useStateApp(0);
-  const refreshData = async () => {await window.Myc.loadData(); setDataVersion(value => value + 1);};
-  const data = window.MYCELIUM_DATA;
-  useMemoApp(() => { window.MYCELIUM_INDEX = buildIndex(data); }, [data]);
+  const refreshData = async () => {await Myc.loadData(); setDataVersion(value => value + 1);};
+  const data = substrate.data;
+  useMemoApp(() => { substrate.index = buildIndex(data); }, [data]);
   const [igNonce, setIgNonce] = useStateApp(0);
-  window.MYC_GO_INGEST = (seed) => { window.MYC_INGEST_SEED = seed || null; setIgNonce(n => n + 1); router.go({ view: 'ingest' }); };
+  const goIngest = () => { setIgNonce(n => n + 1); router.go({ view: 'ingest' }); };
 
-  const defaults = window.MYC_TWEAKS;
+  const defaults = TWEAKS_DEFAULTS;
   const [t, setTweak] = useTweaks(defaults);
-  const draftsArr = window.useMycDrafts ? window.useMycDrafts() : [];
+  const draftsArr = useMycDrafts();
   const openDrafts = draftsArr.filter(d => d.status === 'open').length;
 
   useEffectApp(() => {
@@ -192,6 +214,7 @@ function App() {
 
   return (
     <RouterCtx.Provider value={router}>
+     <GoIngestCtx.Provider value={goIngest}>
       <div className={`shell${['documentation', 'names', 'gaps'].includes(router.view) ? ' documentation-shell' : ''}`}>
         <header className="topbar">
           <div className="topbar-inner">
@@ -207,7 +230,7 @@ function App() {
             <button className={`nav-btn${router.view === 'names' ? ' on' : ''}`} onClick={() => router.go({ view: 'names' })}>Names &amp; aliases</button>
             <button className={`nav-btn${router.view === 'documentation' ? ' on' : ''}`} onClick={() => router.go({ view: 'documentation' })}><I.prov width="15" height="15" />Documentation</button>
             <button className={`nav-btn${router.view === 'settings' ? ' on' : ''}`} onClick={() => router.go({ view: 'settings' })}>AI settings</button>
-            <button className="ingest-btn" onClick={() => window.MYC_GO_INGEST(null)}><I.ingest width="15" height="15" />Ingest</button>
+            <button className="ingest-btn" onClick={() => goIngest()}><I.ingest width="15" height="15" />Ingest</button>
             {isLanding && <div className="topbar-meta">
               <span><span className="dot" style={{ display: 'inline-block', marginRight: 6 }} /><b>writes</b> → drafts</span>
             </div>}
@@ -237,6 +260,7 @@ function App() {
           Ask = serif synthesis (green). Find = mono substrate (cyan). Type & color encode the two read tiers.
         </div>
       </TweaksPanel>
+     </GoIngestCtx.Provider>
     </RouterCtx.Provider>
   );
 }
@@ -248,7 +272,7 @@ function AppRoot() {
 
   const load = () => {
     setState('loading'); setErr(null);
-    window.Myc.loadData()
+    Myc.loadData()
       .then(() => setState('ready'))
       .catch((e) => { setErr(e); setState('error'); });
   };
@@ -286,4 +310,4 @@ function AppRoot() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<AppRoot />);
+createRoot(document.getElementById('root')).render(<AppRoot />);

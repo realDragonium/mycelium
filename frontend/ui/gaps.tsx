@@ -6,9 +6,7 @@
 // here on purpose — humans can file via the MCP tool too if they
 // want, but the primary intake is automated agents flagging things
 // during their work. Editing/curation lives in the substrate proper.
-
-const { useState: useG, useEffect: useEG, useCallback: useCBG, useMemo: useMG } = React;
-
+import { useState as useG, useEffect as useEG, useCallback as useCBG, useMemo as useMG } from 'react';
 
 async function _fetchGaps(status) {
   const url = status && status !== 'all'
@@ -216,4 +214,4 @@ function GapsScreen() {
 }
 
 
-window.GapsScreen = GapsScreen;
+export { GapsScreen };

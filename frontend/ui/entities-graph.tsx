@@ -5,8 +5,10 @@
 // no mention edges. Entity counts in practice are ~10² rather than
 // ~10³, so the simulation can stay simple — naive O(N²) repulsion is
 // fine, no spatial grid required.
-
-const { useState: useStateE, useEffect: useEffectE, useRef: useRefE, useMemo: useMemoE } = React;
+import React from 'react';
+import { useState as useStateE, useEffect as useEffectE, useRef as useRefE, useMemo as useMemoE } from 'react';
+import { KindTag, TweaksCtx, postJSON, useDataCtx, useRouter } from './components';
+import { substrate } from './data';
 
 // Stable palette: type-name → palette index via a small djb2-style
 // hash. Open vocabulary in, deterministic-but-distinct colors out.
@@ -120,15 +122,15 @@ function EntityLinkAddForm({ self, entities, knownTypes, onCreated, onCancel }) 
   );
 }
 
-function EntitiesGraph({ focusId }) {
+function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   const router = useRouter();
   const { tweaks, setTweak } = React.useContext(TweaksCtx);
   // Reading `version` makes the whole component re-render after a UI
   // mutation refetches /api/data — the actual substrate is held in
-  // window globals and re-read on each render.
+  // the module-level `substrate` and re-read on each render.
   const { version } = useDataCtx();
-  const data = window.MYCELIUM_DATA;
-  const idx = window.MYCELIUM_INDEX;
+  const data = substrate.data;
+  const idx = substrate.index;
   const editMode = !!tweaks.showEditAffordances;
   const [searchQuery, setSearchQuery] = useStateE('');
 
@@ -250,7 +252,12 @@ function EntitiesGraph({ focusId }) {
   }, [focusMode, selectedId, edges]);
 
   const simRef = useRefE(null);
-  const drawRef = useRefE({});
+  const drawRef = useRefE<{
+    state?: { selectedId; hoverId; neighborhood; activeTypes; matchSet; theme };
+    draw?: () => void;
+    focusNode?: (nodeId: string, zoom?: number) => void;
+    requestStep?: () => void;
+  }>({});
 
   // Pre-baked positions, fetched once. The Python script
   // scripts/build_entity_layout.py writes this file from the substrate
@@ -406,7 +413,7 @@ function EntitiesGraph({ focusId }) {
       }
     };
 
-    let mouse = { x: 0, y: 0, down: false };
+    const mouse = { x: 0, y: 0, down: false };
     const screenToWorld = (sx, sy) => ({
       x: (sx - sim.pan.x) / sim.zoom,
       y: (sy - sim.pan.y) / sim.zoom,
@@ -1042,4 +1049,4 @@ function EntitiesGraph({ focusId }) {
   );
 }
 
-Object.assign(window, { EntitiesGraph });
+export { EntitiesGraph };

@@ -9,9 +9,12 @@
 //
 // Scoped graph of the draft's touched entities/statements is deferred
 // to a follow-up — list+detail is enough to validate the flow end-to-end.
-
-const { useState: useD, useEffect: useED, useCallback: useCBD, useMemo: useMD } = React;
-
+import React from 'react';
+import { useState as useD, useEffect as useED, useCallback as useCBD, useMemo as useMD } from 'react';
+import { GraphView } from './graph';
+import { draftReviewProviderName } from './ai-settings';
+import { buildIndex, substrate, type SubstrateData } from './data';
+import { RouterCtx } from './components';
 
 async function _fetchDrafts(status) {
   const url = status && status !== 'all'
@@ -98,7 +101,7 @@ async function _editOp(draftId, seq, payload) {
 // interaction and visual language. A highlight overlay can layer on
 // top of GraphView later without forking the renderer.
 
-function _buildScopedSubstrate(ops, full) {
+function _buildScopedSubstrate(ops, full: SubstrateData) {
   const ents = new Map((full.entities || []).map(e => [e.id, e]));
   const stmts = new Map((full.statements || []).map(s => [s.id, s]));
   const namesByEntity = new Map();
@@ -107,8 +110,8 @@ function _buildScopedSubstrate(ops, full) {
     namesByEntity.get(n.entity).push(n);
   });
 
-  const touchedEnt = new Set();
-  const touchedStm = new Set();
+  const touchedEnt = new Set<string>();
+  const touchedStm = new Set<string>();
   const synthEnts = [];   // newly-introduced entities (no real id yet)
   const synthStmts = [];  // newly-introduced statements (no real id yet)
   const synthNames = [];  // names for synthetic entities
@@ -227,9 +230,9 @@ const _DRAFT_GRAPH_SIZES = {
 
 
 function DraftGraph({ ops }) {
-  const fullData = window.MYCELIUM_DATA || {};
+  const fullData = substrate.data;
   const scoped = useMD(() => _buildScopedSubstrate(ops || [], fullData), [ops, fullData]);
-  const scopedIndex = useMD(() => window.buildIndex(scoped), [scoped]);
+  const scopedIndex = useMD(() => buildIndex(scoped), [scoped]);
   // Size persists in localStorage so the curator's choice survives a
   // reload — small annoyance to re-pick every time otherwise.
   const [size, setSize] = useD(() => localStorage.getItem('myc_draft_graph_size') || 'M');
@@ -497,7 +500,7 @@ function OpRow({ op, busy, onRemove, onSave, editable }) {
   // of their payload fields. Surface that prominently in the header so
   // a row showing "upsert_statements" doesn't hide the fact that it'll
   // create 24 statements. Scalar fields render as inline summary.
-  const arrayFields = Object.entries(payload).filter(([, v]) => Array.isArray(v));
+  const arrayFields = Object.entries(payload).filter((entry): entry is [string, unknown[]] => Array.isArray(entry[1]));
   const scalarSummary = Object.entries(payload)
     .filter(([, v]) => !Array.isArray(v))
     .map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 80)}`)
@@ -811,7 +814,7 @@ function DraftDetail({ draftId, onBack }) {
 
 
 function DraftsScreen({ selected }) {
-  const router = React.useContext(window.RouterCtx);
+  const router = React.useContext(RouterCtx);
   const [filter, setFilter] = useD('open');
   const [drafts, setDrafts] = useD([]);
   const [err, setErr] = useD(null);
@@ -905,4 +908,4 @@ function DraftsScreen({ selected }) {
 }
 
 
-window.DraftsScreen = DraftsScreen;
+export { DraftsScreen };

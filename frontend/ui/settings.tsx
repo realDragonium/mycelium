@@ -4,10 +4,10 @@
 // Tokens: the raw secret is only shown once at creation. After that the
 // UI only knows the prefix and metadata. Revoking is a soft delete:
 // the row stays so the user can see what was revoked and when.
+import { useState as useSt, useEffect as useESt, useCallback as useCBSt } from 'react';
+import { AISettings } from './ai-settings';
 
-const { useState: useSt, useEffect: useESt, useCallback: useCBSt } = React;
-
-async function _fetchJSON(url, init) {
+async function _fetchJSON(url: string, init?: RequestInit) {
   const r = await fetch(url, init);
   if (!r.ok) {
     let detail;
@@ -453,4 +453,4 @@ function SettingsScreen() {
   );
 }
 
-window.SettingsScreen = SettingsScreen;
+export { SettingsScreen };

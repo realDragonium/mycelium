@@ -1,8 +1,9 @@
 // Activity feed — paginated stream of mutations from history.history_events
 // with a context panel that shows the affected target plus 1–2 hops of
 // neighbors so the reviewer can judge whether the change reads correctly.
-
-const { useState: useStateAct, useEffect: useEffectAct, useMemo: useMemoAct } = React;
+import { useState as useStateAct, useEffect as useEffectAct, useMemo as useMemoAct } from 'react';
+import { SearchIcon, useRouter } from './components';
+import { substrate } from './data';
 
 const PAGE_SIZE = 50;
 
@@ -12,7 +13,9 @@ const KIND_OPTIONS = [
   'statement_link', 'entity_link', 'entity_statement_link',
 ];
 
-function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '' }) {
+function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '' }: {
+  page?: number; selected?: string | null; ops?: string; kinds?: string; q?: string;
+}) {
   const router = useRouter();
   const [state, setState] = useStateAct({ loading: true, error: null, events: [], total: 0 });
   const [qDraft, setQDraft] = useStateAct(q);
@@ -214,8 +217,8 @@ function OpTag({ op }) {
 }
 
 function describeTarget(ev) {
-  const idx = window.MYCELIUM_INDEX;
-  const data = window.MYCELIUM_DATA;
+  const idx = substrate.index;
+  const data = substrate.data;
   const { target_kind: k, target_id: id } = ev;
 
   if (k === 'statement') {
@@ -279,8 +282,8 @@ function ActivityContextPanel({ event, onClose }) {
 // their 1-hop neighbors, so the reviewer can see the change in context.
 function ContextNeighbors({ event }) {
   const router = useRouter();
-  const idx = window.MYCELIUM_INDEX;
-  const data = window.MYCELIUM_DATA;
+  const idx = substrate.index;
+  const data = substrate.data;
   const { target_kind: k, target_id: id } = event;
 
   const model = useMemoAct(() => buildContextGraph(event, idx, data), [event, idx, data]);
@@ -370,8 +373,8 @@ function shapeFor(kind) {
 }
 
 function MiniGraph({ model, router }) {
-  const data = window.MYCELIUM_DATA;
-  const idx = window.MYCELIUM_INDEX;
+  const data = substrate.data;
+  const idx = substrate.index;
   const W = 720;
   const ANCHOR_W = 220;
   const ANCHOR_H = 76;
@@ -533,10 +536,12 @@ function MiniGraph({ model, router }) {
 
 // Cache link-type descriptions across renders. Fetches from the substrate
 // glossary (statement_link / entity_link / entity_statement_link types).
+let linkTypeDescriptions = null;
+
 function useLinkTypeDescriptions() {
-  const [map, setMap] = useStateAct(() => window.__MYC_LINK_TYPE_DESC || {});
+  const [map, setMap] = useStateAct(() => linkTypeDescriptions || {});
   useEffectAct(() => {
-    if (window.__MYC_LINK_TYPE_DESC) return;
+    if (linkTypeDescriptions) return;
     Promise.all([
       fetch('/list-link-types').then(r => r.ok ? r.json() : []).catch(() => []),
       fetch('/list-entity-link-types').then(r => r.ok ? r.json() : []).catch(() => []),
@@ -544,7 +549,7 @@ function useLinkTypeDescriptions() {
       const m = {};
       (sl || []).forEach(t => { if (t.link_type) m[t.link_type] = t.description || ''; });
       (el || []).forEach(t => { if (t.link_type) m[t.link_type] = t.description || ''; });
-      window.__MYC_LINK_TYPE_DESC = m;
+      linkTypeDescriptions = m;
       setMap(m);
     });
   }, []);
@@ -555,14 +560,14 @@ function EdgeTooltip({ x, y, svgW, linkType, description, fromKind, toKind }) {
   // Clamp horizontally so the tooltip stays in the panel.
   const W = 240;
   const H = description ? 64 : 32;
-  let tx = Math.max(6, Math.min(svgW - W - 6, x - W / 2));
+  const tx = Math.max(6, Math.min(svgW - W - 6, x - W / 2));
   let ty = y - H - 12;
   if (ty < 6) ty = y + 14;
   return (
     <g className="ctx-edge-tooltip" pointerEvents="none">
       <rect x={tx} y={ty} width={W} height={H} rx={5} className="ctx-edge-tooltip-bg" />
       <foreignObject x={tx + 8} y={ty + 6} width={W - 16} height={H - 12}>
-        <div xmlns="http://www.w3.org/1999/xhtml" className="ctx-edge-tooltip-body">
+        <div className="ctx-edge-tooltip-body">
           <div className="ctx-edge-tooltip-head">
             <span className="ctx-edge-tooltip-type">{linkType}</span>
             <span className="ctx-edge-tooltip-pair">{fromKind} → {toKind}</span>
@@ -574,7 +579,13 @@ function EdgeTooltip({ x, y, svgW, linkType, description, fromKind, toKind }) {
   );
 }
 
-function EdgeLine({ from, fromHalfW, to, toHalfW, label, dashed, fromKind, toKind, onHover }) {
+interface Point { x: number; y: number }
+interface EdgeTip { x: number; y: number; linkType: string; fromKind: string; toKind: string }
+
+function EdgeLine({ from, fromHalfW, to, toHalfW, label, dashed, fromKind, toKind, onHover }: {
+  from: Point; fromHalfW: number; to: Point; toHalfW: number; label?: string; dashed?: boolean;
+  fromKind: string; toKind: string; onHover?: (tip: EdgeTip | null) => void;
+}) {
   // Endpoints are the centers; offset so the line ends at the node edge.
   const x1 = from.x < to.x ? from.x + fromHalfW : from.x - fromHalfW;
   const x2 = from.x < to.x ? to.x - toHalfW : to.x + toHalfW;
@@ -621,7 +632,10 @@ function ChangeEdge({ from, to, halfH, label, fromKind, toKind, onHover }) {
   );
 }
 
-function GraphNode({ x, y, w, h, kind, id, label, anchor, onClick }) {
+function GraphNode({ x, y, w, h, kind, id, label, anchor, onClick }: {
+  x: number; y: number; w: number; h: number; kind: string; id: string; label: string;
+  anchor?: boolean; onClick?: () => void;
+}) {
   const shape = shapeFor(kind);
   const cls = `ctx-node ctx-node-${kind}${anchor ? ' ctx-node-anchor' : ''}${onClick ? '' : ' ctx-node-disabled'}`;
   return (
@@ -630,7 +644,7 @@ function GraphNode({ x, y, w, h, kind, id, label, anchor, onClick }) {
       {shape === 'rect' && <rect x={0} y={0} width={w} height={h} rx={5} />}
       {shape === 'circle' && <rect x={0} y={0} width={w} height={h} rx={h/2} />}
       <foreignObject x={6} y={4} width={w - 12} height={h - 8}>
-        <div xmlns="http://www.w3.org/1999/xhtml" className="ctx-node-body">
+        <div className="ctx-node-body">
           <div className="ctx-node-id-row">{id.slice(0, 16)}</div>
           <div className="ctx-node-label-row">{label}</div>
         </div>
@@ -659,4 +673,4 @@ function formatAgo(iso) {
   return iso.slice(0, 10);
 }
 
-Object.assign(window, { ActivityScreen });
+export { ActivityScreen };

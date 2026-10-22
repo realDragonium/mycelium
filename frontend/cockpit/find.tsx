@@ -1,5 +1,8 @@
-// find.jsx — live Find: semantic / grep / survey via Myc.find. Surfaces real scores; never hides the tail.
-const { useState: useStateF, useEffect: useEffectF } = React;
+// find.tsx — live Find: semantic / grep / survey via Myc.find. Surfaces real scores; never hides the tail.
+import { useState as useStateF, useEffect as useEffectF } from 'react';
+import { EditableStatementText, EmptyState, I, KindTag, ScoreMeter, useRouter } from './lib';
+import { substrate } from './data';
+import { Myc } from './api';
 
 // Lane metadata — presentational only. The actual search runs server-side via
 // Myc.find(mode, query); these carry the lane name/icon/desc and the note copy.
@@ -30,7 +33,7 @@ function FindLanes({ mode, query, onMode }) {
   );
 }
 
-function ResultRow({ r, rank, mode, query, tail }) {
+function ResultRow({ r, rank, mode, query, tail }: { r; rank: number; mode: string; query: string; tail?: boolean }) {
   const router = useRouter();
   const s = r.statement;
   const isGrep = mode === 'grep';
@@ -40,7 +43,7 @@ function ResultRow({ r, rank, mode, query, tail }) {
       <div className="r-kind"><KindTag kind={s.kind} /></div>
       <div className="r-body">
         <div className="r-id">{s.id}{isGrep && (r.via === 'mention' || r.via === 'both') ? <> · via alias</> : null}{isGrep && r.occ ? <> · {r.occ}×</> : null}</div>
-        <EditableStatementText statement={s} idx={window.MYCELIUM_INDEX} className="r-text" highlightQuery={isGrep ? query : ''} compact />
+        <EditableStatementText statement={s} idx={substrate.index} className="r-text" highlightQuery={isGrep ? query : ''} compact />
       </div>
       <div className="r-right">
         {/* grep is deterministic — no relevance score. Show the real signal:
@@ -67,7 +70,7 @@ function FindResults({ query, mode }) {
     if (!q) { setState({ loading: false, rows: [], error: null }); return; }
     let live = true;
     setState({ loading: true, rows: [], error: null });
-    window.Myc.find(mode, q)
+    Myc.find(mode, q)
       .then((res) => { if (live) setState({ loading: false, rows: (res && res.rows) || [], error: null }); })
       .catch((err) => { if (live) setState({ loading: false, rows: [], error: err }); });
     return () => { live = false; };
@@ -139,4 +142,4 @@ function FindResults({ query, mode }) {
   );
 }
 
-Object.assign(window, { FindResults, MODES, FindLanes });
+export { FindResults, MODES, FindLanes };

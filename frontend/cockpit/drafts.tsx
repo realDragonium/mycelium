@@ -1,14 +1,18 @@
-// drafts.jsx — the draft/curator spine (§3): the live draft REST surface via Myc.drafts.
+// drafts.tsx — the draft/curator spine (§3): the live draft REST surface via Myc.drafts.
 // list → summaries, get_draft → reviewable diff, discard_draft_op / submit_draft / withdraw_draft.
 // Shared DraftReview diff (used by ingest's draft handoff + the drafts list).
-const { useState: useStateD, useEffect: useEffectD, useMemo: useMemoD, useRef: useRefD } = React;
+import { useState as useStateD, useEffect as useEffectD } from 'react';
+import { EmptyState, I, KindTag, LinkTag, useGoIngest, useRouter } from './lib';
+import { draftReviewProviderName } from '../ui/ai-settings';
+import { substrate } from './data';
+import { Myc } from './api';
 
 /* ============================ live store ============================ */
-// One cached fetch of Myc.drafts.list('all'), held on a window var so every
+// One cached fetch of Myc.drafts.list('all'), held at module level so every
 // surface (app badge, DraftsList) shares it. A subscriber set re-renders the
 // mounted components after a refresh. No localStorage, no seed — this is the
 // real draft spine.
-const draftSubs = new Set();
+const draftSubs = new Set<() => void>();
 function notifyDrafts() { draftSubs.forEach(f => f()); }
 
 // raw serialize_draft (+ op_count) → the summary shape the cockpit reads.
@@ -24,19 +28,18 @@ function toSummary(d) {
   };
 }
 
+let draftsCache = null;
 let draftsInFlight = null;
 function refreshDrafts() {
   draftsInFlight = Myc.drafts.list('all')
     .then(res => {
-      window.__MYC_DRAFTS = ((res && res.drafts) || []).map(toSummary);
-      window.__MYC_DRAFTS_ERR = null;
-      return window.__MYC_DRAFTS;
+      draftsCache = ((res && res.drafts) || []).map(toSummary);
+      return draftsCache;
     })
-    .catch(err => {
-      window.__MYC_DRAFTS_ERR = err;
+    .catch(() => {
       // keep any prior cache rather than blanking the UI on a transient error.
-      if (!window.__MYC_DRAFTS) window.__MYC_DRAFTS = [];
-      return window.__MYC_DRAFTS;
+      if (!draftsCache) draftsCache = [];
+      return draftsCache;
     })
     .finally(() => { draftsInFlight = null; notifyDrafts(); });
   return draftsInFlight;
@@ -44,16 +47,16 @@ function refreshDrafts() {
 
 // Hook: subscribes to the store, kicks off the one-time fetch on first use,
 // and returns the cached summary array. The array + `.status` contract is what
-// app.jsx (open-draft badge) and DraftsList depend on.
+// app.tsx (open-draft badge) and DraftsList depend on.
 function useMycDrafts() {
   const [, bump] = useStateD(0);
   useEffectD(() => {
     const f = () => bump(n => n + 1);
     draftSubs.add(f);
-    if (!window.__MYC_DRAFTS && !draftsInFlight) refreshDrafts();
-    return () => draftSubs.delete(f);
+    if (!draftsCache && !draftsInFlight) refreshDrafts();
+    return () => { draftSubs.delete(f); };
   }, []);
-  return window.__MYC_DRAFTS || [];
+  return draftsCache || [];
 }
 
 function relTime(ts) {
@@ -69,7 +72,7 @@ function relTime(ts) {
 // Resolve a statement/entity id to its human handle via the live index.
 function titleFor(id) {
   if (!id) return '';
-  const rec = (window.MYCELIUM_INDEX && window.MYCELIUM_INDEX.byId[id]) || null;
+  const rec = (substrate.index && substrate.index.byId[id]) || null;
   if (!rec) return String(id);
   return rec.title || rec.text || rec.name || String(id);
 }
@@ -111,7 +114,7 @@ function KV({ obj }) {
 
 function ResolvedRef({ id }) {
   const router = useRouter();
-  const rec = (window.MYCELIUM_INDEX && window.MYCELIUM_INDEX.byId[id]) || null;
+  const rec = (substrate.index && substrate.index.byId[id]) || null;
   const label = titleFor(id);
   const view = rec && rec._kind === 'entity' ? 'entity' : rec && rec._kind === 'statement' ? 'statement' : null;
   return <span className="lp" title={label} style={{ cursor: view ? 'pointer' : 'default' }} onClick={() => view && router.go({ view, id })}>{label}</span>;
@@ -481,6 +484,7 @@ function DraftReview({ id }) {
 /* ============================ DraftsList (list drafts) ============================ */
 function DraftsList() {
   const router = useRouter();
+  const goIngest = useGoIngest();
   const drafts = useMycDrafts();
   const [filter, setFilter] = useStateD(/** @type {'active' | 'completed' | 'all'} */ ('active'));
   useEffectD(() => {
@@ -520,7 +524,7 @@ function DraftsList() {
         <h1>Drafts</h1>
         <span className="dh-sub">newest first · the changeset queue</span>
         <span className="dh-spacer" />
-        <button className="ingest-btn" onClick={() => window.MYC_GO_INGEST(null)}><I.ingest width="15" height="15" />New from ingest</button>
+        <button className="ingest-btn" onClick={() => goIngest()}><I.ingest width="15" height="15" />New from ingest</button>
       </div>
 
       <p style={{ marginBottom: 20, fontSize: 13 }}><a href="#/settings">AI settings</a></p>
@@ -567,5 +571,4 @@ function DraftsList() {
   );
 }
 
-Object.assign(window, { DraftReview, DraftsList, useMycDrafts });
-window.MYC_OPEN_DRAFT_COUNT = () => (window.__MYC_DRAFTS || []).filter(d => d.status === 'open').length;
+export { DraftReview, DraftsList, useMycDrafts };

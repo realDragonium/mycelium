@@ -1,38 +1,25 @@
-// lib.jsx — shared helpers, icons, primitives, router context.
-const { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext, Fragment } = React;
-
-/* ---------------- Index ---------------- */
-function buildIndex(data) {
-  const byId = {};
-  data.entities.forEach(e => { byId[e.id] = { ...e, _kind: 'entity' }; });
-  data.statements.forEach(s => { byId[s.id] = { ...s, _kind: 'statement' }; });
-  data.names.forEach(n => { byId[n.id] = { ...n, _kind: 'name' }; });
-
-  const outgoing = {}, incoming = {};
-  data.links.forEach(l => {
-    (outgoing[l.from] = outgoing[l.from] || []).push(l);
-    (incoming[l.to] = incoming[l.to] || []).push(l);
-  });
-
-  const namesByEntity = {};
-  data.names.forEach(n => { (namesByEntity[n.entity] = namesByEntity[n.entity] || []).push(n); });
-
-  const mentionsByEntity = {};
-  data.statements.forEach(s => (s.mentions || []).forEach(eid => {
-    (mentionsByEntity[eid] = mentionsByEntity[eid] || []).push(s);
-  }));
-
-  const kindLayer = {};
-  data.statementKinds.forEach(k => { kindLayer[k.name] = k; });
-
-  return { byId, outgoing, incoming, namesByEntity, mentionsByEntity, kindLayer };
-}
+// lib.tsx — shared helpers, icons, primitives, router context.
+import { useState, createContext, useContext } from 'react';
+import { substrate, type CockpitIndex } from './data';
+import { Myc } from './api';
 
 /* ---------------- Router ---------------- */
-const RouterCtx = createContext(null);
-const useRouter = () => useContext(RouterCtx);
+interface Route { view: string; query?: string; mode?: string; id?: string | null }
+interface Router extends Route { go: (next: Route) => void }
 
-function parseHash() {
+const RouterCtx = createContext<Router | null>(null);
+function useRouter(): Router {
+  const router = useContext(RouterCtx);
+  if (!router) throw new Error('useRouter needs a RouterCtx provider');
+  return router;
+}
+
+// Opens a fresh Ingest surface. App provides it because it owns the nonce that
+// remounts IngestSurface when Ingest is opened from Ingest.
+const GoIngestCtx = createContext(() => {});
+const useGoIngest = () => useContext(GoIngestCtx);
+
+function parseHash(): Route {
   const h = window.location.hash.replace(/^#/, '');
   if (!h || h === '/') return { view: 'landing' };
   const [path, qs] = h.split('?');
@@ -53,7 +40,7 @@ function parseHash() {
   if (parts[0] === 'e' && parts[1]) return { view: 'entity', id: parts[1] };
   return { view: 'landing' };
 }
-function routeToHash(n) {
+function routeToHash(n: Route) {
   if (n.view === 'find') return `#/find?q=${encodeURIComponent(n.query || '')}&mode=${n.mode || 'semantic'}`;
   if (n.view === 'ask') return `#/ask?q=${encodeURIComponent(n.query || '')}`;
   if (n.view === 'ingest') return '#/ingest';
@@ -123,7 +110,7 @@ const I = {
 
 /* ---------------- Kind tag ---------------- */
 function KindTag({ kind }) {
-  const data = window.MYCELIUM_DATA;
+  const data = substrate.data;
   const def = data.statementKinds.find(k => k.name === kind);
   const layer = def ? def.layer : 'unknown';
   return (
@@ -134,7 +121,7 @@ function KindTag({ kind }) {
 }
 
 /* ---------------- Link tag ---------------- */
-function LinkTag({ type, dir, hasWhen }) {
+function LinkTag({ type, dir, hasWhen }: { type: string; dir?: 'in' | 'out'; hasWhen?: boolean }) {
   return (
     <span className={`lt${hasWhen ? ' has-when' : ''}`} title={hasWhen ? `${type} · gated by a when-condition` : type}>
       {dir && <span className="lt-dir">{dir === 'out' ? '→' : '←'}</span>}
@@ -184,7 +171,8 @@ function StatementText({ statement, idx, className }) {
   const pattern = aliasMap.map(a => escapeRe(a.surface)).join('|');
   const re = new RegExp(`\\b(${pattern})\\b`, 'gi');
   const out = [];
-  let last = 0, m, used = new Set();
+  let last = 0, m;
+  const used = new Set();
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) out.push(text.slice(last, m.index));
     const found = aliasMap.find(a => a.surface.toLowerCase() === m[0].toLowerCase());
@@ -210,7 +198,9 @@ function StatementText({ statement, idx, className }) {
    a draft (drafter); we report which happened. `statement` needs {id, text,
    kind}; mentions optional. `highlightQuery` (optional) renders the text with
    query highlighting instead of inline entity mentions (used in Find rows). */
-function EditableStatementText({ statement, idx, className, onSaved, compact, highlightQuery }) {
+function EditableStatementText({ statement, idx, className, onSaved, compact, highlightQuery }: {
+  statement; idx: CockpitIndex; className?: string; onSaved?: (result: unknown) => void; compact?: boolean; highlightQuery?: string;
+}) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(statement.text);
@@ -226,7 +216,7 @@ function EditableStatementText({ statement, idx, className, onSaved, compact, hi
   const doSave = (force) => {
     if (!val.trim() || busy) return;
     setBusy(true); setErr(null); setViolations(null);
-    window.Myc.editStatement(statement.id, val.trim(), force)
+    Myc.editStatement(statement.id, val.trim(), force)
       .then((res) => {
         if (res.status === 'rejected') { setViolations(res.violations); return null; }
         if (res.status === 'staged') {
@@ -234,7 +224,7 @@ function EditableStatementText({ statement, idx, className, onSaved, compact, hi
           if (onSaved) onSaved(res);
           return null;
         }
-        return window.Myc.refreshStatement(statement.id).then(() => {
+        return Myc.refreshStatement(statement.id).then(() => {
           setLocalText(val.trim()); setEditing(false); setNote({ kind: 'saved' });
           if (onSaved) onSaved(res);
         });
@@ -270,7 +260,7 @@ function EditableStatementText({ statement, idx, className, onSaved, compact, hi
   }
 
   const text = localText != null ? localText : statement.text;
-  const shown = localText != null ? { ...statement, text, title: window.Myc.titleOf(text) } : statement;
+  const shown = localText != null ? { ...statement, text, title: Myc.titleOf(text) } : statement;
   return (
     <div className={`stmt-editable${compact ? ' compact' : ''}`}>
       {highlightQuery != null
@@ -300,8 +290,8 @@ function EmptyState({ title, blurb }) {
   );
 }
 
-Object.assign(window, {
-  buildIndex, RouterCtx, useRouter, parseHash, routeToHash,
+export {
+  type Route, type Router, RouterCtx, useRouter, GoIngestCtx, useGoIngest, parseHash, routeToHash,
   highlight, escapeRe, I, KindTag, LinkTag, EntityChip, ScoreMeter, StatementText, EmptyState,
   EditableStatementText,
-});
+};

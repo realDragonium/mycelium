@@ -1,3 +1,8 @@
+import React from 'react';
+import { AIInstructions, DocumentationProfiles } from './documentation-profiles';
+import { ProductSettings } from './product-settings';
+import type { CSSProperties } from 'react';
+
 function ReasoningEffortField({ provider, value, onChange, label = 'Reasoning effort', style }) {
   const levels = provider === 'claude' ? ['low', 'medium', 'high', 'xhigh', 'max'] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
   return <label style={{ display: 'grid', gap: 6, minWidth: 0 }}>{label}
@@ -81,9 +86,9 @@ function DraftReviewSettings() {
   const selectedProvider = settings?.providers.find(item => item.provider === form?.provider);
   const reviewerExists = settings?.reviewers.some(item => item.id === form?.reviewer_id);
   const incomplete = form?.mode !== 'off' && (!form?.model.trim() || !reviewerExists || !selectedProvider?.available);
-  const buttonStyle = { padding: '8px 14px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))' };
-  const fieldStyle = { display: 'grid', gap: 6, minWidth: 0 };
-  const inputStyle = { width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '8px 10px', fontSize: 13, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))', border: '1px solid var(--rule, var(--line))', borderRadius: 4 };
+  const buttonStyle: CSSProperties = { padding: '8px 14px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))' };
+  const fieldStyle: CSSProperties = { display: 'grid', gap: 6, minWidth: 0 };
+  const inputStyle: CSSProperties = { width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '8px 10px', fontSize: 13, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))', border: '1px solid var(--rule, var(--line))', borderRadius: 4 };
   const body = <div style={{ marginTop: 14 }}>
     {error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p>}
     {!settings && !error && <p>Loading review settings…</p>}
@@ -147,7 +152,7 @@ function DraftReviewSettings() {
     </>}
     <button type="button" onClick={reload} disabled={busy} style={{ ...buttonStyle, marginTop: 12 }}>Reload current settings</button>
   </div>;
-  const style = { padding: '18px 20px', marginBottom: 24, border: '1px solid var(--rule, var(--line))', borderRadius: 6, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', overflowWrap: 'anywhere' };
+  const style: CSSProperties = { padding: '18px 20px', marginBottom: 24, border: '1px solid var(--rule, var(--line))', borderRadius: 6, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', overflowWrap: 'anywhere' };
   return <section aria-label="Draft review settings" style={style}><h2 style={{ margin: 0, color: 'var(--ink)', fontSize: 16 }}>Draft review settings</h2>{body}</section>;
 }
 
@@ -196,9 +201,9 @@ function ActionModelSettings({ settings, canConfigure }) {
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   };
-  const fieldStyle = { display: 'grid', gap: 6, minWidth: 0 };
-  const inputStyle = { minWidth: 0, width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))' };
-  const buttonStyle = { padding: '8px 14px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)' };
+  const fieldStyle: CSSProperties = { display: 'grid', gap: 6, minWidth: 0 };
+  const inputStyle: CSSProperties = { minWidth: 0, width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))' };
+  const buttonStyle: CSSProperties = { padding: '8px 14px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)' };
   return <section aria-label={`${title} model settings`} style={{ padding: '18px 20px', marginBottom: 16, border: '1px solid var(--rule, var(--line))', borderRadius: 6, color: 'var(--ink-3)', fontSize: 13, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
     <h2 style={{ margin: 0, fontSize: 16, color: 'var(--ink)' }}>{title}</h2>
     <p>Current: {draftReviewProviderName(current.provider)} · {current.model || 'No model configured'}.
@@ -250,4 +255,6 @@ function AISettings() {
   </div>;
 }
 
-Object.assign(window, { AISettings, draftReviewProviderName });
+export { AISettings, draftReviewProviderName };
+
+export { ActionModelSettings };

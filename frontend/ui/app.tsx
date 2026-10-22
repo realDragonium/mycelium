@@ -1,9 +1,23 @@
 // Mycelium app — router + tweaks panel + screen mounting.
+import React from 'react';
+import { useState as useStateA, useEffect as useEffectA, useMemo as useMemoA } from 'react';
+import { createRoot } from 'react-dom/client';
+import { ActivityScreen } from './activity';
+import { BrowseIndex, EntityDetail, Landing, SearchResults, StatementDetail } from './screens';
+import { DataCtx, Footer, RouterCtx, TopBar, TweaksCtx, type Route, type Router } from './components';
+import { buildIndex, loadSubstrate, substrate } from './data';
+import { DocumentationWorkspace } from './documentation-workspace';
+import { DraftsScreen } from './drafts';
+import { EntitiesGraph } from './entities-graph';
+import { GapsScreen } from './gaps';
+import { GlossaryScreen } from './glossary';
+import { GraphView } from './graph';
+import { NamesWorkspace } from './names-workspace';
+import { SettingsScreen } from './settings';
+import { TweakRadio, TweakSection, TweakToggle, TweaksPanel, useTweaks } from './tweaks-panel';
 
-const { useState: useStateA, useEffect: useEffectA, useMemo: useMemoA } = React;
-
-function useHashRoute() {
-  const parse = () => {
+function useHashRoute(): Router {
+  const parse = (): Route => {
     const h = window.location.hash.replace(/^#/, '');
     if (!h) return { view: 'landing' };
     const [path, qs] = h.split('?');
@@ -43,7 +57,7 @@ function useHashRoute() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  const go = (next) => {
+  const go = (next: Route) => {
     let h = '#';
     if (next.view === 'statement') h = `#/b/${next.id}`;
     else if (next.view === 'entity') h = `#/e/${next.id}`;
@@ -74,35 +88,41 @@ function useHashRoute() {
     }
     window.location.hash = h;
     // scroll to top on nav
-    window.scrollTo({ top: 0, statement: 'instant' });
+    window.scrollTo({ top: 0, behavior: 'instant' });
   };
 
   return { ...route, go };
 }
 
+const TWEAKS_DEFAULTS = {
+  theme: 'dark',
+  density: 'roomy',
+  showEditAffordances: false,
+};
+
 function App() {
   const router = useHashRoute();
 
   // Data version — bumped after a successful UI mutation (`refresh()`
-  // refetches /api/data and replaces window.MYCELIUM_DATA, then
+  // refetches /api/data and replaces substrate.data, then
   // increments this counter so dependent memos re-run). Reading
-  // `window.MYCELIUM_DATA` straight remains the convention for child
+  // `substrate.data` straight remains the convention for child
   // components; the version is the trigger that makes their memos
   // notice the swap.
   const [dataVersion, setDataVersion] = React.useState(0);
   const refresh = React.useCallback(async () => {
-    await window.MyceliumLoadData();
+    await loadSubstrate();
     setDataVersion(v => v + 1);
   }, []);
-  const data = window.MYCELIUM_DATA;
+  const data = substrate.data;
 
   // Rebuild the in-memory adjacency index whenever data changes.
-  useMemoA(() => { window.MYCELIUM_INDEX = buildIndex(data); }, [data, dataVersion]);
+  useMemoA(() => { substrate.index = buildIndex(data); }, [data, dataVersion]);
 
   const dataCtxValue = useMemoA(() => ({ version: dataVersion, refresh }), [dataVersion, refresh]);
 
   // Tweaks
-  const defaults = window.MYC_TWEAKS_DEFAULTS;
+  const defaults = TWEAKS_DEFAULTS;
   const [tweaks, setTweak] = useTweaks(defaults);
 
   // Apply theme + density to <html> for CSS vars
@@ -189,10 +209,12 @@ function App() {
 
 // Defer rendering until the substrate dump has loaded. Show a quick
 // failure message in #root if the fetch fails.
-window.MyceliumLoadData().then(() => {
-  ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+const root = document.getElementById('root');
+if (!root) throw new Error('index.html has no #root element');
+
+loadSubstrate().then(() => {
+  createRoot(root).render(<App />);
 }).catch((err) => {
-  const root = document.getElementById('root');
   root.textContent = '';
   const wrap = document.createElement('div');
   wrap.style.cssText = 'padding:32px;font-family:var(--mono,monospace);color:var(--ink-3,#71717a);font-size:13px;';

@@ -1,4 +1,7 @@
-const profileStyle = {
+import React from 'react';
+import type { CSSProperties } from 'react';
+
+const profileStyle: Record<string, CSSProperties> = {
   section: { padding: 20, marginBottom: 20, border: '1px solid var(--rule, var(--line))', borderRadius: 6 },
   field: { display: 'grid', gap: 6, margin: '14px 0' },
   input: { width: '100%', boxSizing: 'border-box', padding: 9, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))', border: '1px solid var(--rule, var(--line))', borderRadius: 4 },
@@ -6,7 +9,7 @@ const profileStyle = {
   button: { padding: '8px 12px', color: 'var(--ink)', background: 'var(--surface-2, var(--paper))', border: '1px solid var(--rule, var(--line))', borderRadius: 4 },
 };
 
-async function profileRequest(path, method = 'GET', body) {
+async function profileRequest(path: string, method = 'GET', body?: unknown) {
   const response = await fetch(path, { method, headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
   const data = await response.json();
   if (!response.ok) throw new Error(response.status === 409
@@ -273,4 +276,4 @@ function AIInstructions() {
   </section>;
 }
 
-Object.assign(window, { DocumentationProfiles, AIInstructions });
+export { DocumentationProfiles, AIInstructions };

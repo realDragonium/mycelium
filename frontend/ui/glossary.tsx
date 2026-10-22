@@ -2,8 +2,7 @@
 // tables (statement kinds, statement link types, entity link types).
 // Reads from /list-statement-kinds, /list-link-types,
 // /list-entity-link-types; mutates via /upsert-* and /delete-*.
-
-const { useState: useG, useEffect: useEG, useCallback: useCBG, useRef: useRG } = React;
+import { useState as useG, useEffect as useEG, useCallback as useCBG, useRef as useRG } from 'react';
 
 const GLOSSARY_TABS = [
   {
@@ -206,7 +205,7 @@ function GlossaryRow({ tab, entry, onSaved }) {
   const save = async () => {
     setBusy(true); setError(null);
     try {
-      const body = { [tab.keyField]: entry[tab.keyField], description };
+      const body: Record<string, unknown> = { [tab.keyField]: entry[tab.keyField], description };
       if (tab.hasWhenToUse) body.when_to_use = whenToUse || null;
       await postJSON(tab.endpoints.upsert, body);
       setEditing(false);
@@ -316,7 +315,7 @@ function NewEntryForm({ tab, onSaved }) {
     e.preventDefault();
     setBusy(true); setError(null);
     try {
-      const body = { [tab.keyField]: key.trim(), description };
+      const body: Record<string, unknown> = { [tab.keyField]: key.trim(), description };
       if (tab.hasWhenToUse) body.when_to_use = whenToUse || null;
       await postJSON(tab.endpoints.upsert, body);
       setKey(''); setDescription(''); setWhenToUse('');
@@ -373,4 +372,4 @@ function NewEntryForm({ tab, onSaved }) {
   );
 }
 
-Object.assign(window, { GlossaryScreen });
+export { GlossaryScreen };

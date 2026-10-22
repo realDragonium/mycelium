@@ -1,9 +1,10 @@
 // @ds-adherence-ignore -- omelette starter scaffold (raw elements/hex/px by design)
+import React from 'react';
 
 /* BEGIN USAGE */
-// tweaks-panel.jsx
+// tweaks-panel.tsx
 // Reusable Tweaks shell + form-control helpers.
-// Exports (to window): useTweaks, TweaksPanel, TweakSection, TweakRow, TweakSlider,
+// Exports: useTweaks, TweaksPanel, TweakSection, TweakRow, TweakSlider,
 //   TweakToggle, TweakRadio, TweakSelect, TweakText, TweakNumber, TweakColor, TweakButton.
 //
 // Owns the host protocol (listens for __activate_edit_mode / __deactivate_edit_mode,
@@ -11,7 +12,7 @@
 // individual prototypes don't re-roll it. Ships a consistent set of controls so you
 // don't hand-draw <input type="range">, segmented radios, steppers, etc.
 //
-// Usage (in an HTML file that loads React + Babel):
+// Usage:
 //
 //   const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 //     "primaryColor": "#D97757",
@@ -170,14 +171,15 @@ const __TWEAKS_STYLE = `
 // ── useTweaks ───────────────────────────────────────────────────────────────
 // Single source of truth for tweak values. setTweak persists via the host
 // (__edit_mode_set_keys → host rewrites the EDITMODE block on disk).
-function useTweaks(defaults) {
+type SetTweak = (keyOrEdits: string | Record<string, unknown>, val?: unknown) => void;
+
+function useTweaks<T extends object>(defaults: T): [T, SetTweak] {
   const [values, setValues] = React.useState(defaults);
   // Accepts either setTweak('key', value) or setTweak({ key: value, ... }) so a
   // useState-style call doesn't write a "[object Object]" key into the persisted
   // JSON block.
-  const setTweak = React.useCallback((keyOrEdits, val) => {
-    const edits = typeof keyOrEdits === 'object' && keyOrEdits !== null
-      ? keyOrEdits : { [keyOrEdits]: val };
+  const setTweak = React.useCallback<SetTweak>((keyOrEdits, val) => {
+    const edits = typeof keyOrEdits === 'string' ? { [keyOrEdits]: val } : keyOrEdits;
     setValues((prev) => ({ ...prev, ...edits }));
     window.parent.postMessage({ type: '__edit_mode_set_keys', edits }, '*');
     // Same-window signal so in-page listeners (deck-stage rail thumbnails)
@@ -286,7 +288,7 @@ function TweaksPanel({ title = 'Tweaks', children }) {
 
 // ── Layout helpers ──────────────────────────────────────────────────────────
 
-function TweakSection({ label, children }) {
+function TweakSection({ label, children }: { label: string; children?: React.ReactNode }) {
   return (
     <>
       <div className="twk-sect">{label}</div>
@@ -295,7 +297,9 @@ function TweakSection({ label, children }) {
   );
 }
 
-function TweakRow({ label, value, children, inline = false }) {
+function TweakRow({ label, value, children, inline = false }: {
+  label: string; value?: React.ReactNode; children: React.ReactNode; inline?: boolean;
+}) {
   return (
     <div className={inline ? 'twk-row twk-row-h' : 'twk-row'}>
       <div className="twk-lbl">
@@ -534,8 +538,8 @@ function TweakButton({ label, onClick, secondary = false }) {
   );
 }
 
-Object.assign(window, {
+export {
   useTweaks, TweaksPanel, TweakSection, TweakRow,
   TweakSlider, TweakToggle, TweakRadio, TweakSelect,
   TweakText, TweakNumber, TweakColor, TweakButton,
-});
+};

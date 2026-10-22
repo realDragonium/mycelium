@@ -1,5 +1,9 @@
-// inspect.jsx — statement & entity detail. Provenance + traversal target.
-const { useState: useStateI } = React;
+// inspect.tsx — statement & entity detail. Provenance + traversal target.
+import React from 'react';
+import { useState as useStateI } from 'react';
+import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LinkTag, useRouter } from './lib';
+import { substrate } from './data';
+import { Myc } from './api';
 
 function WhenCond({ when }) {
   const router = useRouter();
@@ -45,7 +49,7 @@ const AM_INPUT = {
 };
 
 function AddMention() {
-  const idx = window.MYCELIUM_INDEX;
+  const idx = substrate.index;
   const [open, setOpen] = useStateI(false);
   const [mode, setMode] = useStateI('existing'); // existing | new
   const [query, setQuery] = useStateI('');
@@ -78,8 +82,8 @@ function AddMention() {
     setBusy(true); setErr(null);
     const label = mode === 'existing' ? alias.trim() : name.trim();
     const call = mode === 'existing'
-      ? window.Myc.upsertName(alias.trim(), entityId)
-      : window.Myc.upsertEntity(name.trim(), desc.trim());
+      ? Myc.upsertName(alias.trim(), entityId)
+      : Myc.upsertEntity(name.trim(), desc.trim());
     call
       .then(() => { reset(); setOpen(false); setDone(label); })
       .catch((e) => setErr((e && e.message) || 'Could not add that.'))
@@ -160,8 +164,8 @@ function AddMention() {
 
 function StatementDetail({ id }) {
   const router = useRouter();
-  const idx = window.MYCELIUM_INDEX;
-  const data = window.MYCELIUM_DATA;
+  const idx = substrate.index;
+  const data = substrate.data;
   const [, bumpVer] = useStateI(0); // re-render after an edit patches the cache
   const s = idx.byId[id];
   if (!s || s._kind !== 'statement') return <main className="page narrow"><EmptyState title="Statement not found" blurb={`No record with id ${id}.`} /></main>;
@@ -245,7 +249,7 @@ function StatementDetail({ id }) {
 
 function EntityDetail({ id }) {
   const router = useRouter();
-  const idx = window.MYCELIUM_INDEX;
+  const idx = substrate.index;
   const e = idx.byId[id];
   if (!e || e._kind !== 'entity') return <main className="page narrow"><EmptyState title="Entity not found" blurb={`No record with id ${id}.`} /></main>;
 
@@ -316,4 +320,4 @@ function EntityDetail({ id }) {
   );
 }
 
-Object.assign(window, { StatementDetail, EntityDetail });
+export { StatementDetail, EntityDetail };

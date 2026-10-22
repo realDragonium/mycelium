@@ -1,4 +1,9 @@
-async function docRequest(path, body, signal) {
+import React from 'react';
+import { ActionModelSettings } from './ai-settings';
+import { DocumentationProfiles } from './documentation-profiles';
+import { ProductSettings } from './product-settings';
+
+async function docRequest(path: string, body?: unknown, signal?: AbortSignal) {
   const response = await fetch('/api/documentation/' + path, {
     method: body === undefined ? 'GET' : 'POST', signal,
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
@@ -14,7 +19,7 @@ function docRoute() {
   return { tab: params.get('tab') || (params.has('run') ? 'runs' : 'library'), document: params.get('document'), revision: params.get('revision'), run: params.get('run') };
 }
 
-function docNavigate(next) {
+function docNavigate(next: Record<string, string | null | undefined>) {
   const params = new URLSearchParams();
   Object.entries(next).forEach(([key, value]) => { if (value) params.set(key, value); });
   const query = params.toString();
@@ -26,13 +31,15 @@ const docStatus = status => ({ queued: 'Queued', running: 'Generating and review
 const docDeliveryStatus = status => ({ unpublished: 'Internal only', published: 'Published to GitHub', changes_pending: 'Changes awaiting publication' }[status] || status);
 const docDate = value => value ? new Date(value).toLocaleString() : 'Not recorded';
 
-function DocumentationModel({ options, value, onChange, disabled }) {
+function DocumentationModel({ options, value, onChange, disabled }: {
+  options; value: string; onChange: (provider: string) => void; disabled?: boolean;
+}) {
   return <label>Model for this run<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled}>
     {options.models.map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.label} · {model.model} · {model.reasoning_effort ?? 'Model default'} effort{model.available ? '' : ' (unavailable)'}</option>)}
   </select></label>;
 }
 
-function DocumentationGenerator({ options, document, onStarted }) {
+function DocumentationGenerator({ options, document, onStarted }: { options; document?; onStarted }) {
   const [prompt, setPrompt] = React.useState('');
   const [provider, setProvider] = React.useState(options.default_provider);
   const providerChosen = React.useRef(false);
@@ -79,7 +86,9 @@ window.addEventListener('beforeunload', event => {
   if (docPendingEdits.size) { event.preventDefault(); event.returnValue = ''; }
 });
 
-function DocumentationEditor({ title: initialTitle, body: initialBody, path, expectedRevision, options, onStarted, onCancel }) {
+function DocumentationEditor({ title: initialTitle, body: initialBody, path, expectedRevision, options, onStarted, onCancel }: {
+  title; body; path: string; expectedRevision?: number; options; onStarted; onCancel: () => void;
+}) {
   const [title, setTitle] = React.useState(() => docPendingEdits.get(path)?.title ?? initialTitle ?? '');
   const [body, setBody] = React.useState(() => docPendingEdits.get(path)?.body ?? initialBody);
   const [baseRevision] = React.useState(() => docPendingEdits.has(path) ? docPendingEdits.get(path).expectedRevision : expectedRevision);
@@ -308,4 +317,4 @@ function DocumentationWorkspace() {
   </main>;
 }
 
-Object.assign(window, { DocumentationWorkspace });
+export { DocumentationWorkspace };

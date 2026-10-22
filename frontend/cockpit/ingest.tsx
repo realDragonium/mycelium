@@ -1,7 +1,9 @@
-// ingest.jsx — bulk text ingest (write tier): compose → async extraction → hands a draft to the store.
-const { useState: useStateIg, useEffect: useEffectIg, useRef: useRefIg, useMemo: useMemoIg } = React;
+// ingest.tsx — bulk text ingest (write tier): compose → async extraction → hands a draft to the store.
+import { useState as useStateIg, useEffect as useEffectIg, useRef as useRefIg } from 'react';
+import { EmptyState, I, useRouter } from './lib';
+import { Myc } from './api';
 
-const SOURCE_TYPES = [
+const SOURCE_TYPES: { k: string; label: string; glyph: keyof typeof I }[] = [
   { k: 'brain-dump', label: 'Brain-dump', glyph: 'survey' },
   { k: 'pasted-doc', label: 'Pasted doc', glyph: 'grep' },
   { k: 'transcript', label: 'Transcript', glyph: 'interp' },
@@ -16,14 +18,13 @@ const PHASES = [
 
 function IngestSurface() {
   const router = useRouter();
-  const seed = useMemoIg(() => { const s = window.MYC_INGEST_SEED; window.MYC_INGEST_SEED = null; return s; }, []);
   const [phase, setPhase] = useStateIg('compose');     // compose | processing
-  const [source, setSource] = useStateIg(seed?.source || '');
-  const [sourceType, setSourceType] = useStateIg(seed?.sourceType || 'brain-dump');
+  const [source, setSource] = useStateIg('');
+  const [sourceType, setSourceType] = useStateIg('brain-dump');
   const [activeIdx, setActiveIdx] = useStateIg(0);
   const [elapsed, setElapsed] = useStateIg(0);
-  const [outcome, setOutcome] = useStateIg(null);      // null | { kind:'nothing', reason } | { kind:'error', message }
-  const timers = useRefIg([]);
+  const [outcome, setOutcome] = useStateIg<{ kind: 'nothing'; reason: string } | { kind: 'error'; message: string } | null>(null);
+  const timers = useRefIg<number[]>([]);
   const alive = useRefIg(true);
   const runId = useRefIg(0);                           // bumps per run; a response from an older run is ignored
   const busy = phase === 'processing';
@@ -63,7 +64,7 @@ function IngestSurface() {
     });
   };
 
-  useEffectIg(() => { if (seed && seed.auto && seed.source) startExtract(); return clear; /* eslint-disable-next-line */ }, []);
+  useEffectIg(() => clear, []);
 
   if (phase === 'processing') {
     return (
@@ -131,4 +132,4 @@ function IngestSurface() {
   );
 }
 
-Object.assign(window, { IngestSurface });
+export { IngestSurface };

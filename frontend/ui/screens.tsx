@@ -1,12 +1,14 @@
 // Mycelium screens — dev-tool aesthetic. Landing, Search results, Statement detail, Entity detail, Browse.
-
-const { useState: useStateS, useEffect: useEffectS, useMemo: useMemoS, useRef: useRefS } = React;
+import React from 'react';
+import { useState as useStateS, useEffect as useEffectS, useMemo as useMemoS, useRef as useRefS } from 'react';
+import { ClaimKindTag, EditHint, EntityChip, KindTag, SearchIcon, StatementText, highlight, searchAll, useRouter } from './components';
+import { substrate } from './data';
 
 // ---------- Landing ----------
 
 function Landing() {
   const router = useRouter();
-  const data = window.MYCELIUM_DATA;
+  const data = substrate.data;
   const inputRef = useRefS(null);
   const [val, setVal] = useStateS('');
 
@@ -18,7 +20,7 @@ function Landing() {
   };
 
   const recent = data.statements.slice(0, 8);
-  const idx = window.MYCELIUM_INDEX;
+  const idx = substrate.index;
 
   return (
     <main className="page landing">
@@ -107,8 +109,8 @@ function Landing() {
 
 function SearchResults({ query }) {
   const router = useRouter();
-  const data = window.MYCELIUM_DATA;
-  const idx = window.MYCELIUM_INDEX;
+  const data = substrate.data;
+  const idx = substrate.index;
   const [filter, setFilter] = useStateS('all');
 
   const all = useMemoS(() => searchAll(data, query), [data, query]);
@@ -164,7 +166,7 @@ function SearchResults({ query }) {
 
 function ResultRow({ result, query, idx: rowIdx }) {
   const router = useRouter();
-  const data = window.MYCELIUM_DATA;
+  const data = substrate.data;
   const r = result.record;
   if (result.kind === 'entity') {
     const aliasCount = data.names.filter(n => n.entity === r.id).length;
@@ -189,7 +191,7 @@ function ResultRow({ result, query, idx: rowIdx }) {
         <span className="res-id">{r.id}</span>
         <span className="res-title">{highlight(r.title, query)}</span>
         <span className="res-snippet">{highlight(r.text, query)}</span>
-        <span className="res-meta">{(window.MYCELIUM_INDEX.outgoing[r.id]||[]).length}↗ {(window.MYCELIUM_INDEX.incoming[r.id]||[]).length}↙</span>
+        <span className="res-meta">{(substrate.index.outgoing[r.id]||[]).length}↗ {(substrate.index.incoming[r.id]||[]).length}↙</span>
       </div>
     );
   }
@@ -210,8 +212,8 @@ function ResultRow({ result, query, idx: rowIdx }) {
 
 function DetailNav({ activeId, kind: activeKind }) {
   const router = useRouter();
-  const data = window.MYCELIUM_DATA;
-  const idx = window.MYCELIUM_INDEX;
+  const data = substrate.data;
+  const idx = substrate.index;
   const [tab, setTab] = useStateS(activeKind === 'entity' ? 'entity' : 'statement');
 
   // singular -> dataset
@@ -308,7 +310,7 @@ function computeLineage(id, idx, maxDepth = 6, type = 'contains') {
 
 function StatementDetail({ id }) {
   const router = useRouter();
-  const idx = window.MYCELIUM_INDEX;
+  const idx = substrate.index;
   const b = idx.byId[id];
   const [connMode, setConnMode] = useStateS('graph');
 
@@ -420,7 +422,7 @@ function StatementDetail({ id }) {
 
       {/* body pane */}
       <section className="i-body">
-        <div className="corner">REC <b>{String(b.recordIdx ?? Math.abs(hashCode(b.id) % 9999)).padStart(4,'0')}</b> · LAST INDEXED 2025-04-12</div>
+        <div className="corner">REC <b>{String(Math.abs(hashCode(b.id) % 9999)).padStart(4,'0')}</b> · LAST INDEXED 2025-04-12</div>
         <h1 className="bv-title">statement.text</h1>
         <StatementText statement={b} byId={idx.byId} className="text" />
 
@@ -975,8 +977,8 @@ function CompositionGraph({ parents, kids, center }) {
               {p.target.title || p.target.text}
               <span className="nid">{p.target.id}</span>
               <div className="nmeta">
-                <span>{(window.MYCELIUM_INDEX.incoming[p.target.id] || []).filter(l => l.link_type === 'contains').length}↑</span>
-                <span>{(window.MYCELIUM_INDEX.outgoing[p.target.id] || []).filter(l => l.link_type === 'contains').length}↓</span>
+                <span>{(substrate.index.incoming[p.target.id] || []).filter(l => l.link_type === 'contains').length}↑</span>
+                <span>{(substrate.index.outgoing[p.target.id] || []).filter(l => l.link_type === 'contains').length}↓</span>
               </div>
             </div>
           </div>
@@ -1008,8 +1010,8 @@ function CompositionGraph({ parents, kids, center }) {
               {c.target.title || c.target.text}
               <span className="nid">{c.target.id}</span>
               <div className="nmeta">
-                <span>{(window.MYCELIUM_INDEX.incoming[c.target.id] || []).filter(l => l.link_type === 'contains').length}↑</span>
-                <span>{(window.MYCELIUM_INDEX.outgoing[c.target.id] || []).filter(l => l.link_type === 'contains').length}↓</span>
+                <span>{(substrate.index.incoming[c.target.id] || []).filter(l => l.link_type === 'contains').length}↑</span>
+                <span>{(substrate.index.outgoing[c.target.id] || []).filter(l => l.link_type === 'contains').length}↓</span>
               </div>
             </div>
           </div>
@@ -1213,7 +1215,7 @@ function hashCode(s) {
 
 function CompositionPanel({ parents, kids }) {
   const router = useRouter();
-  const idx = window.MYCELIUM_INDEX;
+  const idx = substrate.index;
 
   const Item = ({ entry, n }) => {
     const t = entry.target;
@@ -1362,7 +1364,7 @@ function ConnectionsRailSection({ dir, groups, count, idx }) {
 
 function EntityDetail({ id }) {
   const router = useRouter();
-  const idx = window.MYCELIUM_INDEX;
+  const idx = substrate.index;
   const e = idx.byId[id];
 
   if (!e || e.kind !== 'entity') return <NotFoundState what="entity" />;
@@ -1547,8 +1549,8 @@ function EntityDetail({ id }) {
 
 function BrowseIndex() {
   const router = useRouter();
-  const data = window.MYCELIUM_DATA;
-  const idx = window.MYCELIUM_INDEX;
+  const data = substrate.data;
+  const idx = substrate.index;
   const [tab, setTab] = useStateS('statement');
 
   const counts = { entity: data.entities.length, statement: data.statements.length, name: data.names.length };
@@ -1709,7 +1711,9 @@ function BrowseStatementsTable({ data, idx, onPick }) {
 
 // ---------- Empty state ----------
 
-function EmptyState({ title, blurb, suggestions = [], onSuggest }) {
+function EmptyState({ title, blurb, suggestions = [], onSuggest }: {
+  title: React.ReactNode; blurb: string; suggestions?: { id: string; label: string }[]; onSuggest?: (id: string) => void;
+}) {
   return (
     <div className="empty">
       <h2>{title}</h2>
@@ -1754,7 +1758,7 @@ function LoadingDetail() {
   );
 }
 
-Object.assign(window, {
+export {
   Landing, SearchResults, StatementDetail, EntityDetail, BrowseIndex,
   EmptyState, NotFoundState, LoadingDetail,
-});
+};

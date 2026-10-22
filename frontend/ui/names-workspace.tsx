@@ -1,4 +1,7 @@
-async function namesRequest(path = '', body, signal) {
+import React from 'react';
+import { AliasSuggestions } from './alias-suggestions';
+
+async function namesRequest(path = '', body?: unknown, signal?: AbortSignal) {
   const response = await fetch('/api/names-workspace' + path, {
     method: body === undefined ? 'GET' : 'POST', signal,
     headers: body === undefined ? undefined : {'content-type': 'application/json'},
@@ -9,7 +12,7 @@ async function namesRequest(path = '', body, signal) {
   try {
     data = await response.json();
   } catch (error) {
-    if (!response.ok) throw new Error(recovery);
+    if (!response.ok) throw new Error(recovery, { cause: error });
     throw error;
   }
   if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : recovery);
@@ -99,7 +102,7 @@ function NamesDiscovery({entityId}) {
   const [retry, setRetry] = React.useState(0);
   React.useEffect(() => {
     const controller = new AbortController(); setBusy(true); setError(null);
-    fetch('/api/mention-candidates?' + new URLSearchParams({entity_id: entityId, after, limit: 30}), {signal: controller.signal})
+    fetch('/api/mention-candidates?' + new URLSearchParams({entity_id: entityId, after: String(after), limit: '30'}), {signal: controller.signal})
       .then(async response => {const value = await response.json(); if (!response.ok) throw new Error(typeof value.detail === 'string' ? value.detail : 'Could not load statement matches.'); return value;})
       .then(value => {setItems(previous => after ? [...previous, ...value.matches] : value.matches); setPage(value);})
       .catch(error => {if (error.name !== 'AbortError') setError(error.message);})
@@ -148,9 +151,9 @@ function NamesWorkspace({onDataChanged}) {
     namesRequest('', undefined, controller.signal).then(setCatalogue).catch(error => {if (error.name !== 'AbortError') setError(error.message);});
     return () => controller.abort();
   }, [refresh]);
-  const changed = id => {if (id) setSelected(id); setRefresh(value => value + 1); setNotice('Change saved. Discovery is being recomputed.'); if (onDataChanged) onDataChanged().catch(() => setNotice('Change saved. Reload the page to refresh other views.'));};
+  const changed = (id?: string) => {if (id) setSelected(id); setRefresh(value => value + 1); setNotice('Change saved. Discovery is being recomputed.'); if (onDataChanged) onDataChanged().catch(() => setNotice('Change saved. Reload the page to refresh other views.'));};
   const filtered = (catalogue?.entities || []).filter(entity => (entity.label + ' ' + entity.description + ' ' + entity.names.map(name => name.text).join(' ')).toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  const Suggestions = window.AliasSuggestions;
+  const Suggestions = AliasSuggestions;
   return <main className="names-workspace"><h1>Names &amp; aliases</h1><p>Keep the names for each concept together. Statements keep their original wording.</p>
     <nav aria-label="Names workspace"><button aria-pressed={tab === 'names'} onClick={() => setTab('names')}>Names</button>{Suggestions && <button aria-pressed={tab === 'suggestions'} onClick={() => setTab('suggestions')}>AI suggestions</button>}</nav>
     {error && <p role="alert">{error} <button onClick={() => setRefresh(value => value + 1)}>Retry</button></p>}
@@ -163,3 +166,5 @@ function NamesWorkspace({onDataChanged}) {
     </>}
   </main>;
 }
+
+export { NamesWorkspace };

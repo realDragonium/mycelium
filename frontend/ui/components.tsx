@@ -1,91 +1,22 @@
 // Shared components & helpers for Mycelium UI.
-
-const { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } = React;
+import React from 'react';
+import { useState, useEffect, useRef, createContext, useContext } from 'react';
+import { substrate } from './data';
+import type { SetTweak } from './tweaks-panel';
 
 // ---------- Routing context ----------
 
-const RouterCtx = createContext(null);
-const useRouter = () => useContext(RouterCtx);
-
-// ---------- Data lookups ----------
-
-// Walk a when-clause tree and yield every leaf statement_id. Tolerates the
-// legacy flat-string shape; otherwise leaves are {statement_id} and
-// composites are {op, of: [...]}.
-function* walkWhenLeaves(when) {
-  if (!when) return;
-  if (typeof when === 'string') { yield when; return; }
-  if (when.statement_id) { yield when.statement_id; return; }
-  if (when.op && Array.isArray(when.of)) {
-    for (const child of when.of) yield* walkWhenLeaves(child);
-  }
+interface Route {
+  view: string; id?: string; query?: string; focus?: string | null; selected?: string | null;
+  page?: number; ops?: string; kinds?: string; q?: string;
 }
+interface Router extends Route { go: (next: Route) => void }
 
-function buildIndex(data) {
-  const byId = {};
-  data.entities.forEach(e => byId[e.id] = { ...e, kind: 'entity' });
-  // Preserve the statement's own kind (event/state/capability) as
-  // `claimKind`. The byId-`kind` slot is the *record* kind, used by
-  // routers, search and component-dispatch — overwriting it loses the
-  // claim shape, so we save it under a different name.
-  data.statements.forEach(b => byId[b.id] = { ...b, kind: 'statement', claimKind: b.kind });
-  data.names.forEach(n => byId[n.id] = { ...n, kind: 'name' });
-
-  const namesByEntity = {};
-  data.names.forEach(n => {
-    namesByEntity[n.entity] = namesByEntity[n.entity] || [];
-    namesByEntity[n.entity].push(n);
-  });
-
-  const mentionsByEntity = {}; // entity id -> statement[]
-  data.statements.forEach(b => {
-    (b.mentions || []).forEach(eid => {
-      mentionsByEntity[eid] = mentionsByEntity[eid] || [];
-      mentionsByEntity[eid].push(b);
-    });
-  });
-
-  const outgoing = {}; // bid -> [{to, type}]
-  const incoming = {}; // bid -> [{from, type}]
-  // Reverse index for statements used as a `when` condition. A statement
-  // can be a leaf inside any number of links' when-trees; this map lets
-  // the detail screen surface "this statement gates these edges" without
-  // re-walking every link on render.
-  const conditionUses = {}; // bid -> [link, ...]
-  data.links.forEach(l => {
-    outgoing[l.from] = outgoing[l.from] || [];
-    outgoing[l.from].push(l);
-    incoming[l.to] = incoming[l.to] || [];
-    incoming[l.to].push(l);
-    if (l.when) {
-      const seen = new Set();
-      for (const leafId of walkWhenLeaves(l.when)) {
-        if (seen.has(leafId)) continue;
-        seen.add(leafId);
-        conditionUses[leafId] = conditionUses[leafId] || [];
-        conditionUses[leafId].push(l);
-      }
-    }
-  });
-
-  // Entity↔entity adjacency. Same shape as statement-link adjacency
-  // but keyed by entity_id and held in separate buckets so the entity
-  // detail view can render them without overlap with statement-link
-  // bookkeeping.
-  const entityOutgoing = {}; // eid -> [{to, type}]
-  const entityIncoming = {}; // eid -> [{from, type}]
-  (data.entity_links || []).forEach(l => {
-    entityOutgoing[l.from] = entityOutgoing[l.from] || [];
-    entityOutgoing[l.from].push(l);
-    entityIncoming[l.to] = entityIncoming[l.to] || [];
-    entityIncoming[l.to].push(l);
-  });
-
-  return {
-    byId, namesByEntity, mentionsByEntity,
-    outgoing, incoming, conditionUses,
-    entityOutgoing, entityIncoming,
-  };
+const RouterCtx = createContext<Router | null>(null);
+function useRouter(): Router {
+  const router = useContext(RouterCtx);
+  if (!router) throw new Error('useRouter needs a RouterCtx provider');
+  return router;
 }
 
 // ---------- Brand mark (mycelium hyphae) ----------
@@ -244,7 +175,8 @@ function ThemeToggle() {
 }
 
 // Tweaks context — populated by app
-const TweaksCtx = createContext({ tweaks: {}, setTweak: () => {} });
+interface Tweaks { theme?: string; density?: string; showEditAffordances?: boolean }
+const TweaksCtx = createContext<{ tweaks: Tweaks; setTweak: SetTweak }>({ tweaks: {}, setTweak: () => {} });
 
 // Data context — bumps a version counter and re-fetches /api/data when
 // the substrate is mutated through the UI. Consumers re-render off the
@@ -306,12 +238,13 @@ function EntityChip({ entity, asName = false, name = null }) {
 // ---------- Statement text with linkified entity mentions ----------
 
 function StatementText({ statement, byId, className = 'statement-text' }) {
+  const router = useRouter();
   const mentioned = (statement.mentions || []).map(id => byId[id]).filter(Boolean);
   if (!mentioned.length) return <p className={className} style={{marginTop:8}}>{statement.text}</p>;
 
   // Sort by length desc to avoid sub-matching
   const targets = mentioned.slice().sort((a, b) => b.name.length - a.name.length);
-  let text = statement.text;
+  const text = statement.text;
   // Build segments via repeated split
   let segments = [{ t: text, e: null }];
   targets.forEach(ent => {
@@ -331,7 +264,6 @@ function StatementText({ statement, byId, className = 'statement-text' }) {
     segments = next;
   });
 
-  const router = useRouter();
   return (
     <p className={className} style={{marginTop:8}}>
       {segments.map((s, i) => s.e
@@ -349,7 +281,7 @@ function StatementQuote({ statement, byId }) {
 // ---------- Footer ----------
 
 function Footer() {
-  const data = window.MYCELIUM_DATA;
+  const data = substrate.data;
   return (
     <footer className="footer">
       <div className="ftr-inner">
@@ -369,14 +301,13 @@ function EditHint({ children }) {
   return <span className="edit-hint">{children || 'edit later'}</span>;
 }
 
-Object.assign(window, {
-  RouterCtx, useRouter,
+export {
+  type Route, type Router, RouterCtx, useRouter,
   TweaksCtx,
   DataCtx, useDataCtx, postJSON,
-  buildIndex,
   BrandMark, SearchIcon,
   searchAll, highlight,
   TopBar, ThemeToggle,
   KindTag, ClaimKindTag, EntityChip, StatementText, StatementQuote,
   Footer, EditHint,
-});
+};

@@ -1,5 +1,7 @@
-// research.jsx — topic → source-backed research run → optional draft handoff.
-const { useState: useStateR, useEffect: useEffectR, useRef: useRefR } = React;
+// research.tsx — topic → source-backed research run → optional draft handoff.
+import { useState as useStateR, useEffect as useEffectR, useRef as useRefR } from 'react';
+import { EmptyState, I, useRouter } from './lib';
+import { Myc } from './api';
 
 function researchRelTime(ts) {
   const t = Date.parse(ts);
@@ -141,4 +143,4 @@ function ResearchSurface() {
   );
 }
 
-Object.assign(window, { ResearchSurface });
+export { ResearchSurface };

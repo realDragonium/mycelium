@@ -1,7 +1,9 @@
 /** @typedef {{name: string, owner: string, repo: string, enabled: boolean}} GitHubConnection */
 /** @typedef {{installation_id: number, repository_id: number, owner: string, repo: string, default_branch: string}} GitHubRepository */
+import React from 'react';
+import { productSettingsStyle } from './product-settings';
 
-async function githubRequest(path, body) {
+async function githubRequest(path: string, body?: unknown) {
   const response = await fetch('/api/github' + path, {
     method: body === undefined ? 'GET' : 'POST',
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
@@ -38,7 +40,7 @@ function GitHubConnection({ canConfigure, onConnected, onConnections, destinatio
       }
     }).catch(e => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
-  }, [refresh, canConfigure]);
+  }, [refresh, canConfigure, onConnections]);
   const key = repo => `${repo.installation_id}:${repo.repository_id}`;
   const repository = repositories.find(repo => key(repo) === selected);
   const run = async action => {
@@ -102,4 +104,4 @@ function GitHubConnection({ canConfigure, onConnected, onConnections, destinatio
   </section>;
 }
 
-Object.assign(window, { GitHubConnection });
+export { GitHubConnection };

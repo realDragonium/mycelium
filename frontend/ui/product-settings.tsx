@@ -1,3 +1,7 @@
+import React from 'react';
+import { GitHubConnection } from './github-connection';
+import type { CSSProperties } from 'react';
+
 const productSettingsTitles = {
   ask: 'Question limits', ingest: 'Ingestion limits', research: 'Research limits',
   docgen: 'Document generation limits', draft_review: 'Draft review limits', alias_discovery: 'Alias discovery limits',
@@ -14,7 +18,7 @@ const productSettingsFields = {
   documentation_runs: ['Document generation runs', 1, 1], research_runs: ['Research runs', 1, 1],
 };
 
-const productSettingsStyle = {
+const productSettingsStyle: Record<string, CSSProperties> = {
   input: { minWidth: 0, width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))' },
   grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 },
   field: { display: 'grid', gap: 6, minWidth: 0 },
@@ -164,7 +168,7 @@ function ProductSettingsSection({ snapshot, canConfigure, bindings, guidelineSet
   </details>;
 }
 
-function ProductSettings({ kinds } = {}) {
+function ProductSettings({ kinds }: { kinds?: string[] } = {}) {
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [retry, setRetry] = React.useState(0);
@@ -188,4 +192,6 @@ function ProductSettings({ kinds } = {}) {
   </section>;
 }
 
-Object.assign(window, { ProductSettings });
+export { ProductSettings };
+
+export { productSettingsStyle };

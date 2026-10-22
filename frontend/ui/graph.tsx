@@ -1,9 +1,11 @@
 // Force-directed graph view for Mycelium.
-
-const { useState: useStateG, useEffect: useEffectG, useRef: useRefG, useMemo: useMemoG, useCallback: useCallbackG } = React;
+import React from 'react';
+import { useState as useStateG, useEffect as useEffectG, useRef as useRefG, useMemo as useMemoG } from 'react';
+import { ClaimKindTag, KindTag, TweaksCtx, useRouter } from './components';
+import { substrate, type SubstrateData, type SubstrateIndex } from './data';
 
 // Walk a when-clause tree and yield every leaf statement_id. Tolerates the
-// legacy flat-string form. Same shape as the helper in components.jsx —
+// legacy flat-string form. Same shape as the helper in data.ts —
 // duplicated here so this file stays standalone.
 function* walkWhenLeavesG(when) {
   if (!when) return;
@@ -74,11 +76,13 @@ const KNOWN_STMT_ENTITY_TYPES = new Set(Object.values(STMT_ENTITY_EDGE_BY_KIND))
 // calc. Use it when GraphView is mounted inside a smaller area (the
 // draft detail page, future inline-graph spots). The canvas itself and
 // every interaction stay identical.
-function GraphView({ focusId, data: dataProp, index: indexProp, embedded = false }) {
+function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded = false }: {
+  focusId?: string | null; data?: SubstrateData; index?: SubstrateIndex; embedded?: boolean;
+}) {
   const router = useRouter();
   const { tweaks } = React.useContext(TweaksCtx);
-  const data = dataProp || window.MYCELIUM_DATA;
-  const idx = indexProp || window.MYCELIUM_INDEX;
+  const data = dataProp || substrate.data;
+  const idx = indexProp || substrate.index;
 
   const canvasRef = useRefG(null);
   const containerRef = useRefG(null);
@@ -339,7 +343,7 @@ function GraphView({ focusId, data: dataProp, index: indexProp, embedded = false
       const ENTITY_LAYOUT_SCALE = 1.6 * COMPACT_MULT;
       const entityIdx = nodes.filter(n => n.kind === 'entity');
       const baked = positionsRef.current && positionsRef.current.map;
-      const entityPos = {};
+      const entityPos: Record<string, { x: number; y: number }> = {};
       for (const e of entityIdx) {
         const p = baked ? baked[e.id] : null;
         if (p) {
@@ -540,7 +544,7 @@ function GraphView({ focusId, data: dataProp, index: indexProp, embedded = false
     const wake = (ms = 600) => { sim.wakeUntil = performance.now() + ms; if (!sim.running) { sim.running = true; raf = requestAnimationFrame(step); } };
 
     // Mouse handling
-    let mouse = { x: 0, y: 0, down: false };
+    const mouse = { x: 0, y: 0, down: false };
     const screenToWorld = (sx, sy) => ({
       x: (sx - sim.pan.x) / sim.zoom,
       y: (sy - sim.pan.y) / sim.zoom,
@@ -1220,7 +1224,11 @@ function GraphView({ focusId, data: dataProp, index: indexProp, embedded = false
   }, [nodes, edges, positionsTick]);
 
   // Refs for state synced into draw
-  const drawRef = useRefG({});
+  const drawRef = useRefG<{
+    state?: { selectedId; hoverId; neighborhood; activeTypes; showEntities; showStatements; theme; searchMatches };
+    draw?: () => void;
+    requestStep?: () => void;
+  }>({});
   useEffectG(() => {
     drawRef.current.state = { selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, theme: tweaks.theme, searchMatches };
     // Any visual state change needs at least one repaint — even if the
@@ -1435,4 +1443,4 @@ function GraphView({ focusId, data: dataProp, index: indexProp, embedded = false
   );
 }
 
-Object.assign(window, { GraphView });
+export { GraphView };

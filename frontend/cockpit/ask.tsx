@@ -1,5 +1,8 @@
-// ask.jsx — agentic answer tool. Honest working state; bimodal result; real error/retry.
-const { useState: useStateA, useEffect: useEffectA, useRef: useRefA } = React;
+// ask.tsx — agentic answer tool. Honest working state; bimodal result; real error/retry.
+import { useState as useStateA, useEffect as useEffectA, useRef as useRefA, type ReactNode } from 'react';
+import { I, useRouter } from './lib';
+import { substrate } from './data';
+import { Myc } from './api';
 
 /* ---- confidence meter ---- */
 function Confidence({ confidence }) {
@@ -13,7 +16,10 @@ function Confidence({ confidence }) {
 }
 
 /* ---- panels ---- */
-function Panel({ icon, title, count, cls, children, collapsible, openDefault = true }) {
+function Panel({ icon, title, count, cls, children, collapsible, openDefault = true }: {
+  icon: string; title: string; count?: ReactNode; cls: string; children: ReactNode;
+  collapsible?: boolean; openDefault?: boolean;
+}) {
   const [open, setOpen] = useStateA(openDefault);
   const Icon = I[icon];
   return (
@@ -165,7 +171,8 @@ function AskError({ r, onRetry }) {
       <div className="ae-detail">{r.detail || 'No response within the deadline. The store is single-writer and can stall under load.'}</div>
       <div className="ae-actions">
         <button className="btn primary" onClick={onRetry}>Retry</button>
-        <button className="btn" onClick={() => window.MYC_REPORT && window.MYC_REPORT()}>Report a gap</button>
+        {/* Inert, as before the build: nothing ever provided the window.MYC_REPORT handler it called. */}
+        <button className="btn">Report a gap</button>
       </div>
     </div>
   );
@@ -173,7 +180,7 @@ function AskError({ r, onRetry }) {
 
 function AskSurface({ query }) {
   const router = useRouter();
-  const idx = window.MYCELIUM_INDEX;
+  const idx = substrate.index;
   const [phase, setPhase] = useStateA('idle'); // idle | working | done | error
   const [result, setResult] = useStateA(null);
   const [elapsed, setElapsed] = useStateA(0);
@@ -192,7 +199,7 @@ function AskSurface({ query }) {
     setPhase('working'); setElapsed(0); setResult(null); setProgress(''); setPartial('');
     const t0 = Date.now();
     timers.current.push(setInterval(() => setElapsed((Date.now() - t0) / 1000), 100));
-    window.Myc.ask(question, {
+    Myc.ask(question, {
       signal: controller.signal,
       onEvent: event => {
         if (active.current !== controller) return;
@@ -247,4 +254,4 @@ function AskSurface({ query }) {
   );
 }
 
-Object.assign(window, { AskSurface });
+export { AskSurface };

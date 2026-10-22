@@ -1,3 +1,6 @@
+import React from 'react';
+import type { CSSProperties } from 'react';
+
 function AliasSuggestions({ canWrite, onChanged }) {
   const [entries, setEntries] = React.useState([]);
   const [status, setStatus] = React.useState('pending');
@@ -10,8 +13,8 @@ function AliasSuggestions({ canWrite, onChanged }) {
   const [error, setError] = React.useState(null);
   const [notice, setNotice] = React.useState(null);
   const [skipped, setSkipped] = React.useState([]);
-  const field = { width: '100%', minWidth: 0, padding: 8, boxSizing: 'border-box', background: 'var(--surface-2, var(--paper))', color: 'var(--ink)', border: '1px solid var(--rule, var(--line))', borderRadius: 4 };
-  const request = async (url, options) => {
+  const field: CSSProperties = { width: '100%', minWidth: 0, padding: 8, boxSizing: 'border-box', background: 'var(--surface-2, var(--paper))', color: 'var(--ink)', border: '1px solid var(--rule, var(--line))', borderRadius: 4 };
+  const request = async (url: string, options?: RequestInit) => {
     const response = await fetch(url, options);
     const value = await response.json();
     if (!response.ok) throw new Error(typeof value.detail === 'string' ? value.detail : 'The alias request could not be completed.');
@@ -93,4 +96,4 @@ function AliasSuggestions({ canWrite, onChanged }) {
     })}
   </section>;
 }
-window.AliasSuggestions = AliasSuggestions;
+export { AliasSuggestions };

@@ -1,28 +1,30 @@
-/**
- * @typedef {'open' | 'resolved' | 'dismissed'} KnowledgeGapStatus
- * @typedef {'resolve' | 'dismiss' | 'reopen'} KnowledgeGapAction
- * @typedef {{id: string, text: string, status: KnowledgeGapStatus,
- *   created_at: string, created_by: string | null,
- *   resolved_at: string | null, dismissed_at: string | null}} KnowledgeGap
- * @typedef {{phase: 'loading'} | {phase: 'error', message: string} |
- *   {phase: 'ready', gaps: KnowledgeGap[]}} KnowledgeGapLoad
- */
+import React from 'react';
+import { Myc } from './api';
 
-/** @type {ReadonlyArray<{id: KnowledgeGapStatus | 'all', label: string}>} */
-const GAP_FILTERS = [
+type KnowledgeGapStatus = 'open' | 'resolved' | 'dismissed';
+type KnowledgeGapAction = 'resolve' | 'dismiss' | 'reopen';
+interface KnowledgeGap {
+  id: string; text: string; status: KnowledgeGapStatus;
+  created_at: string; created_by: string | null;
+  resolved_at: string | null; dismissed_at: string | null;
+}
+type KnowledgeGapLoad = { phase: 'loading' } | { phase: 'error'; message: string } |
+  { phase: 'ready'; gaps: KnowledgeGap[] };
+
+const GAP_FILTERS: ReadonlyArray<{ id: KnowledgeGapStatus | 'all'; label: string }> = [
   { id: 'open', label: 'Open' },
   { id: 'resolved', label: 'Resolved' },
   { id: 'dismissed', label: 'Dismissed' },
   { id: 'all', label: 'All' },
 ];
 
-/** @param {unknown} error */
-function gapErrorMessage(error) {
+function gapErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The request failed. Please try again.';
 }
 
-/** @param {{gap: KnowledgeGap, busy: boolean, onAction: (id: string, action: KnowledgeGapAction) => Promise<void>}} props */
-function KnowledgeGapCard({ gap, busy, onAction }) {
+function KnowledgeGapCard({ gap, busy, onAction }: {
+  gap: KnowledgeGap; busy: boolean; onAction: (id: string, action: KnowledgeGapAction) => Promise<void>;
+}) {
   const changedAt = gap.resolved_at || gap.dismissed_at;
   return (
     <li className="knowledge-gap-card">
@@ -48,8 +50,8 @@ function KnowledgeGapCard({ gap, busy, onAction }) {
 }
 
 function KnowledgeGapsScreen() {
-  const [filter, setFilter] = React.useState(/** @type {KnowledgeGapStatus | 'all'} */ ('open'));
-  const [load, setLoad] = React.useState(/** @type {KnowledgeGapLoad} */ ({ phase: 'loading' }));
+  const [filter, setFilter] = React.useState<KnowledgeGapStatus | 'all'>('open');
+  const [load, setLoad] = React.useState<KnowledgeGapLoad>({ phase: 'loading' });
   const [attempt, setAttempt] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const [actionError, setActionError] = React.useState('');
@@ -57,21 +59,18 @@ function KnowledgeGapsScreen() {
   React.useEffect(() => {
     let cancelled = false;
     setLoad({ phase: 'loading' });
-    window.Myc.knowledgeGaps('all').then(
-      /** @param {{gaps: KnowledgeGap[]}} result */
-      (result) => { if (!cancelled) setLoad({ phase: 'ready', gaps: result.gaps }); },
+    Myc.knowledgeGaps('all').then(
+      (result: { gaps: KnowledgeGap[] }) => { if (!cancelled) setLoad({ phase: 'ready', gaps: result.gaps }); },
       (error) => { if (!cancelled) setLoad({ phase: 'error', message: gapErrorMessage(error) }); },
     );
     return () => { cancelled = true; };
   }, [attempt]);
 
-  /** @param {string} id @param {KnowledgeGapAction} action */
-  async function onAction(id, action) {
+  async function onAction(id: string, action: KnowledgeGapAction) {
     setBusy(true);
     setActionError('');
     try {
-      /** @type {{gap: KnowledgeGap}} */
-      const result = await window.Myc.updateKnowledgeGap(id, action);
+      const result: { gap: KnowledgeGap } = await Myc.updateKnowledgeGap(id, action);
       // Use the saved row so a failed follow-up read cannot misreport a successful action.
       setLoad(current => current.phase === 'ready'
         ? { phase: 'ready', gaps: current.gaps.map(gap => gap.id === id ? result.gap : gap) }
@@ -115,4 +114,4 @@ function KnowledgeGapsScreen() {
   );
 }
 
-window.KnowledgeGapsScreen = KnowledgeGapsScreen;
+export { KnowledgeGapsScreen };
