@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from mycelium import auth, embed, phrasing, server, store, vector
-from mycelium.server import runtime
+from mycelium.server import indexes, runtime
 
 
 def _embed(text: str) -> list[float]:
@@ -65,7 +65,7 @@ def test_index_persists_before_outermost_commit(
             transaction_depth -= 1
 
     def tracked_save(index: vector.Index, path: Path) -> None:
-        assert server._dirty_marker_path(path).exists()
+        assert indexes._dirty_marker_path(path).exists()
         events.append(("persist", path.name))
         original_save(index, path)
 
@@ -78,7 +78,7 @@ def test_index_persists_before_outermost_commit(
         assert persist in events
         assert commit in events
         assert events.index(persist) < events.index(commit)
-        assert not server._dirty_marker_path(index_path).exists()
+        assert not indexes._dirty_marker_path(index_path).exists()
         events.clear()
 
     statement_path = server._idx_path()
@@ -119,7 +119,7 @@ def test_index_persists_before_outermost_commit(
 
     server.upsert_entity("reviewer", "an updated reviewer")
     assert all(event[0] != "persist" for event in events)
-    assert not server._dirty_marker_path(name_path).exists()
+    assert not indexes._dirty_marker_path(name_path).exists()
     events.clear()
 
     name_id = server.upsert_name("assessor", entity_id)["name_id"]
@@ -147,7 +147,7 @@ def test_draft_replay_clears_markers_only_after_outermost_commit(
     transaction_depth = 0
     original_transaction = store.transaction
     original_save = vector.Index.save
-    original_clear_dirty_marker = server._clear_dirty_marker
+    original_clear_dirty_marker = indexes._clear_dirty_marker
 
     @contextlib.contextmanager
     def tracked_transaction(
@@ -171,7 +171,7 @@ def test_draft_replay_clears_markers_only_after_outermost_commit(
             live_path = server._name_idx_path()
         else:
             raise AssertionError("unexpected index")
-        assert server._dirty_marker_path(live_path).exists()
+        assert indexes._dirty_marker_path(live_path).exists()
         events.append(("persist", path.name))
         original_save(index, path)
 
@@ -181,7 +181,7 @@ def test_draft_replay_clears_markers_only_after_outermost_commit(
 
     monkeypatch.setattr(store, "transaction", tracked_transaction)
     monkeypatch.setattr(vector.Index, "save", tracked_save)
-    monkeypatch.setattr(server, "_clear_dirty_marker", tracked_clear_dirty_marker)
+    monkeypatch.setattr(indexes, "_clear_dirty_marker", tracked_clear_dirty_marker)
 
     curator_token = auth.current_principal.set(auth.LOCAL_ADMIN)
     try:
@@ -205,8 +205,8 @@ def test_draft_replay_clears_markers_only_after_outermost_commit(
         server._idx_path().name,
         server._name_idx_path().name,
     }
-    assert not server._dirty_marker_path(server._idx_path()).exists()
-    assert not server._dirty_marker_path(server._name_idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._name_idx_path()).exists()
 
 
 def test_startup_rebuilds_dirty_indexes(
@@ -228,15 +228,15 @@ def test_startup_rebuilds_dirty_indexes(
     assert statement_vector_id is not None
     assert name_vector_id is not None
 
-    server._write_dirty_marker(server._idx_path())
-    server._write_dirty_marker(server._name_idx_path())
+    indexes._write_dirty_marker(server._idx_path())
+    indexes._write_dirty_marker(server._name_idx_path())
     vector.Index.empty().save(server._idx_path())
     vector.Index.empty().save(server._name_idx_path())
 
     _restart(tmp_path)
 
-    assert not server._dirty_marker_path(server._idx_path()).exists()
-    assert not server._dirty_marker_path(server._name_idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._name_idx_path()).exists()
     assert server._idx().get_vector(statement_vector_id) is not None
     name_hits = server._name_idx().search(_embed("reviewer"), k=1)
     assert name_hits
@@ -271,7 +271,7 @@ def test_persist_failure_marker_stays_sticky_until_restart(
         server.upsert_statement(kind="state", text="write is pending", links=[])
 
     assert len(created_ids) == 1
-    assert server._dirty_marker_path(server._idx_path()).exists()
+    assert indexes._dirty_marker_path(server._idx_path()).exists()
     assert store.get_statement(store.substrate_connection(), created_ids[0]) is None
 
     monkeypatch.setattr(vector.Index, "save", original_save)
@@ -280,12 +280,12 @@ def test_persist_failure_marker_stays_sticky_until_restart(
     )["statement_id"]
 
     assert len(created_ids) == 2
-    assert server._dirty_marker_path(server._idx_path()).exists()
+    assert indexes._dirty_marker_path(server._idx_path()).exists()
     assert store.get_statement(store.substrate_connection(), successful_id) is not None
 
     _restart(tmp_path)
 
-    assert not server._dirty_marker_path(server._idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._idx_path()).exists()
     assert store.get_statement(store.substrate_connection(), created_ids[0]) is None
     assert store.get_statement(store.substrate_connection(), successful_id) is not None
     hits = server.search_statements("the later write succeeds", limit=5, name_boost=0.0)
@@ -324,8 +324,8 @@ def test_failed_draft_replay_leaves_markers_until_restart(
     finally:
         auth.current_principal.reset(curator_token)
 
-    assert server._dirty_marker_path(server._idx_path()).exists()
-    assert server._dirty_marker_path(server._name_idx_path()).exists()
+    assert indexes._dirty_marker_path(server._idx_path()).exists()
+    assert indexes._dirty_marker_path(server._name_idx_path()).exists()
     assert store.all_statements_with_text(store.substrate_connection()) == []
     assert store.list_all_names(store.substrate_connection()) == []
     assert server._idx().ids() == []
@@ -333,8 +333,8 @@ def test_failed_draft_replay_leaves_markers_until_restart(
 
     _restart(tmp_path)
 
-    assert not server._dirty_marker_path(server._idx_path()).exists()
-    assert not server._dirty_marker_path(server._name_idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._name_idx_path()).exists()
     assert store.all_statements_with_text(store.substrate_connection()) == []
     assert store.list_all_names(store.substrate_connection()) == []
     assert server._idx().ids() == []
@@ -351,7 +351,7 @@ def test_kind_only_patch_does_not_mark_or_persist(
     save_calls: list[Path] = []
     marker_writes: list[Path] = []
     original_save = vector.Index.save
-    original_write_dirty_marker = server._write_dirty_marker
+    original_write_dirty_marker = indexes._write_dirty_marker
 
     def track_save(index: vector.Index, path: Path) -> None:
         save_calls.append(path)
@@ -362,10 +362,10 @@ def test_kind_only_patch_does_not_mark_or_persist(
         original_write_dirty_marker(index_path)
 
     monkeypatch.setattr(vector.Index, "save", track_save)
-    monkeypatch.setattr(server, "_write_dirty_marker", track_marker)
+    monkeypatch.setattr(indexes, "_write_dirty_marker", track_marker)
 
     server.patch_statement(statement_id, kind="capability")
 
     assert save_calls == []
     assert marker_writes == []
-    assert not server._dirty_marker_path(server._idx_path()).exists()
+    assert not indexes._dirty_marker_path(server._idx_path()).exists()
