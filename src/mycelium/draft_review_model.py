@@ -27,7 +27,9 @@ live statements and the link type glossary:
 - Entities: no case or spelling variant of a live entity, and no description
   overwritten with a worse one.
 Corrections may revise or strike an existing operation_ref, or append a
-supported tool call. payload_json is the JSON object of that tool's arguments;
+supported tool call. Use each operation_ref in at most one correction: a revise
+replaces that operation's whole payload, so to change several statements in one
+batch, revise the batch once with all its statements. payload_json is the JSON object of that tool's arguments;
 use null for irrelevant correction fields. A changes_suggested assessment
 certifies the complete corrected draft, not just individual edits. Reject only a
 draft that cannot be made to fit with at most eight corrections. Never propose

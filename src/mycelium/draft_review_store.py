@@ -69,6 +69,7 @@ class ReviewRun(BaseModel):
     corrections: list[Correction] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
     attempt: int = 1
+    previous_failure: str | None = None
     application: Literal["unapplied", "applied", "rejected"] = "unapplied"
     detail: str | None = None
     started_at: str = Field(default_factory=timestamps.now)

@@ -958,6 +958,8 @@ def test_draft_failure_is_retried_once_then_rejected(running_app, monkeypatch):
     draft_id = _draft()
     result = _result(draft_id)
     assert len(calls) == 2
+    assert "previous_attempt_failure" not in json.loads(calls[0])
+    assert json.loads(calls[1])["previous_attempt_failure"] == "Fixture draft defect"
     assert result["attempt"] == 2
     assert result["application"] == "rejected"
     assert server.get_draft(draft_id)["status"] == "rejected"

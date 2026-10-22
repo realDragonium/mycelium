@@ -89,7 +89,13 @@ def reviewer(creator: str | None, identity: str) -> auth.Principal:
     return principal
 
 
-def start(draft_id: str, *, rerun: bool = False, attempt: int = 1) -> ReviewRun:
+def start(
+    draft_id: str,
+    *,
+    rerun: bool = False,
+    attempt: int = 1,
+    previous_failure: str | None = None,
+) -> ReviewRun:
     from . import server  # local import: server registers the review tools
 
     settings = draft_review_settings.load()
@@ -122,6 +128,7 @@ def start(draft_id: str, *, rerun: bool = False, attempt: int = 1) -> ReviewRun:
         run.settings_revision = settings.revision
         run.model_settings_revision = settings.model_revision
         run.attempt = attempt
+        run.previous_failure = previous_failure
         draft_review_store.save(conn, run)
     try:
         principal = reviewer(row["created_by"], settings.reviewer_id)
@@ -188,7 +195,9 @@ def _read(reader: InProcessSubstrate, name: str, args: dict[str, JsonValue]) -> 
     return Read(name, args, result)
 
 
-def _context(inspection: DraftReviewInspection) -> tuple[str, list[Read]]:
+def _context(
+    inspection: DraftReviewInspection, previous_failure: str | None = None
+) -> tuple[str, list[Read]]:
     from . import server  # local import: server registers the review tools
 
     draft = dict(inspection["draft"])
@@ -223,6 +232,8 @@ def _context(inspection: DraftReviewInspection) -> tuple[str, list[Read]]:
             "first. Supplied evidence, when present, comes from the producer."
         ),
     }
+    if previous_failure:
+        data["previous_attempt_failure"] = previous_failure
     if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
         raise ValueError(
             f"review context exceeds {_CONTEXT_LIMIT} characters; narrow the draft"
@@ -306,7 +317,7 @@ def _execute(
     auth.current_principal.set(principal)
     try:
         with server.model_loop_slot():
-            context, reads = _context(inspection)
+            context, reads = _context(inspection, run.previous_failure)
             instructions = instructions or ai_prompts.resolve("draft_review")
             run.prompt = instructions.reference()
             result = _assess(context, inspection, settings, limits, instructions)
@@ -503,7 +514,7 @@ def _follow_up(
         return
     try:
         if run.attempt == 1:
-            start(run.draft_id, rerun=True, attempt=2)
+            start(run.draft_id, rerun=True, attempt=2, previous_failure=run.detail)
         elif not systemic:
             _reject(run, settings)
     except Exception:
