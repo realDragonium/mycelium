@@ -53,11 +53,23 @@ class CurrentDocument:
     content_revision: str | None = None
 
 
+#: Where a pull request stands at its destination.
+PullRequestState = Literal["open", "merged", "closed"]
+
+#: Which text a revision starts from: the internal head, or the destination's
+#: copy when people edited it there.
+RevisionBase = Literal["internal", "destination"]
+
+
 @dataclass(frozen=True)
 class RevisionTarget:
     document: ExistingDocument
     revision: int
+    #: The text the revision starts from. `content_revision` is the destination
+    #: blob it reflects, recorded as the document's new sync point; None keeps
+    #: the stored one.
     current: CurrentDocument
+    base: RevisionBase = "internal"
 
 
 class ReviewFinding(BaseModel):
@@ -103,9 +115,8 @@ class DocumentWritten(BaseModel):
     statement_ids: list[str] = Field(default_factory=list)
     guideline_set: str
     document_type: str
+    #: The revision target, when the run revised a document.
     matched_document_id: str | None = None
-    matched_body_digest: str | None = None
-    matched_content_revision: str | None = None
     #: The independent gate that accepted this exact document.
     review: ReviewRecord
     #: What the guideline set asked for that the substrate could not supply —
@@ -126,6 +137,8 @@ class NothingWritten(BaseModel):
     reason: str
     guideline_set: str | None = None
     document_type: str | None = None
+    #: The revision target, or the existing document the model suggested this
+    #: request should revise instead of writing a new one.
     matched_document_id: str | None = None
     #: Present only when a written document reached and failed the review gate.
     review: ReviewRecord | None = None

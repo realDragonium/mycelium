@@ -1,9 +1,10 @@
 // Product settings: per-action limits, concurrency, research repositories and
 // documentation delivery. One server document with a section per kind; each
 // section saves on its own, guarded by the document revision.
-import { useCallback, useState, type FormEvent } from 'react';
-import { GitHubConnection, type GitHubRepoConnection } from './github-connection';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { GitHubConnection, listGitHubConnections, type GitHubRepoConnection } from './github-connection';
 import { Card, LoadError, Loading, Notice } from './lib';
+import { Link } from './router';
 import { HttpError, errorMessage, getJSON, patchJSON } from './api';
 import { useAsync } from './use-async';
 
@@ -48,7 +49,7 @@ function RepositoryFields({ kind, items, bindings, onChange }: { kind: string; i
     if (key === 'binding' && value) {
       const picked = bindings.find(b => b.name === value);
       if (!destination && 'host' in next) next.host = picked?.host || next.host;
-      if (destination && picked?.owner) { next.owner = picked.owner; next.repo = picked.repo || ''; }
+      if (picked?.owner) { next.owner = picked.owner; next.repo = picked.repo || ''; }
     }
     return next;
   }));
@@ -62,7 +63,7 @@ function RepositoryFields({ kind, items, bindings, onChange }: { kind: string; i
     {items.length === 0 && <p className="muted">No {noun}s configured.</p>}
     {items.map((item, index) => {
       const binding = item.binding ? bindings.find(b => b.name === item.binding) : undefined;
-      const appBound = destination && !!item.binding?.startsWith('github-app:');
+      const appBound = !!item.binding?.startsWith('github-app:');
       return (
         <fieldset key={index} className="subcard">
           <legend>{destination ? 'Destination' : 'Source'} {index + 1}</legend>
@@ -84,7 +85,9 @@ function RepositoryFields({ kind, items, bindings, onChange }: { kind: string; i
               <label className="field"><span>GitHub host</span><input className="input" value={item.host} required maxLength={200} onChange={e => change(index, 'host', e.target.value)} /></label>
             )}
           </div>
-          {binding && <p className="hint">Host: {binding.host}. {!binding.available && (binding.name.startsWith('github-app:') ? 'Reconnect this repository above before publishing.' : 'The server administrator must configure these credentials before a run can use them.')}</p>}
+          {binding && <p className="hint">Host: {binding.host}. {!binding.available && (binding.name.startsWith('github-app:')
+            ? (destination ? 'Reconnect this repository above before publishing.' : 'Reconnect this repository under Documentation delivery before a run can read it.')
+            : 'The server administrator must configure these credentials before a run can use them.')}</p>}
           {item.binding && !binding && <Notice tone="warn">This credential binding is unavailable. Select a configured one.</Notice>}
           <button type="button" className="btn ghost sm" onClick={() => onChange(items.filter((_, i) => i !== index))}>Remove {noun} {index + 1}</button>
         </fieldset>
@@ -92,7 +95,7 @@ function RepositoryFields({ kind, items, bindings, onChange }: { kind: string; i
     })}
     <button type="button" className="btn sm" onClick={add} disabled={destination && bindings.length === 0}>Add {noun}</button>
     {destination && bindings.length === 0 && <p className="hint">Connect a GitHub repository above to start publishing.</p>}
-    <p className="hint">{destination ? 'Use {slug} in the file path template, for example docs/{slug}.md. Publishing opens a pull request for review.' : 'An empty ref uses the repository’s default branch.'} Changes apply to new runs. Repository connections are shared by everyone on this instance.</p>
+    <p className="hint">{destination ? 'Use {slug} in the file path template, for example docs/{slug}.md. Publishing opens a pull request for review.' : <>An empty ref uses the repository’s default branch. A private repository can use a GitHub connection made under <Link to={{ view: 'settings', section: 'documentation' }}>Documentation delivery</Link>; runs only read it.</>} Changes apply to new runs. Repository connections are shared by everyone on this instance.</p>
   </>;
 }
 
@@ -104,12 +107,23 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
   const [saved, setSaved] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [connections, setConnections] = useState<GitHubRepoConnection[]>([]);
+  const [connectionsError, setConnectionsError] = useState<string | null>(null);
   const kind = snapshot.settings.kind;
   const title = TITLES[kind] || kind;
   const canConfigure = data.can_configure;
-  const bindings: Binding[] = isDestination(kind)
-    ? [...data.github_bindings, ...connections.map(c => ({ name: c.name, owner: c.owner, repo: c.repo, label: `${c.owner}/${c.repo}`, host: 'github.com', available: c.enabled }))]
-    : data.github_bindings;
+  const bindings: Binding[] = [
+    ...data.github_bindings,
+    ...connections.map(c => ({ name: c.name, owner: c.owner, repo: c.repo, label: `${c.owner}/${c.repo}`, host: 'github.com', available: c.enabled })),
+  ];
+  // Destinations get their connections from the GitHubConnection panel.
+  useEffect(() => {
+    if (kind !== 'sources') return;
+    let cancelled = false;
+    listGitHubConnections()
+      .then(list => { if (!cancelled) setConnections(list); })
+      .catch((e: unknown) => { if (!cancelled) setConnectionsError(errorMessage(e)); });
+    return () => { cancelled = true; };
+  }, [kind]);
 
   const change = (patch: Partial<Settings>) => { setForm(f => ({ ...f, ...patch })); setSaved(false); };
   const accept = (value: Section) => { setCurrent(value); setForm(value.settings); };
@@ -152,6 +166,7 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
       actions={<button type="button" className="btn ghost sm" onClick={() => void reload()} disabled={busy}>Reload</button>}>
       {current.configuration_error && <Notice tone="error">{current.configuration_error}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
+      {connectionsError && <Notice tone="warn">GitHub connections could not be loaded: {connectionsError}</Notice>}
       {isDestination(kind) && <GitHubConnection canConfigure={canConfigure} onConnected={connected} onConnections={setConnections} />}
       <form onSubmit={save}>
         <fieldset disabled={busy || conflict || !canConfigure}>

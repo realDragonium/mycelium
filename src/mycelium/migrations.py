@@ -919,6 +919,17 @@ def _migration_v15_drop_alias_embeddings(conn: sqlite3.Connection) -> None:
         raise
 
 
+def _migration_v16_gap_references(conn: sqlite3.Connection) -> None:
+    """Let a knowledge gap name the draft, statement or document it came from.
+
+    Additive only: existing reports keep NULL references rather than having
+    them guessed from their text."""
+    if not _has_table(conn, "knowledge_gaps"):
+        return
+    for column in ("draft_id", "statement_id", "document_id"):
+        _ensure_column(conn, "knowledge_gaps", column, "TEXT")
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -938,6 +949,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (13, _migration_v13_preferred_names),
     (14, _migration_v14_statement_link_conditions),
     (15, _migration_v15_drop_alias_embeddings),
+    (16, _migration_v16_gap_references),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -1033,8 +1045,9 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
     The sentinel checks one column added in a representative past
     migration — `entities.created_at` (v1), absence of `when_nodes.link_kind` (v14),
     `names.generated_from_name_id` (v5), the NOCASE collation on
-    `names.text` (v6), `link_type_aliases.direction` (v9), and absence of
-    `link_type_aliases.embedding` (v15). A fresh DB
+    `names.text` (v6), `link_type_aliases.direction` (v9), absence of
+    `link_type_aliases.embedding` (v15), and `knowledge_gaps.draft_id`
+    (v16). A fresh DB
     will have all of them (created in one
     shot by `SCHEMA`). A legacy DB at any prior version will be missing
     at least one (CREATE TABLE IF NOT EXISTS leaves existing tables
@@ -1066,4 +1079,5 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
         and "NOCASE" in _table_sql("names").upper()
         and _has("link_type_aliases", "direction")
         and not _has("link_type_aliases", "embedding")
+        and _has("knowledge_gaps", "draft_id")
     )

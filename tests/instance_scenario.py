@@ -87,6 +87,16 @@ def _substrate(server) -> dict[str, str]:
     )
     server.report_knowledge_gap(text="How long does a locked account stay locked?")
     db = _connection(server)
+    from mycelium import store
+
+    file_gap = getattr(store, "create_knowledge_gap", None)
+    if file_gap is not None and "draft_id" in inspect.signature(file_gap).parameters:
+        file_gap(
+            db,
+            "Draft drf_fixture contradicted the session expiry rule.",
+            draft_id="drf_fixture",
+            statement_id=ids["expiry"],
+        )
     name = db.execute("SELECT id FROM names WHERE text = 'Sign-in'").fetchone()
     db.execute(
         "INSERT INTO pending_mentions (statement_id, name_id, created_at, "
@@ -201,8 +211,17 @@ def _documentation(data_dir: Path) -> None:
         return
     with closing(docs_store.connect(data_dir / "mycelium-drafts.db")) as conn:
         run = docs_store.create_run(conn, prompt="Explain sign-in", created_by="ada")
+        anchored = (
+            "anchor_entity_id"
+            in inspect.signature(docs_store.upsert_document).parameters
+        )
         document = docs_store.upsert_document(
-            conn, slug="sign-in", title="Sign-in", body="How to sign in.", run_id=run
+            conn,
+            slug="sign-in",
+            title="Sign-in",
+            body="How to sign in.",
+            run_id=run,
+            **({"anchor_entity_id": "ent_sign_in"} if anchored else {}),
         )
         record = getattr(docs_store, "record_delivery", None)
         if record is None or "binding" not in inspect.signature(record).parameters:
@@ -227,6 +246,7 @@ def _documentation(data_dir: Path) -> None:
             reference="https://github.com/example/docs/pull/1",
             content_revision="sha",
             revision=1,
+            **({"pull_request_number": 1} if anchored else {}),
         )
         docs_store.finish_run(
             conn, run, outcome="document_written", document_id=document

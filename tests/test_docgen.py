@@ -341,9 +341,6 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
     )
     client = FakeAnthropic([_emit(), _review_ok()])
 
-    def unexpected_external_read(document_id: str) -> CurrentDocument:
-        raise AssertionError("explicit internal iteration must not read Git")
-
     result = _run(
         client,
         profiles=profiles,
@@ -359,15 +356,12 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
                 "Internal body the user selected", content_revision="b" * 40
             ),
         ),
-        load_current_document=unexpected_external_read,
     )
     assert isinstance(result, DocumentWritten)
     assert result.matched_document_id == "gdc_selected"
-    assert result.matched_content_revision == "b" * 40
-    assert result.matched_body_digest == selected.body_digest
-    assert (
-        "Internal body the user selected" in client.calls[0]["messages"][0]["content"]
-    )
+    first_message = client.calls[0]["messages"][0]["content"]
+    assert "Internal body the user selected" in first_message
+    assert "people edited" not in first_message
     assert "Changed template after admission" not in json.dumps(client.calls)
     assert all(
         MATCH_TOOL not in [tool["name"] for tool in call["tools"]]
@@ -375,7 +369,31 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
     )
 
 
-def test_an_existing_document_is_listed_matched_and_given_to_the_writer(kb_set):
+def test_a_revision_of_the_published_copy_tells_the_writer_to_keep_its_edits(kb_set):
+    selected = ExistingDocument(
+        id="gdc_selected",
+        title="Selected policy",
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+    client = FakeAnthropic([_emit(), _review_ok()])
+
+    _run(
+        client,
+        revision_target=RevisionTarget(
+            selected,
+            3,
+            CurrentDocument("# Edited on GitHub\n", content_revision="c" * 40),
+            base="destination",
+        ),
+    )
+
+    first_message = client.calls[0]["messages"][0]["content"]
+    assert "# Edited on GitHub" in first_message
+    assert "Keep their edits" in first_message
+
+
+def test_a_matched_document_is_only_suggested_and_nothing_is_written(kb_set):
     existing = ExistingDocument(
         id="gdc_sso",
         title="Configuring SSO",
@@ -383,23 +401,20 @@ def test_an_existing_document_is_listed_matched_and_given_to_the_writer(kb_set):
         document_type="how-to",
         slug="configuring-sso",
     )
-    client = FakeAnthropic([_match("gdc_sso"), _emit(), _review_ok()])
+    client = FakeAnthropic([_match("gdc_sso")])
 
     result = _run(
         client,
         guideline_set="kb-authoring",
         document_type="how-to",
         existing_documents=(existing,),
-        load_current_document=lambda document_id: CurrentDocument(
-            body="# Current review-edited text\n", content_revision="a" * 40
-        ),
     )
 
-    assert isinstance(result, DocumentWritten)
+    assert isinstance(result, NothingWritten)
     assert result.matched_document_id == "gdc_sso"
-    assert result.matched_content_revision == "a" * 40
+    assert "revise that document" in result.reason
     assert "gdc_sso" in client.calls[0]["messages"][0]["content"]
-    assert "# Current review-edited text" in client.calls[1]["messages"][0]["content"]
+    assert len(client.calls) == 1
 
 
 def test_an_unmatched_request_keeps_the_new_document_path(kb_set):
@@ -416,36 +431,10 @@ def test_an_unmatched_request_keeps_the_new_document_path(kb_set):
         guideline_set="kb-authoring",
         document_type="how-to",
         existing_documents=(existing,),
-        load_current_document=lambda document_id: (_ for _ in ()).throw(
-            AssertionError("unmatched document must not be loaded")
-        ),
     )
 
     assert isinstance(result, DocumentWritten)
     assert result.matched_document_id is None
-
-
-def test_a_review_refusal_still_reports_the_matched_document(kb_set):
-    existing = ExistingDocument(
-        id="gdc_sso",
-        title="Configuring SSO",
-        guideline_set="kb-authoring",
-        document_type="how-to",
-    )
-    client = FakeAnthropic(
-        [_match("gdc_sso"), _emit(), _review_fail(), _emit(), _review_fail()]
-    )
-
-    result = _run(
-        client,
-        guideline_set="kb-authoring",
-        document_type="how-to",
-        existing_documents=(existing,),
-        load_current_document=lambda document_id: CurrentDocument(body="# Current\n"),
-    )
-
-    assert isinstance(result, NothingWritten)
-    assert result.matched_document_id == "gdc_sso"
 
 
 # --------------------------------------------------------------------------- #

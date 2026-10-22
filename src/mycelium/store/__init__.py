@@ -35,6 +35,7 @@ from .gaps import (
     create_knowledge_gap,
     get_knowledge_gap,
     list_knowledge_gaps,
+    resolve_draft_gaps,
     set_knowledge_gap_status,
 )
 from .glossary import (
@@ -290,6 +291,7 @@ __all__ = [
     "Direction",
     "set_actor",
     "set_admissible",
+    "resolve_draft_gaps",
     "set_knowledge_gap_status",
     "set_name_entity",
     "set_name_vector_id",

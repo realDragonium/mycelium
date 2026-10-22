@@ -51,6 +51,21 @@ def test_single_upsert_rejects_phrasing_violation(tmp_path, monkeypatch):
         assert "kind='rule'" in v["recommendation"]
 
 
+def test_single_upsert_accepts_obligation_as_rule(tmp_path, monkeypatch):
+    with _client(tmp_path, monkeypatch) as client:
+        body = client.post(
+            "/upsert-statement",
+            json={
+                "kind": "rule",
+                "text": "A user must verify their email address",
+                "mentions": [],
+                "links": [],
+            },
+        ).json()
+        assert body["statement_id"].startswith("stm_")
+        assert "phrasing_violations" not in body
+
+
 def test_single_upsert_bypass_returns_warning(tmp_path, monkeypatch):
     with _client(tmp_path, monkeypatch) as client:
         r = client.post(

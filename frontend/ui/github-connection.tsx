@@ -11,6 +11,7 @@ interface Repository { installation_id: number; repository_id: number; owner: st
 interface Status { configured: boolean; selecting: boolean; message?: string | null; connections: GitHubRepoConnection[] }
 
 const FALLBACK = 'GitHub setup could not be completed. Try again.';
+export const listGitHubConnections = () => getJSON<Status>('/api/github').then(s => s.connections);
 const github = <T,>(path: string, body?: unknown) => (body === undefined ? getJSON<T>('/api/github' + path) : postJSON<T>('/api/github' + path, body))
   .catch((e: unknown) => { throw new Error(errorMessage(e, FALLBACK)); });
 

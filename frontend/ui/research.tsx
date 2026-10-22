@@ -9,8 +9,8 @@ import { useAsync, dataOf } from './use-async';
 
 const ACTIVE = new Set(['queued', 'running']);
 
-export function ResearchSurface() {
-  const [topic, setTopic] = useState('');
+export function ResearchSurface({ topic: initialTopic }: { topic: string }) {
+  const [topic, setTopic] = useState(initialTopic);
   const [picked, setPicked] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);

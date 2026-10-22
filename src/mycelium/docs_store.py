@@ -16,7 +16,10 @@ copy of the same fact could disagree with the document table. `last_run_id` is
 a soft reference with deliberately no FK, so a document survives disposable
 run history. The guideline set, document type, and slug together are the stable
 identity later runs update. A title-derived slug alone is too broad: unrelated
-kinds of page routinely choose the same ordinary title. A run whose document
+kinds of page routinely choose the same ordinary title. A request can also name
+an anchor entity; the guideline set, document type and anchor then identify the
+document before any run writes, so a repeat request revises it rather than
+depending on the title the next run happens to choose. A run whose document
 row is absent reads as `document_written`, not `document_superseded`, because
 nothing replaced it and its `document_id` simply resolves to nothing. Even the
 triple cannot distinguish unrelated same-titled pages within one kind, so a
@@ -35,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import uuid as _uuid
 from pathlib import Path
@@ -114,6 +118,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_generated_document_delivery(conn)
     _rekey_generated_documents(conn)
     _add_document_revisions(conn)
+    _add_document_lifecycle(conn)
     conn.commit()
 
 
@@ -150,6 +155,63 @@ CREATE TABLE IF NOT EXISTS generated_document_deliveries (
 
 class RevisionConflict(ValueError):
     """The selected internal version is no longer the document head."""
+
+
+PULL_REQUEST_STATES = ("open", "merged", "closed")
+
+
+def _add_document_lifecycle(conn: sqlite3.Connection) -> None:
+    """Add anchor identity and pull request tracking; every column is nullable.
+
+    A document delivered before this reads its PR number back from the review
+    URL, which delivery validated as `.../pull/<number>`; its state stays
+    unknown until the next read refreshes it.
+    """
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(generated_documents)")
+    }
+    backfill_numbers = "pull_request_number" not in columns
+    for name, definition in (
+        ("anchor_entity_id", "TEXT"),
+        ("pull_request_number", "INTEGER"),
+        (
+            "pull_request_state",
+            "TEXT CHECK (pull_request_state IN ('open', 'merged', 'closed'))",
+        ),
+        ("pull_request_refreshed_at", "TEXT"),
+    ):
+        if name not in columns:
+            conn.execute(
+                f"ALTER TABLE generated_documents ADD COLUMN {name} {definition}"
+            )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS generated_documents_anchor "
+        "ON generated_documents (guideline_set, document_type, anchor_entity_id) "
+        "WHERE anchor_entity_id IS NOT NULL"
+    )
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    for name, definition in (
+        ("anchor_entity_id", "TEXT"),
+        ("revision_base", "TEXT CHECK (revision_base IN ('internal', 'destination'))"),
+    ):
+        if name not in columns:
+            conn.execute(
+                f"ALTER TABLE documentation_runs ADD COLUMN {name} {definition}"
+            )
+    if not backfill_numbers:
+        return
+    for row in conn.execute(
+        "SELECT id, delivery_reference FROM generated_documents "
+        "WHERE delivery_reference IS NOT NULL"
+    ).fetchall():
+        match = re.search(r"/pull/([0-9]+)\Z", str(row["delivery_reference"]))
+        if match:
+            conn.execute(
+                "UPDATE generated_documents SET pull_request_number = ? WHERE id = ?",
+                (int(match.group(1)), row["id"]),
+            )
 
 
 def _add_document_revisions(conn: sqlite3.Connection) -> None:
@@ -274,17 +336,37 @@ def serialize_revision(
     return result
 
 
+def _delivery_status(row: sqlite3.Row) -> str:
+    """What the reader should do next: publish, wait for review, or nothing.
+
+    A newer internal revision outranks the pull request's fate, because the
+    next step is publishing it whatever happened to the last one.
+    """
+    if row["published_revision"] != row["current_revision"]:
+        return "changes_pending" if row["delivery_destination"] else "unpublished"
+    if row["pull_request_state"] in ("merged", "closed"):
+        return str(row["pull_request_state"])
+    return "published"
+
+
 def _revision_metadata(row: sqlite3.Row) -> dict[str, object]:
-    published = row["published_revision"]
+    number = row["pull_request_number"]
     return {
         "current_revision": row["current_revision"],
-        "published_revision": published,
-        "delivery_status": "published"
-        if published == row["current_revision"]
-        else ("changes_pending" if row["delivery_destination"] else "unpublished"),
+        "published_revision": row["published_revision"],
+        "delivery_status": _delivery_status(row),
         "delivery_coordinates": json.loads(row["delivery_target"])
         if row["delivery_target"]
         else None,
+        "pull_request": None
+        if number is None
+        else {
+            "number": number,
+            "url": row["delivery_reference"],
+            "state": row["pull_request_state"],
+            "refreshed_at": row["pull_request_refreshed_at"],
+        },
+        "anchor_entity_id": row["anchor_entity_id"],
     }
 
 
@@ -515,6 +597,8 @@ def create_run(
     reasoning_effort: str | None = None,
     target_document_id: str | None = None,
     target_revision: int | None = None,
+    anchor_entity_id: str | None = None,
+    revision_base: str | None = None,
 ) -> str:
     run_id = "drn_" + _uuid.uuid4().hex[:12]
     with conn:
@@ -527,8 +611,8 @@ def create_run(
             require_revision(conn, target_document_id, target_revision)
         conn.execute(
             "INSERT INTO documentation_runs "
-            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision, anchor_entity_id, revision_base) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 prompt,
@@ -541,6 +625,8 @@ def create_run(
                 reasoning_effort,
                 target_document_id,
                 target_revision,
+                anchor_entity_id,
+                revision_base,
             ),
         )
     return run_id
@@ -692,6 +778,8 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "target_document_id": row["target_document_id"],
         "target_revision": row["target_revision"],
         "result_revision": row["result_revision"],
+        "anchor_entity_id": row["anchor_entity_id"],
+        "revision_base": row["revision_base"],
         "profile_revisions": json.loads(row["profile_revisions"]),
         "profile_snapshot": json.loads(row["profile_snapshot"]),
         "document_superseded": _document_superseded(row),
@@ -799,6 +887,7 @@ def upsert_document(
     replacing: str | None = None,
     revision_source_content_revision: str | None = None,
     expected_revision: int | None = None,
+    anchor_entity_id: str | None = None,
 ) -> str:
     """Write content while preserving metadata a partial writer omits.
 
@@ -814,6 +903,10 @@ def upsert_document(
     For every deliberate replacement, `updates` says which document and
     `replacing` says which body; the write is refused if the stored body has
     moved on since the caller read it.
+
+    An anchor creates a new document under its own identity. Its title may
+    still produce a slug another document holds; a numbered slug keeps the two
+    apart, since an anchored document is known not to be that one.
     """
     slug = slug.strip()
     title = title.strip()
@@ -843,6 +936,12 @@ def upsert_document(
                     "expected_revision requires an explicit document target"
                 )
             require_revision(conn, updates, expected_revision)
+        if anchor_entity_id is not None:
+            if updates is not None:
+                raise ValueError("an anchor identifies a new document only")
+            _refuse_second_anchor(conn, guideline_set, document_type, anchor_entity_id)
+            slug = _free_slug(conn, guideline_set, document_type, slug)
+            existing = None
         refusal = _write_refusal(
             existing,
             identity=(guideline_set, document_type, slug),
@@ -860,8 +959,8 @@ def upsert_document(
                 "INSERT INTO generated_documents "
                 "(id, slug, title, guideline_set, document_type, body, "
                 "statement_ids, review, revision_source_content_revision, "
-                "created_at, updated_at, last_run_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, updated_at, last_run_id, anchor_entity_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     document_id,
                     slug,
@@ -877,6 +976,7 @@ def upsert_document(
                     now,
                     now,
                     run_id,
+                    anchor_entity_id,
                 ),
             )
         else:
@@ -926,6 +1026,49 @@ def upsert_document(
     return document_id
 
 
+def _refuse_second_anchor(
+    conn: sqlite3.Connection,
+    guideline_set: str,
+    document_type: str,
+    anchor_entity_id: str,
+) -> None:
+    anchored = find_by_anchor(conn, guideline_set, document_type, anchor_entity_id)
+    if anchored is not None:
+        raise ValueError(
+            f"document write refused: document {anchored['id']!r} already holds "
+            f"anchor {anchor_entity_id!r} for ({guideline_set!r}, "
+            f"{document_type!r}); revise that document instead"
+        )
+
+
+def _free_slug(
+    conn: sqlite3.Connection, guideline_set: str, document_type: str, slug: str
+) -> str:
+    candidate, number = slug, 1
+    while conn.execute(
+        "SELECT 1 FROM generated_documents "
+        "WHERE guideline_set = ? AND document_type = ? AND slug = ?",
+        (guideline_set, document_type, candidate),
+    ).fetchone():
+        number += 1
+        candidate = f"{slug}-{number}"
+    return candidate
+
+
+def find_by_anchor(
+    conn: sqlite3.Connection,
+    guideline_set: str,
+    document_type: str,
+    anchor_entity_id: str,
+) -> sqlite3.Row | None:
+    """The document a request with this identity should revise, if any."""
+    return conn.execute(
+        "SELECT * FROM generated_documents WHERE guideline_set = ? "
+        "AND document_type = ? AND anchor_entity_id = ?",
+        (guideline_set, document_type, anchor_entity_id),
+    ).fetchone()
+
+
 def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM generated_documents WHERE id = ?", (document_id,)
@@ -944,12 +1087,16 @@ def record_delivery(
     target: str | None = None,
     revision: int | None = None,
     binding: str | None = None,
+    pull_request_number: int | None = None,
 ) -> None:
     """Record a completed delivery without accepting or rewriting content.
 
     Legacy omissions retain a known revision only for the same delivered content
     and location. A credential binding may carry forward only at the same target;
     missing metadata never authorizes a changed publication destination.
+
+    A delivery always leaves its pull request open. A caller that does not report the number keeps the known one
+    for the same review URL; for a new URL the number is unknown, not stale.
     """
     try:
         conn.execute("BEGIN IMMEDIATE", ())
@@ -969,6 +1116,8 @@ def record_delivery(
         )
         if binding is None and same_target:
             binding = current["delivery_binding"]
+        if pull_request_number is None and reference == current["delivery_reference"]:
+            pull_request_number = current["pull_request_number"]
         if (
             revision is None
             and same_target
@@ -983,7 +1132,9 @@ def record_delivery(
         cursor = conn.execute(
             "UPDATE generated_documents SET delivery_destination = ?, "
             "delivery_path = ?, delivery_reference = ?, "
-            "delivery_content_revision = ?, delivery_target = ?, published_revision = ?, delivery_binding = ? "
+            "delivery_content_revision = ?, delivery_target = ?, published_revision = ?, delivery_binding = ?, "
+            "pull_request_number = ?, "
+            "pull_request_state = ?, pull_request_refreshed_at = ? "
             "WHERE id = ?",
             (
                 destination,
@@ -993,6 +1144,9 @@ def record_delivery(
                 target,
                 revision,
                 binding,
+                pull_request_number,
+                None if pull_request_number is None else "open",
+                None if pull_request_number is None else _now(),
                 document_id,
             ),
         )
@@ -1023,6 +1177,32 @@ def record_delivery(
     except Exception:
         conn.rollback()
         raise
+
+
+def published_blobs(conn: sqlite3.Connection, document_id: str) -> frozenset[str]:
+    """Every destination blob a delivery receipt says this document published."""
+    return frozenset(
+        str(row["content_revision"])
+        for row in conn.execute(
+            "SELECT content_revision FROM generated_document_deliveries "
+            "WHERE document_id = ?",
+            (document_id,),
+        )
+    )
+
+
+def record_pull_request_state(
+    conn: sqlite3.Connection, document_id: str, number: int, state: str
+) -> None:
+    """Record what the destination reported, unless a newer delivery moved on."""
+    if state not in PULL_REQUEST_STATES:
+        raise ValueError(f"invalid pull request state: {state}")
+    conn.execute(
+        "UPDATE generated_documents SET pull_request_state = ?, "
+        "pull_request_refreshed_at = ? WHERE id = ? AND pull_request_number = ?",
+        (state, _now(), document_id, number),
+    )
+    conn.commit()
 
 
 def get_document_by_slug(

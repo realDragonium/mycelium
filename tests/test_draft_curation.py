@@ -11,6 +11,7 @@ from mycelium import (
     alias_suggestions,
     auth,
     draft_review_runs,
+    draft_review_settings,
     draft_review_store,
     drafts_store,
     ingest,
@@ -262,6 +263,28 @@ def test_answer_reviews_the_draft_again_with_it(curated_app, monkeypatch):
     assert draft["status"] == "approved"
     assert draft["review_assessment"]["application"] == "applied"
     assert "Admin console" in _entity_names()
+
+
+def test_applying_the_answered_draft_resolves_its_question_gap(
+    curated_app, monkeypatch
+):
+    client, entity_id = curated_app
+    _automatic()
+    _asks_then_approves(monkeypatch)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+    with store.transaction(server._db()):
+        unrelated = store.create_knowledge_gap(server._db(), "Unrelated question.")
+
+    assert (
+        _answer(client, draft_id, "No, they are separate screens.").status_code == 200
+    )
+    draft_review_runs.wait_all()
+
+    gaps = {row["id"]: row for row in store.list_knowledge_gaps(server._db())}
+    [asked] = [row for row in gaps.values() if row["draft_id"] == draft_id]
+    assert asked["resolved_at"] is not None
+    assert asked["resolved_by"] == draft_review_settings.load().reviewer_id
+    assert gaps[unrelated]["resolved_at"] is None
 
 
 def test_answer_requires_a_current_waiting_question(curated_app, monkeypatch):
