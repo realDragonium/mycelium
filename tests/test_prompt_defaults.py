@@ -126,3 +126,18 @@ def test_upgrade_updates_untouched_doctrines_and_reports_edited_ones(
     server.init(tmp_path)
     assert len(_versions(tmp_path, "ingest")) == 2
     server._ctx = None
+
+
+def test_editor_works_when_the_configured_doctrine_file_is_missing(
+    tmp_path, monkeypatch
+):
+    conn = prompt_store.connect(":memory:")
+    prompt_store.migrate(conn)
+    prompt_store.use_connection(conn)
+    prompt_store.save(conn, type="doctrine", name="ingest", text="Mine.")
+    monkeypatch.setenv("MYCELIUM_INGEST_DOCTRINE_PATH", str(tmp_path / "gone.md"))
+
+    view = ai_prompts.editor("ingest")
+
+    assert view.current.text == "Mine."
+    assert view.newer_default_since is None

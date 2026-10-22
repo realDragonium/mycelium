@@ -156,10 +156,20 @@ def editor(action: Action) -> EditorView:
     return EditorView(
         current=current,
         default_text=default_text(action),
-        newer_default_since=prompt_defaults.newer_default_since(
-            prompt_store.connection(), "doctrine", action, shipped_text(action)
-        ),
+        newer_default_since=_newer_default_since(action),
         preview=preview(action, current.text),
+    )
+
+
+def _newer_default_since(action: Action) -> str | None:
+    # An unreadable configured doctrine leaves saved text editable and
+    # running; it only means there is no default to compare against.
+    try:
+        shipped = shipped_text(action)
+    except (OSError, UnicodeError):
+        return None
+    return prompt_defaults.newer_default_since(
+        prompt_store.connection(), "doctrine", action, shipped
     )
 
 
