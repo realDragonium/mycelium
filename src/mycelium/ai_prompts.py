@@ -10,7 +10,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from . import prompt_store
+from . import prompt_defaults, prompt_store
 
 Action = Literal[
     "ask",
@@ -71,6 +71,15 @@ def default_text(action: Action) -> str:
     else:
         from .alias_suggestions import DEFAULT_INSTRUCTIONS
     return DEFAULT_INSTRUCTIONS
+
+
+def shipped_text(action: Action) -> str:
+    """The default this build serves when nothing is saved: the configured
+    doctrine file for the three loop doctrines, else the packaged text."""
+    path = _default_path(action)
+    if path is None:
+        return default_text(action)
+    return Path(path).read_text(encoding="utf-8")
 
 
 def _default_path(action: Action) -> str | None:
@@ -136,6 +145,9 @@ def resolve(
 class EditorView(BaseModel):
     current: Snapshot
     default_text: str
+    # Set when the saved text predates the default this build ships: when
+    # that default first appeared on this instance.
+    newer_default_since: str | None = None
     preview: str
 
 
@@ -144,6 +156,9 @@ def editor(action: Action) -> EditorView:
     return EditorView(
         current=current,
         default_text=default_text(action),
+        newer_default_since=prompt_defaults.newer_default_since(
+            prompt_store.connection(), "doctrine", action, shipped_text(action)
+        ),
         preview=preview(action, current.text),
     )
 

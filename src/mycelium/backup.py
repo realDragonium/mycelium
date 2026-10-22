@@ -15,6 +15,7 @@ Archive layout
     auth.jsonl                 users, MCP tokens, invites, OAuth clients
     drafts.jsonl               drafts, their ops, reviews, applications, runs
     prompts.jsonl              editable prompt texts, every version
+    shipped-prompt-texts.jsonl when each shipped prompt default was first seen
     documentation.json         generated documents, revisions, runs and deliveries
     draft-review-settings.json saved review controls (when configured)
     model-settings.json        saved per-action models (when configured)
@@ -173,6 +174,12 @@ def _migrate_drafts(conn: sqlite3.Connection) -> None:
     research_store.migrate(conn)
 
 
+def _migrate_prompts(conn: sqlite3.Connection) -> None:
+    from . import prompt_store
+
+    prompt_store.migrate(conn)
+
+
 def _migrate_auth(conn: sqlite3.Connection) -> None:
     from . import auth_store
 
@@ -215,6 +222,13 @@ _SECTIONS: tuple[_Section, ...] = (
         ),
         _migrate_drafts,
         "includes_drafts",
+    ),
+    _Section(
+        "shipped-prompt-texts.jsonl",
+        PROMPTS_DB_NAME,
+        ("shipped_prompt_texts",),
+        _migrate_prompts,
+        "includes_shipped_prompt_texts",
     ),
 )
 

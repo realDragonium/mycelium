@@ -29,8 +29,17 @@ import pytest
 import instance_scenario
 from mycelium import embed, migrations, server
 
+
+def _captured(fixture: Path) -> tuple[int, str]:
+    meta = json.loads((fixture / "fixture.json").read_text(encoding="utf-8"))
+    return meta["schema_version"], meta["captured_at"]
+
+
+# Oldest first; one substrate version can have several fixtures when an
+# auxiliary database changed shape under it.
 FIXTURES = sorted(
-    p for p in (Path(__file__).parent / "migration_fixtures").iterdir() if p.is_dir()
+    (p for p in (Path(__file__).parent / "migration_fixtures").iterdir() if p.is_dir()),
+    key=_captured,
 )
 
 # (database, table) whose rows a migration deliberately rewrites or drops,
@@ -187,9 +196,7 @@ def test_fixture_upgrades_to_the_current_build(fixture, tmp_path, fresh_schema):
 
 
 def test_fixtures_cover_every_version_up_to_the_current_one():
-    versions = {
-        json.loads((f / "fixture.json").read_text())["schema_version"] for f in FIXTURES
-    }
+    versions = {_captured(f)[0] for f in FIXTURES}
     assert versions == set(range(min(versions), migrations.CURRENT_VERSION + 1)), (
         "capture a fixture of the current build: "
         "uv run python scripts/capture_migration_fixture.py"

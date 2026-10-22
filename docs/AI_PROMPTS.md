@@ -38,3 +38,25 @@ legacy doctrine file configuration remains the fallback for those three actions.
 If the prompt store is unavailable, runs record a diagnostic and use defaults,
 matching the existing loop fallback. The editor reports read errors rather than
 offering an apparently current version to overwrite.
+
+## When a release changes a default
+
+Ingestion, Research and Document generation start from a seeded version
+authored by `seed`; the other actions use the shipped default until someone
+saves. On each start the server compares every action with the default the
+running build ships:
+
+- If the newest version is still authored by `seed`, the new default is saved
+  as another `seed` version. Version history shows it, and can restore the
+  previous text.
+- If a person saved the newest version, it is never changed. When the shipped
+  default first appeared on this instance after that save, the server logs a
+  warning (`saved <action> instructions predate the default this build
+  ships`) and the editor API reports `newer_default_since`. Compare with
+  **Use shipped default**; saving any version clears the report.
+
+Saving the shipped default yourself makes the text yours: later releases
+report a newer default rather than replacing it. The instance records when it
+first saw each default in `shipped_prompt_texts` in `mycelium-prompts.db`;
+backups carry it. Documentation profile templates are not updated this way —
+see [Guideline sets](GUIDELINE_SETS.md).

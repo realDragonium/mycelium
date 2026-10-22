@@ -80,7 +80,9 @@ def main() -> None:
             {
                 "schema_version": version,
                 "source": label,
-                "captured_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                "captured_at": datetime.now(timezone.utc).strftime(
+                    "%Y-%m-%dT%H:%M:%SZ"
+                ),
             },
             indent=2,
         )
