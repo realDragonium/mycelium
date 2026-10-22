@@ -1155,6 +1155,10 @@ def init(data_dir: Path) -> None:
         from . import mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
+    if os.environ.get("MYCELIUM_DISABLE_REVIEW_SWEEP") != "1":
+        from . import draft_review_runs
+
+        draft_review_runs.start_sweeper()
 
 
 def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:

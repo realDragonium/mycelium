@@ -2,13 +2,16 @@
 
 import dataclasses
 import json
+from datetime import datetime, timedelta
 
 import pytest
 
 from mycelium import (
+    ai,
     alias_suggestions,
     auth,
     draft_review_runs,
+    draft_review_store,
     drafts_store,
     ingest,
     research_runs,
@@ -30,7 +33,7 @@ from test_ingest import (
     _reconcile_then_adjacency,
     _tool_use,
 )
-from test_internal_draft_review import _assessment
+from test_internal_draft_review import _assessment, _draft
 from test_reviewed_application import _app
 
 TEXT = "Single sign-on (SSO) is required in the Admin console."
@@ -286,3 +289,170 @@ def test_advisory_questions_do_not_wait_for_an_answer(curated_app, monkeypatch):
     assert response.status_code == 400
     assert "not waiting" in response.json()["detail"]
     assert store.list_knowledge_gaps(server._db()) == []
+
+
+def _failing_provider(monkeypatch):
+    def model(context):
+        raise ai.ModelError("Fixture provider outage")
+
+    monkeypatch.setattr(draft_review_runs, "RUNNER", model)
+
+
+def _latest(draft_id):
+    draft_review_runs.wait_all()
+    return draft_review_store.latest(server._drafts_db(), draft_id)
+
+
+def _finished(run):
+    return datetime.fromisoformat(run.finished_at)
+
+
+def test_sweep_retries_a_provider_failure_after_backoff(curated_app, monkeypatch):
+    _automatic()
+    _failing_provider(monkeypatch)
+    draft_id = _draft()
+    failed = _latest(draft_id)
+    assert (failed.status, failed.attempt, failed.retries) == ("failed", 2, 0)
+    due = _finished(failed) + draft_review_runs.RETRY_BACKOFF
+    monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
+
+    assert draft_review_runs.sweep(due - timedelta(seconds=1)) == []
+    assert draft_review_runs.sweep(due) == [draft_id]
+
+    retried = _latest(draft_id)
+    assert (retried.attempt, retried.retries) == (1, 1)
+    assert retried.previous_failure == "Fixture provider outage"
+    assert retried.application == "applied"
+    assert server.get_draft(draft_id)["status"] == "approved"
+
+
+def test_sweep_stops_after_the_last_attempt(curated_app, monkeypatch):
+    _automatic()
+    _failing_provider(monkeypatch)
+    draft_id = _draft()
+    for _ in range(draft_review_runs.MAX_RETRIES):
+        run = _latest(draft_id)
+        later = _finished(run) + timedelta(days=1)
+        assert draft_review_runs.sweep(later) == [draft_id]
+    exhausted = _latest(draft_id)
+    assert exhausted.retries == draft_review_runs.MAX_RETRIES
+    assert exhausted.attempt == 2
+    assert draft_review_runs.sweep(_finished(exhausted) + timedelta(days=30)) == []
+    assert server.get_draft(draft_id)["status"] == "submitted"
+
+
+def test_sweep_recovers_restarts_and_configuration_failures(curated_app):
+    interrupted = _draft()
+    conn = server._drafts_db()
+    with store.transaction(conn):
+        run = draft_review_store.new(
+            interrupted, "review-and-apply", server.get_draft(interrupted)["revision"]
+        )
+        draft_review_store.save(conn, run)
+    draft_review_store.mark_orphaned(conn)
+    _automatic()
+    reviewer = draft_review_runs.draft_review_settings.load().reviewer_id
+    set_review_controls(reviewer_id="local-admin")
+    misconfigured = _draft()
+    assert "active real writer" in _latest(misconfigured).detail
+    set_review_controls(reviewer_id=reviewer)
+
+    later = datetime.fromisoformat(_latest(misconfigured).finished_at) + timedelta(
+        hours=1
+    )
+    assert sorted(draft_review_runs.sweep(later)) == sorted(
+        [interrupted, misconfigured]
+    )
+    draft_review_runs.wait_all()
+    assert server.get_draft(interrupted)["status"] == "approved"
+    assert server.get_draft(misconfigured)["status"] == "approved"
+
+
+def test_sweep_leaves_settled_and_unreviewed_drafts_alone(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    submitted_while_off = _draft()
+    _automatic()
+    _asks_then_approves(monkeypatch)
+    waiting_for_person = _ingested_draft(client, monkeypatch, entity_id)
+    far_future = datetime.fromisoformat("2100-01-01T00:00:00.000Z")
+
+    assert draft_review_runs.sweep(far_future) == []
+    assert _latest(submitted_while_off) is None
+    assert _latest(waiting_for_person).application == "needs_human"
+    set_review_controls(mode="off")
+    _failing_provider(monkeypatch)
+    assert draft_review_runs.sweep(far_future) == []
+
+
+def test_backlog_is_offered_and_reviewed_once_when_switched_on(
+    curated_app, monkeypatch
+):
+    client, entity_id = curated_app
+    submitted_while_off = _draft()
+    alias_only = _ingest_aliases_only(client, monkeypatch, entity_id)
+    set_review_controls(mode="review-only")
+    advisory = _draft()
+    assert _latest(advisory).status == "completed"
+    assert client.get("/api/draft-review/backlog").json() == {
+        "draft_ids": [submitted_while_off]
+    }
+
+    _automatic()
+    offered = client.get("/api/draft-review/backlog").json()["draft_ids"]
+    assert sorted(offered) == sorted([submitted_while_off, advisory])
+    assert alias_only not in offered
+    response = client.post("/api/draft-review/backlog")
+
+    assert sorted(response.json()["draft_ids"]) == sorted(offered)
+    draft_review_runs.wait_all()
+    assert server.get_draft(submitted_while_off)["status"] == "approved"
+    assert server.get_draft(advisory)["status"] == "approved"
+    assert server.get_draft(alias_only)["status"] == "submitted"
+    assert client.get("/api/draft-review/backlog").json() == {"draft_ids": []}
+
+
+def test_backlog_review_is_refused_while_review_is_off(curated_app):
+    client, _ = curated_app
+    submitted = _draft()
+
+    response = client.post("/api/draft-review/backlog")
+
+    assert response.status_code == 400
+    assert _latest(submitted) is None
+
+
+def _ingest_aliases_only(client, monkeypatch, entity_id):
+    alias = alias_suggestions.Proposal(
+        entity_id=entity_id,
+        alias="SSO",
+        quote="Single sign-on (SSO)",
+        reason="The abbreviation is defined in parentheses.",
+        ambiguity="",
+    )
+    emission = _emit_input(
+        ops=[_op("alias_suggestion", alias.model_dump(exclude_none=True))],
+        ledger=[
+            _ledger_row(
+                "SSO", "new", matched=[entity_id], considered=[], note="abbreviation"
+            )
+        ],
+    )
+    run_ingest = ingest_loop.run_ingest
+    monkeypatch.setattr(
+        ingest,
+        "run_ingest",
+        lambda text, *, config: run_ingest(
+            text,
+            client=FakeAnthropic(
+                _reconcile_then_adjacency()
+                + [_message([_tool_use(EMIT_TOOL, emission)])]
+            ),
+            substrate=FakeSubstrate(),
+            config=dataclasses.replace(
+                config, provider="claude", thinking=False, trace_log_path=None
+            ),
+        ),
+    )
+    result = client.post("/ingest", json={"text": TEXT}).json()
+    assert result["draft_id"] == result["alias_draft_id"]
+    return result["draft_id"]

@@ -10,6 +10,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pydantic import JsonValue, TypeAdapter
@@ -94,6 +95,7 @@ def start(
     *,
     rerun: bool = False,
     attempt: int = 1,
+    retries: int = 0,
     previous_failure: str | None = None,
     answer: Answer | None = None,
 ) -> ReviewRun:
@@ -139,6 +141,7 @@ def start(
         run.settings_revision = settings.revision
         run.model_settings_revision = settings.model_revision
         run.attempt = attempt
+        run.retries = retries
         run.previous_failure = previous_failure
         run.answers = answers
         draft_review_store.save(conn, run)
@@ -172,6 +175,120 @@ def on_submitted(draft_id: str) -> None:
     except Exception:
         # Submission already committed; failure here must not turn it into a retry.
         logger.exception("could not start internal draft review for %s", draft_id)
+
+
+# A failed run is retried after RETRY_BACKOFF, doubling per retry, at most
+# MAX_RETRIES times: about two and a half hours of a provider outage.
+MAX_RETRIES = 5
+RETRY_BACKOFF = timedelta(minutes=5)
+SWEEP_INTERVAL_S = 60.0
+_sweeper: threading.Thread | None = None
+_stop_sweeper = threading.Event()
+
+
+def sweep(now: datetime | None = None) -> list[str]:
+    """Review again each submitted draft whose latest run failed without
+    recording a review, once its backoff has passed. Nothing else retries
+    a configuration failure, a provider failure after the automatic rerun,
+    or a run interrupted by a restart. Returns the draft ids started."""
+    now = now or datetime.now(UTC)
+    try:
+        if mode() == "off":
+            return []
+    except draft_review_settings.Unavailable:
+        return []
+    started = []
+    conn = drafts_store.connection()
+    for row in drafts_store.list_drafts(conn, "submitted"):
+        run = draft_review_store.latest(conn, row["id"])
+        if run is None or not _retry_due(run, now):
+            continue
+        try:
+            start(
+                row["id"],
+                rerun=True,
+                retries=run.retries + 1,
+                previous_failure=run.detail,
+            )
+            started.append(row["id"])
+        except Exception:
+            logger.exception("could not retry review of %s", row["id"])
+    return started
+
+
+def _retry_due(run: ReviewRun, now: datetime) -> bool:
+    if (
+        run.status != "failed"
+        or run.review_id is not None
+        or run.application != "unapplied"
+        or run.retries >= MAX_RETRIES
+        or run.finished_at is None
+    ):
+        return False
+    finished = datetime.fromisoformat(run.finished_at)
+    return now >= finished + RETRY_BACKOFF * (1 << run.retries)
+
+
+def backlog() -> list[str]:
+    """Submitted drafts the current configuration has not reviewed and
+    cannot reach by itself: submitted while review was off, reviewed only
+    advisorily, or failed beyond the sweep. Alias suggestion drafts await
+    a person and are left out."""
+    current = mode()
+    conn = drafts_store.connection()
+    waiting = []
+    for row in drafts_store.list_drafts(conn, "submitted"):
+        ops = drafts_store.list_ops(conn, row["id"])
+        if all(op["kind"] == drafts_store.ALIAS_SUGGESTION_KIND for op in ops):
+            continue
+        if _in_backlog(draft_review_store.latest(conn, row["id"]), current):
+            waiting.append(row["id"])
+    return waiting
+
+
+def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
+    if run is None:
+        return True
+    if run.status == "running":
+        return False
+    if run.application == "needs_human":
+        return run.stale
+    if run.application != "unapplied" or run.review_id is not None:
+        return False
+    if run.status == "failed":
+        return True
+    return run.stale or run.mode != current or current == "review-and-apply"
+
+
+def review_backlog() -> list[str]:
+    """Start a review of every draft in the backlog. Returns their ids."""
+    if mode() == "off":
+        raise ValueError("internal draft review is off")
+    started = []
+    for draft_id in backlog():
+        try:
+            start(draft_id, rerun=True)
+            started.append(draft_id)
+        except Exception:
+            logger.exception("could not start review of %s", draft_id)
+    return started
+
+
+def start_sweeper(interval: float = SWEEP_INTERVAL_S) -> None:
+    global _sweeper
+    if _sweeper is not None and _sweeper.is_alive():
+        return
+    _stop_sweeper.clear()
+
+    def loop() -> None:
+        while not _stop_sweeper.wait(interval):
+            try:
+                sweep()
+            except Exception:  # never let the thread die on one bad sweep
+                logger.exception("draft review sweep failed")
+
+    _sweeper = threading.Thread(target=loop, name="draft-review-sweep", daemon=True)
+    _sweeper.start()
 
 
 def wait_all(timeout: float = 10) -> None:
@@ -571,7 +688,13 @@ def _follow_up(
         return
     try:
         if run.attempt == 1:
-            start(run.draft_id, rerun=True, attempt=2, previous_failure=run.detail)
+            start(
+                run.draft_id,
+                rerun=True,
+                attempt=2,
+                retries=run.retries,
+                previous_failure=run.detail,
+            )
         elif not systemic:
             _reject(run, settings)
     except Exception:

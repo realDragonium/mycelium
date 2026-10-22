@@ -1413,6 +1413,35 @@ def save_draft_review_settings(
         raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
+@app.get("/api/draft-review/backlog")
+def draft_review_backlog(request: Request) -> dict[str, list[str]]:
+    """Submitted drafts the current review configuration has not reached, to
+    offer reviewing them once when review is switched on."""
+    from fastapi import HTTPException
+
+    from . import draft_review_runs
+
+    _require_admin(request)
+    try:
+        return {"draft_ids": draft_review_runs.backlog()}
+    except review_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@app.post("/api/draft-review/backlog")
+def review_draft_backlog(request: Request) -> dict[str, list[str]]:
+    """Start reviewing every draft in the backlog; returns their ids."""
+    from fastapi import HTTPException
+
+    from . import draft_review_runs
+
+    _require_admin(request)
+    try:
+        return {"draft_ids": draft_review_runs.review_backlog()}
+    except review_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
 @app.post("/api/drafts/{draft_id}/review")
 def run_draft_review_http(
     draft_id: str, request: Request

@@ -79,6 +79,7 @@ class ReviewRun(BaseModel):
     corrections: list[Correction] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
     attempt: int = 1
+    retries: int = 0
     previous_failure: str | None = None
     answers: list[Answer] = Field(default_factory=list)
     application: Literal["unapplied", "applied", "rejected", "needs_human"] = (
@@ -188,7 +189,9 @@ def mark_orphaned(
     for row in rows:
         run = ReviewRun.model_validate_json(row["body_json"])
         run.status = "failed"
-        run.detail = "Review interrupted by restart; request an explicit rerun."
+        run.detail = (
+            "Review interrupted by restart; retried automatically while review is on."
+        )
         if run.review_id:
             run.detail = (
                 "Review interrupted; inspect the authoritative review and "
