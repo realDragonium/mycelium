@@ -165,7 +165,7 @@ function BacklogOffer() {
   const [started, setStarted] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (started !== null) return <Notice tone="success">Started reviewing {started} waiting draft{started === 1 ? '' : 's'}. Their progress shows under Drafts.</Notice>;
+  if (started !== null) return <Notice tone="success">Started reviewing {started} waiting draft{started === 1 ? '' : 's'}. Progress shows under Drafts.</Notice>;
   if (state.status !== 'ready' || state.data.length === 0) return null;
   const n = state.data.length;
   const start = async () => {
@@ -177,7 +177,7 @@ function BacklogOffer() {
   return (
     <Notice tone="warn">
       <div className="stack-sm">
-        <div><b>{n} submitted draft{n === 1 ? ' is' : 's are'} waiting from before review was on.</b> They are not reviewed automatically; review them now under the current settings?</div>
+        <div><b>{n} submitted draft{n === 1 ? ' is' : 's are'} waiting from before review was on.</b> {n === 1 ? 'It is' : 'They are'} not reviewed automatically. Review {n === 1 ? 'it' : 'them'} now under these settings?</div>
         <div className="row gap-sm"><button className="btn primary sm" disabled={busy} onClick={() => void start()}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}`}</button></div>
         {error && <p className="form-error">{error}</p>}
       </div>

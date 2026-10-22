@@ -341,7 +341,7 @@ function ReviewerQuestion({ draftId, assessment, onAnswered, onMoved }: {
     try { await drafts.answer(draftId, assessment.run_id, answer.trim()); setAnswer(''); onAnswered(); }
     catch (ex) {
       // 400: the reviewer asked again or the draft moved on; show what is current.
-      if (ex instanceof HttpError && ex.status === 400) onMoved(`Your answer was not sent: ${ex.message} The draft has been reloaded.`);
+      if (ex instanceof HttpError && ex.status === 400) onMoved(`Your answer was not sent (${ex.message.replace(/\.$/, '')}). The reviewer asked again or the draft moved on; it has been reloaded to show where it stands.`);
       else setError(errorMessage(ex, 'The answer could not be sent.'));
     } finally { setBusy(false); }
   };

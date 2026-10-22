@@ -42,10 +42,10 @@ export function CommandBar({ hero = false }: { hero?: boolean }) {
     <div className={`cmd-wrap${hero ? ' hero' : ' compact'}`}>
       <form className="cmd" data-intent={intent} onSubmit={submit} role="search">
         <div className="cmd-toggle" role="group" aria-label="Read mode">
-          <button type="button" className={`cmd-mode${intent === 'ask' ? ' on' : ''}`} data-tier="ask" aria-pressed={intent === 'ask'} onClick={() => setIntent('ask')}>
+          <button type="button" className={`cmd-mode${intent === 'ask' ? ' on' : ''}`} data-tier="ask" aria-pressed={intent === 'ask'} onClick={() => { setIntent('ask'); inputRef.current?.focus(); }}>
             <span className="m-name">Ask</span>{hero && <span className="m-sub">agentic</span>}
           </button>
-          <button type="button" className={`cmd-mode${intent === 'find' ? ' on' : ''}`} data-tier="find" aria-pressed={intent === 'find'} onClick={() => setIntent('find')}>
+          <button type="button" className={`cmd-mode${intent === 'find' ? ' on' : ''}`} data-tier="find" aria-pressed={intent === 'find'} onClick={() => { setIntent('find'); inputRef.current?.focus(); }}>
             <span className="m-name">Find</span>{hero && <span className="m-sub">deterministic</span>}
           </button>
         </div>
