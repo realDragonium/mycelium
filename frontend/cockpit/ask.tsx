@@ -95,6 +95,7 @@ function Answered({ r, idx }) {
         </Panel>
         <Panel icon="gap" title="Gaps" count={r.gaps.length} cls="gaps reveal-2">
           {r.gaps.map((g, i) => <div key={i} className="gap-item"><span className="gi-mark">—</span><span>{g}</span></div>)}
+          {r.gaps.length > 0 && <ReportGap question={r.question} detail={`Gaps: ${r.gaps.join('; ')}`} />}
         </Panel>
         <Panel icon="prov" title="Provenance" count={`${r.provenance.length} statement${r.provenance.length === 1 ? '' : 's'}`} cls="reveal-3">
           <Provenance items={r.provenance} idx={idx} />
@@ -163,7 +164,34 @@ function Working({ elapsed, progress, onCancel }) {
   );
 }
 
-function AskError({ r, onRetry }) {
+// Files a knowledge gap for a question the substrate could not answer. The text
+// is editable before sending; report_knowledge_gap takes free-form prose.
+function ReportGap({ question, detail }: { question: string; detail: string }) {
+  const [open, setOpen] = useStateA(false);
+  const [text, setText] = useStateA(`Ask could not answer: "${question}". ${detail}`);
+  const [state, setState] = useStateA<{ phase: 'idle' | 'sending' | 'sent' } | { phase: 'error'; message: string }>({ phase: 'idle' });
+  if (state.phase === 'sent') return <span className="flag answered"><I.check width="13" height="13" />Gap reported</span>;
+  if (!open) return <button className="btn" onClick={() => setOpen(true)}>Report a gap</button>;
+  const send = () => {
+    setState({ phase: 'sending' });
+    Myc.reportKnowledgeGap(text.trim()).then(
+      () => setState({ phase: 'sent' }),
+      (err: unknown) => setState({ phase: 'error', message: err instanceof Error ? err.message : 'The report could not be filed.' }),
+    );
+  };
+  return (
+    <div className="report-gap">
+      <textarea value={text} onChange={e => setText(e.target.value)} rows={3} aria-label="Gap report" />
+      <div className="ae-actions">
+        <button className="btn primary" disabled={!text.trim() || state.phase === 'sending'} onClick={send}>{state.phase === 'sending' ? 'Reporting…' : 'File gap report'}</button>
+        <button className="btn" onClick={() => setOpen(false)}>Cancel</button>
+      </div>
+      {state.phase === 'error' && <div className="stmt-edit-err" role="alert">{state.message}</div>}
+    </div>
+  );
+}
+
+function AskError({ r, question, onRetry }) {
   return (
     <div className="ask-error reveal">
       <I.timeout className="ae-icon" width="34" height="34" />
@@ -171,9 +199,8 @@ function AskError({ r, onRetry }) {
       <div className="ae-detail">{r.detail || 'No response within the deadline. The store is single-writer and can stall under load.'}</div>
       <div className="ae-actions">
         <button className="btn primary" onClick={onRetry}>Retry</button>
-        {/* Inert, as before the build: nothing ever provided the window.MYC_REPORT handler it called. */}
-        <button className="btn">Report a gap</button>
       </div>
+      {!r.cancelled && <ReportGap question={question} detail={r.detail || ''} />}
     </div>
   );
 }
@@ -246,7 +273,7 @@ function AskSurface({ query }) {
 
         {phase === 'working' && <Working elapsed={elapsed} progress={progress} onCancel={() => active.current && active.current.abort()} />}
         {partial && phase !== 'done' && <section className="answer-card"><div className="answer-top">{phase === 'working' ? 'Composing answer · provisional' : 'Incomplete answer'}</div><div className="answer-prose" style={{ whiteSpace: 'pre-wrap' }}>{partial}</div></section>}
-        {phase === 'error' && <AskError r={result} onRetry={() => setAttempt(a => a + 1)} />}
+        {phase === 'error' && <AskError r={result} question={query} onRetry={() => setAttempt(a => a + 1)} />}
         {phase === 'done' && result && result.outcome === 'answered' && <Answered r={result} idx={idx} />}
         {phase === 'done' && result && result.outcome === 'needs_clarification' && <NeedsClarification r={result} idx={idx} onPick={onPick} />}
       </div>

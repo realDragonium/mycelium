@@ -808,3 +808,7 @@ footer.foot b { color: var(--ink-3); font-weight: 500; }
 .nav-btn { display: inline-flex; align-items: center; gap: 7px; padding: 7px 12px; border-radius: var(--r-md); font-weight: 500; font-size: var(--fs-sm); color: var(--ink-2); border: 1px solid transparent; background: transparent; transition: all 0.12s; white-space: nowrap; }
 .nav-btn:hover { color: var(--ink); background: var(--bg-2); }
 .nav-btn.on { color: var(--bio); border-color: var(--bio-line); background: var(--bio-bg); }
+
+/* Report a gap from a failed Ask */
+.report-gap { margin: 18px auto 0; max-width: 520px; display: grid; gap: 10px; text-align: left; }
+.report-gap textarea { width: 100%; resize: vertical; padding: 10px 12px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--bg-1); color: var(--ink); font-size: var(--fs-sm); line-height: 1.5; }

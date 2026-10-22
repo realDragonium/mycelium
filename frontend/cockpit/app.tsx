@@ -7,7 +7,7 @@ import { DocumentationWorkspace } from '../ui/documentation-workspace';
 import { DraftReview, DraftsList, useMycDrafts } from './drafts';
 import { EntityDetail, StatementDetail } from './inspect';
 import { FindLanes, FindResults } from './find';
-import { GoIngestCtx, I, RouterCtx, parseHash, routeToHash, useGoIngest, useRouter } from './lib';
+import { ErrorBoundary, GoIngestCtx, I, RouterCtx, parseHash, routeToHash, useGoIngest, useRouter } from './lib';
 import { IngestSurface } from './ingest';
 import { KnowledgeGapsScreen } from './gaps';
 import { NamesWorkspace } from '../ui/names-workspace';
@@ -237,7 +237,7 @@ function App() {
           </div>
         </header>
 
-        {screen}
+        <ErrorBoundary key={routeToHash(router)}>{screen}</ErrorBoundary>
 
         <footer className="foot">
           <div className="fi">

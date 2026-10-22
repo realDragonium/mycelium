@@ -63,24 +63,31 @@ function ResultRow({ r, rank, mode, query, tail }: { r; rank: number; mode: stri
 function FindResults({ query, mode }) {
   const router = useRouter();
   const m = MODES[mode] || MODES.semantic;
-  const [state, setState] = useStateF({ loading: false, rows: [], error: null });
+  // Rows remember the search they answer. Until the effect below starts a new
+  // one, a mode switch renders the previous mode's rows — grep rows carry no
+  // score, so drawing them as semantic rows crashed the score meter.
+  const [state, setState] = useStateF({ key: '', loading: false, rows: [], error: null });
+  const key = `${mode}\u0000${query}`;
 
   useEffectF(() => {
     const q = (query || '').trim();
-    if (!q) { setState({ loading: false, rows: [], error: null }); return; }
+    if (!q) { setState({ key, loading: false, rows: [], error: null }); return; }
     let live = true;
-    setState({ loading: true, rows: [], error: null });
+    setState({ key, loading: true, rows: [], error: null });
     Myc.find(mode, q)
-      .then((res) => { if (live) setState({ loading: false, rows: (res && res.rows) || [], error: null }); })
-      .catch((err) => { if (live) setState({ loading: false, rows: [], error: err }); });
+      .then((res) => { if (live) setState({ key, loading: false, rows: (res && res.rows) || [], error: null }); })
+      .catch((err) => { if (live) setState({ key, loading: false, rows: [], error: err }); });
     return () => { live = false; };
-  }, [query, mode]);
+  }, [query, mode, key]);
 
   if (!query || !query.trim()) {
     return <main className="page narrow"><EmptyState title="Nothing to find yet" blurb="Type a query and pick a mode. Find returns raw matches with scores — you judge relevance." /></main>;
   }
 
-  const { loading, rows, error } = state;
+  const current = state.key === key;
+  const loading = !current || state.loading;
+  const rows = current ? state.rows : [];
+  const error = current ? state.error : null;
 
   // survey: split strong head from faded tail
   let head = rows, tail = [];

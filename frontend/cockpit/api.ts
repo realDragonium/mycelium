@@ -22,6 +22,7 @@
 //   GET  /list-research-sources         — configured research sources
 //   GET/POST/PATCH/DELETE /api/drafts/* — draft spine
 //   GET  /api/knowledge-gaps            — reported knowledge gaps
+//   POST /report-knowledge-gap          — file a knowledge gap
 
 import { substrate } from './data';
 
@@ -370,6 +371,7 @@ export const Myc = {
     submit: (id) => post('/api/drafts/' + encodeURIComponent(id) + '/submit'),
     withdraw: (id) => post('/api/drafts/' + encodeURIComponent(id) + '/withdraw'),
   },
+  reportKnowledgeGap: (text: string) => post('/report-knowledge-gap', { text }),
   knowledgeGaps: (status) => get('/api/knowledge-gaps?status=' + encodeURIComponent(status || 'open')),
   updateKnowledgeGap: (id, action) => http('PATCH', '/api/knowledge-gaps/' + encodeURIComponent(id), { action }),
   // Vocabulary edits that make the matcher derive new mentions. Creating an

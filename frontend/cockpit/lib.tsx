@@ -1,5 +1,5 @@
 // lib.tsx — shared helpers, icons, primitives, router context.
-import { useState, createContext, useContext } from 'react';
+import { Component, useState, createContext, useContext, type ErrorInfo, type ReactNode } from 'react';
 import { substrate, type CockpitIndex } from './data';
 import { Myc } from './api';
 
@@ -142,7 +142,8 @@ function EntityChip({ entity }) {
 }
 
 /* ---------------- Score meter ---------------- */
-function ScoreMeter({ score }) {
+function ScoreMeter({ score }: { score: number | null }) {
+  if (score == null) return <span className="score lo"><span className="s-num">—</span></span>;
   const band = score >= 0.66 ? 'hi' : score >= 0.4 ? 'mid' : 'lo';
   return (
     <span className={`score ${band}`}>
@@ -290,7 +291,26 @@ function EmptyState({ title, blurb }) {
   );
 }
 
+/* ---------------- Error boundary ----------------
+   Contains a crash to the screen that threw, so the shell and navigation stay
+   usable. App keys it by route, so navigating away clears the error. */
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
+  state = { error: null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error(error, info.componentStack); }
+  render() {
+    const { error } = this.state;
+    if (!error) return this.props.children;
+    return (
+      <main className="page narrow" role="alert">
+        <EmptyState title="This screen failed to render" blurb={`${error.message || error}. The rest of the app still works — go back or pick another screen.`} />
+      </main>
+    );
+  }
+}
+
 export {
+  ErrorBoundary,
   type Route, type Router, RouterCtx, useRouter, GoIngestCtx, useGoIngest, parseHash, routeToHash,
   highlight, escapeRe, I, KindTag, LinkTag, EntityChip, ScoreMeter, StatementText, EmptyState,
   EditableStatementText,
