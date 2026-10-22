@@ -55,8 +55,8 @@ configuration; midstream output is reset rather than silently replayed.
 ## Combined retrieval
 
 The reader tool `retrieve_context(query, names, entity_limit=3,
-statement_limit=6, linked_limit=8)` is available through HTTP, MCP and read-tool
-discovery. It performs name-prefix lookup across aliases, semantic name lookup
+statement_limit=6, linked_limit=8)` is available through HTTP and read-tool
+discovery. It is not advertised over MCP; see [the MCP tool manifest](MCP_TOOLS.md). It performs name-prefix lookup across aliases, semantic name lookup
 if no prefix candidates exist, entity hydration, query-relevant statement search
 filtered by each selected entity, and one linked-statement fetch. Candidate
 matches are explicitly candidates; they do not resolve ambiguity by themselves.

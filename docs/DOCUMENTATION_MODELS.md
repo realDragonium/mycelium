@@ -59,9 +59,11 @@ of their current document body; overwritten bodies cannot be reconstructed.
 Legacy publication timestamps remain unknown rather than inferred from edit times.
 Archives predating document backups contain no document library to restore.
 
-MCP and REST use the same operations: `request_documentation`,
-`list_generated_documents`, `get_generated_document`, `list_document_revisions`,
-`get_document_revision`, `revise_document`, and `deliver_document`.
+REST exposes `request_documentation`, `list_generated_documents`,
+`get_generated_document`, `list_document_revisions`, `get_document_revision`,
+`revise_document`, and `deliver_document`. MCP exposes `request_documentation`,
+`get_documentation_run`, `get_generated_document`, and `revise_document`. Publishing
+stays in the UI; see [the MCP tool manifest](MCP_TOOLS.md).
 `revise_document` requires `document_id`, `expected_revision`, and instructions.
 The UI always supplies the current revision when publishing. Existing automation
 may retain automatic document matching through `request_documentation`'s default

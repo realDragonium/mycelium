@@ -14,7 +14,7 @@ administrators can retire profiles or remove existing slots. The configured
 default profile's last template is protected until another default is selected.
 
 A save checks the profile revision and appends all changed slots atomically.
-Conflicts keep local edits visible until you reload. Existing MCP tools use the
+Conflicts keep local edits visible until you reload. The profile HTTP operations use the
 same validation; slot-by-slot creation remains supported, and a profile without
 a template is shown as incomplete. Templates keep stable names; duplicating a
 profile creates a new identity. Audience/disclosure guidance does not change
@@ -159,7 +159,7 @@ can also be retired, subject to the configured default reference.
 
 Saved profiles survive deployments and are included in instance backups.
 Source files are needed only for the packaged initial examples, not for profiles
-authored in the UI or through MCP.
+authored in the UI or over HTTP.
 
 The cockpit's Documentation screen also offers a per-run Claude/GPT choice.
 See [Documentation models](DOCUMENTATION_MODELS.md) for server configuration and
