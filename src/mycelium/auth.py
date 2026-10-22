@@ -728,15 +728,15 @@ def find_or_create_user(
         domain = email.rpartition("@")[2]
         if domain and domain in _jit_domains():
             jit_role = _jit_default_role()
-        if jit_role is None:
-            return None
 
     if is_bootstrap:
         role = "admin"
     elif invited_role is not None:
         role = invited_role
-    else:
+    elif jit_role is not None:
         role = jit_role
+    else:
+        return None
 
     user_id = str(uuid.uuid4())
     conn.execute(

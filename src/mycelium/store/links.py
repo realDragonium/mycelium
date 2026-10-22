@@ -55,7 +55,7 @@ def _insert_one_link(
     )
     if not cur.rowcount:
         return None
-    link_id = cur.lastrowid
+    link_id = kernel._inserted_rowid(cur)
     if canonical is not None:
         _insert_when_tree(conn, link_id, canonical)
     _record(

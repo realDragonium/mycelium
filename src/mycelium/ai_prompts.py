@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -150,6 +151,7 @@ def editor(action: Action) -> EditorView:
 
 def preview(action: Action, text: str) -> str:
     """Use the runtime builders; per-request evidence and tool schemas stay dynamic."""
+    build_system_prompt: Callable[[str], str]
     if action == "ask":
         from .ask.prompts import build_system_prompt
     elif action == "ingest":

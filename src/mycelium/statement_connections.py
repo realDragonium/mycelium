@@ -148,7 +148,7 @@ class Result(BaseModel):
     def requested_ids(self) -> set[str]:
         return {e.selected_id for e in self.endpoints if e.selected_id is not None}
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]  # pydantic's documented mypy workaround
     @property
     def connected_ids(self) -> list[str]:
         if any(e.selected_id is None for e in self.endpoints):
@@ -158,7 +158,7 @@ class Result(BaseModel):
             reached.add(self.source.selected_id)
         return sorted(self.requested_ids & reached)
 
-    @computed_field
+    @computed_field  # type: ignore[prop-decorator]  # pydantic's documented mypy workaround
     @property
     def unconnected_ids(self) -> list[str]:
         if any(e.selected_id is None for e in self.endpoints):

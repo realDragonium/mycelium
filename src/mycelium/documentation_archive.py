@@ -169,7 +169,7 @@ def _validate_publication(conn: sqlite3.Connection) -> None:
 
 
 def _validate_json(conn: sqlite3.Connection) -> None:
-    fields = {
+    fields: dict[str, dict[str, type[list[object]] | type[dict[str, object]]]] = {
         "generated_documents": {
             "statement_ids": list,
             "review": dict,
@@ -206,9 +206,12 @@ def _validate_json(conn: sqlite3.Connection) -> None:
                 if (
                     field in ("target", "delivery_target")
                     and not unresolved_legacy
-                    and not all(
-                        isinstance(value.get(key), str) and value[key]
-                        for key in ("host", "owner", "repo", "base_branch")
+                    and not (
+                        isinstance(value, dict)
+                        and all(
+                            isinstance(value.get(key), str) and value[key]
+                            for key in ("host", "owner", "repo", "base_branch")
+                        )
                     )
                 ):
                     raise ValueError("invalid documentation delivery coordinates")

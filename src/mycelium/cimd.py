@@ -96,7 +96,7 @@ def _resolve_addresses(host: str, port: int) -> list[str]:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise CimdError(f"client id host does not resolve: {host}") from exc
-    return [info[4][0] for info in infos]
+    return [str(info[4][0]) for info in infos]
 
 
 def _is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

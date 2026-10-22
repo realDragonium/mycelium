@@ -887,7 +887,7 @@ async def token_endpoint(
         if user_row is None or user_row["status"] != "active":
             return _oauth_error("invalid_grant", "user no longer active")
 
-        scope_to_grant: auth.Scope = user_row["role"]  # type: ignore[assignment]
+        scope_to_grant: auth.Scope = user_row["role"]
         raw, prefix, h = auth.generate_token()
         client_row = conn.execute(
             "SELECT client_name FROM oauth_clients WHERE client_id = ?",

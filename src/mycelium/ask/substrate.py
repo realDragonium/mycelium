@@ -115,7 +115,9 @@ def _json_schema_for(func: Callable[..., Any]) -> dict:
         default = ... if param.default is inspect.Parameter.empty else param.default
         fields[name] = (annotation, default)
 
-    model = create_model(func.__name__ + "Args", **fields)
+    # pydantic's overloads can't tell **fields apart from its __config__-style
+    # keywords, so no overload matches a plain field mapping.
+    model = create_model(func.__name__ + "Args", **fields)  # type: ignore[call-overload]
     schema = model.model_json_schema()
     schema.pop("title", None)
     schema["type"] = "object"

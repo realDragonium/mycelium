@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort
@@ -24,7 +25,7 @@ _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 #: Prompt-store name the research doctrine is kept under (type `doctrine`).
 #: Startup seeds that row from `doctrine_path`; the loop reads it per run,
 #: so an edit through `save_prompt_text` lands on the next research run.
-DOCTRINE_NAME = "research"
+DOCTRINE_NAME: Final = "research"
 
 
 @dataclass(frozen=True)

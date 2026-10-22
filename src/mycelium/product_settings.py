@@ -247,7 +247,7 @@ Body = Annotated[
     | SourcesSettings,
     Field(discriminator="kind"),
 ]
-BODY = TypeAdapter(Body)
+BODY: TypeAdapter[Body] = TypeAdapter(Body)
 DEFAULTS: tuple[Body, ...] = (
     AskSettings(),
     IngestSettings(),
@@ -274,7 +274,7 @@ class InvalidLegacySettings(SettingsModel):
 
 
 ArchivedBody = Body | InvalidLegacySettings
-ARCHIVED_BODY = TypeAdapter(ArchivedBody)
+ARCHIVED_BODY: TypeAdapter[ArchivedBody] = TypeAdapter(ArchivedBody)
 
 
 class Snapshot(SettingsModel):

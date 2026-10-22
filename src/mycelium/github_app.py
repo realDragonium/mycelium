@@ -254,7 +254,7 @@ class GitHubClient:
             ):
                 continue
             for page in range(1, 101):
-                batch = self.request(
+                repositories = self.request(
                     "GET",
                     f"/user/installations/{installation.id}/repositories?per_page=100&page={page}",
                     token,
@@ -268,10 +268,10 @@ class GitHubClient:
                         repo=repo.name,
                         default_branch=repo.default_branch,
                     )
-                    for repo in batch
+                    for repo in repositories
                     if repo.permissions.push and not repo.archived and not repo.disabled
                 )
-                if len(batch) < 100:
+                if len(repositories) < 100:
                     break
             else:
                 raise GitHubError(

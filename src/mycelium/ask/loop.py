@@ -379,8 +379,8 @@ def _run_reads(tool_uses: list[ai.ToolUse], ctx: _RunContext) -> None:
                     and previous_targeted
                     and source_ids
                     and set(source_ids) <= available_ids
-                    and arguments.get("query", "").strip().casefold()
-                    != ctx.question.strip().casefold()
+                    and isinstance(query := arguments.get("query", ""), str)
+                    and query.strip().casefold() != ctx.question.strip().casefold()
                 )
                 ctx.ops_after_recon.append(ReadCheck(tu.name, adjacency))
                 ctx.targeted_ids.update(ctx.evidence.last_ids)
@@ -388,7 +388,7 @@ def _run_reads(tool_uses: list[ai.ToolUse], ctx: _RunContext) -> None:
             {
                 "tool": tu.name,
                 "turn": ctx.trace.model_turns,
-                "sources": source_ids,
+                "sources": [*source_ids],
                 "adjacency": adjacency,
                 "ok": ok,
             }

@@ -539,8 +539,10 @@ def _commit(
         json={
             "message": f"Deliver {document.title}",
             "tree": tree_sha,
-            "parents": [parent_sha]
-            + ([additional_parent_sha] if additional_parent_sha else []),
+            "parents": [
+                parent_sha,
+                *([additional_parent_sha] if additional_parent_sha else []),
+            ],
         },
     )
     return _sha(config, payload, "commit")
@@ -650,7 +652,8 @@ def _review_reference(config: GitHubConfig, payload: dict, branch: str) -> str:
     except (KeyError, TypeError):
         state = base = head = repository = None
     if (
-        not _valid_reference(config, reference)
+        not isinstance(reference, str)
+        or not _valid_reference(config, reference)
         or state != "open"
         or base != config.base_branch
         or head != branch

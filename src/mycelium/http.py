@@ -573,7 +573,9 @@ def _register(func: Callable[..., Any]) -> None:
         default = ... if param.default is inspect.Parameter.empty else param.default
         fields[name] = (annotation, default)
 
-    BodyModel = create_model(_model_name_for(func.__name__), **fields)
+    # pydantic's overloads can't tell **fields apart from its __config__-style
+    # keywords, so no overload matches a plain field mapping.
+    BodyModel = create_model(_model_name_for(func.__name__), **fields)  # type: ignore[call-overload]
     if func.__name__ in _STREAMING_TOOLS:
         make = _make_streaming_post_handler
     elif server.limiter_for(func.__name__) is not None:

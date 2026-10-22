@@ -18,8 +18,8 @@ from pydantic import (
 Provider = Literal["claude", "openai"]
 ClaudeEffort = Literal["low", "medium", "high", "xhigh", "max"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
-CLAUDE_EFFORT = TypeAdapter(ClaudeEffort)
-REASONING_EFFORT = TypeAdapter(ReasoningEffort)
+CLAUDE_EFFORT: TypeAdapter[ClaudeEffort] = TypeAdapter(ClaudeEffort)
+REASONING_EFFORT: TypeAdapter[ReasoningEffort] = TypeAdapter(ReasoningEffort)
 Output = TypeVar("Output", bound=BaseModel)
 
 

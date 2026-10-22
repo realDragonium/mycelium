@@ -72,15 +72,16 @@ def find_candidates(
         if not definite and not possible:
             continue
         approved = any((row["id"], m.name_id) in approvals for m in possible)
+        matched: list[mentions.Mention | mentions.SuspectOccurrence] = [
+            *definite,
+            *possible,
+        ]
         found.append(
             Candidate(
                 statement_id=row["id"],
                 text=row["text"],
                 kind=row["kind"],
-                names=[
-                    MatchedName(name_id=m.name_id, text=m.name)
-                    for m in [*definite, *possible]
-                ],
+                names=[MatchedName(name_id=m.name_id, text=m.name) for m in matched],
                 match="derived" if definite else "approved" if approved else "possible",
             )
         )

@@ -735,7 +735,7 @@ def _queue_draft_op(
             payload=clean,
             created_by=actor,
         )
-        revision = drafts_store.get_draft(_drafts_db(), draft_id)["revision"]
+        revision = drafts_store.current_revision(_drafts_db(), draft_id)
     return {
         "draft_id": draft_id,
         "seq": seq,
@@ -5907,7 +5907,7 @@ def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePreconditi
     statements_by_id = {statement["id"]: statement for statement in statements}
     for statement_id in ordered_statement_ids:
         hydrated = statements_by_id.get(statement_id)
-        statement = (
+        statement: JsonValue = (
             {"statements": [hydrated], "missing": []}
             if hydrated is not None
             else {"statements": [], "missing": [statement_id]}
@@ -6055,7 +6055,6 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
 
     findings: list[DraftOperationFinding] = []
     tools_by_name = {wrapper.__name__: wrapper for wrapper in TOOLS}
-    available_sequences = {int(op["seq"]) for op in ops}
     producers = {int(op["seq"]): op for op in ops}
     for op in ops:
         kind = op["kind"]
@@ -6087,7 +6086,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
             producer = int(reference)
             producer_op = producers.get(producer)
             result_index = int(result_index_text)
-            if producer not in available_sequences or producer >= int(op["seq"]):
+            if producer_op is None or producer >= int(op["seq"]):
                 messages.append(f"unresolved_operation_reference:@{reference}")
             elif producer_op["kind"] != "upsert_statements" or result_index >= len(
                 _json.loads(producer_op["payload_json"]).get("statements", [])
@@ -6155,7 +6154,7 @@ def append_draft_correction(
             payload=payload,
             created_by=principal.id,
         )
-        updated = drafts_store.get_draft(conn, draft_id)
+        revision = drafts_store.current_revision(conn, draft_id)
         operation = next(
             op for op in drafts_store.list_ops(conn, draft_id) if op["seq"] == seq
         )
@@ -6163,7 +6162,7 @@ def append_draft_correction(
         "draft_id": draft_id,
         "operation_ref": operation["id"],
         "seq": seq,
-        "revision": int(updated["revision"]),
+        "revision": revision,
     }
 
 
@@ -6220,7 +6219,9 @@ def record_draft_review(
                 drafts_store.set_decision(
                     conn, draft_id, decision="rejected", by=principal.id
                 )
-    return drafts_store.serialize_review(drafts_store.get_review(conn, review_id))
+    review = drafts_store.get_review(conn, review_id)
+    assert review is not None  # written in the transaction above
+    return drafts_store.serialize_review(review)
 
 
 _DRAFT_RESULT_REF = re.compile(r"^@(\d+):(\d+)$")
