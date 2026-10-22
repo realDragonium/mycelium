@@ -53,6 +53,7 @@ from . import (
     draft_review_settings as review_settings,
 )
 from .docgen.schema import ManualDocument
+from .server import registry
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -61,7 +62,7 @@ from .docgen.schema import ManualDocument
 # 2025-era client's `initialize` handshake and a 2026-07-28 client's
 # self-describing requests — with nothing to configure.
 _MCP_SUBAPP = server.mcp.streamable_http_app(
-    transport_security=server._build_transport_security(),
+    transport_security=registry._build_transport_security(),
 )
 
 
@@ -372,10 +373,10 @@ def _enforce_role(request: Request, required: str, real_role: bool = False) -> N
         from fastapi import HTTPException
 
         raise HTTPException(status_code=401, detail="authentication required")
-    # `server._satisfies` is the one rule the MCP wrapper and the tools/list
+    # `registry._satisfies` is the one rule the MCP wrapper and the tools/list
     # filter also ask, so a tool cannot be reachable over one transport and
     # gated on another.
-    if not server._satisfies(p, required, real_role):
+    if not registry._satisfies(p, required, real_role):
         from fastapi import HTTPException
 
         raise HTTPException(

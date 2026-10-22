@@ -8,7 +8,7 @@ underpin both.
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, server, store
-from mycelium.server import runtime
+from mycelium.server import registry, runtime
 
 
 def _reset_server() -> None:
@@ -419,7 +419,7 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
     with client:
         from mycelium import server
 
-        middleware = server._RoleFilteredTools()
+        middleware = registry._RoleFilteredTools()
         # Only `.method` is read; a stub keeps the test off the SDK's
         # session-bound context construction.
         ctx = SimpleNamespace(method="tools/list")
@@ -488,7 +488,7 @@ def test_tool_list_hides_tools_whose_gate_is_stricter_than_its_prefix(
     with client:
         from mycelium import server
 
-        middleware = server._RoleFilteredTools()
+        middleware = registry._RoleFilteredTools()
         ctx = SimpleNamespace(method="tools/list")
 
         async def unfiltered(_ctx):
