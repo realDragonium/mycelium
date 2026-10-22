@@ -20,7 +20,7 @@ import { ResearchSurface } from './research';
 import { SettingsScreen } from './settings';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
-import { getJSON, getMe, type KnowledgeGap, type Me } from './api';
+import { getJSON, getMe, getServerInfo, type KnowledgeGap, type Me } from './api';
 import { loadSubstrate } from './data';
 import { usePrefs } from './prefs';
 import { useAsync } from './use-async';
@@ -111,6 +111,33 @@ function Sidebar({ me, open, onClose }: { me: Me | null; open: boolean; onClose:
   );
 }
 
+/* ---------------- Partial restore ---------------- */
+const LOST_WITH: Record<string, string> = {
+  'mycelium-auth.db': 'users and tokens',
+  'mycelium-drafts.db': 'drafts and research runs',
+  'mycelium-prompts.db': 'prompt texts and settings',
+  'mycelium-history.db': 'audit history',
+};
+
+// Not dismissible: the condition lasts until the files are restored and the
+// server restarts, and an operator should not have to read logs to find it.
+function PartialRestoreBanner() {
+  const info = useAsync(getServerInfo).state;
+  const missing = info.status === 'ready' ? info.data.partial_restore : [];
+  if (!missing.length) return null;
+  const lost = missing.map(name => LOST_WITH[name] ?? name).join(', ');
+  return (
+    <div className="restore-banner notice error" role="alert">
+      <I.warn width="16" height="16" />
+      <span>
+        <strong>Partial restore.</strong> This server started without {missing.map((name, i) => <span key={name}>{i ? ', ' : ''}<code>{name}</code></span>)} beside
+        a knowledge base that should have {missing.length === 1 ? 'it' : 'them'}, and recreated {missing.length === 1 ? 'it' : 'them'} empty.
+        The {lost} kept there are missing from this instance. Restore every file <code>mycelium databases</code> lists, then restart the server.
+      </span>
+    </div>
+  );
+}
+
 /* ---------------- Screen for a route ---------------- */
 function Screen({ route, ingestNonce, refresh }: { route: Route; ingestNonce: number; refresh: () => Promise<void> }) {
   switch (route.view) {
@@ -158,6 +185,7 @@ export function App() {
               <Sidebar me={me.status === 'ready' ? me.data : null} open={navOpen} onClose={() => setNavOpen(false)} />
               {navOpen && <div className="side-scrim" onClick={() => setNavOpen(false)} />}
               <div className="main-col">
+                <PartialRestoreBanner />
                 <header className="topbar">
                   <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Open navigation"><I.menu /></button>
                   {route.view !== 'home' ? <CommandBar /> : <div className="topbar-spacer" />}

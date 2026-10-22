@@ -57,6 +57,10 @@ export const enc = encodeURIComponent;
 export type Role = 'reader' | 'drafter' | 'writer' | 'admin';
 export interface Me { id: string; name: string; role: Role; type: string; auth_enabled: boolean }
 export const getMe = () => getJSON<Me>('/api/me');
+// `partial_restore` names the databases startup found missing beside a
+// populated substrate; it is fixed for the life of the server process.
+export interface ServerInfo { partial_restore: string[] }
+export const getServerInfo = () => getJSON<ServerInfo>('/api/server-info');
 
 /* -------------------------------- Find -------------------------------- */
 export type FindMode = 'semantic' | 'grep' | 'survey';
