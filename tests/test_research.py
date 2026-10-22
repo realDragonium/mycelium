@@ -489,7 +489,7 @@ def test_substrate_error_is_reported_not_fabricated():
     responses = [
         *_explore_turns(),
         _message([_tool_use("discover_facts", {"texts": ["x"]}, id="df")]),
-        _message([_tool_use("find_duplicates", {"query": "x"})]),
+        _message([_tool_use("find_duplicates", {"threshold": 0.92})]),
         _message([_tool_use("search_statements", {"query": "x"})]),
         _message([_tool_use(EMIT_TOOL, _good_new_op_emit())]),
     ]

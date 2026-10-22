@@ -68,8 +68,10 @@ if TYPE_CHECKING:
 
 
 #: Reconcile reads — at least one must have happened before emit is accepted.
+#: Each takes the candidate's text; `find_duplicates` audits the whole corpus
+#: instead, so calling it checks nothing about the candidates.
 _RECONCILE_TOOLS = frozenset(
-    {"discover_facts", "find_duplicates", "search_statements", "survey_statements"}
+    {"discover_facts", "search_statements", "survey_statements"}
 )
 #: Adjacency searches — at least one must have happened before emit is accepted.
 _ADJACENCY_TOOLS = frozenset(
