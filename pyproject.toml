@@ -147,6 +147,7 @@ module = [
     "mycelium.server.entities",
     "mycelium.server.hydration",
     "mycelium.server.indexes",
+    "mycelium.server.links",
     "mycelium.server.lookups",
     "mycelium.server.names",
     "mycelium.server.registry",
