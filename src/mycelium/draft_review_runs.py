@@ -66,6 +66,10 @@ REVIEWABLE_OPERATIONS = frozenset(
 )
 
 
+class NotAdmitted(ValueError):
+    """The draft's latest run no longer qualifies for the requested review."""
+
+
 @dataclass(frozen=True)
 class Read:
     name: str
@@ -98,7 +102,11 @@ def start(
     retries: int = 0,
     previous_failure: str | None = None,
     answer: Answer | None = None,
+    admit: Callable[[ReviewRun | None], bool] | None = None,
 ) -> ReviewRun:
+    """`admit`, when given, decides under the admission lock whether the
+    draft's latest run still qualifies, so a selection made earlier cannot
+    supersede a run that finished in between."""
     from . import server  # local import: server registers the review tools
 
     settings = draft_review_settings.load()
@@ -113,6 +121,8 @@ def start(
         if row is None or drafts_store.status_for(row) != "submitted":
             raise ValueError("only submitted drafts can be internally reviewed")
         previous = draft_review_store.latest(conn, draft_id)
+        if admit is not None and not admit(previous):
+            raise NotAdmitted("the draft's latest review changed; not started")
         answers = previous.answers if previous else []
         if answer is not None:
             if previous is None or previous.application != "needs_human":
@@ -211,11 +221,21 @@ def sweep(now: datetime | None = None) -> list[str]:
                 rerun=True,
                 retries=run.retries + 1,
                 previous_failure=run.detail,
+                admit=_still_due(run.run_id, now),
             )
             started.append(row["id"])
+        except NotAdmitted:
+            continue
         except Exception:
             logger.exception("could not retry review of %s", row["id"])
     return started
+
+
+def _still_due(seen: str, now: datetime) -> Callable[[ReviewRun | None], bool]:
+    def admit(latest: ReviewRun | None) -> bool:
+        return latest is not None and latest.run_id == seen and _retry_due(latest, now)
+
+    return admit
 
 
 def _retry_due(run: ReviewRun, now: datetime) -> bool:
@@ -264,13 +284,20 @@ def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
 
 def review_backlog() -> list[str]:
     """Start a review of every draft in the backlog. Returns their ids."""
-    if mode() == "off":
+    current = mode()
+    if current == "off":
         raise ValueError("internal draft review is off")
     started = []
     for draft_id in backlog():
         try:
-            start(draft_id, rerun=True)
+            start(
+                draft_id,
+                rerun=True,
+                admit=lambda latest: _in_backlog(latest, current),
+            )
             started.append(draft_id)
+        except NotAdmitted:
+            continue
         except Exception:
             logger.exception("could not start review of %s", draft_id)
     return started

@@ -463,3 +463,37 @@ def _ingest_aliases_only(client, monkeypatch, entity_id):
     result = client.post("/ingest", json={"text": TEXT}).json()
     assert result["draft_id"] == result["alias_draft_id"]
     return result["draft_id"]
+
+
+def test_sweep_does_not_supersede_a_run_that_finished_after_selection(
+    curated_app, monkeypatch
+):
+    _automatic()
+    _failing_provider(monkeypatch)
+    draft_id = _draft()
+    selected = _latest(draft_id)
+    retry_due = draft_review_runs._retry_due
+    interleaved = []
+
+    def selection_then_manual_rerun(run, now):
+        due = retry_due(run, now)
+        if due and not interleaved:
+            interleaved.append(run.run_id)
+            _asks_then_approves(monkeypatch)
+            token = auth.current_principal.set(auth.LOCAL_ADMIN)
+            try:
+                server.request_draft_review(draft_id, rerun=True)
+            finally:
+                auth.current_principal.reset(token)
+            draft_review_runs.wait_all()
+        return due
+
+    monkeypatch.setattr(draft_review_runs, "_retry_due", selection_then_manual_rerun)
+
+    later = _finished(selected) + timedelta(days=1)
+    assert draft_review_runs.sweep(later) == []
+
+    assert interleaved == [selected.run_id]
+    latest = _latest(draft_id)
+    assert latest.application == "needs_human"
+    assert server.get_draft(draft_id)["status"] == "submitted"
