@@ -20,9 +20,7 @@ CONNECT_HTML = """<!doctype html>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Connect a client · Mycelium</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/fonts/fonts.css" />
 <style>
   :root {
     --bg: #0b0b0c;
@@ -36,7 +34,7 @@ CONNECT_HTML = """<!doctype html>
     --amber: #fbbf24;
     --green: #4ade80;
     --red: #f87171;
-    --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   @media (prefers-color-scheme: light) {
     :root {

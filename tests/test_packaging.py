@@ -119,16 +119,25 @@ _WEBUI = _REPO_ROOT / "src" / "mycelium" / "webui"
 
 def test_browser_app_ships_inside_the_wheel(wheel):
     """`uv run mycelium-http` must serve /ui/ without Node, so the committed
-    build output — the app's page and every bundle it references —
-    has to reach the wheel unaltered. A page whose script or stylesheet is
-    missing loads blank, with nothing failing server-side."""
+    build output — the app's page, every bundle it references and the
+    self-hosted fonts — has to reach the wheel unaltered. A page whose
+    script or stylesheet is missing loads blank, with nothing failing
+    server-side."""
     with zipfile.ZipFile(wheel) as zf:
         members = set(zf.namelist())
         page = _WEBUI / "ui" / "index.html"
         html = page.read_text(encoding="utf-8")
-        assets = re.findall(r'(?:src|href)="/ui/(assets/[^"]+)"', html)
+        assets = re.findall(r'(?:src|href)="/ui/([^"]+)"', html)
         assert any(a.endswith(".js") for a in assets), "the page loads no script"
-        for path in [page, *(_WEBUI / "ui" / a for a in assets)]:
+        fonts = _WEBUI / "ui" / "fonts" / "fonts.css"
+        assert "fonts/fonts.css" in assets
+        font_files = re.findall(r"url\(\./([^)]+)\)", fonts.read_text(encoding="utf-8"))
+        assert font_files, "the font stylesheet loads no fonts"
+        for path in [
+            page,
+            *(_WEBUI / "ui" / a for a in assets),
+            *(fonts.parent / f for f in font_files),
+        ]:
             member = path.relative_to(_REPO_ROOT / "src").as_posix()
             assert member in members
             assert zf.read(member) == path.read_bytes()
