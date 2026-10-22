@@ -1,8 +1,8 @@
 # AI model configuration
 
-Administrators configure Mycelium's language-model actions in **AI settings**.
-Open Settings in the cockpit or the existing UI. Each action has its own default
-provider and model:
+Administrators configure Mycelium's language-model actions in **Settings → Models**
+(see [the web app](WEB_APP.md)). Each action has its own default provider and
+model:
 
 - Ask: answer questions from existing knowledge.
 - Ingest: extract proposed knowledge changes from supplied material.
@@ -28,7 +28,7 @@ it again to use the new settings. Saving configuration does not start work.
 ## Reasoning effort
 
 Choose **Reasoning effort** alongside each action’s model, including Draft review
-and Documentation → Models & GitHub. **Model default** sends no effort override
+(**Settings → Draft review**). **Model default** sends no effort override
 and preserves existing behavior. OpenAI **None** is different: it explicitly
 requests no reasoning, on models that support it.
 
@@ -73,7 +73,7 @@ provider and accepts the existing `MYCELIUM_DRAFT_REVIEW_MODEL` as the selected
 provider's initial model when its provider-specific variable is absent.
 
 Each action’s provider and both model IDs come entirely from saved settings. Changing environment variables does not override that saved action.
-The administrator controls **Allow applying accepted reviews** in AI settings. This separate permission covers manual curator application and automatic application.
+The administrator controls **Allow applying accepted reviews** in **Settings → Draft review**. This separate permission covers manual curator application and automatic application.
 
 ## Persistence and API
 
@@ -115,7 +115,7 @@ this screen.
 
 ## Limits and repository integrations
 
-AI settings also provides independent limits for Ask, Ingest, Research,
+**Settings → Limits** provides independent limits for Ask, Ingest, Research,
 Documentation, and Draft review. Output tokens, request timeouts, and retries
 apply to each provider request. The four tool loops additionally expose operation
 and run time limits and adaptive thinking; Ask exposes its existing cache switch.

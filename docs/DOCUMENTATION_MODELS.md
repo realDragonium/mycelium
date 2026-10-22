@@ -1,9 +1,10 @@
 # Documentation models
 
-Open **Documentation** in either UI to create a document, read saved documents,
-inspect revision history, or publish an update to GitHub. **Profiles & templates**
-edits writing guidance; **Models & GitHub** configures the generation model,
-limits, default profile, and repository destinations. These settings persist in
+Open **Documents** in the web app to create a document, read saved documents,
+inspect revision history, or publish an update to GitHub. **Settings →
+Documentation** edits writing profiles and configures the default profile and
+repository destinations; the generation model is under **Settings → Models**
+and its limits under **Settings → Limits**. These settings persist in
 the instance and do not require editing files or redeploying.
 
 Each generation form can choose Claude or GPT independently of the saved default.
@@ -27,7 +28,7 @@ not change that run's instructions.
 
 ### GitHub publication
 
-Connect GitHub in **Models & GitHub → Documentation delivery** and choose a
+Connect GitHub in **Settings → Documentation → Documentation delivery** and choose a
 repository and base branch. Then save the documentation delivery settings.
 See [GitHub App setup](GITHUB_APP.md) for one-time operator configuration,
 reconnection, and access requirements.

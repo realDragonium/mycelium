@@ -7,7 +7,7 @@ store (`prompt_store`, its own `mycelium-prompts.db`) as ordinary rows, so
 adding, editing or replacing one is a tool call — never a code change and
 never a redeploy.
 
-Open **AI settings → Documentation profiles** in either UI to create, edit,
+Open **Settings → Documentation → Writing profiles & templates** to create, edit,
 duplicate or retire profiles and templates. The shared editor also shows text
 history and can restore earlier versions. Writers can save and restore;
 administrators can retire profiles or remove existing slots. The configured
@@ -161,6 +161,6 @@ Saved profiles survive deployments and are included in instance backups.
 Source files are needed only for the packaged initial examples, not for profiles
 authored in the UI or over HTTP.
 
-The cockpit's Documentation screen also offers a per-run Claude/GPT choice.
+The Documents screen also offers a per-run Claude/GPT choice.
 See [Documentation models](DOCUMENTATION_MODELS.md) for server configuration and
 how that selection applies to writing and review.

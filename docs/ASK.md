@@ -8,7 +8,7 @@ default over MCP and HTTP JSON/SSE:
 
 Set `verbose: true` in the request arguments for the full result, including
 interpretation, gaps, provenance and trace, or clarification candidates and
-known_so_far. The cockpit requests this detailed result explicitly.
+known_so_far. The web app's Ask screen requests this detailed result explicitly.
 `run_ask` and server-side traces retain the full result. Verbosity changes only
 response formatting, not reasoning, retrieval depth, or model latency.
 
@@ -37,7 +37,7 @@ or cancellation before `complete` leaves an incomplete result, even if some text
 was visible. Clients should not concatenate draft text with `complete.result.answer`.
 There is no event replay/resume protocol; retry starts a fresh run.
 
-The cockpit consumes events, displays provisional text and factual progress,
+The web app's Ask screen consumes events, displays provisional text and factual progress,
 and provides Cancel. It aborts on navigation, retry and replacement questions,
 and ignores events/results from older requests. Completed JSON remains a fallback
 for a server that does not support the opt-in stream.

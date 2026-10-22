@@ -39,8 +39,8 @@ classification, so policy can't drift between transports.
 ## Inviting a human
 
 1. Log in to the UI as an admin.
-2. **Settings → Users & invites**.
-3. Under **Invite human**, enter the email and pick a starting role.
+2. **Settings → Members & invites**.
+3. Under **Invite a person**, enter the email and pick a starting role.
    Click **Invite**.
 4. A link appears at the top of the section. Click **Copy link** in
    the invites table — that's the URL to send to the invitee.
@@ -65,7 +65,7 @@ becomes useless.
 For automated agents that should write to Mycelium without a human
 behind them.
 
-1. **Settings → Users & invites → Create service account**.
+1. **Settings → Members & invites → Create a service account**.
 2. Enter a name that identifies what the agent is (e.g. `ci-doc-bot`,
    `feedback-ingestor`, `claude-skill-changelog`). Pick a role.
 3. Click **Create**. The row appears in the members table with

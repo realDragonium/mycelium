@@ -1,6 +1,6 @@
 # Names and aliases
 
-Open **Names & aliases** in either UI. Search by a concept's name, alias, or
+Open **Names & aliases**. Search by a concept's name, alias, or
 description, then select it to see all names, generated plurals, example
 statements, relationships, and recorded changes. Readers can inspect the
 vocabulary. Writers can add, correct, prefer, move, or split names. Removing an

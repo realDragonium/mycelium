@@ -10,7 +10,7 @@ See [AI model configuration](docs/AI_MODELS.md) to select Claude or GPT independ
 See [AI prompts](docs/AI_PROMPTS.md) to edit per-action instructions in the UI without redeploying.
 
 See [the documentation workflow](docs/DOCUMENTATION_MODELS.md) to configure writing profiles,
-generate and revise documents, and publish GitHub pull requests from either UI.
+generate and revise documents, and publish GitHub pull requests from the web app.
 
 See [internal draft review](docs/DRAFT_REVIEW.md) for configurable Claude/GPT assessment and
 automatic application configuration.
@@ -41,7 +41,11 @@ uv run mycelium-http
 ```
 
 The HTTP server listens on `127.0.0.1:8765` by default. Interactive API docs
-are available at `/docs` and the browser UI at `/ui/`.
+are available at `/docs` and the web app at `/ui/`: Ask and Find from any
+screen, browse and graph the knowledge base, ingest and research, curate
+drafts, gaps, names and the glossary, and configure everything under Settings.
+[docs/WEB_APP.md](docs/WEB_APP.md) maps its screens and addresses. The former
+`/cockpit` app is part of it now; old `/cockpit` links redirect.
 
 To start a separate knowledge base without putting runtime state in this
 repository:
