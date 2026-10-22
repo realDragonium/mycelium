@@ -548,7 +548,7 @@ build with this behaviour also creates `shipped_prompt_texts` in
 Restoring a snapshot undoes these with everything else. A code-only
 rollback does not: the previous build serves the appended versions and
 ignores the new table. To return to the earlier wording, restore it from
-**Version history** in **AI settings → Prompts**.
+**Version history** in **Settings → Prompts**.
 
 ---
 

@@ -1,9 +1,9 @@
 # Internal draft review
 
 Mycelium can review submitted drafts with Claude or an OpenAI GPT model.
-Review starts on submission from MCP or either browser interface. It works for
+Review starts on submission from MCP or the web app. It works for
 all drafts; PR provenance is optional. While review is on, `ingest` (over MCP,
-HTTP, and the cockpit) and finished research runs submit their drafts
+HTTP, and the web app) and finished research runs submit their drafts
 themselves; with review off those drafts stay open for curation. Alias
 suggestions from ingestion go to a separate draft that awaits individual human
 decisions and is not sent to the reviewer.
@@ -11,12 +11,14 @@ decisions and is not sent to the reviewer.
 Enabling the feature does not sweep the existing backlog. An administrator can
 list it with `GET /api/draft-review/backlog` and review it once with
 `POST /api/draft-review/backlog`; see [Inspecting and rerunning](#inspecting-and-rerunning).
+In the web app, **Settings → Draft review** offers **Review N waiting drafts**
+whenever review is on and the backlog is not empty.
 A curator can explicitly review an existing submitted draft.
 
 ## Configuration
 
-Administrators can open **AI settings** from cockpit Drafts or the existing
-Settings screen. The draft-review card configures this action independently of
+Administrators configure review in **Settings → Draft review**, also linked
+from Drafts. It configures this action independently of
 Ask, Ingest, Research, and Documentation. Choose the mode, provider, model ID, and independent reviewer
 account, then save. Changes take effect for new submissions and explicit reruns
 without restarting the server. The form can create a stored writer service
@@ -131,7 +133,8 @@ gate enabled, the run records an authoritative `needs_context` review carrying
 the questions, ends with outcome `needs_human`, files a knowledge gap naming the
 draft and the questions, and leaves the draft submitted. A curator answers with
 `POST /api/drafts/{id}/review/answer` and the draft is reviewed again with the
-answer. The reviewer gets no new tools for this.
+answer. In the web app the questions and an answer form sit at the top of the
+draft; such drafts sort first under Drafts and are counted on Home. The reviewer gets no new tools for this.
 
 Every automatic rejection, every contradiction resolved in an applied draft, and
 every question for a person is filed as a knowledge gap naming the draft, so a

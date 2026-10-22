@@ -1,456 +1,299 @@
-// Settings screen — account info, MCP token management, and (when the
-// current user is an admin) user / invite management.
-//
-// Tokens: the raw secret is only shown once at creation. After that the
-// UI only knows the prefix and metadata. Revoking is a soft delete:
-// the row stays so the user can see what was revoked and when.
-import { useState as useSt, useEffect as useESt, useCallback as useCBSt } from 'react';
-import { AISettings } from './ai-settings';
+// Settings: everything an operator configures, grouped by what they are
+// trying to do. Each section is its own route (#/settings/<section>).
+import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
+import { ActionModels, DraftReviewSettings } from './ai-settings';
+import { AIInstructions, DocumentationProfiles } from './documentation-profiles';
+import { ProductSettings } from './product-settings';
+import { Card, I, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
+import { Link, type SettingsSection } from './router';
+import { deleteJSON, enc, errorMessage, getJSON, patchJSON, postJSON, type Me, type Role } from './api';
+import { PREF_CHOICES, usePrefs, type Prefs } from './prefs';
+import { useAsync } from './use-async';
 
-async function _fetchJSON(url: string, init?: RequestInit) {
-  const r = await fetch(url, init);
-  if (!r.ok) {
-    let detail;
-    try { detail = (await r.json()).detail; } catch (_) { detail = r.statusText; }
-    throw new Error(detail || `${init && init.method || 'GET'} ${url} → ${r.status}`);
-  }
-  return r.json();
-}
+const ROLES: Role[] = ['reader', 'drafter', 'writer', 'admin'];
 
-function _postJSON(url, body) {
-  return _fetchJSON(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
+interface SectionDef { id: SettingsSection; label: string; blurb: string }
+const GROUPS: { title: string; sections: SectionDef[] }[] = [
+  { title: 'You', sections: [
+    { id: 'account', label: 'Account & tokens', blurb: 'Who you are signed in as, and the MCP tokens your clients use.' },
+    { id: 'appearance', label: 'Appearance', blurb: 'Theme and density for this browser.' },
+  ] },
+  { title: 'People', sections: [
+    { id: 'members', label: 'Members & invites', blurb: 'Who can use this instance, with which role, plus service accounts for agents.' },
+  ] },
+  { title: 'AI', sections: [
+    { id: 'models', label: 'Models', blurb: 'Which provider and model each AI action uses.' },
+    { id: 'prompts', label: 'Prompts', blurb: 'The behavioural instructions each AI action follows.' },
+    { id: 'review', label: 'Draft review', blurb: 'Whether submitted drafts get an automatic AI review, and whether it may apply them.' },
+    { id: 'limits', label: 'Limits', blurb: 'Token, time and concurrency budgets for each AI action.' },
+  ] },
+  { title: 'Sources & publishing', sections: [
+    { id: 'research', label: 'Research sources', blurb: 'The repositories research runs may read.' },
+    { id: 'documentation', label: 'Documentation', blurb: 'Writing profiles and templates, and the GitHub repositories documents publish to.' },
+  ] },
+];
+const SECTIONS = GROUPS.flatMap(g => g.sections);
 
-function _del(url) {
-  return _fetchJSON(url, { method: 'DELETE' });
-}
-
-function _patchJSON(url, body) {
-  return _fetchJSON(url, {
-    method: 'PATCH',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify(body),
-  });
-}
-
-// ---------- account header ----------
-
-function AccountCard({ me }) {
+export function SettingsScreen({ section }: { section: SettingsSection }) {
+  const def = SECTIONS.find(s => s.id === section) || SECTIONS[0];
   return (
-    <section className="card" style={{ padding: '20px 24px', marginBottom: 24 }}>
-      <h2 style={{ margin: 0, fontSize: 14, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Account</h2>
-      <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: 6, columnGap: 16, fontSize: 13 }}>
-        <span style={{ color: 'var(--ink-3)' }}>Name</span><span>{me.name}</span>
-        <span style={{ color: 'var(--ink-3)' }}>Role</span><span><RoleBadge role={me.role} /></span>
-        <span style={{ color: 'var(--ink-3)' }}>Type</span><span>{me.type}</span>
-        <span style={{ color: 'var(--ink-3)' }}>Auth</span>
-        <span>
-          {me.auth_enabled
-            ? <span style={{ color: 'var(--green, #16a34a)' }}>enabled</span>
-            : <span style={{ color: 'var(--amber, #d97706)' }}>disabled — running as local admin</span>}
-        </span>
-      </div>
-    </section>
-  );
-}
-
-function RoleBadge({ role }) {
-  const colors = {
-    admin: { bg: 'rgba(220,38,38,0.12)', fg: '#dc2626' },
-    writer: { bg: 'rgba(37,99,235,0.12)', fg: '#2563eb' },
-    drafter: { bg: 'rgba(217,119,6,0.12)', fg: '#d97706' },
-    reader: { bg: 'rgba(107,114,128,0.18)', fg: 'var(--ink-2)' },
-  };
-  const c = colors[role] || colors.reader;
-  return (
-    <span style={{
-      display: 'inline-block', padding: '2px 8px', borderRadius: 4,
-      fontFamily: 'var(--mono)', fontSize: 11, fontWeight: 600,
-      background: c.bg, color: c.fg,
-    }}>{role}</span>
-  );
-}
-
-// ---------- tokens ----------
-
-function TokensCard({ me }) {
-  const [tokens, setTokens] = useSt([]);
-  const [loading, setLoading] = useSt(true);
-  const [err, setErr] = useSt(null);
-  const [creating, setCreating] = useSt(false);
-  const [newName, setNewName] = useSt('');
-  const [newScope, setNewScope] = useSt('writer');
-  const [justCreated, setJustCreated] = useSt(null);
-
-  const reload = useCBSt(async () => {
-    setLoading(true); setErr(null);
-    try {
-      const data = await _fetchJSON('/api/me/tokens');
-      setTokens(data.tokens || []);
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
-  }, []);
-
-  useESt(() => { reload(); }, [reload]);
-
-  const onCreate = async (e) => {
-    e.preventDefault();
-    if (!newName.trim()) return;
-    setCreating(true); setErr(null);
-    try {
-      const { token, ...meta } = await _postJSON('/api/me/tokens', { name: newName.trim(), scope: newScope });
-      setJustCreated({ token, ...meta });
-      setNewName('');
-      await reload();
-    } catch (e) { setErr(e.message); }
-    finally { setCreating(false); }
-  };
-
-  const onRevoke = async (id) => {
-    if (!confirm('Revoke this token? Any MCP client using it will lose access.')) return;
-    try { await _del(`/api/me/tokens/${id}`); await reload(); }
-    catch (e) { setErr(e.message); }
-  };
-
-  const scopes = me.role === 'admin'
-    ? ['reader', 'drafter', 'writer', 'admin']
-    : me.role === 'writer'
-      ? ['reader', 'drafter', 'writer']
-      : me.role === 'drafter'
-        ? ['reader', 'drafter']
-        : ['reader'];
-
-  return (
-    <section className="card" style={{ padding: '20px 24px', marginBottom: 24 }}>
-      <h2 style={{ margin: 0, fontSize: 14, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ink-3)' }}>MCP tokens</h2>
-      <p style={{ marginTop: 8, marginBottom: 18, fontSize: 12.5, color: 'var(--ink-3)' }}>
-        Bearer tokens for MCP clients (Claude Desktop, Claude Code, CI agents). Pass as <code>Authorization: Bearer myc_…</code>. Each token is independently revocable; the secret is shown only once at creation.
-        {' '}<a href="/connect" style={{ color: 'var(--accent, #2563eb)' }}>How do I connect a client? →</a>
-      </p>
-
-      {justCreated && (
-        <div style={{ background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.35)', borderRadius: 6, padding: '12px 14px', marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 6 }}>
-            Token <strong>{justCreated.name}</strong> created. Copy it now — it will not be shown again.
-          </div>
-          <code style={{ display: 'block', padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 4, fontSize: 12, wordBreak: 'break-all', userSelect: 'all' }}>
-            {justCreated.token}
-          </code>
-          <button
-            onClick={() => { navigator.clipboard.writeText(justCreated.token); }}
-            style={{ marginTop: 8, fontSize: 11, padding: '4px 10px' }}
-          >Copy</button>
-          <button
-            onClick={() => setJustCreated(null)}
-            style={{ marginTop: 8, marginLeft: 6, fontSize: 11, padding: '4px 10px' }}
-          >Dismiss</button>
-        </div>
-      )}
-
-      {err && <div style={{ color: 'var(--red, #dc2626)', fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
-
-      {loading ? (
-        <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>loading…</div>
-      ) : tokens.length === 0 ? (
-        <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic' }}>No tokens yet. Create one below to connect an MCP client.</div>
-      ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--rule)', textAlign: 'left', color: 'var(--ink-3)' }}>
-              <th style={{ padding: '6px 8px' }}>Name</th>
-              <th style={{ padding: '6px 8px' }}>Identifier</th>
-              <th style={{ padding: '6px 8px' }}>Scope</th>
-              <th style={{ padding: '6px 8px' }}>Created</th>
-              <th style={{ padding: '6px 8px' }}>Last used</th>
-              <th style={{ padding: '6px 8px' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {tokens.map(t => (
-              <tr key={t.id} style={{ borderBottom: '1px solid var(--rule)', opacity: t.revoked_at ? 0.45 : 1 }}>
-                <td style={{ padding: '8px' }}>{t.name}{t.revoked_at && <span style={{ marginLeft: 6, fontSize: 10.5, color: 'var(--ink-3)' }}>revoked</span>}</td>
-                <td style={{ padding: '8px', fontFamily: 'var(--mono)', fontSize: 11.5 }}>myc_{t.prefix}_…</td>
-                <td style={{ padding: '8px' }}><RoleBadge role={t.scope} /></td>
-                <td style={{ padding: '8px', color: 'var(--ink-3)' }}>{(t.created_at || '').slice(0, 10)}</td>
-                <td style={{ padding: '8px', color: 'var(--ink-3)' }}>{t.last_used_at ? t.last_used_at.slice(0, 10) : '—'}</td>
-                <td style={{ padding: '8px', textAlign: 'right' }}>
-                  {!t.revoked_at && <button onClick={() => onRevoke(t.id)} style={{ fontSize: 11, padding: '3px 8px' }}>Revoke</button>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-
-      <form onSubmit={onCreate} style={{ marginTop: 20, display: 'flex', gap: 8, alignItems: 'center', borderTop: '1px solid var(--rule)', paddingTop: 16 }}>
-        <input
-          type="text" placeholder="Token name (e.g. laptop)" value={newName}
-          onChange={(e) => setNewName(e.target.value)} required maxLength={80}
-          style={{ flex: 1, padding: '6px 10px', fontSize: 13 }}
-        />
-        <select value={newScope} onChange={(e) => setNewScope(e.target.value)} style={{ padding: '6px 10px', fontSize: 13 }}>
-          {scopes.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <button type="submit" disabled={creating || !newName.trim()} style={{ padding: '6px 14px', fontSize: 13 }}>
-          {creating ? 'Creating…' : 'Create token'}
-        </button>
-      </form>
-    </section>
-  );
-}
-
-// ---------- admin: users ----------
-
-function UsersCard() {
-  const [users, setUsers] = useSt([]);
-  const [invites, setInvites] = useSt([]);
-  const [err, setErr] = useSt(null);
-  const [loading, setLoading] = useSt(true);
-  const [newSvcName, setNewSvcName] = useSt('');
-  const [newSvcRole, setNewSvcRole] = useSt('writer');
-  const [newInvEmail, setNewInvEmail] = useSt('');
-  const [newInvRole, setNewInvRole] = useSt('writer');
-  const [lastInviteLink, setLastInviteLink] = useSt(null);
-  const [svcTokenJustCreated, setSvcTokenJustCreated] = useSt(null);
-
-  const reload = useCBSt(async () => {
-    setLoading(true); setErr(null);
-    try {
-      const [u, i] = await Promise.all([
-        _fetchJSON('/api/admin/users'),
-        _fetchJSON('/api/admin/invites'),
-      ]);
-      setUsers(u.users || []);
-      setInvites(i.invites || []);
-    } catch (e) { setErr(e.message); }
-    finally { setLoading(false); }
-  }, []);
-
-  useESt(() => { reload(); }, [reload]);
-
-  const onCreateService = async (e) => {
-    e.preventDefault();
-    if (!newSvcName.trim()) return;
-    setErr(null);
-    try {
-      await _postJSON('/api/admin/users', { name: newSvcName.trim(), role: newSvcRole, type: 'service' });
-      setNewSvcName('');
-      await reload();
-    } catch (e) { setErr(e.message); }
-  };
-
-  const onCreateInvite = async (e) => {
-    e.preventDefault();
-    if (!newInvEmail.trim()) return;
-    setErr(null);
-    try {
-      const r = await _postJSON('/api/admin/invites', { email: newInvEmail.trim(), role: newInvRole });
-      setLastInviteLink(r.link);
-      setNewInvEmail('');
-      await reload();
-    } catch (e) { setErr(e.message); }
-  };
-
-  const onChangeRole = async (userId, role) => {
-    try { await _patchJSON(`/api/admin/users/${userId}`, { role }); await reload(); }
-    catch (e) { setErr(e.message); }
-  };
-
-  const onToggleStatus = async (u) => {
-    const next = u.status === 'active' ? 'suspended' : 'active';
-    try { await _patchJSON(`/api/admin/users/${u.id}`, { status: next }); await reload(); }
-    catch (e) { setErr(e.message); }
-  };
-
-  const onMintForService = async (userId) => {
-    const name = prompt('Token name (e.g. ci-agent):');
-    if (!name) return;
-    try {
-      const r = await _postJSON(`/api/admin/users/${userId}/tokens`, { name, scope: 'writer' });
-      setSvcTokenJustCreated({ user_id: userId, ...r });
-    } catch (e) { setErr(e.message); }
-  };
-
-  const onRevokeInvite = async (id) => {
-    if (!confirm('Revoke this invite?')) return;
-    try { await _del(`/api/admin/invites/${id}`); await reload(); }
-    catch (e) { setErr(e.message); }
-  };
-
-  return (
-    <section className="card" style={{ padding: '20px 24px', marginBottom: 24 }}>
-      <h2 style={{ margin: 0, fontSize: 14, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--ink-3)' }}>Users & invites</h2>
-      <p style={{ marginTop: 8, marginBottom: 18, fontSize: 12.5, color: 'var(--ink-3)' }}>
-        Admin-only. Humans authenticate via OIDC after accepting an invite; service accounts are token-only identities for third-party agents.
-      </p>
-
-      {err && <div style={{ color: 'var(--red, #dc2626)', fontSize: 12.5, marginBottom: 12 }}>{err}</div>}
-
-      {svcTokenJustCreated && (
-        <div style={{ background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.35)', borderRadius: 6, padding: '12px 14px', marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: 'var(--ink-2)', marginBottom: 6 }}>
-            Token <strong>{svcTokenJustCreated.name}</strong> for service account created. Copy it now.
-          </div>
-          <code style={{ display: 'block', padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 4, fontSize: 12, wordBreak: 'break-all', userSelect: 'all' }}>
-            {svcTokenJustCreated.token}
-          </code>
-          <button onClick={() => setSvcTokenJustCreated(null)} style={{ marginTop: 8, fontSize: 11, padding: '4px 10px' }}>Dismiss</button>
-        </div>
-      )}
-
-      {loading ? (
-        <div style={{ fontSize: 12, color: 'var(--ink-3)' }}>loading…</div>
-      ) : (
-        <>
-          <h3 style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 4, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Members</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 24 }}>
-            <thead>
-              <tr style={{ borderBottom: '1px solid var(--rule)', textAlign: 'left', color: 'var(--ink-3)' }}>
-                <th style={{ padding: '6px 8px' }}>Name</th>
-                <th style={{ padding: '6px 8px' }}>Email</th>
-                <th style={{ padding: '6px 8px' }}>Type</th>
-                <th style={{ padding: '6px 8px' }}>Role</th>
-                <th style={{ padding: '6px 8px' }}>Status</th>
-                <th style={{ padding: '6px 8px' }}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map(u => (
-                <tr key={u.id} style={{ borderBottom: '1px solid var(--rule)', opacity: u.status === 'active' ? 1 : 0.5 }}>
-                  <td style={{ padding: '8px' }}>{u.name}</td>
-                  <td style={{ padding: '8px', color: 'var(--ink-3)' }}>{u.email || '—'}</td>
-                  <td style={{ padding: '8px' }}>{u.type}</td>
-                  <td style={{ padding: '8px' }}>
-                    <select value={u.role} onChange={(e) => onChangeRole(u.id, e.target.value)} style={{ fontSize: 12, padding: '2px 6px' }}>
-                      <option value="reader">reader</option>
-                      <option value="drafter">drafter</option>
-                      <option value="writer">writer</option>
-                      <option value="admin">admin</option>
-                    </select>
-                  </td>
-                  <td style={{ padding: '8px' }}>{u.status}</td>
-                  <td style={{ padding: '8px', textAlign: 'right' }}>
-                    {u.type === 'service' && <button onClick={() => onMintForService(u.id)} style={{ fontSize: 11, padding: '3px 8px', marginRight: 4 }}>Mint token</button>}
-                    <button onClick={() => onToggleStatus(u)} style={{ fontSize: 11, padding: '3px 8px' }}>
-                      {u.status === 'active' ? 'Suspend' : 'Activate'}
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <h3 style={{ fontSize: 12, color: 'var(--ink-3)', marginTop: 4, marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Pending invites</h3>
-          {invites.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic', marginBottom: 16 }}>No pending invites.</div>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 24 }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid var(--rule)', textAlign: 'left', color: 'var(--ink-3)' }}>
-                  <th style={{ padding: '6px 8px' }}>Email</th>
-                  <th style={{ padding: '6px 8px' }}>Role</th>
-                  <th style={{ padding: '6px 8px' }}>Created</th>
-                  <th style={{ padding: '6px 8px' }}>Link</th>
-                  <th style={{ padding: '6px 8px' }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {invites.map(i => (
-                  <tr key={i.id} style={{ borderBottom: '1px solid var(--rule)' }}>
-                    <td style={{ padding: '8px' }}>{i.email}</td>
-                    <td style={{ padding: '8px' }}><RoleBadge role={i.role} /></td>
-                    <td style={{ padding: '8px', color: 'var(--ink-3)' }}>{(i.created_at || '').slice(0, 10)}</td>
-                    <td style={{ padding: '8px' }}>
-                      <button onClick={() => { navigator.clipboard.writeText(i.link); }} style={{ fontSize: 11, padding: '3px 8px' }}>Copy link</button>
-                    </td>
-                    <td style={{ padding: '8px', textAlign: 'right' }}>
-                      <button onClick={() => onRevokeInvite(i.id)} style={{ fontSize: 11, padding: '3px 8px' }}>Revoke</button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-
-          {lastInviteLink && (
-            <div style={{ background: 'rgba(37,99,235,0.08)', border: '1px solid rgba(37,99,235,0.35)', borderRadius: 6, padding: '10px 12px', marginBottom: 16, fontSize: 12 }}>
-              Invite link (send to the recipient):
-              <code style={{ display: 'block', padding: '6px 8px', marginTop: 6, background: 'var(--surface-2)', borderRadius: 4, fontSize: 11.5, wordBreak: 'break-all', userSelect: 'all' }}>{lastInviteLink}</code>
+    <main className="page settings-page">
+      <PageHeader eyebrow="Settings" title={def.label} blurb={def.blurb} />
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="Settings sections">
+          {GROUPS.map(g => (
+            <div key={g.title} className="sn-group">
+              <div className="sn-title">{g.title}</div>
+              {g.sections.map(s => <Link key={s.id} to={{ view: 'settings', section: s.id }} className={`sn-link${s.id === def.id ? ' on' : ''}`}>{s.label}</Link>)}
             </div>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-            <form onSubmit={onCreateService} style={{ borderTop: '1px solid var(--rule)', paddingTop: 14 }}>
-              <h4 style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Create service account</h4>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input value={newSvcName} onChange={(e) => setNewSvcName(e.target.value)} placeholder="Name (e.g. ci-agent)" maxLength={80} style={{ flex: 1, padding: '6px 10px', fontSize: 13 }} />
-                <select value={newSvcRole} onChange={(e) => setNewSvcRole(e.target.value)} style={{ padding: '6px 10px', fontSize: 13 }}>
-                  <option value="reader">reader</option>
-                  <option value="drafter">drafter</option>
-                  <option value="writer">writer</option>
-                  <option value="admin">admin</option>
-                </select>
-                <button type="submit" disabled={!newSvcName.trim()} style={{ padding: '6px 12px', fontSize: 13 }}>Create</button>
-              </div>
-            </form>
-
-            <form onSubmit={onCreateInvite} style={{ borderTop: '1px solid var(--rule)', paddingTop: 14 }}>
-              <h4 style={{ fontSize: 11.5, color: 'var(--ink-3)', margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.04em' }}>Invite human</h4>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <input value={newInvEmail} onChange={(e) => setNewInvEmail(e.target.value)} placeholder="email@example.com" type="email" style={{ flex: 1, padding: '6px 10px', fontSize: 13 }} />
-                <select value={newInvRole} onChange={(e) => setNewInvRole(e.target.value)} style={{ padding: '6px 10px', fontSize: 13 }}>
-                  <option value="reader">reader</option>
-                  <option value="drafter">drafter</option>
-                  <option value="writer">writer</option>
-                  <option value="admin">admin</option>
-                </select>
-                <button type="submit" disabled={!newInvEmail.trim()} style={{ padding: '6px 12px', fontSize: 13 }}>Invite</button>
-              </div>
-            </form>
-          </div>
-        </>
-      )}
-    </section>
-  );
-}
-
-// ---------- screen root ----------
-
-function SettingsScreen() {
-  const [me, setMe] = useSt(null);
-  const [err, setErr] = useSt(null);
-
-  useESt(() => {
-    _fetchJSON('/api/me').then(setMe).catch(e => setErr(e.message));
-  }, []);
-
-  if (err) return <main className="page"><div className="page-inner" style={{ padding: '32px 24px' }}><div style={{ color: 'var(--red, #dc2626)' }}>{err}</div></div></main>;
-  if (!me) return <main className="page"><div className="page-inner" style={{ padding: '32px 24px', color: 'var(--ink-3)' }}>loading…</div></main>;
-
-  return (
-    <main className="page">
-      <div className="page-inner" style={{ maxWidth: 960, padding: '32px 24px 80px' }}>
-        <header style={{ marginBottom: 24 }}>
-          <h1 style={{ margin: 0 }}>Settings</h1>
-          <p style={{ marginTop: 6, color: 'var(--ink-3)', fontSize: 13 }}>AI models, account, MCP tokens, and user management.</p>
-        </header>
-
-        <AISettings />
-        <AccountCard me={me} />
-        <TokensCard me={me} />
-        {me.role === 'admin' && me.auth_enabled && <UsersCard />}
-        {me.role === 'admin' && !me.auth_enabled && (
-          <div style={{ fontSize: 12.5, color: 'var(--ink-3)', fontStyle: 'italic', padding: '16px 0' }}>
-            General user management is hidden while authentication is disabled. You can create a reviewer account above. Set <code>MYCELIUM_AUTH=on</code> to enable full user management.
-          </div>
-        )}
+          ))}
+        </nav>
+        <div className="settings-body"><Section id={def.id} /></div>
       </div>
     </main>
   );
 }
 
-export { SettingsScreen };
+function Section({ id }: { id: SettingsSection }) {
+  switch (id) {
+    case 'account': return <><AccountCard /><TokensCard /></>;
+    case 'appearance': return <AppearanceCard />;
+    case 'members': return <MembersSection />;
+    case 'models': return <ActionModels />;
+    case 'prompts': return <AIInstructions />;
+    case 'review': return <DraftReviewSettings />;
+    case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'research', 'docgen', 'draft_review', 'alias_discovery', 'concurrency']} />;
+    case 'research': return <ProductSettings kinds={['sources']} />;
+    case 'documentation': return <><ProductSettings kinds={['documentation']} /><DocumentationProfiles /></>;
+  }
+}
+
+/* ---------------- shared bits ---------------- */
+export const RoleBadge = ({ role }: { role: string }) => <span className={`role-badge ${role}`}>{role}</span>;
+
+function Secret({ label, value, onDismiss }: { label: ReactNode; value: string; onDismiss: () => void }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="notice success secret">
+      <div className="stack-sm grow">
+        <div>{label}</div>
+        <code className="secret-value">{value}</code>
+        <div className="row gap-sm">
+          <button className="btn sm" onClick={() => { void navigator.clipboard?.writeText(value); setCopied(true); }}>{copied ? 'Copied' : 'Copy'}</button>
+          <button className="btn ghost sm" onClick={onDismiss}>Dismiss</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- account ---------------- */
+function AccountCard() {
+  const me = useMe();
+  if (!me) return <Card title="Account"><Loading what="your account" /></Card>;
+  return (
+    <Card title="Account">
+      <dl className="kv-grid">
+        <dt>Name</dt><dd>{me.name}</dd>
+        <dt>Role</dt><dd><RoleBadge role={me.role} /></dd>
+        <dt>Type</dt><dd>{me.type}</dd>
+        <dt>Authentication</dt>
+        <dd>{me.auth_enabled ? <span className="ok-text">enabled</span> : <span className="warn-text">disabled: everyone is the local admin</span>}</dd>
+      </dl>
+    </Card>
+  );
+}
+
+interface Token { id: string; name: string; prefix: string; scope: Role; created_at: string; last_used_at: string | null; revoked_at: string | null }
+type CreatedToken = Token & { token: string };
+
+const scopesFor = (role: Role): Role[] => ROLES.slice(0, ROLES.indexOf(role) + 1);
+
+function TokensCard() {
+  const me = useMe();
+  const { state, reload } = useAsync(useCallback(() => getJSON<{ tokens: Token[] }>('/api/me/tokens').then(r => r.tokens), []));
+  const [name, setName] = useState('');
+  const [scope, setScope] = useState<Role>('writer');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [created, setCreated] = useState<CreatedToken | null>(null);
+  const scopes = me ? scopesFor(me.role) : ['reader' as Role];
+
+  const create = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setBusy(true); setErr(null);
+    try {
+      setCreated(await postJSON<CreatedToken>('/api/me/tokens', { name: name.trim(), scope: scopes.includes(scope) ? scope : scopes[scopes.length - 1] }));
+      setName(''); reload();
+    } catch (ex) { setErr(errorMessage(ex)); }
+    finally { setBusy(false); }
+  };
+  const revoke = async (id: string) => {
+    if (!window.confirm('Revoke this token? Any MCP client using it loses access.')) return;
+    try { await deleteJSON<unknown>(`/api/me/tokens/${enc(id)}`); reload(); }
+    catch (ex) { setErr(errorMessage(ex)); }
+  };
+
+  return (
+    <Card title="MCP tokens" actions={<a className="btn ghost sm" href="/connect"><I.plug width="14" height="14" />How to connect a client</a>}>
+      <p className="muted">Bearer tokens for MCP clients such as Claude Desktop, Claude Code and CI agents, sent as <code>Authorization: Bearer myc_…</code>. Each token is revocable on its own; the secret is shown once, at creation.</p>
+      {created && <Secret label={<>Token <b>{created.name}</b> created. Copy it now: it will not be shown again.</>} value={created.token} onDismiss={() => setCreated(null)} />}
+      {err && <Notice tone="error">{err}</Notice>}
+      {state.status === 'loading' && <Loading what="tokens" />}
+      {state.status === 'error' && <LoadError error={state.error} what="tokens" onRetry={reload} />}
+      {state.status === 'ready' && (state.data.length === 0
+        ? <p className="muted">No tokens yet. Create one below to connect an MCP client.</p>
+        : <table className="tbl compact">
+          <thead><tr><th>Name</th><th>Identifier</th><th>Scope</th><th>Created</th><th>Last used</th><th /></tr></thead>
+          <tbody>{state.data.map(t => (
+            <tr key={t.id} className={t.revoked_at ? 'revoked' : ''}>
+              <td>{t.name}{t.revoked_at && <span className="muted small"> · revoked</span>}</td>
+              <td className="mono">myc_{t.prefix}_…</td>
+              <td><RoleBadge role={t.scope} /></td>
+              <td className="muted">{t.created_at.slice(0, 10)}</td>
+              <td className="muted">{t.last_used_at ? t.last_used_at.slice(0, 10) : '—'}</td>
+              <td className="num">{!t.revoked_at && <button className="btn ghost xs" onClick={() => void revoke(t.id)}>Revoke</button>}</td>
+            </tr>
+          ))}</tbody>
+        </table>)}
+      <form className="inline-form" onSubmit={create}>
+        <input className="input grow" placeholder="Token name, for example laptop" aria-label="Token name" value={name} onChange={e => setName(e.target.value)} required maxLength={80} />
+        <select className="input" aria-label="Token scope" value={scopes.includes(scope) ? scope : scopes[scopes.length - 1]} onChange={e => setScope(e.target.value as Role)}>
+          {scopes.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button className="btn primary" type="submit" disabled={busy || !name.trim()}>{busy ? 'Creating…' : 'Create token'}</button>
+      </form>
+    </Card>
+  );
+}
+
+/* ---------------- appearance ---------------- */
+const PREF_LABELS: { [K in keyof Prefs]: { label: string; hint: string } } = {
+  theme: { label: 'Theme', hint: '' },
+  density: { label: 'Density', hint: 'Spacing in lists and tables.' },
+  answerVoice: { label: 'Answer typeface', hint: 'Ask answers in a serif reading face, or in the interface face.' },
+};
+
+function AppearanceCard() {
+  const { prefs, setPref } = usePrefs();
+  const row = <K extends keyof Prefs>(key: K) => (
+    <div className="field-row" key={key}>
+      <div><div className="field-label">{PREF_LABELS[key].label}</div>{PREF_LABELS[key].hint && <div className="hint">{PREF_LABELS[key].hint}</div>}</div>
+      <div className="seg" role="group" aria-label={PREF_LABELS[key].label}>
+        {(PREF_CHOICES[key] as readonly Prefs[K][]).map(v => <button key={v} className={prefs[key] === v ? 'on' : ''} aria-pressed={prefs[key] === v} onClick={() => setPref(key, v)}>{v}</button>)}
+      </div>
+    </div>
+  );
+  return <Card title="Appearance"><p className="muted">Saved in this browser only.</p>{row('theme')}{row('density')}{row('answerVoice')}</Card>;
+}
+
+/* ---------------- members ---------------- */
+interface User { id: string; name: string; email: string | null; type: string; role: Role; status: string }
+interface Invite { id: string; email: string; role: Role; created_at: string; link: string }
+
+function MembersSection() {
+  const me = useMe();
+  if (!me) return <Loading what="your account" />;
+  if (me.role !== 'admin') return <Notice>Only administrators manage members. You are signed in as a {me.role}.</Notice>;
+  if (!me.auth_enabled) {
+    return <Notice>User management is off while authentication is disabled: everyone is the local admin. Set <code>MYCELIUM_AUTH=on</code> to invite people. A reviewer service account can still be created under <Link to={{ view: 'settings', section: 'review' }}>Draft review</Link>.</Notice>;
+  }
+  return <MembersCard me={me} />;
+}
+
+function MembersCard({ me }: { me: Me }) {
+  const load = useCallback(() => Promise.all([
+    getJSON<{ users: User[] }>('/api/admin/users').then(r => r.users),
+    getJSON<{ invites: Invite[] }>('/api/admin/invites').then(r => r.invites),
+  ]), []);
+  const { state, reload } = useAsync(load);
+  const [err, setErr] = useState<string | null>(null);
+  const [svcName, setSvcName] = useState('');
+  const [svcRole, setSvcRole] = useState<Role>('writer');
+  const [invEmail, setInvEmail] = useState('');
+  const [invRole, setInvRole] = useState<Role>('writer');
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [svcToken, setSvcToken] = useState<{ name: string; token: string } | null>(null);
+
+  const act = async (action: () => Promise<unknown>) => {
+    setErr(null);
+    try { await action(); reload(); } catch (e) { setErr(errorMessage(e)); }
+  };
+  const createService = (e: FormEvent) => { e.preventDefault(); void act(async () => { await postJSON('/api/admin/users', { name: svcName.trim(), role: svcRole, type: 'service' }); setSvcName(''); }); };
+  const invite = (e: FormEvent) => { e.preventDefault(); void act(async () => { const r = await postJSON<{ link: string }>('/api/admin/invites', { email: invEmail.trim(), role: invRole }); setInviteLink(r.link); setInvEmail(''); }); };
+  const mint = (userId: string) => {
+    const name = window.prompt('Token name, for example ci-agent:');
+    if (name) void act(async () => setSvcToken(await postJSON<{ name: string; token: string }>(`/api/admin/users/${enc(userId)}/tokens`, { name, scope: 'writer' })));
+  };
+  const roleSelect = (value: Role, onChange: (r: Role) => void, label: string) => (
+    <select className="input" aria-label={label} value={value} onChange={e => onChange(e.target.value as Role)}>{ROLES.map(r => <option key={r} value={r}>{r}</option>)}</select>
+  );
+
+  return (
+    <>
+      {err && <Notice tone="error">{err}</Notice>}
+      {svcToken && <Secret label={<>Token <b>{svcToken.name}</b> for the service account. Copy it now.</>} value={svcToken.token} onDismiss={() => setSvcToken(null)} />}
+      {inviteLink && <Secret label="Invite link: send it to the recipient." value={inviteLink} onDismiss={() => setInviteLink(null)} />}
+      <Card title="Members">
+        <p className="muted">People sign in through your identity provider after accepting an invite. Service accounts are token-only identities for agents.</p>
+        {state.status === 'loading' && <Loading what="members" />}
+        {state.status === 'error' && <LoadError error={state.error} what="members" onRetry={reload} />}
+        {state.status === 'ready' && (
+          <table className="tbl compact">
+            <thead><tr><th>Name</th><th>Email</th><th>Type</th><th>Role</th><th>Status</th><th /></tr></thead>
+            <tbody>{state.data[0].map(u => (
+              <tr key={u.id} className={u.status === 'active' ? '' : 'revoked'}>
+                <td>{u.name}{u.id === me.id && <span className="muted small"> · you</span>}</td>
+                <td className="muted">{u.email || '—'}</td>
+                <td>{u.type}</td>
+                <td>{roleSelect(u.role, r => void act(() => patchJSON(`/api/admin/users/${enc(u.id)}`, { role: r })), `Role of ${u.name}`)}</td>
+                <td>{u.status}</td>
+                <td className="num row gap-sm end">
+                  {u.type === 'service' && <button className="btn ghost xs" onClick={() => mint(u.id)}>Mint token</button>}
+                  <button className="btn ghost xs" onClick={() => void act(() => patchJSON(`/api/admin/users/${enc(u.id)}`, { status: u.status === 'active' ? 'suspended' : 'active' }))}>
+                    {u.status === 'active' ? 'Suspend' : 'Activate'}
+                  </button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        )}
+      </Card>
+      <Card title="Pending invites">
+        {state.status === 'ready' && (state.data[1].length === 0 ? <p className="muted">No pending invites.</p> : (
+          <table className="tbl compact">
+            <thead><tr><th>Email</th><th>Role</th><th>Created</th><th /></tr></thead>
+            <tbody>{state.data[1].map(i => (
+              <tr key={i.id}>
+                <td>{i.email}</td><td><RoleBadge role={i.role} /></td><td className="muted">{i.created_at.slice(0, 10)}</td>
+                <td className="num row gap-sm end">
+                  <button className="btn ghost xs" onClick={() => void navigator.clipboard?.writeText(i.link)}>Copy link</button>
+                  <button className="btn ghost xs" onClick={() => { if (window.confirm('Revoke this invite?')) void act(() => deleteJSON(`/api/admin/invites/${enc(i.id)}`)); }}>Revoke</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        ))}
+        <div className="two-col">
+          <form className="stack-sm" onSubmit={invite}>
+            <div className="field-label">Invite a person</div>
+            <div className="row gap-sm">
+              <input className="input grow" type="email" placeholder="email@example.com" aria-label="Invitee email" value={invEmail} onChange={e => setInvEmail(e.target.value)} />
+              {roleSelect(invRole, setInvRole, 'Invitee role')}
+              <button className="btn primary" type="submit" disabled={!invEmail.trim()}>Invite</button>
+            </div>
+          </form>
+          <form className="stack-sm" onSubmit={createService}>
+            <div className="field-label">Create a service account</div>
+            <div className="row gap-sm">
+              <input className="input grow" placeholder="Name, for example ci-agent" aria-label="Service account name" maxLength={80} value={svcName} onChange={e => setSvcName(e.target.value)} />
+              {roleSelect(svcRole, setSvcRole, 'Service account role')}
+              <button className="btn" type="submit" disabled={!svcName.trim()}>Create</button>
+            </div>
+          </form>
+        </div>
+      </Card>
+    </>
+  );
+}

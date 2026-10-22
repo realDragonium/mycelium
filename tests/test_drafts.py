@@ -1118,11 +1118,11 @@ def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
     }
 
 
-_DRAFTS_TSX = Path(__file__).resolve().parents[1] / "frontend/ui/drafts.tsx"
+_DRAFTS_TSX = Path(__file__).resolve().parents[1] / "frontend/ui/draft-review.tsx"
 
 
 def test_flag_reason_lookup_is_guarded_against_inherited_properties():
-    """A bare `_FLAG_REASONS[reason]` index reaches Object.prototype, so a flag
+    """A bare `FLAG_REASONS[reason]` index reaches Object.prototype, so a flag
     whose reason is `constructor` or `toString` resolves to an inherited member
     and renders a blank stage and a blank explanation next to the enum — worse
     than the enum alone, because it reads as though the pipeline said nothing.
@@ -1130,12 +1130,12 @@ def test_flag_reason_lookup_is_guarded_against_inherited_properties():
     There is no JS test runner in this repo, so hold the concrete guard and
     fallback expression that prevent inherited members from being rendered."""
     source = _DRAFTS_TSX.read_text()
-    lookup = re.search(r"const known = ([^;]*?_FLAG_REASONS[^;]*?);\n", source, re.S)
-    assert lookup is not None, "could not find the _FLAG_REASONS lookup"
+    lookup = re.search(r"const known = ([^;]*?FLAG_REASONS[^;]*?);\n", source, re.S)
+    assert lookup is not None, "could not find the FLAG_REASONS lookup"
     guard = " ".join(lookup.group(1).split())
     assert guard == (
-        "Object.prototype.hasOwnProperty.call(_FLAG_REASONS, p.reason) "
-        "? _FLAG_REASONS[p.reason] : null"
+        "Object.prototype.hasOwnProperty.call(FLAG_REASONS, reason) "
+        "? FLAG_REASONS[reason] : null"
     )
-    assert "const stage = known ? known[0]" in source
-    assert "const explanation = known ? known[1]" in source
+    assert "known ? known[0]" in source
+    assert "known ? known[1]" in source

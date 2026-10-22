@@ -2,6 +2,7 @@
 // tables (statement kinds, statement link types, entity link types).
 // Reads from /list-statement-kinds, /list-link-types,
 // /list-entity-link-types; mutates via /upsert-* and /delete-*.
+import { PageHeader } from './lib';
 import { useState as useG, useEffect as useEG, useCallback as useCBG, useRef as useRG } from 'react';
 
 const GLOSSARY_TABS = [
@@ -72,28 +73,14 @@ function GlossaryScreen() {
 
   return (
     <main className="page">
-      <div className="page-inner" style={{maxWidth: 1040, padding: '32px 24px 80px'}}>
-        <header className="gls-header">
-          <h1>Glossary</h1>
-          <p>
-            Authoritative definitions for statement kinds and link types in the substrate. Edit a description below, or add a new entry at the bottom of each section. Changes are persisted immediately.
-          </p>
-        </header>
-
-        <nav className="glossary-tabs">
-          {GLOSSARY_TABS.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setActiveTab(t.id)}
-              className={t.id === activeTab ? 'is-active' : ''}
-            >
-              {t.label}
-            </button>
-          ))}
-        </nav>
-
-        <GlossaryTab key={tab.id} tab={tab} />
-      </div>
+      <PageHeader eyebrow="Curate" title="Glossary"
+        blurb="The vocabulary the knowledge base is written in: statement kinds, statement link types and entity link types. Edit a description, or add an entry at the end of a section. Changes save immediately and are offered to every agent." />
+      <nav className="tabs">
+        {GLOSSARY_TABS.map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)} className={t.id === activeTab ? 'on' : ''} aria-pressed={t.id === activeTab}>{t.label}</button>
+        ))}
+      </nav>
+      <GlossaryTab key={tab.id} tab={tab} />
     </main>
   );
 }
@@ -119,10 +106,10 @@ function GlossaryTab({ tab }) {
   useEG(() => { setLoading(true); reload(); }, [reload]);
 
   if (loading) {
-    return <div style={{padding: '20px 4px', color: 'var(--ink-3)', fontSize: 13}}>Loading…</div>;
+    return <p className="muted small" role="status">Loading…</p>;
   }
   if (error) {
-    return <div className="gls-error" style={{padding: '20px 4px'}}>Error: {error}</div>;
+    return <p className="gls-error" role="alert">Error: {error}</p>;
   }
 
   const totalUsage = entries.reduce((acc, e) => acc + (e.usage_count || 0), 0);

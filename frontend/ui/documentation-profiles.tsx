@@ -1,279 +1,308 @@
-import React from 'react';
-import type { CSSProperties } from 'react';
+// Revisioned AI texts: the per-action prompts (doctrine) and the
+// documentation writing profiles (guidance, disclosure rules, templates).
+import { useCallback, useState, type FormEvent } from 'react';
+import { Card, LoadError, Loading, Notice, formatDate } from './lib';
+import { HttpError, deleteJSON, enc, errorMessage, getJSON, postJSON, putJSON } from './api';
+import { useAsync } from './use-async';
 
-const profileStyle: Record<string, CSSProperties> = {
-  section: { padding: 20, marginBottom: 20, border: '1px solid var(--rule, var(--line))', borderRadius: 6 },
-  field: { display: 'grid', gap: 6, margin: '14px 0' },
-  input: { width: '100%', boxSizing: 'border-box', padding: 9, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))', border: '1px solid var(--rule, var(--line))', borderRadius: 4 },
-  buttons: { display: 'flex', flexWrap: 'wrap', gap: 8, margin: '12px 0' },
-  button: { padding: '8px 12px', color: 'var(--ink)', background: 'var(--surface-2, var(--paper))', border: '1px solid var(--rule, var(--line))', borderRadius: 4 },
-};
-
-async function profileRequest(path: string, method = 'GET', body?: unknown) {
-  const response = await fetch(path, { method, headers: { 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(response.status === 409
-    ? 'This configuration changed elsewhere. Your edits are still here. Reload before saving again.'
-    : typeof data.detail === 'string' ? data.detail : 'Could not save. Check the names and text, then try again.');
-  return data;
+// Saves are guarded by revision; a 409 keeps the edits and asks for a reload.
+function saveMessage(e: unknown): string {
+  if (e instanceof HttpError && e.status === 409) return 'This text changed elsewhere. Your edits are still here; reload before saving again.';
+  return errorMessage(e, 'Could not save. Check the names and text, then try again.');
 }
 
-function PromptHistory({ type, name, canRestore, onRestored, onBusyChange }) {
-  const [versions, setVersions] = React.useState(null);
-  const [selected, setSelected] = React.useState('');
-  const [error, setError] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const [reload, setReload] = React.useState(0);
-  React.useEffect(() => {
-    let active = true;
-    setVersions(null); setError(null);
-    profileRequest(`/api/documentation/prompts/history?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`)
-      .then(data => { if (active) { setVersions(data.versions); setSelected(String(data.versions[0]?.version || '')); } })
-      .catch(e => { if (active) setError(e.message); });
-    return () => { active = false; };
-  }, [type, name, reload]);
-  const version = versions?.find(item => String(item.version) === selected);
+/* ============================ version history ============================ */
+interface Version { id: string; version: number; text: string; created_at: string; created_by: string | null; deleted: boolean }
+
+function PromptHistory({ type, name, canRestore, onRestored, onBusyChange }: {
+  type: string; name: string; canRestore: boolean; onRestored: (saved: Version) => void | Promise<void>; onBusyChange?: (busy: boolean) => void;
+}) {
+  const load = useCallback(() => getJSON<{ versions: Version[] }>(`/api/documentation/prompts/history?type=${enc(type)}&name=${enc(name)}`).then(r => r.versions), [type, name]);
+  const { state, reload, update } = useAsync(load);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const versions = state.status === 'ready' ? state.data : null;
+  const selected = versions?.find(v => v.version === picked) || versions?.[0];
+
   const restore = async () => {
-    onBusyChange?.(true);
-    setBusy(true); setError(null);
+    if (!versions || !selected) return;
+    onBusyChange?.(true); setBusy(true); setError(null);
     try {
-      const saved = await profileRequest('/api/documentation/prompts/restore', 'POST', { type, name, version: version.version, revision: versions[0].version });
-      setVersions(previous => [saved, ...previous.filter(item => item.version !== saved.version)]);
-      setSelected(String(saved.version));
+      const saved = await postJSON<Version>('/api/documentation/prompts/restore', { type, name, version: selected.version, revision: versions[0].version });
+      update(list => [saved, ...list.filter(v => v.version !== saved.version)]);
+      setPicked(saved.version);
       await onRestored(saved);
-    } catch (e) { setError(e.message); }
+    } catch (e) { setError(saveMessage(e)); }
     finally { setBusy(false); onBusyChange?.(false); }
   };
-  return <section style={profileStyle.section} aria-label={`History of ${name}`}>
-    <h3>History: {name}</h3>
-    {error && <p role="alert">{error}</p>}
-    {!versions ? <p>Loading history…</p> : versions.length === 0 ? <p>No saved versions.</p> : <>
-      <label style={profileStyle.field}>Version<select value={selected} disabled={busy} style={profileStyle.input} onChange={event => setSelected(event.target.value)}>
-        {versions.map(item => <option key={item.id} value={item.version}>Version {item.version} · {item.created_at} · {item.created_by || 'Unknown author'}{item.deleted ? ' · Retired' : ''}</option>)}
-      </select></label>
-      <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 320, overflow: 'auto' }}>{version?.deleted ? 'This version retired the text.' : version?.text}</pre>
-      {canRestore && <button type="button" style={profileStyle.button} disabled={busy || !version || version.deleted || version.version === versions[0].version} onClick={restore}>{busy ? 'Restoring…' : 'Restore this version'}</button>}
-      <p>Restored text becomes current. Earlier versions remain available.</p>
-    </>}
-    <button type="button" style={profileStyle.button} disabled={busy} onClick={() => setReload(value => value + 1)}>Reload history</button>
-  </section>;
+
+  return (
+    <div className="subcard" aria-label={`History of ${name}`}>
+      <div className="row between"><h3>History · {name}</h3><button type="button" className="btn ghost xs" disabled={busy} onClick={reload}>Reload</button></div>
+      {error && <Notice tone="error">{error}</Notice>}
+      {state.status === 'loading' && <Loading what="history" />}
+      {state.status === 'error' && <LoadError error={state.error} what="history" />}
+      {versions && (versions.length === 0 ? <p className="muted">No saved versions.</p> : <>
+        <label className="field"><span>Version</span>
+          <select className="input" value={selected?.version ?? ''} disabled={busy} onChange={e => setPicked(Number(e.target.value))}>
+            {versions.map(v => <option key={v.id} value={v.version}>Version {v.version} · {formatDate(v.created_at)} · {v.created_by || 'unknown author'}{v.deleted ? ' · retired' : ''}</option>)}
+          </select>
+        </label>
+        <pre className="code tall">{selected?.deleted ? 'This version retired the text.' : selected?.text}</pre>
+        {canRestore && <button type="button" className="btn sm" disabled={busy || !selected || selected.deleted || selected.version === versions[0].version} onClick={() => void restore()}>{busy ? 'Restoring…' : 'Restore this version'}</button>}
+        <p className="hint">A restored version becomes current; earlier versions stay available.</p>
+      </>)}
+    </div>
+  );
 }
 
-function DocumentationProfiles() {
-  const [data, setData] = React.useState(null);
-  const [form, setForm] = React.useState(null);
-  const [original, setOriginal] = React.useState(null);
-  const [creating, setCreating] = React.useState(false);
-  const [error, setError] = React.useState(null);
-  const [message, setMessage] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const [history, setHistory] = React.useState(null);
-  const [retry, setRetry] = React.useState(0);
-  const [showRetired, setShowRetired] = React.useState(false);
-  React.useEffect(() => {
-    let active = true;
-    profileRequest('/api/documentation/profiles').then(value => { if (active) setData(value); }).catch(e => { if (active) setError(e.message); });
-    return () => { active = false; };
-  }, [retry]);
-  const dirty = form && JSON.stringify(form) !== JSON.stringify(original);
-  const choose = profile => {
-    if (dirty && !window.confirm('Discard unsaved profile changes?')) return;
-    setForm(profile); setOriginal(profile); setCreating(false); setHistory(null); setError(null); setMessage(null);
-  };
-  const create = source => {
-    if (dirty && !window.confirm('Discard unsaved profile changes?')) return;
-    const value = { name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(item => ({ ...item })) : [] };
-    setForm(value); setOriginal(null); setCreating(true); setHistory(null); setError(null); setMessage(null);
-  };
-  const change = (key, value) => { setForm(previous => ({ ...previous, [key]: value })); setMessage(null); };
-  const reloadProfile = async () => {
-    if (!form || creating) return;
-    if (dirty && !window.confirm('Discard local edits and load the saved profile?')) return;
-    setBusy(true); setError(null);
-    try {
-      const value = await profileRequest(`/api/documentation/profiles/${encodeURIComponent(form.name)}`);
-      setForm(value); setOriginal(value); setRetry(value => value + 1);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-  const save = async event => {
-    event.preventDefault(); setBusy(true); setError(null); setMessage(null);
-    try {
-      const value = await profileRequest(`/api/documentation/profiles/${encodeURIComponent(form.name)}`, 'PUT', { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })) });
-      setForm(value); setOriginal(value); setCreating(false); setRetry(value => value + 1); setMessage('Profile saved. New runs use these settings.');
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-  const retire = async () => {
-    if (!window.confirm(`Retire ${form.name}? Its history and generated documents will remain.`)) return;
-    setBusy(true); setError(null);
-    try {
-      const value = await profileRequest(`/api/documentation/profiles/${encodeURIComponent(form.name)}`, 'DELETE', { revision: form.revision });
-      setForm(value); setOriginal(value); setRetry(value => value + 1); setMessage('Profile retired. It will stay retired after a restart.');
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-  const templateChange = (index, key, value) => change('templates', form.templates.map((item, i) => i === index ? { ...item, [key]: value } : item));
-  const duplicateTemplate = item => {
-    setForm(previous => {
-      const names = new Set(previous.templates.map(template => template.name));
-      const base = `${item.name}-copy`;
-      let name = base;
-      let suffix = 2;
-      while (names.has(name)) name = `${base}-${suffix++}`;
-      return { ...previous, templates: [...previous.templates, { name, text: item.text, isNew: true }] };
-    });
-    setMessage(null);
-  };
-  return <section style={profileStyle.section} aria-label="Documentation profiles">
-    <h2>Documentation profiles</h2>
-    <p>Configure writing guidance, disclosure rules, and document templates. Changes are stored here and need no deployment. Audience guidance does not change who can access generated documents.</p>
-    {error && <p role="alert">{error}</p>}
-    {message && <p role="status">{message}</p>}
-    {!data ? <p>Loading profiles…</p> : <>
-      <div style={profileStyle.buttons}>
-        {data.can_write && <button type="button" style={profileStyle.button} disabled={busy} onClick={() => create(null)}>Create profile</button>}
-        <button type="button" style={profileStyle.button} disabled={busy} onClick={() => { setError(null); setRetry(value => value + 1); }}>Refresh profiles</button>
-        <label><input type="checkbox" checked={showRetired} onChange={event => setShowRetired(event.target.checked)} /> Show retired profiles</label>
-      </div>
-      <div style={profileStyle.buttons}>{data.profiles.filter(item => showRetired || !item.retired).map(item => <button type="button" key={item.name} style={profileStyle.button} disabled={busy} onClick={() => choose(item)}>{item.name}{item.name === data.default_profile ? ' · Default' : ''}{item.retired ? ' · Retired' : !item.ready ? ' · Incomplete' : ''}</button>)}</div>
-      {data.profiles.length === 0 && <p>No profiles yet. Create a profile and add a template to start.</p>}
-      {form && <>
-        {!creating && <h3>{form.name}{form.retired ? ' (retired)' : ''}</h3>}
-        {!creating && form.issues?.map(issue => <p key={issue}>{issue}</p>)}
-        <form onSubmit={save}><fieldset disabled={busy || !data.can_write} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-          {creating && <label style={profileStyle.field}>Profile name<input style={profileStyle.input} value={form.name} onChange={event => change('name', event.target.value)} required maxLength={200} pattern="[^/]+" placeholder="For example internal-doc" /></label>}
-          <label style={profileStyle.field}>Writing guidance<textarea rows={8} style={profileStyle.input} value={form.guidance} onChange={event => change('guidance', event.target.value)} /></label>
-          {!creating && <button type="button" style={profileStyle.button} onClick={() => setHistory('guidance')}>Guidance history</button>}
-          <label style={profileStyle.field}>Disclosure rules<textarea rows={6} style={profileStyle.input} value={form.exposure} onChange={event => change('exposure', event.target.value)} placeholder="Describe what may be disclosed and what must remain internal." /></label>
-          {!creating && <button type="button" style={profileStyle.button} onClick={() => setHistory('exposure')}>Disclosure history</button>}
-          <h3>Document templates</h3>
-          {form.templates.length === 0 && <p>Add a template to make this profile available for generation.</p>}
-          {form.templates.map((item, index) => <section key={index} style={profileStyle.section}>
-            <label style={profileStyle.field}>Template name<input style={profileStyle.input} value={item.name} required maxLength={200} pattern="[^/]+" disabled={!creating && !item.isNew} onChange={event => templateChange(index, 'name', event.target.value)} /></label>
-            <label style={profileStyle.field}>Template text<textarea rows={10} style={profileStyle.input} value={item.text} required onChange={event => templateChange(index, 'text', event.target.value)} /></label>
-            <div style={profileStyle.buttons}>
-              {!creating && !item.isNew && <button type="button" style={profileStyle.button} onClick={() => setHistory(item.name)}>Template history</button>}
-              <button type="button" style={profileStyle.button} onClick={() => duplicateTemplate(item)}>Duplicate template</button>
-              {(data.can_retire || creating || item.isNew) && <button type="button" style={profileStyle.button} onClick={() => change('templates', form.templates.filter((_, i) => i !== index))}>Remove template</button>}
-            </div>
-          </section>)}
-          <div style={profileStyle.buttons}>
-            <button type="button" style={profileStyle.button} onClick={() => change('templates', [...form.templates, { name: '', text: '', isNew: true }])}>Add template</button>
-            <button type="submit" style={profileStyle.button}>{busy ? 'Saving…' : 'Save profile'}</button>
-          </div>
-        </fieldset></form>
-        <div style={profileStyle.buttons}>
-          {!creating && <button type="button" style={profileStyle.button} disabled={busy} onClick={reloadProfile}>Reload saved profile</button>}
-          {data.can_write && <button type="button" style={profileStyle.button} disabled={busy} onClick={() => create(form)}>Duplicate profile</button>}
-          {data.can_retire && !creating && !form.retired && <button type="button" style={profileStyle.button} disabled={busy || form.name === data.default_profile} onClick={retire}>Retire profile</button>}
-        </div>
-        {form.name === data.default_profile && <p>Choose another default under Documentation delivery before retiring this profile or its last template.</p>}
-        {!data.can_write && <p>Writers can edit these profiles. Administrators can retire them.</p>}
-        {!creating && <label style={profileStyle.field}>Text history<select style={profileStyle.input} disabled={busy} value={history || ''} onChange={event => setHistory(event.target.value || null)}>
-          <option value="">Choose text to inspect</option><option value="guidance">Writing guidance</option><option value="exposure">Disclosure rules</option>
-          {original?.templates.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}
-          {original?.retired_templates?.map(name => <option key={name} value={name}>{name} (retired)</option>)}
-        </select></label>}
-        {history && !creating && <><p>{dirty ? 'Save or reload your edits before restoring history.' : ''}</p><PromptHistory key={`${form.name}/${history}`} type="guideline-set" name={`${form.name}/${history}`} canRestore={data.can_write && !dirty && !busy} onBusyChange={setBusy} onRestored={reloadProfile} /></>}
-      </>}
-    </>}
-    {!data && <button type="button" style={profileStyle.button} onClick={() => { setError(null); setRetry(value => value + 1); }}>Retry loading profiles</button>}
-  </section>;
+/* ============================ prompts ============================ */
+interface PromptAction { name: string; title: string }
+interface Snapshot { version: number; text: string; source: string; note?: string | null }
+interface Editor { current: Snapshot; default_text: string; newer_default_since: string | null; preview: string }
+
+export function AIInstructions() {
+  const list = useAsync(useCallback(() => getJSON<{ actions: PromptAction[]; can_write: boolean }>('/api/ai-instructions'), []));
+  // Each action's editor carries newer_default_since; read them all so the list
+  // can mark the prompts whose shipped default moved on after an edit.
+  const listed = list.state.status === 'ready' ? list.state.data : null;
+  const loadAll = useCallback(async (): Promise<Record<string, Editor | null>> => {
+    if (!listed) return {};
+    const entries = await Promise.all(listed.actions.map(async a =>
+      [a.name, await getJSON<Editor>(`/api/ai-instructions/${enc(a.name)}`).catch(() => null)] as const));
+    return Object.fromEntries(entries);
+  }, [listed]);
+  const editors = useAsync(loadAll);
+  const [name, setName] = useState('ask');
+  const [dirty, setDirty] = useState(false);
+
+  if (list.state.status === 'loading') return <Loading what="prompts" />;
+  if (list.state.status === 'error') return <LoadError error={list.state.error} what="prompts" onRetry={list.reload} />;
+  const { actions, can_write } = list.state.data;
+  const loaded = editors.state.status === 'ready' ? editors.state.data : {};
+  const drifted = actions.filter(a => loaded[a.name]?.newer_default_since);
+  const choose = (next: string) => { if (next !== name && (!dirty || window.confirm('Discard unsaved instruction changes?'))) { setName(next); setDirty(false); } };
+
+  return <>
+    <p className="muted">Both providers use the same instructions. Saves keep a version history and apply to new runs; tool schemas, response formats and safeguards stay in code. A prompt nobody has edited follows each release; an edited one stays as you left it.</p>
+    {drifted.length > 0 && <Notice tone="warn">{drifted.length === 1 ? 'One edited prompt is' : `${drifted.length} edited prompts are`} behind the default this release ships: {drifted.map(a => a.title).join(', ')}.</Notice>}
+    <div className="split">
+      <nav className="sub-list" aria-label="AI actions">
+        {actions.map(a => (
+          <button key={a.name} className={`sub-item${a.name === name ? ' on' : ''}`} aria-current={a.name === name} onClick={() => choose(a.name)}>
+            <span>{a.title}</span>
+            {loaded[a.name]?.current.source === 'saved' && <span className="tag">edited</span>}
+            {loaded[a.name]?.newer_default_since && <span className="tag warn">new default</span>}
+          </button>
+        ))}
+      </nav>
+      <PromptEditor key={name} name={name} title={actions.find(a => a.name === name)?.title || name} canWrite={can_write}
+        onDirty={setDirty} onSaved={editors.reload} />
+    </div>
+  </>;
 }
 
-function AIInstructions() {
-  const [options, setOptions] = React.useState(null);
-  const [name, setName] = React.useState('ask');
-  const [head, setHead] = React.useState(null);
-  const [defaultText, setDefaultText] = React.useState('');
-  const [text, setText] = React.useState('');
-  const [preview, setPreview] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  const [message, setMessage] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const [reload, setReload] = React.useState(0);
-  const [history, setHistory] = React.useState(false);
-  React.useEffect(() => {
-    let active = true;
-    profileRequest('/api/ai-instructions').then(value => { if (active) setOptions(value); })
-      .catch(e => { if (active) setError(e.message); });
-    return () => { active = false; };
-  }, [reload]);
-  React.useEffect(() => {
-    let active = true;
-    setHead(null); setText(''); setPreview(null); setHistory(false);
-    profileRequest(`/api/ai-instructions/${encodeURIComponent(name)}`)
-      .then(value => {
-        if (active) {
-          setHead(value.current); setText(value.current.text);
-          setDefaultText(value.default_text); setPreview(value.preview);
-        }
-      }).catch(e => { if (active) setError(e.message); });
-    return () => { active = false; };
-  }, [name, reload]);
-  const dirty = head && text !== head.text;
-  const refresh = () => {
-    if (dirty && !window.confirm('Discard unsaved instruction changes?')) return;
-    setError(null); setReload(value => value + 1);
-  };
-  const applySaved = saved => {
-    setHead({ version: saved.version, text: saved.text, source: 'saved' });
-    setText(saved.text); setPreview(null);
-    setMessage('Instructions saved. New runs use this version; running actions keep their captured instructions.');
-  };
-  const save = async event => {
-    event.preventDefault(); setBusy(true); setError(null); setMessage(null);
+function PromptEditor({ name, title, canWrite, onDirty, onSaved }: { name: string; title: string; canWrite: boolean; onDirty: (dirty: boolean) => void; onSaved: () => void }) {
+  const { state, reload } = useAsync(useCallback(() => getJSON<Editor>(`/api/ai-instructions/${enc(name)}`), [name]));
+  if (state.status === 'loading') return <Loading what="instructions" />;
+  if (state.status === 'error') return <LoadError error={state.error} what="instructions" onRetry={reload} />;
+  return <PromptForm key={state.data.current.version} editor={state.data} name={name} title={title} canWrite={canWrite} onDirty={onDirty}
+    onSaved={() => { onSaved(); reload(); }} onReload={reload} />;
+}
+
+function PromptForm({ editor, name, title, canWrite, onDirty, onSaved, onReload }: {
+  editor: Editor; name: string; title: string; canWrite: boolean; onDirty: (d: boolean) => void; onSaved: () => void; onReload: () => void;
+}) {
+  const head = editor.current;
+  const [text, setText] = useState(head.text);
+  const [preview, setPreview] = useState<string | null>(editor.preview);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [history, setHistory] = useState(false);
+  const [compare, setCompare] = useState(false);
+  const dirty = text !== head.text;
+  const edit = (value: string) => { setText(value); setPreview(null); setMessage(null); onDirty(value !== head.text); };
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault(); setBusy(true); setError(null); setMessage(null);
     try {
-      const saved = await profileRequest('/api/documentation/prompts', 'PUT', { type: 'doctrine', name, text, revision: head.version });
-      applySaved(saved);
-    } catch (e) { setError(e.message); }
+      await putJSON<unknown>('/api/documentation/prompts', { type: 'doctrine', name, text, revision: head.version });
+      onDirty(false); onSaved();
+    } catch (ex) { setError(saveMessage(ex)); }
     finally { setBusy(false); }
   };
   const inspect = async () => {
     setBusy(true); setError(null);
-    try {
-      const value = await profileRequest(`/api/ai-instructions/${encodeURIComponent(name)}/preview`, 'POST', { text });
-      setPreview(value.preview);
-    } catch (e) { setError(e.message); }
+    try { setPreview((await postJSON<{ preview: string }>(`/api/ai-instructions/${enc(name)}/preview`, { text })).preview); }
+    catch (ex) { setError(errorMessage(ex)); }
     finally { setBusy(false); }
   };
-  const edit = value => { setText(value); setPreview(null); setMessage(null); };
-  return <section style={profileStyle.section} aria-label="Prompts">
-    <h2>Prompts</h2>
-    <p>View and edit the behavioral instructions for each AI action. Both providers use these instructions. Saves keep a version history and take effect on new runs.</p>
-    {error && <p role="alert">{error}</p>}{message && <p role="status">{message}</p>}
-    <label style={profileStyle.field}>AI action<select value={name} style={profileStyle.input} disabled={busy || !options} onChange={event => {
-      if (!dirty || window.confirm('Discard unsaved instruction changes?')) { setName(event.target.value); setError(null); setMessage(null); }
-    }}>
-      {(options?.actions || [{ name: 'ask', title: 'Questions' }]).map(item => <option key={item.name} value={item.name}>{item.title}</option>)}
-    </select></label>
-    {!head ? <p>Loading instructions…</p> : <>
-      {head.note && <p role="alert">{head.note}</p>}
-      <p>{head.source === 'saved' ? `Saved version ${head.version}` : 'Using default instructions'}{dirty ? ' · Unsaved changes' : ''}</p>
-      <form onSubmit={save}>
-        <label style={profileStyle.field}>Behavioral instructions<textarea rows={14} style={profileStyle.input} value={text}
-          readOnly={!options?.can_write} disabled={busy} onChange={event => edit(event.target.value)} required /></label>
-        <div style={profileStyle.buttons}>
-          {options?.can_write && <>
-            <button type="submit" style={profileStyle.button} disabled={busy || !dirty || !text.trim()}>Save instructions</button>
-            <button type="button" style={profileStyle.button} disabled={busy || text === defaultText}
-              onClick={() => { if (!dirty || window.confirm('Replace unsaved changes with the shipped default?')) edit(defaultText); }}>Use shipped default</button>
+  const reload = () => { if (!dirty || window.confirm('Discard unsaved instruction changes?')) { onDirty(false); onReload(); } };
+
+  return (
+    <Card title={title} actions={<button type="button" className="btn ghost sm" disabled={busy} onClick={reload}>Reload</button>}>
+      <p className="muted small">{head.source === 'saved' ? `Edited · saved version ${head.version}` : 'Shipped default'}{dirty ? ' · unsaved changes' : ''}</p>
+      {head.note && <Notice tone="warn">{head.note}</Notice>}
+      {editor.newer_default_since && (
+        <Notice tone="warn">
+          <div className="stack-sm">
+            <div><b>The shipped default changed after this prompt was edited.</b> A newer default arrived with the release installed {formatDate(editor.newer_default_since)}; this instance keeps running your edited text until you choose.</div>
+            <div className="row gap-sm">
+              <button type="button" className="btn sm" onClick={() => setCompare(c => !c)}>{compare ? 'Hide the new default' : 'Compare with the new default'}</button>
+              {canWrite && <button type="button" className="btn sm" disabled={busy || text === editor.default_text}
+                onClick={() => { if (!dirty || window.confirm('Replace unsaved changes with the shipped default?')) edit(editor.default_text); }}>Load the new default into the editor</button>}
+            </div>
+          </div>
+        </Notice>
+      )}
+      {compare && <div className="compare"><div><div className="col-head">Yours (current)</div><pre className="code tall">{head.text}</pre></div><div><div className="col-head">Shipped default</div><pre className="code tall">{editor.default_text}</pre></div></div>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {message && <Notice tone="success">{message}</Notice>}
+      <form onSubmit={save} className="stack-sm">
+        <label className="field"><span>Behavioural instructions</span>
+          <textarea className="input code-input" rows={16} value={text} readOnly={!canWrite} disabled={busy} required onChange={e => edit(e.target.value)} />
+        </label>
+        <div className="row gap-sm wrap">
+          {canWrite && <>
+            <button type="submit" className="btn primary" disabled={busy || !dirty || !text.trim()}>Save instructions</button>
+            <button type="button" className="btn" disabled={busy || text === editor.default_text}
+              onClick={() => { if (!dirty || window.confirm('Replace unsaved changes with the shipped default?')) edit(editor.default_text); }}>Use shipped default</button>
           </>}
-          <button type="button" style={profileStyle.button} disabled={busy} onClick={inspect}>Preview combined prompt</button>
+          <button type="button" className="btn ghost" disabled={busy} onClick={() => void inspect()}>Preview combined prompt</button>
+          <button type="button" className="btn ghost" onClick={() => setHistory(h => !h)}>{history ? 'Hide history' : 'Version history'}</button>
         </div>
       </form>
-      <p>Using the shipped default fills the editor; save to apply it. Tool schemas, response formats, and application safeguards remain controlled by code.</p>
-      {(name === 'docgen' || name === 'document_review') && <p>Documentation profiles below control writing guidance, disclosure rules, and templates. The preview marks where the selected profile will be inserted.</p>}
-      <p>The preview shows the system instructions. Request text, retrieved evidence, tool definitions, and loop messages are supplied separately during a run.</p>
-      {preview !== null && <details><summary>Combined prompt preview</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 420, overflow: 'auto' }}>{preview}</pre></details>}
-      <button type="button" style={profileStyle.button} disabled={busy} onClick={() => setHistory(value => !value)}>Version history</button>
-      {history && <PromptHistory key={`${name}/${head.version}`} type="doctrine" name={name}
-        canRestore={options?.can_write && !dirty && !busy} onBusyChange={setBusy} onRestored={applySaved} />}
-      {history && dirty && <p>Save or reload your edits before restoring history.</p>}
-    </>}
-    <button type="button" style={profileStyle.button} disabled={busy} onClick={refresh}>Reload instructions</button>
-  </section>;
+      <p className="hint">Using the shipped default fills the editor; save to apply it. {(name === 'docgen' || name === 'document_review') && 'Documentation profiles supply writing guidance, disclosure rules and templates; the preview marks where the selected profile goes. '}The preview shows the system instructions only: request text, evidence, tools and loop messages are added during a run.</p>
+      {preview !== null && <details className="disclosure"><summary>Combined prompt preview</summary><pre className="code tall">{preview}</pre></details>}
+      {history && <>
+        {dirty && <p className="hint">Save or reload your edits before restoring a version.</p>}
+        <PromptHistory type="doctrine" name={name} canRestore={canWrite && !dirty && !busy} onBusyChange={setBusy} onRestored={() => { setMessage('Version restored. New runs use it.'); onSaved(); }} />
+      </>}
+    </Card>
+  );
 }
 
-export { DocumentationProfiles, AIInstructions };
+/* ============================ documentation profiles ============================ */
+interface Template { name: string; text: string; isNew?: boolean }
+interface Profile {
+  name: string; revision: string | number; guidance: string; exposure: string; templates: Template[];
+  retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
+}
+interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
+
+export function DocumentationProfiles() {
+  const { state, reload } = useAsync(useCallback(() => getJSON<Profiles>('/api/documentation/profiles'), []));
+  const [form, setForm] = useState<Profile | null>(null);
+  const [original, setOriginal] = useState<Profile | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [history, setHistory] = useState<string | null>(null);
+  const [showRetired, setShowRetired] = useState(false);
+  const dirty = !!form && JSON.stringify(form) !== JSON.stringify(original);
+  const data = state.status === 'ready' ? state.data : null;
+
+  const discardOk = (q = 'Discard unsaved profile changes?') => !dirty || window.confirm(q);
+  const open = (profile: Profile, isNew: boolean) => { setForm(profile); setOriginal(isNew ? null : profile); setCreating(isNew); setHistory(null); setError(null); setMessage(null); };
+  const choose = (p: Profile) => { if (discardOk()) open(p, false); };
+  const create = (source: Profile | null) => {
+    if (!discardOk()) return;
+    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [] }, true);
+  };
+  const change = (patch: Partial<Profile>) => { setForm(f => f && { ...f, ...patch }); setMessage(null); };
+  const changeTemplate = (i: number, patch: Partial<Template>) => form && change({ templates: form.templates.map((t, j) => j === i ? { ...t, ...patch } : t) });
+  const duplicateTemplate = (t: Template) => form && change({ templates: [...form.templates, { name: uniqueName(form.templates, `${t.name}-copy`), text: t.text, isNew: true }] });
+
+  const act = async (work: () => Promise<Profile>, done: string) => {
+    setBusy(true); setError(null);
+    try { const value = await work(); setForm(value); setOriginal(value); setCreating(false); reload(); setMessage(done); }
+    catch (e) { setError(saveMessage(e)); }
+    finally { setBusy(false); }
+  };
+  const path = (n: string) => `/api/documentation/profiles/${enc(n)}`;
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    if (form) void act(() => putJSON<Profile>(path(form.name), { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })) }), 'Profile saved. New runs use it.');
+  };
+  const retire = () => { if (form && window.confirm(`Retire ${form.name}? Its history and generated documents remain.`)) void act(() => deleteJSON<Profile>(path(form.name), { revision: form.revision }), 'Profile retired.'); };
+  const reloadProfile = () => { if (form && !creating && discardOk('Discard local edits and load the saved profile?')) void act(() => getJSON<Profile>(path(form.name)), 'Saved profile loaded.'); };
+
+  return (
+    <Card title="Writing profiles & templates" actions={data?.can_write && <button type="button" className="btn sm" disabled={busy} onClick={() => create(null)}>New profile</button>}>
+      <p className="muted">Writing guidance, disclosure rules and document templates used when generating documents. Stored here, versioned, no deploy needed. Audience guidance does not change who can open a generated document.</p>
+      {error && <Notice tone="error">{error}</Notice>}
+      {message && <Notice tone="success">{message}</Notice>}
+      {state.status === 'loading' && <Loading what="profiles" />}
+      {state.status === 'error' && <LoadError error={state.error} what="profiles" onRetry={reload} />}
+      {data && <>
+        <div className="row gap-sm wrap">
+          {data.profiles.filter(p => showRetired || !p.retired).map(p => (
+            <button key={p.name} type="button" className={`fchip${form?.name === p.name && !creating ? ' on' : ''}`} disabled={busy} onClick={() => choose(p)}>
+              {p.name}{p.name === data.default_profile && ' · default'}{p.retired ? ' · retired' : p.ready === false ? ' · incomplete' : ''}
+            </button>
+          ))}
+          <label className="check small"><input type="checkbox" checked={showRetired} onChange={e => setShowRetired(e.target.checked)} />Show retired</label>
+        </div>
+        {data.profiles.length === 0 && <p className="muted">No profiles yet. Create one and add a template to start.</p>}
+        {form && (
+          <div className="subcard">
+            {!creating && <h3>{form.name}{form.retired && ' (retired)'}</h3>}
+            {!creating && form.issues?.map(i => <Notice key={i} tone="warn">{i}</Notice>)}
+            <form onSubmit={save}><fieldset disabled={busy || !data.can_write} className="stack">
+              {creating && <label className="field"><span>Profile name</span><input className="input" value={form.name} required maxLength={200} pattern="[^/]+" placeholder="For example internal-doc" onChange={e => change({ name: e.target.value })} /></label>}
+              <label className="field"><span>Writing guidance</span><textarea className="input" rows={8} value={form.guidance} onChange={e => change({ guidance: e.target.value })} /></label>
+              <label className="field"><span>Disclosure rules</span><textarea className="input" rows={6} value={form.exposure} placeholder="What may be disclosed, and what must stay internal." onChange={e => change({ exposure: e.target.value })} /></label>
+              <h4 className="section-label">Document templates</h4>
+              {form.templates.length === 0 && <p className="hint">Add a template to make this profile available for generation.</p>}
+              {form.templates.map((t, i) => (
+                <div key={i} className="subcard">
+                  <label className="field"><span>Template name</span><input className="input" value={t.name} required maxLength={200} pattern="[^/]+" disabled={!creating && !t.isNew} onChange={e => changeTemplate(i, { name: e.target.value })} /></label>
+                  <label className="field"><span>Template text</span><textarea className="input" rows={10} value={t.text} required onChange={e => changeTemplate(i, { text: e.target.value })} /></label>
+                  <div className="row gap-sm wrap">
+                    {!creating && !t.isNew && <button type="button" className="btn ghost xs" onClick={() => setHistory(t.name)}>History</button>}
+                    <button type="button" className="btn ghost xs" onClick={() => duplicateTemplate(t)}>Duplicate</button>
+                    {(data.can_retire || creating || t.isNew) && <button type="button" className="btn ghost xs" onClick={() => change({ templates: form.templates.filter((_, j) => j !== i) })}>Remove</button>}
+                  </div>
+                </div>
+              ))}
+              <div className="row gap-sm wrap">
+                <button type="button" className="btn sm" onClick={() => change({ templates: [...form.templates, { name: '', text: '', isNew: true }] })}>Add template</button>
+                <button type="submit" className="btn primary sm">{busy ? 'Saving…' : 'Save profile'}</button>
+              </div>
+            </fieldset></form>
+            <div className="row gap-sm wrap">
+              {!creating && <button type="button" className="btn ghost xs" disabled={busy} onClick={reloadProfile}>Reload saved profile</button>}
+              {data.can_write && <button type="button" className="btn ghost xs" disabled={busy} onClick={() => create(form)}>Duplicate profile</button>}
+              {data.can_retire && !creating && !form.retired && <button type="button" className="btn ghost xs" disabled={busy || form.name === data.default_profile} onClick={retire}>Retire profile</button>}
+            </div>
+            {form.name === data.default_profile && <p className="hint">This is the default profile. Choose another default under Documentation delivery before retiring it or its last template.</p>}
+            {!data.can_write && <p className="hint">Writers can edit profiles; administrators can retire them.</p>}
+            {!creating && original && (
+              <label className="field"><span>Text history</span>
+                <select className="input" disabled={busy} value={history || ''} onChange={e => setHistory(e.target.value || null)}>
+                  <option value="">Choose text to inspect</option><option value="guidance">Writing guidance</option><option value="exposure">Disclosure rules</option>
+                  {original.templates.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+                  {original.retired_templates?.map(n => <option key={n} value={n}>{n} (retired)</option>)}
+                </select>
+              </label>
+            )}
+            {history && !creating && <>
+              {dirty && <p className="hint">Save or reload your edits before restoring history.</p>}
+              <PromptHistory key={`${form.name}/${history}`} type="guideline-set" name={`${form.name}/${history}`} canRestore={data.can_write && !dirty && !busy} onBusyChange={setBusy} onRestored={reloadProfile} />
+            </>}
+          </div>
+        )}
+      </>}
+    </Card>
+  );
+}
+
+function uniqueName(templates: Template[], base: string): string {
+  const names = new Set(templates.map(t => t.name));
+  let name = base, n = 2;
+  while (names.has(name)) name = `${base}-${n++}`;
+  return name;
+}

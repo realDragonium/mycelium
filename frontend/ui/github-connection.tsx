@@ -1,107 +1,114 @@
-/** @typedef {{name: string, owner: string, repo: string, enabled: boolean}} GitHubConnection */
-/** @typedef {{installation_id: number, repository_id: number, owner: string, repo: string, default_branch: string}} GitHubRepository */
-import React from 'react';
-import { productSettingsStyle } from './product-settings';
+// Connect a GitHub repository through the GitHub App so writers can publish
+// documentation pull requests. GitHub's install flow returns to
+// #/documentation?tab=settings&github=…, which the router maps to
+// Settings → Documentation with `github` kept in the hash.
+import { useEffect, useState, type FormEvent } from 'react';
+import { Notice } from './lib';
+import { errorMessage, getJSON, postJSON } from './api';
 
-async function githubRequest(path: string, body?: unknown) {
-  const response = await fetch('/api/github' + path, {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const fallback = 'GitHub setup could not be completed. Try again.';
-  let data;
-  try { data = await response.json(); }
-  catch { throw new Error(fallback); }
-  if (!response.ok) throw new Error(typeof data?.detail === 'string' ? data.detail : fallback);
-  return data;
-}
+export interface GitHubRepoConnection { name: string; owner: string; repo: string; enabled: boolean; base_branch?: string }
+interface Repository { installation_id: number; repository_id: number; owner: string; repo: string; default_branch: string }
+interface Status { configured: boolean; selecting: boolean; message?: string | null; connections: GitHubRepoConnection[] }
 
-function GitHubConnection({ canConfigure, onConnected, onConnections, destinationSaved }) {
-  const [status, setStatus] = React.useState(null);
-  const [repositories, setRepositories] = React.useState([]);
-  const [selected, setSelected] = React.useState('');
-  const [branch, setBranch] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState(null);
-  const [message, setMessage] = React.useState(null);
-  const [refresh, setRefresh] = React.useState(0);
-  React.useEffect(() => { if (destinationSaved) setMessage(null); }, [destinationSaved]);
+const FALLBACK = 'GitHub setup could not be completed. Try again.';
+const github = <T,>(path: string, body?: unknown) => (body === undefined ? getJSON<T>('/api/github' + path) : postJSON<T>('/api/github' + path, body))
+  .catch((e: unknown) => { throw new Error(errorMessage(e, FALLBACK)); });
+
+export function GitHubConnection({ canConfigure, onConnected, onConnections }: {
+  canConfigure: boolean; onConnected: (c: GitHubRepoConnection) => void; onConnections: (c: GitHubRepoConnection[]) => void;
+}) {
+  const [status, setStatus] = useState<Status | null>(null);
+  const [repositories, setRepositories] = useState<Repository[]>([]);
+  const [selected, setSelected] = useState('');
+  const [branch, setBranch] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
   const returnState = new URLSearchParams(window.location.hash.split('?')[1] || '').get('github');
-  React.useEffect(() => {
+
+  useEffect(() => {
     let cancelled = false;
-    setError(null);
-    githubRequest('').then(async data => {
+    github<Status>('').then(async data => {
       if (cancelled) return;
-      setStatus(data); onConnections(data.connections);
+      setStatus(data); setError(null); onConnections(data.connections);
       if (data.selecting && canConfigure) {
-        const repos = await githubRequest('/repositories');
+        const repos = await github<Repository[]>('/repositories');
         if (!cancelled) setRepositories(repos);
       }
-    }).catch(e => { if (!cancelled) setError(e.message); });
+    }).catch((e: unknown) => { if (!cancelled) setError(errorMessage(e)); });
     return () => { cancelled = true; };
   }, [refresh, canConfigure, onConnections]);
-  const key = repo => `${repo.installation_id}:${repo.repository_id}`;
-  const repository = repositories.find(repo => key(repo) === selected);
-  const run = async action => {
+
+  const key = (r: Repository) => `${r.installation_id}:${r.repository_id}`;
+  const repository = repositories.find(r => key(r) === selected);
+  const run = async (action: () => Promise<void>) => {
     setBusy(true); setError(null); setMessage(null);
-    try { await action(); }
-    catch (e) { setError(e.message); }
-    finally { setBusy(false); }
+    try { await action(); } catch (e) { setError(errorMessage(e)); } finally { setBusy(false); }
   };
-  const start = existing => run(async () => {
-    const result = await githubRequest('/start', { existing, surface: window.location.pathname.startsWith('/cockpit') ? 'cockpit' : 'ui' });
+  const start = (existing: boolean) => run(async () => {
+    const result = await github<{ url: string }>('/start', { existing, surface: 'ui' });
     window.location.assign(result.url);
   });
-  const connect = event => {
-    event.preventDefault();
+  const connect = (e: FormEvent) => {
+    e.preventDefault();
     if (!repository) return;
-    run(async () => {
-      const connection = await githubRequest('/connections', { installation_id: repository.installation_id, repository_id: repository.repository_id, base_branch: branch });
-      onConnected(connection);
+    void run(async () => {
+      onConnected(await github<GitHubRepoConnection>('/connections', { installation_id: repository.installation_id, repository_id: repository.repository_id, base_branch: branch }));
       setMessage('Repository connected. Save documentation delivery below to use it.');
-      setRefresh(value => value + 1);
+      setRefresh(n => n + 1);
     });
   };
-  const disconnect = connection => run(async () => {
-    await githubRequest('/disconnect', { name: connection.name });
-    setMessage(`${connection.owner}/${connection.repo} disconnected. Documents and existing pull requests are preserved.`);
-    setRefresh(value => value + 1);
+  const disconnect = (c: GitHubRepoConnection) => run(async () => {
+    await github<unknown>('/disconnect', { name: c.name });
+    setMessage(`${c.owner}/${c.repo} disconnected. Documents and existing pull requests are kept.`);
+    setRefresh(n => n + 1);
   });
-  return <section aria-label="GitHub connection" style={{ marginTop: 18, padding: 16, border: '1px solid var(--rule, var(--line))', borderRadius: 6 }}>
-    <h3 style={{ marginTop: 0, color: 'var(--ink)' }}>Connect a GitHub repository</h3>
-    <p>Connect GitHub, select a repository, then save its branch and file path below. This lets writers in this Mycelium instance publish documentation pull requests.</p>
-    {!status && !error && <p>Loading GitHub connection…</p>}
-    {status?.message && <p role="status">{status.message}</p>}
-    {status && !status.configured && <p>The server administrator needs to register a GitHub App and configure it once. See <a href="/ui/github-setup.html" target="_blank" rel="noreferrer">GitHub App setup</a>.</p>}
-    {canConfigure ? <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-      <button type="button" style={productSettingsStyle.button} disabled={busy || !status?.configured} onClick={() => start(false)}>Connect GitHub</button>
-      <button type="button" style={productSettingsStyle.button} disabled={busy || !status?.configured} onClick={() => start(true)}>Use existing GitHub installation</button>
-    </div> : <p>Only administrators can connect or disconnect repositories.</p>}
-    {returnState === 'cancelled' && !message && <p>GitHub authorization was cancelled. You can connect again when ready.</p>}
-    {returnState === 'pending' && !message && <p>GitHub may require organization approval. Once approved, choose Use existing GitHub installation.</p>}
-    {status?.selecting && canConfigure && <form onSubmit={connect} style={{ marginTop: 16 }}>
-      <fieldset disabled={busy} style={{ border: 0, padding: 0 }}>
-        <div style={productSettingsStyle.grid}>
-          <label style={productSettingsStyle.field}>GitHub repository<select required style={productSettingsStyle.input} value={selected} onChange={event => {
-            setSelected(event.target.value);
-            setBranch(repositories.find(repo => key(repo) === event.target.value)?.default_branch || '');
-          }}><option value="">Select a repository</option>{repositories.map(repo => <option key={key(repo)} value={key(repo)}>{repo.owner}/{repo.repo}</option>)}</select></label>
-          <label style={productSettingsStyle.field}>Base branch<input required style={productSettingsStyle.input} value={branch} onChange={event => setBranch(event.target.value)} maxLength={200} /></label>
-        </div>
-        <button type="submit" style={{ ...productSettingsStyle.button, marginTop: 12 }} disabled={!repository || !branch || busy}>{busy ? 'Connecting…' : 'Use repository'}</button>
-      </fieldset>
-      {!repositories.length && <p>No writable repositories are available. Check which repositories the App can access and whether your organization has approved the installation and its Contents and Pull requests permissions.</p>}
-    </form>}
-    {!!status?.connections.length && <ul>{status.connections.map(connection => <li key={connection.name} style={{ marginTop: 10 }}>
-      <strong>{connection.owner}/{connection.repo}</strong> · {connection.enabled ? 'Connected' : 'Disconnected'}{' '}
-      {canConfigure && connection.enabled && <button type="button" style={productSettingsStyle.button} disabled={busy} onClick={() => disconnect(connection)}>Disconnect</button>}
-      {!connection.enabled && canConfigure && <span>Use existing GitHub installation to reconnect this repository.</span>}
-    </li>)}</ul>}
-    {error && <p role="alert">{error}</p>}
-    {message && <p role="status">{message}</p>}
-    <button type="button" style={{ ...productSettingsStyle.button, marginTop: 12 }} disabled={busy} onClick={() => setRefresh(value => value + 1)}>Refresh GitHub access</button>
-  </section>;
-}
 
-export { GitHubConnection };
+  return (
+    <section className="subcard" aria-label="GitHub connection">
+      <h3>Connect a GitHub repository</h3>
+      <p className="hint">Connect GitHub, pick a repository, then save its branch and file path below. Writers on this instance can then publish documentation pull requests.</p>
+      {!status && !error && <p className="muted small">Checking the GitHub connection…</p>}
+      {status?.message && <Notice>{status.message}</Notice>}
+      {status && !status.configured && <Notice tone="warn">The server administrator needs to register a GitHub App once. See <a href="/ui/github-setup.html" target="_blank" rel="noreferrer">GitHub App setup</a>.</Notice>}
+      {canConfigure ? (
+        <div className="row gap-sm">
+          <button type="button" className="btn sm" disabled={busy || !status?.configured} onClick={() => void start(false)}>Connect GitHub</button>
+          <button type="button" className="btn ghost sm" disabled={busy || !status?.configured} onClick={() => void start(true)}>Use an existing installation</button>
+        </div>
+      ) : <p className="hint">Only administrators can connect or disconnect repositories.</p>}
+      {returnState === 'cancelled' && !message && <Notice>GitHub authorization was cancelled. Connect again when ready.</Notice>}
+      {returnState === 'pending' && !message && <Notice>GitHub may need organization approval. Once approved, choose Use an existing installation.</Notice>}
+      {status?.selecting && canConfigure && (
+        <form onSubmit={connect}>
+          <fieldset disabled={busy}>
+            <div className="field-grid">
+              <label className="field"><span>GitHub repository</span>
+                <select className="input" required value={selected} onChange={e => { setSelected(e.target.value); setBranch(repositories.find(r => key(r) === e.target.value)?.default_branch || ''); }}>
+                  <option value="">Select a repository</option>
+                  {repositories.map(r => <option key={key(r)} value={key(r)}>{r.owner}/{r.repo}</option>)}
+                </select>
+              </label>
+              <label className="field"><span>Base branch</span><input className="input" required value={branch} maxLength={200} onChange={e => setBranch(e.target.value)} /></label>
+            </div>
+            <button type="submit" className="btn primary sm" disabled={!repository || !branch || busy}>{busy ? 'Connecting…' : 'Use repository'}</button>
+          </fieldset>
+          {!repositories.length && <p className="hint">No writable repositories are available. Check which repositories the App can access, and whether your organization approved the installation with Contents and Pull requests permissions.</p>}
+        </form>
+      )}
+      {!!status?.connections.length && (
+        <ul className="plain-list">{status.connections.map(c => (
+          <li key={c.name} className="row gap-sm">
+            <b>{c.owner}/{c.repo}</b><span className={c.enabled ? 'ok-text' : 'warn-text'}>{c.enabled ? 'connected' : 'disconnected'}</span>
+            {canConfigure && c.enabled && <button type="button" className="btn ghost xs" disabled={busy} onClick={() => void disconnect(c)}>Disconnect</button>}
+            {canConfigure && !c.enabled && <span className="hint">Use an existing installation to reconnect.</span>}
+          </li>
+        ))}</ul>
+      )}
+      {error && <Notice tone="error">{error}</Notice>}
+      {message && <Notice tone="success">{message}</Notice>}
+      <button type="button" className="btn ghost xs" disabled={busy} onClick={() => setRefresh(n => n + 1)}>Refresh GitHub access</button>
+    </section>
+  );
+}

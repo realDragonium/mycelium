@@ -1,0 +1,299 @@
+/* ---------- Graph ---------- */
+
+.graph-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 0;
+  height: calc(100vh - var(--topbar-h));
+}
+/* Embedded mode: single column, no sidepanel, fill the parent. Used
+   when GraphView is dropped into a container of bounded height (the
+   draft detail page is the current caller). */
+.graph-page.is-embedded {
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+}
+.graph-page.is-embedded .graph-canvas-wrap {
+  border-right: none;
+}
+.graph-canvas-wrap {
+  position: relative;
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
+}
+.graph-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  cursor: grab;
+}
+.graph-toolbar {
+  position: absolute;
+  top: 46px;
+  left: 10px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  max-width: calc(100% - 20px);
+}
+
+/* Graph search box — sits above the toolbar pills, full-width on the
+ * left. Highlights matching nodes (yellow halo + label forced on)
+ * and dims everything else. */
+.graph-search {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+  min-width: 240px;
+  max-width: calc(100% - 20px);
+}
+.graph-search-input {
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  flex: 1;
+  min-width: 120px;
+}
+.graph-search-input::placeholder { color: var(--ink-4); }
+.graph-search-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-4);
+  white-space: nowrap;
+}
+.graph-search-clear {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--ink-3);
+  font-size: 14px;
+  line-height: 14px;
+  padding: 0 4px;
+}
+.graph-search-clear:hover { color: var(--ink); }
+.graph-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  border-radius: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+  height: 22px;
+}
+.graph-pill .swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+.graph-pill.is-off {
+  color: var(--ink-4);
+  background: var(--bg-1);
+}
+.graph-pill.is-off .swatch { opacity: 0.4; }
+.graph-pill:hover { color: var(--ink); border-color: var(--line-strong); }
+
+.graph-help {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  background: var(--bg);
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  display: flex;
+  gap: 14px;
+  height: 22px;
+  align-items: center;
+}
+.graph-help b { color: var(--ink-2); font-weight: 500; }
+
+.graph-side {
+  background: var(--bg-1);
+  border-left: 1px solid var(--line);
+  padding: 14px;
+  overflow-y: auto;
+  font-size: var(--fs-base);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.graph-side h3 {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  margin: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  font-weight: 500;
+}
+.graph-focus-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+.graph-empty-state {
+  color: var(--ink-3);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+/* ---------- Entities tab — toolbar search ---------- */
+.ent-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+}
+.ent-search input {
+  font: inherit;
+  font-size: 12px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--ink);
+  width: 180px;
+  padding: 4px 0;
+}
+.ent-search input::placeholder { color: var(--ink-4); }
+.ent-search input:focus { color: var(--ink); }
+.ent-search-count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+.ent-search-jump {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 1px 6px;
+}
+.ent-search-jump:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bio) 8%, transparent);
+  border-color: var(--bio);
+  color: var(--bio);
+}
+.ent-search-jump:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* ---------- Entity-link inline editor (Entities tab) ---------- */
+.graph-pill.is-primary {
+  color: var(--bio);
+  border-color: var(--bio);
+}
+.graph-pill.is-primary:hover {
+  background: color-mix(in srgb, var(--bio) 8%, transparent);
+}
+.graph-pill:disabled,
+.graph-pill[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ent-edit-form {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ent-edit-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+.ent-edit-row label {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  text-transform: lowercase;
+}
+.ent-edit-row input,
+.ent-edit-row select {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 8px;
+  background: var(--bg-1);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  width: 100%;
+}
+.ent-edit-row input:focus,
+.ent-edit-row select:focus {
+  outline: none;
+  border-color: var(--bio);
+}
+.ent-edit-error {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--danger);
+  padding: 4px 0;
+}
+.ent-edit-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.ent-edit-remove {
+  font: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ink-4);
+  font-size: 14px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  cursor: pointer;
+  padding: 0;
+}
+.ent-edit-remove:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--line);
+  background: var(--bg);
+}
+.ent-edit-remove:disabled { opacity: 0.5; cursor: not-allowed; }
+

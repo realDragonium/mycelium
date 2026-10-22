@@ -1,6 +1,6 @@
 # Connect GitHub repositories
 
-Administrators can connect GitHub under **Documentation → Models & GitHub →
+Administrators can connect GitHub under **Settings → Documentation →
 Documentation delivery**. Connecting a repository grants this Mycelium instance's
 writers permission to publish documentation pull requests. It does not change
 Mycelium sign-in or grant other users administrator access.

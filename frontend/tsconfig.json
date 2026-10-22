@@ -28,5 +28,5 @@
 
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["ui", "cockpit"]
+  "include": ["ui"]
 }

@@ -1,6 +1,6 @@
 # Alias suggestions
 
-Open **Names & aliases → AI suggestions** in either UI. AI proposes alternative
+Open **Names & aliases → AI suggestions**. AI proposes alternative
 names for existing concepts; names recognized in statement text support discovery
 without creating explicit entity-to-statement links.
 
@@ -54,7 +54,7 @@ acceptance without repeating the name mutation.
 
 ## Configuration and API
 
-**AI settings → Alias discovery** selects Claude or OpenAI, each with its own
+**Settings → Models → Alias discovery** selects Claude or OpenAI, each with its own
 remembered model and reasoning effort. **Alias discovery limits** configures the
 output-token budget, request timeout, retry count, and maximum input size. The
 scan shares the existing AI concurrency budget. These settings are stored in
