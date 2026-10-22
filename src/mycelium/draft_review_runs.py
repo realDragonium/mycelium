@@ -117,6 +117,8 @@ def start(
         if answer is not None:
             if previous is None or previous.application != "needs_human":
                 raise ValueError("the internal reviewer is not waiting for an answer")
+            if previous.run_id != answer.run_id:
+                raise ValueError("the reviewer has asked again since; reload")
             if previous.stale:
                 raise ValueError("the draft changed after the reviewer asked; rerun")
             answers = [
@@ -659,12 +661,17 @@ def _ask_person(
     )
 
 
-def answer(draft_id: str, text: str, principal: auth.Principal) -> ReviewRun:
-    """Review the draft again with a curator's answer to the reviewer's questions."""
+def answer(
+    draft_id: str, run_id: str, text: str, principal: auth.Principal
+) -> ReviewRun:
+    """Review the draft again with a curator's answer to the questions run
+    `run_id` asked."""
     return start(
         draft_id,
         rerun=True,
-        answer=Answer(questions=[], answer=text.strip(), answered_by=principal.id),
+        answer=Answer(
+            run_id=run_id, questions=[], answer=text.strip(), answered_by=principal.id
+        ),
     )
 
 

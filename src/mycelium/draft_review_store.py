@@ -50,6 +50,7 @@ class Answer(BaseModel):
     """A curator's answer to the reviewer's questions, written only by the server."""
 
     model_config = ConfigDict(extra="forbid", strict=True)
+    run_id: str
     questions: list[str]
     answer: str = Field(min_length=1, max_length=6000)
     answered_by: str

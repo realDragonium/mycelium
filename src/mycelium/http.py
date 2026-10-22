@@ -1451,6 +1451,7 @@ def run_draft_review_http(
 
 
 class DraftReviewAnswerBody(BaseModel):
+    run_id: str
     answer: str
 
 
@@ -1465,7 +1466,7 @@ def answer_draft_review_http(
 
     principal = _enforce_curator(request, action="answering the internal reviewer")
     try:
-        run = draft_review_runs.answer(draft_id, body.answer, principal)
+        run = draft_review_runs.answer(draft_id, body.run_id, body.answer, principal)
     except ValidationError as exc:
         raise ValueError("answer must be 1 to 6000 characters") from exc
     return {"review": run.model_dump(mode="json")}
