@@ -1,6 +1,6 @@
 """A slow tool must not freeze the server for everyone else.
 
-`server._offloaded` runs each tool body on a worker thread under that tool's
+`admission._offloaded` runs each tool body on a worker thread under that tool's
 bound, so a single multi-second `ask` cannot stall every concurrent request on
 the process — including any health probe, which is what would turn one slow
 call into a 503 for every caller behind a proxy that drops unhealthy backends.
@@ -17,6 +17,7 @@ import anyio
 import pytest
 
 from mycelium import auth, product_settings, server
+from mycelium.server import admission
 from product_settings_helpers import set_product
 
 
@@ -38,7 +39,7 @@ def test_offloaded_call_leaves_the_event_loop_free():
         time.sleep(seconds)
         return "done"
 
-    offloaded = server._offloaded(blocking_tool)
+    offloaded = admission._offloaded(blocking_tool)
 
     ticks = asyncio.run(_ticks_during(offloaded(0.5)))
 
@@ -49,7 +50,7 @@ def test_offloaded_call_returns_the_wrapped_result():
     def add(a: int, b: int = 1) -> int:
         return a + b
 
-    offloaded = server._offloaded(add)
+    offloaded = admission._offloaded(add)
 
     assert asyncio.run(offloaded(2, b=3)) == 5
 
@@ -58,7 +59,7 @@ def test_offloaded_call_propagates_the_exception():
     def boom() -> None:
         raise ValueError("nope")
 
-    offloaded = server._offloaded(boom)
+    offloaded = admission._offloaded(boom)
 
     with pytest.raises(ValueError, match="nope"):
         asyncio.run(offloaded())
@@ -68,7 +69,7 @@ def test_offloaded_call_runs_off_the_calling_thread():
     def which_thread() -> int:
         return threading.get_ident()
 
-    offloaded = server._offloaded(which_thread)
+    offloaded = admission._offloaded(which_thread)
 
     assert asyncio.run(offloaded()) != threading.get_ident()
 
@@ -81,7 +82,7 @@ def test_offloaded_call_carries_the_principal_into_the_worker_thread():
         principal = auth.current_principal.get()
         return principal.role if principal is not None else None
 
-    offloaded = server._offloaded(caller_role)
+    offloaded = admission._offloaded(caller_role)
 
     async def scenario():
         token = auth.current_principal.set(
@@ -104,7 +105,7 @@ def test_offloaded_preserves_the_signature_pydantic_reads():
         """A docstring."""
         return {}
 
-    offloaded = server._offloaded(some_tool)
+    offloaded = admission._offloaded(some_tool)
 
     import inspect
 
@@ -124,22 +125,22 @@ def test_every_registered_mcp_tool_is_offloaded():
 
 def test_model_loop_tools_are_bounded_more_tightly_than_the_general_pool(monkeypatch):
     set_product(product_settings.ConcurrencySettings(model_loops=3))
-    server._model_loop_limiter.cache_clear()
+    admission._model_loop_limiter.cache_clear()
 
     async def scenario():
         return (
-            server._model_loop_limiter().total_tokens,
+            admission._model_loop_limiter().total_tokens,
             anyio.to_thread.current_default_thread_limiter().total_tokens,
         )
 
     try:
         bound, general_pool = asyncio.run(scenario())
     finally:
-        server._model_loop_limiter.cache_clear()
+        admission._model_loop_limiter.cache_clear()
 
     assert bound == 3
     assert bound < general_pool
-    assert server._MODEL_LOOP_TOOLS == {"ask", "ingest"}
+    assert admission._MODEL_LOOP_TOOLS == {"ask", "ingest"}
 
 
 def test_limiter_is_selected_by_name_not_by_transport():
@@ -154,7 +155,7 @@ def test_rest_mirror_routes_bounded_tools_through_an_async_handler():
     handler here, or posting to `/ingest` walks straight past the bound."""
     from mycelium import http
 
-    for name in sorted(server._MODEL_LOOP_TOOLS):
+    for name in sorted(admission._MODEL_LOOP_TOOLS):
         route = next(r for r in http.app.routes if getattr(r, "name", None) == name)
         assert inspect.iscoroutinefunction(route.endpoint), name
 
@@ -163,7 +164,7 @@ def test_rest_offload_applies_the_same_bound(monkeypatch):
     """The regression Codex caught: `/ask` and `/ingest` over REST bypassed the
     limiter entirely, so the bound could be exceeded by choosing a transport."""
     set_product(product_settings.ConcurrencySettings(model_loops=2))
-    server._model_loop_limiter.cache_clear()
+    admission._model_loop_limiter.cache_clear()
 
     from mycelium import http
 
@@ -188,7 +189,7 @@ def test_rest_offload_applies_the_same_bound(monkeypatch):
     try:
         asyncio.run(scenario())
     finally:
-        server._model_loop_limiter.cache_clear()
+        admission._model_loop_limiter.cache_clear()
 
     assert peak == 2
 
@@ -198,7 +199,7 @@ def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
     wait on the anyio limiter. If it kept a private cap the two would add up and
     the box would hold more model contexts than either cap intended."""
     set_product(product_settings.ConcurrencySettings(model_loops=2))
-    server._model_loop_budget.cache_clear()
+    admission._model_loop_budget.cache_clear()
 
     peak = 0
     live = 0
@@ -223,7 +224,7 @@ def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
         for t in threads:
             t.join(timeout=10)
     finally:
-        server._model_loop_budget.cache_clear()
+        admission._model_loop_budget.cache_clear()
 
     assert peak == 2
 
@@ -231,7 +232,7 @@ def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
 def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
     """The wiring: the runner must execute inside the slot, not beside it."""
     set_product(product_settings.ConcurrencySettings(model_loops=1))
-    server._model_loop_budget.cache_clear()
+    admission._model_loop_budget.cache_clear()
 
     from mycelium import research_runs, research_store
 
@@ -245,7 +246,7 @@ def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
 
     def runner(topic, *, source=None):
         # With the budget at 1 and the run holding it, this must find none free.
-        observed["another_slot_available"] = server._model_loop_budget().acquire(
+        observed["another_slot_available"] = admission._model_loop_budget().acquire(
             blocking=False
         )
         return {"outcome": "nothing_found", "reason": "test"}
@@ -255,7 +256,7 @@ def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
             run_id, "t", "src", str(db_path), str(tmp_path), runner
         )
     finally:
-        server._model_loop_budget.cache_clear()
+        admission._model_loop_budget.cache_clear()
 
     assert observed["another_slot_available"] is False
     assert research_store.get_run(conn, run_id)["outcome"] == "nothing_found"
@@ -263,7 +264,7 @@ def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
 
 def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):
     set_product(product_settings.ConcurrencySettings(model_loops=2))
-    server._model_loop_limiter.cache_clear()
+    admission._model_loop_limiter.cache_clear()
 
     peak = 0
     live = 0
@@ -279,7 +280,7 @@ def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):
             live -= 1
 
     model_loop.__name__ = "ask"
-    offloaded = server._offloaded(model_loop)
+    offloaded = admission._offloaded(model_loop)
 
     async def scenario():
         await asyncio.gather(*(offloaded() for _ in range(6)))
@@ -287,6 +288,6 @@ def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):
     try:
         asyncio.run(scenario())
     finally:
-        server._model_loop_limiter.cache_clear()
+        admission._model_loop_limiter.cache_clear()
 
     assert peak == 2

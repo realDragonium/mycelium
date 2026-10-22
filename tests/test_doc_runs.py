@@ -25,6 +25,7 @@ from mycelium import (
     prompt_store,
     server,
 )
+from mycelium.server import admission
 from product_settings_helpers import set_product
 
 
@@ -773,7 +774,7 @@ def test_run_holds_a_shared_model_loop_slot(tmp_path, monkeypatch):
     """The wiring: the runner must execute inside the slot, not beside it —
     otherwise a documentation run and `ask` each get the full budget."""
     set_product(product_settings.ConcurrencySettings(model_loops=1))
-    server._model_loop_budget.cache_clear()
+    admission._model_loop_budget.cache_clear()
 
     db_path = tmp_path / "mycelium-drafts.db"
     conn = _conn(tmp_path)
@@ -782,7 +783,7 @@ def test_run_holds_a_shared_model_loop_slot(tmp_path, monkeypatch):
     observed = {}
 
     def runner(prompt, *, guideline_set, document_type):
-        observed["another_slot_available"] = server._model_loop_budget().acquire(
+        observed["another_slot_available"] = admission._model_loop_budget().acquire(
             blocking=False
         )
         return {"outcome": "nothing_written", "reason": "test"}
@@ -790,7 +791,7 @@ def test_run_holds_a_shared_model_loop_slot(tmp_path, monkeypatch):
     try:
         doc_runs._execute_run(run_id, "p", None, None, str(db_path), runner)
     finally:
-        server._model_loop_budget.cache_clear()
+        admission._model_loop_budget.cache_clear()
 
     assert observed["another_slot_available"] is False
     assert docs_store.get_run(conn, run_id)["outcome"] == "nothing_written"
@@ -960,7 +961,7 @@ def test_request_documentation_is_registered_outside_the_model_loop_set():
     assert server.request_documentation._mycelium_real_role is True
     # The TOOL is fast — it returns a run row. Its background run takes the
     # slot, so gating the tool would double-count the budget.
-    assert "request_documentation" not in server._MODEL_LOOP_TOOLS
+    assert "request_documentation" not in admission._MODEL_LOOP_TOOLS
     assert server.limiter_for("request_documentation") is None
 
 
