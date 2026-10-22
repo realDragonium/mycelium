@@ -587,7 +587,7 @@ def test_v14_preserves_condition_tree_and_restores_link_foreign_key():
 def test_v14_refuses_unrescued_knowledge_without_changing_database(
     legacy_condition_only,
 ):
-    conn, a, b, condition = _v12_with_condition()
+    conn, a, _b, condition = _v12_with_condition()
     entity = store.create_entity(conn, "Reviewer")
     if legacy_condition_only:
         conn.execute(
@@ -612,7 +612,7 @@ def test_v14_refuses_unrescued_knowledge_without_changing_database(
 
 
 def test_v14_failed_rebuild_rolls_back_schema_and_tree():
-    conn, a, b, condition = _v12_with_condition()
+    conn, _a, _b, _condition = _v12_with_condition()
     conn.execute("UPDATE when_nodes SET link_id = 999")
     conn.commit()
     before = list(conn.iterdump())

@@ -19,10 +19,7 @@ def reject_entity_statement_additions(links: object) -> None:
             continue
         from_id = link.get("from_id")
         to_id = link.get("to_id")
-        if (
-            isinstance(from_id, str)
-            and from_id.startswith("ent_")
-            or isinstance(to_id, str)
-            and to_id.startswith("ent_")
+        if (isinstance(from_id, str) and from_id.startswith("ent_")) or (
+            isinstance(to_id, str) and to_id.startswith("ent_")
         ):
             raise ValueError(MIXED_LINK_ERROR)
