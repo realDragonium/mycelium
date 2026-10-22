@@ -792,17 +792,44 @@ def import_substrate(
         finally:
             settings_db.close()
 
-        # Vector files: copy back if present in the archive. Otherwise leave
-        # the data dir without them; the server's next `init()` rebuilds each
-        # missing index by re-embedding the stored statement or name text.
+        # Vector files: copy back if present in the archive and consistent
+        # with it. Otherwise leave the data dir without them; the server's
+        # next `init()` rebuilds each missing index by re-embedding the
+        # stored statement or name text.
         vectors_src = staging / "vectors"
         if vectors_src.is_dir():
+            with closing(store.connect(db_path)) as conn:
+                mapped = {
+                    vf: {
+                        row[0] for row in conn.execute(f"SELECT vector_id FROM {table}")
+                    }
+                    for vf, table in zip(_VECTOR_FILES, _VECTOR_ID_TABLES, strict=True)
+                }
             for vf in _VECTOR_FILES:
                 src = vectors_src / vf
-                if src.exists():
+                if src.exists() and _index_matches(src, mapped[vf]):
                     shutil.copy2(src, data_dir / vf)
 
         return manifest
+
+
+def _index_matches(path: Path, vector_ids: set[int]) -> bool:
+    """Whether the index serves exactly the archived vector ids.
+
+    Index files are copied after the database snapshot, so a write that
+    lands in between leaves them disagreeing: a deleted statement's row is
+    archived while its vector is gone. Such an index is rebuilt instead."""
+    from . import vector
+
+    index = vector.Index.load(path)
+    live = {i for i in index.ids() if index.get_vector(i) is not None}
+    if live == vector_ids:
+        return True
+    logger.warning(
+        "%s disagrees with the archived vector ids; the next start rebuilds it",
+        path.name,
+    )
+    return False
 
 
 def _prepare_section(

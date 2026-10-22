@@ -405,10 +405,11 @@ newer build; an older build refuses it.
    sudo myc import /var/lib/mycelium-backups/move.tar.gz
    ```
 
-5. Start the service. If the archive was exported with `--no-vectors`, the
-   first start re-embeds every statement and name, which needs Ollama with
-   the same embedding model and takes time proportional to the knowledge
-   base.
+5. Start the service. If the archive was exported with `--no-vectors`, or
+   import reported that an index disagrees with the archived data (a write
+   landed while a live export copied the index), the first start re-embeds
+   every statement or name, which needs Ollama with the same embedding
+   model and takes time proportional to the knowledge base.
 
    ```bash
    sudo systemctl start mycelium

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 import instance_scenario
-from mycelium import auth, auth_store, backup, embed, phrasing, server, store
+from mycelium import auth, auth_store, backup, embed, phrasing, server, store, vector
 
 # Rows a restore rewrites on purpose, normalized to what the restore produces.
 _RESTORED_DIFFERENTLY = {
@@ -196,3 +196,35 @@ def test_export_reads_the_substrate_as_one_snapshot(populated, tmp_path, monkeyp
 
     gaps = {row["id"] for row in _rows(restored / "mycelium.db", "knowledge_gaps")}
     assert "gap-late" not in gaps
+
+
+def test_import_rebuilds_a_vector_index_that_disagrees_with_the_archive(
+    populated, tmp_path
+):
+    """Vector files are copied after the database snapshot, so a statement
+    deleted meanwhile leaves its row archived and its vector gone."""
+    source, ids = populated
+    archive = tmp_path / "instance.tar.gz"
+    backup.export_substrate(source, archive)
+    work = tmp_path / "work"
+    work.mkdir()
+    with tarfile.open(archive) as tar:
+        tar.extractall(work, filter="data")
+    index = vector.Index.load(work / "vectors" / "mycelium.vec")
+    with closing(store.connect(source / "mycelium.db")) as conn:
+        index.delete(store.get_vector_id(conn, ids["locked"]))
+    index.save(work / "vectors" / "mycelium.vec")
+    drifted = tmp_path / "drifted.tar.gz"
+    with tarfile.open(drifted, "w:gz") as tar:
+        for item in sorted(work.rglob("*")):
+            if item.is_file():
+                tar.add(item, arcname=str(item.relative_to(work)))
+
+    restored = tmp_path / "restored"
+    backup.import_substrate(drifted, restored)
+    server._ctx = None
+    server.init(restored)
+
+    text = instance_scenario.STATEMENTS["locked"][1]
+    hits = server.search_statements(text, limit=1, name_boost=0.0)
+    assert [hit["id"] for hit in hits] == [ids["locked"]]
