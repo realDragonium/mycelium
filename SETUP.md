@@ -93,9 +93,8 @@ Keep a real corpus and its runtime state outside the source checkout:
 uv run mycelium-init ~/work/my-new-kb
 ```
 
-This creates a workspace with its own `.mcp.json`, ignored `data/` directory,
-and `ingest/` directory. Open the workspace in your MCP client and approve its
-server configuration.
+This creates a workspace with its own `.mcp.json` and ignored `data/` directory.
+Open the workspace in your MCP client and approve its server configuration.
 
 ## 5. Add data
 

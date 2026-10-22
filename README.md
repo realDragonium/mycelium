@@ -50,8 +50,7 @@ repository:
 uv run mycelium-init ~/work/my-new-kb
 ```
 
-The scaffolder creates a `.mcp.json`, ignored `data/`, and an `ingest/`
-directory.
+The scaffolder creates a `.mcp.json` and an ignored `data/` directory.
 
 ## Configuration
 
