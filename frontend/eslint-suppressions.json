@@ -1,50 +1,8 @@
 {
-  "cockpit/app.tsx": {
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "cockpit/ask.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "cockpit/find.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "cockpit/gaps.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "cockpit/tweaks-panel.tsx": {
-    "react-hooks/refs": {
-      "count": 4
-    }
-  },
   "ui/activity.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 3
-    },
     "react-hooks/immutability": {
       "count": 1
     },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "ui/ai-settings.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
     }
@@ -54,53 +12,14 @@
       "count": 1
     }
   },
-  "ui/app.tsx": {
-    "no-useless-assignment": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
-  "ui/components.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "ui/documentation-profiles.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
   "ui/documentation-workspace.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 5
-    }
-  },
-  "ui/drafts.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "ui/entities-graph.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
     "react-hooks/set-state-in-effect": {
       "count": 4
     }
   },
-  "ui/gaps.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
+  "ui/entities-graph.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "ui/github-connection.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
+      "count": 4
     }
   },
   "ui/glossary.tsx": {
@@ -109,9 +28,6 @@
     }
   },
   "ui/graph.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 4
-    },
     "react-hooks/immutability": {
       "count": 1
     },
@@ -122,32 +38,6 @@
   "ui/names-workspace.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 3
-    }
-  },
-  "ui/product-settings.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "ui/screens.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 11
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    },
-    "react-hooks/static-components": {
-      "count": 2
-    }
-  },
-  "ui/settings.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "ui/tweaks-panel.tsx": {
-    "react-hooks/refs": {
-      "count": 4
     }
   }
 }

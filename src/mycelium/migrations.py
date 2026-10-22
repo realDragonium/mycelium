@@ -612,11 +612,11 @@ def _migration_v7_kind_link_matrix(conn: sqlite3.Connection) -> None:
 
 
 def _migration_v8_link_type_aliases(conn: sqlite3.Connection) -> None:
-    """Create the `link_type_aliases` and embedding queue tables.
+    """Create the `link_type_aliases` table.
 
-    Like v7, a pure version bump: the CREATE TABLEs live in `SCHEMA` and
-    `store.migrate()` runs SCHEMA before the runner, so the tables already
-    exist on legacy and fresh DBs alike. Seeding is deliberately not done
+    Like v7, a pure version bump: the CREATE TABLE lives in `SCHEMA` and
+    `store.migrate()` runs SCHEMA before the runner, so the table already
+    exists on legacy and fresh DBs alike. Seeding is deliberately not done
     here — `store.link_type_aliases.seed_link_type_aliases` runs after the
     glossaries, and only while the table is empty."""
     pass
@@ -629,8 +629,8 @@ def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
     an empty or missing table is left alone. On an already-seeded DB every
     `_REVERSE_SEED` row is flipped regardless of provenance — before v9 the
     column did not exist, so no stored direction was ever a curator's choice —
-    and a reverse alias the old seed lacked ("is part of") is inserted with an
-    embedding job, since seeding never runs again on a non-empty table.
+    and a reverse alias the old seed lacked ("is part of") is inserted, since
+    seeding never runs again on a non-empty table.
     """
     columns = {row[1] for row in conn.execute("PRAGMA table_info(link_type_aliases)")}
     if not columns:
@@ -662,11 +662,6 @@ def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
             "INSERT INTO link_type_aliases "
             "(link_type, alias, provenance, direction, created_at) "
             "VALUES (?, ?, 'seed', 'reverse', ?)",
-            (link_type, alias, now),
-        )
-        conn.execute(
-            "INSERT INTO link_type_alias_embed_queue "
-            "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
             (link_type, alias, now),
         )
 
@@ -701,11 +696,6 @@ def _migration_v10_belongs_to_aliases(conn: sqlite3.Connection) -> None:
             "INSERT INTO link_type_aliases "
             "(link_type, alias, provenance, direction, created_at) "
             "VALUES (?, ?, 'seed', 'reverse', ?)",
-            (link_type, alias, now),
-        )
-        conn.execute(
-            "INSERT INTO link_type_alias_embed_queue "
-            "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
             (link_type, alias, now),
         )
 
@@ -746,11 +736,6 @@ def _migration_v11_passive_by_aliases(conn: sqlite3.Connection) -> None:
             "INSERT INTO link_type_aliases "
             "(link_type, alias, provenance, direction, created_at) "
             "VALUES (?, ?, 'seed', 'reverse', ?)",
-            (link_type, alias, now),
-        )
-        conn.execute(
-            "INSERT INTO link_type_alias_embed_queue "
-            "(link_type, alias, enqueued_at) VALUES (?, ?, ?)",
             (link_type, alias, now),
         )
 
@@ -889,6 +874,51 @@ def _migration_v14_statement_link_conditions(conn: sqlite3.Connection) -> None:
         conn.execute(f"PRAGMA foreign_keys = {int(foreign_keys)}")
 
 
+def _migration_v15_drop_alias_embeddings(conn: sqlite3.Connection) -> None:
+    """Drop `link_type_aliases.embedding` and `link_type_alias_embed_queue`.
+
+    Only the connect pipeline read them, and it is gone. The table is rebuilt
+    rather than altered because `DROP COLUMN` needs SQLite 3.35, and the whole
+    step is one transaction with the version bump, so a crash leaves v14
+    intact for the next start to retry."""
+    conn.commit()
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("DROP TABLE IF EXISTS link_type_alias_embed_queue")
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(link_type_aliases)")
+        }
+        if "embedding" in columns:
+            kept = (
+                "link_type, alias, provenance, score, direction, created_at, created_by"
+            )
+            conn.execute("""
+                CREATE TABLE link_type_aliases_v15 (
+                    link_type   TEXT NOT NULL,
+                    alias       TEXT NOT NULL,
+                    provenance  TEXT NOT NULL DEFAULT 'seed',
+                    score       REAL,
+                    direction   TEXT NOT NULL DEFAULT 'forward',
+                    created_at  TEXT,
+                    created_by  TEXT,
+                    PRIMARY KEY (link_type, alias)
+                )
+            """)
+            conn.execute(
+                f"INSERT INTO link_type_aliases_v15 ({kept}) "
+                f"SELECT {kept} FROM link_type_aliases"
+            )
+            conn.execute("DROP TABLE link_type_aliases")
+            conn.execute(
+                "ALTER TABLE link_type_aliases_v15 RENAME TO link_type_aliases"
+            )
+        _set_user_version(conn, 15)
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -907,6 +937,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (12, _migration_v12_connection_indexes),
     (13, _migration_v13_preferred_names),
     (14, _migration_v14_statement_link_conditions),
+    (15, _migration_v15_drop_alias_embeddings),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
@@ -1002,7 +1033,8 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
     The sentinel checks one column added in a representative past
     migration — `entities.created_at` (v1), absence of `when_nodes.link_kind` (v14),
     `names.generated_from_name_id` (v5), the NOCASE collation on
-    `names.text` (v6), and `link_type_aliases.direction` (v9). A fresh DB
+    `names.text` (v6), `link_type_aliases.direction` (v9), and absence of
+    `link_type_aliases.embedding` (v15). A fresh DB
     will have all of them (created in one
     shot by `SCHEMA`). A legacy DB at any prior version will be missing
     at least one (CREATE TABLE IF NOT EXISTS leaves existing tables
@@ -1033,4 +1065,5 @@ def _looks_like_fresh_db(conn: sqlite3.Connection) -> bool:
         and _has("names", "generated_from_name_id")
         and "NOCASE" in _table_sql("names").upper()
         and _has("link_type_aliases", "direction")
+        and not _has("link_type_aliases", "embedding")
     )

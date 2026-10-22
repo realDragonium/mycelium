@@ -1,8 +1,8 @@
 """Configured code sources for research runs.
 
 A source is a codebase this instance derives knowledge from. Administrators
-configure repository/ref entries in AI settings and select deployment-owned
-GitHub credential bindings. Explicit environment mappings are accepted only by
+configure repository/ref entries in AI settings and select either a
+deployment-owned GitHub credential binding or a GitHub App connection. Explicit environment mappings are accepted only by
 the legacy import parser; normal runtime reads use saved settings.
 
 All git/GitHub mechanics live in this module only. The rest of the research
@@ -56,6 +56,7 @@ class Source:
     ref: str | None = None
     token_env: str | None = None
     host: str = "github.com"
+    connection: str | None = None
 
 
 def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
@@ -67,9 +68,14 @@ def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
             sources: dict[str, Source] = {}
             for item in settings.sources:
                 if item.binding and item.binding.startswith(github_connections.PREFIX):
-                    raise ValueError(
-                        "GitHub App connections support documentation only."
+                    sources[item.name] = Source(
+                        name=item.name,
+                        owner=item.owner,
+                        repo=item.repo,
+                        ref=item.ref,
+                        connection=item.binding,
                     )
+                    continue
                 binding = (
                     github_credentials.resolve(item.binding) if item.binding else None
                 )
@@ -139,13 +145,7 @@ def get_source(name: str, env: Mapping[str, str] | None = None) -> Source:
 
 @contextmanager
 def fetch(source: Source, env: Mapping[str, str] | None = None) -> Iterator[Path]:
-    e = env or os.environ
-    token = None
-    if source.token_env:
-        token = e.get(source.token_env)
-        if not token:
-            raise SourceError(f"missing token env var {source.token_env}")
-
+    token = _access_token(source, env or os.environ)
     tmp = Path(tempfile.mkdtemp(prefix="mycelium-research-"))
     dest = tmp / "repo"
     url = _clone_url(source, token)
@@ -203,6 +203,24 @@ def fetch(source: Source, env: Mapping[str, str] | None = None) -> Iterator[Path
         yield dest
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _access_token(source: Source, env: Mapping[str, str]) -> str | None:
+    if source.connection:
+        from .. import github_app, github_connections
+
+        try:
+            return github_connections.access_token(
+                source.connection, source.owner, source.repo, publish=False
+            )
+        except github_app.GitHubError as exc:
+            raise SourceError(str(exc)) from None
+    if not source.token_env:
+        return None
+    token = env.get(source.token_env)
+    if not token:
+        raise SourceError(f"missing token env var {source.token_env}")
+    return token
 
 
 def _scrub(text: str, secrets: list[str]) -> str:

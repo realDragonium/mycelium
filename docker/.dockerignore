@@ -8,7 +8,6 @@ infra/.venv
 **/__pycache__
 **/*.pyc
 tests
-bench
 docs
 scripts
 deploy

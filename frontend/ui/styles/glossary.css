@@ -1,0 +1,215 @@
+/* ─── Glossary screen ─────────────────────────────────────────── */
+.glossary-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 22px;
+}
+.glossary-tabs button {
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-3);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.glossary-tabs button:hover {
+  color: var(--ink-2);
+}
+.glossary-tabs button.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--bio);
+}
+
+.glossary-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+.glossary-table thead th {
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--ink-4);
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+}
+.glossary-table tbody tr {
+  border-bottom: 1px solid var(--line-soft);
+  transition: background-color 100ms ease;
+}
+.glossary-table tbody tr:hover {
+  background: var(--bg-1);
+}
+.glossary-table tbody tr.is-editing {
+  background: var(--bg-1);
+}
+.glossary-table td {
+  padding: 14px 12px;
+  vertical-align: top;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.glossary-table td.col-key {
+  width: 200px;
+  white-space: nowrap;
+}
+.glossary-table td.col-actions {
+  width: 1%;
+  white-space: nowrap;
+}
+.glossary-table .desc {
+  white-space: pre-wrap;
+  max-width: 640px;
+}
+.glossary-table .desc.empty {
+  color: var(--ink-4);
+  font-style: italic;
+}
+
+.gls-count {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ink);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.gls-count.is-zero {
+  color: var(--ink-4);
+  font-weight: 400;
+}
+
+.gls-keytag {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+}
+
+.gls-btn {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  transition: background-color 100ms ease, border-color 100ms ease, color 100ms ease;
+}
+.gls-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+.gls-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.gls-btn.is-primary {
+  background: var(--bio);
+  border-color: var(--bio);
+  color: var(--bg);
+}
+[data-theme="dark"] .gls-btn.is-primary {
+  color: var(--bg);
+}
+.gls-btn.is-primary:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--bio) 88%, black);
+  border-color: color-mix(in oklab, var(--bio) 88%, black);
+}
+.gls-btn.is-danger { color: var(--danger); }
+.gls-btn.is-danger:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--danger) 10%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 45%, transparent);
+}
+.gls-btn.is-confirming { background: var(--danger); border-color: var(--danger); color: var(--bg-inset); }
+.gls-btn.is-confirming:hover:not(:disabled) { filter: brightness(0.92); }
+
+.gls-input,
+.gls-textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--ink);
+  transition: border-color 100ms ease, box-shadow 100ms ease;
+}
+.gls-input:focus,
+.gls-textarea:focus {
+  outline: none;
+  border-color: var(--bio);
+  box-shadow: 0 0 0 3px var(--bio-bg-2);
+}
+.gls-textarea {
+  resize: vertical;
+  min-height: 70px;
+}
+.gls-input.is-key {
+  font-family: var(--mono);
+  width: 240px;
+}
+
+.gls-card {
+  margin-top: 26px;
+  padding: 18px 20px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+}
+.gls-card h3 {
+  margin: 0 0 14px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+}
+.gls-field {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-4);
+  margin-bottom: 14px;
+}
+.gls-field-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--ink-4);
+  font-weight: 400;
+  margin-left: 4px;
+}
+.gls-field > .gls-input,
+.gls-field > .gls-textarea {
+  margin-top: 5px;
+}
+
+.gls-error {
+  color: var(--danger);
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.gls-row-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+

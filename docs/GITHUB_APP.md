@@ -1,6 +1,6 @@
 # Connect GitHub repositories
 
-Administrators can connect GitHub under **Documentation → Models & GitHub →
+Administrators can connect GitHub under **Settings → Documentation →
 Documentation delivery**. Connecting a repository grants this Mycelium instance's
 writers permission to publish documentation pull requests. It does not change
 Mycelium sign-in or grant other users administrator access.
@@ -77,5 +77,7 @@ another installation. A repository rename or transfer requires operator attentio
 Mycelium fails rather than writing to a different repository under the old name.
 
 Environment-backed credentials and GitHub Enterprise destinations continue to
-work. GitHub App connections currently support github.com documentation publishing
-only; research integrations retain their existing credential configuration.
+work. GitHub App connections support github.com only. A research source may also
+use a connection for its repository; its clone requests a read-only Contents
+token. The settings form does not offer connections for research sources yet, so
+save such a source through `PATCH /api/product-settings`.

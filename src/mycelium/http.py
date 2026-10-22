@@ -999,12 +999,19 @@ async def get_server_info(request: Request) -> dict[str, Any]:
     Answering on the event loop makes the probe mean "this process's loop is
     still turning", which is the condition a restart can actually fix. It does
     no I/O, so there is nothing here that needs a thread. Keep it that way.
+
+    `partial_restore` breaks the address-bar rule on purpose: it names the
+    databases startup found missing beside a populated substrate, so a
+    broken restore is visible to whoever watches the probe. It stays 200 —
+    a replacement task would restore the same incomplete set.
     """
     base = str(request.base_url).rstrip("/")
+    ctx = runtime._ctx
     return {
         "base_url": base,
         "mcp_url": f"{base}/mcp",
         "auth_enabled": auth.is_enabled(),
+        "partial_restore": list(ctx.partial_restore) if ctx else [],
     }
 
 
@@ -2081,38 +2088,29 @@ def _root_redirect() -> RedirectResponse:
     return RedirectResponse(url="/connect")
 
 
-# Both browser apps are built from `frontend/` into `webui/`, which is committed
-# so the server runs without Node. The bundles of both apps live under
-# webui/ui/assets/, so the /ui mount serves cockpit's scripts too.
+# The browser app is built from `frontend/` into `webui/`, which is committed so
+# the server runs without Node.
 _WEBUI_DIR = Path(__file__).resolve().parent / "webui"
 _UI_DIR = _WEBUI_DIR / "ui"
 app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
-# Second, parallel UI: the "cockpit" — an AI-native authoring surface
-# (Ask / Find / Ingest / Drafts / Coverage) recreated from a Claude Design
-# handoff. Wired to the live substrate through the same endpoints as /ui
-# (/api/data, /search-statements, /ask, /ingest, /api/drafts, …) via its own
-# api.ts bridge. Gated by the same AuthMiddleware as /ui — /cockpit is not in
-# the auth-exempt list.
-_COCKPIT_DIR = _WEBUI_DIR / "cockpit"
-app.mount(
-    "/cockpit", StaticFiles(directory=str(_COCKPIT_DIR), html=True), name="cockpit"
-)
 
-
-# Serve the bundles at the bare /ui and /cockpit paths too. Starlette would
-# normally redirect /cockpit -> /cockpit/ via redirect_slashes, but the
-# catch-all MCP sub-app mounted at "/" below matches /cockpit first, so that
-# automatic redirect never fires. Register explicit redirects here, ahead of
-# the "/" mount, so visitors can use the clean /ui and /cockpit URLs.
+# Serve the app at the bare /ui path too. Starlette would normally redirect
+# /ui -> /ui/ via redirect_slashes, but the catch-all MCP sub-app mounted at "/"
+# below matches /ui first, so that automatic redirect never fires. Register it
+# here, ahead of the "/" mount.
 @app.get("/ui", include_in_schema=False)
 def _ui_redirect() -> RedirectResponse:
     return RedirectResponse(url="/ui/")
 
 
+# /cockpit was a second app, merged into /ui. Old links redirect permanently;
+# the browser keeps the #fragment across a redirect, and /ui resolves the
+# cockpit's old hash routes.
 @app.get("/cockpit", include_in_schema=False)
-def _cockpit_redirect() -> RedirectResponse:
-    return RedirectResponse(url="/cockpit/")
+@app.get("/cockpit/{rest:path}", include_in_schema=False)
+def _cockpit_redirect(rest: str = "") -> RedirectResponse:
+    return RedirectResponse(url="/ui/", status_code=301)
 
 
 @app.exception_handler(alias_suggestions.Conflict)

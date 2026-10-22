@@ -1,7 +1,6 @@
 import React from 'react';
-import { ActionModelSettings } from './ai-settings';
-import { DocumentationProfiles } from './documentation-profiles';
-import { ProductSettings } from './product-settings';
+import { PageHeader } from './lib';
+import { Link } from './router';
 
 async function docRequest(path: string, body?: unknown, signal?: AbortSignal) {
   const response = await fetch('/api/documentation/' + path, {
@@ -210,10 +209,10 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
       {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to edit or publish</button></p>}
       <div className="docw-actions"><button onClick={() => setSource(value => !value)}>{source ? 'Read document' : 'View Markdown'}</button><button onClick={download}>Download Markdown</button>{!historical && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`documents/${encodeURIComponent(id)}/edits`) ? 'Resume edit' : 'Edit Markdown'}</button>}</div>
       {source ? <pre className="docw-source">{selected.body}</pre> : <article className="docw-prose" dangerouslySetInnerHTML={{ __html: selected.body_html }} />}
-      <details><summary>Sources and review</summary><p>{selected.statement_ids?.length || 0} source statements</p><ul>{(selected.statement_ids || []).map(id => <li key={id}><a href={'/ui/#/b/' + encodeURIComponent(id)}>{id}</a></li>)}</ul><pre className="docw-source">{JSON.stringify(selected.review, null, 2)}</pre></details>
+      <details><summary>Sources and review</summary><p>{selected.statement_ids?.length || 0} source statements</p><ul>{(selected.statement_ids || []).map(id => <li key={id}><a href={'#/s/' + encodeURIComponent(id)}>{id}</a></li>)}</ul><pre className="docw-source">{JSON.stringify(selected.review, null, 2)}</pre></details>
       {(selected.run_id || (!historical && current.last_run_id)) && <p><button onClick={() => docNavigate({ run: selected.run_id || current.last_run_id })}>View generation run</button></p>}
     </section>
-    {!historical && <><DocumentationDelivery key={current.current_revision} document={current} canWrite={options.can_generate} onUpdated={onUpdated} onConfigure={() => docNavigate({ tab: 'settings' })} /><DocumentationGenerator key={current.id + ':' + current.current_revision} options={options} document={current} onStarted={onStarted} /></>}
+    {!historical && <><DocumentationDelivery key={current.current_revision} document={current} canWrite={options.can_generate} onUpdated={onUpdated} onConfigure={() => { window.location.hash = '#/settings/documentation'; }} /><DocumentationGenerator key={current.id + ':' + current.current_revision} options={options} document={current} onStarted={onStarted} /></>}
   </>;
 }
 
@@ -250,27 +249,6 @@ function DocumentationRun({ id, onCompleted, options, onStarted }) {
   </section>;
 }
 
-function DocumentationConfiguration() {
-  const [models, setModels] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  const [retry, setRetry] = React.useState(0);
-  React.useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    fetch('/api/model-settings').then(async response => {
-      const value = await response.json();
-      if (!response.ok) throw new Error(typeof value.detail === 'string' ? value.detail : 'Could not load models.');
-      if (!cancelled) setModels(value);
-    }).catch(error => { if (!cancelled) setError(error.message); });
-    return () => { cancelled = true; };
-  }, [retry]);
-  return <section className="docw-panel"><h2>Documentation settings</h2><p>Choose the model, generation limits, default writing profile, and GitHub repositories. Connect GitHub and choose where documentation pull requests should be published.</p>
-    {error && <p role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Reload models</button></p>}
-    {models?.actions.filter(action => action.action === 'docgen').map(action => <ActionModelSettings key={action.action} settings={action} canConfigure={models.can_configure} />)}
-    <ProductSettings kinds={['documentation', 'docgen']} />
-  </section>;
-}
-
 function DocumentationWorkspace() {
   const [route, setRoute] = React.useState(docRoute);
   const [options, setOptions] = React.useState(null);
@@ -301,10 +279,11 @@ function DocumentationWorkspace() {
   }, [refresh, route.tab]);
   const started = run => { update(); docNavigate({ run: run.id }); };
   const filtered = documents.filter(document => [document.title, document.guideline_set, document.document_type].join(' ').toLowerCase().includes(search.toLowerCase()));
-  return <main className="docw"><header><h1>Documentation</h1><p>Write, refine, and publish documents from your knowledge base.</p></header>
-    <nav className="docw-tabs" aria-label="Documentation sections">{[['library', 'Documents'], ['generate', 'Generate'], ['runs', 'Generation history'], ['profiles', 'Profiles & templates'], ['settings', 'Models & GitHub']].map(([tab, label]) => <button key={tab} aria-current={route.tab === tab ? 'page' : undefined} onClick={() => docNavigate({ tab })}>{label}</button>)}</nav>
+  return <main className="page docw"><PageHeader eyebrow="Explore" title="Documents" blurb="Generate documents from the knowledge base, refine them, and publish them to GitHub as pull requests."
+      actions={<Link to={{ view: 'settings', section: 'documentation' }} className="btn ghost sm">Profiles &amp; publishing settings</Link>} />
+    <nav className="tabs" aria-label="Documentation sections">{[['library', 'Documents'], ['generate', 'Generate'], ['runs', 'Generation history']].map(([tab, label]) => <button key={tab} className={route.tab === tab ? 'on' : ''} aria-current={route.tab === tab ? 'page' : undefined} onClick={() => docNavigate({ tab })}>{label}</button>)}</nav>
     {error && <p role="alert">{error} <button onClick={update}>Reload documentation</button></p>}
-    {route.tab === 'profiles' ? <section className="docw-panel"><DocumentationProfiles /></section> : route.tab === 'settings' ? <DocumentationConfiguration /> : !options ? !error && <p role="status">Loading documentation…</p> : <>
+    {!options ? !error && <p role="status">Loading documentation…</p> : <>
       {route.tab === 'generate' && <DocumentationGenerator options={options} onStarted={started} />}
       {route.tab === 'library' && (route.document ? <DocumentationDocument key={route.document} id={route.document} revision={route.revision} options={options} refresh={refresh} onUpdated={update} onStarted={started} /> : <section className="docw-panel">
         <div className="docw-actions"><h2>Saved documents</h2><button onClick={() => docNavigate({ tab: 'generate' })}>Generate document</button><button onClick={update}>Refresh</button></div>

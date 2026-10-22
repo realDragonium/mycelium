@@ -235,11 +235,6 @@ _SECTIONS: tuple[_Section, ...] = (
 # Tables an archive deliberately leaves behind, by database file. Anything
 # not listed here (or SQLite-internal) must survive export → import.
 UNARCHIVED_TABLES: dict[str, dict[str, str]] = {
-    "mycelium.db": {
-        "link_type_alias_embed_queue": (
-            "written by migrations 9-11 and never read; nothing drains it"
-        ),
-    },
     "mycelium-auth.db": {
         "oauth_codes": "single-use authorization codes that expire in a minute",
         "oauth_consents": "pending consent screens that expire within minutes",
@@ -1022,11 +1017,14 @@ def _load_data_jsonl(
                 # leave seeds that collide with archived rows.
                 conn.execute(f"DELETE FROM {table}")
                 lazily_cleared.add(table)
-            if table == "link_type_aliases" and "direction" not in row:
-                raise ValueError(
-                    "data.jsonl link_type_alias record has no direction; "
-                    "direction is archived data and may not be defaulted"
-                )
+            if table == "link_type_aliases":
+                if "direction" not in row:
+                    raise ValueError(
+                        "data.jsonl link_type_alias record has no direction; "
+                        "direction is archived data and may not be defaulted"
+                    )
+                # Archives from before v15 carry the dropped alias embedding.
+                row.pop("embedding", None)
             _insert_archived_row(
                 conn,
                 _decode_blobs(row),

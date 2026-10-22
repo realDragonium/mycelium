@@ -1,4 +1,4 @@
-# Adding mentions from the cockpit
+# Adding mentions from statement detail
 
 Historical design note. The per-occurrence review queue is retired; see
 [alias-based discovery](MENTIONS.md). Vocabulary editing belongs in Names & aliases.
@@ -26,16 +26,15 @@ no API change — the matcher stays the single source of mentions.
 
 ## What was built
 
-- **Cockpit client** (`cockpit/api.js`): `Myc.upsertEntity` / `Myc.upsertName`.
-- **Cockpit UI** (`cockpit/inspect.jsx`, `AddMention`): an "+ add mention" control
+- **Client** (`frontend/ui/api.ts`): `upsertEntity` / `upsertName`.
+- **UI** (`frontend/ui/inspect.tsx`, `AddMention`): an "+ add mention" control
   in the statement view's mentions section. Two modes — attach an alias to an
   entity found by search, or create a new entity (name + description). On success
-  it explains the matcher will link it on the next scan and offers a Reload.
+  it explains the matcher will link it on the next scan and offers a reload.
 
 ## Known limitation
 
-The recompute is asynchronous (worker drain), and the cockpit loads its substrate
-snapshot once at startup. So a newly-derived mention appears after a **reload**,
-not instantly — surfaced honestly in the success banner. A live in-place refresh
-would need the cockpit to re-pull `/api/data` and rebuild its index; out of scope
-for this first cut.
+The recompute is asynchronous (worker drain), and the app holds a snapshot of
+`/api/data`. So a newly-derived mention appears after **Reload data** re-pulls
+the snapshot once the worker has drained, not instantly — surfaced honestly in
+the success banner.

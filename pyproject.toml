@@ -22,7 +22,6 @@ dependencies = [
     "httpx>=0.28.1",
     "itsdangerous>=2.2.0",
     "markdown-it-py>=4.0.0",
-    "matplotlib>=3.10.9",
     "mcp>=2.0.0",
     "numpy>=2.4.4",
     "ollama>=0.6.2",
@@ -98,6 +97,7 @@ module = [
     "mycelium.cimd",
     "mycelium.connect_page",
     "mycelium.connections",
+    "mycelium.databases",
     "mycelium.doc_runs",
     "mycelium.docgen",
     "mycelium.docgen.config",
@@ -229,11 +229,8 @@ ignore = [
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-# One-off operator scripts aren't held to the complexity gate, nor is the
-# bench: make_ops is a flat registry of one closure per tool, so its score
-# counts the closures rather than branching.
+# One-off operator scripts aren't held to the complexity gate.
 "scripts/*" = ["C901"]
-"bench/*" = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["mycelium"]

@@ -4,6 +4,7 @@ Subcommands:
     serve              (default) run the MCP server
     export             write a .tar.gz snapshot of the whole instance
     import             restore a snapshot into the data dir
+    databases          print the database files a deployment must restore
     users list         show all users + their roles
     users set-role     change a user's role by email
 """
@@ -42,6 +43,12 @@ def _cmd_export(args: argparse.Namespace) -> None:
     print(f"wrote {args.archive}", file=sys.stderr)
     for table, count in sorted(manifest["row_counts"].items()):
         print(f"  {table}: {count}", file=sys.stderr)
+
+
+def _cmd_databases(args: argparse.Namespace) -> None:
+    from . import databases
+
+    print("\n".join(databases.FILES))
 
 
 def _auth_db_path(data_dir: Path) -> Path:
@@ -177,6 +184,12 @@ def main() -> None:
         help="clobber an existing data dir (auto-snapshots first)",
     )
     p_import.set_defaults(func=_cmd_import)
+
+    p_databases = sub.add_parser(
+        "databases",
+        help="print the database files a deployment must replicate and restore",
+    )
+    p_databases.set_defaults(func=_cmd_databases)
 
     p_users = sub.add_parser("users", help="manage user roles in the auth DB")
     users_sub = p_users.add_subparsers(dest="users_cmd")

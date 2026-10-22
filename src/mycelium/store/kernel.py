@@ -231,14 +231,10 @@ CREATE TABLE IF NOT EXISTS entities (
     updated_by  TEXT
 );
 
--- `kind` discriminates by the shape of claim the text makes. Starting
--- vocabulary (open — grow as needed, same posture as link types):
---   event      — something happening (present-tense action)
---   state      — a condition holding (is / has / remains)
---   capability — a modal claim (can / may / is able to)
--- The substrate enforces only that kind is non-null; it does not lock
--- the vocabulary, and it does not enforce kind-edge compatibility
--- (e.g., that `triggers` is only between events). Trust the writer.
+-- `kind` discriminates by the shape of claim the text makes. The glossary
+-- seeds and describes the vocabulary, but it stays open: the schema enforces
+-- only that kind is non-null. Phrasing checks and link direction rules are
+-- applied by the write path, not here.
 CREATE TABLE IF NOT EXISTS statements (
     id         TEXT PRIMARY KEY,
     kind       TEXT NOT NULL,
@@ -396,20 +392,15 @@ CREATE TABLE IF NOT EXISTS kind_link_matrix (
     PRIMARY KEY (from_kind, to_kind, link_type)
 );
 
--- Link-type aliases are the vocabulary layer beneath cue matching; the
+-- Link-type aliases are the phrasings that express each link type; the
 -- substrate only ever stores the canonical `link_type`. The same alias may
--- legitimately belong to two types: that ambiguity is real and a later stage
--- gates on it, so identity is the (link_type, alias) pair. Alias text is stored
--- casefolded, stripped, and with internal whitespace collapsed.
---
--- Embeddings use a carrier template rather than the bare alias because a
--- sentence encoder represents bare connector words noisily. `provenance` and
--- `score` are present from the start so automatic alias absorption will not
--- require a later schema migration.
+-- legitimately belong to two types, so identity is the (link_type, alias)
+-- pair. Alias text is stored casefolded, stripped, and with internal
+-- whitespace collapsed. `provenance` and `score` are present from the start so
+-- automatic alias absorption will not require a later schema migration.
 CREATE TABLE IF NOT EXISTS link_type_aliases (
     link_type   TEXT NOT NULL,
     alias       TEXT NOT NULL,
-    embedding   BLOB,
     provenance  TEXT NOT NULL DEFAULT 'seed',
     score       REAL,
     -- 'forward' reads the edge off the alias left to right ("A contains B");
@@ -419,16 +410,6 @@ CREATE TABLE IF NOT EXISTS link_type_aliases (
     created_by  TEXT,
     PRIMARY KEY (link_type, alias)
 );
-
-CREATE TABLE IF NOT EXISTS link_type_alias_embed_queue (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    link_type   TEXT NOT NULL,
-    alias       TEXT NOT NULL,
-    enqueued_at TEXT NOT NULL,
-    claimed_at  TEXT
-);
-CREATE INDEX IF NOT EXISTS link_type_alias_embed_queue_open
-    ON link_type_alias_embed_queue (id) WHERE claimed_at IS NULL;
 
 -- Note: authentication tables (users, mcp_tokens, invites,
 -- oauth_clients, oauth_codes) live in a SEPARATE SQLite file managed

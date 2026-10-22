@@ -33,11 +33,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:${PYTHON_VERSION}-slim AS runtime
 
 # ca-certificates: TLS for the app's outbound calls (Anthropic, Auth0, Ollama).
+# git: research runs shallow-clone their source repository.
 # Nothing else on purpose — this image is deployment-agnostic. Persistence and
 # WAL replication, derived-artifact snapshotting, and any cloud CLIs are deploy
 # concerns and live in the image that wraps this one (which overrides ENTRYPOINT).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates \
+        ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

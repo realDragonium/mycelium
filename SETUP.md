@@ -47,8 +47,11 @@ private session secret to the server process:
 MYCELIUM_AUTH=on MYCELIUM_SESSION_SECRET='<random-secret>' uv run mycelium-http
 ```
 
-Open <http://127.0.0.1:8765/ui/> for the UI or
-<http://127.0.0.1:8765/docs> for the generated HTTP API reference.
+Open <http://127.0.0.1:8765/ui/> for the web app or
+<http://127.0.0.1:8765/docs> for the generated HTTP API reference. The web app's
+sidebar groups screens into Explore, Add knowledge and Curate; Settings holds
+tokens, members, models, prompts, draft review, limits and publishing. See
+[docs/WEB_APP.md](docs/WEB_APP.md).
 
 Both transports use `./.mycelium` unless `MYCELIUM_DATA_DIR` points elsewhere.
 Write serialization is process-local, so run only one server process against a
@@ -93,9 +96,8 @@ Keep a real corpus and its runtime state outside the source checkout:
 uv run mycelium-init ~/work/my-new-kb
 ```
 
-This creates a workspace with its own `.mcp.json`, ignored `data/` directory,
-and `ingest/` directory. Open the workspace in your MCP client and approve its
-server configuration.
+This creates a workspace with its own `.mcp.json` and ignored `data/` directory.
+Open the workspace in your MCP client and approve its server configuration.
 
 ## 5. Add data
 
@@ -113,8 +115,8 @@ active vocabularies before authoring unfamiliar edges or kinds.
 
 ## 6. Change the browser UI
 
-The two browser apps, `/ui/` and `/cockpit/`, are built from `frontend/` with
-Vite, React and TypeScript. The build output in `src/mycelium/webui/` is
+The browser app at `/ui/` is built from `frontend/ui/` with Vite, React and
+TypeScript; [docs/WEB_APP.md](docs/WEB_APP.md) describes its screens. The build output in `src/mycelium/webui/` is
 committed, so running the server needs no Node; changing the UI needs Node 24.
 
 ```sh
@@ -123,9 +125,9 @@ npm ci
 npm run dev
 ```
 
-`npm run dev` serves both apps with hot reload at <http://localhost:5173/ui/>
-and <http://localhost:5173/cockpit/>, and proxies every other path (API, auth,
-MCP) to `mycelium-http` on `127.0.0.1:8765`. Start the server first; if it runs
+`npm run dev` serves the app with hot reload at <http://localhost:5173/ui/> and
+proxies every other path (API, auth, MCP) to `mycelium-http` on
+`127.0.0.1:8765`. Start the server first; if it runs
 on another port, start the dev server with the same `MYCELIUM_HTTP_PORT`.
 
 Before committing a UI change, run the checks CI runs and commit the rebuilt

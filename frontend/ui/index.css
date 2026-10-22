@@ -1,6 +1,9 @@
-/* One stylesheet per app, in the original <link> order. Linking the files
-   separately lets the bundler hoist the CSS both apps share ahead of each
-   app's own, which changes the cascade. */
-@import './styles.css';
-@import './documentation-workspace.css';
-@import './names-workspace.css';
+/* The app's one stylesheet, in cascade order: tokens, shared base and
+   components, the shell, then screens. */
+@import './styles/tokens.css';
+@import './styles/base.css';
+@import './styles/shell.css';
+@import './styles/screens.css';
+@import './styles/graph.css';
+@import './styles/glossary.css';
+@import './styles/activity.css';

@@ -1,29 +1,33 @@
 ---
 name: mycelium-draft
-description: Research a product domain and produce a structured draft of proposed mycelium substrate mutations — statements, links, entities, plus a mermaid topology diagram — for human review. Writes a markdown file to context/mycelium-drafts/<slug>.md. Never mutates the substrate — read-only access only. Use this skill whenever the operator wants to document a domain in the substrate but wants to review the proposal before anything is written. Multiple instances can run in parallel on different domains.
+description: Research a product domain against its codebase and propose the mycelium substrate changes that document it — statements, links, entities — as a submitted substrate draft, which the server's internal draft reviewer then assesses. Writes only through a drafter-scoped MCP connection, so nothing lands live without review. Use this skill whenever the operator wants a domain documented in the substrate through review rather than written directly.
 ---
 
 # Mycelium Draft Authoring
 
-Research a product domain, plan the statements and links needed to document it in the mycelium substrate, and write a structured draft markdown file — fronted by a topology diagram — for human review.
+Research a product domain, plan the statements and links needed to document it in the mycelium substrate, and queue them as a **substrate draft** that you submit for review. The server's internal reviewer (see `docs/DRAFT_REVIEW.md`) judges how the draft fits the existing graph; a curator, or the reviewer in automatic mode, applies or rejects it.
 
-**You may not mutate the substrate.** The draft file is your only output.
+**You never write live knowledge.** Every write goes onto the draft.
 
 ---
 
-## Permitted tools
+## Connection check — before anything else
 
-**Substrate (read-only):**
-`search_statements`, `grep_statements`, `get_statements`, `discover_facts`, `list_entities`, `get_entity`, `list_link_types`, `list_entity_link_types`, `list_statements`
+A draft is only guaranteed when the MCP connection is **drafter**-scoped: the server then queues every write tool call onto the caller's open draft instead of applying it. A writer or admin connection applies writes immediately, and has no MCP tool to open a draft.
 
-**Files / shell (read-only):**
-`Read`, `Glob`, `Grep`, `Bash` — read-only operations only (no writes, no destructive commands)
+Read your tool list:
 
-**File write — one location only:**
-`Write` to `context/mycelium-drafts/<slug>.md`
+- `upsert_statements` present and `list_drafts` **absent** → drafter. Proceed.
+- `list_drafts` present → writer or admin (including a local server with authentication off). **Stop.** Writes would land live. Ask the operator for a drafter token (Settings → MCP tokens, scope `drafter`; see `docs/USERS.md`).
+- No `upsert_statements` → reader or asker. Stop and say so.
 
-**Forbidden — never call these:**
-All substrate write/mutation tools: `upsert_statement`, `upsert_statements`, `upsert_entity`, `upsert_name`, `rename_name`, `add_links`, `remove_links`, `add_entity_links`, `remove_entity_links`, `delete_statement`, `delete_entity`, `delete_name`, `merge_statements`, `merge_entities`, `move_name`, `replace_text`, `patch_statement`, `add_mentions`, `remove_mentions`
+Then call `list_my_drafts()`. A drafter has **one open draft per account** (per MCP session when the client keeps one), and every write joins it. If an open draft already holds unrelated operations, stop and ask the operator whether to submit it first. For the same reason, parallel runs on different domains need separate drafter accounts.
+
+**Substrate reads:** `search_statements`, `grep_statements`, `get_statements`, `discover_facts`, `list_entities`, `search_entities`, `get_entity`, `list_link_types`, `list_entity_link_types`, `list_statement_kinds`, `list_statements`.
+
+**Draft writes (queued, never live):** `upsert_entity`, `upsert_name`, `upsert_statements`, `add_links`, `add_entity_links`, `patch_statement`; then `set_draft_review_evidence` and `submit_draft`. `upsert_name` and `add_entity_links` take entity ids, and a queued `upsert_entity` returns none, so they can only target entities that already exist (see "Writing the draft"). `discard_draft_op` removes a queued operation while the draft is open; `get_draft` shows it.
+
+**Files / shell:** read-only. Nothing is written to disk.
 
 ---
 
@@ -35,7 +39,7 @@ Three things follow from the authoring rewrite and govern everything below:
 
 - **Depth policy lives in authoring §1**, not here: every distinct product action is its own statement, wired in execution order — *including* linear sequences — and every computation decomposes into stages, wired in derivation order (authoring §1e). This skill's research protocol is the *how* (reading code to find those actions and stages); it does not set the depth bar.
 - **Link and kind vocabulary lives in the live tools**, not in any skill. Always call `list_link_types()` / `list_entity_link_types()` this session and treat what they return as the full menu. Any type names appearing in either skill are illustrations, not the available set. (This depends on those tool descriptions being complete — if a returned type has an empty description, flag it; you can't model a link whose meaning you can't read.)
-- **Phrasing is validated at apply time, not draft time** — see the checklist note. This skill never calls `upsert_statement`, so it never sees a phrasing rejection. Aim for clean per-kind shapes (authoring §5) but treat the apply step as the real gate.
+- **Phrasing is checked when the draft is reviewed and applied, not when an operation is queued** — see the checklist note. A queued `upsert_statements` returns a receipt, not a phrasing verdict. The reviewer sees phrasing findings and its automatic application refuses a violation, but a curator's manual **Approve** silently leaves out a violating statement, and every statement that references it, while the rest lands. Treat clean per-kind shapes (authoring §5) as your job, not the gate's.
 
 ---
 
@@ -61,9 +65,9 @@ Before reading any code, walk the substrate to understand what already exists ar
 
 **What this produces:**
 
-A mental map with three zones: (a) existing context the draft inherits from upstream, (b) the interior the draft will propose, (c) existing targets downstream the draft should trigger into. This map directly drives the topology diagram's dashed existing nodes and is the basis for the "Incoming links from existing" and "Links between existing" tables in the draft.
+A mental map with three zones: (a) existing context the draft inherits from upstream, (b) the interior the draft will propose, (c) existing targets downstream the draft should trigger into. This map directly drives the topology diagram's dashed existing nodes and is the basis for the "Incoming links from existing" and "Links between existing" tables in the plan.
 
-**The zone boundary is the draft's scope.** Anything in zone (a) or (c) is shown as an existing (dashed) node but not re-proposed. The draft's new statements live in zone (b). If zone (b) is larger than expected, split into multiple draft files rather than widening scope.
+**The zone boundary is the draft's scope.** Anything in zone (a) or (c) is shown as an existing (dashed) node but not re-proposed. The draft's new statements live in zone (b). If zone (b) is larger than expected, split it into several drafts, submitted one after another, rather than widening scope.
 
 ---
 
@@ -121,21 +125,14 @@ This ordering is what prevents the star. Mapping shared targets, branches, sub-s
 
 ---
 
-## Draft file format
+## The plan
 
-Write to `context/mycelium-drafts/<slug>.md`. Use kebab-case based on the domain: `mcp-connection-setup.md`, `oidc-login-flow.md`.
-
-Use this exact structure:
+Before queuing anything, settle the proposal in this shape in your working notes. It is not written to disk: the tables become draft operations, and the Context, Uncertainties and code evidence become the reviewer's evidence (see "Writing the draft").
 
 ```
----
-topic: [human-readable topic name]
-status: draft
-date: YYYY-MM-DD
-codebase_ref: [key file paths read, comma-separated]
----
+# Plan: [Topic]
 
-# Draft: [Topic]
+Code read: [key file paths, comma-separated]
 
 ## Context
 [1–3 sentences: what this draft covers, why it's being added now, what gap it fills]
@@ -162,7 +159,7 @@ codebase_ref: [key file paths read, comma-separated]
 | Ref | Kind | Text | Mentions |
 |-----|------|------|----------|
 
-Ref values are short labels (S1, S2, …) used for cross-referencing within this draft.
+Ref values are short labels (S1, S2, …) used for cross-referencing within this plan; in the batch they become `@N` positions.
 Mentions lists the entity names whose context the statement belongs to.
 
 ### Outgoing links from new statements
@@ -178,7 +175,7 @@ Edges FROM a new statement TO another statement (new or existing).
 
 ### Incoming links to new statements (from existing)
 
-Edges FROM an existing statement TO a new statement.
+Edges FROM an existing statement TO a new statement (queued as the new statement's `incoming_links`).
 
 | From ID | From text (truncated to ~60 chars) | Link type | To (ref) |
 |---------|------------------------------------|-----------|----------|
@@ -240,9 +237,9 @@ Summary of `discover_facts` findings — shows the reviewer what was checked and
 
 ## Topology diagram
 
-The diagram is the reviewer's fastest path to understanding *what* you're proposing and *at what grain*. Build it **last**, from the settled tables, so it matches them exactly — it is the same topology in visual form, not a separate claim.
+The diagram is the operator's fastest path to understanding *what* you're proposing and *at what grain*; it goes in your final report. Build it **last**, from the settled tables, so it matches them exactly — it is the same topology in visual form, not a separate claim. You also read your own graph back off it (checklist below).
 
-**The diagram does not replace the tables, and they are not redundant.** The tables are the apply source of truth — exact statement text, mentions, full `when` trees, entity descriptions, discover provenance. The diagram is a deliberately *lossy* overview (short/paraphrased labels, no mentions, no provenance) optimised for a human's eyes. Two forms of the same topology, for two readers: the reviewer and the applier. Keep both in sync (checklist below).
+**The diagram does not replace the tables.** The tables become the queued operations — exact statement text, full `when` trees, entity descriptions. The diagram is a deliberately *lossy* overview (short/paraphrased labels, no mentions, no provenance) optimised for a human's eyes. Keep both in sync.
 
 Conventions:
 
@@ -278,7 +275,7 @@ A reviewer scanning this should immediately see: how many new statements, how ma
 
 ---
 
-## Before writing the file
+## Before queuing anything
 
 Run through this checklist mentally. If any item fails, fix the draft content first.
 
@@ -296,7 +293,7 @@ Then run the checklist:
 
 0a. **Capability-hub gate (blocking).** No `configures` or `governed-by` edge may terminate on a `capability` node — see authoring §6 for the rule and its two honest exits (name the stage it targets, or scope the mechanism out explicitly). This fails the draft; it is the hard enforcement of the "Stars / opaque hubs" smell above. Walk every `configures`/`governed-by` edge in the diagram and confirm each lands on a rule/stage, not a *"X can be …"* hub.
 
-1. **Each statement text follows its kind's phrasing routing** (authoring §5). Note: this skill never calls `upsert_statement`, so phrasing is **not** validated at draft time — the apply step is the gate. Aim for clean shapes; where you deliberately left text compound (e.g. a get-or-create), flag it so the applier knows to pass `allow_phrasing_violations`. Don't block the draft on borderline wording.
+1. **Each statement text follows its kind's phrasing routing** (authoring §5). Queuing does not check phrasing, and a manual approval drops a violating statement without failing. Where you deliberately leave text compound (e.g. a get-or-create), set `allow_phrasing_violations: true` on that batch item and say why in the evidence.
 2. **Connected and walkable, not just orphan-free.** Every new statement has a link (incoming or outgoing) — condition-state `when`-leaf exceptions flagged explicitly — *and* the draft has a spine: the central object walks as a chain through real intermediates, not a flat star of spokes on a hub (authoring §1d, §1e; structural smells above).
 3. **All `stm_...` IDs are real IDs** confirmed via `get_statements` — never guessed or invented.
 4. **`discover_facts` has been run** on every statement text. All `exists` and `near` hits are addressed in the discover results table.
@@ -309,7 +306,7 @@ Then run the checklist:
 
 ## After writing the file — adversarial verification
 
-Once the draft file is written, divide it into 3–5 logical subsections and spawn one sub-agent per subsection to adversarially verify it. Each agent works **co-equal fronts**: (1) find evidence that the stated claims are **wrong or inaccurate**, (2) find behaviour in its territory the draft **failed to model at all** — code paths, branches, failure/rejection paths, fallbacks, and async handlers that no statement covers (authoring §1d), and (3) find places the draft **flattened structure onto a hub** that the code shows as a multi-stage chain (authoring §1e). Under-documentation is as much a defect as a wrong claim; a draft can be 100% accurate and still dangerously incomplete, and a draft can be both accurate and complete and still a star. Front (1) is unchanged — all the existing disprove-the-claim strategies still apply; the others are added beside it, not in place of it.
+Once the plan is settled, and before queuing anything, divide it into 3–5 logical subsections and spawn one sub-agent per subsection to adversarially verify it. Each agent works **co-equal fronts**: (1) find evidence that the stated claims are **wrong or inaccurate**, (2) find behaviour in its territory the draft **failed to model at all** — code paths, branches, failure/rejection paths, fallbacks, and async handlers that no statement covers (authoring §1d), and (3) find places the draft **flattened structure onto a hub** that the code shows as a multi-stage chain (authoring §1e). Under-documentation is as much a defect as a wrong claim; a draft can be 100% accurate and still dangerously incomplete, and a draft can be both accurate and complete and still a star. Front (1) is unchanged — all the existing disprove-the-claim strategies still apply; the others are added beside it, not in place of it.
 
 ### How to divide
 
@@ -366,7 +363,7 @@ Report every place the draft pinned a fact to an abstract hub where the code sho
 
 ### Incorporating findings
 
-After all agents return, apply corrections to the draft file:
+After all agents return, apply corrections to the plan:
 
 - **Confirmed wrong** → fix the statement text, link type, or remove the statement and explain in Uncertainties
 - **Missing behaviour found** → add the statement(s) and link(s) to cover the unmodelled path, and update the diagram. If it's genuinely out of this draft's scope, say so explicitly in Uncertainties rather than leaving it silently absent
@@ -380,28 +377,35 @@ After all agents return, apply corrections to the draft file:
 - **Answered** → move the finding into the relevant statement's note; remove from Uncertainties
 - **Still open** → keep in Uncertainties with a precise description of what remains unknown and why
 
-A well-reviewed draft should have only genuinely unresolved items in Uncertainties — not confirmed findings that happen to be surprising. If the code cannot answer a question but the answer doesn't affect how anything is modelled, it is not an uncertainty — it is context that belongs in a statement note. The Uncertainties section exists only for items where the reviewer must make a decision before the draft can be applied.
+A well-reviewed plan should have only genuinely unresolved items in Uncertainties — not confirmed findings that happen to be surprising. If the code cannot answer a question but the answer doesn't affect how anything is modelled, it is not an uncertainty — it is context that belongs in a statement note. The Uncertainties section exists only for items where the reviewer must make a decision before the draft can be applied.
 
 **Re-sync the diagram.** If verification changed any statement, link, or kind, update the Topology diagram so it still matches the tables (checklist item 7).
 
-After incorporating all corrections, triaging Uncertainties, and re-syncing the diagram, update `status` in the frontmatter to `draft — adversarial review complete`.
+After incorporating all corrections, triaging Uncertainties, and re-syncing the diagram, the plan is ready to queue.
 
 ---
 
-## Final step — run validate-draft as a sub-agent
+## Writing the draft
 
-Once the adversarial review is complete and all corrections are incorporated, spawn the `validate-draft` skill as a **sub-agent in an isolated context**. This ensures the validation runs with fresh substrate access and no context bleed from the drafting session.
+Queue the operations in dependency order. Each call returns a receipt (`draft_id`, `seq`, `queued`, `revision`), not a substrate result; the draft replays them in `seq` order.
 
-Prompt to pass to the sub-agent:
+1. **Entities first** — `upsert_entity` for each new entity, so its name exists when the statements replay and their mentions resolve. Aliases (`upsert_name`) and entity links (`add_entity_links`) need entity ids: queue them only for entities that already exist. For a new entity, list its aliases and entity links in the evidence and your report, to be added once the draft is applied; never guess an id, because a missing entity fails the whole replay.
+2. **All new statements in one `upsert_statements` batch.** Queued statements have no ids until the draft is applied, so every link that touches a new statement belongs in this batch: outgoing edges in each item's `links`, edges from existing statements in `incoming_links`, and `@N` (the item's 0-based position) wherever an edge or a `when` leaf points at another new statement. Existing statements are referenced by their real `stm_` ids.
+3. **Links between two existing statements** — `add_links`.
+4. **Entity ↔ entity links between existing entities** — `add_entity_links`.
+5. **Text updates** to existing statements — `patch_statement`.
+6. `get_draft(draft_id)` and read the queued operations back against the plan. Remove a wrong one with `discard_draft_op` and queue it again.
+7. **Give the reviewer your evidence**: `set_draft_review_evidence(draft_id, evidence, expected_revision=<the draft's current revision>)`. The reviewer trusts you on what the product does and never sees the code, so this is where the code goes: the Context, the `file:line` evidence for non-obvious claims and anchor links, why each `exists`/`near` discover match was kept or reused, and the remaining Uncertainties. Plain text, at most 30,000 characters.
+8. `submit_draft(draft_id)`. Don't change the evidence after submitting: it raises the draft's revision, makes the assessment stale, and blocks a curator from answering the reviewer until it runs again.
 
-```
-Run the validate-draft skill on context/mycelium-drafts/<slug>.md and return the full validation report. Report every finding — blocking and advisory — with the specific Ref or stm_ ID, the issue, and the suggested fix.
-```
+## After submitting
 
-**After the sub-agent returns:**
+If draft review is on, the reviewer starts at once. Follow it with `get_draft(draft_id)` and read `review_assessment` (`status`, `label`, `rationale`, `questions`, `corrections`, `contradictions`, `application`). Poll sparingly; a review takes a minute or two.
 
-- **Blocking issues** → fix them in the draft file before this skill is considered done. Re-run validate-draft if the fixes are non-trivial. Do not mark the draft ready while blocking issues remain.
-- **Advisory issues** → address them where the fix is clear and cheap (e.g., a diagram out of sync with the tables, an orphaned condition state). For advisory items that require a reviewer decision (e.g., entity precision ambiguity, cross-draft placeholder), leave them as `⚠️` notes in the Uncertainties section so the human reviewer sees them explicitly.
-- **No blocking issues** → update `status` in the frontmatter to `draft — validated, ready for review`.
+- `application: applied` — it landed. Spot-check with `get_statements`.
+- `application: needs_human` — the reviewer asked a question. Only a curator can answer it, in the UI; give the operator the questions and, if the code answers them, the answer with evidence.
+- `application: rejected`, or a `reject` label — read the rationale. Fix the plan and author a new draft; an author cannot add or change operations on a submitted draft.
+- `review-only` mode or an unapplied assessment — the draft waits for a curator; report the assessment.
+- No assessment — review is off, or on without a model configured; the draft waits for a curator. Tell the operator which, if you can tell.
 
-The human reviewer sees the draft only after this gate passes. The validate-draft output is not included in the draft file — it informs corrections only.
+Report to the operator: the draft id, the topology diagram, the operation counts (new statements, reused existing ones, links), the remaining Uncertainties, and the review status.

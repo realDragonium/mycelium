@@ -1,8 +1,8 @@
 # AI model configuration
 
-Administrators configure Mycelium's language-model actions in **AI settings**.
-Open Settings in the cockpit or the existing UI. Each action has its own default
-provider and model:
+Administrators configure Mycelium's language-model actions in **Settings → Models**
+(see [the web app](WEB_APP.md)). Each action has its own default provider and
+model:
 
 - Ask: answer questions from existing knowledge.
 - Ingest: extract proposed knowledge changes from supplied material.
@@ -28,7 +28,7 @@ it again to use the new settings. Saving configuration does not start work.
 ## Reasoning effort
 
 Choose **Reasoning effort** alongside each action’s model, including Draft review
-and Documentation → Models & GitHub. **Model default** sends no effort override
+(**Settings → Draft review**). **Model default** sends no effort override
 and preserves existing behavior. OpenAI **None** is different: it explicitly
 requests no reasoning, on models that support it.
 
@@ -57,23 +57,13 @@ profiles. The settings screen shows local credential availability; it does not
 make a provider request to test a model or establish account access. Provider
 errors remain explicit and never cause fallback to a different model.
 
-Existing instances import these legacy environment values once at upgrade, preserving saved values. Fresh instances use built-in defaults. Subsequent environment changes have no effect:
-
-| Action | Provider | Claude model | OpenAI model |
-| --- | --- | --- | --- |
-| Ask | `MYCELIUM_ASK_PROVIDER` | `MYCELIUM_ASK_MODEL` | `MYCELIUM_ASK_OPENAI_MODEL` |
-| Ingest | `MYCELIUM_INGEST_PROVIDER` | `MYCELIUM_INGEST_MODEL` | `MYCELIUM_INGEST_OPENAI_MODEL` |
-| Research | `MYCELIUM_RESEARCH_PROVIDER` | `MYCELIUM_RESEARCH_MODEL` | `MYCELIUM_RESEARCH_OPENAI_MODEL` |
-| Documentation | `MYCELIUM_DOCGEN_PROVIDER` | `MYCELIUM_DOCGEN_MODEL` | `MYCELIUM_DOCGEN_OPENAI_MODEL` |
-| Draft review | `MYCELIUM_DRAFT_REVIEW_PROVIDER` | `MYCELIUM_DRAFT_REVIEW_CLAUDE_MODEL` | `MYCELIUM_DRAFT_REVIEW_OPENAI_MODEL` |
-
-Ask, ingest, research, and documentation retain their existing Claude defaults.
-OpenAI model IDs have no implicit default. Draft review retains its OpenAI default
-provider and accepts the existing `MYCELIUM_DRAFT_REVIEW_MODEL` as the selected
-provider's initial model when its provider-specific variable is absent.
-
-Each action’s provider and both model IDs come entirely from saved settings. Changing environment variables does not override that saved action.
-The administrator controls **Allow applying accepted reviews** in AI settings. This separate permission covers manual curator application and automatic application.
+A fresh instance starts every action on Claude with its built-in Claude model,
+except Draft review, which starts on OpenAI with no model selected. OpenAI model
+IDs have no implicit default. Each action’s provider and both model IDs come
+entirely from saved settings; no environment variable selects or overrides them.
+Instances that predate saved settings imported their environment once; see
+[Upgrading from pre-settings versions](#upgrading-from-pre-settings-versions).
+The administrator controls **Allow applying accepted reviews** in **Settings → Draft review**. This separate permission covers manual curator application and automatic application.
 
 ## Persistence and API
 
@@ -115,7 +105,7 @@ this screen.
 
 ## Limits and repository integrations
 
-AI settings also provides independent limits for Ask, Ingest, Research,
+**Settings → Limits** provides independent limits for Ask, Ingest, Research,
 Documentation, and Draft review. Output tokens, request timeouts, and retries
 apply to each provider request. The four tool loops additionally expose operation
 and run time limits and adaptive thinking; Ask exposes its existing cache switch.
@@ -154,17 +144,12 @@ hosts, and whether the referenced credential is present; it never accepts token
 values or arbitrary environment-variable names. A binding fixes the host to
 which its credential can be sent. Public research sources can omit a binding
 and supply a validated host. Documentation destinations require a binding.
+Either may instead use a [GitHub App connection](GITHUB_APP.md) to the same
+repository.
 Changing a token value rotates credentials without changing saved repository
 settings.
 
-Existing instances import legacy task budgets, `MYCELIUM_SOURCES`,
-`MYCELIUM_DOC_DESTINATIONS`, and `MYCELIUM_DOCGEN_GUIDELINE_SET` once. Their
-credential host/reference pairs become stable `imported-` bindings in a separate
-registry that the settings API cannot edit. Explicit deployment bindings override
-a registry entry with the same name. Fresh and restored instances never import
-unrelated legacy environment configuration. Invalid legacy sections are recorded
-as disabled without storing their raw text; an administrator must repair that
-section. Ports, storage and trace paths, authentication, credentials, and other
+Ports, storage and trace paths, authentication, credentials, and other
 deployment configuration remain on the server.
 
 Admitted research jobs capture their source coordinates and AI budgets before
@@ -184,3 +169,40 @@ independently. Backup includes product sections and imported credential
 references in `product-settings.json`, validates them before restore, and
 refuses to silently omit corrupt saved configuration. Tokens remain outside the
 archive.
+
+## Upgrading from pre-settings versions
+
+Before AI settings existed, these actions were configured with environment
+variables. The first start of a version with saved settings imports them once,
+into saved settings, and records that the import happened. After that they have
+no effect, and fresh and restored instances never read them. They are listed
+here only so an operator upgrading an old instance knows what carried over.
+
+| Action | Provider | Claude model | OpenAI model |
+| --- | --- | --- | --- |
+| Ask | `MYCELIUM_ASK_PROVIDER` | `MYCELIUM_ASK_MODEL` | `MYCELIUM_ASK_OPENAI_MODEL` |
+| Ingest | `MYCELIUM_INGEST_PROVIDER` | `MYCELIUM_INGEST_MODEL` | `MYCELIUM_INGEST_OPENAI_MODEL` |
+| Research | `MYCELIUM_RESEARCH_PROVIDER` | `MYCELIUM_RESEARCH_MODEL` | `MYCELIUM_RESEARCH_OPENAI_MODEL` |
+| Documentation | `MYCELIUM_DOCGEN_PROVIDER` | `MYCELIUM_DOCGEN_MODEL` | `MYCELIUM_DOCGEN_OPENAI_MODEL` |
+| Draft review | `MYCELIUM_DRAFT_REVIEW_PROVIDER` | `MYCELIUM_DRAFT_REVIEW_CLAUDE_MODEL` | `MYCELIUM_DRAFT_REVIEW_OPENAI_MODEL` |
+
+Research and Documentation fall back to `MYCELIUM_INGEST_MODEL` for their Claude
+model. Draft review takes `MYCELIUM_DRAFT_REVIEW_MODEL` as the selected
+provider's model when the provider-specific variable is absent. Its mode,
+reviewer and application permission are covered in
+[Draft review](DRAFT_REVIEW.md#upgrading-from-pre-settings-versions).
+
+The same import reads:
+
+- task budgets as `MYCELIUM_<ACTION>_<FIELD>`, for example
+  `MYCELIUM_ASK_WALL_CLOCK_S` or `MYCELIUM_INGEST_OP_CAP`;
+- `MYCELIUM_MODEL_LOOP_MAX_CONCURRENT`, `MYCELIUM_DOCGEN_MAX_ACTIVE` and
+  `MYCELIUM_RESEARCH_MAX_ACTIVE` for the concurrency limits;
+- `MYCELIUM_SOURCES` for research sources, `MYCELIUM_DOC_DESTINATIONS` for
+  documentation destinations, and `MYCELIUM_DOCGEN_GUIDELINE_SET`.
+
+Credential host/reference pairs from sources and destinations become stable
+`imported-` bindings in a separate registry that the settings API cannot edit.
+Explicit deployment bindings override a registry entry with the same name.
+Invalid legacy sections are recorded as disabled without storing their raw
+text; an administrator must repair that section.

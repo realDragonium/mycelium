@@ -83,22 +83,22 @@ def disconnect(name: str) -> None:
         )
 
 
-def access_token(name: str, owner: str, repo: str) -> str:
+def access_token(name: str, owner: str, repo: str, *, publish: bool = True) -> str:
     connection = resolve(name)
     connection.require_target(owner, repo)
     if not connection.enabled:
         raise github_app.GitHubError(
-            "This GitHub repository is disconnected. An administrator must reconnect it before publishing."
+            "This GitHub repository is disconnected. An administrator must reconnect it before it can be used."
         )
     config = github_app.AppConfig.load()
     if config.app_id != connection.app_id:
         raise github_app.GitHubError(
-            "This connection belongs to another GitHub App. Restore its App configuration before publishing."
+            "This connection belongs to another GitHub App. Restore its App configuration before using it."
         )
     with github_app.client() as transport:
         api = github_app.GitHubClient(transport, config)
         token = api.installation_token(
-            connection.installation_id, connection.repository_id
+            connection.installation_id, connection.repository_id, publish=publish
         )
         api.verify_repository(token, connection.repository_id, owner, repo)
         return token

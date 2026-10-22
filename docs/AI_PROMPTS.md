@@ -1,6 +1,6 @@
 # AI prompts
 
-Open **AI settings → Prompts** in either UI. Choose Questions, Ingestion,
+Open **Settings → Prompts**. Choose Questions, Ingestion,
 Research, Document generation, Document review, Draft review, or Alias discovery.
 Writers and administrators can edit instructions; readers can inspect them.
 Claude and OpenAI use the same saved behavioral instructions for each action.
@@ -53,7 +53,8 @@ running build ships:
   default first appeared on this instance after that save, the server logs a
   warning (`saved <action> instructions predate the default this build
   ships`) and the editor API reports `newer_default_since`. Compare with
-  **Use shipped default**; saving any version clears the report.
+  **Use shipped default**; saving any version clears the report. **Settings →
+  Prompts** marks such prompts **new default** and offers a side-by-side compare.
 
 Saving the shipped default yourself makes the text yours: later releases
 report a newer default rather than replacing it. The instance records when it
