@@ -3,14 +3,21 @@ request, and the text people edit at the destination."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
-from mycelium import docs_store
+from mycelium import doc_runs, docs_store
+from mycelium.docgen import publication
+from mycelium.docgen.schema import CurrentDocument, RevisionTarget
+from product_settings_helpers import import_product_environment
 
 TARGET = json.dumps(
     {"host": "github.com", "owner": "acme", "repo": "handbook", "base_branch": "main"}
@@ -192,3 +199,423 @@ def test_upgrade_reads_the_pull_request_number_back_from_the_review_url(tmp_path
     assert isinstance(pull_request, dict)
     assert (pull_request["number"], pull_request["state"]) == (42, None)
     legacy.close()
+
+
+# --- which text a revision starts from --------------------------------------
+
+
+def _published(conn: sqlite3.Connection, body: str = "# SSO\n") -> sqlite3.Row:
+    document_id = _document(conn, body=body)
+    docs_store.record_delivery(
+        conn,
+        document_id,
+        destination="docs",
+        target=TARGET,
+        path="docs/sso.md",
+        reference="https://github.com/acme/handbook/pull/17",
+        content_revision=_blob(body),
+        revision=1,
+        pull_request_number=17,
+    )
+    row = docs_store.get_document(conn, document_id)
+    assert row is not None
+    return row
+
+
+def _revised_internally(conn: sqlite3.Connection, row: sqlite3.Row) -> sqlite3.Row:
+    docs_store.upsert_document(
+        conn,
+        slug="sso",
+        title="SSO",
+        body="# SSO, revised here\n",
+        guideline_set="kb",
+        document_type="how-to",
+        updates=row["id"],
+        replacing=docs_store.body_digest(row["body"]),
+        expected_revision=1,
+    )
+    revised = docs_store.get_document(conn, row["id"])
+    assert revised is not None
+    return revised
+
+
+def _blob(body: str) -> str:
+    encoded = body.encode("utf-8")
+    return hashlib.sha1(
+        f"blob {len(encoded)}\0".encode() + encoded, usedforsecurity=False
+    ).hexdigest()
+
+
+def _remote(body: str) -> CurrentDocument:
+    return CurrentDocument(body=body, content_revision=_blob(body))
+
+
+def _start(row, remote, published=frozenset(), **kwargs):
+    return publication.revision_start(row, remote, published, **kwargs)
+
+
+def test_an_untouched_published_copy_leaves_the_internal_head_as_the_start(conn):
+    row = _revised_internally(conn, _published(conn))
+
+    start = _start(row, _remote("# SSO\n"))
+
+    assert start.base == "internal"
+    assert start.current == CurrentDocument("# SSO, revised here\n", _blob("# SSO\n"))
+
+
+def test_a_copy_edited_on_github_is_the_start_when_nothing_is_unpublished(conn):
+    row = _published(conn)
+
+    start = _start(row, _remote("# SSO, edited by a reviewer\n"))
+
+    assert start.base == "destination"
+    assert start.current == _remote("# SSO, edited by a reviewer\n")
+
+
+def test_edits_on_both_sides_are_refused_with_the_ways_forward(conn):
+    row = _revised_internally(conn, _published(conn))
+
+    with pytest.raises(ValueError) as refusal:
+        _start(row, _remote("# SSO, edited by a reviewer\n"))
+
+    message = str(refusal.value)
+    assert "edited on GitHub after revision 1 was published" in message
+    assert "revision 2 here has not been published" in message
+    assert "start_from_destination" in message
+    assert "close pull request #17 without merging" in message
+
+
+def test_starting_from_the_destination_is_an_explicit_way_past_the_refusal(conn):
+    row = _revised_internally(conn, _published(conn))
+
+    start = _start(
+        row, _remote("# SSO, edited by a reviewer\n"), start_from_destination=True
+    )
+
+    assert start.base == "destination"
+
+
+def test_an_earlier_published_text_is_not_mistaken_for_an_edit(conn):
+    """After an unmerged close the base branch still holds an older version."""
+    row = _revised_internally(conn, _published(conn, body="# SSO v2\n"))
+
+    start = _start(row, _remote("# SSO v1\n"), frozenset({_blob("# SSO v1\n")}))
+
+    assert start.base == "internal"
+    assert start.current.content_revision == _blob("# SSO v1\n")
+
+
+def test_a_copy_already_matching_the_head_needs_no_reconciling(conn):
+    row = _revised_internally(conn, _published(conn))
+
+    start = _start(row, _remote("# SSO, revised here\n"))
+
+    assert start.base == "internal"
+
+
+def test_an_absent_copy_keeps_the_internal_head_and_the_sync_point(conn):
+    row = _revised_internally(conn, _published(conn))
+
+    assert _start(row, None) == publication.RevisionStart(
+        CurrentDocument("# SSO, revised here\n"), "internal"
+    )
+    with pytest.raises(ValueError, match="no published copy"):
+        _start(row, None, start_from_destination=True)
+
+
+# --- the whole loop against a fake GitHub -----------------------------------
+
+
+class FakeGitHub:
+    """Enough of GitHub's Git Data, contents and pulls APIs to hold state.
+
+    Trees are path-to-text maps, so a commit's file is a lookup. Nothing here
+    reaches the network: `handle` is an httpx MockTransport handler.
+    """
+
+    def __init__(self) -> None:
+        root_tree, root_commit = "e" * 40, "f" * 40
+        self.trees: dict[str, dict[str, str]] = {root_tree: {}}
+        self.commits: dict[str, str] = {root_commit: root_tree}
+        self.branches: dict[str, str] = {"main": root_commit}
+        self.pulls: dict[int, dict[str, object]] = {}
+        self.blobs: dict[str, str] = {}
+        self.counter = 0
+
+    def _sha(self) -> str:
+        self.counter += 1
+        return f"{self.counter:040x}"
+
+    def commit_file(self, branch: str, path: str, body: str) -> None:
+        tree = {**self.trees[self.commits[self.branches[branch]]], path: body}
+        tree_sha, commit_sha = self._sha(), self._sha()
+        self.trees[tree_sha] = tree
+        self.commits[commit_sha] = tree_sha
+        self.branches[branch] = commit_sha
+
+    def merge(self, number: int) -> None:
+        pull = self.pulls[number]
+        self.branches["main"] = self.branches[str(pull["head"])]
+        pull.update(state="closed", merged=True)
+
+    def file(self, branch: str, path: str) -> str | None:
+        return self.trees[self.commits[self.branches[branch]]].get(path)
+
+    def _pull_json(self, number: int) -> dict[str, object]:
+        pull = self.pulls[number]
+        return {
+            "html_url": f"https://github.com/acme/handbook/pull/{number}",
+            "state": pull["state"],
+            "merged": pull["merged"],
+            "base": {"ref": "main"},
+            "head": {"ref": pull["head"], "repo": {"full_name": "acme/handbook"}},
+        }
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path.removeprefix("/repos/acme/handbook")
+        body = json.loads(request.content) if request.content else {}
+        if request.method == "GET" and path == "/pulls":
+            head = request.url.params["head"].removeprefix("acme:")
+            return httpx.Response(
+                200,
+                json=[
+                    self._pull_json(number)
+                    for number, pull in self.pulls.items()
+                    if pull["head"] == head and pull["state"] == "open"
+                ],
+            )
+        if request.method == "GET" and path.startswith("/pulls/"):
+            return httpx.Response(200, json=self._pull_json(int(path.split("/")[2])))
+        if request.method == "POST" and path == "/pulls":
+            number = len(self.pulls) + 17
+            self.pulls[number] = {
+                "head": body["head"],
+                "state": "open",
+                "merged": False,
+            }
+            return httpx.Response(201, json=self._pull_json(number))
+        if request.method == "GET" and path.startswith("/contents/"):
+            text = self.file(request.url.params["ref"], path.removeprefix("/contents/"))
+            if text is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(text.encode()).decode(),
+                    "sha": _blob(text),
+                },
+            )
+        if request.method == "GET" and path.startswith("/git/ref/heads/"):
+            branch = path.removeprefix("/git/ref/heads/")
+            if branch not in self.branches:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json={"object": {"sha": self.branches[branch]}})
+        if request.method == "GET" and path == "/branches/main":
+            commit = self.branches["main"]
+            return httpx.Response(
+                200,
+                json={
+                    "commit": {
+                        "sha": commit,
+                        "commit": {"tree": {"sha": self.commits[commit]}},
+                    }
+                },
+            )
+        if request.method == "GET" and path.startswith("/git/commits/"):
+            return httpx.Response(
+                200, json={"tree": {"sha": self.commits[path.split("/")[3]]}}
+            )
+        if request.method == "POST" and path == "/git/blobs":
+            blob_sha = _blob(body["content"])
+            self.blobs[blob_sha] = body["content"]
+            return httpx.Response(201, json={"sha": blob_sha})
+        if request.method == "POST" and path == "/git/trees":
+            entry = body["tree"][0]
+            sha = self._sha()
+            self.trees[sha] = {
+                **self.trees[body["base_tree"]],
+                entry["path"]: self.blobs[entry["sha"]],
+            }
+            return httpx.Response(201, json={"sha": sha})
+        if request.method == "POST" and path == "/git/commits":
+            sha = self._sha()
+            self.commits[sha] = body["tree"]
+            return httpx.Response(201, json={"sha": sha})
+        if path.startswith("/git/refs"):
+            branch = (
+                body["ref"].removeprefix("refs/heads/")
+                if "ref" in body
+                else path.removeprefix("/git/refs/heads/")
+            )
+            self.branches[branch] = body["sha"]
+            return httpx.Response(
+                201,
+                json={
+                    "ref": f"refs/heads/{branch}",
+                    "object": {"type": "commit", "sha": body["sha"]},
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+
+@pytest.fixture
+def github(monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+    from mycelium.docgen import github_destination
+
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps(
+            {
+                "docs": {
+                    "type": "github",
+                    "path_template": "docs/{slug}.md",
+                    "config": {
+                        "owner": "acme",
+                        "repo": "handbook",
+                        "base_branch": "main",
+                        "token_env": "DOCS_TOKEN",
+                    },
+                }
+            }
+        ),
+    )
+    monkeypatch.setenv("DOCS_TOKEN", "test-only-credential")
+    import_product_environment()
+    fake = FakeGitHub()
+    monkeypatch.setattr(
+        github_destination,
+        "_client",
+        lambda config, token: httpx.Client(transport=httpx.MockTransport(fake.handle)),
+    )
+    return fake
+
+
+def _later() -> datetime:
+    return datetime.now(UTC) + publication.REFRESH_INTERVAL
+
+
+def _revise(conn, document_id, prompt, **kwargs) -> str:
+    row = docs_store.get_document(conn, document_id)
+    run_id = doc_runs.start_run(
+        prompt=prompt,
+        guideline_set=None,
+        document_type=None,
+        created_by=None,
+        conn=conn,
+        target_document_id=document_id,
+        expected_revision=int(row["current_revision"]),
+        **kwargs,
+    )
+    doc_runs.wait_all()
+    return run_id
+
+
+def test_a_document_round_trips_through_review_edits_and_merge(
+    conn, github, monkeypatch
+):
+    started_from: list[RevisionTarget] = []
+
+    def runner(prompt, *, revision_target=None, **kwargs):
+        assert revision_target is not None
+        started_from.append(revision_target)
+        return {
+            "outcome": "document_written",
+            "slug": "ignored",
+            "title": "SSO",
+            "body": revision_target.current.body + f"\n{prompt}\n",
+            "statement_ids": ["stm_1"],
+        }
+
+    monkeypatch.setattr(doc_runs, "_default_runner", runner)
+    document_id = _document(conn)
+    path = "docs/sso.md"
+    branch = f"mycelium/docs/sso-{document_id}"
+
+    first = publication.publish(conn, document_id, "docs")
+    assert (first["pull_request_number"], github.file(branch, path)) == (17, "# SSO\n")
+
+    github.commit_file(branch, path, "# SSO\n\nReviewer: mind the IdP clock.\n")
+    run = docs_store.get_run(conn, _revise(conn, document_id, "Add a summary."))
+    assert (run["outcome"], run["revision_base"]) == ("document_written", "destination")
+    assert "Reviewer: mind the IdP clock." in started_from[-1].current.body
+
+    publication.publish(conn, document_id, "docs")
+    assert github.file(branch, path) == (
+        "# SSO\n\nReviewer: mind the IdP clock.\n\nAdd a summary.\n"
+    )
+    assert list(github.pulls) == [17]
+
+    github.merge(17)
+    publication.refresh_pull_request(conn, document_id, now=_later())
+    assert _serialized(conn, document_id)["delivery_status"] == "merged"
+
+    github.commit_file("main", path, "# SSO\n\nEdited on main after merge.\n")
+    _revise(conn, document_id, "Add a caveat.")
+    assert started_from[-1].base == "destination"
+    second = publication.publish(conn, document_id, "docs")
+    assert second["pull_request_number"] == 18
+    assert github.file(branch, path) == (
+        "# SSO\n\nEdited on main after merge.\n\nAdd a caveat.\n"
+    )
+    assert _serialized(conn, document_id)["delivery_status"] == "published"
+
+
+def test_a_revision_over_edits_on_both_sides_is_refused_before_a_run_exists(
+    conn, github, monkeypatch
+):
+    monkeypatch.setattr(
+        doc_runs, "_default_runner", lambda *args, **kwargs: pytest.fail("ran")
+    )
+    document_id = _document(conn)
+    publication.publish(conn, document_id, "docs")
+    github.commit_file(f"mycelium/docs/sso-{document_id}", "docs/sso.md", "# Edited\n")
+    row = docs_store.get_document(conn, document_id)
+    docs_store.upsert_document(
+        conn,
+        slug="sso",
+        title="SSO",
+        body="# SSO, edited here too\n",
+        guideline_set="kb",
+        document_type="how-to",
+        updates=document_id,
+        replacing=docs_store.body_digest(row["body"]),
+        expected_revision=1,
+    )
+
+    with pytest.raises(ValueError, match="Mycelium will not merge the two"):
+        _revise(conn, document_id, "Tidy up.")
+
+    assert docs_store.list_runs(conn) == []
+
+
+def test_refresh_keeps_the_last_state_when_github_cannot_be_reached(
+    conn, github, monkeypatch, caplog
+):
+    from mycelium.docgen import github_destination
+
+    document_id = _document(conn)
+    publication.publish(conn, document_id, "docs")
+    monkeypatch.setattr(
+        github_destination,
+        "_client",
+        lambda config, token: httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(502))
+        ),
+    )
+
+    publication.refresh_pull_request(conn, document_id, now=_later())
+
+    pull_request = _serialized(conn, document_id)["pull_request"]
+    assert isinstance(pull_request, dict) and pull_request["state"] == "open"
+    assert "pull request state" in caplog.text
+
+
+def test_refresh_reuses_a_recent_answer(conn, github):
+    document_id = _document(conn)
+    publication.publish(conn, document_id, "docs")
+    github.merge(17)
+
+    publication.refresh_pull_request(conn, document_id)
+
+    assert _serialized(conn, document_id)["delivery_status"] == "published"

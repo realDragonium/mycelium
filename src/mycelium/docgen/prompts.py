@@ -335,9 +335,17 @@ def initial_user_message(
     guideline_set: str,
     document_type: str,
     current_document: str | None = None,
+    edited_at_destination: bool = False,
 ) -> str:
+    provenance = (
+        "\nThis is the published copy, which people edited after Mycelium "
+        "published it. Keep their edits unless the request asks to change them."
+        if edited_at_destination
+        else ""
+    )
     revision = (
-        "\n\nCURRENT DOCUMENT TO REVISE (verbatim):\n=== CURRENT DOCUMENT ===\n"
+        "\n\nCURRENT DOCUMENT TO REVISE (verbatim):"
+        f"{provenance}\n=== CURRENT DOCUMENT ===\n"
         f"{current_document}\n=== END CURRENT DOCUMENT ==="
         if current_document is not None
         else ""

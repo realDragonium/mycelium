@@ -62,7 +62,6 @@ from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from . import prompts
 from .config import DOCTRINE_NAME, DocgenConfig
 from .schema import (
-    CurrentDocument,
     DocgenResult,
     DocumentWritten,
     ExistingDocument,
@@ -115,7 +114,6 @@ def run_docgen(
     report_gap: Callable[[str], Any] | None = None,
     config: DocgenConfig | None = None,
     existing_documents: tuple[ExistingDocument, ...] = (),
-    load_current_document: Callable[[str], CurrentDocument] | None = None,
     revision_target: RevisionTarget | None = None,
     manual_document: ManualDocument | None = None,
     profiles: CatalogueSnapshot | None = None,
@@ -161,7 +159,6 @@ def run_docgen(
             else _store_catalogue(),
             load_texts=profiles.texts if profiles is not None else _store_texts,
             existing_documents=existing_documents,
-            load_current_document=load_current_document,
             revision_target=revision_target,
             manual_document=manual_document,
         )
@@ -263,8 +260,6 @@ class _RunContext:
     emit_blocks: int = 0
     malformed_retries: int = 0
     matched_document_id: str | None = None
-    matched_body_digest: str | None = None
-    matched_content_revision: str | None = None
 
 
 def _execute(
@@ -281,7 +276,6 @@ def _execute(
     catalogue: dict[str, list[str]],
     load_texts: Callable[[str, str], tuple[str | None, str | None, str | None]],
     existing_documents: tuple[ExistingDocument, ...] = (),
-    load_current_document: Callable[[str], CurrentDocument] | None = None,
     revision_target: RevisionTarget | None = None,
     manual_document: ManualDocument | None = None,
     review_instructions: str = prompts.DEFAULT_REVIEW_INSTRUCTIONS,
@@ -327,11 +321,8 @@ def _execute(
         emit_blocks=0,
         malformed_retries=0,
         matched_document_id=None,
-        matched_body_digest=None,
-        matched_content_revision=None,
     )
 
-    matched_document = None
     candidates = tuple(
         item
         for item in existing_documents
@@ -339,25 +330,25 @@ def _execute(
         and (requested_type is None or item.document_type == requested_type)
     )
     if revision_target is not None:
-        matched_document = revision_target.document
-        ctx.matched_document_id = matched_document.id
-        ctx.matched_body_digest = matched_document.body_digest
+        ctx.matched_document_id = revision_target.document.id
     elif candidates:
         matched, matched_document_id = _match_existing(ctx, candidates)
         if not matched:
             return _nothing(ctx, ctx.unresolved)
         if matched_document_id is not None:
-            matched_document = next(
+            # A suggestion, not a decision: the caller chooses whether this
+            # request revises that document.
+            ctx.matched_document_id = matched_document_id
+            suggested = next(
                 item for item in candidates if item.id == matched_document_id
             )
-            ctx.matched_document_id = matched_document.id
-            ctx.matched_body_digest = matched_document.body_digest
+            return _nothing(ctx, _suggestion(suggested))
 
     resolved = _resolve(
         prompt,
         catalogue,
-        matched_document.guideline_set if matched_document else requested_set,
-        matched_document.document_type if matched_document else requested_type,
+        revision_target.document.guideline_set if revision_target else requested_set,
+        revision_target.document.document_type if revision_target else requested_type,
         ctx,
     )
     if resolved is None:
@@ -367,15 +358,6 @@ def _execute(
     current_document = (
         revision_target.current.body if revision_target is not None else None
     )
-    if revision_target is not None:
-        ctx.matched_content_revision = revision_target.current.content_revision
-    elif ctx.matched_document_id is not None and load_current_document is not None:
-        try:
-            loaded_document = load_current_document(ctx.matched_document_id)
-        except Exception as exc:  # noqa: BLE001
-            return _nothing(ctx, f"current document could not be loaded: {exc}")
-        current_document = loaded_document.body
-        ctx.matched_content_revision = loaded_document.content_revision
 
     guidance, exposure, template = load_texts(*resolved)
     if not (template or "").strip():
@@ -426,6 +408,8 @@ def _execute(
                 guideline_set=ctx.guideline_set,
                 document_type=ctx.document_type,
                 current_document=current_document,
+                edited_at_destination=revision_target is not None
+                and revision_target.base == "destination",
             ),
         }
     ]
@@ -446,6 +430,15 @@ def _execute(
             }
         ]
     return _write(ctx)
+
+
+def _suggestion(document: ExistingDocument) -> str:
+    return (
+        f"This request looks like an update to document {document.id} "
+        f"({document.title!r}), so nothing was written. To update it, revise that "
+        "document; to write a separate document, request again without matching "
+        "existing documents."
+    )
 
 
 def _match_existing(
@@ -878,8 +871,6 @@ def _handle_emit(
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
         matched_document_id=ctx.matched_document_id,
-        matched_body_digest=ctx.matched_body_digest,
-        matched_content_revision=ctx.matched_content_revision,
         review=review,
         gaps=_merged_gaps(ctx, gaps),
         trace=_build_trace(ctx, "document_written", cited=ids),

@@ -359,8 +359,8 @@ def test_research_runner_keeps_admitted_source_and_limits(db, tmp_path, monkeypa
 
 
 def test_document_destination_change_refuses_old_delivery_coordinates(db, monkeypatch):
-    from mycelium import doc_runs, docs_store
-    from mycelium.docgen import destinations
+    from mycelium import docs_store
+    from mycelium.docgen import destinations, publication
     from mycelium.docgen.schema import CurrentDocument
 
     monkeypatch.setenv(
@@ -391,6 +391,17 @@ def test_document_destination_change_refuses_old_delivery_coordinates(db, monkey
         content_revision="a" * 40,
         target=destinations.target_identity(admitted["docs"]),
     )
+    observed = []
+
+    def read(config, *args):
+        observed.append(destinations.destination_coordinates(config)["repo"])
+        return CurrentDocument(body="Remote")
+
+    monkeypatch.setattr(destinations, "read_document", read)
+    row = docs_store.get_document(conn, document_id)
+    current = publication.destination_text(row)
+    assert current is not None and current.body == "Remote"
+    assert observed == ["original"]
     changed = settings.DestinationSettings(
         name="docs",
         owner="acme",
@@ -400,17 +411,9 @@ def test_document_destination_change_refuses_old_delivery_coordinates(db, monkey
         binding="github",
     )
     save(settings.DocumentationSettings(destinations=(changed,)))
-    observed = []
-
-    def read(config, *args):
-        observed.append(destinations.destination_coordinates(config)["repo"])
-        return CurrentDocument(body="Remote")
-
-    monkeypatch.setattr(destinations, "read_document", read)
-    assert doc_runs._load_current_document(conn, document_id, admitted).body == "Remote"
+    with pytest.raises(ValueError, match="destination has changed"):
+        publication.destination_text(row)
     assert observed == ["original"]
-    with pytest.raises(destinations.DestinationError, match="destination has changed"):
-        doc_runs._load_current_document(conn, document_id)
     conn.close()
 
 

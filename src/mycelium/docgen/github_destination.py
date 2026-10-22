@@ -1074,7 +1074,7 @@ def _validate_branch(name: str, value: str) -> str:
     return value
 
 
-def _required_string(name: str, entry: dict, field: str) -> str:
+def _required_string(name: str, entry: dict[str, object], field: str) -> str:
     value = entry.get(field)
     if not isinstance(value, str) or not value.strip():
         raise DestinationError(
@@ -1083,7 +1083,9 @@ def _required_string(name: str, entry: dict, field: str) -> str:
     return value
 
 
-def _optional_string(name: str, entry: dict, field: str, default: str) -> str:
+def _optional_string(
+    name: str, entry: dict[str, object], field: str, default: str
+) -> str:
     value = entry.get(field, default)
     if not isinstance(value, str) or not value.strip():
         raise DestinationError(f"destination {name!r} has an invalid {field!r} value")

@@ -740,6 +740,8 @@ def test_record_delivery_updates_only_the_delivery_columns(tmp_path):
         "delivery_path",
         "delivery_reference",
         "delivery_content_revision",
+        # The delivered blob is the new sync point.
+        "revision_source_content_revision",
     }
     document = docs_store.serialize_document(docs_store.get_document(conn, document_id))
     assert document["delivery_destination"] == "knowledge-base"

@@ -1179,6 +1179,18 @@ def record_delivery(
         raise
 
 
+def published_blobs(conn: sqlite3.Connection, document_id: str) -> frozenset[str]:
+    """Every destination blob a delivery receipt says this document published."""
+    return frozenset(
+        str(row["content_revision"])
+        for row in conn.execute(
+            "SELECT content_revision FROM generated_document_deliveries "
+            "WHERE document_id = ?",
+            (document_id,),
+        )
+    )
+
+
 def record_pull_request_state(
     conn: sqlite3.Connection, document_id: str, number: int, state: str
 ) -> None:
