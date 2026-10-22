@@ -1,4 +1,4 @@
-"""The prompt sources that a deployment receives from the built wheel.
+"""The prompt sources and browser apps a deployment receives from the built wheel.
 
 Startup seeds guidelines and doctrines before an operator has supplied any
 data, so those sources have to travel with the installed package rather than
@@ -23,6 +23,7 @@ declaration-free.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import zipfile
@@ -111,3 +112,24 @@ def test_doctrines_ship_inside_the_wheel(wheel):
             member = path.resolve().relative_to(_REPO_ROOT / "src").as_posix()
             assert member in members
             assert zf.read(member).decode("utf-8") == path.read_text(encoding="utf-8")
+
+
+_WEBUI = _REPO_ROOT / "src" / "mycelium" / "webui"
+
+
+def test_browser_apps_ship_inside_the_wheel(wheel):
+    """`uv run mycelium-http` must serve /ui/ and /cockpit/ without Node, so the
+    committed build output — each app's page and every bundle it references —
+    has to reach the wheel unaltered. A page whose script or stylesheet is
+    missing loads blank, with nothing failing server-side."""
+    with zipfile.ZipFile(wheel) as zf:
+        members = set(zf.namelist())
+        for app in ("ui", "cockpit"):
+            page = _WEBUI / app / "index.html"
+            html = page.read_text(encoding="utf-8")
+            assets = re.findall(r'(?:src|href)="/ui/(assets/[^"]+)"', html)
+            assert any(a.endswith(".js") for a in assets), f"{app} page loads no script"
+            for path in [page, *(_WEBUI / "ui" / a for a in assets)]:
+                member = path.relative_to(_REPO_ROOT / "src").as_posix()
+                assert member in members
+                assert zf.read(member) == path.read_bytes()

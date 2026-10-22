@@ -46,3 +46,28 @@ jobs:
           cache-suffix: hnswlib-portable-v1
       - run: uv sync --locked
       - run: uv run pytest -q
+
+  # The browser apps are built from frontend/ into src/mycelium/webui/, which is
+  # committed so the Python package runs without Node. Rebuilding must reproduce
+  # it exactly, or the committed bundles are stale.
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run build
+      - name: Committed build output matches the sources
+        run: |
+          git add --intent-to-add ../src/mycelium/webui
+          git diff --exit-code --stat -- ../src/mycelium/webui \
+            || { echo "::error::src/mycelium/webui is stale. Run 'npm run build' in frontend/ and commit the result."; exit 1; }

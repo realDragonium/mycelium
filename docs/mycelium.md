@@ -679,7 +679,7 @@ The interactive OpenAPI docs are served at `/docs`.
 
 A small set of endpoints exist purely to back the bundled web UI and are
 not registered as MCP tools. `GET /` 307-redirects to `/ui/`. `GET
-/ui/*` serves static files from `src/mycelium/ui/`. `GET /api/data`
+/ui/*` and `GET /cockpit/*` serve the built apps from `src/mycelium/webui/`. `GET /api/data`
 returns the entire substrate as a JSON document with the shape
 `{entities, names, statements, links}`, where each entity is given a
 synthesised `name` field by picking the alphabetically first text from
@@ -689,11 +689,11 @@ UI renders mentions as entity chips.
 
 ## Browser UI
 
-The browser UI is a React application bundled inside `src/mycelium/ui/` and
-served as static files. Alongside graph browsing, it exposes authenticated
-draft review, glossary editing, and other role-gated mutation controls. It does
-not have a build step: React, ReactDOM, and Babel-Standalone are loaded from the
-unpkg CDN, and Babel transpiles the JSX in the browser at page load.
+The browser UI is a React and TypeScript application whose source lives in
+`frontend/`. Vite bundles it into `src/mycelium/webui/`, which is committed and
+served as static files, so the server needs no Node at runtime. Alongside graph
+browsing, it exposes authenticated draft review, glossary editing, and other
+role-gated mutation controls.
 
 The UI is a single-page application backed by hash-based routing. It
 loads the entire substrate in one fetch from `/api/data` at startup,

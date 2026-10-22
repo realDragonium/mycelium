@@ -12,8 +12,8 @@ build/
 dist/
 *.egg-info/
 
-# JS — defensive: the bundled UI loads React/Babel via CDN (no build step
-# today), so node_modules shouldn't appear, but ignore it pre-emptively.
+# JS — frontend/ dependencies. The build output in src/mycelium/webui/ is
+# committed on purpose (see frontend/vite.config.ts).
 node_modules/
 
 # CDK (infra/)

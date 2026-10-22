@@ -1,0 +1,7 @@
+/* One stylesheet per app, in the original <link> order. Linking the files
+   separately lets the bundler hoist the CSS both apps share ahead of each
+   app's own, which changes the cascade. */
+@import './cockpit.css';
+@import './gaps.css';
+@import '../ui/documentation-workspace.css';
+@import '../ui/names-workspace.css';

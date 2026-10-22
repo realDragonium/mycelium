@@ -1118,7 +1118,7 @@ def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
     }
 
 
-_DRAFTS_JSX = Path(__file__).resolve().parents[1] / "src/mycelium/ui/drafts.jsx"
+_DRAFTS_TSX = Path(__file__).resolve().parents[1] / "frontend/ui/drafts.tsx"
 
 
 def test_flag_reason_lookup_is_guarded_against_inherited_properties():
@@ -1129,7 +1129,7 @@ def test_flag_reason_lookup_is_guarded_against_inherited_properties():
 
     There is no JS test runner in this repo, so hold the concrete guard and
     fallback expression that prevent inherited members from being rendered."""
-    source = _DRAFTS_JSX.read_text()
+    source = _DRAFTS_TSX.read_text()
     lookup = re.search(r"const known = ([^;]*?_FLAG_REASONS[^;]*?);\n", source, re.S)
     assert lookup is not None, "could not find the _FLAG_REASONS lookup"
     guard = " ".join(lookup.group(1).split())
