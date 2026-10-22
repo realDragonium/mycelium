@@ -45,7 +45,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-MAX_ACTIVE_ENV = "MYCELIUM_DOCGEN_MAX_ACTIVE"
 RUNNER: Callable[..., Any] | None = None
 _spawn_lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
@@ -318,8 +317,8 @@ def _execute_run(
         # on the same budget rather than a private one — otherwise the two caps
         # add up and the box holds more model contexts than either intended.
         # The wait happens on this daemon thread, which costs nothing shared,
-        # and MYCELIUM_DOCGEN_MAX_ACTIVE already bounds how many can be queued
-        # behind it. The row stays 'running' while waiting, which is honest:
+        # and the saved documentation run limit already bounds how many can be
+        # queued behind it. The row stays 'running' while waiting, which is honest:
         # the run has been accepted and nothing else needs to happen to it.
         from . import server
 
