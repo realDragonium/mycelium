@@ -196,7 +196,7 @@ instead, double-check that:
   Auth0 profile exactly (case-insensitive).
 - No other admin exists in the database. The bootstrap only fires when
   there are zero admins. Run
-  `sudo sqlite3 /var/lib/mycelium/main.db "SELECT email,role FROM users"`
+  `sudo -u mycelium sqlite3 /var/lib/mycelium/mycelium-auth.db "SELECT email,role FROM users"`
   to inspect.
 
 ---

@@ -1012,7 +1012,7 @@ def init(data_dir: Path) -> None:
             orphaned_docs,
         )
 
-    # The .vec files are re-derivable from the substrate, so backup.sh omits
+    # The .vec files are re-derivable from the substrate, so a backup may omit
     # them while keeping the *_vector_ids mappings in the DB. When a .vec is
     # missing (a fresh checkout, or a restore of such a backup) or marked dirty
     # after an interrupted write, rebuild the index by re-embedding, or search

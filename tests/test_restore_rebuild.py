@@ -1,8 +1,8 @@
 """Regression: restoring a substrate without its .vec files rebuilds both
 vector indexes from the DB.
 
-`backup.sh` omits the (re-derivable) `*.vec` files but keeps the whole
-`mycelium.db`, including the `statement_vector_ids` / `name_vector_ids`
+A file-level backup may omit the (re-derivable) `*.vec` files but keep the
+whole `mycelium.db`, including the `statement_vector_ids` / `name_vector_ids`
 mappings. On the next `init` the .vec files are missing while the mappings
 remain, so both indexes must be rebuilt by re-embedding — reusing the existing
 vector ids — or search silently returns nothing against a populated substrate
@@ -52,7 +52,7 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
     name_vid = store.get_name_vector_id(conn, name_row["id"])
     assert stmt_vid is not None and name_vid is not None
 
-    # Simulate a backup.sh restore: substrate present, .vec files gone.
+    # Simulate such a restore: substrate present, .vec files gone.
     (tmp_path / "mycelium.vec").unlink()
     (tmp_path / "mycelium-names.vec").unlink()
 
