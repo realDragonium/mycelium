@@ -94,9 +94,6 @@ def test_migration_v9_backfills_legacy_alias_tables():
             link_type TEXT NOT NULL, alias TEXT NOT NULL, embedding BLOB,
             provenance TEXT NOT NULL DEFAULT 'seed', score REAL,
             created_at TEXT, created_by TEXT, PRIMARY KEY (link_type, alias));
-        CREATE TABLE link_type_alias_embed_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, link_type TEXT NOT NULL,
-            alias TEXT NOT NULL, enqueued_at TEXT, claimed_at TEXT);
         """
     )
     # A curator once re-upserted this seed row: provenance is no longer
@@ -121,15 +118,9 @@ def test_migration_v9_backfills_legacy_alias_tables():
     }
     assert rows[("requires", "is required for")] == "reverse"
     assert ("cases", "is one of") not in rows
-    # The alias the old seed lacked is inserted with an embedding job, since
-    # seeding never runs again on a non-empty table.
+    # The alias the old seed lacked is inserted, since seeding never runs
+    # again on a non-empty table.
     assert rows[("contains", "is part of")] == "reverse"
-    queued = conn.execute(
-        "SELECT link_type, alias FROM link_type_alias_embed_queue"
-    ).fetchall()
-    assert [(row["link_type"], row["alias"]) for row in queued] == [
-        ("contains", "is part of")
-    ]
 
 
 def test_migration_v9_leaves_an_unseeded_table_for_seeding():
@@ -161,9 +152,6 @@ def _v9_alias_conn() -> sqlite3.Connection:
             provenance TEXT NOT NULL DEFAULT 'seed', score REAL,
             direction TEXT NOT NULL DEFAULT 'forward',
             created_at TEXT, created_by TEXT, PRIMARY KEY (link_type, alias));
-        CREATE TABLE link_type_alias_embed_queue (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, link_type TEXT NOT NULL,
-            alias TEXT NOT NULL, enqueued_at TEXT, claimed_at TEXT);
         """
     )
     return conn
@@ -191,15 +179,6 @@ def test_migration_v10_adds_only_missing_belongs_to_aliases():
         ("contains", "is owned by", "seed", "reverse"),
     ]
     assert all(row["created_at"] for row in rows)
-    assert [
-        (row["link_type"], row["alias"])
-        for row in seeded.execute(
-            "SELECT link_type, alias FROM link_type_alias_embed_queue ORDER BY alias"
-        )
-    ] == [
-        ("contains", "belongs to"),
-        ("contains", "is owned by"),
-    ]
 
     absorbed = _v9_alias_conn()
     absorbed.execute(
@@ -207,11 +186,6 @@ def test_migration_v10_adds_only_missing_belongs_to_aliases():
         "(link_type, alias, provenance, score, direction, created_at, created_by) "
         "VALUES ('contains', 'includes', 'seed', NULL, 'forward', NULL, NULL), "
         "('contains', 'belongs to', 'auto', 0.91, 'forward', 'chosen-at', 'curator')"
-    )
-    absorbed.execute(
-        "INSERT INTO link_type_alias_embed_queue "
-        "(link_type, alias, enqueued_at) "
-        "VALUES ('contains', 'belongs to', 'chosen-at')"
     )
 
     migrations._migration_v10_belongs_to_aliases(absorbed)
@@ -222,18 +196,10 @@ def test_migration_v10_adds_only_missing_belongs_to_aliases():
         "WHERE link_type = 'contains' AND alias = 'belongs to'"
     ).fetchone()
     assert tuple(existing) == ("auto", 0.91, "forward", "chosen-at", "curator")
-    queued = absorbed.execute(
-        "SELECT alias FROM link_type_alias_embed_queue ORDER BY id"
-    ).fetchall()
-    assert [row["alias"] for row in queued] == ["belongs to", "is owned by"]
 
     empty = _v9_alias_conn()
     migrations._migration_v10_belongs_to_aliases(empty)
     assert empty.execute("SELECT COUNT(*) FROM link_type_aliases").fetchone()[0] == 0
-    assert (
-        empty.execute("SELECT COUNT(*) FROM link_type_alias_embed_queue").fetchone()[0]
-        == 0
-    )
 
 
 def test_migration_v11_adds_only_missing_passive_by_aliases():
@@ -267,23 +233,6 @@ def test_migration_v11_adds_only_missing_passive_by_aliases():
         ("restricts", "is suspended by", "seed", "reverse"),
     ]
     assert all(row["created_at"] for row in rows)
-    assert [
-        (row["link_type"], row["alias"])
-        for row in seeded.execute(
-            "SELECT link_type, alias FROM link_type_alias_embed_queue "
-            "ORDER BY link_type, alias"
-        )
-    ] == [
-        ("enables", "is enabled by"),
-        ("enables", "is unlocked by"),
-        ("restricts", "is bounded by"),
-        ("restricts", "is capped by"),
-        ("restricts", "is disabled by"),
-        ("restricts", "is frozen by"),
-        ("restricts", "is limited by"),
-        ("restricts", "is locked by"),
-        ("restricts", "is suspended by"),
-    ]
 
     absorbed = _v9_alias_conn()
     absorbed.execute(
@@ -292,11 +241,6 @@ def test_migration_v11_adds_only_missing_passive_by_aliases():
         "VALUES ('contains', 'includes', 'seed', NULL, 'forward', NULL, NULL), "
         "('restricts', 'is locked by', 'auto', 0.91, 'forward', "
         "'chosen-at', 'curator')"
-    )
-    absorbed.execute(
-        "INSERT INTO link_type_alias_embed_queue "
-        "(link_type, alias, enqueued_at) "
-        "VALUES ('restricts', 'is locked by', 'chosen-at')"
     )
 
     migrations._migration_v11_passive_by_aliases(absorbed)
@@ -307,28 +251,10 @@ def test_migration_v11_adds_only_missing_passive_by_aliases():
         "WHERE link_type = 'restricts' AND alias = 'is locked by'"
     ).fetchone()
     assert tuple(existing) == ("auto", 0.91, "forward", "chosen-at", "curator")
-    queued = absorbed.execute(
-        "SELECT link_type, alias FROM link_type_alias_embed_queue ORDER BY id"
-    ).fetchall()
-    assert [(row["link_type"], row["alias"]) for row in queued] == [
-        ("restricts", "is locked by"),
-        ("restricts", "is limited by"),
-        ("restricts", "is bounded by"),
-        ("restricts", "is capped by"),
-        ("restricts", "is disabled by"),
-        ("restricts", "is frozen by"),
-        ("restricts", "is suspended by"),
-        ("enables", "is enabled by"),
-        ("enables", "is unlocked by"),
-    ]
 
     empty = _v9_alias_conn()
     migrations._migration_v11_passive_by_aliases(empty)
     assert empty.execute("SELECT COUNT(*) FROM link_type_aliases").fetchone()[0] == 0
-    assert (
-        empty.execute("SELECT COUNT(*) FROM link_type_alias_embed_queue").fetchone()[0]
-        == 0
-    )
 
 
 def test_migrate_sets_alias_schema_version(fresh_conn):

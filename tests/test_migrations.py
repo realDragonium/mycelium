@@ -622,3 +622,69 @@ def test_v14_failed_rebuild_rolls_back_schema_and_tree():
     assert _user_version(conn) == 13
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     conn.close()
+
+
+def _v14_with_alias_embeddings() -> sqlite3.Connection:
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    conn.execute("ALTER TABLE link_type_aliases ADD COLUMN embedding BLOB")
+    conn.execute(
+        "CREATE TABLE link_type_alias_embed_queue ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, link_type TEXT NOT NULL, "
+        "alias TEXT NOT NULL, enqueued_at TEXT NOT NULL, claimed_at TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO link_type_aliases "
+        "(link_type, alias, embedding, provenance, score, direction, "
+        "created_at, created_by) "
+        "VALUES ('contains', 'is housed in', x'00ff', 'auto', 0.91, 'reverse', "
+        "'chosen-at', 'curator')"
+    )
+    conn.execute(
+        "INSERT INTO link_type_alias_embed_queue (link_type, alias, enqueued_at) "
+        "VALUES ('contains', 'is housed in', 'chosen-at')"
+    )
+    conn.execute("PRAGMA user_version = 14")
+    conn.commit()
+    return conn
+
+
+def _aliases(conn: sqlite3.Connection) -> list[tuple]:
+    return [
+        tuple(r)
+        for r in conn.execute(
+            "SELECT link_type, alias, provenance, score, direction, created_at, "
+            "created_by FROM link_type_aliases ORDER BY link_type, alias"
+        )
+    ]
+
+
+def test_v15_drops_alias_embeddings_and_keeps_every_alias():
+    conn = _v14_with_alias_embeddings()
+    before = _aliases(conn)
+
+    store.migrate(conn)
+
+    assert _user_version(conn) == 15
+    assert not _has_column(conn, "link_type_aliases", "embedding")
+    assert not migrations._has_table(conn, "link_type_alias_embed_queue")
+    assert _aliases(conn) == before
+    assert ("contains", "is housed in", "auto", 0.91, "reverse") in [
+        row[:5] for row in before
+    ]
+    conn.close()
+
+
+def test_v15_failed_rebuild_rolls_back():
+    conn = _v14_with_alias_embeddings()
+    # The rename refuses while a view names the dropped table.
+    conn.execute("CREATE VIEW alias_texts AS SELECT alias FROM link_type_aliases")
+    conn.commit()
+    before = list(conn.iterdump())
+
+    with pytest.raises(sqlite3.OperationalError):
+        migrations.apply_migrations(conn)
+
+    assert list(conn.iterdump()) == before
+    assert _user_version(conn) == 14
+    conn.close()

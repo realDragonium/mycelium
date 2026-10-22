@@ -345,35 +345,30 @@ def test_round_trip_restores_emptied_config_table(tmp_path):
     assert _row_count(dst, "entity_link_type_glossary") == 0
 
 
-def test_round_trip_preserves_alias_embedding_blob(tmp_path):
+def test_import_discards_a_pre_v15_alias_embedding(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     conn = store.connect(src / "mycelium.db")
     store.migrate(conn)
-    embedding = b"\x00\x01\xfe"
-    with store.transaction(conn):
-        conn.execute(
-            "UPDATE link_type_aliases SET embedding = ? "
-            "WHERE link_type = 'contains' AND alias = 'includes'",
-            (embedding,),
-        )
     conn.close()
-
     archive = tmp_path / "snap.tar.gz"
     backup.export_substrate(src, archive)
 
-    dst = tmp_path / "dst"
-    backup.import_substrate(archive, dst)
+    def _embedded_aliases(work: Path) -> None:
+        path = work / "data.jsonl"
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            if row["_kind"] == "link_type_alias":
+                row["embedding"] = {"$b64": "AAH+"}
+        path.write_text("\n".join(json.dumps(row) for row in rows) + "\n")
 
-    conn = store.connect(dst / "mycelium.db")
-    try:
-        row = conn.execute(
-            "SELECT embedding FROM link_type_aliases "
-            "WHERE link_type = 'contains' AND alias = 'includes'"
-        ).fetchone()
-        assert row["embedding"] == embedding
-    finally:
-        conn.close()
+    legacy = _repack(
+        archive, tmp_path / "work", tmp_path / "legacy.tar.gz", _embedded_aliases
+    )
+    dst = tmp_path / "dst"
+    backup.import_substrate(legacy, dst)
+
+    assert _row_count(dst, "link_type_aliases") == _row_count(src, "link_type_aliases")
 
 
 def test_import_legacy_archive_without_config_tables_keeps_seeds(tmp_path):
