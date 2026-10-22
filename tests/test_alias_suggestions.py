@@ -341,6 +341,65 @@ def test_ingest_validates_alias_quote_against_actual_input(quote, queued):
         )
 
 
+@pytest.mark.parametrize("with_knowledge", [True, False])
+def test_ingest_puts_alias_suggestions_in_their_own_submitted_draft(with_knowledge):
+    from mycelium.ingest.config import IngestConfig
+    from mycelium.ingest.loop import run_ingest
+    from mycelium.ingest.tools import EMIT_TOOL
+    from test_ingest import (
+        _DEFAULT_KINDS,
+        FakeAnthropic,
+        FakeEmitter,
+        FakeSubstrate,
+        _emit_input,
+        _ledger_row,
+        _message,
+        _op,
+        _reconcile_then_adjacency,
+        _tool_use,
+    )
+
+    alias = _op(
+        "alias_suggestion", proposal("ent_existing").model_dump(exclude_none=True)
+    )
+    entity = _op("upsert_entity", {"name": "Admin console", "description": "UI"})
+    emission = _emit_input(
+        ops=[alias, entity] if with_knowledge else [alias],
+        ledger=[
+            _ledger_row(
+                "Single sign-on (SSO)",
+                "new",
+                matched=["ent_existing"],
+                considered=["stm_existing"],
+                note="Explicit abbreviation",
+            )
+        ],
+    )
+    emitter = FakeEmitter(valid_kinds=_DEFAULT_KINDS | {"alias_suggestion"})
+    result = run_ingest(
+        "Single sign-on (SSO) is enabled in the Admin console",
+        client=FakeAnthropic(
+            _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emission)])]
+        ),
+        substrate=FakeSubstrate(),
+        emitter=emitter,
+        config=IngestConfig(thinking=False, trace_log_path=None),
+    )
+    by_draft = {}
+    for draft_id, kind, _ in emitter.queued:
+        by_draft.setdefault(draft_id, []).append(kind)
+    assert result.alias_draft_id is not None
+    assert by_draft[result.alias_draft_id] == ["alias_suggestion"]
+    assert emitter.submitted == [result.alias_draft_id]
+    if with_knowledge:
+        assert result.draft_id != result.alias_draft_id
+        assert by_draft[result.draft_id] == ["upsert_entity"]
+        assert result.draft_id in emitter.created[1]
+    else:
+        assert result.draft_id == result.alias_draft_id
+        assert len(emitter.created) == 1
+
+
 def test_auto_review_remains_advisory_even_if_model_proposes_acceptance(
     tmp_path, monkeypatch
 ):

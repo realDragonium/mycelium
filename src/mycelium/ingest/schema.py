@@ -61,8 +61,12 @@ class CandidateLedger(BaseModel):
 
 class DraftCreated(BaseModel):
     outcome: Literal["draft_created"] = "draft_created"
-    #: the queued draft id ("drf_…") in the drafts DB.
+    #: the queued draft id ("drf_…") in the drafts DB. When the run proposed
+    #: only alias suggestions, this is their draft.
     draft_id: str
+    #: the separate, already-submitted draft of alias suggestions, each awaiting
+    #: an individual human decision in Names & aliases.
+    alias_draft_id: str | None = None
     #: ops that passed validation and were queued.
     ops: list[ProposedOp] = Field(default_factory=list)
     #: contradictions + ops that failed hard validation (with reason).

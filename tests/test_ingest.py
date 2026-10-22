@@ -118,6 +118,7 @@ class FakeEmitter:
         self._valid = valid_kinds if valid_kinds is not None else set(_DEFAULT_KINDS)
         self.created: list[str | None] = []
         self.queued: list[tuple[str, str, dict]] = []  # (draft_id, kind, payload)
+        self.submitted: list[str] = []
         self._n = 0
 
     def valid_kinds(self) -> set[str]:
@@ -148,6 +149,9 @@ class FakeEmitter:
         clean = {k: v for k, v in payload.items() if v is not None}
         self.queued.append((draft_id, kind, clean))
         return len(self.queued)
+
+    def submit_aliases(self, draft_id: str) -> None:
+        self.submitted.append(draft_id)
 
 
 _DEFAULT_KINDS = {

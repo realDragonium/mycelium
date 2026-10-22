@@ -526,26 +526,44 @@ def _assemble_draft(
     # failure on one op moves that op to `flagged` and we keep queueing the rest,
     # then always return DraftCreated with the real draft_id and whatever landed.
     # That honors "emit what was processed; never partial/orphaned write".
+    #
+    # Alias suggestions go to their own draft: each one needs an individual
+    # human decision, and a draft holding one can be neither applied nor
+    # closed until it is decided, so sharing a draft would hold the knowledge
+    # back.
+    knowledge = [(i, p) for i, p in enumerate(validated) if p.op != "alias_suggestion"]
+    suggestions = [
+        (i, p) for i, p in enumerate(validated) if p.op == "alias_suggestion"
+    ]
+    title = _draft_title(ctx.text)
     try:
-        draft_id = emitter.create(title=_draft_title(ctx.text))
+        draft_id = (
+            emitter.create(title=title)
+            if knowledge or model_flags
+            else emitter.create(title=f"Alias suggestions from {title}")
+        )
     except Exception as exc:  # noqa: BLE001 — no draft exists yet: degrade cleanly
         trace.notes.append(f"draft create failed: {exc}")
         return _degrade_no_draft(
             f"degraded: could not assemble a draft (draft store error: {exc})", ctx
         )
 
-    queued: list[ProposedOp] = []
-    for i, p in enumerate(validated):
+    queued = _queue_ops(draft_id, knowledge, flagged, ctx)
+    alias_draft_id = None
+    if suggestions:
+        alias_draft_id = (
+            _alias_draft(draft_id, title, ctx, flagged)
+            if knowledge or model_flags
+            else draft_id
+        )
+    if alias_draft_id is not None:
+        alias_queued = _queue_ops(alias_draft_id, suggestions, flagged, ctx)
+        queued.extend(alias_queued)
         try:
-            if p.op == "alias_suggestion":
-                emitter.add_op(draft_id, p.op, p.payload, source_text=ctx.text)
-            else:
-                emitter.add_op(draft_id, p.op, p.payload)
-            queued.append(p)
-        except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
-            flagged.append(
-                f"op[{i}] ({p.op}) dropped: draft store error queueing it: {exc}"
-            )
+            if alias_queued:
+                emitter.submit_aliases(alias_draft_id)
+        except Exception as exc:  # noqa: BLE001 — never throw; the draft exists
+            flagged.append(f"alias suggestions left unsubmitted: {exc}")
 
     trace.proposed_ops = [p.model_dump() for p in queued]
     trace.flagged = flagged
@@ -553,11 +571,43 @@ def _assemble_draft(
     trace_dict = _build_trace(trace, "draft_created", ctx)
     return DraftCreated(
         draft_id=draft_id,
+        alias_draft_id=alias_draft_id,
         ops=queued,
         flagged=flagged,
         skipped_duplicates=list(skipped),
         trace=trace_dict,
     )
+
+
+def _alias_draft(
+    draft_id: str, title: str, ctx: _RunContext, flagged: list[str]
+) -> str | None:
+    try:
+        return ctx.emitter.create(title=f"Alias suggestions from {draft_id}: {title}")
+    except Exception as exc:  # noqa: BLE001 — the knowledge draft already exists
+        flagged.append(f"alias suggestions dropped: draft store error: {exc}")
+        return None
+
+
+def _queue_ops(
+    draft_id: str,
+    ops: list[tuple[int, ProposedOp]],
+    flagged: list[str],
+    ctx: _RunContext,
+) -> list[ProposedOp]:
+    queued: list[ProposedOp] = []
+    for i, p in ops:
+        try:
+            if p.op == "alias_suggestion":
+                ctx.emitter.add_op(draft_id, p.op, p.payload, source_text=ctx.text)
+            else:
+                ctx.emitter.add_op(draft_id, p.op, p.payload)
+            queued.append(p)
+        except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
+            flagged.append(
+                f"op[{i}] ({p.op}) dropped: draft store error queueing it: {exc}"
+            )
+    return queued
 
 
 def _validate_op(
