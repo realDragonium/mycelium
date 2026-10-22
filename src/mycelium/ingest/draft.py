@@ -43,6 +43,8 @@ class DraftEmitter(Protocol):
         self, draft_id: str, kind: str, payload: dict, *, source_text: str | None = None
     ) -> int: ...
 
+    def submit_aliases(self, draft_id: str) -> None: ...
+
 
 class InProcessDraftEmitter:
     """Creates a draft and queues ops in the live drafts DB, in-process.
@@ -122,3 +124,10 @@ class InProcessDraftEmitter:
                 payload=clean,
                 created_by=None,
             )
+
+    def submit_aliases(self, draft_id: str) -> None:
+        """Submit a draft of alias suggestions without starting internal
+        review: each suggestion awaits an individual human decision."""
+        conn = self._server._drafts_db()
+        with store.transaction(conn):
+            drafts_store.set_submitted(conn, draft_id)

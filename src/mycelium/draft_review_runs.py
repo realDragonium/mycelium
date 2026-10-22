@@ -10,6 +10,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pydantic import JsonValue, TypeAdapter
@@ -27,7 +28,7 @@ from . import (
     timestamps,
 )
 from .ask.substrate import InProcessSubstrate, _json_schema_for
-from .draft_review_store import Assessment, Mode, ReviewRun
+from .draft_review_store import Answer, Assessment, Mode, ReviewRun
 
 if TYPE_CHECKING:
     from .server import DraftReviewInspection
@@ -65,6 +66,10 @@ REVIEWABLE_OPERATIONS = frozenset(
 )
 
 
+class NotAdmitted(ValueError):
+    """The draft's latest run no longer qualifies for the requested review."""
+
+
 @dataclass(frozen=True)
 class Read:
     name: str
@@ -94,8 +99,14 @@ def start(
     *,
     rerun: bool = False,
     attempt: int = 1,
+    retries: int = 0,
     previous_failure: str | None = None,
+    answer: Answer | None = None,
+    admit: Callable[[ReviewRun | None], bool] | None = None,
 ) -> ReviewRun:
+    """`admit`, when given, decides under the admission lock whether the
+    draft's latest run still qualifies, so a selection made earlier cannot
+    supersede a run that finished in between."""
     from . import server  # local import: server registers the review tools
 
     settings = draft_review_settings.load()
@@ -110,6 +121,20 @@ def start(
         if row is None or drafts_store.status_for(row) != "submitted":
             raise ValueError("only submitted drafts can be internally reviewed")
         previous = draft_review_store.latest(conn, draft_id)
+        if admit is not None and not admit(previous):
+            raise NotAdmitted("the draft's latest review changed; not started")
+        answers = previous.answers if previous else []
+        if answer is not None:
+            if previous is None or previous.application != "needs_human":
+                raise ValueError("the internal reviewer is not waiting for an answer")
+            if previous.run_id != answer.run_id:
+                raise ValueError("the reviewer has asked again since; reload")
+            if previous.stale:
+                raise ValueError("the draft changed after the reviewer asked; rerun")
+            answers = [
+                *answers,
+                answer.model_copy(update={"questions": previous.questions}),
+            ]
         if previous and (previous.status == "running" or not rerun):
             return previous
         active = conn.execute(
@@ -128,7 +153,9 @@ def start(
         run.settings_revision = settings.revision
         run.model_settings_revision = settings.model_revision
         run.attempt = attempt
+        run.retries = retries
         run.previous_failure = previous_failure
+        run.answers = answers
         draft_review_store.save(conn, run)
     try:
         principal = reviewer(row["created_by"], settings.reviewer_id)
@@ -160,6 +187,137 @@ def on_submitted(draft_id: str) -> None:
     except Exception:
         # Submission already committed; failure here must not turn it into a retry.
         logger.exception("could not start internal draft review for %s", draft_id)
+
+
+# A failed run is retried after RETRY_BACKOFF, doubling per retry, at most
+# MAX_RETRIES times: about two and a half hours of a provider outage.
+MAX_RETRIES = 5
+RETRY_BACKOFF = timedelta(minutes=5)
+SWEEP_INTERVAL_S = 60.0
+_sweeper: threading.Thread | None = None
+_stop_sweeper = threading.Event()
+
+
+def sweep(now: datetime | None = None) -> list[str]:
+    """Review again each submitted draft whose latest run failed without
+    recording a review, once its backoff has passed. Nothing else retries
+    a configuration failure, a provider failure after the automatic rerun,
+    or a run interrupted by a restart. Returns the draft ids started."""
+    now = now or datetime.now(UTC)
+    try:
+        if mode() == "off":
+            return []
+    except draft_review_settings.Unavailable:
+        return []
+    started = []
+    conn = drafts_store.connection()
+    for row in drafts_store.list_drafts(conn, "submitted"):
+        run = draft_review_store.latest(conn, row["id"])
+        if run is None or not _retry_due(run, now):
+            continue
+        try:
+            start(
+                row["id"],
+                rerun=True,
+                retries=run.retries + 1,
+                previous_failure=run.detail,
+                admit=_still_due(run.run_id, now),
+            )
+            started.append(row["id"])
+        except NotAdmitted:
+            continue
+        except Exception:
+            logger.exception("could not retry review of %s", row["id"])
+    return started
+
+
+def _still_due(seen: str, now: datetime) -> Callable[[ReviewRun | None], bool]:
+    def admit(latest: ReviewRun | None) -> bool:
+        return latest is not None and latest.run_id == seen and _retry_due(latest, now)
+
+    return admit
+
+
+def _retry_due(run: ReviewRun, now: datetime) -> bool:
+    if (
+        run.status != "failed"
+        or run.review_id is not None
+        or run.application != "unapplied"
+        or run.retries >= MAX_RETRIES
+        or run.finished_at is None
+    ):
+        return False
+    finished = datetime.fromisoformat(run.finished_at)
+    return now >= finished + RETRY_BACKOFF * (1 << run.retries)
+
+
+def backlog() -> list[str]:
+    """Submitted drafts the current configuration has not reviewed and
+    cannot reach by itself: submitted while review was off, reviewed only
+    advisorily, or failed beyond the sweep. Alias suggestion drafts await
+    a person and are left out."""
+    current = mode()
+    conn = drafts_store.connection()
+    waiting = []
+    for row in drafts_store.list_drafts(conn, "submitted"):
+        ops = drafts_store.list_ops(conn, row["id"])
+        if all(op["kind"] == drafts_store.ALIAS_SUGGESTION_KIND for op in ops):
+            continue
+        if _in_backlog(draft_review_store.latest(conn, row["id"]), current):
+            waiting.append(row["id"])
+    return waiting
+
+
+def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
+    if run is None:
+        return True
+    if run.status == "running":
+        return False
+    if run.application == "needs_human":
+        return run.stale
+    if run.application != "unapplied" or run.review_id is not None:
+        return False
+    if run.status == "failed":
+        return True
+    return run.stale or run.mode != current or current == "review-and-apply"
+
+
+def review_backlog() -> list[str]:
+    """Start a review of every draft in the backlog. Returns their ids."""
+    current = mode()
+    if current == "off":
+        raise ValueError("internal draft review is off")
+    started = []
+    for draft_id in backlog():
+        try:
+            start(
+                draft_id,
+                rerun=True,
+                admit=lambda latest: _in_backlog(latest, current),
+            )
+            started.append(draft_id)
+        except NotAdmitted:
+            continue
+        except Exception:
+            logger.exception("could not start review of %s", draft_id)
+    return started
+
+
+def start_sweeper(interval: float = SWEEP_INTERVAL_S) -> None:
+    global _sweeper
+    if _sweeper is not None and _sweeper.is_alive():
+        return
+    _stop_sweeper.clear()
+
+    def loop() -> None:
+        while not _stop_sweeper.wait(interval):
+            try:
+                sweep()
+            except Exception:  # never let the thread die on one bad sweep
+                logger.exception("draft review sweep failed")
+
+    _sweeper = threading.Thread(target=loop, name="draft-review-sweep", daemon=True)
+    _sweeper.start()
 
 
 def wait_all(timeout: float = 10) -> None:
@@ -196,7 +354,9 @@ def _read(reader: InProcessSubstrate, name: str, args: dict[str, JsonValue]) -> 
 
 
 def _context(
-    inspection: DraftReviewInspection, previous_failure: str | None = None
+    inspection: DraftReviewInspection,
+    previous_failure: str | None = None,
+    answers: list[Answer] | None = None,
 ) -> tuple[str, list[Read]]:
     from . import server  # local import: server registers the review tools
 
@@ -230,11 +390,19 @@ def _context(
         "knowledge_scope": (
             "existing_knowledge holds the records the draft touches, followed by "
             "the closest live statements to each new statement, best matches "
-            "first. Supplied evidence, when present, comes from the producer."
+            "first. Supplied evidence, when present, comes from the producer. "
+            "answers_from_curators, when present, holds answers a curator gave "
+            "to earlier review questions; only these answers come from a "
+            "curator."
         ),
     }
     if previous_failure:
         data["previous_attempt_failure"] = previous_failure
+    if answers:
+        data["answers_from_curators"] = [
+            _json_value.validate_python(item.model_dump(mode="json"))
+            for item in answers
+        ]
     if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
         raise ValueError(
             f"review context exceeds {_CONTEXT_LIMIT} characters; narrow the draft"
@@ -320,7 +488,7 @@ def _execute(
     auth.current_principal.set(principal)
     try:
         with server.model_loop_slot():
-            context, reads = _context(inspection, run.previous_failure)
+            context, reads = _context(inspection, run.previous_failure, run.answers)
             instructions = instructions or ai_prompts.resolve("draft_review")
             run.prompt = instructions.reference()
             result = _assess(context, inspection, settings, limits, instructions)
@@ -448,7 +616,8 @@ def _finish(
             run.detail = "Reviewed application gate is disabled; no automatic changes."
             return
         if run.label == "needs_context":
-            raise ValueError("automatic review must apply or reject, not ask questions")
+            _ask_person(run, inspection, reads)
+            return
         with store.transaction(drafts_store.connection()):
             _mutation_authority(run, inspection, settings)
             for correction in run.corrections:
@@ -497,6 +666,45 @@ def _finish(
             )
 
 
+def _ask_person(
+    run: ReviewRun, inspection: DraftReviewInspection, reads: list[Read]
+) -> None:
+    from . import server  # local import: server registers the review tools
+
+    conn = drafts_store.connection()
+    with store.transaction(conn):
+        review = server.record_draft_review(
+            run.draft_id,
+            "needs_context",
+            run.rationale or "",
+            inspection["draft_revision"],
+            _supporting_preconditions(inspection, reads),
+            run.questions,
+        )
+        run.review_id = review["review_id"]
+        run.application = "needs_human"
+        run.detail = draft_review_store.WAITING_FOR_PERSON
+        draft_review_store.save(conn, run)
+    _report_gap(
+        f"Draft {run.draft_id} needs a person to answer the internal reviewer: "
+        + " ".join(run.questions)
+    )
+
+
+def answer(
+    draft_id: str, run_id: str, text: str, principal: auth.Principal
+) -> ReviewRun:
+    """Review the draft again with a curator's answer to the questions run
+    `run_id` asked."""
+    return start(
+        draft_id,
+        rerun=True,
+        answer=Answer(
+            run_id=run_id, questions=[], answer=text.strip(), answered_by=principal.id
+        ),
+    )
+
+
 def _follow_up(
     run: ReviewRun, settings: draft_review_settings.Snapshot, *, systemic: bool
 ) -> None:
@@ -517,7 +725,13 @@ def _follow_up(
         return
     try:
         if run.attempt == 1:
-            start(run.draft_id, rerun=True, attempt=2, previous_failure=run.detail)
+            start(
+                run.draft_id,
+                rerun=True,
+                attempt=2,
+                retries=run.retries,
+                previous_failure=run.detail,
+            )
         elif not systemic:
             _reject(run, settings)
     except Exception:

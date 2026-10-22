@@ -8,7 +8,9 @@ Ingestion can propose an alias when the supplied prose establishes equivalence,
 for example “single sign-on (SSO)”. Suggestions retain the exact quoted evidence,
 the original source text, target concept, reason, and possible ambiguity. A
 substring check verifies the quote came from the input; human review decides
-whether it actually supports equivalence.
+whether it actually supports equivalence. Ingestion puts its suggestions in a
+separate submitted draft titled after the knowledge draft, so the knowledge can
+be reviewed and applied without waiting for the alias decisions.
 
 To scan existing knowledge, expand **Discover aliases in existing statements**,
 search for statements, select up to 50 across searches, and start discovery.
@@ -41,7 +43,8 @@ All suggestions require human review, including when draft review is set to
 **Review and apply**. Such drafts receive advisory assessments only. Pending
 suggestions must be individually decided before applying, rejecting, or
 withdrawing their draft. Drafts containing only alias suggestions close after
-the final decision. Mixed drafts remain available for normal review.
+the final decision. Mixed drafts, which ingestion no longer produces, remain
+available for normal review.
 
 Accepted and rejected records remain visible through the status filter. Replaying
 a draft skips these records, so it cannot recreate an alias removed after its

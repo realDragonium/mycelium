@@ -39,7 +39,7 @@ decision, and the rest runs in-process.
 | `list_statement_kinds` | Lists the statement kind vocabulary. |
 | `list_entity_link_types` | Lists the entity link vocabulary that appears in `get_entity`. |
 | `ask` | Runs the server's answer loop. It is the only tool an `asker` sees. |
-| `ingest` | Turns prose into a reviewable draft. |
+| `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. |
 | `upsert_entity` | Creates or describes the entity a statement names. |
 | `upsert_name` | Adds an alias so mentions resolve. |
 | `upsert_statement` | Creates or replaces one statement. Its description holds the statement-kind definitions that the authoring skills refer to. |

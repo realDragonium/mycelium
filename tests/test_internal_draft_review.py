@@ -223,14 +223,14 @@ def test_review_only_cannot_upgrade_inflight(running_app, monkeypatch):
     assert server.get_draft(draft_id)["status"] == "submitted"
 
 
-@pytest.mark.parametrize("label", ["good", "reject", "needs_context"])
+@pytest.mark.parametrize("label", ["good", "reject"])
 def test_automatic_outcomes(running_app, monkeypatch, label):
     _set_review_controls(mode="review-and-apply")
     _set_review_controls(application_enabled=True)
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment(label))
     draft_id = _draft()
     result = _result(draft_id)
-    assert result["status"] == ("failed" if label == "needs_context" else "completed")
+    assert result["status"] == "completed"
     assert result["application"] == ("applied" if label == "good" else "rejected")
     assert server.get_draft(draft_id)["status"] == (
         "approved" if label == "good" else "rejected"

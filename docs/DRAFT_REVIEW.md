@@ -2,8 +2,16 @@
 
 Mycelium can review submitted drafts with Claude or an OpenAI GPT model.
 Review starts on submission from MCP or either browser interface. It works for
-all drafts; PR provenance is optional. Enabling the feature does not sweep the
-existing backlog. A curator can explicitly review an existing submitted draft.
+all drafts; PR provenance is optional. While review is on, `ingest` (over MCP,
+HTTP, and the cockpit) and finished research runs submit their drafts
+themselves; with review off those drafts stay open for curation. Alias
+suggestions from ingestion go to a separate draft that awaits individual human
+decisions and is not sent to the reviewer.
+
+Enabling the feature does not sweep the existing backlog. An administrator can
+list it with `GET /api/draft-review/backlog` and review it once with
+`POST /api/draft-review/backlog`; see [Inspecting and rerunning](#inspecting-and-rerunning).
+A curator can explicitly review an existing submitted draft.
 
 ## Configuration
 
@@ -102,18 +110,36 @@ records the existing inspection contract fingerprints. Drafts containing other
 operations, including glossary or link-alias edits, are rejected without a model
 call. The model cannot append or revise those uninspected mutation families.
 
-In `review-and-apply` no draft waits for a person. A new statement that
-contradicts a live one wins: the reviewer corrects the live statement and lists
-the contradiction. Failed knowledge reads, oversized context, API errors,
-refusals, and incomplete or invalid model output are explicit failed attempts and
-never authorize application. A failed attempt that recorded no review is run once
-more; if that fails too, the draft is rejected, unless the failure came from the
-model provider, which leaves the draft submitted for a later rerun. A
-`needs_context` answer counts as a failure in this mode.
+In `review-and-apply` a draft waits for a person only when the reviewer asks
+one. A new statement that contradicts a live one wins: the reviewer corrects the
+live statement and lists the contradiction. Failed knowledge reads, oversized
+context, API errors, refusals, and incomplete or invalid model output are
+explicit failed attempts and never authorize application. A failed attempt that
+recorded no review is run once more; if that fails too, the draft is rejected,
+unless the failure came from the model provider, which leaves the draft
+submitted.
 
-Every automatic rejection, and every contradiction resolved in an applied draft,
-is filed as a knowledge gap naming the draft and statement, so a person can review
-it on the Gaps page whenever they choose. Nothing waits on that review.
+A sweep retries submitted drafts whose latest attempt failed without recording a
+review: provider failures, an unusable reviewer account, and attempts
+interrupted by a restart. It runs every minute while review is on and starts a
+retry 5 minutes after the failure, doubling the wait each time, at most 5
+retries per draft (about two and a half hours). Each retry is a fresh attempt
+with the usual single rerun. A curator's **Run again** or a backlog review
+starts the count over. Drafts with no attempt at all are left for the backlog
+review.
+
+When the supplied knowledge cannot settle how the draft fits and a person's
+answer would, such as whether a new concept is the same as a live one, the
+reviewer answers `needs_context` with specific questions. With the application
+gate enabled, the run records an authoritative `needs_context` review carrying
+the questions, ends with outcome `needs_human`, files a knowledge gap naming the
+draft and the questions, and leaves the draft submitted. A curator answers with
+`POST /api/drafts/{id}/review/answer` and the draft is reviewed again with the
+answer. The reviewer gets no new tools for this.
+
+Every automatic rejection, every contradiction resolved in an applied draft, and
+every question for a person is filed as a knowledge gap naming the draft, so a
+person can find it on the Gaps page. Only the question holds its draft back.
 An automated assessment remains a model judgment; isolated tests verify the
 execution safeguards and API contract, not the model's factual accuracy.
 
@@ -140,7 +166,9 @@ both browser interfaces expose the latest `review_assessment`, including:
 - Label (`good`, `changes_suggested`, `reject`, `needs_context`), rationale,
   questions, concrete suggested corrections, resolved contradictions, and the
   attempt number (2 for the automatic rerun after a failure).
-- Application outcome (`unapplied`, `applied`, `rejected`) and explanatory detail.
+- Application outcome (`unapplied`, `applied`, `rejected`, `needs_human`) and
+  explanatory detail.
+- The sweep retry count, and curators' recorded answers to earlier questions.
 - The authoritative `review_id`, when automatic mode records one.
 
 The HTTP tool mirrors are `POST /request-draft-review` and
@@ -154,6 +182,24 @@ revision returns 409. The selected model and review controls save atomically.
 `POST /api/drafts/{id}/review` with no body starts an
 explicit rerun. The latter returns `{review: ...}` and enforces the current
 server mode and the caller's real curator role.
+
+`POST /api/drafts/{id}/review/answer` takes `run_id`, the attempt whose
+questions are answered, and `answer`, up to 6,000 characters. It requires a
+real curator role and is refused unless that attempt is the draft's latest, has
+outcome `needs_human`, and the draft has not changed since. The answer is stored
+on the review attempt with the curator's ID and carried to every later attempt
+of the draft, where the reviewer receives it as `answers_from_curators`, apart
+from the creator-supplied evidence. It returns `{review: ...}` for the new
+attempt.
+
+Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...]}`: submitted
+drafts the current configuration has not reached. That is a draft with no
+attempt, a failed attempt that recorded no review, an advisory assessment
+made under another mode, any unapplied assessment in `review-and-apply` (for
+example one held by the application gate), or a question whose draft has
+changed since it was asked. Drafts containing only alias suggestions are excluded.
+`POST /api/draft-review/backlog` starts a review of each and returns their IDs.
+The list is available while review is off; starting the reviews is refused.
 
 In `review-only`, an advisory `reject` label leaves the draft submitted. Suggested corrections are
 validated without execution before they are published. Draft edits make the old
@@ -176,8 +222,10 @@ supporting records. Later manual/recoverable application also rechecks supportin
 knowledge, preserving the same gate as immediate automatic application.
 
 The review run links to its authoritative review before applying. On restart,
-interrupted runs become failed and retryable; already committed application or
-rejection receipts restore the actual outcome instead of reporting it unapplied.
+interrupted runs become failed and the sweep retries them; already committed
+application or rejection receipts restore the actual outcome instead of
+reporting it unapplied. A run that recorded its review before the interruption is
+not retried.
 When a reviewed application still needs finalization, inspect its durable receipt
 and use the existing `apply_reviewed_draft(draft_id, review_id)` recovery path.
 No startup recovery launches model work or replays an uncommitted application.

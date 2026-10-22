@@ -46,6 +46,17 @@ class Assessment(BaseModel):
     contradictions: list[Contradiction] = Field(max_length=8)
 
 
+class Answer(BaseModel):
+    """A curator's answer to the reviewer's questions, written only by the server."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    run_id: str
+    questions: list[str]
+    answer: str = Field(min_length=1, max_length=6000)
+    answered_by: str
+    answered_at: str = Field(default_factory=timestamps.now)
+
+
 class ReviewRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_id: str
@@ -69,8 +80,12 @@ class ReviewRun(BaseModel):
     corrections: list[Correction] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
     attempt: int = 1
+    retries: int = 0
     previous_failure: str | None = None
-    application: Literal["unapplied", "applied", "rejected"] = "unapplied"
+    answers: list[Answer] = Field(default_factory=list)
+    application: Literal["unapplied", "applied", "rejected", "needs_human"] = (
+        "unapplied"
+    )
     detail: str | None = None
     started_at: str = Field(default_factory=timestamps.now)
     finished_at: str | None = None
@@ -127,6 +142,9 @@ def save(conn: sqlite3.Connection, run: ReviewRun) -> None:
     )
 
 
+WAITING_FOR_PERSON = "Waiting for a person to answer the reviewer's questions."
+
+
 def new(draft_id: str, mode: Mode, revision: int) -> ReviewRun:
     return ReviewRun(
         run_id="drv_" + uuid.uuid4().hex[:12],
@@ -158,10 +176,14 @@ def reconcile(
         row = conn.execute(
             "SELECT outcome FROM draft_reviews WHERE id = ?", (run.review_id,)
         ).fetchone()
-        if row is None or row["outcome"] != "rejected":
+        if row is not None and row["outcome"] == "needs_context":
+            run.application = "needs_human"
+            run.detail = WAITING_FOR_PERSON
+        elif row is not None and row["outcome"] == "rejected":
+            run.application = "rejected"
+            run.detail = "Draft rejection committed; recovered from its review record."
+        else:
             return False
-        run.application = "rejected"
-        run.detail = "Draft rejection committed; recovered from its review record."
     run.status = "completed"
     return True
 
@@ -175,7 +197,9 @@ def mark_orphaned(
     for row in rows:
         run = ReviewRun.model_validate_json(row["body_json"])
         run.status = "failed"
-        run.detail = "Review interrupted by restart; request an explicit rerun."
+        run.detail = (
+            "Review interrupted by restart; retried automatically while review is on."
+        )
         if run.review_id:
             run.detail = (
                 "Review interrupted; inspect the authoritative review and "
