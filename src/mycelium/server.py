@@ -6716,47 +6716,69 @@ def _fingerprint(value: JsonValue) -> str:
     return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+# Only these operations recompute mentions on existing statements; a statement
+# that merely mentions an entity the draft touches is not affected otherwise.
+_MENTION_REMAPPING_OPERATIONS = frozenset(
+    {"merge_entities", "move_name", "rename_name", "delete_name", "delete_entity"}
+)
+
+
+def _name_owner_ids(name_ids: set[str]) -> set[str]:
+    owners: set[str] = set()
+    for name_id in name_ids:
+        row = store.get_name_by_id(_db(), name_id)
+        if row is not None:
+            owners.add(row["entity_id"])
+    return owners
+
+
+def _named_entity_ids(
+    kind: str, payload: dict, all_names: list[sqlite3.Row]
+) -> set[str]:
+    entity_ids: set[str] = set()
+    texts: list[str] = []
+    if isinstance(payload.get("text"), str):
+        texts.append(payload["text"])
+    texts.extend(
+        item["text"]
+        for item in payload.get("statements", [])
+        if isinstance(item, dict) and isinstance(item.get("text"), str)
+    )
+    for name_row in all_names:
+        if any(mentions.text_contains_name(text, name_row["text"]) for text in texts):
+            entity_ids.add(name_row["entity_id"])
+    names: list[str] = []
+    if kind == "upsert_entity" and isinstance(payload.get("name"), str):
+        names.append(payload["name"])
+    if kind == "upsert_entities":
+        names.extend(
+            item["name"]
+            for item in payload.get("entities", [])
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        )
+    for name in names:
+        row = store.get_name_by_text(_db(), name)
+        if row is not None:
+            entity_ids.add(row["entity_id"])
+    return entity_ids
+
+
 def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePrecondition]:
     entity_ids: set[str] = set()
+    remapped_entity_ids: set[str] = set()
     statement_ids: set[str] = set()
     all_names = store.list_all_names(_db())
     for op in ops:
         payload = _json.loads(op["payload_json"])
         entities, statements, names = _payload_knowledge_ids(payload)
-        entity_ids.update(entities)
+        targeted = entities | _name_owner_ids(names)
+        entity_ids.update(targeted)
+        entity_ids.update(_named_entity_ids(op["kind"], payload, all_names))
         statement_ids.update(statements)
-        texts: list[str] = []
-        if isinstance(payload.get("text"), str):
-            texts.append(payload["text"])
-        texts.extend(
-            item["text"]
-            for item in payload.get("statements", [])
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
-        )
-        for name_row in all_names:
-            if any(
-                mentions.text_contains_name(text, name_row["text"]) for text in texts
-            ):
-                entity_ids.add(name_row["entity_id"])
-        for name_id in names:
-            row = store.get_name_by_id(_db(), name_id)
-            if row is not None:
-                entity_ids.add(row["entity_id"])
-        names = []
-        if op["kind"] == "upsert_entity" and isinstance(payload.get("name"), str):
-            names.append(payload["name"])
-        if op["kind"] == "upsert_entities":
-            names.extend(
-                item["name"]
-                for item in payload.get("entities", [])
-                if isinstance(item, dict) and isinstance(item.get("name"), str)
-            )
-        for name in names:
-            row = store.get_name_by_text(_db(), name)
-            if row is not None:
-                entity_ids.add(row["entity_id"])
+        if op["kind"] in _MENTION_REMAPPING_OPERATIONS:
+            remapped_entity_ids.update(targeted)
 
-    for entity_id in entity_ids:
+    for entity_id in remapped_entity_ids:
         for name_row in store.get_names_by_entity(_db(), entity_id):
             statement_ids.update(
                 store.statements_mentioning_name(_db(), name_row["id"])

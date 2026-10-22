@@ -292,32 +292,47 @@ def test_inspection_rejects_dangling_operation_references(tmp_path, monkeypatch)
         )
 
 
+def _inspect_submitted(kind, payload):
+    conn = server._drafts_db()
+    with store.transaction(conn):
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None
+        )
+        drafts_store.add_op(
+            conn, draft_id=draft_id, kind=kind, payload=payload, created_by="drafter-1"
+        )
+        drafts_store.set_submitted(conn, draft_id)
+    token = _principal()
+    try:
+        return server.inspect_draft_review(draft_id)
+    finally:
+        auth.current_principal.reset(token)
+
+
 def test_statement_text_captures_name_resolution_precondition(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch):
         entity_id = server.upsert_entity("Mycelium", "system")["entity_id"]
-        conn = server._drafts_db()
-        with store.transaction(conn):
-            draft_id = drafts_store.create_draft(
-                conn, created_by="drafter-1", session_id=None
-            )
-            drafts_store.add_op(
-                conn,
-                draft_id=draft_id,
-                kind="upsert_statement",
-                payload={
-                    "kind": "state",
-                    "text": "Mycelium is available",
-                    "links": [],
-                },
-                created_by="drafter-1",
-            )
-            drafts_store.set_submitted(conn, draft_id)
-        token = _principal()
-        try:
-            evidence = server.inspect_draft_review(draft_id)
-        finally:
-            auth.current_principal.reset(token)
-        assert evidence["knowledge_preconditions"][0]["id"] == entity_id
+        server.upsert_statement("state", "Mycelium stores drafts", [])
+        evidence = _inspect_submitted(
+            "upsert_statement",
+            {"kind": "state", "text": "Mycelium is available", "links": []},
+        )
+        assert [item["id"] for item in evidence["knowledge_preconditions"]] == [
+            entity_id
+        ]
+
+
+def test_remapping_mentions_captures_mentioning_statements(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        entity_id = server.upsert_entity("Mycelium", "system")["entity_id"]
+        statement_id = server.upsert_statement("state", "Mycelium stores drafts", [])[
+            "statement_id"
+        ]
+        evidence = _inspect_submitted("delete_entity", {"id": entity_id})
+        assert {item["id"] for item in evidence["knowledge_preconditions"]} == {
+            entity_id,
+            statement_id,
+        }
 
 
 def test_apply_rechecks_affected_knowledge_and_real_tool_role(tmp_path, monkeypatch):

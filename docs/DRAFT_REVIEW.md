@@ -88,6 +88,11 @@ process accepted runs, sharing the existing model-loop capacity with other tasks
 A submission burst waits for those workers; duplicate requests for the same draft
 return its current run. No repository checkout or GitHub access is required.
 
+Affected knowledge is what the operations reference by id, the entities named in
+their text, and the entities they upsert. Statements that mention an affected
+entity are included only for operations that remap existing mentions:
+`merge_entities`, `move_name`, `rename_name`, `delete_name`, and `delete_entity`.
+
 Internal review supports entity, statement, name, and graph-link mutations whose
 records the existing inspection contract fingerprints. Drafts containing other
 operations, including glossary or link-alias edits, receive `needs_context` with
