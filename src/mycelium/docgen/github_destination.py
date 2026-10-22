@@ -249,12 +249,12 @@ def read(
         branch = _branch_name(
             config, DeliveryDocument(document_id, slug, "", "", "", "", ())
         )
-        ref = (
-            branch
-            if _has_open_review(config, branch, active, token)
-            else config.base_branch
-        )
-        return _file(config, path, ref, active, token)
+        if not _has_open_review(config, branch, active, token):
+            return _file(config, path, config.base_branch, active, token)
+        current = _file(config, path, branch, active, token)
+        if current is None:
+            raise _deleted_in_review(config, path, branch)
+        return current
 
     return _call(destination, env, client, "read", fetch)
 
@@ -330,6 +330,16 @@ def _call(
         _ACTIVE_CREDENTIALS.reset(context)
 
 
+def _deleted_in_review(
+    config: GitHubConfig, path: str, branch: str
+) -> DestinationError:
+    return DestinationError(
+        f"destination {config.destination.name!r} has no {path} on {branch}: "
+        "someone deleted it in the open pull request. Restore the file there, or "
+        "close the pull request if the document should not be published."
+    )
+
+
 def _access_token(config: GitHubConfig, env: Mapping[str, str]) -> str | None:
     if config.connection is not None:
         from .. import github_app, github_connections
@@ -400,9 +410,11 @@ def _deliver(
     )
     if expected_revision is not None:
         ref = branch if reuse_branch else config.base_branch
-        # An absent file holds nothing to lose: the PR closed unmerged, or the
-        # file was removed, and delivery recreates it for review.
+        # Absent from the base holds nothing to lose: the PR closed unmerged,
+        # or the file was removed, and delivery proposes it again for review.
         current = _file(config, path, ref, client, token)
+        if current is None and reuse_branch:
+            raise _deleted_in_review(config, path, branch)
         intended_revision = _git_blob_id(document.body)
         if (
             current is not None
@@ -417,10 +429,12 @@ def _deliver(
                 content_revision=intended_revision,
                 pull_request_number=_pull_number(config, reference),
             )
-        if current is not None and current.content_revision not in (
+        if current is not None and current.content_revision not in {
             intended_revision,
             expected_revision,
-        ):
+            document.delivered_content_revision,
+            *document.published_content_revisions,
+        }:
             raise DestinationError(
                 f"destination {config.destination.name!r} has edits to {path} on "
                 f"{ref} made after this revision was written. Revise the document "

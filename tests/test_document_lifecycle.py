@@ -110,7 +110,7 @@ def test_an_unanchored_title_collision_is_still_refused(conn):
 # --- pull request tracking --------------------------------------------------
 
 
-def test_delivery_records_an_open_pull_request_and_the_sync_point(conn):
+def test_delivery_records_an_open_pull_request(conn):
     document_id = _document(conn)
     _deliver(conn, document_id)
 
@@ -120,7 +120,6 @@ def test_delivery_records_an_open_pull_request_and_the_sync_point(conn):
     assert (pull_request["number"], pull_request["state"]) == (17, "open")
     assert pull_request["url"] == "https://github.com/acme/handbook/pull/17"
     assert document["delivery_status"] == "published"
-    assert document["revision_source_content_revision"] == "a" * 40
 
 
 @pytest.mark.parametrize("state", ["merged", "closed"])
@@ -165,6 +164,27 @@ def test_a_state_read_for_a_replaced_pull_request_is_discarded(conn):
     pull_request = _serialized(conn, document_id)["pull_request"]
     assert isinstance(pull_request, dict)
     assert (pull_request["number"], pull_request["state"]) == (18, "open")
+
+
+def test_a_delivery_that_does_not_report_its_number_keeps_the_same_pull_request(
+    conn,
+):
+    """The server's own delivery path does not pass the number yet."""
+    document_id = _document(conn)
+    _deliver(conn, document_id, number=17)
+    docs_store.record_delivery(
+        conn,
+        document_id,
+        destination="docs",
+        target=TARGET,
+        path="docs/sso.md",
+        reference="https://github.com/acme/handbook/pull/17",
+        content_revision="b" * 40,
+        revision=1,
+    )
+
+    pull_request = _serialized(conn, document_id)["pull_request"]
+    assert isinstance(pull_request, dict) and pull_request["number"] == 17
 
 
 def test_an_unknown_pull_request_state_is_refused(conn):
@@ -357,6 +377,9 @@ class FakeGitHub:
         pull = self.pulls[number]
         self.branches["main"] = self.branches[str(pull["head"])]
         pull.update(state="closed", merged=True)
+
+    def close(self, number: int) -> None:
+        self.pulls[number].update(state="closed")
 
     def file(self, branch: str, path: str) -> str | None:
         return self.trees[self.commits[self.branches[branch]]].get(path)
@@ -559,6 +582,12 @@ def test_a_document_round_trips_through_review_edits_and_merge(
         "# SSO\n\nEdited on main after merge.\n\nAdd a caveat.\n"
     )
     assert _serialized(conn, document_id)["delivery_status"] == "published"
+
+    github.close(18)
+    publication.refresh_pull_request(conn, document_id, now=_later())
+    assert _serialized(conn, document_id)["delivery_status"] == "closed"
+    third = publication.publish(conn, document_id, "docs")
+    assert third["pull_request_number"] == 19
 
 
 def test_a_revision_over_edits_on_both_sides_is_refused_before_a_run_exists(

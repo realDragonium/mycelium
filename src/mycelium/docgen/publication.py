@@ -8,17 +8,18 @@ when the answer matters.
 
 Once a PR is open, two parties can edit the document: Mycelium, through new
 internal revisions, and people, by committing to the PR branch or to the base
-branch after merge. Mycelium recognises the texts it put there itself: the sync
-point (`revision_source_content_revision`, the blob it last wrote or read) and
-every blob it published. Any other destination text holds edits made by people.
+branch after merge. Mycelium recognises the texts it has already accounted
+for: every blob it published, and the sync point
+(`revision_source_content_revision`), the destination text the internal head
+was last derived from. Any other destination text holds edits made by people.
 A revision starts from that text when the internal head adds nothing since its
 publication. When both sides changed, the revision is refused rather than
 merged, because a model asked to reconcile two edits can drop either one
 without anyone noticing.
 
-Recognising older published blobs is what lets a closed PR fall back to the
-base branch, which still holds an earlier published version rather than the
-sync point. The cost is that a person reverting to an earlier Mycelium text is
+Recognising all of them is what lets a closed PR fall back to the base branch,
+which holds an earlier published version or the text the closed revision was
+built from. The cost is that a person reverting to an earlier Mycelium text is
 not seen as an edit, so a later revision proposes the reverted changes again.
 That happens in a new pull request the person can close, so nothing they wrote
 is lost.
@@ -69,7 +70,8 @@ def publish(
         try:
             configured, binding = destinations.publishing_destination(row, destination)
             delivery = destinations.deliver_document(
-                configured, _delivery_document(row)
+                configured,
+                _delivery_document(row, docs_store.published_blobs(conn, document_id)),
             )
         except DestinationError as exc:
             raise ValueError(str(exc)) from None
@@ -88,7 +90,9 @@ def publish(
         return {**delivery.serialize(), "revision": revision}
 
 
-def _delivery_document(row: sqlite3.Row) -> destinations.DeliveryDocument:
+def _delivery_document(
+    row: sqlite3.Row, published: frozenset[str]
+) -> destinations.DeliveryDocument:
     def optional(column: str) -> str | None:
         value = row[column]
         return None if value is None else str(value)
@@ -104,6 +108,7 @@ def _delivery_document(row: sqlite3.Row) -> destinations.DeliveryDocument:
         delivered_path=optional("delivery_path"),
         delivered_content_revision=optional("delivery_content_revision"),
         revision_source_content_revision=optional("revision_source_content_revision"),
+        published_content_revisions=published,
     )
 
 
@@ -173,8 +178,9 @@ def revision_start(
 ) -> RevisionStart:
     """Choose the text a revision of a delivered document starts from.
 
-    `remote` is `destination_text(row)` and `published` its `docs_store.published_blobs`. The result's `content_revision` is the sync point the
-    revision records; None keeps the stored one.
+    `remote` is `destination_text(row)` and `published` the document's
+    `docs_store.published_blobs`. The result's `content_revision` is the sync
+    point the revision records; None keeps the stored one.
     """
     internal = CurrentDocument(body=str(row["body"]))
     if remote is None:
@@ -188,14 +194,11 @@ def revision_start(
     from_destination = RevisionStart(remote, "destination")
     if start_from_destination:
         return from_destination
-    sync_point = (
-        row["revision_source_content_revision"] or row["delivery_content_revision"]
-    )
-    if (
-        remote.content_revision == sync_point
-        or remote.content_revision in published
-        or remote.body == internal.body
-    ):
+    accounted_for = published | {
+        row["revision_source_content_revision"],
+        row["delivery_content_revision"],
+    }
+    if remote.content_revision in accounted_for or remote.body == internal.body:
         return RevisionStart(
             CurrentDocument(internal.body, remote.content_revision), "internal"
         )

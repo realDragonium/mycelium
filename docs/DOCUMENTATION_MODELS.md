@@ -26,13 +26,12 @@ first. Mycelium recognises every text it published itself. Any other text there
 is someone's edit, and the revision starts from it, telling the writer to keep
 it. The run records this as `revision_base: destination`. If the document also
 has a revision here that was never published, Mycelium refuses rather than
-merging the two, and says how to continue. Either revise with
-`start_from_destination` (the unpublished revision stays in the history), or
-undo the GitHub edits or close the pull request without merging. If the
-published copy cannot be read, the revision is refused until the connection or
-credential binding is restored. A manual edit does not read GitHub, so
-publishing it is refused over edits it did not see. Revise first to bring them
-in.
+merging the two. To continue from the revision here, undo the GitHub edits or
+close the pull request without merging. A deleted file in an open pull request
+is refused the same way. If the published copy cannot be read, the revision is
+refused until the connection or credential binding is restored. A manual edit
+does not read GitHub, so publishing it is refused over GitHub edits it did not
+see.
 
 Generation records the model and a consistent snapshot of the available writing
 profiles at admission. The selected guidance, exposure rules, template, and their

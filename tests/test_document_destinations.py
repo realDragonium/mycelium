@@ -436,6 +436,94 @@ def test_redelivery_after_an_unmerged_close_recreates_the_absent_file():
     assert any(request.url.path.endswith("/git/blobs") for request in requests)
 
 
+def test_redelivery_after_an_unmerged_close_accepts_an_earlier_published_base():
+    """The closed PR's blob never reached the base, which holds an older one."""
+    _, base_handler = _responses()
+    earlier = "# Configuring SSO, as merged before\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/contents/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={
+                    "encoding": "base64",
+                    "content": base64.b64encode(earlier.encode()).decode(),
+                    "sha": _blob_id(earlier),
+                },
+            )
+        return base_handler(request)
+
+    document = replace(
+        _document(),
+        delivered_path="docs/configuring-sso.md",
+        delivered_content_revision=_blob_id("closed without merging"),
+    )
+    with pytest.raises(DestinationError, match="made after this revision"):
+        deliver(
+            _config(),
+            document,
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+    delivery = deliver(
+        _config(),
+        replace(document, published_content_revisions=frozenset({_blob_id(earlier)})),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    assert delivery.content_revision == CONTENT_SHA
+
+
+def _deleted_on_open_branch(request: httpx.Request) -> httpx.Response | None:
+    if request.url.path.endswith("/pulls") and request.method == "GET":
+        return httpx.Response(
+            200, json=[_pull("https://github.com/acme/handbook/pull/17")]
+        )
+    if "/contents/" in request.url.path:
+        return httpx.Response(404, json={"message": "Not Found"})
+    return None
+
+
+def test_a_file_deleted_in_the_open_pull_request_is_not_read_as_absent():
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = _deleted_on_open_branch(request)
+        assert response is not None
+        return response
+
+    with pytest.raises(DestinationError, match="deleted it in the open pull request"):
+        read(
+            _config(),
+            "docs/recorded.md",
+            "gdc_123",
+            "configuring-sso",
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+
+def test_delivery_does_not_restore_a_file_deleted_in_the_open_pull_request():
+    requests, base_handler = _responses()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return _deleted_on_open_branch(request) or base_handler(request)
+
+    with pytest.raises(DestinationError, match="deleted it in the open pull request"):
+        deliver(
+            _config(),
+            replace(
+                _document(),
+                delivered_path="docs/configuring-sso.md",
+                delivered_content_revision=_blob_id("delivered"),
+            ),
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+    assert not any(request.url.path.endswith("/git/blobs") for request in requests)
+
+
 def _pull_state_client(payload: dict) -> httpx.Client:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"

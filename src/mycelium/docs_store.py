@@ -1095,9 +1095,8 @@ def record_delivery(
     and location. A credential binding may carry forward only at the same target;
     missing metadata never authorizes a changed publication destination.
 
-    The delivered blob becomes the sync point, the destination text the next
-    revision and delivery compare against. A delivery always leaves its pull
-    request open; without a number the state is unknown rather than stale.
+    A delivery always leaves its pull request open. A caller that does not report the number keeps the known one
+    for the same review URL; for a new URL the number is unknown, not stale.
     """
     try:
         conn.execute("BEGIN IMMEDIATE", ())
@@ -1117,6 +1116,8 @@ def record_delivery(
         )
         if binding is None and same_target:
             binding = current["delivery_binding"]
+        if pull_request_number is None and reference == current["delivery_reference"]:
+            pull_request_number = current["pull_request_number"]
         if (
             revision is None
             and same_target
@@ -1132,7 +1133,7 @@ def record_delivery(
             "UPDATE generated_documents SET delivery_destination = ?, "
             "delivery_path = ?, delivery_reference = ?, "
             "delivery_content_revision = ?, delivery_target = ?, published_revision = ?, delivery_binding = ?, "
-            "revision_source_content_revision = ?, pull_request_number = ?, "
+            "pull_request_number = ?, "
             "pull_request_state = ?, pull_request_refreshed_at = ? "
             "WHERE id = ?",
             (
@@ -1143,7 +1144,6 @@ def record_delivery(
                 target,
                 revision,
                 binding,
-                content_revision,
                 pull_request_number,
                 None if pull_request_number is None else "open",
                 None if pull_request_number is None else _now(),

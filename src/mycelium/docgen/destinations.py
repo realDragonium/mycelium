@@ -49,6 +49,9 @@ class DeliveryDocument:
     delivered_path: str | None = None
     delivered_content_revision: str | None = None
     revision_source_content_revision: str | None = None
+    #: Every blob this document published. The base branch holding one of
+    #: them is Mycelium's own text, as after a later PR closed unmerged.
+    published_content_revisions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

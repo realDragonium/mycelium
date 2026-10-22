@@ -67,7 +67,7 @@ A published document can be edited on GitHub. A revision then starts from the
 GitHub text and keeps those edits (the run's `revision_base` is
 `destination`). If the document also has an unpublished revision here, the
 call is refused with an explanation. Relay it to the operator; do not choose
-for them.
+for them, and do not undo GitHub edits yourself.
 
 ## Not here
 
