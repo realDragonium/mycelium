@@ -53,7 +53,7 @@ from . import (
     draft_review_settings as review_settings,
 )
 from .docgen.schema import ManualDocument
-from .server import registry
+from .server import registry, runtime
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -876,7 +876,7 @@ def get_entity_positions(request: Request) -> Any:
     from fastapi.responses import FileResponse
     from fastapi.responses import JSONResponse as _JSON
 
-    path = server._baker().output_path()
+    path = runtime._baker().output_path()
     if not path.exists():
         return _JSON(
             status_code=404, content={"detail": "entity positions not baked yet"}
