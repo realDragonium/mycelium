@@ -21,7 +21,7 @@ from mycelium import (
 from mycelium import (
     draft_review_settings as settings,
 )
-from mycelium.server import runtime
+from mycelium.server import draft_application, runtime
 from test_backup import _seed_substrate
 from test_internal_draft_review import (
     _assessment,
@@ -1005,13 +1005,13 @@ def test_manual_application_checks_permission_after_waiting_for_write_lock(
     finally:
         auth.current_principal.reset(token)
     waiting = threading.Event()
-    original = server._identified_principal
+    original = draft_application._identified_principal
 
     def identified():
         waiting.set()
         return original()
 
-    monkeypatch.setattr(server, "_identified_principal", identified)
+    monkeypatch.setattr(draft_application, "_identified_principal", identified)
 
     def apply():
         token = _principal()

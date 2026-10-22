@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store
-from mycelium.server import authoring, runtime
+from mycelium.server import authoring, draft_application, runtime
 
 
 @contextmanager
@@ -516,7 +516,7 @@ def test_failure_before_substrate_commit_is_durable(tmp_path, monkeypatch):
         token = _principal()
         review = _accepted_review(draft_id)
         monkeypatch.setattr(
-            server,
+            draft_application,
             "apply_draft",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 sqlite3.OperationalError("substrate commit failed")
@@ -565,7 +565,7 @@ def test_exception_after_substrate_commit_recovers_same_attempt(tmp_path, monkey
                 )
             raise KeyboardInterrupt("after commit")
 
-        monkeypatch.setattr(server, "apply_draft", commit_then_interrupt)
+        monkeypatch.setattr(draft_application, "apply_draft", commit_then_interrupt)
         try:
             result = server.apply_reviewed_draft(draft_id, review["review_id"])
         finally:

@@ -28,7 +28,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, plurals, server, store, vector
-from mycelium.server import runtime
+from mycelium.server import draft_application, runtime
 
 
 def _reset_server() -> None:
@@ -1113,7 +1113,7 @@ def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
     }
     results = {1: {"results": [{"statement_id": "stm_created"}]}}
 
-    assert server._resolve_draft_refs(payload, results) == {
+    assert draft_application._resolve_draft_refs(payload, results) == {
         "statements": [{"links": [{"to_id": "@2"}]}],
         "proposal": {"from_id": "stm_created"},
     }

@@ -144,6 +144,7 @@ module = [
     "mycelium.server.authoring",
     "mycelium.server.batch_planning",
     "mycelium.server.documentation",
+    "mycelium.server.draft_application",
     "mycelium.server.draft_queue",
     "mycelium.server.draft_review",
     "mycelium.server.drafts",
@@ -206,13 +207,6 @@ disable_error_code = ["assignment", "call-overload", "index"]
 [[tool.mypy.overrides]]
 module = "mycelium.docgen.loop"
 disable_error_code = ["func-returns-value"]
-
-# Reviewed-application receipts splice untyped JSON (apply_draft's result,
-# stored result_json) into the ReviewedApplicationReceipt TypedDict. Unblocked
-# by giving apply_draft a typed result, which belongs with the tool-surface cut.
-[[tool.mypy.overrides]]
-module = "mycelium.server"
-disable_error_code = ["typeddict-item"]
 
 [tool.ruff]
 line-length = 88

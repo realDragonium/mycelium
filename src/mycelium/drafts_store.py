@@ -752,7 +752,7 @@ def finish_application(
     application_id: str,
     *,
     status: str,
-    result: dict | None = None,
+    result: Mapping[str, object] | None = None,
     failure: str | None = None,
 ) -> None:
     conn.execute(

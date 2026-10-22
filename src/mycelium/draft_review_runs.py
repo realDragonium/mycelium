@@ -335,13 +335,15 @@ def _save(run: ReviewRun) -> None:
 def _failed(run: ReviewRun, detail: str) -> None:
     run.status = "failed"
     run.detail = detail
-    from . import server  # local import: reconcile the separate substrate receipt
+    from .server import (
+        draft_application,  # local import: reconcile the separate substrate receipt
+    )
 
     draft_review_store.reconcile(
         drafts_store.connection(),
         run,
         lambda application_id: (
-            server._substrate_application_result(application_id) is not None
+            draft_application._substrate_application_result(application_id) is not None
         ),
     )
     run.finished_at = timestamps.now()
@@ -596,6 +598,7 @@ def _finish(
     reads: list[Read],
 ) -> None:
     from . import server  # local import: server registers the review tools
+    from .server import draft_application
 
     with store.write_lock():
         _validate_snapshot(inspection, reads)
@@ -612,7 +615,7 @@ def _finish(
             run.detail = "Advisory assessment only; automatic action disabled by mode or changed settings."
             return
         _mutation_authority(run, inspection, settings)
-        if not server._reviewed_apply_enabled():
+        if not draft_application._reviewed_apply_enabled():
             run.detail = "Reviewed application gate is disabled; no automatic changes."
             return
         if run.label == "needs_context":
@@ -713,14 +716,16 @@ def _follow_up(
     # failure was the model provider's rather than the draft's. A run that
     # already recorded its review failed while applying, which
     # apply_reviewed_draft recovers.
-    from . import server  # local import: server registers the review tools
+    from .server import (
+        draft_application,
+    )  # local import: loading it loads the server package
 
     if (
         run.mode != "review-and-apply"
         or mode() != "review-and-apply"
         or run.review_id is not None
         or run.application != "unapplied"
-        or not server._reviewed_apply_enabled()
+        or not draft_application._reviewed_apply_enabled()
     ):
         return
     try:
