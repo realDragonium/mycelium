@@ -2,7 +2,8 @@
 // with a context panel that shows the affected target plus 1–2 hops of
 // neighbors so the reviewer can judge whether the change reads correctly.
 import { useState as useStateAct, useEffect as useEffectAct, useMemo as useMemoAct } from 'react';
-import { SearchIcon, useRouter } from './components';
+import { I, PageHeader } from './lib';
+import { useRouter } from './router';
 import { substrate } from './data';
 
 const PAGE_SIZE = 50;
@@ -67,24 +68,17 @@ function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '
 
   return (
     <main className="page activity-page">
-      <div className="crumbs">
-        <a href="#" onClick={(e) => { e.preventDefault(); router.go({ view: 'landing' }); }}>~</a>
-        <span className="sep">/</span>
-        <span>activity</span>
-      </div>
-
-      <header className="results-head" style={{marginTop:8}}>
-        <h1>activity <span className="qct">{state.total} events{hasFilters ? ' (filtered)' : ''}</span></h1>
-        <div className="results-tabs">
-          <button disabled={page <= 1} onClick={() => router.go({ view: 'activity', page: page - 1, ops, kinds, q })}>← prev</button>
-          <span style={{fontFamily:'var(--mono)', fontSize:11, color:'var(--ink-3)', padding:'0 8px'}}>page {page} / {totalPages}</span>
-          <button disabled={page >= totalPages} onClick={() => router.go({ view: 'activity', page: page + 1, ops, kinds, q })}>next →</button>
-        </div>
-      </header>
+      <PageHeader eyebrow="Curate" title="Activity"
+        blurb={<>Every change to the knowledge base, newest first. Select an event to see what it touched in context. {state.total} event{state.total === 1 ? '' : 's'}{hasFilters ? ' match these filters' : ''}.</>}
+        actions={<div className="pager">
+          <button className="btn ghost sm" disabled={page <= 1} onClick={() => router.go({ view: 'activity', page: page - 1, ops, kinds, q, selected: null })}>← Newer</button>
+          <span className="mono small muted">page {page} / {totalPages}</span>
+          <button className="btn ghost sm" disabled={page >= totalPages} onClick={() => router.go({ view: 'activity', page: page + 1, ops, kinds, q, selected: null })}>Older →</button>
+        </div>} />
 
       <div className="activity-filters">
         <form onSubmit={submitQ} className="activity-search">
-          <SearchIcon size={14} />
+          <I.find width={14} height={14} />
           <input
             type="text"
             value={qDraft}
@@ -123,7 +117,7 @@ function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '
         )}
       </div>
 
-      <div className="activity-layout">
+      <div className={`activity-layout${selectedEvent ? ' has-context' : ''}`}>
         <div className="activity-list">
           {state.loading && <div className="muted" style={{padding:'12px 0'}}>loading…</div>}
           {state.error && <div className="muted" style={{padding:'12px 0', color:'var(--danger, #d04848)'}}>error: {state.error}</div>}
@@ -139,18 +133,14 @@ function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '
             />
           )}
         </div>
-        <aside className="activity-context">
-          {selectedEvent ? (
+        {selectedEvent && (
+          <aside className="activity-context">
             <ActivityContextPanel
               event={selectedEvent}
-              onClose={() => router.go({ view: 'activity', page, ops, kinds, q })}
+              onClose={() => router.go({ view: 'activity', page, ops, kinds, q, selected: null })}
             />
-          ) : (
-            <div className="muted" style={{padding:'14px 4px', fontFamily:'var(--mono)', fontSize:11}}>
-              select an event to see its context.
-            </div>
-          )}
-        </aside>
+          </aside>
+        )}
       </div>
     </main>
   );

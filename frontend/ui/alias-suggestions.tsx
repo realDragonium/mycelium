@@ -1,5 +1,4 @@
 import React from 'react';
-import type { CSSProperties } from 'react';
 
 function AliasSuggestions({ canWrite, onChanged }) {
   const [entries, setEntries] = React.useState([]);
@@ -13,7 +12,6 @@ function AliasSuggestions({ canWrite, onChanged }) {
   const [error, setError] = React.useState(null);
   const [notice, setNotice] = React.useState(null);
   const [skipped, setSkipped] = React.useState([]);
-  const field: CSSProperties = { width: '100%', minWidth: 0, padding: 8, boxSizing: 'border-box', background: 'var(--surface-2, var(--paper))', color: 'var(--ink)', border: '1px solid var(--rule, var(--line))', borderRadius: 4 };
   const request = async (url: string, options?: RequestInit) => {
     const response = await fetch(url, options);
     const value = await response.json();
@@ -56,29 +54,29 @@ function AliasSuggestions({ canWrite, onChanged }) {
     const value = await request('/api/names-workspace');
     setConcepts(value.entities);
   });
-  return <section aria-label="Alias suggestions" style={{ color: 'var(--ink)', overflowWrap: 'anywhere' }}>
+  return <section aria-label="Alias suggestions" className="alias-suggestions">
     <p>AI suggests names that may identify an existing concept. A human writer must accept each suggestion, even when automatic draft review is enabled. Acceptance adds only this alias.</p>
     {error && <p role="alert">{error} <button disabled={busy} onClick={() => act(reload)}>Reload suggestions</button></p>}
     {notice && <p role="status">{notice}</p>}
     {skipped.length > 0 && <div role="status"><p>{skipped.length} suggestion{skipped.length === 1 ? ' was' : 's were'} skipped:</p><ul>{skipped.map((item, index) => <li key={index}>“{item.proposal.alias}”: {item.reason}</li>)}</ul></div>}
     {canWrite && <details><summary>Discover aliases in existing statements</summary>
       <p>Select up to 50 statements. Discovery uses the independent Alias discovery model configured in AI settings.</p>
-      <form onSubmit={search} style={{ display: 'flex', gap: 8 }}><input style={field} aria-label="Find statements for alias discovery" value={query} onChange={event => setQuery(event.target.value)} required /><button disabled={busy}>Search statements</button></form>
-      <ul style={{ paddingLeft: 20 }}>{matches.map(item => <li key={item.id}><label><input type="checkbox" checked={selected.some(chosen => chosen.id === item.id)} disabled={busy || (selected.length >= 50 && !selected.some(chosen => chosen.id === item.id))} onChange={event => setSelected(current => event.target.checked ? [...current, { id: item.id, text: item.text }] : current.filter(chosen => chosen.id !== item.id))} /> {item.text}</label></li>)}</ul>
+      <form onSubmit={search} className="row gap-sm"><input className="input" aria-label="Find statements for alias discovery" value={query} onChange={event => setQuery(event.target.value)} required /><button disabled={busy}>Search statements</button></form>
+      <ul className="names-examples">{matches.map(item => <li key={item.id}><label><input type="checkbox" checked={selected.some(chosen => chosen.id === item.id)} disabled={busy || (selected.length >= 50 && !selected.some(chosen => chosen.id === item.id))} onChange={event => setSelected(current => event.target.checked ? [...current, { id: item.id, text: item.text }] : current.filter(chosen => chosen.id !== item.id))} /> {item.text}</label></li>)}</ul>
       {selected.length > 0 && <><p>{selected.length} statement{selected.length === 1 ? '' : 's'} selected across searches.</p><ul>{selected.map(item => <li key={item.id}>{item.text} <button disabled={busy} onClick={() => setSelected(current => current.filter(chosen => chosen.id !== item.id))}>Remove selection</button></li>)}</ul></>}
       <button disabled={busy || !selected.length} onClick={scan}>{busy ? 'Working…' : 'Discover alias suggestions'}</button>
     </details>}
-    <label style={{ display: 'block', margin: '20px 0' }}>Show <select aria-label="Alias suggestion status" disabled={busy} value={status} onChange={event => setStatus(event.target.value)}><option value="pending">Needs human review</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option><option value="all">All suggestions</option></select></label>
+    <label>Show <select className="input" aria-label="Alias suggestion status" disabled={busy} value={status} onChange={event => setStatus(event.target.value)}><option value="pending">Needs human review</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option><option value="all">All suggestions</option></select></label>
     {!entries.length && <p>No {status === 'all' ? '' : status} alias suggestions.</p>}
     {entries.map(entry => {
       const suggestion = entry.suggestion;
       const proposal = suggestion.proposal;
       const actionable = canWrite && suggestion.status === 'pending' && ['open', 'submitted'].includes(entry.draft_status);
-      return <article key={entry.operation_ref} style={{ padding: 16, marginBottom: 16, border: '1px solid var(--rule, var(--line))', borderRadius: 6 }}>
-        <h3 style={{ marginTop: 0 }}>“{proposal.alias}” → {entry.current_names.join(' / ') || proposal.entity_id}</h3>
+      return <article key={entry.operation_ref} className="names-panel">
+        <h3>“{proposal.alias}” → {entry.current_names.join(' / ') || proposal.entity_id}</h3>
         <p>{suggestion.status === 'pending' ? 'Needs human review' : suggestion.status} · <a href={`/cockpit/#/draft/${entry.draft_id}`}>{entry.draft_title || entry.draft_id}</a> · Draft {entry.draft_status}</p>
         <blockquote>{suggestion.evidence.quote}</blockquote>
-        {suggestion.evidence.text !== suggestion.evidence.quote && <details><summary>Read source context</summary><p style={{ whiteSpace: 'pre-wrap' }}>{suggestion.evidence.text}</p></details>}
+        {suggestion.evidence.text !== suggestion.evidence.quote && <details><summary>Read source context</summary><p className="pre-wrap">{suggestion.evidence.text}</p></details>}
         {suggestion.evidence.statement_id && <p>Source statement: {suggestion.evidence.statement_id}</p>}
         <p>{proposal.reason}</p>
         {suggestion.original_proposal.entity_id !== proposal.entity_id && <p>The AI originally suggested concept {suggestion.original_proposal.entity_id}. A human changed the target; the source evidence and original recommendation remain recorded.</p>}
@@ -87,9 +85,9 @@ function AliasSuggestions({ canWrite, onChanged }) {
         {entry.examples.length > 0 && <details><summary>Statements using this name</summary><ul>{entry.examples.map(item => <li key={item.statement_id}>{item.text}</li>)}</ul></details>}
         {entry.acceptance_committed && suggestion.status === 'pending' && <p>The alias was accepted but its draft decision was interrupted. Recover the recorded decision; this will not recreate a subsequently removed name.</p>}
         {entry.stale && !entry.acceptance_committed && suggestion.status === 'pending' && <p>Names or supporting evidence changed since this suggestion was prepared. Inspect the current names and source before refreshing. Changed source statements require a new scan.</p>}
-        {actionable && <fieldset disabled={busy} style={{ border: 0, padding: 0, marginTop: 12 }}>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}><button onClick={() => review(entry, 'accept')} disabled={entry.stale && !entry.acceptance_committed}>{entry.acceptance_committed ? 'Recover accepted decision' : 'Accept alias'}</button><button onClick={() => review(entry, 'reject')}>Reject suggestion</button>{entry.stale && !entry.acceptance_committed && <button onClick={() => review(entry, 'refresh')}>Refresh after inspection</button>}</div>
-          <details style={{ marginTop: 12 }}><summary onClick={() => { if (!concepts.length) loadConcepts(); }}>Assign to a different concept</summary><label>Target concept<select aria-label={`Target concept for ${proposal.alias}`} style={field} value={targets[entry.operation_ref] || ''} onChange={event => setTargets(current => ({ ...current, [entry.operation_ref]: event.target.value }))}><option value="">Choose a concept</option>{concepts.map(item => <option key={item.id} value={item.id}>{item.label || item.names.map(name => name.text).join(' / ') || item.id}</option>)}</select></label><button disabled={!targets[entry.operation_ref]} onClick={() => review(entry, 'retarget')}>Change target for review</button></details>
+        {actionable && <fieldset disabled={busy}>
+          <div className="row gap-sm wrap"><button onClick={() => review(entry, 'accept')} disabled={entry.stale && !entry.acceptance_committed}>{entry.acceptance_committed ? 'Recover accepted decision' : 'Accept alias'}</button><button onClick={() => review(entry, 'reject')}>Reject suggestion</button>{entry.stale && !entry.acceptance_committed && <button onClick={() => review(entry, 'refresh')}>Refresh after inspection</button>}</div>
+          <details className="disclosure"><summary onClick={() => { if (!concepts.length) loadConcepts(); }}>Assign to a different concept</summary><label>Target concept<select aria-label={`Target concept for ${proposal.alias}`} className="input" value={targets[entry.operation_ref] || ''} onChange={event => setTargets(current => ({ ...current, [entry.operation_ref]: event.target.value }))}><option value="">Choose a concept</option>{concepts.map(item => <option key={item.id} value={item.id}>{item.label || item.names.map(name => name.text).join(' / ') || item.id}</option>)}</select></label><button disabled={!targets[entry.operation_ref]} onClick={() => review(entry, 'retarget')}>Change target for review</button></details>
         </fieldset>}
         {!!suggestion.history.length && <details><summary>Decision history</summary><ul>{suggestion.history.map((item, index) => <li key={index}>{item.action} · {item.actor_id} · {item.at} · {item.entity_id}</li>)}</ul></details>}
       </article>;

@@ -1,27 +1,4 @@
 {
-  "cockpit/app.tsx": {
-    "react-hooks/immutability": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
-  "cockpit/ask.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "cockpit/find.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "cockpit/gaps.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "cockpit/tweaks-panel.tsx": {
     "react-hooks/refs": {
       "count": 4
@@ -35,21 +12,8 @@
       "count": 2
     }
   },
-  "ui/ai-settings.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
   "ui/alias-suggestions.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "ui/app.tsx": {
-    "no-useless-assignment": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
       "count": 1
     }
   },
@@ -58,14 +22,9 @@
       "count": 1
     }
   },
-  "ui/documentation-profiles.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
   "ui/documentation-workspace.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 5
+      "count": 4
     }
   },
   "ui/drafts.tsx": {
@@ -86,11 +45,6 @@
       "count": 1
     }
   },
-  "ui/github-connection.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
   "ui/glossary.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
@@ -109,21 +63,11 @@
       "count": 3
     }
   },
-  "ui/product-settings.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "ui/screens.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
     },
     "react-hooks/static-components": {
-      "count": 2
-    }
-  },
-  "ui/settings.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 2
     }
   },

@@ -1,260 +1,280 @@
-import React from 'react';
-import { AIInstructions, DocumentationProfiles } from './documentation-profiles';
-import { ProductSettings } from './product-settings';
-import type { CSSProperties } from 'react';
+// Model choice per AI action, and the automatic draft review.
+import { useCallback, useState, type FormEvent } from 'react';
+import { Card, LoadError, Loading, Notice } from './lib';
+import { HttpError, errorMessage, getJSON, patchJSON, postJSON } from './api';
+import { useAsync } from './use-async';
 
-function ReasoningEffortField({ provider, value, onChange, label = 'Reasoning effort', style }) {
-  const levels = provider === 'claude' ? ['low', 'medium', 'high', 'xhigh', 'max'] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
-  return <label style={{ display: 'grid', gap: 6, minWidth: 0 }}>{label}
-    <select aria-label={label} style={style} value={value ?? ''} onChange={event => onChange(event.target.value || null)}>
-      <option value="">Model default</option>
-      {levels.map(level => <option key={level} value={level}>{level === 'xhigh' ? 'Extra high' : level[0].toUpperCase() + level.slice(1)}</option>)}
-    </select>
-    <span>Supported levels depend on the model. Higher effort can use more tokens and time; existing limits still apply.</span>
-  </label>;
-}
+type Provider = 'claude' | 'openai';
+type Effort = string | null;
+interface ProviderStatus { provider: Provider; available: boolean; reason?: string | null }
 
-function draftReviewProviderName(provider) {
+export function draftReviewProviderName(provider: string | null | undefined): string {
   return provider === 'claude' ? 'Claude' : provider === 'openai' ? 'GPT (OpenAI)' : 'Unknown provider';
 }
 
-function DraftReviewSettings() {
-  const [settings, setSettings] = React.useState(null);
-  const [form, setForm] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  const [saved, setSaved] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-  const [conflict, setConflict] = React.useState(false);
-  const [accountName, setAccountName] = React.useState('');
-
-  const accept = data => {
-    setSettings(data);
-    setForm({ application_enabled: data.application_enabled, mode: data.mode, provider: data.provider, model: data.model, reasoning_effort: data[data.provider === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort'] ?? null, reviewer_id: data.reviewer_id, revision: data.revision, model_revision: data.model_revision });
-  };
-  const reload = React.useCallback(async () => {
-    setBusy(true); setError(null); setSaved(false);
-    try {
-      const response = await fetch('/api/draft-review/settings');
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || 'Review settings could not be loaded.');
-      accept(data); setConflict(false);
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  }, []);
-  React.useEffect(() => { reload(); }, [reload]);
-
-  const change = (key, value) => {
-    setForm(current => ({ ...current, [key]: value }));
-    setSaved(false);
-  };
-  const save = async event => {
-    event.preventDefault();
-    setBusy(true); setError(null); setSaved(false);
-    try {
-      const response = await fetch('/api/draft-review/settings', {
-        method: 'PATCH', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...form, model: form.model.trim() }),
-      });
-      const data = await response.json();
-      if (response.status === 409) {
-        setConflict(true);
-        throw new Error('Another administrator changed these settings. Reload the current settings before saving again.');
-      }
-      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Review settings could not be saved.');
-      accept(data); setSaved(true);
-      window.dispatchEvent(new Event('draft-review-settings-changed'));
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-
-  const createReviewer = async () => {
-    setBusy(true); setError(null); setSaved(false);
-    try {
-      const response = await fetch('/api/admin/users', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: accountName.trim(), role: 'writer', type: 'service' }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Reviewer account could not be created.');
-      setSettings(current => ({ ...current, reviewers: [...current.reviewers, data.user] }));
-      setForm(current => ({ ...current, reviewer_id: data.user.id }));
-      setAccountName('');
-    } catch (e) { setError(e.message); }
-    finally { setBusy(false); }
-  };
-
-  const selectedProvider = settings?.providers.find(item => item.provider === form?.provider);
-  const reviewerExists = settings?.reviewers.some(item => item.id === form?.reviewer_id);
-  const incomplete = form?.mode !== 'off' && (!form?.model.trim() || !reviewerExists || !selectedProvider?.available);
-  const buttonStyle: CSSProperties = { padding: '8px 14px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))' };
-  const fieldStyle: CSSProperties = { display: 'grid', gap: 6, minWidth: 0 };
-  const inputStyle: CSSProperties = { width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '8px 10px', fontSize: 13, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))', border: '1px solid var(--rule, var(--line))', borderRadius: 4 };
-  const body = <div style={{ marginTop: 14 }}>
-    {error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p>}
-    {!settings && !error && <p>Loading review settings…</p>}
-    {settings && <>
-      <p style={{ marginTop: 0 }}>
-        Current: {settings.mode === 'off' ? 'Off' : settings.mode === 'review-only' ? 'Review only' : 'Review and apply'}
-        {' · '}{draftReviewProviderName(settings.provider)}{settings.model ? ` · ${settings.model}` : ' · No model configured'}.
-        {' · Effort: '}{settings.reasoning_effort ?? 'Model default'}.
-        {' '}{settings.source === 'saved' ? 'Saved in Mycelium.' : 'Using built-in defaults.'}
-      </p>
-      {settings.issues.length > 0 && <ul style={{ paddingLeft: 20 }}>{settings.issues.map(issue => <li key={issue}>{issue}</li>)}</ul>}
-      <p>Applying accepted reviews is {settings.application_enabled ? 'enabled' : 'disabled'}. This permission covers manual curator application and automatic application.</p>
-      {settings.can_configure ? <form onSubmit={save}>
-        <fieldset disabled={busy || conflict} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-          <label style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-            <input type="checkbox" checked={form.application_enabled} onChange={event => change('application_enabled', event.target.checked)} />
-            Allow applying accepted reviews
-          </label>
-          <p>Automatic application also requires Review and apply mode. This permission can be enabled while automatic reviews are Off.</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
-            <label style={fieldStyle}>Review mode
-              <select aria-label="Review mode" style={inputStyle} value={form.mode} onChange={event => change('mode', event.target.value)}>
-                <option value="off">Off</option><option value="review-only">Review only</option><option value="review-and-apply">Review and apply</option>
-              </select>
-            </label>
-            <label style={fieldStyle}>Provider
-              <select aria-label="Provider" style={inputStyle} value={form.provider} onChange={event => { setForm(current => ({ ...current, provider: event.target.value, model: settings[event.target.value === 'claude' ? 'claude_model' : 'openai_model'], reasoning_effort: settings[event.target.value === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort'] ?? null })); setSaved(false); }}>
-                <option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option>
-              </select>
-            </label>
-            <label style={fieldStyle}>Model ID
-              <input style={inputStyle} value={form.model} onChange={event => change('model', event.target.value)} placeholder="Enter a model ID for this provider" required={form.mode !== 'off'} />
-            </label>
-            <ReasoningEffortField provider={form.provider} value={form.reasoning_effort} onChange={value => change('reasoning_effort', value)} label="Draft review reasoning effort" style={inputStyle} />
-            <label style={fieldStyle}>Reviewer account
-              <select aria-label="Reviewer account" style={inputStyle} value={form.reviewer_id} onChange={event => change('reviewer_id', event.target.value)} required={form.mode !== 'off'}>
-                <option value="">Select an active writer or administrator</option>
-                {form.reviewer_id && !reviewerExists && <option value={form.reviewer_id}>Unavailable account ({form.reviewer_id})</option>}
-                {settings.reviewers.map(user => <option key={user.id} value={user.id}>{user.name} ({user.role})</option>)}
-              </select>
-            </label>
-          </div>
-          <p>{selectedProvider?.available ? 'Provider credentials are configured on the server. Model access is checked when a review runs.' : selectedProvider?.reason || 'This provider has no server credentials configured.'} API credentials are never stored in this form.</p>
-          <p>The reviewer must be a stored, active writer or administrator, including when authentication is disabled.</p>
-          <details style={{ marginBottom: 16 }}><summary style={{ cursor: 'pointer' }}>Create a reviewer account</summary>
-            <p>Create a service account with writer permissions for internal reviews. No access token is needed.</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'end', gap: 8 }}>
-              <label style={{ ...fieldStyle, flex: '1 1 200px' }}>Account name
-                <input style={inputStyle} value={accountName} maxLength={80} onChange={event => setAccountName(event.target.value)} />
-              </label>
-              <button type="button" onClick={createReviewer} disabled={!accountName.trim()} style={buttonStyle}>Create account</button>
-            </div>
-            <p>The account is created immediately. Save review settings to use it.</p>
-          </details>
-          <p>Saving changes affects new submissions and reruns. Reviews already running can finish, but cannot apply automatically after the settings change. Run them again to use the new settings.</p>
-          {incomplete && <p>Choose a model, a reviewer account, and a provider with server credentials before enabling reviews. You can always save Off.</p>}
-          <button type="submit" disabled={incomplete} style={{ ...buttonStyle, fontWeight: 600, opacity: incomplete ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save review settings'}</button>
-        </fieldset>
-      </form> : <p>Only administrators can change these settings. Writers can still run or rerun draft reviews.</p>}
-      {saved && <p role="status">Review settings saved.</p>}
-    </>}
-    <button type="button" onClick={reload} disabled={busy} style={{ ...buttonStyle, marginTop: 12 }}>Reload current settings</button>
-  </div>;
-  const style: CSSProperties = { padding: '18px 20px', marginBottom: 24, border: '1px solid var(--rule, var(--line))', borderRadius: 6, fontSize: 13, lineHeight: 1.5, color: 'var(--ink-3)', overflowWrap: 'anywhere' };
-  return <section aria-label="Draft review settings" style={style}><h2 style={{ margin: 0, color: 'var(--ink)', fontSize: 16 }}>Draft review settings</h2>{body}</section>;
+function ReasoningEffortField({ provider, value, onChange, label = 'Reasoning effort' }: {
+  provider: Provider; value: Effort; onChange: (value: Effort) => void; label?: string;
+}) {
+  const levels = provider === 'claude' ? ['low', 'medium', 'high', 'xhigh', 'max'] : ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <select className="input" value={value ?? ''} onChange={e => onChange(e.target.value || null)}>
+        <option value="">Model default</option>
+        {levels.map(l => <option key={l} value={l}>{l === 'xhigh' ? 'Extra high' : l[0].toUpperCase() + l.slice(1)}</option>)}
+      </select>
+      <span className="hint">Supported levels depend on the model. Higher effort can use more tokens and time; limits still apply.</span>
+    </label>
+  );
 }
 
-function ActionModelSettings({ settings, canConfigure }) {
-  const [current, setCurrent] = React.useState(settings);
-  const [form, setForm] = React.useState({ provider: settings.provider, claude_model: settings.claude_model, openai_model: settings.openai_model, claude_reasoning_effort: settings.claude_reasoning_effort ?? null, openai_reasoning_effort: settings.openai_reasoning_effort ?? null, revision: settings.revision });
-  const [error, setError] = React.useState(null);
-  const [saved, setSaved] = React.useState(false);
-  const [busy, setBusy] = React.useState(false);
-  const [conflict, setConflict] = React.useState(false);
-  const titles = { ask: 'Questions', ingest: 'Ingestion', research: 'Research', docgen: 'Document generation', alias_discovery: 'Alias discovery' };
-  const title = titles[settings.action];
-  const effortKey = form.provider === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort';
-  const modelKey = form.provider === 'claude' ? 'claude_model' : 'openai_model';
-  const selectedProvider = current.providers.find(item => item.provider === form.provider);
-  const accept = value => {
-    setCurrent(value);
-    setForm({ provider: value.provider, claude_model: value.claude_model, openai_model: value.openai_model, claude_reasoning_effort: value.claude_reasoning_effort ?? null, openai_reasoning_effort: value.openai_reasoning_effort ?? null, revision: value.revision });
-  };
+const ProviderSelect = ({ value, onChange, label }: { value: Provider; onChange: (p: Provider) => void; label: string }) => (
+  <label className="field"><span>{label}</span>
+    <select className="input" value={value} onChange={e => onChange(e.target.value === 'openai' ? 'openai' : 'claude')}>
+      <option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option>
+    </select>
+  </label>
+);
+
+// Settings saves are optimistic-locked by revision: a 409 means someone else
+// saved first, and the form must be reloaded before it can save again.
+function saveError(e: unknown, what: string): { message: string; conflict: boolean } {
+  if (e instanceof HttpError && e.status === 409) return { message: `Someone else changed ${what}. Reload the current values before saving again.`, conflict: true };
+  return { message: errorMessage(e, `${what} could not be saved.`), conflict: false };
+}
+
+/* ============================ per-action models ============================ */
+interface ActionSettings {
+  action: string; provider: Provider; model: string; source: string; revision: number | string;
+  claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
+  configuration_error?: string | null; providers: ProviderStatus[];
+}
+interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
+const ACTION_TITLES: Record<string, string> = { ask: 'Questions (Ask)', ingest: 'Ingestion', research: 'Research', docgen: 'Document generation', alias_discovery: 'Alias discovery' };
+
+function formOf(s: ActionSettings) {
+  return { provider: s.provider, claude_model: s.claude_model, openai_model: s.openai_model, claude_reasoning_effort: s.claude_reasoning_effort ?? null, openai_reasoning_effort: s.openai_reasoning_effort ?? null, revision: s.revision };
+}
+
+function ActionModelSettings({ settings, canConfigure }: { settings: ActionSettings; canConfigure: boolean }) {
+  const [current, setCurrent] = useState(settings);
+  const [form, setForm] = useState(() => formOf(settings));
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const title = ACTION_TITLES[settings.action] || settings.action;
+  const claude = form.provider === 'claude';
+  const model = claude ? form.claude_model : form.openai_model;
+  const effort = claude ? form.claude_reasoning_effort : form.openai_reasoning_effort;
+  const available = current.providers.find(p => p.provider === form.provider);
+  const accept = (value: ActionSettings) => { setCurrent(value); setForm(formOf(value)); };
+  const edit = (patch: Partial<ReturnType<typeof formOf>>) => { setForm(f => ({ ...f, ...patch })); setSaved(false); };
+
   const reload = async () => {
     setBusy(true); setError(null); setSaved(false);
     try {
-      const response = await fetch('/api/model-settings');
-      const data = await response.json();
-      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'AI settings could not be loaded.');
-      const value = data.actions.find(item => item.action === settings.action);
+      const data = await getJSON<ModelSettings>('/api/model-settings');
+      const value = data.actions.find(a => a.action === settings.action);
       if (!value) throw new Error('These model settings are unavailable.');
       accept(value); setConflict(false);
-    } catch (e) { setError(e.message); }
+    } catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
-  const save = async event => {
-    event.preventDefault(); setBusy(true); setError(null); setSaved(false);
+  const save = async (e: FormEvent) => {
+    e.preventDefault(); setBusy(true); setError(null); setSaved(false);
     try {
-      const response = await fetch(`/api/model-settings/${settings.action}`, {
-        method: 'PATCH', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...form, claude_model: form.claude_model.trim(), openai_model: form.openai_model.trim() }),
-      });
-      const data = await response.json();
-      if (response.status === 409) {
-        setConflict(true);
-        throw new Error('Another administrator changed this action. Reload its current settings before saving again.');
-      }
-      if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Model settings could not be saved.');
-      accept(data); setSaved(true);
-    } catch (e) { setError(e.message); }
+      accept(await patchJSON<ActionSettings>(`/api/model-settings/${settings.action}`, { ...form, claude_model: form.claude_model.trim(), openai_model: form.openai_model.trim() }));
+      setSaved(true);
+    } catch (ex) { const r = saveError(ex, `the ${title.toLowerCase()} model`); setError(r.message); setConflict(r.conflict); }
     finally { setBusy(false); }
   };
-  const fieldStyle: CSSProperties = { display: 'grid', gap: 6, minWidth: 0 };
-  const inputStyle: CSSProperties = { minWidth: 0, width: '100%', boxSizing: 'border-box', padding: '8px 10px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)', background: 'var(--surface-2, var(--paper))' };
-  const buttonStyle: CSSProperties = { padding: '8px 14px', border: '1px solid var(--rule, var(--line))', borderRadius: 4, color: 'var(--ink)' };
-  return <section aria-label={`${title} model settings`} style={{ padding: '18px 20px', marginBottom: 16, border: '1px solid var(--rule, var(--line))', borderRadius: 6, color: 'var(--ink-3)', fontSize: 13, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
-    <h2 style={{ margin: 0, fontSize: 16, color: 'var(--ink)' }}>{title}</h2>
-    <p>Current: {draftReviewProviderName(current.provider)} · {current.model || 'No model configured'}.
-      {' · Effort: '}{current[current.provider === 'claude' ? 'claude_reasoning_effort' : 'openai_reasoning_effort'] ?? 'Model default'}.
-      {' '}{current.source === 'saved' ? 'Saved in Mycelium.' : 'Using built-in defaults.'}
-    </p>
-    {settings.action === 'docgen' && <p>These are the model and effort defaults for new documents. Choosing a different provider in the generation screen uses its saved model and effort.</p>}
-    {current.configuration_error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{current.configuration_error} Save valid settings to enable this action.</p>}
-    {error && <p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p>}
-    {canConfigure ? <>
-      <form onSubmit={save}><fieldset disabled={busy || conflict} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 14 }}>
-          <label style={fieldStyle}>Provider<select aria-label={`${title} provider`} style={inputStyle} value={form.provider} onChange={event => { setForm(value => ({ ...value, provider: event.target.value })); setSaved(false); }}><option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option></select></label>
-          <label style={fieldStyle}>Model ID<input aria-label={`${title} model ID`} style={inputStyle} value={form[modelKey]} onChange={event => { setForm(value => ({ ...value, [modelKey]: event.target.value })); setSaved(false); }} placeholder="Enter a model ID for this provider" required /></label>
-          <ReasoningEffortField provider={form.provider} value={form[effortKey]} onChange={value => { setForm(current => ({ ...current, [effortKey]: value })); setSaved(false); }} label={`${title} reasoning effort`} style={inputStyle} />
-        </div>
-        <p>{selectedProvider?.available ? 'Provider credentials are configured on the server.' : selectedProvider?.reason || 'Provider credentials are unavailable.'}</p>
-        <button type="submit" disabled={!form[modelKey].trim()} style={{ ...buttonStyle, fontWeight: 600 }}>{busy ? 'Saving…' : `Save ${title.toLowerCase()} settings`}</button>
-      </fieldset></form>
-      {saved && <p role="status">{title} settings saved.</p>}
-      <button type="button" onClick={reload} disabled={busy} style={{ ...buttonStyle, marginTop: 10 }}>Reload {title.toLowerCase()} settings</button>
-    </> : <p>Only administrators can change this model.</p>}
-  </section>;
+
+  return (
+    <Card title={title} actions={<button type="button" className="btn ghost sm" onClick={() => void reload()} disabled={busy}>Reload</button>}>
+      <p className="muted">
+        Now: {draftReviewProviderName(current.provider)} · {current.model || 'no model configured'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'} · {current.source === 'saved' ? 'saved here' : 'built-in default'}
+      </p>
+      {settings.action === 'docgen' && <p className="hint">The default for new documents. Choosing another provider when generating uses that provider's saved model and effort.</p>}
+      {current.configuration_error && <Notice tone="error">{current.configuration_error} Save valid settings to enable this action.</Notice>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {canConfigure ? (
+        <form onSubmit={save}>
+          <fieldset disabled={busy || conflict}>
+            <div className="field-grid">
+              <ProviderSelect value={form.provider} onChange={provider => edit({ provider })} label="Provider" />
+              <label className="field"><span>Model ID</span>
+                <input className="input" required value={model} placeholder="A model ID for this provider" onChange={e => edit(claude ? { claude_model: e.target.value } : { openai_model: e.target.value })} />
+              </label>
+              <ReasoningEffortField provider={form.provider} value={effort} onChange={v => edit(claude ? { claude_reasoning_effort: v } : { openai_reasoning_effort: v })} />
+            </div>
+            <p className="hint">{available?.available ? 'Credentials for this provider are configured on the server.' : available?.reason || 'This provider has no credentials on the server.'}</p>
+            <div className="row gap-sm">
+              <button type="submit" className="btn primary" disabled={!model.trim()}>{busy ? 'Saving…' : 'Save'}</button>
+              {saved && <span className="ok-text small" role="status">Saved. New runs use it.</span>}
+            </div>
+          </fieldset>
+        </form>
+      ) : <p className="hint">Only administrators can change this model.</p>}
+    </Card>
+  );
 }
 
-function AISettings() {
-  const [data, setData] = React.useState(null);
-  const [error, setError] = React.useState(null);
-  const [retry, setRetry] = React.useState(0);
-  React.useEffect(() => {
-    let cancelled = false;
-    setError(null);
-    fetch('/api/model-settings').then(async response => {
-      const value = await response.json();
-      if (!response.ok) throw new Error(typeof value.detail === 'string' ? value.detail : 'AI settings could not be loaded.');
-      if (!cancelled) setData(value);
-    }).catch(e => { if (!cancelled) setError(e.message); });
-    return () => { cancelled = true; };
-  }, [retry]);
-  return <div>
-    <AIInstructions />
-    <p style={{ color: 'var(--ink-3)', fontSize: 13, lineHeight: 1.5 }}>Choose the provider and model for each action independently. Saved choices apply to new runs. API credentials stay on the server; model access is checked when a run starts.</p>
-    {error ? <div><p role="alert" style={{ color: 'var(--red, #dc2626)' }}>{error}</p><button onClick={() => setRetry(value => value + 1)}>Reload AI settings</button></div>
-      : !data ? <p>Loading AI settings…</p>
-      : data.actions.filter(action => action.action !== 'draft_review').map(action => <ActionModelSettings key={action.action} settings={action} canConfigure={data.can_configure} />)}
-    <DraftReviewSettings />
-    <ProductSettings />
-    <DocumentationProfiles />
-  </div>;
+export function ActionModels() {
+  const { state, reload } = useAsync(useCallback(() => getJSON<ModelSettings>('/api/model-settings'), []));
+  if (state.status === 'loading') return <Loading what="model settings" />;
+  if (state.status === 'error') return <LoadError error={state.error} what="model settings" onRetry={reload} />;
+  return <>
+    <p className="muted">Each action picks its provider and model independently. Saved choices apply to new runs. API credentials stay on the server; model access is checked when a run starts. The draft reviewer's model is under Draft review.</p>
+    {state.data.actions.filter(a => a.action !== 'draft_review').map(a => <ActionModelSettings key={a.action} settings={a} canConfigure={state.data.can_configure} />)}
+  </>;
 }
 
-export { AISettings, draftReviewProviderName };
+/* ============================ automatic draft review ============================ */
+type ReviewMode = 'off' | 'review-only' | 'review-and-apply';
+interface Reviewer { id: string; name: string; role: string }
+interface ReviewConfig {
+  mode: ReviewMode; application_enabled: boolean; provider: Provider; model: string; reasoning_effort?: Effort;
+  claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
+  reviewer_id: string; revision: number | string; model_revision: number | string;
+  source: string; issues: string[]; can_configure: boolean; providers: ProviderStatus[]; reviewers: Reviewer[];
+}
+interface ReviewForm { application_enabled: boolean; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; revision: number | string; model_revision: number | string }
 
-export { ActionModelSettings };
+function reviewForm(d: ReviewConfig): ReviewForm {
+  return {
+    application_enabled: d.application_enabled, mode: d.mode, provider: d.provider, model: d.model,
+    reasoning_effort: (d.provider === 'claude' ? d.claude_reasoning_effort : d.openai_reasoning_effort) ?? null,
+    reviewer_id: d.reviewer_id, revision: d.revision, model_revision: d.model_revision,
+  };
+}
+const MODE_LABEL: Record<ReviewMode, string> = { off: 'Off', 'review-only': 'Review only', 'review-and-apply': 'Review and apply' };
+
+export function DraftReviewSettings() {
+  const { state, reload } = useAsync(useCallback(() => getJSON<ReviewConfig>('/api/draft-review/settings'), []));
+  if (state.status === 'loading') return <Loading what="draft review settings" />;
+  if (state.status === 'error') return <LoadError error={state.error} what="draft review settings" onRetry={reload} />;
+  return <DraftReviewForm initial={state.data} onReload={reload} />;
+}
+
+// Drafts submitted while review was off are not reviewed retroactively. When
+// review is on, an admin is offered to review them once.
+function BacklogOffer() {
+  const load = useCallback(() => getJSON<{ draft_ids: string[] }>('/api/draft-review/backlog').then(r => r.draft_ids), []);
+  const { state, reload } = useAsync(load);
+  const [started, setStarted] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  if (started !== null) return <Notice tone="success">Started reviewing {started} waiting draft{started === 1 ? '' : 's'}. Their progress shows under Drafts.</Notice>;
+  if (state.status !== 'ready' || state.data.length === 0) return null;
+  const n = state.data.length;
+  const start = async () => {
+    setBusy(true); setError(null);
+    try { setStarted((await postJSON<{ draft_ids: string[] }>('/api/draft-review/backlog', {})).draft_ids.length); }
+    catch (e) { setError(errorMessage(e)); reload(); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Notice tone="warn">
+      <div className="stack-sm">
+        <div><b>{n} submitted draft{n === 1 ? ' is' : 's are'} waiting from before review was on.</b> They are not reviewed automatically; review them now under the current settings?</div>
+        <div className="row gap-sm"><button className="btn primary sm" disabled={busy} onClick={() => void start()}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}`}</button></div>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Notice>
+  );
+}
+
+function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReload: () => void }) {
+  const [settings, setSettings] = useState(initial);
+  const [form, setForm] = useState(() => reviewForm(initial));
+  const [reviewers, setReviewers] = useState(settings.reviewers);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [conflict, setConflict] = useState(false);
+  const [accountName, setAccountName] = useState('');
+  const [backlogCheck, setBacklogCheck] = useState(0);
+  const change = (patch: Partial<ReviewForm>) => { setForm(f => ({ ...f, ...patch })); setSaved(false); };
+
+  const provider = settings.providers.find(p => p.provider === form.provider);
+  const reviewerExists = reviewers.some(r => r.id === form.reviewer_id);
+  const incomplete = form.mode !== 'off' && (!form.model.trim() || !reviewerExists || !provider?.available);
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault(); setBusy(true); setError(null); setSaved(false);
+    try {
+      const value = await patchJSON<ReviewConfig>('/api/draft-review/settings', { ...form, model: form.model.trim() });
+      setSettings(value); setForm(reviewForm(value)); setSaved(true); setBacklogCheck(n => n + 1);
+      window.dispatchEvent(new Event('draft-review-settings-changed'));
+    } catch (ex) { const r = saveError(ex, 'the review settings'); setError(r.message); setConflict(r.conflict); }
+    finally { setBusy(false); }
+  };
+  const createReviewer = async () => {
+    setBusy(true); setError(null);
+    try {
+      const { user } = await postJSON<{ user: Reviewer }>('/api/admin/users', { name: accountName.trim(), role: 'writer', type: 'service' });
+      setReviewers(r => [...r, user]); change({ reviewer_id: user.id }); setAccountName('');
+    } catch (ex) { setError(errorMessage(ex, 'The reviewer account could not be created.')); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Card title="Automatic draft review" actions={<button type="button" className="btn ghost sm" onClick={onReload} disabled={busy}>Reload</button>}>
+      <p className="muted">
+        Now: {MODE_LABEL[settings.mode]} · {draftReviewProviderName(settings.provider)} · {settings.model || 'no model configured'} · effort {settings.reasoning_effort ?? 'model default'} · {settings.source === 'saved' ? 'saved here' : 'built-in defaults'}.
+        {' '}Applying accepted reviews is <b>{settings.application_enabled ? 'allowed' : 'not allowed'}</b>; that permission covers both a curator applying a review and automatic application.
+      </p>
+      {settings.can_configure && settings.mode !== 'off' && <BacklogOffer key={backlogCheck} />}
+      {settings.issues.length > 0 && <Notice tone="warn"><ul>{settings.issues.map(i => <li key={i}>{i}</li>)}</ul></Notice>}
+      {error && <Notice tone="error">{error}</Notice>}
+      {settings.can_configure ? (
+        <form onSubmit={save}>
+          <fieldset disabled={busy || conflict}>
+            <label className="check"><input type="checkbox" checked={form.application_enabled} onChange={e => change({ application_enabled: e.target.checked })} />Allow applying accepted reviews</label>
+            <p className="hint">Automatic application also needs Review and apply mode. The permission can be on while reviews are off.</p>
+            <div className="field-grid">
+              <label className="field"><span>Review mode</span>
+                <select className="input" value={form.mode} onChange={e => change({ mode: e.target.value as ReviewMode })}>
+                  {(Object.keys(MODE_LABEL) as ReviewMode[]).map(m => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
+                </select>
+              </label>
+              <ProviderSelect label="Provider" value={form.provider} onChange={p => change({
+                provider: p,
+                model: p === 'claude' ? settings.claude_model : settings.openai_model,
+                reasoning_effort: (p === 'claude' ? settings.claude_reasoning_effort : settings.openai_reasoning_effort) ?? null,
+              })} />
+              <label className="field"><span>Model ID</span>
+                <input className="input" value={form.model} placeholder="A model ID for this provider" required={form.mode !== 'off'} onChange={e => change({ model: e.target.value })} />
+              </label>
+              <ReasoningEffortField provider={form.provider} value={form.reasoning_effort} onChange={v => change({ reasoning_effort: v })} />
+              <label className="field"><span>Reviewer account</span>
+                <select className="input" value={form.reviewer_id} required={form.mode !== 'off'} onChange={e => change({ reviewer_id: e.target.value })}>
+                  <option value="">Select an active writer or administrator</option>
+                  {form.reviewer_id && !reviewerExists && <option value={form.reviewer_id}>Unavailable account ({form.reviewer_id})</option>}
+                  {reviewers.map(u => <option key={u.id} value={u.id}>{u.name} ({u.role})</option>)}
+                </select>
+                <span className="hint">The reviewer acts as a stored, active writer or administrator, also when authentication is off.</span>
+              </label>
+            </div>
+            <p className="hint">{provider?.available ? 'Provider credentials are configured on the server; model access is checked when a review runs.' : provider?.reason || 'This provider has no credentials on the server.'} API credentials are never stored in this form.</p>
+            <details className="disclosure">
+              <summary>Create a reviewer account</summary>
+              <p className="hint">A service account with the writer role for internal reviews. It needs no access token. Save the review settings afterwards to use it.</p>
+              <div className="row gap-sm">
+                <input className="input grow" aria-label="Reviewer account name" placeholder="Account name" value={accountName} maxLength={80} onChange={e => setAccountName(e.target.value)} />
+                <button type="button" className="btn" onClick={() => void createReviewer()} disabled={!accountName.trim()}>Create account</button>
+              </div>
+            </details>
+            <p className="hint">Changes apply to new submissions and reruns. Reviews already running can finish but will not apply automatically after a change.</p>
+            {incomplete && <Notice tone="warn">Choose a model, a reviewer account and a provider with server credentials before turning reviews on. Saving Off always works.</Notice>}
+            <div className="row gap-sm">
+              <button type="submit" className="btn primary" disabled={incomplete}>{busy ? 'Saving…' : 'Save review settings'}</button>
+              {saved && <span className="ok-text small" role="status">Saved.</span>}
+            </div>
+          </fieldset>
+        </form>
+      ) : <p className="hint">Only administrators can change these settings. Writers can still run or rerun reviews from a draft.</p>}
+    </Card>
+  );
+}

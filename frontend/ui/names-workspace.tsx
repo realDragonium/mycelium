@@ -1,5 +1,6 @@
 import React from 'react';
 import { AliasSuggestions } from './alias-suggestions';
+import { PageHeader } from './lib';
 
 async function namesRequest(path = '', body?: unknown, signal?: AbortSignal) {
   const response = await fetch('/api/names-workspace' + path, {
@@ -154,8 +155,8 @@ function NamesWorkspace({onDataChanged}) {
   const changed = (id?: string) => {if (id) setSelected(id); setRefresh(value => value + 1); setNotice('Change saved. Discovery is being recomputed.'); if (onDataChanged) onDataChanged().catch(() => setNotice('Change saved. Reload the page to refresh other views.'));};
   const filtered = (catalogue?.entities || []).filter(entity => (entity.label + ' ' + entity.description + ' ' + entity.names.map(name => name.text).join(' ')).toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   const Suggestions = AliasSuggestions;
-  return <main className="names-workspace"><h1>Names &amp; aliases</h1><p>Keep the names for each concept together. Statements keep their original wording.</p>
-    <nav aria-label="Names workspace"><button aria-pressed={tab === 'names'} onClick={() => setTab('names')}>Names</button>{Suggestions && <button aria-pressed={tab === 'suggestions'} onClick={() => setTab('suggestions')}>AI suggestions</button>}</nav>
+  return <main className="page names-workspace"><PageHeader eyebrow="Curate" title="Names & aliases" blurb="Keep every name for a concept together: add, correct, move or merge aliases, and decide AI alias suggestions. Statements keep their original wording; mentions follow the names." />
+    <nav className="tabs" aria-label="Names workspace"><button className={tab === 'names' ? 'on' : ''} aria-pressed={tab === 'names'} onClick={() => setTab('names')}>Names</button>{Suggestions && <button className={tab === 'suggestions' ? 'on' : ''} aria-pressed={tab === 'suggestions'} onClick={() => setTab('suggestions')}>AI suggestions</button>}</nav>
     {error && <p role="alert">{error} <button onClick={() => setRefresh(value => value + 1)}>Retry</button></p>}
     {notice && <p role="status">{notice}</p>}
     {!catalogue ? <p>Loading names…</p> : tab === 'suggestions' && Suggestions ? <Suggestions canWrite={catalogue.can_write} onChanged={() => changed()}/> : <>

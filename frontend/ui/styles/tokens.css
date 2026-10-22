@@ -1,0 +1,158 @@
+/* ============================================================
+   Mycelium design tokens. One set, dark first, light as a variant.
+   Colour encodes what a person is doing:
+     · Ask   (agentic synthesis)  → serif prose, living mycelium GREEN (--bio)
+     · Find  (deterministic)      → mono substrate, precise CYAN (--cyan)
+     · Write (drafts, ingest)     → VIOLET (--write)
+   Geist carries the interface; Newsreader the answers; Geist Mono the data.
+   ============================================================ */
+
+:root {
+  /* ---- dark hero (the instrument surface) ---- */
+  --bg:        oklch(0.165 0.006 165);
+  --bg-1:      oklch(0.200 0.007 165);
+  --bg-2:      oklch(0.238 0.008 165);
+  --bg-3:      oklch(0.285 0.009 165);
+  --bg-inset:  oklch(0.145 0.006 165);
+
+  --line:      oklch(0.315 0.010 165);
+  --line-soft: oklch(0.252 0.008 165);
+  --line-strong: oklch(0.40 0.012 165);
+
+  --ink:       oklch(0.965 0.006 150);
+  --ink-2:     oklch(0.820 0.007 150);
+  --ink-3:     oklch(0.660 0.008 155);
+  --ink-4:     oklch(0.520 0.009 160);
+  --ink-5:     oklch(0.400 0.009 165);
+
+  /* tier accents */
+  --bio:       oklch(0.875 0.185 146);   /* Ask — living synthesis */
+  --bio-dim:   color-mix(in oklab, var(--bio) 80%, var(--ink-4));
+  --bio-bg:    color-mix(in oklab, var(--bio) 11%, transparent);
+  --bio-bg-2:  color-mix(in oklab, var(--bio) 19%, transparent);
+  --bio-line:  color-mix(in oklab, var(--bio) 32%, transparent);
+  --bio-glow:  color-mix(in oklab, var(--bio) 42%, transparent);
+
+  --cyan:      oklch(0.815 0.105 213);   /* Find — deterministic precision */
+  --cyan-dim:  oklch(0.70 0.08 213);
+  --cyan-bg:   oklch(0.815 0.105 213 / 0.10);
+  --cyan-bg-2: oklch(0.815 0.105 213 / 0.18);
+  --cyan-line: oklch(0.815 0.105 213 / 0.30);
+
+  /* write tier — staged proposals / drafts (violet) */
+  --write:     oklch(0.74 0.15 305);
+  --write-dim: color-mix(in oklab, var(--write) 80%, var(--ink-4));
+  --write-bg:  color-mix(in oklab, var(--write) 11%, transparent);
+  --write-bg-2: color-mix(in oklab, var(--write) 19%, transparent);
+  --write-line: color-mix(in oklab, var(--write) 32%, transparent);
+  --write-glow: color-mix(in oklab, var(--write) 42%, transparent);
+
+  /* statement-kind layers (colored by layer; kind string rendered verbatim) */
+  --k-desc:    oklch(0.74 0.075 258);    /* descriptive — periwinkle */
+  --k-desc-bg: oklch(0.74 0.075 258 / 0.12);
+  --k-pres:    oklch(0.79 0.095 66);     /* prescriptive — amber */
+  --k-pres-bg: oklch(0.79 0.095 66 / 0.12);
+
+  --warn:      oklch(0.78 0.13 50);
+  --warn-bg:   oklch(0.78 0.13 50 / 0.12);
+  --danger:    oklch(0.70 0.15 25);
+
+  --sel:       color-mix(in oklab, var(--bio) 20%, transparent);
+
+  --sans: 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --mono: 'Geist Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+
+  --r-sm: 4px;
+  --r-md: 7px;
+  --r-lg: 11px;
+  --r-xl: 16px;
+
+  --maxw: 1180px;
+
+  --pad: 18px;
+  --gap: 14px;
+  --row-h: 34px;
+
+  --fs-2xs: 10.5px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-base: 13.5px;
+  --fs-md: 15px;
+  --fs-lg: 17px;
+
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-2: 0 2px 8px oklch(0 0 0 / 0.32), 0 8px 28px -8px oklch(0 0 0 / 0.5);
+  --shadow-pop: 0 12px 40px -6px oklch(0 0 0 / 0.6), 0 0 0 1px var(--line-soft);
+}
+
+[data-theme="light"] {
+  --bg:        oklch(0.985 0.003 165);
+  --bg-1:      oklch(0.965 0.004 165);
+  --bg-2:      oklch(0.945 0.005 165);
+  --bg-3:      oklch(0.915 0.006 165);
+  --bg-inset:  oklch(0.998 0.002 165);
+
+  --line:      oklch(0.895 0.006 165);
+  --line-soft: oklch(0.935 0.005 165);
+  --line-strong: oklch(0.82 0.008 165);
+
+  --ink:       oklch(0.225 0.012 165);
+  --ink-2:     oklch(0.37 0.012 160);
+  --ink-3:     oklch(0.50 0.011 158);
+  --ink-4:     oklch(0.62 0.010 158);
+  --ink-5:     oklch(0.74 0.008 160);
+
+  --bio:       oklch(0.62 0.16 150);
+
+  --cyan:      oklch(0.55 0.12 232);
+  --cyan-dim:  oklch(0.50 0.10 232);
+  --cyan-bg:   oklch(0.55 0.12 232 / 0.09);
+  --cyan-bg-2: oklch(0.55 0.12 232 / 0.15);
+  --cyan-line: oklch(0.55 0.12 232 / 0.30);
+
+  --write:     oklch(0.52 0.16 305);
+
+  --k-desc:    oklch(0.50 0.11 262);
+  --k-desc-bg: oklch(0.50 0.11 262 / 0.10);
+  --k-pres:    oklch(0.55 0.11 60);
+  --k-pres-bg: oklch(0.55 0.11 60 / 0.12);
+
+  --warn:      oklch(0.58 0.14 50);
+  --warn-bg:   oklch(0.58 0.14 50 / 0.12);
+  --danger:    oklch(0.55 0.18 25);
+
+  --sel:       color-mix(in oklab, var(--bio) 18%, transparent);
+
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.06);
+  --shadow-2: 0 2px 8px oklch(0 0 0 / 0.06), 0 10px 30px -10px oklch(0 0 0 / 0.16);
+  --shadow-pop: 0 14px 44px -8px oklch(0 0 0 / 0.22), 0 0 0 1px var(--line);
+}
+
+[data-density="compact"] { --pad: 13px; --gap: 10px; --row-h: 29px; --fs-base: 12.5px; }
+[data-density="roomy"]   { --pad: 24px; --gap: 18px; --row-h: 40px; }
+
+/* Record kinds as the graphs draw them. */
+:root {
+  --rk-entity: var(--cyan);
+  --rk-statement: var(--k-desc);
+  --rk-name: var(--warn);
+  --sidebar-w: 224px;
+  --topbar-h: 56px;
+}
+
+/* Link types: one hue each, so a type reads the same in every list and graph. */
+:root {
+  --lt-contains: #c4b5fd; --lt-triggers: #fca5a5; --lt-enables: #6ee7b7; --lt-requires: #fda4af;
+  --lt-precedes: #93c5fd; --lt-implies: #fcd34d; --lt-uses: #5eead4; --lt-follows: #93c5fd;
+  --lt-depends-on: #fda4af; --lt-constrains: #d6d3d1; --lt-links-to: #fcd34d; --lt-mentions: #a1a1aa;
+}
+[data-theme="light"] {
+  --lt-contains: #7c3aed; --lt-triggers: #dc2626; --lt-enables: #059669; --lt-requires: #be123c;
+  --lt-precedes: #2563eb; --lt-implies: #ca8a04; --lt-uses: #0d9488; --lt-follows: #2563eb;
+  --lt-depends-on: #be123c; --lt-constrains: #57534e; --lt-links-to: #ca8a04; --lt-mentions: #71717a;
+}
+.lt-contains { color: var(--lt-contains); } .lt-triggers { color: var(--lt-triggers); } .lt-enables { color: var(--lt-enables); }
+.lt-requires { color: var(--lt-requires); } .lt-precedes { color: var(--lt-precedes); } .lt-implies { color: var(--lt-implies); }
+.lt-uses { color: var(--lt-uses); } .lt-follows { color: var(--lt-follows); } .lt-depends-on { color: var(--lt-depends-on); }
+.lt-constrains { color: var(--lt-constrains); } .lt-links-to { color: var(--lt-links-to); } .lt-mentions { color: var(--lt-mentions); }

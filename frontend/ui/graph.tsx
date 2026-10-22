@@ -1,7 +1,9 @@
 // Force-directed graph view for Mycelium.
 import React from 'react';
 import { useState as useStateG, useEffect as useEffectG, useRef as useRefG, useMemo as useMemoG } from 'react';
-import { ClaimKindTag, KindTag, TweaksCtx, useRouter } from './components';
+import { KindTag, RecordTag } from './lib';
+import { usePrefs } from './prefs';
+import { useRouter } from './router';
 import { substrate, type SubstrateData, type SubstrateIndex } from './data';
 
 // Walk a when-clause tree and yield every leaf statement_id. Tolerates the
@@ -80,7 +82,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
   focusId?: string | null; data?: SubstrateData; index?: SubstrateIndex; embedded?: boolean;
 }) {
   const router = useRouter();
-  const { tweaks } = React.useContext(TweaksCtx);
+  const { theme } = usePrefs().prefs;
   const data = dataProp || substrate.data;
   const idx = indexProp || substrate.index;
 
@@ -668,7 +670,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       const sy = e.clientY - rect.top;
       const n = findNodeAt(sx, sy);
       if (n) {
-        router.go({ view: n.kind, id: n.id });
+        router.go(n.kind === 'entity' ? { view: 'entity', id: n.id } : { view: 'statement', id: n.id });
       }
     };
     const onWheel = (e) => {
@@ -697,7 +699,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     window.addEventListener('keydown', onKeyDown);
 
     // Read latest state via refs at draw time
-    const stateRef = { selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, theme: tweaks.theme, searchMatches };
+    const stateRef = { selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, theme: theme, searchMatches };
     drawRef.current.state = stateRef;
 
     // Simulation loop. The repulsion uses a spatial grid so it's
@@ -1214,7 +1216,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     requestStep?: () => void;
   }>({});
   useEffectG(() => {
-    drawRef.current.state = { selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, theme: tweaks.theme, searchMatches };
+    drawRef.current.state = { selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, theme: theme, searchMatches };
     // Any visual state change needs at least one repaint — even if the
     // sim is quenched, we owe the user a frame so the toggle is visible.
     const sim = simRef.current;
@@ -1222,12 +1224,12 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       sim.wakeUntil = performance.now() + 200;
       if (!sim.running && drawRef.current.requestStep) drawRef.current.requestStep();
     }
-  }, [selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, tweaks.theme, searchMatches]);
+  }, [selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, theme, searchMatches]);
 
   // Update focus ID from prop
   useEffectG(() => { if (focusId) setSelectedId(focusId); }, [focusId]);
 
-  const colors = tweaks.theme === 'dark' ? LINK_TYPE_COLORS_DARK : LINK_TYPE_COLORS_LIGHT;
+  const colors = theme === 'dark' ? LINK_TYPE_COLORS_DARK : LINK_TYPE_COLORS_LIGHT;
   // Filter list is driven by the data: every link_type that actually
   // appears on a statement_link or entity_link edge, plus the synthetic
   // statement→entity edge types (one per registered claim kind) so the
@@ -1256,7 +1258,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     if (!('mentions' in counts)) counts['mentions'] = 0;
     return { allTypes: Object.keys(counts).sort(), typeCounts: counts };
   }, [data]);
-  const fallbackSwatch = tweaks.theme === 'dark' ? '#6b6b73' : '#a1a1aa';
+  const fallbackSwatch = theme === 'dark' ? '#6b6b73' : '#a1a1aa';
 
   const selected = selectedId ? idx.byId[selectedId] : null;
   const selectedNeighbors = selected ? (() => {
@@ -1307,11 +1309,11 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
             {focusMode ? 'focus mode · on' : 'focus mode · off'}
           </button>
           <button className={`graph-pill${showStatements ? '' : ' is-off'}`} onClick={() => setShowStatements(v => !v)}>
-            <span className="swatch" style={{background: tweaks.theme === 'dark' ? '#c4b5fd' : '#7c3aed', borderRadius:'50%'}} />
+            <span className="swatch" style={{background: theme === 'dark' ? '#c4b5fd' : '#7c3aed', borderRadius:'50%'}} />
             statements · {data.statements.length}
           </button>
           <button className={`graph-pill${showEntities ? '' : ' is-off'}`} onClick={() => setShowEntities(v => !v)}>
-            <span className="swatch" style={{background: tweaks.theme === 'dark' ? '#22d3ee' : '#0e7490', transform:'rotate(45deg)'}} />
+            <span className="swatch" style={{background: theme === 'dark' ? '#22d3ee' : '#0e7490', transform:'rotate(45deg)'}} />
             entities · {data.entities.length}
           </button>
           {allTypes.map(t => {
@@ -1358,9 +1360,9 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
           <>
             <div>
               <div style={{display:'flex', gap:6, alignItems:'center', flexWrap:'wrap'}}>
-                <KindTag kind={selected.kind} />
+                <RecordTag kind={selected.kind} />
                 {selected.kind === 'statement' && selected.claimKind && (
-                  <ClaimKindTag kind={selected.claimKind} />
+                  <KindTag kind={selected.claimKind} />
                 )}
               </div>
               <div className="graph-focus-title" style={{marginTop:8}}>
@@ -1382,7 +1384,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
               <div style={{marginTop:18, display:'flex', gap:10}}>
                 <button
                   className="graph-pill"
-                  onClick={() => router.go({ view: selected.kind, id: selected.id })}
+                  onClick={() => router.go(selected.kind === 'entity' ? { view: 'entity', id: selected.id } : { view: 'statement', id: selected.id })}
                   style={{color:'var(--accent)', borderColor:'var(--accent)'}}
                 >
                   open detail →

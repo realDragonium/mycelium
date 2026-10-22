@@ -7,7 +7,10 @@
 // fine, no spatial grid required.
 import React from 'react';
 import { useState as useStateE, useEffect as useEffectE, useRef as useRefE, useMemo as useMemoE } from 'react';
-import { KindTag, TweaksCtx, postJSON, useDataCtx, useRouter } from './components';
+import { RecordTag, useDataCtx } from './lib';
+import { postJSON } from './api';
+import { usePrefs } from './prefs';
+import { useRouter } from './router';
 import { substrate } from './data';
 
 // Stable palette: type-name → palette index via a small djb2-style
@@ -124,14 +127,14 @@ function EntityLinkAddForm({ self, entities, knownTypes, onCreated, onCancel }) 
 
 function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   const router = useRouter();
-  const { tweaks, setTweak } = React.useContext(TweaksCtx);
+  const { theme } = usePrefs().prefs;
   // Reading `version` makes the whole component re-render after a UI
   // mutation refetches /api/data — the actual substrate is held in
   // the module-level `substrate` and re-read on each render.
   const { version } = useDataCtx();
   const data = substrate.data;
   const idx = substrate.index;
-  const editMode = !!tweaks.showEditAffordances;
+  const [editMode, setEditMode] = React.useState(false);
   const [searchQuery, setSearchQuery] = useStateE('');
 
   const canvasRef = useRefE(null);
@@ -519,7 +522,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKeyDown);
 
-    const stateRef = { selectedId, hoverId, neighborhood, activeTypes, matchSet, theme: tweaks.theme };
+    const stateRef = { selectedId, hoverId, neighborhood, activeTypes, matchSet, theme: theme };
     drawRef.current.state = stateRef;
 
     // Static render loop. No physics — node positions come from the
@@ -723,13 +726,13 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   }, [nodes, edges, positionsTick]);
 
   useEffectE(() => {
-    drawRef.current.state = { selectedId, hoverId, neighborhood, activeTypes, matchSet, theme: tweaks.theme };
+    drawRef.current.state = { selectedId, hoverId, neighborhood, activeTypes, matchSet, theme: theme };
     const sim = simRef.current;
     if (sim) {
       sim.wakeUntil = performance.now() + 200;
       if (!sim.running && drawRef.current.requestStep) drawRef.current.requestStep();
     }
-  }, [selectedId, hoverId, neighborhood, activeTypes, matchSet, tweaks.theme]);
+  }, [selectedId, hoverId, neighborhood, activeTypes, matchSet, theme]);
 
   useEffectE(() => { if (focusId) setSelectedId(focusId); }, [focusId]);
 
@@ -868,13 +871,13 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
           </button>
           <button
             className={`graph-pill${editMode ? ' is-primary' : ' is-off'}`}
-            onClick={() => setTweak('showEditAffordances', !editMode)}
+            onClick={() => setEditMode(!editMode)}
             title={editMode ? 'Disable edit affordances' : 'Enable edit affordances'}
           >
             ✎ {editMode ? 'edit · on' : 'edit · off'}
           </button>
           <span className="graph-pill is-off" style={{cursor:'default'}}>
-            <span className="swatch" style={{background: tweaks.theme === 'dark' ? '#22d3ee' : '#0e7490', transform:'rotate(45deg)'}} />
+            <span className="swatch" style={{background: theme === 'dark' ? '#22d3ee' : '#0e7490', transform:'rotate(45deg)'}} />
             entities · {data.entities.length}
           </span>
           {allEntityLinkTypes.length === 0 && (
@@ -898,7 +901,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
                 }}
                 title={`${t} · ${count} edge${count === 1 ? '' : 's'}`}
               >
-                <span className="swatch" style={{background: entityLinkColor(t, tweaks.theme), height: 8, borderRadius: 2}} />
+                <span className="swatch" style={{background: entityLinkColor(t, theme), height: 8, borderRadius: 2}} />
                 {t}
                 {count > 0 && <span style={{marginLeft: 6, color: 'var(--ink-4)', fontSize: 10.5}}>{count.toLocaleString()}</span>}
               </button>
@@ -928,7 +931,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
         {selected && selected.kind === 'entity' && (
           <>
             <div>
-              <KindTag kind="entity" />
+              <RecordTag kind="entity" />
               <div className="graph-focus-title" style={{marginTop:8}}>{selected.name}</div>
               <div style={{fontFamily:'var(--mono)', fontSize:10.5, color:'var(--ink-4)', marginTop:4}}>{selected.id}</div>
 
@@ -1014,7 +1017,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
                         onClick={() => setSelectedId(n.target.id)}
                         style={{
                           whiteSpace:'nowrap', fontFamily:'var(--mono)', fontSize:10.5,
-                          color: entityLinkColor(n.link_type, tweaks.theme),
+                          color: entityLinkColor(n.link_type, theme),
                           cursor:'pointer',
                         }}
                       >

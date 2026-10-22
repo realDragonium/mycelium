@@ -10,31 +10,18 @@ import { execFileSync } from 'node:child_process';
 import { relative } from 'node:path';
 
 const NOT_STRICT_YET = new Set([
-  'cockpit/api.ts', // raw backend responses are untyped JSON
-  'cockpit/app.tsx',
-  'cockpit/ask.tsx',
-  'cockpit/drafts.tsx',
-  'cockpit/find.tsx',
-  'cockpit/inspect.tsx',
-  'cockpit/lib.tsx',
-  'cockpit/research.tsx',
   'cockpit/tweaks-panel.tsx',
   'ui/activity.tsx',
-  'ui/ai-settings.tsx',
   'ui/alias-suggestions.tsx',
   'ui/components.tsx',
-  'ui/documentation-profiles.tsx',
   'ui/documentation-workspace.tsx',
   'ui/drafts.tsx',
   'ui/entities-graph.tsx',
   'ui/gaps.tsx',
-  'ui/github-connection.tsx',
   'ui/glossary.tsx',
   'ui/graph.tsx',
   'ui/names-workspace.tsx',
-  'ui/product-settings.tsx',
   'ui/screens.tsx',
-  'ui/settings.tsx',
   'ui/tweaks-panel.tsx',
 ]);
 
