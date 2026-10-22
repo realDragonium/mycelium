@@ -141,6 +141,7 @@ module = [
     "mycelium.research.workspace",
     "mycelium.research_runs",
     "mycelium.server.admission",
+    "mycelium.server.authoring",
     "mycelium.server.batch_planning",
     "mycelium.server.draft_queue",
     "mycelium.server.entities",

@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store
-from mycelium.server import runtime
+from mycelium.server import authoring, runtime
 
 
 @contextmanager
@@ -486,7 +486,7 @@ def test_soft_replay_rejection_rolls_back_and_records_failure(tmp_path, monkeypa
         drafts_store.set_submitted(conn, draft_id)
         token = _principal()
         monkeypatch.setattr(
-            server,
+            authoring,
             "_phrasing_gate",
             lambda *args: ([], {"rejected": True, "violations": ["test"]}),
         )
