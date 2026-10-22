@@ -1092,12 +1092,19 @@ async def get_server_info(request: Request) -> dict[str, Any]:
     Answering on the event loop makes the probe mean "this process's loop is
     still turning", which is the condition a restart can actually fix. It does
     no I/O, so there is nothing here that needs a thread. Keep it that way.
+
+    `partial_restore` breaks the address-bar rule on purpose: it names the
+    databases startup found missing beside a populated substrate, so a
+    broken restore is visible to whoever watches the probe. It stays 200 —
+    a replacement task would restore the same incomplete set.
     """
     base = str(request.base_url).rstrip("/")
+    ctx = server._ctx
     return {
         "base_url": base,
         "mcp_url": f"{base}/mcp",
         "auth_enabled": auth.is_enabled(),
+        "partial_restore": list(ctx.partial_restore) if ctx else [],
     }
 
 

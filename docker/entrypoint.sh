@@ -8,6 +8,11 @@
 # concerns: the image that wraps this one overrides ENTRYPOINT with a supervisor
 # that restores first and then execs this server. A bare `docker run` of this
 # image just serves on a local, ephemeral data dir.
+#
+# The files to replicate and restore are whatever `mycelium databases` prints,
+# one per line; read the list rather than copying it. A restore that misses one
+# is logged at error level on startup and reported as `partial_restore` by
+# /api/server-info.
 set -euo pipefail
 
 mkdir -p "${MYCELIUM_DATA_DIR:-/data}"

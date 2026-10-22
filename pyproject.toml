@@ -98,6 +98,7 @@ module = [
     "mycelium.cimd",
     "mycelium.connect_page",
     "mycelium.connections",
+    "mycelium.databases",
     "mycelium.doc_runs",
     "mycelium.docgen",
     "mycelium.docgen.config",
