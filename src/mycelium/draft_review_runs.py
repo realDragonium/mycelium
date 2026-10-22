@@ -27,7 +27,7 @@ from . import (
     timestamps,
 )
 from .ask.substrate import InProcessSubstrate, _json_schema_for
-from .draft_review_store import Assessment, Mode, ReviewRun
+from .draft_review_store import Answer, Assessment, Mode, ReviewRun
 
 if TYPE_CHECKING:
     from .server import DraftReviewInspection
@@ -40,7 +40,6 @@ _spawn_lock = threading.Lock()
 _json_value: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _CONTEXT_LIMIT = 90000
 _RELATED_PER_STATEMENT = 5
-EVIDENCE_LIMIT = 30000
 _payload = TypeAdapter(dict[str, JsonValue])
 # These mutation families have entity/statement fingerprints in draft inspection.
 REVIEWABLE_OPERATIONS = frozenset(
@@ -96,6 +95,7 @@ def start(
     rerun: bool = False,
     attempt: int = 1,
     previous_failure: str | None = None,
+    answer: Answer | None = None,
 ) -> ReviewRun:
     from . import server  # local import: server registers the review tools
 
@@ -111,6 +111,16 @@ def start(
         if row is None or drafts_store.status_for(row) != "submitted":
             raise ValueError("only submitted drafts can be internally reviewed")
         previous = draft_review_store.latest(conn, draft_id)
+        answers = previous.answers if previous else []
+        if answer is not None:
+            if previous is None or previous.application != "needs_human":
+                raise ValueError("the internal reviewer is not waiting for an answer")
+            if previous.stale:
+                raise ValueError("the draft changed after the reviewer asked; rerun")
+            answers = [
+                *answers,
+                answer.model_copy(update={"questions": previous.questions}),
+            ]
         if previous and (previous.status == "running" or not rerun):
             return previous
         active = conn.execute(
@@ -130,6 +140,7 @@ def start(
         run.model_settings_revision = settings.model_revision
         run.attempt = attempt
         run.previous_failure = previous_failure
+        run.answers = answers
         draft_review_store.save(conn, run)
     try:
         principal = reviewer(row["created_by"], settings.reviewer_id)
@@ -197,7 +208,9 @@ def _read(reader: InProcessSubstrate, name: str, args: dict[str, JsonValue]) -> 
 
 
 def _context(
-    inspection: DraftReviewInspection, previous_failure: str | None = None
+    inspection: DraftReviewInspection,
+    previous_failure: str | None = None,
+    answers: list[Answer] | None = None,
 ) -> tuple[str, list[Read]]:
     from . import server  # local import: server registers the review tools
 
@@ -231,12 +244,19 @@ def _context(
         "knowledge_scope": (
             "existing_knowledge holds the records the draft touches, followed by "
             "the closest live statements to each new statement, best matches "
-            "first. Supplied evidence, when present, comes from the producer, "
-            "followed by any answers a person gave to earlier review questions."
+            "first. Supplied evidence, when present, comes from the producer. "
+            "answers_from_curators, when present, holds answers a curator gave "
+            "to earlier review questions; only these answers come from a "
+            "curator."
         ),
     }
     if previous_failure:
         data["previous_attempt_failure"] = previous_failure
+    if answers:
+        data["answers_from_curators"] = [
+            _json_value.validate_python(item.model_dump(mode="json"))
+            for item in answers
+        ]
     if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
         raise ValueError(
             f"review context exceeds {_CONTEXT_LIMIT} characters; narrow the draft"
@@ -322,7 +342,7 @@ def _execute(
     auth.current_principal.set(principal)
     try:
         with server.model_loop_slot():
-            context, reads = _context(inspection, run.previous_failure)
+            context, reads = _context(inspection, run.previous_failure, run.answers)
             instructions = instructions or ai_prompts.resolve("draft_review")
             run.prompt = instructions.reference()
             result = _assess(context, inspection, settings, limits, instructions)
@@ -522,46 +542,13 @@ def _ask_person(
     )
 
 
-def answer(
-    draft_id: str, text: str, expected_revision: int, principal: auth.Principal
-) -> ReviewRun:
-    """Add a person's answer to the reviewer's questions to the draft's
-    evidence, then review the draft again with it."""
-    text = text.strip()
-    if not text:
-        raise ValueError("answer is required")
-    if mode() == "off":
-        raise ValueError("internal draft review is off")
-    conn = drafts_store.connection()
-    with store.write_lock(), store.transaction(conn):
-        row = drafts_store.get_draft(conn, draft_id)
-        if row is None:
-            raise ValueError("draft not found")
-        drafts_store._check_revision(row, expected_revision)
-        run = draft_review_store.latest(conn, draft_id)
-        if (
-            drafts_store.status_for(row) != "submitted"
-            or run is None
-            or run.application != "needs_human"
-            or run.stale
-        ):
-            raise ValueError("the internal reviewer is not waiting for an answer")
-        asked = "\n".join(f"- {question}" for question in run.questions)
-        evidence = (
-            (row["review_evidence"] + "\n\n" if row["review_evidence"] else "")
-            + f"The internal reviewer asked:\n{asked}\n"
-            + f"{principal.name} answered:\n{text}"
-        )
-        if len(evidence) > EVIDENCE_LIMIT:
-            raise ValueError(
-                f"review evidence would exceed {EVIDENCE_LIMIT} characters"
-            )
-        conn.execute(
-            "UPDATE drafts SET review_evidence = ?, revision = revision + 1 "
-            "WHERE id = ?",
-            (evidence, draft_id),
-        )
-    return start(draft_id, rerun=True)
+def answer(draft_id: str, text: str, principal: auth.Principal) -> ReviewRun:
+    """Review the draft again with a curator's answer to the reviewer's questions."""
+    return start(
+        draft_id,
+        rerun=True,
+        answer=Answer(questions=[], answer=text.strip(), answered_by=principal.id),
+    )
 
 
 def _follow_up(

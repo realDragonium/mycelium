@@ -46,6 +46,16 @@ class Assessment(BaseModel):
     contradictions: list[Contradiction] = Field(max_length=8)
 
 
+class Answer(BaseModel):
+    """A curator's answer to the reviewer's questions, written only by the server."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    questions: list[str]
+    answer: str = Field(min_length=1, max_length=6000)
+    answered_by: str
+    answered_at: str = Field(default_factory=timestamps.now)
+
+
 class ReviewRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_id: str
@@ -70,6 +80,7 @@ class ReviewRun(BaseModel):
     contradictions: list[Contradiction] = Field(default_factory=list)
     attempt: int = 1
     previous_failure: str | None = None
+    answers: list[Answer] = Field(default_factory=list)
     application: Literal["unapplied", "applied", "rejected", "needs_human"] = (
         "unapplied"
     )

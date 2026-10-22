@@ -1422,8 +1422,7 @@ def run_draft_review_http(
 
 
 class DraftReviewAnswerBody(BaseModel):
-    answer: str = PydField(min_length=1)
-    expected_revision: int
+    answer: str
 
 
 @app.post("/api/drafts/{draft_id}/review/answer")
@@ -1431,17 +1430,15 @@ def answer_draft_review_http(
     draft_id: str, body: DraftReviewAnswerBody, request: Request
 ) -> dict[str, dict[str, JsonValue]]:
     """Answer the internal reviewer's questions; the draft is reviewed again."""
-    from fastapi import HTTPException
+    from pydantic import ValidationError
 
-    from . import draft_review_runs, drafts_store
+    from . import draft_review_runs
 
     principal = _enforce_curator(request, action="answering the internal reviewer")
     try:
-        run = draft_review_runs.answer(
-            draft_id, body.answer, body.expected_revision, principal
-        )
-    except drafts_store.StaleDraftRevisionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
+        run = draft_review_runs.answer(draft_id, body.answer, principal)
+    except ValidationError as exc:
+        raise ValueError("answer must be 1 to 6000 characters") from exc
     return {"review": run.model_dump(mode="json")}
 
 

@@ -233,46 +233,56 @@ def test_answer_reviews_the_draft_again_with_it(curated_app, monkeypatch):
     _automatic()
     contexts = _asks_then_approves(monkeypatch)
     draft_id = _ingested_draft(client, monkeypatch, entity_id)
-    revision = server.get_draft(draft_id)["revision"]
 
     response = client.post(
         f"/api/drafts/{draft_id}/review/answer",
-        json={
-            "answer": "No, they are separate screens.",
-            "expected_revision": revision,
-        },
+        json={"answer": "No, they are separate screens."},
     )
 
     assert response.status_code == 200, response.text
     draft_review_runs.wait_all()
-    evidence = contexts[1]["draft"]["review_evidence"]
-    assert QUESTION in evidence and "No, they are separate screens." in evidence
+    [answer] = contexts[1]["answers_from_curators"]
+    assert answer["questions"] == [QUESTION]
+    assert answer["answer"] == "No, they are separate screens."
+    assert answer["answered_by"] == auth.LOCAL_ADMIN.id
+    assert contexts[1]["draft"]["review_evidence"] is None
     draft = server.get_draft(draft_id)
     assert draft["status"] == "approved"
     assert draft["review_assessment"]["application"] == "applied"
     assert "Admin console" in _entity_names()
 
 
-def test_answer_requires_a_waiting_question_and_current_revision(
-    curated_app, monkeypatch
-):
+def test_answer_requires_a_current_waiting_question(curated_app, monkeypatch):
     client, entity_id = curated_app
     _automatic()
     _asks_then_approves(monkeypatch)
     draft_id = _ingested_draft(client, monkeypatch, entity_id)
-    revision = server.get_draft(draft_id)["revision"]
     url = f"/api/drafts/{draft_id}/review/answer"
+    with store.transaction(server._drafts_db()):
+        server._drafts_db().execute(
+            "UPDATE drafts SET revision = revision + 1 WHERE id = ?", (draft_id,)
+        )
 
-    stale = client.post(url, json={"answer": "No.", "expected_revision": revision - 1})
-    assert stale.status_code == 409
-    assert client.post(url, json={"answer": "No.", "expected_revision": revision})
-    draft_review_runs.wait_all()
-    again = client.post(
-        url,
-        json={
-            "answer": "No.",
-            "expected_revision": server.get_draft(draft_id)["revision"],
-        },
+    stale = client.post(url, json={"answer": "No."})
+
+    assert stale.status_code == 400
+    assert "changed after the reviewer asked" in stale.json()["detail"]
+    assert client.post(url, json={"answer": ""}).status_code == 400
+
+
+def test_advisory_questions_do_not_wait_for_an_answer(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    set_review_controls(mode="review-only")
+    _asks_then_approves(monkeypatch)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+    assessment = server.get_draft(draft_id)["review_assessment"]
+    assert assessment["label"] == "needs_context"
+    assert assessment["application"] == "unapplied"
+
+    response = client.post(
+        f"/api/drafts/{draft_id}/review/answer", json={"answer": "No."}
     )
-    assert again.status_code == 400
-    assert "not waiting" in again.json()["detail"]
+
+    assert response.status_code == 400
+    assert "not waiting" in response.json()["detail"]
+    assert store.list_knowledge_gaps(server._db()) == []
