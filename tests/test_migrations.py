@@ -665,7 +665,7 @@ def test_v15_drops_alias_embeddings_and_keeps_every_alias():
 
     store.migrate(conn)
 
-    assert _user_version(conn) == 15
+    assert _user_version(conn) == migrations.CURRENT_VERSION
     assert not _has_column(conn, "link_type_aliases", "embedding")
     assert not migrations._has_table(conn, "link_type_alias_embed_queue")
     assert _aliases(conn) == before

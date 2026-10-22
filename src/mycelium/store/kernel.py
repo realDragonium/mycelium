@@ -419,9 +419,10 @@ CREATE TABLE IF NOT EXISTS link_type_aliases (
 
 -- Reports filed by callers (humans or agents) flagging something
 -- they noticed needs attention in the substrate — a missing topic,
--- a contradiction, an unclear claim. Body is free-form text; if the
--- reporter wants to reference an entity or statement, they include
--- it in the text.
+-- a contradiction, an unclear claim. Body is free-form text.
+-- `draft_id` / `statement_id` / `document_id` name what the report came
+-- from when the reporter knows it; applying a draft resolves the open
+-- reports that name it. Rows from before v16 leave them NULL.
 --
 -- No status column: a row is "open" while both resolved_at and
 -- dismissed_at are NULL; "resolved" once resolved_at is set;
@@ -439,6 +440,9 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
     resolved_by  TEXT,
     dismissed_at TEXT,
     dismissed_by TEXT,
+    draft_id     TEXT,
+    statement_id TEXT,
+    document_id  TEXT,
     CHECK (resolved_at IS NULL OR dismissed_at IS NULL)
 );
 
