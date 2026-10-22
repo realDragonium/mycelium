@@ -101,7 +101,7 @@ must always be at least one. If you're locked out, you can promote a
 new admin directly in SQLite:
 
 ```bash
-sudo sqlite3 /var/lib/mycelium/main.db \
+sudo -u mycelium sqlite3 /var/lib/mycelium/mycelium-auth.db \
   "UPDATE users SET role='admin' WHERE email='backup-admin@example.com'"
 ```
 
@@ -166,18 +166,18 @@ When the UI isn't enough, the SQLite store is human-queryable:
 
 ```bash
 # All users
-sudo sqlite3 -header -column /var/lib/mycelium/main.db \
+sudo -u mycelium sqlite3 -header -column /var/lib/mycelium/mycelium-auth.db \
   "SELECT name, type, email, role, status, created_at FROM users"
 
 # All tokens (hashed; raw secrets are NEVER stored)
-sudo sqlite3 -header -column /var/lib/mycelium/main.db \
+sudo -u mycelium sqlite3 -header -column /var/lib/mycelium/mycelium-auth.db \
   "SELECT u.name AS user, t.name AS token, t.prefix, t.scope,
           t.created_at, t.last_used_at, t.revoked_at
      FROM mcp_tokens t JOIN users u ON u.id = t.user_id
    ORDER BY t.created_at DESC"
 
 # Pending invites
-sudo sqlite3 -header -column /var/lib/mycelium/main.db \
+sudo -u mycelium sqlite3 -header -column /var/lib/mycelium/mycelium-auth.db \
   "SELECT email, role, created_at FROM invites WHERE accepted_at IS NULL"
 ```
 

@@ -2,7 +2,7 @@
 
 Subcommands:
     serve              (default) run the MCP server
-    export             write a .tar.gz snapshot of the substrate
+    export             write a .tar.gz snapshot of the whole instance
     import             restore a snapshot into the data dir
     users list         show all users + their roles
     users set-role     change a user's role by email
@@ -157,7 +157,7 @@ def main() -> None:
     p_serve = sub.add_parser("serve", help="run the MCP server (default)")
     p_serve.set_defaults(func=_cmd_serve)
 
-    p_export = sub.add_parser("export", help="snapshot the substrate to a .tar.gz")
+    p_export = sub.add_parser("export", help="snapshot the whole instance to a .tar.gz")
     p_export.add_argument("archive", type=Path, help="output archive path")
     p_export.add_argument(
         "--no-history", action="store_true", help="omit the audit log"

@@ -20,8 +20,16 @@ A future schema change adds:
 1. A new migration function below.
 2. A new tuple in `MIGRATIONS`.
 3. Updates to `SCHEMA` in store.py so fresh DBs pick it up directly.
+4. A fixture of the new shape, captured once the tests pass:
+   `uv run python scripts/capture_migration_fixture.py`.
 
 That's it — no ad-hoc idempotent ALTER checks scattered through the code.
+`tests/test_migration_fixtures.py` starts the build on a populated instance
+from every shipped schema version and fails if the upgrade loses a row or
+ends in a schema a fresh database would not have. A migration that drops or
+rewrites rows on purpose declares it in that test's `REWRITES`. The same
+test covers the auxiliary databases (auth, drafts, prompts), whose stores
+upgrade themselves without a version number, so step 4 applies to them too.
 """
 
 from __future__ import annotations
@@ -777,9 +785,17 @@ def _migration_v13_preferred_names(conn: sqlite3.Connection) -> None:
     )
 
     if _has_table(conn, "names"):
-        conn.execute(
-            "UPDATE entities SET preferred_name_id = (SELECT n.id FROM names n WHERE n.entity_id = entities.id ORDER BY n.text COLLATE NOCASE, n.id LIMIT 1) WHERE preferred_name_id IS NULL"
-        )
+        backfill_preferred_names(conn)
+
+
+def backfill_preferred_names(conn: sqlite3.Connection) -> None:
+    """Point each entity without a preferred name at its first name.
+
+    Shared with archive import, so restoring an archive from before v13 ends
+    where upgrading in place does: no audit stamp, no history event."""
+    conn.execute(
+        "UPDATE entities SET preferred_name_id = (SELECT n.id FROM names n WHERE n.entity_id = entities.id ORDER BY n.text COLLATE NOCASE, n.id LIMIT 1) WHERE preferred_name_id IS NULL"
+    )
 
 
 def require_rescued_entity_statement_links(conn: sqlite3.Connection) -> None:

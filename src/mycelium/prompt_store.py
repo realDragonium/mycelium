@@ -108,9 +108,11 @@ def migrate(conn: sqlite3.Connection) -> None:
     from .github_credentials import SCHEMA as CREDENTIAL_SCHEMA
     from .model_settings import SCHEMA as MODEL_SCHEMA
     from .product_settings import SCHEMA as PRODUCT_SCHEMA
+    from .prompt_defaults import SCHEMA as DEFAULTS_SCHEMA
 
     conn.executescript(
         PROMPT_TEXTS_SCHEMA
+        + DEFAULTS_SCHEMA
         + SCHEMA
         + MODEL_SCHEMA
         + PRODUCT_SCHEMA

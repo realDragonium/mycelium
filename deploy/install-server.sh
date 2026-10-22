@@ -39,7 +39,7 @@ apt-get install -y -qq \
     curl ca-certificates git \
     build-essential pkg-config \
     nginx certbot python3-certbot-nginx \
-    rsync
+    rsync sqlite3
 
 echo "==> create system user '$SERVICE_USER'"
 if ! id -u "$SERVICE_USER" >/dev/null 2>&1; then

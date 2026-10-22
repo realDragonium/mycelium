@@ -1066,7 +1066,7 @@ def init(data_dir: Path) -> None:
             orphaned_docs,
         )
 
-    # The .vec files are re-derivable from the substrate, so backup.sh omits
+    # The .vec files are re-derivable from the substrate, so a backup may omit
     # them while keeping the *_vector_ids mappings in the DB. When a .vec is
     # missing (a fresh checkout, or a restore of such a backup) or marked dirty
     # after an interrupted write, rebuild the index by re-embedding, or search
@@ -1194,8 +1194,11 @@ def _is_seeded(type: str, name: str) -> bool:
 
 
 def _seed_prompt_texts() -> None:
-    """Seed starter profiles once; keep the established per-doctrine bootstrap."""
-    from . import prompt_store
+    """Seed starter profiles once and the loop doctrines when absent, then
+    bring untouched seeded texts up to this build's defaults and warn about
+    saved texts that predate them (see `prompt_defaults`)."""
+    from . import ai_prompts, prompt_defaults, prompt_store
+    from .agentloop import DOCTRINE_TYPE
 
     try:
         documentation_profiles.seed_starters(_prompts_db())
@@ -1217,6 +1220,24 @@ def _seed_prompt_texts() -> None:
         except Exception:
             logger.warning(
                 "could not seed prompt text %s/%s", type, name, exc_info=True
+            )
+
+    for action in ai_prompts.ACTIONS:
+        try:
+            since = prompt_defaults.sync(
+                _prompts_db(), DOCTRINE_TYPE, action, ai_prompts.shipped_text(action)
+            )
+        except Exception:
+            logger.warning(
+                "could not update the shipped default for %s", action, exc_info=True
+            )
+            continue
+        if since is not None:
+            logger.warning(
+                "saved %s instructions predate the default this build ships "
+                "(first seen %s); compare them in AI settings → Prompts",
+                action,
+                since,
             )
 
 

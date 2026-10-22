@@ -31,6 +31,15 @@ infra/cdk.context.json
 # never in this generic substrate repo.
 .mycelium/
 .ingest/
+# Stray databases and indexes from local runs and debugging. Migration
+# fixtures are SQL dumps and archives, so nothing tracked matches.
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.vec
 
 # Local dev env file (loaded by load_dotenv at startup). Holds secrets
 # like ANTHROPIC_API_KEY — never commit it. See .env.example for the shape.

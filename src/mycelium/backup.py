@@ -12,7 +12,10 @@ Archive layout
     data.jsonl                 relational data, one record per line,
                                 discriminated by `_kind`, dependency-ordered
     history.jsonl              audit log events (omit with --no-history)
+    auth.jsonl                 users, MCP tokens, invites, OAuth clients
+    drafts.jsonl               drafts, their ops, reviews, applications, runs
     prompts.jsonl              editable prompt texts, every version
+    shipped-prompt-texts.jsonl when each shipped prompt default was first seen
     documentation.json         generated documents, revisions, runs and deliveries
     draft-review-settings.json saved review controls (when configured)
     model-settings.json        saved per-action models (when configured)
@@ -23,6 +26,12 @@ Records carry their full column set, including audit columns and the
 internal autoincrement keys (link_id, node_id) so the substrate
 round-trips byte-for-byte at the semantic level. Vector index files are
 copied verbatim — they're binary blobs produced by hnswlib.
+
+Every table in every instance database is either archived or listed in
+`UNARCHIVED_TABLES` with the reason it may be lost; `test_backup_lossless`
+enforces that, so a new table cannot silently fall out of backups. Token
+hashes and invite links make an archive as sensitive as the data directory
+itself.
 
 Prompt texts live in their own DB (`mycelium-prompts.db`) and are instance
 configuration, not substrate — but nothing outside the instance can
@@ -44,11 +53,14 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import shutil
 import sqlite3
 import tarfile
 import tempfile
+from collections.abc import Callable
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
@@ -92,6 +104,7 @@ _DATA_TABLES: tuple[str, ...] = (
     "statements",
     "statement_mentions",
     "pending_mentions",
+    "mention_recompute_queue",
     "statement_links",
     "when_nodes",
     "entity_links",
@@ -100,6 +113,8 @@ _DATA_TABLES: tuple[str, ...] = (
     "entity_link_type_glossary",
     "kind_link_matrix",
     "link_type_aliases",
+    "knowledge_gaps",
+    "reviewed_draft_applications",
 )
 
 _ONTOLOGY_CONFIG_TABLES: tuple[str, ...] = (
@@ -135,6 +150,7 @@ _TABLE_TO_KIND: dict[str, str] = {
     "statements": "statement",
     "statement_mentions": "statement_mention",
     "pending_mentions": "legacy_mention_decision",
+    "mention_recompute_queue": "mention_recompute",
     "statement_links": "statement_link",
     "when_nodes": "when_node",
     "entity_links": "entity_link",
@@ -143,10 +159,101 @@ _TABLE_TO_KIND: dict[str, str] = {
     "entity_link_type_glossary": "entity_link_type_glossary_entry",
     "kind_link_matrix": "kind_link_matrix_entry",
     "link_type_aliases": "link_type_alias",
+    "knowledge_gaps": "knowledge_gap",
+    "reviewed_draft_applications": "reviewed_draft_application",
     "statement_vector_ids": "statement_vector_id",
     "name_vector_ids": "name_vector_id",
 }
 _KIND_TO_TABLE: dict[str, str] = {v: k for k, v in _TABLE_TO_KIND.items()}
+
+
+def _migrate_drafts(conn: sqlite3.Connection) -> None:
+    from . import drafts_store, research_store
+
+    drafts_store.migrate(conn)
+    research_store.migrate(conn)
+
+
+def _migrate_prompts(conn: sqlite3.Connection) -> None:
+    from . import prompt_store
+
+    prompt_store.migrate(conn)
+
+
+def _migrate_auth(conn: sqlite3.Connection) -> None:
+    from . import auth_store
+
+    auth_store.migrate(conn)
+
+
+@dataclass(frozen=True)
+class _Section:
+    """Whole tables from one auxiliary database, archived as one JSONL member.
+
+    A restore replaces these tables only when the archive carries the member,
+    so an archive from before the section existed leaves the target's rows
+    (for auth: who can log in) alone."""
+
+    member: str
+    db_name: str
+    tables: tuple[str, ...]  # parents before children
+    migrate: Callable[[sqlite3.Connection], None]
+    manifest_flag: str
+
+
+_SECTIONS: tuple[_Section, ...] = (
+    _Section(
+        "auth.jsonl",
+        "mycelium-auth.db",
+        ("users", "oauth_clients", "mcp_tokens", "invites"),
+        _migrate_auth,
+        "includes_auth",
+    ),
+    _Section(
+        "drafts.jsonl",
+        documentation_archive.DB_NAME,
+        (
+            "drafts",
+            "draft_ops",
+            "draft_reviews",
+            "draft_applications",
+            "draft_review_runs",
+            "research_runs",
+        ),
+        _migrate_drafts,
+        "includes_drafts",
+    ),
+    _Section(
+        "shipped-prompt-texts.jsonl",
+        PROMPTS_DB_NAME,
+        ("shipped_prompt_texts",),
+        _migrate_prompts,
+        "includes_shipped_prompt_texts",
+    ),
+)
+
+# Tables an archive deliberately leaves behind, by database file. Anything
+# not listed here (or SQLite-internal) must survive export → import.
+UNARCHIVED_TABLES: dict[str, dict[str, str]] = {
+    "mycelium.db": {
+        "link_type_alias_embed_queue": (
+            "written by migrations 9-11 and never read; nothing drains it"
+        ),
+    },
+    "mycelium-auth.db": {
+        "oauth_codes": "single-use authorization codes that expire in a minute",
+        "oauth_consents": "pending consent screens that expire within minutes",
+    },
+    "mycelium-prompts.db": {
+        "instance_settings_migrations": (
+            "marks one-time environment imports; restore re-marks them so the "
+            "target environment is never imported"
+        ),
+    },
+    "mycelium-ops.db": {
+        "operations": "bounded tool-call telemetry, pruned on every startup",
+    },
+}
 
 
 # --- export -----------------------------------------------------------------
@@ -183,16 +290,29 @@ def export_substrate(
             staging = Path(staging_str)
 
             row_counts: dict[str, int] = {}
+            # One read transaction, pinned before the first table: a server
+            # writing meanwhile cannot leave a link in the archive whose
+            # statement is not.
+            conn.execute("BEGIN")
+            conn.execute("SELECT 1 FROM sqlite_master").fetchone()
             with (staging / "data.jsonl").open("w", encoding="utf-8") as f:
                 _write_tables(conn, f, _DATA_TABLES, row_counts)
                 if include_vectors:
                     _write_tables(conn, f, _VECTOR_ID_TABLES, row_counts)
+            conn.rollback()
 
             if include_history and history_db_path.exists():
                 history_count = _write_history(
                     history_db_path, staging / "history.jsonl"
                 )
                 row_counts["history_events"] = history_count
+
+            sections_included = {
+                section.manifest_flag: _write_section(
+                    section, data_dir, staging, row_counts
+                )
+                for section in _SECTIONS
+            }
 
             prompts_count = _archive_prompts(prompts_db_path, staging / "prompts.jsonl")
             if prompts_count is not None:
@@ -219,6 +339,7 @@ def export_substrate(
                 "exported_at": _now_iso(),
                 "includes_history": include_history and history_db_path.exists(),
                 "includes_prompts": prompts_count is not None,
+                **sections_included,
                 "includes_draft_review_settings": settings_included,
                 "includes_model_settings": models_included,
                 "includes_product_settings": products_included,
@@ -241,13 +362,14 @@ def _write_tables(
     fp: TextIO,
     tables: tuple[str, ...],
     row_counts: dict[str, int],
+    kinds: dict[str, str] = _TABLE_TO_KIND,
 ) -> None:
     """Dump each table to JSONL, tagged with `_kind`. Ordering within a
     table is by rowid so autoincrement parents precede their children
     (e.g., when_nodes parent nodes have lower node_ids than their
     descendants — assigned by AUTOINCREMENT in insert order)."""
     for table in tables:
-        kind = _TABLE_TO_KIND[table]
+        kind = kinds[table]
         count = 0
         for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid"):
             payload: dict[str, Any] = {"_kind": kind}
@@ -261,6 +383,30 @@ def _write_tables(
             fp.write(json.dumps(payload) + "\n")
             count += 1
         row_counts[table] = count
+
+
+def _write_section(
+    section: _Section, data_dir: Path, staging: Path, row_counts: dict[str, int]
+) -> bool:
+    """Dump a section's tables from one consistent snapshot of its database.
+
+    The snapshot is migrated in memory first, so a database the running build
+    has not opened since an upgrade still exports in this build's shape."""
+    path = data_dir / section.db_name
+    if not path.exists():
+        return False
+    with (
+        closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as src,
+        closing(sqlite3.connect(":memory:")) as snapshot,
+    ):
+        src.backup(snapshot)
+        snapshot.row_factory = sqlite3.Row
+        section.migrate(snapshot)
+        with (staging / section.member).open("w", encoding="utf-8") as fp:
+            _write_tables(
+                snapshot, fp, section.tables, row_counts, {t: t for t in section.tables}
+            )
+    return True
 
 
 def _write_history(history_db_path: Path, out_path: Path) -> int:
@@ -477,6 +623,10 @@ def _restore_model_settings(db_path: Path, settings: list[ModelSnapshot]) -> Non
 
 def _make_archive(staging: Path, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Owner-only before any byte lands: the archive carries token hashes and
+    # live invite links.
+    os.close(os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600))
+    out_path.chmod(0o600)
     with tarfile.open(out_path, "w:gz") as tar:
         for item in sorted(staging.rglob("*")):
             if item.is_file():
@@ -488,10 +638,9 @@ def _make_archive(staging: Path, out_path: Path) -> None:
 
 def _prepare_restore_target(data_dir: Path, *, force: bool) -> None:
     db_path = data_dir / "mycelium.db"
-    if (
-        db_path.exists()
-        or (data_dir / PROMPTS_DB_NAME).exists()
-        or (data_dir / documentation_archive.DB_NAME).exists()
+    if db_path.exists() or any(
+        (data_dir / name).exists()
+        for name in (PROMPTS_DB_NAME, *(section.db_name for section in _SECTIONS))
     ):
         if not force:
             raise FileExistsError(
@@ -578,6 +727,11 @@ def import_substrate(
         _validate_legacy_link_archive(
             staging / "data.jsonl", manifest.get("row_counts")
         )
+        sections = {
+            section: rows
+            for section in _SECTIONS
+            if (rows := _prepare_section(section, staging)) is not None
+        }
         _prepare_restore_target(data_dir, force=force)
         from . import prompt_store
 
@@ -611,12 +765,7 @@ def import_substrate(
                 )
                 if history_db_path is not None and (staging / "history.jsonl").exists():
                     _load_history_jsonl(conn, staging / "history.jsonl")
-                for entity in conn.execute(
-                    "SELECT id FROM entities WHERE preferred_name_id IS NULL"
-                ).fetchall():
-                    store.ensure_preferred_name(
-                        conn, entity["id"], preserve_fallback=True
-                    )
+                migrations.backfill_preferred_names(conn)
         finally:
             conn.close()
 
@@ -630,6 +779,10 @@ def import_substrate(
             _restore_review_settings(data_dir / PROMPTS_DB_NAME, review_settings)
         _restore_model_settings(data_dir / PROMPTS_DB_NAME, models)
         _restore_product_settings(data_dir / PROMPTS_DB_NAME, products)
+        for section, rows in sections.items():
+            with closing(_connect_auxiliary(data_dir / section.db_name)) as conn:
+                section.migrate(conn)
+                _replace_section_rows(conn, section, rows)
         documentation_archive.restore(data_dir, documentation)
 
         settings_db = prompt_store.connect(data_dir / PROMPTS_DB_NAME)
@@ -639,17 +792,113 @@ def import_substrate(
         finally:
             settings_db.close()
 
-        # Vector files: copy back if present in the archive. Otherwise leave
-        # the data dir without them; the server's next `init()` rebuilds each
-        # missing index by re-embedding the stored statement or name text.
+        # Vector files: copy back if present in the archive and consistent
+        # with it. Otherwise leave the data dir without them; the server's
+        # next `init()` rebuilds each missing index by re-embedding the
+        # stored statement or name text.
         vectors_src = staging / "vectors"
         if vectors_src.is_dir():
+            with closing(store.connect(db_path)) as conn:
+                mapped = {
+                    vf: {
+                        row[0] for row in conn.execute(f"SELECT vector_id FROM {table}")
+                    }
+                    for vf, table in zip(_VECTOR_FILES, _VECTOR_ID_TABLES, strict=True)
+                }
             for vf in _VECTOR_FILES:
                 src = vectors_src / vf
-                if src.exists():
+                if src.exists() and _index_matches(src, mapped[vf]):
                     shutil.copy2(src, data_dir / vf)
 
         return manifest
+
+
+def _index_matches(path: Path, vector_ids: set[int]) -> bool:
+    """Whether the index serves exactly the archived vector ids.
+
+    Index files are copied after the database snapshot, so a write that
+    lands in between leaves them disagreeing: a deleted statement's row is
+    archived while its vector is gone. Such an index is rebuilt instead."""
+    from . import vector
+
+    index = vector.Index.load(path)
+    live = {i for i in index.ids() if index.get_vector(i) is not None}
+    if live == vector_ids:
+        return True
+    logger.warning(
+        "%s disagrees with the archived vector ids; the next start rebuilds it",
+        path.name,
+    )
+    return False
+
+
+def _prepare_section(
+    section: _Section, staging: Path
+) -> dict[str, list[dict[str, Any]]] | None:
+    """Parse a section and prove it loads into a fresh database, before a
+    force restore touches the target. None when the archive lacks it."""
+    path = staging / section.member
+    if not path.exists():
+        return None
+    rows: dict[str, list[dict[str, Any]]] = {table: [] for table in section.tables}
+    with path.open(encoding="utf-8") as fp:
+        for line in fp:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError(f"{section.member} records must be JSON objects")
+            table = row.pop("_kind", None)
+            if table not in rows:
+                raise ValueError(f"unknown record kind in {section.member}: {table!r}")
+            rows[table].append(_decode_blobs(row))
+    with closing(_connect_auxiliary(":memory:")) as conn:
+        section.migrate(conn)
+        _replace_section_rows(conn, section, rows)
+    return rows
+
+
+def _connect_auxiliary(path: Path | str) -> sqlite3.Connection:
+    """Open an auxiliary database the way its stores do (rows, FKs, WAL)."""
+    from . import drafts_store
+
+    return drafts_store.connect(path)
+
+
+def _replace_section_rows(
+    conn: sqlite3.Connection,
+    section: _Section,
+    rows: dict[str, list[dict[str, Any]]],
+) -> None:
+    """Swap the section's tables for the archived rows in one transaction.
+
+    Children are inserted before parents with foreign keys deferred to
+    commit, so triggers that touch a parent on child insert (draft_ops bumps
+    drafts.revision) find no parent yet and archived values land unchanged."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("PRAGMA defer_foreign_keys = ON")
+        for table in reversed(section.tables):
+            conn.execute(f"DELETE FROM {table}")
+        for table in reversed(section.tables):
+            columns = _table_columns(conn, table)
+            for row in rows[table]:
+                _insert_archived_row(
+                    conn, row, table=table, columns=columns, source=section.member
+                )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+
+
+def _decode_blobs(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        column: base64.b64decode(value["$b64"], validate=True)
+        if isinstance(value, dict) and set(value) == {"$b64"}
+        else value
+        for column, value in row.items()
+    }
 
 
 def _clear_archived_ontology_tables(
@@ -775,12 +1024,9 @@ def _load_data_jsonl(
                     "data.jsonl link_type_alias record has no direction; "
                     "direction is archived data and may not be defaulted"
                 )
-            for column, value in row.items():
-                if isinstance(value, dict) and set(value) == {"$b64"}:
-                    row[column] = base64.b64decode(value["$b64"], validate=True)
             _insert_archived_row(
                 conn,
-                row,
+                _decode_blobs(row),
                 table=table,
                 columns=columns[table],
                 source="data.jsonl",

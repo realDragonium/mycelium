@@ -180,7 +180,7 @@ let you in but Mycelium refused. Means:
 Inspect the DB:
 
 ```bash
-sudo sqlite3 /var/lib/mycelium/main.db \
+sudo -u mycelium sqlite3 /var/lib/mycelium/mycelium-auth.db \
   "SELECT email, role, status, created_at FROM users"
 ```
 

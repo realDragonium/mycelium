@@ -4,8 +4,8 @@ Identity (users, tokens, invites, OAuth clients/codes) lives here so
 the substrate file can be swapped, restored from backup, or wiped
 without affecting who can log in or what tokens are valid.
 
-The file lives at `<data_dir>/auth.db` alongside `main.db` and
-`history.db`. Foreign keys inside this file are honored (PRAGMA
+The file lives at `<data_dir>/mycelium-auth.db` alongside `mycelium.db`
+and `mycelium-history.db`. Foreign keys inside this file are honored (PRAGMA
 foreign_keys=ON); there are no FKs *across* files because SQLite
 doesn't support cross-database FKs anyway, which is exactly the
 property we want — the substrate has zero schema dependencies on
