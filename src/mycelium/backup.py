@@ -251,7 +251,10 @@ UNARCHIVED_TABLES: dict[str, dict[str, str]] = {
         ),
     },
     "mycelium-ops.db": {
-        "operations": "bounded tool-call telemetry, pruned on every startup",
+        "operations": (
+            "telemetry from the removed operation ledger; left on older "
+            "instances and no longer written or read"
+        ),
     },
 }
 

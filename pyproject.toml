@@ -129,7 +129,6 @@ module = [
     "mycelium.model_settings",
     "mycelium.names_workspace",
     "mycelium.oauth_server",
-    "mycelium.ops_ledger",
     "mycelium.phrasing",
     "mycelium.phrasing_cues",
     "mycelium.plurals",
