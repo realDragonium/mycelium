@@ -231,14 +231,10 @@ CREATE TABLE IF NOT EXISTS entities (
     updated_by  TEXT
 );
 
--- `kind` discriminates by the shape of claim the text makes. Starting
--- vocabulary (open — grow as needed, same posture as link types):
---   event      — something happening (present-tense action)
---   state      — a condition holding (is / has / remains)
---   capability — a modal claim (can / may / is able to)
--- The substrate enforces only that kind is non-null; it does not lock
--- the vocabulary, and it does not enforce kind-edge compatibility
--- (e.g., that `triggers` is only between events). Trust the writer.
+-- `kind` discriminates by the shape of claim the text makes. The glossary
+-- seeds and describes the vocabulary, but it stays open: the schema enforces
+-- only that kind is non-null. Phrasing checks and link direction rules are
+-- applied by the write path, not here.
 CREATE TABLE IF NOT EXISTS statements (
     id         TEXT PRIMARY KEY,
     kind       TEXT NOT NULL,
