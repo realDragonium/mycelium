@@ -142,6 +142,7 @@ module = [
     "mycelium.research.sources",
     "mycelium.research.workspace",
     "mycelium.research_runs",
+    "mycelium.server",
     "mycelium.server.admission",
     "mycelium.server.authoring",
     "mycelium.server.batch_planning",
