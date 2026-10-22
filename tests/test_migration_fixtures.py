@@ -1,15 +1,20 @@
-"""Every schema shape this repository has shipped upgrades to the current one.
+"""Every schema and archive this repository has shipped carries forward.
 
 Each directory in `migration_fixtures/` is a populated instance captured from
-a historical build by `scripts/capture_migration_fixture.py`. The current
-build starts on a copy of it exactly as a deploy would (`server.init`), and
-the result must:
+a historical build by `scripts/capture_migration_fixture.py`, plus an archive
+that build exported. The current build starts on a copy of the instance
+exactly as a deploy would (`server.init`), and the result must:
 
 - reach the current substrate version with every database's schema equal to
   a fresh instance's, so a column added to a schema without a migration fails;
 - keep every row it had, apart from rewrites declared in `REWRITES`;
 - pass SQLite's integrity and foreign-key checks; and
 - serve the captured statements through search and hydration.
+
+The archive is restored into a fresh data directory — the path for a change
+too awkward to migrate in place — and must keep every row the old build
+archived and serve the same statements. Dropping a column breaks this for
+older archives until the importer learns to discard it.
 
 `test_newest_fixture_has_the_current_schema` keeps the set complete: change
 any schema and it fails until a fixture of the new shape is captured, so the
@@ -27,7 +32,7 @@ from pathlib import Path
 import pytest
 
 import instance_scenario
-from mycelium import embed, migrations, server
+from mycelium import backup, embed, migrations, server, store
 
 
 def _captured(fixture: Path) -> tuple[int, str]:
@@ -169,22 +174,54 @@ def test_fixture_upgrades_to_the_current_build(fixture, tmp_path, fresh_schema):
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
+    _assert_rows_kept(before, data_dir)
+    _assert_serves(before["mycelium.db"]["statements"])
+
+
+@pytest.mark.parametrize("fixture", FIXTURES, ids=lambda p: p.name)
+def test_fixture_archive_restores_into_a_fresh_instance(fixture, tmp_path):
+    source = tmp_path / "source"
+    _load(fixture, source)
+    before = {db.name: _rows(db) for db in source.glob("*.db")}
+    restored = tmp_path / "restored"
+
+    manifest = backup.import_substrate(fixture / "export.tar.gz", restored)
+    _start(restored)
+
+    archived = set(manifest["row_counts"])
+    _assert_rows_kept(
+        {
+            db: {t: rows for t, rows in tables.items() if t in archived}
+            for db, tables in before.items()
+        },
+        restored,
+    )
+    _assert_serves(before["mycelium.db"]["statements"])
+
+
+def _assert_rows_kept(before: dict[str, dict[str, list[dict]]], data_dir: Path) -> None:
     for db_name, tables in before.items():
-        after = _rows(data_dir / db_name)
+        after = _rows(data_dir / db_name) if tables else {}
         for table, rows in tables.items():
             if (db_name, table) in REWRITES:
                 continue
-            assert table in after, f"{db_name}:{table} was dropped by the upgrade"
+            assert table in after, f"{db_name}:{table} was dropped"
             with closing(sqlite3.connect(data_dir / db_name)) as conn:
                 kept = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
             columns = set(rows[0]) & kept if rows else set()
             missing = _projected(rows, columns) - _projected(after[table], columns)
             assert not missing, (
-                f"{db_name}:{table} lost rows in the upgrade; if a migration "
-                f"rewrites them on purpose, declare it in REWRITES: {missing}"
+                f"{db_name}:{table} lost rows; if a migration rewrites them on "
+                f"purpose, declare it in REWRITES: {missing}"
             )
 
-    ids = {row["text"]: row["id"] for row in before["mycelium.db"]["statements"]}
+
+def _assert_serves(statements: list[dict]) -> None:
+    unnamed = store.substrate_connection().execute(
+        "SELECT id FROM entities WHERE preferred_name_id IS NULL"
+    )
+    assert unnamed.fetchall() == []
+    ids = {row["text"]: row["id"] for row in statements}
     hydrated = server.get_statements(list(ids.values()))
     assert hydrated["missing"] == []
     assert {s["id"]: s["text"] for s in hydrated["statements"]} == {

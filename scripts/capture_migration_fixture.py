@@ -1,9 +1,11 @@
 """Freeze a populated instance of this build as a migration fixture.
 
 Writes `tests/migration_fixtures/v<NN>-<label>/`: one `<database>.sql` dump
-per instance database plus `fixture.json`. `tests/test_migration_fixtures.py`
-loads every fixture and starts the current build on it, so each schema
-shape this repository has shipped is proven to upgrade cleanly.
+per instance database, `export.tar.gz` made by this build's own `export`,
+and `fixture.json`. `tests/test_migration_fixtures.py` starts the current
+build on every fixture and imports every archive into a fresh instance, so
+each schema shape and archive format this repository has shipped is proven
+to carry forward.
 
 Run it whenever that test reports the newest fixture is behind the schema —
 in the change that alters the schema, after the migration is written:
@@ -50,7 +52,7 @@ def main() -> None:
     os.environ["MYCELIUM_AUTH"] = "off"
     sys.path.insert(0, str(REPO / "tests"))
     import instance_scenario
-    from mycelium import embed, migrations, phrasing
+    from mycelium import backup, embed, migrations, phrasing
 
     embed.embed = instance_scenario.embed
     phrasing.check = lambda text, kind=None: []
@@ -65,6 +67,9 @@ def main() -> None:
         data_dir = Path(tmp)
         instance_scenario.populate(data_dir)
         out.mkdir(parents=True)
+        # Vectors are left out: hnswlib files are large, and the importer
+        # rebuilds them, which is the path a fresh-instance restore takes.
+        backup.export_substrate(data_dir, out / "export.tar.gz", include_vectors=False)
         for db in sorted(data_dir.glob("*.db")):
             if db.name in SKIPPED_FILES:
                 continue
