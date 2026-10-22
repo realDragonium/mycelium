@@ -783,9 +783,17 @@ def _migration_v13_preferred_names(conn: sqlite3.Connection) -> None:
     )
 
     if _has_table(conn, "names"):
-        conn.execute(
-            "UPDATE entities SET preferred_name_id = (SELECT n.id FROM names n WHERE n.entity_id = entities.id ORDER BY n.text COLLATE NOCASE, n.id LIMIT 1) WHERE preferred_name_id IS NULL"
-        )
+        backfill_preferred_names(conn)
+
+
+def backfill_preferred_names(conn: sqlite3.Connection) -> None:
+    """Point each entity without a preferred name at its first name.
+
+    Shared with archive import, so restoring an archive from before v13 ends
+    where upgrading in place does: no audit stamp, no history event."""
+    conn.execute(
+        "UPDATE entities SET preferred_name_id = (SELECT n.id FROM names n WHERE n.entity_id = entities.id ORDER BY n.text COLLATE NOCASE, n.id LIMIT 1) WHERE preferred_name_id IS NULL"
+    )
 
 
 def require_rescued_entity_statement_links(conn: sqlite3.Connection) -> None:
