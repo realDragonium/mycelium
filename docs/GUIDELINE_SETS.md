@@ -103,9 +103,9 @@ against, and that is not a state worth supporting.
 The guidance is written for a generation run, whose only handle on the set is
 the store — so it names each template as the sibling row it is, reaches for no
 file, and carries no skill frontmatter. The `kb-authoring` skill in `.claude/`
-is a consumer of that same text, not a second copy of it: it points a reader
-who has a checkout at the guidance file and translates the row names into
-paths.
+does not read it at all: it asks the server for a run through
+`request_documentation`, so a skill-requested document follows whatever set the
+instance has configured.
 
 Startup inserts the starter profile atomically only when no guideline-set
 history exists. Saved edits and retirement tombstones take precedence, including
