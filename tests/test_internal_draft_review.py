@@ -933,6 +933,9 @@ def test_resolved_contradiction_is_filed_as_gap_after_apply(running_app, monkeyp
     [gap] = _gaps()
     assert draft_id in gap and statement_id in gap
     assert "Marked the feature as retired." in gap
+    # Filed after the apply, so the apply does not resolve it.
+    [row] = store.list_knowledge_gaps(server._db(), status="open")
+    assert (row["draft_id"], row["statement_id"]) == (draft_id, statement_id)
 
 
 def test_rejected_draft_is_filed_as_gap(running_app, monkeypatch):
@@ -944,6 +947,8 @@ def test_rejected_draft_is_filed_as_gap(running_app, monkeypatch):
     assert _result(draft_id)["application"] == "rejected"
     [gap] = _gaps()
     assert draft_id in gap and "Supported by supplied facts." in gap
+    [row] = store.list_knowledge_gaps(server._db())
+    assert row["draft_id"] == draft_id
 
 
 def test_draft_failure_is_retried_once_then_rejected(running_app, monkeypatch):

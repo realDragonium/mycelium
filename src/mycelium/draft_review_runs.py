@@ -648,8 +648,9 @@ def _finish(
             run.application = "rejected"
             run.detail = "Draft rejected by the configured internal reviewer."
             _report_gap(
+                run.draft_id,
                 f"Draft {run.draft_id} was rejected by the internal reviewer: "
-                f"{run.rationale}"
+                f"{run.rationale}",
             )
             return
         _mutation_authority(run, inspection, settings)
@@ -658,11 +659,15 @@ def _finish(
         run.detail = (
             f"Applied through reviewed application {receipt['application_id']}."
         )
+        with store.transaction(server._db()):
+            store.resolve_draft_gaps(server._db(), run.draft_id, settings.reviewer_id)
         for contradiction in run.contradictions:
             _report_gap(
+                run.draft_id,
                 f"Draft {run.draft_id} contradicted live statement "
                 f"{contradiction.statement_id}; the internal reviewer resolved it "
-                f"in favour of the draft: {contradiction.resolution}"
+                f"in favour of the draft: {contradiction.resolution}",
+                statement_id=contradiction.statement_id,
             )
 
 
@@ -686,8 +691,9 @@ def _ask_person(
         run.detail = draft_review_store.WAITING_FOR_PERSON
         draft_review_store.save(conn, run)
     _report_gap(
+        run.draft_id,
         f"Draft {run.draft_id} needs a person to answer the internal reviewer: "
-        + " ".join(run.questions)
+        + " ".join(run.questions),
     )
 
 
@@ -758,14 +764,16 @@ def _reject(run: ReviewRun, settings: draft_review_settings.Snapshot) -> None:
         run.application = "rejected"
         run.detail = reason
         _save(run)
-    _report_gap(f"Draft {run.draft_id} was rejected: {reason}")
+    _report_gap(run.draft_id, f"Draft {run.draft_id} was rejected: {reason}")
 
 
-def _report_gap(text: str) -> None:
+def _report_gap(draft_id: str, text: str, *, statement_id: str | None = None) -> None:
     from . import server  # local import: gaps live in the substrate database
 
     with store.transaction(server._db()):
-        store.create_knowledge_gap(server._db(), text)
+        store.create_knowledge_gap(
+            server._db(), text, draft_id=draft_id, statement_id=statement_id
+        )
 
 
 def _correct(draft_id: str, correction: draft_review_store.Correction) -> None:

@@ -77,7 +77,9 @@ not list is accepted. What the substrate does enforce is below.
   phrasing check before mutating. A common catalog applies to every kind
   (compound clauses, conditions written into the text, universal claims,
   hedges, an event and its resulting state packed into one statement), and
-  `event`, `state` and `capability` add rules of their own; other kinds get the
+  `event`, `state` and `capability` add rules of their own. `rule` adds only
+  the ban on `will`, because obligations ("must", "may", "is required to") and
+  definitions ("is a", "is one of") are what a rule states. Other kinds get the
   `event` rules. A violation rejects the write with
   `{"rejected": true, "violations": [...]}`. `allow_phrasing_violations=true`
   writes anyway and returns the violations as a warning; use it only for text

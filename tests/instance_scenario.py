@@ -85,6 +85,16 @@ def _substrate(server) -> dict[str, str]:
     )
     server.report_knowledge_gap(text="How long does a locked account stay locked?")
     db = _connection(server)
+    from mycelium import store
+
+    file_gap = getattr(store, "create_knowledge_gap", None)
+    if file_gap is not None and "draft_id" in inspect.signature(file_gap).parameters:
+        file_gap(
+            db,
+            "Draft drf_fixture contradicted the session expiry rule.",
+            draft_id="drf_fixture",
+            statement_id=ids["expiry"],
+        )
     name = db.execute("SELECT id FROM names WHERE text = 'Sign-in'").fetchone()
     db.execute(
         "INSERT INTO pending_mentions (statement_id, name_id, created_at, "

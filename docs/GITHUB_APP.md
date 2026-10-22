@@ -78,6 +78,6 @@ Mycelium fails rather than writing to a different repository under the old name.
 
 Environment-backed credentials and GitHub Enterprise destinations continue to
 work. GitHub App connections support github.com only. A research source may also
-use a connection for its repository; its clone requests a read-only Contents
-token. The settings form does not offer connections for research sources yet, so
-save such a source through `PATCH /api/product-settings`.
+use a connection for its repository: under **Settings → Research sources**,
+choose the connected repository as the source's GitHub connection. Its clone
+requests a read-only Contents token.

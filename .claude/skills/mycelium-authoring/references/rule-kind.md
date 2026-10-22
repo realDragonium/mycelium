@@ -31,8 +31,9 @@ The contingency test: **configured/input values** → current value is a `state`
 | "Default X is Y" | default |
 | "X is one of: …" | enumeration |
 | "X is bounded by", "X is between A and B" | bound |
+| "X must Y", "X must not Y", "X shall Y", "X may Y", "X is required to Y", "X never Y" | obligation, prohibition or permission |
 
-Rule phrasing is independent of the event/state/capability catalogs — copular and mathematical constructions that those kinds reject are valid here. Contingent language (`can`, `may`, `sometimes`, mid-sentence `if`) is rejected.
+Rule phrasing is independent of the event/state/capability catalogs — the modal, copular and mathematical constructions those kinds reject are valid here. The validator still rejects hedges (`sometimes`), conditions (mid-sentence `if`), universal quantifiers, compounds and `will`. It does not tell permission `may` from possibility `can` / `might`: a claim that could be otherwise for one instance fails the contingency test, so make it a `capability` or `state` yourself.
 
 ## `cases` vs. `when`-on-`composes` — not interchangeable
 

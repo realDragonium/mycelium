@@ -139,6 +139,11 @@ draft; such drafts sort first under Drafts and are counted on Home. The reviewer
 Every automatic rejection, every contradiction resolved in an applied draft, and
 every question for a person is filed as a knowledge gap naming the draft, so a
 person can find it on the Gaps page. Only the question holds its draft back.
+The gap records the draft id, and the contradicted statement's id, as
+references as well as in its text. When the reviewer applies a draft it
+resolves that draft's open gaps, so an answered question closes once its
+draft lands. Contradiction gaps are filed after the application and stay open
+for a person to check. A draft approved by hand does not yet resolve its gaps.
 An automated assessment remains a model judgment; isolated tests verify the
 execution safeguards and API contract, not the model's factual accuracy.
 
