@@ -8,12 +8,19 @@
 # The snapshot is taken with the service stopped and before any code is
 # replaced, so it is exactly what the running build last wrote — and what a
 # rollback restores (docs/DEPLOYMENT.md, "Rolling back a deploy"). If it
-# fails, the current build is started again and nothing is installed.
+# fails, the current build is started again and nothing is installed. If
+# installing fails after that, the previous build's code is put back and
+# started, so a failed deploy leaves the previous build running.
 #
-# Layout: $MYC_SNAPSHOT_DIR/<UTC time>/data/ is the copy; BUILD beside it
-# names the build that wrote it. Both directories are root-only.
+# Layout: $MYC_SNAPSHOT_DIR/<UTC time>/data/ is the data, app/ the previous
+# build's code (without its venv and caches), BUILD names that build. All
+# root-only.
 
 set -euo pipefail
+
+# uv, its caches and the venv live in the app dir (the service user's HOME);
+# code copies leave them alone.
+APP_EXCLUDES=(--exclude='.local/' --exclude='.cache/' --exclude='.venv/')
 
 STAGE_DIR="$1"
 BUILD="$2"
@@ -50,11 +57,11 @@ sys.exit(0 if result == "ok" else f"{sys.argv[1]}: {result}")
     # redirect the write.
     { sudo -u mycelium cat "$REMOTE_DIR/BUILD" 2>/dev/null || echo unknown; } |
         sudo tee "$dest/BUILD" >/dev/null
+    sudo rsync -a "${APP_EXCLUDES[@]}" "$REMOTE_DIR/" "$dest/app/" || return 1
 }
 
 snapshot() {
-    local dest
-    dest="$SNAPSHOT_ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
+    local dest="$1"
     sudo install -d -m 0700 "$SNAPSHOT_ROOT" "$dest" || return 1
     echo "==> snapshot $DATA_DIR → $dest"
     if ! copy_and_verify "$dest"; then
@@ -66,10 +73,20 @@ snapshot() {
         sort -r | tail -n "+$((KEEP_SNAPSHOTS + 1))" | xargs -r sudo rm -rf --
 }
 
+install_code() {
+    # --delete keeps the app dir free of stale source.
+    sudo rsync -a --delete "${APP_EXCLUDES[@]}" "$1/" "$REMOTE_DIR/" || return 1
+    sudo chown -R mycelium:mycelium "$REMOTE_DIR" || return 1
+    sudo -u mycelium -H bash -lc \
+        "cd '$REMOTE_DIR' && $REMOTE_DIR/.local/bin/uv sync --frozen" || return 1
+}
+
+SNAPSHOT=
 if [[ "$SKIP_RESTART" != "--skip-restart" ]] && sudo test -f "$DATA_DIR/mycelium.db"; then
+    SNAPSHOT="$SNAPSHOT_ROOT/$(date -u +%Y%m%dT%H%M%SZ)"
     echo "==> stop $SERVICE"
     sudo systemctl stop "$SERVICE"
-    if ! snapshot; then
+    if ! snapshot "$SNAPSHOT"; then
         echo "!! snapshot failed; restarting the current build, nothing installed" >&2
         sudo systemctl start "$SERVICE"
         exit 1
@@ -77,14 +94,16 @@ if [[ "$SKIP_RESTART" != "--skip-restart" ]] && sudo test -f "$DATA_DIR/mycelium
 fi
 
 echo "==> install $BUILD into $REMOTE_DIR"
-# --delete keeps the app dir free of stale source, but the mycelium user's
-# HOME is $REMOTE_DIR too — uv and its caches live there. Preserve those.
-sudo rsync -a --delete \
-    --exclude='.local/' --exclude='.cache/' --exclude='.venv/' \
-    "$STAGE_DIR/" "$REMOTE_DIR/"
-echo "$BUILD" | sudo tee "$REMOTE_DIR/BUILD" >/dev/null
-sudo chown -R mycelium:mycelium "$REMOTE_DIR"
-sudo -u mycelium -H bash -lc "cd '$REMOTE_DIR' && $REMOTE_DIR/.local/bin/uv sync --frozen"
+if ! { install_code "$STAGE_DIR" &&
+    echo "$BUILD" | sudo tee "$REMOTE_DIR/BUILD" >/dev/null; }; then
+    if [[ -n "$SNAPSHOT" ]]; then
+        echo "!! install failed; putting the previous build back and starting it" >&2
+        install_code "$SNAPSHOT/app" ||
+            echo "!! could not fully reinstall the previous build" >&2
+        sudo systemctl start "$SERVICE"
+    fi
+    exit 1
+fi
 
 if [[ "$SKIP_RESTART" == "--skip-restart" ]]; then
     echo "==> skipping restart (--skip-restart)"

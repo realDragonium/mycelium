@@ -76,7 +76,8 @@ This does four things:
    stops here and the running build is started again.
 3. Installs the build into `/opt/mycelium` and runs `uv sync --frozen`,
    which installs the exact dependency versions from `uv.lock` into a venv
-   owned by the `mycelium` user.
+   owned by the `mycelium` user. If this fails, the previous build's code is
+   put back from the snapshot and started, and the deploy exits non-zero.
 4. Starts the `mycelium` systemd service and checks it is still running a
    few seconds later, so a migration that refuses at startup fails the
    deploy.
@@ -363,7 +364,8 @@ sudo rm -rf /tmp/restore-check
 
 Every deploy that restarts the service first stops it and copies the data
 dir (without `.uv-cache`) to `/var/lib/mycelium-snapshots/<UTC time>/data/`,
-checks every database in it, and records the build that wrote the data in
+checks every database in it, keeps the previous build's code (without its
+venv) in `app/` beside it, and records the build that wrote the data in
 `/var/lib/mycelium-snapshots/<UTC time>/BUILD`. The newest five are kept
 (`MYC_KEEP_SNAPSHOTS`). Each is a full copy, so leave room for five data
 dirs on the disk.
