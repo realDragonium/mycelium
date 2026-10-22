@@ -143,7 +143,7 @@ The validator checks text against the chosen `kind` and **rejects with a reason*
 
 `allow_phrasing_violations=True` bypasses the check — use it for verbatim quotes/contract clauses and the §4 carve-out, not to dodge a real split.
 
-Rule phrasing (`equals`, `is one of`, `is bounded`) is independent and does **not** trip the event/state/capability checks. The rule/state distinction is the easiest place to go wrong → `references/rule-kind.md`.
+Rule phrasing (`must`, `may`, `is required to`, `equals`, `is one of`, `is bounded`) is independent and does **not** trip the event/state/capability checks. The rule/state distinction is the easiest place to go wrong → `references/rule-kind.md`.
 
 ---
 

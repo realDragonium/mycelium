@@ -1,3 +1,5 @@
+import pytest
+
 from mycelium import phrasing
 
 # ─── normalization ──────────────────────────────────────────────────────────
@@ -571,6 +573,43 @@ def test_capability_rejects_obligation_modal():
 def test_capability_rejects_sequencing():
     v = phrasing.check("user will be logged out", kind="capability")
     assert "sequencing" in categories(v)
+
+
+# ─── per-kind dispatch: rule ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A user must verify their email address",
+        "A user must not share their API key",
+        "A reader may read statements",
+        "A writer is required to supply a reason",
+        "A draft shall carry a title",
+        "An admin should rotate the session secret",
+        "A user has to accept the terms of service",
+        "A revoked token never grants access",
+        "Kind boost is a number between 0 and 100",
+        "Statement kind is one of: event, state, capability, rule, property",
+    ],
+)
+def test_rule_accepts_obligation_permission_and_definition_forms(text):
+    assert phrasing.check(text, kind="rule") == []
+
+
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        ("A user must verify their email and accept the terms", "compound"),
+        ("A user must verify their email when they sign up", "precondition_in_text"),
+        ("Every user must verify their email address", "universal_claim"),
+        ("A user usually must verify their email address", "hedge"),
+        ("A user's status is set to verified", "hidden_event_state"),
+        ("A verification email will be sent", "sequencing"),
+    ],
+)
+def test_rule_still_rejects_the_common_catalog_and_sequencing(text, category):
+    assert category in categories(phrasing.check(text, kind="rule"))
 
 
 # ─── per-kind dispatch: event (default + open kinds) ────────────────────────

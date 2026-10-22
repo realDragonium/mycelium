@@ -45,7 +45,12 @@ Capability-only:
                             capabilities
   - sequencing            — "will" describes a future event
 
-Open kinds (anything outside event/state/capability) run the event
+Rule-only:
+  - sequencing            — "will" describes a future event. Everything
+                            the other kinds reject as rule- or
+                            property-shaped is how a rule is phrased.
+
+Open kinds (anything outside event/state/capability/rule) run the event
 catalog as the default — same posture as link types, where unknown
 kinds get the generic baseline.
 
@@ -328,13 +333,10 @@ def _phrase_span(tokens: list[Token]) -> tuple[int, int]:
 
 
 def _check_modals(doc: Doc, original: str, pos_map: list[int]) -> list[Violation]:
-    """Modal AUX → rule_shaped (obligation/recommendation) or sequencing
-    (the "will" case: usually points at a follow-up statement)."""
+    """Obligation/recommendation modal AUX → rule_shaped."""
     out: list[Violation] = []
     for tok in doc:
-        if tok.pos_ != "AUX":
-            continue
-        if tok.lemma_ in _MODAL_LEMMAS:
+        if tok.pos_ == "AUX" and tok.lemma_ in _MODAL_LEMMAS:
             n_start, n_end = _token_span(tok)
             out.append(
                 _violation(
@@ -347,7 +349,14 @@ def _check_modals(doc: Doc, original: str, pos_map: list[int]) -> list[Violation
                     pos_map=pos_map,
                 )
             )
-        elif tok.lemma_ in _SEQUENCING_MODAL_LEMMAS:
+    return out
+
+
+def _check_sequencing(doc: Doc, original: str, pos_map: list[int]) -> list[Violation]:
+    """ "will" AUX → sequencing: it usually points at a follow-up statement."""
+    out: list[Violation] = []
+    for tok in doc:
+        if tok.pos_ == "AUX" and tok.lemma_ in _SEQUENCING_MODAL_LEMMAS:
             n_start, n_end = _token_span(tok)
             out.append(
                 _violation(
@@ -780,6 +789,16 @@ def _atomicity_checks(
     return violations
 
 
+def _rule_shape_checks(doc: Doc, original: str, pos_map: list[int]) -> list[Violation]:
+    """Run the detectors for text that states a rule under a non-rule kind."""
+    violations: list[Violation] = []
+    violations.extend(_check_modals(doc, original, pos_map))
+    violations.extend(_check_rule_adverbs(doc, original, pos_map))
+    violations.extend(_check_periphrastic_modals(doc, original, pos_map))
+    violations.extend(_check_copula_rules(doc, original, pos_map))
+    return violations
+
+
 def check(text: str, kind: str = "event") -> list[Violation]:
     """Run every check against `text` and return all violations.
 
@@ -795,8 +814,11 @@ def check(text: str, kind: str = "event") -> list[Violation]:
                       Allows "is a / has a" — states ARE conditions.
       - capability  — rejects rule modals and sequencing. Allows
                       capability modals (can / may / is able to).
+      - rule        — rejects sequencing only. Obligation and
+                      permission modals, "is required to", "never",
+                      and "is a" are what a rule states.
 
-    Open kinds (anything outside the three above) run the event
+    Open kinds (anything outside the four above) run the event
     catalog as the default — same posture as link types, where
     unknown kinds inherit the generic baseline.
 
@@ -821,30 +843,26 @@ def check(text: str, kind: str = "event") -> list[Violation]:
     violations.extend(_check_hidden_event_state(normalized, text, pos_map))
 
     # --- Per-kind catalog ---
+    # A `rule` adds nothing past sequencing: obligations, permissions,
+    # invariants, definitions and bounds are what a rule states, so the
+    # "must / may / shall", "is required to", "never / always" and "is a"
+    # forms the other kinds reject are the rule's own vocabulary.
+    violations.extend(_check_sequencing(doc, text, pos_map))
     if kind == "state":
-        # States are conditions holding. Reject rule-shape (must/should),
-        # sequencing (will), and capability modals (can/may/is able to).
-        # Allow copula property ("is a"), possession ("has a"), structural
-        # verbs — those describe states.
-        violations.extend(_check_modals(doc, text, pos_map))
-        violations.extend(_check_rule_adverbs(doc, text, pos_map))
-        violations.extend(_check_periphrastic_modals(doc, text, pos_map))
-        violations.extend(_check_copula_rules(doc, text, pos_map))
+        # States are conditions holding. Reject rule-shape (must/should)
+        # and capability modals (can/may/is able to). Allow copula
+        # property ("is a"), possession ("has a"), structural verbs —
+        # those describe states.
+        violations.extend(_rule_shape_checks(doc, text, pos_map))
         violations.extend(_check_capability_modals_in_state(doc, text, pos_map))
     elif kind == "capability":
         # Capabilities are modal claims. Reject obligation modals
-        # (must/should), sequencing (will), and structural verbs.
-        # Allow capability modals (can/may/could/might) and "is able to".
-        violations.extend(_check_modals(doc, text, pos_map))
-        violations.extend(_check_rule_adverbs(doc, text, pos_map))
-        violations.extend(_check_periphrastic_modals(doc, text, pos_map))
-        violations.extend(_check_copula_rules(doc, text, pos_map))
-    else:
+        # (must/should). Allow capability modals (can/may/could/might)
+        # and "is able to".
+        violations.extend(_rule_shape_checks(doc, text, pos_map))
+    elif kind != "rule":
         # `event` and any open kind: full event catalog.
-        violations.extend(_check_modals(doc, text, pos_map))
-        violations.extend(_check_rule_adverbs(doc, text, pos_map))
-        violations.extend(_check_periphrastic_modals(doc, text, pos_map))
-        violations.extend(_check_copula_rules(doc, text, pos_map))
+        violations.extend(_rule_shape_checks(doc, text, pos_map))
         violations.extend(_check_copula_property(doc, text, pos_map))
         violations.extend(_check_have_property(doc, text, pos_map))
         violations.extend(_check_structural_verbs(doc, text, pos_map))
