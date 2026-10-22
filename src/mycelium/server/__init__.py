@@ -61,6 +61,13 @@ from .admission import (
 from .admission import (
     model_loop_slot as model_loop_slot,
 )
+from .draft_queue import (
+    _LIST_TOOL_KINDS,
+    _MUTATION_PREFIXES,
+    _list_from_draft,
+    _queue_draft_op,
+    _resolve_draft_target,
+)
 from .indexes import (
     _clear_dirty_marker,
     _dirty_marker_path,
@@ -377,42 +384,6 @@ def tool(
     return _register
 
 
-# Prefixes that mark a tool as a substrate mutation. Tools whose name
-# starts with one of these become "draftable": they accept an optional
-# `draft_id` kwarg, and a drafter principal automatically routes them
-# to a session-scoped draft instead of touching the substrate.
-_MUTATION_PREFIXES = (
-    "upsert_",
-    "add_",
-    "delete_",
-    "remove_",
-    "replace_",
-    "patch_",
-    "rename_",
-    "move_",
-    "merge_",
-)
-
-
-# List tools that have a natural "what's queued in this draft" view: when
-# they're called with an explicit `draft_id`, the wrapper returns the
-# draft's ops of matching kinds instead of hitting the substrate. The
-# return shape is `list[dict]` either way; with draft_id, each dict is
-# the op payload plus `_seq` and `_kind` markers so callers can tell
-# which queued op produced it.
-#
-# Get / search / discover tools aren't here on purpose — most have a
-# single-item return shape, and matching by name/id against arbitrary
-# op payloads gets fragile fast. Use `get_draft(draft_id)` if you need
-# the full op list for one draft.
-_LIST_TOOL_KINDS: dict[str, tuple[str, ...]] = {
-    "list_statements": ("upsert_statement",),
-    "list_entities": ("upsert_entity",),
-    "list_link_types": ("upsert_link_type",),
-    "list_entity_link_types": ("upsert_entity_link_type",),
-    "list_statement_kinds": ("upsert_statement_kind",),
-}
-
 #: Cached unmodified signatures of mutation tools, so the wrapper can
 #: bind incoming kwargs against the function's *real* parameters when
 #: building the draft op payload (after we've already popped draft_id).
@@ -462,108 +433,6 @@ def _add_draft_id_to_signature(
     new_sig = sig.replace(parameters=params, return_annotation=return_ann)
     wrapper.__signature__ = new_sig  # type: ignore[attr-defined]
     wrapper.__annotations__ = {**resolved, "draft_id": str | None, "return": return_ann}
-
-
-def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
-    """Decide whether this tool call should be redirected to a draft.
-
-    Returns the target draft_id, or None to mean 'execute against the
-    substrate normally'. Three cases:
-
-      1. Explicit `draft_id` from the caller — must reference an open
-         draft. Raises if missing/non-open.
-      2. Drafter principal, no explicit draft_id — find or create the
-         session-scoped open draft. Requires a session id.
-      3. Anything else — return None.
-    """
-    from .. import auth as _auth
-    from .. import drafts_store
-
-    if draft_id is not None:
-        row = drafts_store.get_draft(_drafts_db(), draft_id)
-        if row is None:
-            raise ValueError(f"draft_id '{draft_id}' not found")
-        if drafts_store.status_for(row) != "open":
-            raise ValueError(
-                f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
-                f"only open drafts accept new ops"
-            )
-        return draft_id
-
-    if principal is not None and principal.role == "drafter":
-        # Prefer the MCP session id when there is one (one auto-draft per
-        # active conversation), and fall back to a principal-scoped key
-        # when there isn't. The fallback is the common case, not the edge
-        # one: the 2026-07-28 protocol has no sessions at all, many 2025
-        # clients don't echo `Mcp-Session-Id` back on tool calls, and the
-        # REST mirror never had one. Net effect: a drafter has at most one
-        # open auto-draft at a time across all their clients, and must
-        # submit it before another opens. A drafter who wants two at once
-        # passes `draft_id` explicitly, which always wins over
-        # auto-targeting.
-        session_id = _auth.current_session_id.get() or f"actor:{principal.id}"
-        row = drafts_store.find_open_session_draft(
-            _drafts_db(), session_id, principal.id
-        )
-        if row is not None:
-            return row["id"]
-        with store.transaction(_drafts_db()):
-            return drafts_store.create_draft(
-                _drafts_db(),
-                created_by=principal.id,
-                session_id=session_id,
-            )
-
-    return None
-
-
-def _list_from_draft(draft_id: str, kinds: tuple[str, ...]) -> list[dict[str, Any]]:
-    """Return queued ops in a draft whose kind is in `kinds`, each shaped
-    as the op payload plus `_seq`/`_kind` markers so the caller can map
-    items back to specific ops. Raises if the draft id doesn't resolve."""
-    from .. import drafts_store
-
-    row = drafts_store.get_draft(_drafts_db(), draft_id)
-    if row is None:
-        raise ValueError(f"draft_id '{draft_id}' not found")
-    ops = drafts_store.list_ops(_drafts_db(), draft_id)
-    out: list[dict[str, Any]] = []
-    for op in ops:
-        if op["kind"] not in kinds:
-            continue
-        item = {"_seq": op["seq"], "_kind": op["kind"]}
-        item.update(_json.loads(op["payload_json"]))
-        out.append(item)
-    return out
-
-
-def _queue_draft_op(
-    draft_id: str, kind: str, payload: dict, principal
-) -> dict[str, Any]:
-    """Append a queued op to the draft and return a JSON-friendly
-    receipt. Used as the return value of the redirected tool call so the
-    agent sees what happened instead of a normal substrate response."""
-    from .. import drafts_store
-
-    actor = principal.id if principal is not None else None
-    # Drop None defaults so the stored payload only carries the args the
-    # caller actually supplied — replay re-applies defaults at apply time.
-    clean = {k: v for k, v in payload.items() if v is not None}
-    with store.transaction(_drafts_db()):
-        seq = drafts_store.add_op(
-            _drafts_db(),
-            draft_id=draft_id,
-            kind=kind,
-            payload=clean,
-            created_by=actor,
-        )
-        revision = drafts_store.current_revision(_drafts_db(), draft_id)
-    return {
-        "draft_id": draft_id,
-        "seq": seq,
-        "queued": kind,
-        "revision": revision,
-    }
 
 
 class LinkSpec(TypedDict):

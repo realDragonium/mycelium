@@ -31,6 +31,7 @@ from mycelium.docgen.tools import (
     REVIEW_TOOL,
     build_tools,
 )
+from mycelium.server import draft_queue
 
 # --------------------------------------------------------------------------- #
 # Fakes
@@ -505,7 +506,7 @@ def test_no_tool_the_model_sees_can_reach_the_substrate_or_a_draft():
 
     tools = build_tools(InProcessSubstrate(server).tool_specs())
     for tool in tools:
-        assert not tool["name"].startswith(server._MUTATION_PREFIXES), tool["name"]
+        assert not tool["name"].startswith(draft_queue._MUTATION_PREFIXES), tool["name"]
         assert "draft_id" not in (tool["input_schema"].get("properties") or {})
 
 
