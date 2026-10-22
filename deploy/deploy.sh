@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
-# Push the local mycelium checkout to a remote server and restart the
-# service. Run from your laptop. Assumes the server has already been
-# bootstrapped with `deploy/install-server.sh`.
+# Push the local mycelium checkout to a remote server, snapshot its data
+# and restart into the new build. Run from your laptop. Assumes the server
+# has already been bootstrapped with `deploy/install-server.sh`.
 #
 # Configure via env vars (or edit defaults below):
-#   MYC_SSH_HOST   — e.g. mycelium@your-vps.example.com
-#   MYC_SSH_PORT   — defaults to 22
-#   MYC_REMOTE_DIR — defaults to /opt/mycelium
-#   MYC_SERVICE    — defaults to mycelium
+#   MYC_SSH_HOST        — e.g. mycelium@your-vps.example.com
+#   MYC_SSH_PORT        — defaults to whatever ~/.ssh/config says
+#   MYC_REMOTE_DIR      — defaults to /opt/mycelium
+#   MYC_SERVICE         — defaults to mycelium
+#   MYC_DATA_DIR        — defaults to /var/lib/mycelium
+#   MYC_SNAPSHOT_DIR    — defaults to /var/lib/mycelium-snapshots
+#   MYC_KEEP_SNAPSHOTS  — defaults to 5
 #
 # Usage:
 #   MYC_SSH_HOST=root@1.2.3.4 deploy/deploy.sh
 #   MYC_SSH_HOST=root@1.2.3.4 deploy/deploy.sh --skip-restart
+#
+# Before installing the new build the server stops the service and copies
+# the data dir to $MYC_SNAPSHOT_DIR/<UTC time>/, keeping the newest
+# $MYC_KEEP_SNAPSHOTS. If the snapshot fails the deploy aborts and the
+# current build is started again. --skip-restart installs without stopping,
+# snapshotting or restarting (first deploy). The server side is
+# deploy/release.sh.
 #
 # What gets shipped: everything under the repo root except common
 # transient/non-source paths (see EXCLUDES). uv on the remote installs
@@ -27,7 +37,10 @@ SSH_HOST="${MYC_SSH_HOST:-}"
 SSH_PORT="${MYC_SSH_PORT:-}"
 REMOTE_DIR="${MYC_REMOTE_DIR:-/opt/mycelium}"
 SERVICE="${MYC_SERVICE:-mycelium}"
-SKIP_RESTART=0
+DATA_DIR="${MYC_DATA_DIR:-/var/lib/mycelium}"
+SNAPSHOT_DIR="${MYC_SNAPSHOT_DIR:-/var/lib/mycelium-snapshots}"
+KEEP_SNAPSHOTS="${MYC_KEEP_SNAPSHOTS:-5}"
+SKIP_RESTART=
 
 for arg in "$@"; do
     case "$arg" in
@@ -69,36 +82,24 @@ EXCLUDES=(
     --exclude 'cleanup_log.jsonl'
 )
 
-# Rsync into a staging dir under the SSH user's home (no sudo needed),
-# then a single TTY-allocated SSH call moves it into place as root and
-# runs uv sync as the mycelium user. Keeps the rsync transfer itself
-# sudo-free, so the only password prompt is the final ssh call.
-STAGE_DIR="\$HOME/.mycelium-staging"
+# Which build this is, recorded on the server and in each snapshot so a
+# rollback knows what to redeploy.
+BUILD="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+git -C "$REPO_ROOT" diff --quiet HEAD -- || BUILD="$BUILD-dirty"
 
+# Rsync into a staging dir under the SSH user's home (no sudo needed), then
+# one TTY-allocated SSH call runs release.sh from it, so the only password
+# prompt is sudo's.
 echo "==> rsync $REPO_ROOT/ → $SSH_HOST:~/.mycelium-staging/"
 rsync -avz --delete -e "ssh${SSH_PORT:+ -p $SSH_PORT}" \
     "${EXCLUDES[@]}" \
     "$REPO_ROOT/" "$SSH_HOST:.mycelium-staging/"
 
-echo "==> remote: install + uv sync (will prompt for sudo password)"
-# The remote rsync uses --delete to keep the app dir clean of stale
-# source files, but the mycelium user's HOME is /opt/mycelium too —
-# uv and its caches live there. Preserve those across deploys.
-ssh -t ${SSH_PORT:+-p "$SSH_PORT"} "$SSH_HOST" "
-    set -e
-    sudo rsync -a --delete \
-        --exclude='.local/' --exclude='.cache/' --exclude='.venv/' \
-        $STAGE_DIR/ '$REMOTE_DIR/'
-    sudo chown -R mycelium:mycelium '$REMOTE_DIR'
-    sudo -u mycelium -H bash -lc \"cd '$REMOTE_DIR' && /opt/mycelium/.local/bin/uv sync --frozen\"
-"
-
-if [[ "$SKIP_RESTART" -eq 1 ]]; then
-    echo "==> skipping restart (--skip-restart)"
-    exit 0
-fi
-
-echo "==> remote: restart $SERVICE"
-ssh -t ${SSH_PORT:+-p "$SSH_PORT"} "$SSH_HOST" "sudo systemctl restart $SERVICE && sudo systemctl is-active --quiet $SERVICE && echo 'active' || (sudo journalctl -u $SERVICE -n 50 --no-pager; exit 1)"
+echo "==> remote: snapshot, install $BUILD, restart (will prompt for sudo password)"
+ssh -t ${SSH_PORT:+-p "$SSH_PORT"} "$SSH_HOST" \
+    "MYC_REMOTE_DIR='$REMOTE_DIR' MYC_SERVICE='$SERVICE' MYC_DATA_DIR='$DATA_DIR'" \
+    "MYC_SNAPSHOT_DIR='$SNAPSHOT_DIR' MYC_KEEP_SNAPSHOTS='$KEEP_SNAPSHOTS'" \
+    "bash .mycelium-staging/deploy/release.sh \"\$HOME/.mycelium-staging\" '$BUILD'" \
+    "${SKIP_RESTART:+--skip-restart}"
 
 echo "==> done"
