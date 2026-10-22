@@ -39,7 +39,7 @@ function useNavGroups(activeDrafts: number, openGaps: number): { title: string |
     ] },
     { title: 'Add knowledge', items: [
       { label: 'Ingest text', icon: 'ingest', to: { view: 'ingest' }, views: ['ingest'] },
-      { label: 'Research', icon: 'research', to: { view: 'research' }, views: ['research'] },
+      { label: 'Research', icon: 'research', to: { view: 'research', topic: '' }, views: ['research'] },
     ] },
     { title: 'Curate', items: [
       { label: 'Drafts', icon: 'prov', to: { view: 'drafts' }, views: ['drafts', 'draft'], badge: activeDrafts },
@@ -124,7 +124,7 @@ function Screen({ route, ingestNonce, refresh }: { route: Route; ingestNonce: nu
     case 'entity': return <EntityDetail id={route.id} />;
     case 'documentation': return <DocumentationWorkspace />;
     case 'ingest': return <IngestSurface key={ingestNonce} />;
-    case 'research': return <ResearchSurface />;
+    case 'research': return <ResearchSurface key={route.topic} topic={route.topic} />;
     case 'drafts': return <DraftsList />;
     case 'draft': return <DraftReview id={route.id} />;
     case 'gaps': return <KnowledgeGapsScreen />;

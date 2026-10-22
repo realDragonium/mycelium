@@ -28,9 +28,9 @@ focuses it.
 | | Entity map | `#/entities?focus=<id>` | Entities and their links; add and remove entity links |
 | | Documents | `#/documentation` | Generate, edit, review and publish documents |
 | Add knowledge | Ingest text | `#/ingest` | Paste prose; a loop extracts a draft |
-| | Research | `#/research` | Point a run at a configured repository |
+| | Research | `#/research?topic=…` | Point a run at a configured repository |
 | Curate | Drafts | `#/drafts`, `#/drafts/<id>` | Review, edit, submit, approve, reject or withdraw drafts; answer the reviewer's questions |
-| | Knowledge gaps | `#/gaps` | Resolve, dismiss or reopen reported gaps |
+| | Knowledge gaps | `#/gaps` | Resolve, dismiss or reopen reported gaps; open Research with a gap as the topic |
 | | Names & aliases | `#/names` | Curate a concept's names; decide AI alias suggestions |
 | | Glossary | `#/glossary` | Statement kinds and link types |
 | | Activity | `#/activity` | The audit log of every change |
