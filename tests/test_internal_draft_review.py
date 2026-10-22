@@ -15,7 +15,7 @@ from mycelium import (
     store,
 )
 from mycelium.draft_review_store import Assessment, Correction
-from mycelium.server import runtime
+from mycelium.server import draft_review, runtime
 from settings_helpers import save_model
 from settings_helpers import set_review_controls as _set_review_controls
 from test_reviewed_application import _app, _principal
@@ -413,7 +413,7 @@ def test_authoritative_support_preconditions_survive_later_apply(
             {
                 "kind": "statement",
                 "id": statement_id,
-                "fingerprint": server._fingerprint(
+                "fingerprint": draft_review._fingerprint(
                     server.get_statements([statement_id])
                 ),
             }

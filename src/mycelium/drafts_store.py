@@ -33,7 +33,7 @@ from .connections import ConnectionProvider
 from .link_authoring import reject_entity_statement_additions
 
 if TYPE_CHECKING:  # the record shape is the server's review contract
-    from .server import DraftReviewRecord
+    from .server.draft_review import DraftReviewRecord
 
 DRAFTS_SCHEMA = """
 -- A drafter's pending change set. One open draft per MCP session;

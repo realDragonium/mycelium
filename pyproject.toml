@@ -145,6 +145,7 @@ module = [
     "mycelium.server.batch_planning",
     "mycelium.server.documentation",
     "mycelium.server.draft_queue",
+    "mycelium.server.draft_review",
     "mycelium.server.drafts",
     "mycelium.server.entities",
     "mycelium.server.gaps",

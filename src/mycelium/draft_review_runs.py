@@ -31,7 +31,7 @@ from .ask.substrate import InProcessSubstrate, _json_schema_for
 from .draft_review_store import Answer, Assessment, Mode, ReviewRun
 
 if TYPE_CHECKING:
-    from .server import DraftReviewInspection
+    from .server.draft_review import DraftReviewInspection
 
 logger = logging.getLogger(__name__)
 RUNNER: Callable[[str], Assessment] | None = None
@@ -823,7 +823,9 @@ def _check_correction_knowledge(
 def _supporting_preconditions(
     inspection: DraftReviewInspection, reads: list[Read]
 ) -> list[draft_review_store.Precondition]:
-    from . import server  # local import: server defines fingerprint contracts
+    from .server import (
+        draft_review,
+    )  # local import: server defines fingerprint contracts
 
     conditions = {
         (item["kind"], item["id"]): item
@@ -836,7 +838,7 @@ def _supporting_preconditions(
                 conditions[("entity", identity)] = {
                     "kind": "entity",
                     "id": identity,
-                    "fingerprint": server._fingerprint(read.result),
+                    "fingerprint": draft_review._fingerprint(read.result),
                 }
             continue
         if read.name != "get_statements" or not isinstance(read.result, dict):
@@ -853,7 +855,7 @@ def _supporting_preconditions(
             conditions[("statement", identity)] = {
                 "kind": "statement",
                 "id": identity,
-                "fingerprint": server._fingerprint(
+                "fingerprint": draft_review._fingerprint(
                     {"statements": [statement], "missing": []}
                 ),
             }
@@ -864,6 +866,7 @@ def _validate_corrections(
     result: Assessment, inspection: DraftReviewInspection
 ) -> None:
     from . import server  # local import: validate registered tool contracts
+    from .server import draft_review
 
     ops = inspection["draft"].get("ops")
     if not isinstance(ops, list):
@@ -913,5 +916,5 @@ def _validate_corrections(
             TypeAdapter(tools_by_name[name].__annotations__[key]).validate_python(
                 value, strict=True
             )
-        if server._nested_parameter_findings(name, payload):
+        if draft_review._nested_parameter_findings(name, payload):
             raise ValueError("correction payload has unsupported nested parameters")
