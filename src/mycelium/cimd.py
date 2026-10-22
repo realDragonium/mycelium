@@ -31,8 +31,9 @@ import ipaddress
 import json
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 
 #: Ceiling on the document body. Client metadata is a handful of fields; a

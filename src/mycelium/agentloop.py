@@ -19,10 +19,11 @@ import json
 import logging
 import re
 import time
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 from . import prompt_store
 

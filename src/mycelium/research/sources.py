@@ -18,10 +18,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Mapping
 
 
 class SourceError(RuntimeError):

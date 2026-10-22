@@ -12,7 +12,7 @@ those tables have always stored and that `oauth_server` parses back.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 
 def _fmt(t: datetime) -> str:
@@ -21,10 +21,10 @@ def _fmt(t: datetime) -> str:
 
 def now() -> str:
     """ISO-8601 UTC timestamp with millisecond precision and trailing Z."""
-    return _fmt(datetime.now(timezone.utc))
+    return _fmt(datetime.now(UTC))
 
 
 def days_ago(n: int) -> str:
     """A `now()`-format timestamp `n` days in the past. The format sorts
     lexicographically, so `at < days_ago(n)` is a valid age comparison."""
-    return _fmt(datetime.now(timezone.utc) - timedelta(days=n))
+    return _fmt(datetime.now(UTC) - timedelta(days=n))

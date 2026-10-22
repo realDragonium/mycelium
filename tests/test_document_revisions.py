@@ -626,7 +626,7 @@ def test_legacy_startup_attributes_receipt_after_target_binding(
     if configured:
         configure(monkeypatch)
     document_id = document(db)
-    body = "First body".encode()
+    body = b"First body"
     git_revision = hashlib.sha1(
         f"blob {len(body)}\0".encode() + body, usedforsecurity=False
     ).hexdigest()

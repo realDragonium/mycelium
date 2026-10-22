@@ -32,7 +32,7 @@ import json
 import os
 import sqlite3
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -617,7 +617,7 @@ def main() -> None:
     ]
 
     payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "seed": args.seed,
         "algorithm": args.algorithm,
         "iters": iters,

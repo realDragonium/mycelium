@@ -17,8 +17,9 @@ import logging
 import os
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import product_settings, research_store
 

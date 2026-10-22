@@ -18,10 +18,11 @@ import json
 import sqlite3
 import threading
 from collections import defaultdict
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .. import timestamps
 from ..connections import ConnectionProvider

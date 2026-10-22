@@ -72,7 +72,7 @@ class IngestConfig:
     trace_dir: str | None = None
 
     @classmethod
-    def from_env(cls) -> "IngestConfig":
+    def from_env(cls) -> IngestConfig:
         def _f(name: str, default: float) -> float:
             v = os.environ.get(name)
             return float(v) if v else default

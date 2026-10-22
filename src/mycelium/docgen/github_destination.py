@@ -8,9 +8,10 @@ import logging
 import os
 import re
 import unicodedata
+from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Literal, Mapping, TypeAlias, overload
+from typing import Literal, TypeAlias, overload
 from urllib.parse import quote, urlsplit
 
 import httpx

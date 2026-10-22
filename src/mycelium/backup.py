@@ -49,7 +49,7 @@ import sqlite3
 import tarfile
 import tempfile
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
@@ -876,7 +876,7 @@ def _safety_snapshot(data_dir: Path) -> Path:
     """Snapshot the current data dir before --force clobbers it. The
     archive lands next to (not inside) the data dir so the wipe doesn't
     eat the safety net."""
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = data_dir.parent / f"{data_dir.name}.before-restore.{timestamp}.tar.gz"
     export_substrate(data_dir, out, include_history=True, include_vectors=True)
     return out
@@ -902,7 +902,7 @@ def _wipe_data_dir(data_dir: Path) -> None:
 
 
 def _now_iso() -> str:
-    t = datetime.now(timezone.utc)
+    t = datetime.now(UTC)
     return f"{t.strftime('%Y-%m-%dT%H:%M:%S')}.{t.microsecond // 1000:03d}Z"
 
 

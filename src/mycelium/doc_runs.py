@@ -26,7 +26,8 @@ import logging
 import os
 import sqlite3
 import threading
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from . import ai_prompts, docs_store, product_settings, prompt_store
 from .ai import Provider

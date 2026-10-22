@@ -36,9 +36,9 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from .. import ai, ai_prompts, tracing
 from ..agentloop import (

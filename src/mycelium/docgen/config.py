@@ -139,7 +139,7 @@ class DocgenConfig:
     trace_dir: str | None = None
 
     @classmethod
-    def from_env(cls, *, provider: Provider | None = None) -> "DocgenConfig":
+    def from_env(cls, *, provider: Provider | None = None) -> DocgenConfig:
         limits = product_settings.get(product_settings.DocgenSettings)
         selected = model_settings.get("docgen")
         selected_provider = (

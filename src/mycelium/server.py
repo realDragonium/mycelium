@@ -22,10 +22,10 @@ import sqlite3
 import sys
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal, NotRequired, TypedDict
+from typing import Annotated, Any, Literal, NotRequired, TypedDict
 
 import anyio
 import anyio.to_thread
@@ -294,7 +294,7 @@ def _model_loop_limiter() -> anyio.CapacityLimiter:
 
 
 @functools.cache
-def _model_loop_budget() -> "Capacity":
+def _model_loop_budget() -> Capacity:
     return Capacity(_model_loop_max_concurrent)
 
 

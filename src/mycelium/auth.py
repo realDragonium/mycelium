@@ -38,7 +38,7 @@ import secrets
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Literal
 
 from .require import require
@@ -162,7 +162,7 @@ def required_role_for(func_name: str) -> Role:
     return "writer"
 
 
-def principal_satisfies(principal: "Principal", required: str) -> bool:
+def principal_satisfies(principal: Principal, required: str) -> bool:
     # Drafters can invoke every write/delete/merge tool: the @tool wrapper
     # intercepts and redirects their calls to a draft instead of touching
     # the substrate. So for gate purposes a drafter satisfies writer AND
@@ -179,7 +179,7 @@ def is_valid_role(role: str) -> bool:
     return role in _ROLE_RANK
 
 
-def principal_has_real_role(principal: "Principal", required: str) -> bool:
+def principal_has_real_role(principal: Principal, required: str) -> bool:
     """Strict role check that *ignores* the drafter-equivalence shortcut.
 
     Used by curator-only operations (approve/reject a draft) where the
@@ -283,7 +283,7 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
         return None
     conn.execute(
         "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
-        (datetime.now(timezone.utc).isoformat(), row["token_id"]),
+        (datetime.now(UTC).isoformat(), row["token_id"]),
     )
     return Principal(
         id=row["user_id"],
@@ -319,7 +319,7 @@ def resolve_session_user(
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def create_user(

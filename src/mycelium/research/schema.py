@@ -14,7 +14,7 @@ invents none of its own.
 
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -58,4 +58,4 @@ class NothingFound(BaseModel):
     trace: dict = Field(default_factory=dict)
 
 
-ResearchResult = Union[ResearchDraftCreated, NothingFound]
+ResearchResult = ResearchDraftCreated | NothingFound

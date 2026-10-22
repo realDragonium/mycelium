@@ -65,7 +65,7 @@ class ResearchConfig:
     trace_dir: str | None = None
 
     @classmethod
-    def from_env(cls) -> "ResearchConfig":
+    def from_env(cls) -> ResearchConfig:
         def _f(name: str, default: float) -> float:
             v = os.environ.get(name)
             return float(v) if v else default

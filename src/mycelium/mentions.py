@@ -51,8 +51,8 @@ matching algorithm.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
 
 from . import survey
 from .phrasing import normalize_with_map

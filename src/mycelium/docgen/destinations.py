@@ -14,8 +14,9 @@ import json
 import sqlite3
 import string
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping, Protocol, cast
+from typing import Protocol, cast
 
 from .schema import CurrentDocument
 

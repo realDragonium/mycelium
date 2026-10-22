@@ -33,9 +33,9 @@ import sys
 import tempfile
 import time
 import zlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 

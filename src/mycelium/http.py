@@ -15,9 +15,10 @@ import json
 import os
 import secrets
 import time
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import anyio.from_thread
 import anyio.to_thread

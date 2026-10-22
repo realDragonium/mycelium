@@ -205,10 +205,10 @@ _HIDDEN_EVENT_STATE_PHRASES = phrasing_cues.HIDDEN_EVENT_STATE_PHRASES
 # ─── lazy-loaded spaCy ──────────────────────────────────────────────────────
 
 _MODEL_NAME = "en_core_web_sm"
-_nlp: "Language | None" = None
+_nlp: Language | None = None
 
 
-def get_nlp() -> "Language":
+def get_nlp() -> Language:
     """Return the shared lazily loaded spaCy pipeline."""
     global _nlp
     if _nlp is None:
@@ -316,18 +316,18 @@ def _violation(
     )
 
 
-def _token_span(tok: "Token") -> tuple[int, int]:
+def _token_span(tok: Token) -> tuple[int, int]:
     return (tok.idx, tok.idx + len(tok.text))
 
 
-def _phrase_span(tokens: list["Token"]) -> tuple[int, int]:
+def _phrase_span(tokens: list[Token]) -> tuple[int, int]:
     return (tokens[0].idx, tokens[-1].idx + len(tokens[-1].text))
 
 
 # ─── per-category detection ─────────────────────────────────────────────────
 
 
-def _check_modals(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_modals(doc: Doc, original: str, pos_map: list[int]) -> list[Violation]:
     """Modal AUX → rule_shaped (obligation/recommendation) or sequencing
     (the "will" case: usually points at a follow-up statement)."""
     out: list[Violation] = []
@@ -363,9 +363,7 @@ def _check_modals(doc: "Doc", original: str, pos_map: list[int]) -> list[Violati
     return out
 
 
-def _check_rule_adverbs(
-    doc: "Doc", original: str, pos_map: list[int]
-) -> list[Violation]:
+def _check_rule_adverbs(doc: Doc, original: str, pos_map: list[int]) -> list[Violation]:
     """ADV "never" / "always" → rule_shaped."""
     out: list[Violation] = []
     for tok in doc:
@@ -386,7 +384,7 @@ def _check_rule_adverbs(
 
 
 def _check_periphrastic_modals(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """need to + verb / have to + verb → rule_shaped.
 
@@ -413,9 +411,7 @@ def _check_periphrastic_modals(
     return out
 
 
-def _check_copula_rules(
-    doc: "Doc", original: str, pos_map: list[int]
-) -> list[Violation]:
+def _check_copula_rules(doc: Doc, original: str, pos_map: list[int]) -> list[Violation]:
     """is/are required/allowed/prohibited/... to + verb → rule_shaped.
 
     Detection: VERB token with lemma in COPULA_RULE_LEMMAS, an auxpass
@@ -443,7 +439,7 @@ def _check_copula_rules(
 
 
 def _check_copula_property(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """is/are/was a/an <noun> → property_shaped (entity description).
 
@@ -475,7 +471,7 @@ def _check_copula_property(
 
 
 def _check_have_property(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """has/have a/an <noun> → property_shaped.
 
@@ -506,7 +502,7 @@ def _check_have_property(
 
 
 def _check_structural_verbs(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """consists of / belongs to / comprises → property_shaped."""
     out: list[Violation] = []
@@ -528,7 +524,7 @@ def _check_structural_verbs(
 
 
 def _check_compound_clauses(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """CCONJ "and" joining two VERB heads → compound.
 
@@ -561,7 +557,7 @@ def _check_compound_clauses(
     return out
 
 
-def _check_semicolons(doc: "Doc", original: str, pos_map: list[int]) -> list[Violation]:
+def _check_semicolons(doc: Doc, original: str, pos_map: list[int]) -> list[Violation]:
     """Any semicolon → compound."""
     out: list[Violation] = []
     for tok in doc:
@@ -582,7 +578,7 @@ def _check_semicolons(doc: "Doc", original: str, pos_map: list[int]) -> list[Vio
 
 
 def _check_precondition_sconj(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """when/before/after/while/until/if/... → precondition_in_text.
 
@@ -612,7 +608,7 @@ def _check_precondition_sconj(
 
 
 def _check_universal_quantifier(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """every/all/each/any <noun> or everyone/nobody/... → universal_claim.
 
@@ -689,7 +685,7 @@ def _check_hidden_event_state(
 
 
 def _check_capability_modals_in_state(
-    doc: "Doc", original: str, pos_map: list[int]
+    doc: Doc, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """can / may / could / might / is able to → capability_in_state.
 
@@ -773,7 +769,7 @@ def _check_hedges(
 
 
 def _atomicity_checks(
-    doc: "Doc", normalized: str, original: str, pos_map: list[int]
+    doc: Doc, normalized: str, original: str, pos_map: list[int]
 ) -> list[Violation]:
     """Run the four detectors that decide whether text is atomic."""
     violations: list[Violation] = []

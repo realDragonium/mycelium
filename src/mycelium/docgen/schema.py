@@ -18,7 +18,7 @@ made that choice, and the row should show it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Union
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -139,4 +139,4 @@ class NothingWritten(BaseModel):
     trace: dict = Field(default_factory=dict)
 
 
-DocgenResult = Union[DocumentWritten, NothingWritten]
+DocgenResult = DocumentWritten | NothingWritten
