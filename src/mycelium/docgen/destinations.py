@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from .schema import CurrentDocument
+from .schema import CurrentDocument, PullRequestState
 
 
 class DestinationError(RuntimeError):
@@ -49,6 +49,9 @@ class DeliveryDocument:
     delivered_path: str | None = None
     delivered_content_revision: str | None = None
     revision_source_content_revision: str | None = None
+    #: Every blob this document published. The base branch holding one of
+    #: them is Mycelium's own text, as after a later PR closed unmerged.
+    published_content_revisions: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -57,13 +60,15 @@ class Delivery:
     path: str
     reference: str
     content_revision: str
+    pull_request_number: int | None = None
 
-    def serialize(self) -> dict[str, str]:
+    def serialize(self) -> dict[str, str | int | None]:
         return {
             "destination": self.destination,
             "path": self.path,
             "reference": self.reference,
             "content_revision": self.content_revision,
+            "pull_request_number": self.pull_request_number,
         }
 
 
@@ -90,7 +95,14 @@ class DestinationBackend(Protocol):
         document_id: str,
         slug: str,
         env: Mapping[str, str] | None = None,
-    ) -> CurrentDocument: ...
+    ) -> CurrentDocument | None: ...
+
+    def pull_request_state(
+        self,
+        destination: DestinationConfig,
+        number: int,
+        env: Mapping[str, str] | None = None,
+    ) -> PullRequestState: ...
 
 
 def load_destinations(
@@ -216,8 +228,14 @@ def read_document(
     document_id: str,
     slug: str,
     env: Mapping[str, str] | None = None,
-) -> CurrentDocument:
+) -> CurrentDocument | None:
     return _backend(config).read(config, path, document_id, slug, env)
+
+
+def pull_request_state(
+    config: DestinationConfig, number: int, env: Mapping[str, str] | None = None
+) -> PullRequestState:
+    return _backend(config).pull_request_state(config, number, env)
 
 
 def _backend(config: DestinationConfig) -> DestinationBackend:

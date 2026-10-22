@@ -157,7 +157,7 @@ def test_runner_resolution_lands_on_the_run_and_the_document(tmp_path):
     assert document["statement_ids"] == ["stm_1", "stm_2"]
 
 
-def test_a_matched_run_updates_the_document_and_reports_its_id(tmp_path):
+def test_a_creation_run_never_writes_into_the_document_the_model_matched(tmp_path):
     conn = _conn(tmp_path)
     first_run_id = _start(
         conn, tmp_path, lambda prompt, *, guideline_set, document_type: _document()
@@ -179,10 +179,81 @@ def test_a_matched_run_updates_the_document_and_reports_its_id(tmp_path):
 
     run = docs_store.serialize_run(docs_store.get_run(conn, second_run_id))
     assert run["matched_document_id"] == document_id
-    assert run["document_id"] == document_id
-    assert docs_store.get_document(conn, document_id)["slug"] == "how-to-x"
-    assert docs_store.get_document(conn, document_id)["title"] == "How to X safely"
-    assert docs_store.get_document(conn, document_id)["body"].endswith("Revised.\n")
+    assert run["document_id"] not in (None, document_id)
+    assert docs_store.get_document(conn, document_id)["title"] == "How to X"
+    assert docs_store.get_document(conn, document_id)["current_revision"] == 1
+
+
+def _anchored(conn, tmp_path, runner, **overrides) -> str:
+    identity = {
+        "guideline_set": "kb",
+        "document_type": "how-to",
+        "anchor_entity_id": "ent_x",
+    }
+    return _start(conn, tmp_path, runner, **{**identity, **overrides})
+
+
+def test_an_anchored_request_creates_once_then_revises_the_same_document(
+    tmp_path, monkeypatch
+):
+    conn = _conn(tmp_path)
+    seen = []
+
+    def runner(prompt, *, revision_target=None, **kwargs):
+        seen.append(revision_target)
+        if revision_target is None:
+            return _document()
+        return _document(title="Doing X, retitled", slug="doing-x-retitled")
+
+    monkeypatch.setattr(doc_runs, "_default_runner", runner)
+    first = _anchored(conn, tmp_path, None, match_existing=True)
+    doc_runs.wait_all()
+    document_id = docs_store.get_run(conn, first)["document_id"]
+    second = _anchored(conn, tmp_path, None, prompt="add a troubleshooting step")
+    doc_runs.wait_all()
+
+    assert seen[0] is None
+    assert seen[1] is not None and seen[1].document.id == document_id
+    second_run = docs_store.serialize_run(docs_store.get_run(conn, second))
+    assert (second_run["target_document_id"], second_run["target_revision"]) == (
+        document_id,
+        1,
+    )
+    assert second_run["document_id"] == document_id
+    assert second_run["anchor_entity_id"] == "ent_x"
+    document = docs_store.get_document(conn, document_id)
+    assert (document["anchor_entity_id"], document["current_revision"]) == ("ent_x", 2)
+    assert (document["slug"], document["title"]) == ("how-to-x", "Doing X, retitled")
+
+
+def test_an_anchored_document_keeps_the_identity_the_request_named(tmp_path):
+    conn = _conn(tmp_path)
+    run_id = _anchored(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(
+            guideline_set="other-set", document_type="reference"
+        ),
+    )
+    doc_runs.wait_all()
+
+    document = docs_store.get_document(
+        conn, docs_store.get_run(conn, run_id)["document_id"]
+    )
+    assert (document["guideline_set"], document["document_type"]) == ("kb", "how-to")
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"guideline_set": None}, {"document_type": None}],
+)
+def test_an_anchor_without_its_full_identity_is_refused(tmp_path, overrides):
+    conn = _conn(tmp_path)
+
+    with pytest.raises(ValueError, match="An anchor entity needs guideline_set"):
+        _anchored(conn, tmp_path, lambda *args, **kwargs: _document(), **overrides)
+
+    assert docs_store.list_runs(conn) == []
 
 
 def test_review_record_round_trips_onto_the_stored_document(tmp_path):

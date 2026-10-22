@@ -101,6 +101,8 @@ module = [
     "mycelium.doc_runs",
     "mycelium.docgen",
     "mycelium.docgen.config",
+    "mycelium.docgen.github_destination",
+    "mycelium.docgen.publication",
     "mycelium.document_edits",
     "mycelium.documentation_archive",
     "mycelium.documentation_profiles",
@@ -171,13 +173,6 @@ warn_return_any = true
 
 # Ratchet: modules that fail one baseline check, each switched off only for
 # the codes it trips. Fix the blocker, delete the entry.
-
-# Parses GitHub responses EAFP-style (`payload["a"]["b"]` inside
-# `except (KeyError, TypeError)`), which mypy cannot follow through JsonValue.
-# Unblocked by validating each response into a pydantic model.
-[[tool.mypy.overrides]]
-module = "mycelium.docgen.github_destination"
-disable_error_code = ["assignment", "call-overload", "index"]
 
 # `return _unresolvable(ctx, reason)` records the reason on the run context and
 # returns None in one statement, which mypy reads as using a None result.
