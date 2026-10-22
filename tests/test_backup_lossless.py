@@ -173,3 +173,26 @@ def test_force_restore_replaces_only_the_sections_an_archive_carries(
 
     backup.import_substrate(archive, target, force=True)
     assert _emails(target) == {"ada@example.com"}
+
+
+def test_export_reads_the_substrate_as_one_snapshot(populated, tmp_path, monkeypatch):
+    source, _ = populated
+    write_tables = backup._write_tables
+
+    def write_meanwhile(conn, *args, **kwargs):
+        with closing(store.connect(source / "mycelium.db")) as server_conn:
+            server_conn.execute(
+                "INSERT OR IGNORE INTO knowledge_gaps (id, text, created_at) "
+                "VALUES ('gap-late', 'Written during the export.', '2026-10-22')"
+            )
+            server_conn.commit()
+        write_tables(conn, *args, **kwargs)
+
+    monkeypatch.setattr(backup, "_write_tables", write_meanwhile)
+    archive = tmp_path / "instance.tar.gz"
+    backup.export_substrate(source, archive)
+    restored = tmp_path / "restored"
+    backup.import_substrate(archive, restored)
+
+    gaps = {row["id"] for row in _rows(restored / "mycelium.db", "knowledge_gaps")}
+    assert "gap-late" not in gaps

@@ -290,10 +290,16 @@ def export_substrate(
             staging = Path(staging_str)
 
             row_counts: dict[str, int] = {}
+            # One read transaction, pinned before the first table: a server
+            # writing meanwhile cannot leave a link in the archive whose
+            # statement is not.
+            conn.execute("BEGIN")
+            conn.execute("SELECT 1 FROM sqlite_master").fetchone()
             with (staging / "data.jsonl").open("w", encoding="utf-8") as f:
                 _write_tables(conn, f, _DATA_TABLES, row_counts)
                 if include_vectors:
                     _write_tables(conn, f, _VECTOR_ID_TABLES, row_counts)
+            conn.rollback()
 
             if include_history and history_db_path.exists():
                 history_count = _write_history(
