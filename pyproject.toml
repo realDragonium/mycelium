@@ -143,6 +143,7 @@ module = [
     "mycelium.server.admission",
     "mycelium.server.authoring",
     "mycelium.server.batch_planning",
+    "mycelium.server.documentation",
     "mycelium.server.draft_queue",
     "mycelium.server.drafts",
     "mycelium.server.entities",

@@ -1573,7 +1573,7 @@ def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
 
     conn = docs_store.connect(":memory:")
     docs_store.migrate(conn)
-    monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    monkeypatch.setattr(drafts_store, "connection", lambda: conn)
     monkeypatch.setenv(
         "MYCELIUM_DOC_DESTINATIONS",
         json.dumps({"knowledge-base": _entry()}),
