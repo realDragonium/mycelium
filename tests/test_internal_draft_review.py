@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from mycelium import (
+    ai,
     auth,
     draft_review_model,
     draft_review_runs,
@@ -19,7 +20,7 @@ from settings_helpers import set_review_controls as _set_review_controls
 from test_reviewed_application import _app, _principal
 
 
-def _assessment(label="good", corrections=()):
+def _assessment(label="good", corrections=(), contradictions=()):
     return Assessment(
         label=label,
         rationale="Supported by supplied facts.",
@@ -27,6 +28,7 @@ def _assessment(label="good", corrections=()):
         if label == "needs_context"
         else [],
         corrections=list(corrections),
+        contradictions=list(contradictions),
     )
 
 
@@ -228,18 +230,10 @@ def test_automatic_outcomes(running_app, monkeypatch, label):
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment(label))
     draft_id = _draft()
     result = _result(draft_id)
-    assert result["status"] == "completed", result
-    assert (
-        result["application"]
-        == {"good": "applied", "reject": "rejected", "needs_context": "unapplied"}[
-            label
-        ]
-    )
-    assert (
-        server.get_draft(draft_id)["status"]
-        == {"good": "approved", "reject": "rejected", "needs_context": "submitted"}[
-            label
-        ]
+    assert result["status"] == ("failed" if label == "needs_context" else "completed")
+    assert result["application"] == ("applied" if label == "good" else "rejected")
+    assert server.get_draft(draft_id)["status"] == (
+        "approved" if label == "good" else "rejected"
     )
 
 
@@ -402,7 +396,8 @@ def test_supporting_knowledge_change_blocks_automatic_action(running_app, monkey
     result = _result(draft_id)
     assert result["status"] == "failed", result
     assert "supporting knowledge changed" in result["detail"]
-    assert server.get_draft(draft_id)["status"] == "submitted"
+    assert result["application"] == "rejected"
+    assert server.list_entities()["entities"] == []
 
 
 def test_authoritative_support_preconditions_survive_later_apply(
@@ -475,10 +470,13 @@ def test_failed_correction_batch_rolls_back_all_edits(running_app, monkeypatch):
     _request(draft_id)
     result = _result(draft_id)
     assert result["status"] == "failed", result
+    assert result["application"] == "rejected"
     after = server.get_draft(draft_id)
     assert before["ops"] == after["ops"]
     assert before["revision"] == after["revision"]
-    assert drafts_store.list_reviews(server._drafts_db(), draft_id) == []
+    assert [
+        r["outcome"] for r in drafts_store.list_reviews(server._drafts_db(), draft_id)
+    ] == ["rejected"]
 
 
 def test_source_attach_invalidates_completed_assessment(running_app, monkeypatch):
@@ -891,14 +889,125 @@ def test_uninspected_glossary_cannot_be_automatically_overwritten(
     finally:
         auth.current_principal.reset(token)
     result = _result(draft_id)
-    assert result["application"] == "unapplied", result
+    assert result["application"] == "rejected", result
     if as_correction:
-        assert result["status"] == "failed"
         assert "supported tool_name" in result["detail"]
     else:
-        assert result["label"] == "needs_context"
-        assert "upsert_link_type" in result["questions"][0]
-    assert server.get_draft(draft_id)["status"] == "submitted"
-    assert drafts_store.list_reviews(server._drafts_db(), draft_id) == []
+        assert "upsert_link_type" in result["rationale"]
+    assert server.get_draft(draft_id)["status"] == "rejected"
     assert "Original glossary meaning" in json.dumps(server.list_link_types())
     assert "Uninspected overwrite" not in json.dumps(server.list_link_types())
+
+
+def _gaps():
+    return [row["text"] for row in store.list_knowledge_gaps(server._db())]
+
+
+def _automatic():
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
+
+
+def test_resolved_contradiction_is_filed_as_gap_after_apply(running_app, monkeypatch):
+    statement_id = _supporting_statement()
+    correction = Correction(
+        action="append",
+        operation_ref=None,
+        tool_name="replace_text",
+        payload_json=json.dumps(
+            {"id": statement_id, "text": "A supporting feature is retired."}
+        ),
+        reason="The draft supersedes this statement.",
+    )
+    contradiction = draft_review_store.Contradiction(
+        statement_id=statement_id, resolution="Marked the feature as retired."
+    )
+    monkeypatch.setattr(
+        draft_review_runs,
+        "RUNNER",
+        lambda context: _assessment("changes_suggested", [correction], [contradiction]),
+    )
+    _automatic()
+    draft_id = _draft()
+    assert _result(draft_id)["application"] == "applied"
+    [gap] = _gaps()
+    assert draft_id in gap and statement_id in gap
+    assert "Marked the feature as retired." in gap
+
+
+def test_rejected_draft_is_filed_as_gap(running_app, monkeypatch):
+    monkeypatch.setattr(
+        draft_review_runs, "RUNNER", lambda context: _assessment("reject")
+    )
+    _automatic()
+    draft_id = _draft()
+    assert _result(draft_id)["application"] == "rejected"
+    [gap] = _gaps()
+    assert draft_id in gap and "Supported by supplied facts." in gap
+
+
+def test_draft_failure_is_retried_once_then_rejected(running_app, monkeypatch):
+    calls = []
+
+    def model(context):
+        calls.append(context)
+        raise ValueError("Fixture draft defect")
+
+    monkeypatch.setattr(draft_review_runs, "RUNNER", model)
+    _automatic()
+    draft_id = _draft()
+    result = _result(draft_id)
+    assert len(calls) == 2
+    assert result["attempt"] == 2
+    assert result["application"] == "rejected"
+    assert server.get_draft(draft_id)["status"] == "rejected"
+    [gap] = _gaps()
+    assert "Fixture draft defect" in gap
+
+
+def test_provider_failure_is_retried_once_and_never_rejects(running_app, monkeypatch):
+    calls = []
+
+    def model(context):
+        calls.append(context)
+        raise ai.ModelError("Fixture provider outage")
+
+    monkeypatch.setattr(draft_review_runs, "RUNNER", model)
+    _automatic()
+    draft_id = _draft()
+    result = _result(draft_id)
+    assert len(calls) == 2
+    assert result["status"] == "failed"
+    assert result["application"] == "unapplied"
+    assert server.get_draft(draft_id)["status"] == "submitted"
+    assert _gaps() == []
+
+
+def test_new_statement_context_includes_its_closest_live_statements(
+    running_app, monkeypatch
+):
+    statement_id = _supporting_statement()
+    contexts = []
+
+    def model(context):
+        contexts.append(json.loads(context))
+        return _assessment()
+
+    monkeypatch.setattr(draft_review_runs, "RUNNER", model)
+    _automatic()
+    token = _principal("drafter")
+    try:
+        queued = server.upsert_statement(
+            kind="state",
+            text="A supporting feature is available to every company.",
+            links=[],
+            allow_phrasing_violations=True,
+        )
+        server.submit_draft(queued["draft_id"])
+    finally:
+        auth.current_principal.reset(token)
+    result = _result(queued["draft_id"])
+    [context] = contexts
+    assert statement_id in json.dumps(context["existing_knowledge"])
+    assert context["link_types"]
+    assert any(item["id"] == statement_id for item in result["knowledge_preconditions"])

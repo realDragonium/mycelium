@@ -192,7 +192,11 @@ def test_draft_review_uses_saved_behavior_with_fixed_contract(
         seen.append(task.system)
         assert config.provider == provider
         return Assessment(
-            label="good", rationale="Supported", questions=[], corrections=[]
+            label="good",
+            rationale="Supported",
+            questions=[],
+            corrections=[],
+            contradictions=[],
         )
 
     monkeypatch.setattr(ai, "structured", assess)

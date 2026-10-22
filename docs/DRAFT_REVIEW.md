@@ -79,10 +79,14 @@ commit hash, or workflow run ID does not supply the source contents. Attaching
 metadata or evidence after a review starts makes that assessment stale; request
 an explicit rerun after the draft is ready.
 
-The reviewer receives draft operations, supplied evidence, affected knowledge,
-and up to 12 related statements found using existing semantic search. It makes
-one fresh structured-output model call, with no author conversation and no
-external investigation tools. Bounds are 30 affected knowledge records, 90,000
+The reviewer trusts the producer on what the product does and judges how the
+draft fits the existing knowledge: duplicates, contradictions, link type and
+direction, missing links to live neighbours, and entity variants or worse
+descriptions. It receives draft operations, supplied evidence, affected
+knowledge, the link type glossary, and the five closest live statements to each
+new or changed statement, added best matches first until the context is full.
+It makes one fresh structured-output model call, with no author conversation and
+no external investigation tools. Bounds are 30 affected knowledge records, 90,000
 context characters, 6,000 output tokens, and a 90-second HTTP timeout. Two workers
 process accepted runs, sharing the existing model-loop capacity with other tasks.
 A submission burst waits for those workers; duplicate requests for the same draft
@@ -95,13 +99,21 @@ entity are included only for operations that remap existing mentions:
 
 Internal review supports entity, statement, name, and graph-link mutations whose
 records the existing inspection contract fingerprints. Drafts containing other
-operations, including glossary or link-alias edits, receive `needs_context` with
-a request for manual review; no model call or automatic decision is made for
-them. The model cannot append or revise those uninspected mutation families.
+operations, including glossary or link-alias edits, are rejected without a model
+call. The model cannot append or revise those uninspected mutation families.
 
-Missing facts should produce `needs_context` with concrete questions. Failed
-knowledge reads, oversized context, API errors, refusals, and incomplete or invalid
-model output remain explicit failed attempts. They do not authorize application.
+In `review-and-apply` no draft waits for a person. A new statement that
+contradicts a live one wins: the reviewer corrects the live statement and lists
+the contradiction. Failed knowledge reads, oversized context, API errors,
+refusals, and incomplete or invalid model output are explicit failed attempts and
+never authorize application. A failed attempt that recorded no review is run once
+more; if that fails too, the draft is rejected, unless the failure came from the
+model provider, which leaves the draft submitted for a later rerun. A
+`needs_context` answer counts as a failure in this mode.
+
+Every automatic rejection, and every contradiction resolved in an applied draft,
+is filed as a knowledge gap naming the draft and statement, so a person can review
+it on the Gaps page whenever they choose. Nothing waits on that review.
 An automated assessment remains a model judgment; isolated tests verify the
 execution safeguards and API contract, not the model's factual accuracy.
 
@@ -126,7 +138,8 @@ both browser interfaces expose the latest `review_assessment`, including:
 - Selected provider/model, reviewer ID, and control/model settings revisions. Historical attempts
   retain unknown metadata; a selected model does not imply a provider was called.
 - Label (`good`, `changes_suggested`, `reject`, `needs_context`), rationale,
-  questions, and concrete suggested corrections.
+  questions, concrete suggested corrections, resolved contradictions, and the
+  attempt number (2 for the automatic rerun after a failure).
 - Application outcome (`unapplied`, `applied`, `rejected`) and explanatory detail.
 - The authoritative `review_id`, when automatic mode records one.
 
@@ -142,7 +155,7 @@ revision returns 409. The selected model and review controls save atomically.
 explicit rerun. The latter returns `{review: ...}` and enforces the current
 server mode and the caller's real curator role.
 
-An advisory `reject` label leaves the draft submitted. Suggested corrections are
+In `review-only`, an advisory `reject` label leaves the draft submitted. Suggested corrections are
 validated without execution before they are published. Draft edits make the old
 assessment visibly stale in lists and details. Existing curator controls remain
 available for human decisions.

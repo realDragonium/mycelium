@@ -31,12 +31,19 @@ class Correction(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class Contradiction(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    statement_id: str = Field(min_length=1, max_length=200)
+    resolution: str = Field(min_length=1, max_length=2000)
+
+
 class Assessment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     label: Literal["good", "changes_suggested", "reject", "needs_context"]
     rationale: str = Field(min_length=1, max_length=6000)
     questions: list[str] = Field(max_length=12)
     corrections: list[Correction] = Field(max_length=8)
+    contradictions: list[Contradiction] = Field(max_length=8)
 
 
 class ReviewRun(BaseModel):
@@ -60,6 +67,8 @@ class ReviewRun(BaseModel):
     rationale: str | None = None
     questions: list[str] = Field(default_factory=list)
     corrections: list[Correction] = Field(default_factory=list)
+    contradictions: list[Contradiction] = Field(default_factory=list)
+    attempt: int = 1
     application: Literal["unapplied", "applied", "rejected"] = "unapplied"
     detail: str | None = None
     started_at: str = Field(default_factory=timestamps.now)

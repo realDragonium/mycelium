@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import itertools
 import json
 import logging
 import threading
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING
 from pydantic import JsonValue, TypeAdapter
 
 from . import (
+    ai,
     ai_prompts,
     auth,
     draft_review_model,
@@ -36,6 +38,8 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="draft-review")
 _futures: dict[str, Future[None]] = {}
 _spawn_lock = threading.Lock()
 _json_value = TypeAdapter(JsonValue)
+_CONTEXT_LIMIT = 90000
+_RELATED_PER_STATEMENT = 5
 _payload = TypeAdapter(dict[str, JsonValue])
 # These mutation families have entity/statement fingerprints in draft inspection.
 REVIEWABLE_OPERATIONS = frozenset(
@@ -85,7 +89,7 @@ def reviewer(creator: str | None, identity: str) -> auth.Principal:
     return principal
 
 
-def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
+def start(draft_id: str, *, rerun: bool = False, attempt: int = 1) -> ReviewRun:
     from . import server  # local import: server registers the review tools
 
     settings = draft_review_settings.load()
@@ -117,6 +121,7 @@ def start(draft_id: str, *, rerun: bool = False) -> ReviewRun:
         run.reviewer_id = settings.reviewer_id
         run.settings_revision = settings.revision
         run.model_settings_revision = settings.model_revision
+        run.attempt = attempt
         draft_review_store.save(conn, run)
     try:
         principal = reviewer(row["created_by"], settings.reviewer_id)
@@ -151,8 +156,9 @@ def on_submitted(draft_id: str) -> None:
 
 
 def wait_all(timeout: float = 10) -> None:
-    for future in list(_futures.values()):
-        future.result(timeout=timeout)
+    while _futures:
+        for future in list(_futures.values()):
+            future.result(timeout=timeout)
 
 
 def _save(run: ReviewRun) -> None:
@@ -200,21 +206,6 @@ def _context(inspection: DraftReviewInspection) -> tuple[str, list[Read]]:
         )
         name = "get_entity" if item["kind"] == "entity" else "get_statements"
         reads.append(_read(reader, name, args))
-    query = str(draft.get("title") or "")
-    ops = draft.get("ops")
-    if isinstance(ops, list):
-        query += " " + json.dumps(ops, ensure_ascii=False)[:2000]
-    search = _read(reader, "search_statements", {"query": query, "limit": 12})
-    hits = search.result
-    if not isinstance(hits, list):
-        raise ValueError("related knowledge search returned an invalid result")
-    ids = [
-        hit["id"]
-        for hit in hits
-        if isinstance(hit, dict) and isinstance(hit.get("id"), str)
-    ]
-    if ids:
-        reads.append(_read(reader, "get_statements", {"ids": ids}))
     schemas = {
         tool.__name__: _json_schema_for(tool)
         for tool in server.TOOLS
@@ -224,17 +215,77 @@ def _context(inspection: DraftReviewInspection) -> tuple[str, list[Read]]:
         "draft": draft,
         "operation_findings": inspection["operation_findings"],
         "existing_knowledge": [read.result for read in reads],
+        "link_types": _read(reader, "list_link_types", {}).result,
         "correction_tool_schemas": schemas,
-        "evidence_limitations": (
-            "Only supplied evidence and these knowledge records are available. "
-            "PR provenance and URLs do not provide source contents. Search is bounded "
-            "to 12 related statements; unestablished claims require questions."
+        "knowledge_scope": (
+            "existing_knowledge holds the records the draft touches, followed by "
+            "the closest live statements to each new statement, best matches "
+            "first. Supplied evidence, when present, comes from the producer."
         ),
     }
+    if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
+        raise ValueError(
+            f"review context exceeds {_CONTEXT_LIMIT} characters; narrow the draft"
+        )
+    seen = {item["id"] for item in preconditions}
+    for statement_id in _related_statement_ids(reader, draft):
+        if statement_id in seen:
+            continue
+        seen.add(statement_id)
+        read = _read(reader, "get_statements", {"ids": [statement_id]})
+        data["existing_knowledge"].append(read.result)
+        if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
+            data["existing_knowledge"].pop()
+            break
+        reads.append(read)
     context = json.dumps(data, ensure_ascii=False)
-    if len(context) > 90000:
-        raise ValueError("review context exceeds 90000 characters; narrow the draft")
     return context, reads
+
+
+def _related_statement_ids(
+    reader: InProcessSubstrate, draft: dict[str, JsonValue]
+) -> list[str]:
+    queries = _statement_texts(draft.get("ops"))
+    if not queries:
+        ops = json.dumps(draft.get("ops"), ensure_ascii=False)[:2000]
+        queries = [f"{draft.get('title') or ''} {ops}"]
+    rankings: list[list[str]] = []
+    for query in queries:
+        hits = _read(
+            reader,
+            "search_statements",
+            {"query": query, "limit": _RELATED_PER_STATEMENT},
+        ).result
+        if not isinstance(hits, list):
+            raise ValueError("related knowledge search returned an invalid result")
+        rankings.append(
+            [
+                hit["id"]
+                for hit in hits
+                if isinstance(hit, dict) and isinstance(hit.get("id"), str)
+            ]
+        )
+    return [
+        statement_id
+        for rank in itertools.zip_longest(*rankings)
+        for statement_id in rank
+        if statement_id is not None
+    ]
+
+
+def _statement_texts(ops: JsonValue) -> list[str]:
+    texts: list[str] = []
+    for op in ops if isinstance(ops, list) else []:
+        payload = op.get("payload") if isinstance(op, dict) else None
+        if not isinstance(payload, dict):
+            continue
+        if isinstance(payload.get("text"), str):
+            texts.append(payload["text"])
+        statements = payload.get("statements")
+        for item in statements if isinstance(statements, list) else []:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                texts.append(item["text"])
+    return texts
 
 
 def _execute(
@@ -248,7 +299,12 @@ def _execute(
 
     try:
         principal = reviewer(_creator(inspection), settings.reviewer_id)
-        auth.current_principal.set(principal)
+    except Exception as exc:
+        _failed(run, str(exc))
+        _futures.pop(run.run_id, None)
+        return
+    auth.current_principal.set(principal)
+    try:
         with server.model_loop_slot():
             context, reads = _context(inspection)
             instructions = instructions or ai_prompts.resolve("draft_review")
@@ -260,14 +316,18 @@ def _execute(
         run.rationale = result.rationale
         run.questions = result.questions
         run.corrections = result.corrections
+        run.contradictions = result.contradictions
         run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
         _finish(run, inspection, settings, reads)
         run.status = "completed"
         run.finished_at = timestamps.now()
         _save(run)
     except Exception as exc:
-        logger.warning("internal review %s failed: %s", run.run_id, type(exc).__name__)
+        logger.warning(
+            "internal review %s failed: %s: %s", run.run_id, type(exc).__name__, exc
+        )
         _failed(run, str(exc))
+        _follow_up(run, settings, systemic=isinstance(exc, ai.ModelError))
     finally:
         _futures.pop(run.run_id, None)
 
@@ -296,14 +356,12 @@ def _assess(
     )
     if unsupported:
         return Assessment(
-            label="needs_context",
-            rationale="Internal review cannot inspect all knowledge affected by these operations.",
-            questions=[
-                "Can a curator inspect and resolve these operations manually: "
-                + ", ".join(unsupported)
-                + "?"
-            ],
+            label="reject",
+            rationale="Internal review cannot inspect the knowledge these operations "
+            "affect: " + ", ".join(unsupported) + ".",
+            questions=[],
             corrections=[],
+            contradictions=[],
         )
     if RUNNER is not None:
         return RUNNER(context)
@@ -372,12 +430,11 @@ def _finish(
             run.detail = "Advisory assessment only; automatic action disabled by mode or changed settings."
             return
         _mutation_authority(run, inspection, settings)
-        if run.label == "needs_context":
-            run.detail = "Missing evidence; answer the questions and rerun."
-            return
         if not server._reviewed_apply_enabled():
             run.detail = "Reviewed application gate is disabled; no automatic changes."
             return
+        if run.label == "needs_context":
+            raise ValueError("automatic review must apply or reject, not ask questions")
         with store.transaction(drafts_store.connection()):
             _mutation_authority(run, inspection, settings)
             for correction in run.corrections:
@@ -407,6 +464,10 @@ def _finish(
         if run.label == "reject":
             run.application = "rejected"
             run.detail = "Draft rejected by the configured internal reviewer."
+            _report_gap(
+                f"Draft {run.draft_id} was rejected by the internal reviewer: "
+                f"{run.rationale}"
+            )
             return
         _mutation_authority(run, inspection, settings)
         receipt = server.apply_reviewed_draft(run.draft_id, review["review_id"])
@@ -414,6 +475,69 @@ def _finish(
         run.detail = (
             f"Applied through reviewed application {receipt['application_id']}."
         )
+        for contradiction in run.contradictions:
+            _report_gap(
+                f"Draft {run.draft_id} contradicted live statement "
+                f"{contradiction.statement_id}; the internal reviewer resolved it "
+                f"in favour of the draft: {contradiction.resolution}"
+            )
+
+
+def _follow_up(
+    run: ReviewRun, settings: draft_review_settings.Snapshot, *, systemic: bool
+) -> None:
+    # Nobody approves drafts by hand, so a failed automatic review must not
+    # leave its draft queued: run it once more, then reject it unless the
+    # failure was the model provider's rather than the draft's. A run that
+    # already recorded its review failed while applying, which
+    # apply_reviewed_draft recovers.
+    from . import server  # local import: server registers the review tools
+
+    if (
+        run.mode != "review-and-apply"
+        or mode() != "review-and-apply"
+        or run.review_id is not None
+        or run.application != "unapplied"
+        or not server._reviewed_apply_enabled()
+    ):
+        return
+    try:
+        if run.attempt == 1:
+            start(run.draft_id, rerun=True, attempt=2)
+        elif not systemic:
+            _reject(run, settings)
+    except Exception:
+        logger.exception("could not follow up failed review %s", run.run_id)
+
+
+def _reject(run: ReviewRun, settings: draft_review_settings.Snapshot) -> None:
+    from . import server  # local import: server registers the review tools
+
+    reason = f"Automatic review failed twice: {run.detail}"
+    with store.write_lock():
+        inspection = server.inspect_draft_review(run.draft_id)
+        if inspection["draft"].get("status") != "submitted":
+            return
+        _mutation_authority(run, inspection, settings)
+        review = server.record_draft_review(
+            run.draft_id,
+            "rejected",
+            reason,
+            inspection["draft_revision"],
+            inspection["knowledge_preconditions"],
+        )
+        run.review_id = review["review_id"]
+        run.application = "rejected"
+        run.detail = reason
+        _save(run)
+    _report_gap(f"Draft {run.draft_id} was rejected: {reason}")
+
+
+def _report_gap(text: str) -> None:
+    from . import server  # local import: gaps live in the substrate database
+
+    with store.transaction(server._db()):
+        store.create_knowledge_gap(server._db(), text)
 
 
 def _correct(draft_id: str, correction: draft_review_store.Correction) -> None:

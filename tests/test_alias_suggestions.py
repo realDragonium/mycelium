@@ -366,6 +366,7 @@ def test_auto_review_remains_advisory_even_if_model_proposes_acceptance(
                 rationale="The abbreviation is supported.",
                 corrections=[],
                 questions=[],
+                contradictions=[],
             ),
         )
         entry = queue(entity_id, statement_id, extra=True)
