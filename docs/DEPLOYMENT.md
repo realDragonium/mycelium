@@ -122,6 +122,28 @@ MYCELIUM_BOOTSTRAP_ADMIN_EMAIL=you@example.com
 The file is mode `0640`, owned `root:mycelium` — the service user can
 read it but nobody else can.
 
+### Less common settings
+
+None of these are needed for a normal deployment. Model choice, limits,
+concurrency and draft review are not environment settings; they live in AI
+settings (see [AI model configuration](AI_MODELS.md)).
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. |
+| `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
+| `EMBED_TIMEOUT_S` | `30` | Seconds before one Ollama embedding request fails instead of hanging. |
+| `MYCELIUM_RESEARCH_CLONE_TIMEOUT_S` | `120` | Seconds a research run waits for its source clone. |
+| `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
+| `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling traces and loop traces are written. |
+| `MYCELIUM_{ASK,INGEST,RESEARCH,DOCGEN}_TRACE_DIR` | `MYCELIUM_TRACE_DIR` | Per-action override of the trace directory. |
+| `MYCELIUM_{ASK,INGEST,RESEARCH,DOCGEN}_TRACE_LOG` | unset; research uses `<data dir>/research_trace.jsonl` | JSONL file that receives one record per run. |
+| `MYCELIUM_{ASK,INGEST,RESEARCH,DOCGEN}_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | Ask 1 / 5, others 3 / 15 | USD per million tokens used for the cost estimate in traces. Applied only while the action runs its default Claude model. |
+| `MYCELIUM_{INGEST,RESEARCH,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
+| `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
+| `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |
+| `MYCELIUM_DISABLE_REVIEW_SWEEP` | unset | `1` stops the sweep that retries failed draft reviews. Meant for tests. |
+
 > **Want to try it without Auth0 first?** Leave `MYCELIUM_AUTH=off`,
 > leave the OIDC fields blank, skip step 6, and just expose the UI over
 > HTTPS. Every caller will be `local-admin`. Useful for a single-user
