@@ -10,8 +10,6 @@ that surface is a deliberate, documented subset (`docs/MCP_TOOLS.md`).
 from __future__ import annotations
 
 import contextlib
-import cProfile
-import datetime as _dt
 import functools
 import hashlib
 import inspect
@@ -20,7 +18,6 @@ import logging
 import os
 import re
 import sqlite3
-import sys
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -59,75 +56,6 @@ from .store.connection_graph import ConnectionGraph
 from .tracing import trace_span
 
 logger = logging.getLogger(__name__)
-
-# --- Profiling ---------------------------------------------------------------
-# Toggled with `MYCELIUM_PROFILE=1` (off by default). When on, every tool
-# call is wrapped in a cProfile run; we log wall-clock duration to stderr
-# and write a per-call `.prof` file to MYCELIUM_PROFILE_DIR (default
-# `./.mycelium/profiles`).
-#
-# Convert any `.prof` file to a flame graph from your shell — pstats is
-# the standard input format for these tools:
-#   uvx flameprof <file.prof> > out.svg          # SVG flame graph
-#   uvx snakeviz <file.prof>                     # interactive in browser
-#   uvx --from speedscope-py speedscope <file>   # speedscope JSON
-#
-# Profiling adds noticeable overhead (cProfile traces every Python call),
-# so leave it off in normal operation and flip it on when investigating
-# a specific slow tool.
-
-_PROFILE_LOG = logging.getLogger("mycelium.profile")
-if not _PROFILE_LOG.handlers:
-    _PROFILE_LOG.addHandler(logging.StreamHandler(sys.stderr))
-    _PROFILE_LOG.setLevel(logging.INFO)
-
-
-def _profile_enabled() -> bool:
-    """Re-read each call so toggling mid-run via os.environ works in tests."""
-    val = (os.environ.get("MYCELIUM_PROFILE") or "").strip().lower()
-    return val in {"1", "true", "yes", "on"}
-
-
-def _profile_dir() -> Path:
-    return Path(
-        os.environ.get("MYCELIUM_PROFILE_DIR") or "./.mycelium/profiles"
-    ).expanduser()
-
-
-def _profile_filename(tool_name: str) -> Path:
-    # ISO-ish timestamp + microseconds + tool name keeps filenames sortable
-    # and unique even under bursty concurrent calls.
-    stamp = _dt.datetime.now().strftime("%Y%m%dT%H%M%S_%f")
-    return _profile_dir() / f"{stamp}_{tool_name}.prof"
-
-
-def _run_with_profile(func: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
-    profiler = cProfile.Profile()
-    started = time.perf_counter()
-    try:
-        return profiler.runcall(func, *args, **kwargs)
-    finally:
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        out_dir = _profile_dir()
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = _profile_filename(func.__name__)
-        try:
-            profiler.dump_stats(str(path))
-            _PROFILE_LOG.info(
-                "tool=%s duration_ms=%.2f profile=%s",
-                func.__name__,
-                elapsed_ms,
-                path,
-            )
-        except OSError as ex:
-            # Don't let a profile-dump failure mask the tool's own result.
-            _PROFILE_LOG.warning(
-                "tool=%s duration_ms=%.2f profile_write_failed=%s",
-                func.__name__,
-                elapsed_ms,
-                ex,
-            )
-
 
 # `MYCELIUM_INSTRUCTIONS` lets each deployment tell Claude Desktop / other
 # MCP clients *when* to reach for this server — naming the product, the
@@ -372,15 +300,13 @@ def _run_tool(
     budgeted: bool,
 ) -> Any:
     """Execute a tool body — under the shared model-loop budget when the tool
-    declares one, and under the profiler when MYCELIUM_PROFILE is set.
+    declares one.
 
     This is the seam every transport passes through, which is the point: the
     budget is enforced here rather than at any one entry point, so MCP, the REST
     mirror, stdio and draft replay are all bound by the same accounting.
     """
     with model_loop_slot() if budgeted else contextlib.nullcontext():
-        if _profile_enabled():
-            return _run_with_profile(func, args, kwargs)
         return func(*args, **kwargs)
 
 
@@ -452,10 +378,6 @@ def tool(
 ) -> Callable[..., Any]:
     """Register `func` as an HTTP endpoint, and as an MCP tool when its name
     is in `MCP_TOOLS`.
-
-    The wrapper consults MYCELIUM_PROFILE on every call so the env var
-    can be flipped at runtime — useful for tests and for switching
-    profiling on without restarting the server.
 
     Also enforces the per-tool role gate when invoked through the MCP
     transport. The REST mirror in `http.py` performs its own pre-call
