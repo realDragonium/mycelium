@@ -38,6 +38,7 @@ from mcp_types import (
 )
 
 from mycelium import auth, auth_store, server, store
+from mycelium.server import runtime
 
 # Both revisions negotiate content type through Accept; the transport wants to
 # know a client can take either a JSON body or an SSE stream.
@@ -61,7 +62,7 @@ def client(tmp_path_factory):
         mp.setenv("MYCELIUM_DISABLE_MCP_HTTP", "0")
         store.reset_substrate()
         auth_store.reset()
-        server._ctx = None
+        runtime._ctx = None
         from mycelium import embed
 
         mp.setattr(embed, "embed", lambda t: [0.0] * 768)

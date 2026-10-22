@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from mycelium import auth, embed, phrasing, server, store, vector
+from mycelium.server import runtime
 
 
 def _embed(text: str) -> list[float]:
@@ -30,12 +31,12 @@ def _init(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     monkeypatch.setenv("MYCELIUM_DISABLE_MENTION_WORKER", "1")
     store.reset_substrate()
-    server._ctx = None
+    runtime._ctx = None
     server.init(data_dir)
 
 
 def _restart(data_dir: Path) -> None:
-    server._ctx = None
+    runtime._ctx = None
     server.init(data_dir)
 
 

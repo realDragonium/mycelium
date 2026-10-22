@@ -28,13 +28,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store, vector
+from mycelium.server import runtime
 
 
 def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):

@@ -7,6 +7,7 @@ import pytest
 
 from mycelium import auth, backup, embed, mention_worker, server, store
 from mycelium import names_workspace as names
+from mycelium.server import runtime
 from test_auth import _app
 
 
@@ -15,7 +16,7 @@ def srv(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", lambda text: [1.0] + [0.0] * 767)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
-    server._ctx = None
+    runtime._ctx = None
     server.init(tmp_path)
     return server
 

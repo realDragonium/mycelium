@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store
+from mycelium.server import runtime
 
 
 @contextmanager
@@ -17,7 +18,7 @@ def _app(tmp_path, monkeypatch, *, application_enabled=False):
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
     from mycelium import embed
 
     monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)

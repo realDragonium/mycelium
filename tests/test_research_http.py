@@ -17,6 +17,7 @@ from mycelium import (
     server,
     store,
 )
+from mycelium.server import runtime
 from product_settings_helpers import import_product_environment, set_product
 
 
@@ -42,7 +43,7 @@ def _client(tmp_path, monkeypatch, embedder):
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
     from mycelium.http import app
 
     return TestClient(app)
@@ -253,7 +254,7 @@ def test_role_gates(tmp_path, monkeypatch):
         auth.current_principal.reset(token)
         drafts_conn.close()
         drafts_store.reset()
-        server._ctx = None
+        runtime._ctx = None
 
 
 def test_research_tools_registered():

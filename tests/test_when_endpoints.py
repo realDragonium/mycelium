@@ -14,8 +14,9 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, server, store
+from mycelium import embed, store
 from mycelium import when_expression as we
+from mycelium.server import runtime
 
 
 def deterministic_embed(text: str) -> list[float]:
@@ -28,7 +29,7 @@ def _client(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", deterministic_embed)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
-    server._ctx = None
+    runtime._ctx = None
     from mycelium.http import app
 
     return TestClient(app)

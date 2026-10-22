@@ -19,6 +19,7 @@ import pytest
 
 import instance_scenario
 from mycelium import auth, auth_store, backup, embed, phrasing, server, store, vector
+from mycelium.server import runtime
 
 # Rows a restore rewrites on purpose, normalized to what the restore produces.
 _RESTORED_DIFFERENTLY = {
@@ -39,7 +40,7 @@ def populated(tmp_path, monkeypatch):
     ids = instance_scenario.populate(source)
     store.set_actor(None)
     yield source, ids
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _tables(path: Path) -> list[str]:
@@ -121,7 +122,7 @@ def test_fresh_instance_from_an_export_serves_the_same_knowledge(
     backup.import_substrate(archive, restored)
     assert (restored / "mycelium.vec").exists() is include_vectors
 
-    server._ctx = None
+    runtime._ctx = None
     server.init(restored)
 
     assert server.get_statements(statement_ids) == before
@@ -222,7 +223,7 @@ def test_import_rebuilds_a_vector_index_that_disagrees_with_the_archive(
 
     restored = tmp_path / "restored"
     backup.import_substrate(drifted, restored)
-    server._ctx = None
+    runtime._ctx = None
     server.init(restored)
 
     text = instance_scenario.STATEMENTS["locked"][1]

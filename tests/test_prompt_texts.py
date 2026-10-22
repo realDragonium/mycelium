@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, prompt_store, server, store
+from mycelium.server import runtime
 
 
 def _conn() -> sqlite3.Connection:
@@ -27,7 +28,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     prompt_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):

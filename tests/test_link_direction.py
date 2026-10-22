@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from mycelium import embed, server, store
 from mycelium.link_rules import flip_error
+from mycelium.server import runtime
 
 
 def _embed(text: str) -> list[float]:
@@ -18,7 +19,7 @@ def _client(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", _embed)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
-    server._ctx = None
+    runtime._ctx = None
     from mycelium.http import app
 
     return TestClient(app)

@@ -11,6 +11,7 @@ import pytest
 import instance_scenario
 from mycelium import ai_prompts, embed, prompt_store, server
 from mycelium.prompt_defaults import Plan, Version, digest, plan
+from mycelium.server import runtime
 
 NOW = "2026-10-22T12:00:00.000Z"
 
@@ -111,7 +112,7 @@ def test_upgrade_updates_untouched_doctrines_and_reports_edited_ones(
         conn.execute("DROP TABLE shipped_prompt_texts")
 
     with caplog.at_level(logging.WARNING, logger="mycelium.server"):
-        server._ctx = None
+        runtime._ctx = None
         server.init(tmp_path)
 
     shipped = ai_prompts.shipped_text("ingest")
@@ -122,10 +123,10 @@ def test_upgrade_updates_untouched_doctrines_and_reports_edited_ones(
     assert ai_prompts.editor("research").newer_default_since is not None
     assert ai_prompts.editor("ingest").newer_default_since is None
 
-    server._ctx = None
+    runtime._ctx = None
     server.init(tmp_path)
     assert len(_versions(tmp_path, "ingest")) == 2
-    server._ctx = None
+    runtime._ctx = None
 
 
 def test_editor_works_when_the_configured_doctrine_file_is_missing(

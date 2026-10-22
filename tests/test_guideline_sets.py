@@ -28,6 +28,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, guidelines, prompt_store, server, store
+from mycelium.server import runtime
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "seed_guideline_sets.py"
 
@@ -94,7 +95,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     prompt_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _app(tmp_path, monkeypatch):

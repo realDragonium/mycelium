@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, drafts_store, embed, phrasing, server, store, survey
+from mycelium.server import runtime
 
 # --- concept-based fake embedder --------------------------------------------
 
@@ -130,7 +131,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _client(tmp_path, monkeypatch, embedder=concept_embed) -> TestClient:

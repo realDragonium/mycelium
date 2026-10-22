@@ -16,6 +16,7 @@ import zlib
 import numpy as np
 
 from mycelium import embed, phrasing, server, store
+from mycelium.server import runtime
 
 
 def _embed(text: str) -> list[float]:
@@ -27,7 +28,7 @@ def _embed(text: str) -> list[float]:
 
 def _restart(data_dir) -> None:
     """Re-run init against the same dir, simulating a process restart."""
-    server._ctx = None
+    runtime._ctx = None
     server.init(data_dir)
 
 
@@ -37,7 +38,7 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
 
-    server._ctx = None
+    runtime._ctx = None
     server.init(tmp_path)
 
     server.upsert_entity(name="reviewer", description="a reviewer")

@@ -140,6 +140,7 @@ module = [
     "mycelium.research.sources",
     "mycelium.research.workspace",
     "mycelium.research_runs",
+    "mycelium.server.runtime",
     "mycelium.statement_connections",
     "mycelium.store",
     "mycelium.store.connection_graph",

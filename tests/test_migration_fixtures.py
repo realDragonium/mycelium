@@ -33,6 +33,7 @@ import pytest
 
 import instance_scenario
 from mycelium import backup, embed, migrations, server, store
+from mycelium.server import runtime
 
 
 def _captured(fixture: Path) -> tuple[int, str]:
@@ -72,7 +73,7 @@ def _load(fixture: Path, data_dir: Path) -> None:
 
 
 def _start(data_dir: Path) -> None:
-    server._ctx = None
+    runtime._ctx = None
     server.init(data_dir)
 
 
@@ -169,7 +170,7 @@ def _offline(monkeypatch):
     monkeypatch.setattr(embed, "embed", instance_scenario.embed)
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     yield
-    server._ctx = None
+    runtime._ctx = None
 
 
 @pytest.fixture(scope="module")
@@ -179,7 +180,7 @@ def fresh_schema(tmp_path_factory) -> dict[str, dict]:
         mp.setattr(embed, "embed", instance_scenario.embed)
         mp.setenv("MYCELIUM_AUTH", "off")
         _start(data_dir)
-        server._ctx = None
+        runtime._ctx = None
     return {db.name: _schema(db) for db in sorted(data_dir.glob("*.db"))}
 
 

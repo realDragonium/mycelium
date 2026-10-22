@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from mycelium import embed, mention_worker, server, store
 from mycelium.http import _history_target_id
+from mycelium.server import runtime
 
 
 def fake_embed_factory():
@@ -27,7 +28,7 @@ def _client(tmp_path, monkeypatch, embedder):
     monkeypatch.setattr(embed, "embed", embedder)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
-    server._ctx = None
+    runtime._ctx = None
     from mycelium.http import app
 
     return TestClient(app)

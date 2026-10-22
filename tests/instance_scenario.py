@@ -24,6 +24,8 @@ from pathlib import Path
 
 import numpy as np
 
+from mycelium.server import runtime
+
 STATEMENTS = {
     "submit": ("event", "A user submits the Login form."),
     "session": ("event", "The server issues a Session token."),
@@ -47,7 +49,7 @@ def populate(data_dir: Path) -> dict[str, str]:
     """
     from mycelium import server
 
-    server._ctx = None
+    runtime._ctx = None
     server.init(data_dir)
     ids = _substrate(server)
     _vocabulary(server)
