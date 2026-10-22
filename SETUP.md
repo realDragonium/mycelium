@@ -111,6 +111,34 @@ Use `search_statements` for semantic retrieval and `get_statements` to hydrate
 known IDs. Use `list_link_types` and `list_statement_kinds` to inspect the
 active vocabularies before authoring unfamiliar edges or kinds.
 
+## 6. Change the browser UI
+
+The two browser apps, `/ui/` and `/cockpit/`, are built from `frontend/` with
+Vite, React and TypeScript. The build output in `src/mycelium/webui/` is
+committed, so running the server needs no Node; changing the UI needs Node 24.
+
+```sh
+cd frontend
+npm ci
+npm run dev
+```
+
+`npm run dev` serves both apps with hot reload at <http://localhost:5173/ui/>
+and <http://localhost:5173/cockpit/>, and proxies every other path (API, auth,
+MCP) to `mycelium-http` on `127.0.0.1:8765`. Start the server first; if it runs
+on another port, start the dev server with the same `MYCELIUM_HTTP_PORT`.
+
+Before committing a UI change, run the checks CI runs and commit the rebuilt
+output with the source change:
+
+```sh
+npm run typecheck   # tsc, plus the strict-mode ratchet in strict-ratchet.ts
+npm run lint        # ESLint; eslint-suppressions.json lists tolerated old findings
+npm run build       # writes src/mycelium/webui/
+```
+
+CI rebuilds and fails if `src/mycelium/webui/` differs from what you committed.
+
 ## Troubleshooting
 
 - If the MCP tools do not appear, run the configured command in a terminal and
