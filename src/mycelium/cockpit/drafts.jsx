@@ -85,9 +85,10 @@ function categoryOf(op) {
   return 'links'; // add_links | add_entity_links
 }
 
-// A `flag` op is an unresolved fragment `ingest_text` refused to guess a
-// statement out of; it never replays, so it stays here until someone resolves
-// it and discards it. Everything else carries no flag reason.
+// A `flag` op is an unresolved fragment the retired `ingest_text` pipeline
+// refused to guess a statement out of; older drafts still carry them. It never
+// replays, so it stays here until someone resolves it and discards it.
+// Everything else carries no flag reason.
 function flagReason(op) {
   if (op.kind !== 'flag') return false;
   const p = op.payload || {};

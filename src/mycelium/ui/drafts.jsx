@@ -278,25 +278,21 @@ function DraftGraph({ ops }) {
 
 // ---------- Flagged fragments (draft detail) ----------
 //
-// A `flag` op records something the pipeline would not decide on its own:
-// usually a fragment it refused to turn into a statement, and for `cue` a
-// connective it could not type between two fragments it did write.
+// A `flag` op records something the retired `ingest_text` pipeline would not
+// decide on its own: usually a fragment it refused to turn into a statement,
+// and for `cue` a connective it could not type between two fragments it did
+// write. Nothing writes flags any more, but drafts filed before the pipeline
+// was removed still carry them.
 // It has no id and no edges, so there is no honest node for it: drawing one
 // would show the curator something that does not exist in the substrate.
 // It gets a list beside the graph instead — the text involved, and which
 // stage stopped.
 //
-// The enum is the word the API, the logs and `FLAG_SOURCES` use, so it stays
-// on screen; the sentence beside it is the part a curator can act on.
-//
-// The stage label names, in an operator's words, the stage that RAISED the
-// flag. That is usually a rewording of `FLAG_SOURCES` in connect/extract.py,
-// but deliberately not always: `FLAG_SOURCES['phrasing']` records the
-// phrasing catalog, because the catalog is what refused the wording — yet the
-// flag is raised by the planner (`_ingest_plan_flags` in server.py) against a
-// statement it had already classified. The label follows the raiser, so a
-// curator reading it knows which stage to go and look at; the sentence still
-// names the catalog as the thing that objected.
+// The enum is the word the stored op carries, so it stays on screen; the
+// sentence beside it is the part a curator can act on. The stage label names
+// the stage that RAISED the flag, so `phrasing` names the planner that refused
+// an already classified statement, while the sentence names the catalog as the
+// thing that objected.
 //
 // An op carrying a reason this table has not learned uses its own
 // `provenance.source` for the stage and a generic line for the explanation,

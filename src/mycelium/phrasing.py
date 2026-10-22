@@ -61,7 +61,6 @@ text via a per-character position map.
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Callable
 from typing import TYPE_CHECKING, TypedDict
 
 from mycelium import phrasing_cues
@@ -171,7 +170,6 @@ _PROPERTY_VERB_LEMMAS = {"consist", "belong", "comprise"}
 # outweighs the precision gain.
 _CAPABILITY_MODAL_LEMMAS = {"can", "could", "may", "might"}
 
-# The cue vocabulary is shared with the raw-text segmenter.
 _PRECONDITION_SCONJ = phrasing_cues.PRECONDITION_SCONJ
 
 # Universal quantifiers — describe a population, not an instance event.
@@ -777,45 +775,12 @@ def _check_hedges(
 def _atomicity_checks(
     doc: "Doc", normalized: str, original: str, pos_map: list[int]
 ) -> list[Violation]:
-    """Run the four detectors that decide whether text is atomic.
-
-    Sole definition of that set: `check` and `atomicity_violations` both call
-    it, so the segmenter's re-check cannot drift from the catalog.
-    """
+    """Run the four detectors that decide whether text is atomic."""
     violations: list[Violation] = []
     violations.extend(_check_compound_clauses(doc, original, pos_map))
     violations.extend(_check_semicolons(doc, original, pos_map))
     violations.extend(_check_compound_phrases(normalized, original, pos_map))
     violations.extend(_check_precondition_sconj(doc, original, pos_map))
-    return violations
-
-
-def atomicity_violations(
-    text: str, *, parse: Callable[[str], "Doc"] | None = None
-) -> list[Violation]:
-    """Run only the four atomicity detectors against `text`.
-
-    Check compound clauses, semicolons, compound phrases, and precondition
-    subordinators. Use an injected parser when supplied.
-    """
-    normalized, pos_map = normalize_with_map(text)
-    if not normalized.strip():
-        return []
-
-    doc = parse(normalized) if parse is not None else get_nlp()(normalized)
-    violations = _atomicity_checks(doc, normalized, text, pos_map)
-    violations.sort(key=lambda violation: violation["position"])
-    return violations
-
-
-def hidden_event_state_violations(text: str) -> list[Violation]:
-    """Run only the hidden event/state detector against `text`."""
-    normalized, pos_map = normalize_with_map(text)
-    if not normalized.strip():
-        return []
-
-    violations = _check_hidden_event_state(normalized, text, pos_map)
-    violations.sort(key=lambda violation: violation["position"])
     return violations
 
 

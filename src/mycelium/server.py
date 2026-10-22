@@ -22,7 +22,7 @@ import sqlite3
 import sys
 import time
 import uuid
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, NotRequired, TypedDict
@@ -51,22 +51,6 @@ from . import (
 )
 from .app_context import AppContext
 from .auth import Principal as AuthPrincipal
-from .connect import aliases as connect_aliases
-from .connect import cue_gate
-from .connect import draft as connect_draft
-from .connect import pipeline as connect_pipeline
-from .connect.cue_gate import ABSORBING_DECISIONS, CueResolution
-from .connect.draft import BatchInput
-from .connect.extract import (
-    ExtractedItem,
-    Extraction,
-    FlagInput,
-    extract,
-    violations_detail,
-)
-from .connect.funnel import BatchStatement
-from .connect.proposals import Proposal, ProposalSet, proposals_from
-from .connect.substrate import HintedView, LiveSubstrate
 from .layout_baker import LayoutBaker
 from .model_capacity import Capacity
 from .require import require
@@ -856,24 +840,6 @@ class BatchStatementSpec(TypedDict):
     allow_phrasing_violations: NotRequired[bool]
 
 
-class ConnectedStatementSpec(TypedDict):
-    """One statement in a connected batch draft.
-
-    Same shape as one item of `upsert_statements`, except input-derived links
-    are always outgoing from this statement, so `incoming_links` is omitted —
-    an item that sends one is rejected rather than losing the edge silently.
-    `mention_hints` names texts the agent asserts this statement is about. They
-    widen candidate discovery for this call, count as shared entities for the
-    conflict gate, and are never written to the substrate.
-    """
-
-    kind: str
-    text: str
-    links: NotRequired[list[LinkSpec]]
-    allow_phrasing_violations: NotRequired[bool]
-    mention_hints: NotRequired[list[str]]
-
-
 #: The live application context — vector indexes, data dir, layout baker.
 #: Built whole by `init`; every accessor below reads through it.
 _ctx: AppContext | None = None
@@ -1127,15 +1093,14 @@ def init(data_dir: Path) -> None:
         layout_baker=baker,
     )
 
-    # Start background queue workers on their own threads and connections
+    # Start the background mention worker on its own thread and connection
     # (transport-agnostic: both stdio and HTTP funnel through init). The flag is
-    # the test suite's single "background workers off" switch, not a per-worker
-    # knob, so tests can drain either queue synchronously without thread races.
+    # the test suite's "background worker off" switch, so tests can drain the
+    # queue synchronously without thread races.
     if os.environ.get("MYCELIUM_DISABLE_MENTION_WORKER") != "1":
-        from . import alias_worker, mention_worker  # local import: workers are optional
+        from . import mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
-        alias_worker.start(data_dir)
 
 
 def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
@@ -3300,17 +3265,11 @@ class _BatchPlan:
     resolved_incoming: list[list[tuple[int | str, str, dict[str, Any] | None]]]
 
 
-def _plan_batch(
-    statements: list[BatchStatementSpec], pre_rejected: set[int] | None = None
-) -> _BatchPlan:
+def _plan_batch(statements: list[BatchStatementSpec]) -> _BatchPlan:
     """Decide the fate of every item in a batch upsert without mutating
     anything: run the phrasing gate, cascade @-ref rejections to a fixed
     point, validate/resolve each survivor's cross-references, then reject
     items whose links flip a directional rule (cascading once more).
-
-    `pre_rejected` seeds the directly-rejected set before anything is
-    resolved, so a caller that refuses an item outright keeps its edges out
-    of reference validation and out of the directional flip check.
 
     Reads existing statements to validate non-sibling refs, but performs no
     writes — the caller embeds and persists the survivors."""
@@ -3319,7 +3278,6 @@ def _plan_batch(
     # Phrasing check per item; items that trip the catalog without bypass
     # are directly rejected.
     item_violations, direct_rejected = _batch_phrasing_pass(statements)
-    direct_rejected.update(pre_rejected or ())
     item_errors: list[list[str]] = [[] for _ in range(n)]
 
     # Cascade rejection — transitive closure on @-refs.
@@ -3467,849 +3425,6 @@ def upsert_statements(
     )
 
     return {"results": results, "near_duplicates": near_dups}
-
-
-def _connected_statement_text(statement_id: str) -> str | None:
-    """Return statement text for connection proposal rendering."""
-    row = store.get_statement(_db(), statement_id)
-    return None if row is None else row["text"]
-
-
-def _connected_text_reader() -> Callable[[str], str | None]:
-    """Return a request-scoped, memoized statement-text lookup.
-
-    Every renderer and the draft assembler read the same neighbour ids, and
-    the candidate set grows with batch size times fan-out, so one reader per
-    request keeps that from becoming an N+1 read on the request thread.
-    """
-    cache: dict[str, str | None] = {}
-
-    def read(statement_id: str) -> str | None:
-        if statement_id not in cache:
-            cache[statement_id] = _connected_statement_text(statement_id)
-        return cache[statement_id]
-
-    return read
-
-
-def _reindex_connected_ref(reference: str, new_of: dict[int, int]) -> str:
-    """Rewrite a sibling reference into accepted-only batch coordinates."""
-    if not reference.startswith("@"):
-        return reference
-    return f"@{new_of[int(reference[1:])]}"
-
-
-def _rewrite_connected_links(
-    links: list[LinkSpec], new_of: dict[int, int]
-) -> list[dict[str, Any]]:
-    """Rewrite sibling endpoints and conditions into draft batch coordinates."""
-    rewritten: list[dict[str, Any]] = []
-
-    def resolve(reference: str, position: str) -> str:
-        return _reindex_connected_ref(reference, new_of)
-
-    for index, link in enumerate(links):
-        item: dict[str, Any] = {
-            "to_id": resolve(link["to_id"], f"links[{index}].to_id"),
-            "link_type": link["link_type"],
-        }
-        if "when" in link:
-            item["when"] = _resolve_when_tree(
-                link["when"], resolve, f"links[{index}].when"
-            )
-        rewritten.append(item)
-    return rewritten
-
-
-def _prepare_connected_batch(
-    statements: list[ConnectedStatementSpec], plan: _BatchPlan
-) -> tuple[list[int], dict[int, int], list[BatchInput], list[BatchStatement]]:
-    """Build accepted-only draft and pipeline batches with rewritten references."""
-    accepted = [index for index in range(len(statements)) if index not in plan.rejected]
-    new_of = {old: new for new, old in enumerate(accepted)}
-    batch_inputs: list[BatchInput] = []
-    batch: list[BatchStatement] = []
-    for old_index in accepted:
-        spec = statements[old_index]
-        new_index = new_of[old_index]
-        batch_inputs.append(
-            BatchInput(
-                kind=spec["kind"],
-                text=spec["text"],
-                links=_rewrite_connected_links(spec.get("links", []), new_of),
-                allow_phrasing_violations=spec.get("allow_phrasing_violations", False),
-            )
-        )
-        batch.append(BatchStatement(new_index, spec["kind"], spec["text"]))
-    return accepted, new_of, batch_inputs, batch
-
-
-def _connected_hints(
-    statements: list[ConnectedStatementSpec], accepted: list[int]
-) -> tuple[dict[str, frozenset[str]], list[str]]:
-    """Resolve accepted mention hints without creating names or entities."""
-    # Keyed by text because text is the only key the funnel hands to
-    # `entities_in`. Two accepted items with identical text therefore share
-    # their hints — they are already one statement to every other text-keyed
-    # stage (embedding, derived mentions, cue matching).
-    by_text: dict[str, set[str]] = {}
-    unresolved: list[str] = []
-    seen_unresolved: set[str] = set()
-    for index in accepted:
-        spec = statements[index]
-        entity_ids = by_text.setdefault(spec["text"], set())
-        for hint in spec.get("mention_hints", []):
-            row = store.get_name_by_text(_db(), hint)
-            if row is not None:
-                entity_ids.add(row["entity_id"])
-            elif hint not in seen_unresolved:
-                unresolved.append(hint)
-                seen_unresolved.add(hint)
-    return {text: frozenset(ids) for text, ids in by_text.items()}, unresolved
-
-
-def _items_with_incoming_links(statements: list[ConnectedStatementSpec]) -> set[int]:
-    """Index every item carrying a non-empty `incoming_links`, which this
-    tool refuses.
-
-    The draft batch only stores outgoing links, so an inbound edge would be
-    validated here and then silently dropped on the way to the draft. An
-    empty list carries no edge, so it has nothing to drop and passes.
-    """
-    return {
-        index
-        for index, spec in enumerate(statements)
-        if spec.get("incoming_links")  # type: ignore[typeddict-item]
-    }
-
-
-def _connected_results(
-    statements: list[ConnectedStatementSpec],
-    plan: _BatchPlan,
-    new_of: dict[int, int],
-    unsupported: set[int],
-) -> list[dict[str, Any]]:
-    """Render connected-batch outcomes with batch-upsert rejection precedence."""
-    results: list[dict[str, Any]] = []
-    for index in range(len(statements)):
-        if index in unsupported:
-            results.append({"rejected": True, "reason": "incoming_links_not_supported"})
-        elif plan.item_errors[index]:
-            results.append({"rejected": True, "errors": plan.item_errors[index]})
-        elif index in plan.direct_rejected:
-            results.append(
-                {"rejected": True, "violations": plan.item_violations[index]}
-            )
-        elif index in plan.rejected:
-            results.append(
-                {
-                    "rejected": True,
-                    "reason": "depends_on_rejected",
-                    "depends_on": plan.cascade_reasons[index],
-                }
-            )
-        else:
-            item: dict[str, Any] = {
-                "accepted": True,
-                "batch_index": new_of[index],
-            }
-            if plan.item_violations[index]:
-                item["phrasing_violations"] = plan.item_violations[index]
-            results.append(item)
-    return results
-
-
-def _proposal_nli(proposal: Proposal) -> dict[str, Any] | None:
-    """Extract directional NLI evidence from proposal provenance when present."""
-    provenance = proposal.provenance
-    if provenance["source"] == "similarity":
-        return None
-    return {
-        "forward": provenance["forward"],
-        "backward": provenance["backward"],
-    }
-
-
-def _connected_link(proposal: Proposal) -> dict[str, Any]:
-    """Render a rule link proposal for the tool response.
-
-    `source` and `target` are the edge's endpoints as refs ("@N" or an
-    existing statement id); the cue carrier is whichever of them is
-    `@batch_index`. The frame's words decided that geometry.
-    """
-    provenance = proposal.provenance
-    return {
-        "batch_index": proposal.new_index,
-        "source": proposal.source,
-        "target": proposal.target,
-        "link_type": proposal.link_type,
-        "cue": provenance["cue"],
-        "pattern": provenance["pattern"],
-        "score": provenance["score"],
-    }
-
-
-def _connected_merge(
-    proposal: Proposal, text_of: Callable[[str], str | None]
-) -> dict[str, Any]:
-    """Render a merge proposal with a bounded target-text preview."""
-    return {
-        "batch_index": proposal.new_index,
-        "into": proposal.target,
-        "into_text": _snippet(text_of(proposal.target) or ""),
-        "score": proposal.provenance["score"],
-        "nli": _proposal_nli(proposal),
-    }
-
-
-def _connected_conflict(
-    proposal: Proposal, text_of: Callable[[str], str | None]
-) -> dict[str, Any]:
-    """Render a contradiction proposal with its directional evidence."""
-    return {
-        "batch_index": proposal.new_index,
-        "statement_id": proposal.target,
-        "text": _snippet(text_of(proposal.target) or ""),
-        "nli": _proposal_nli(proposal),
-        "score": proposal.provenance["score"],
-    }
-
-
-def _connected_related(
-    result: connect_pipeline.PipelineResult,
-    proposal_set: ProposalSet,
-    text_of: Callable[[str], str | None],
-) -> list[dict[str, Any]]:
-    """Render candidates that produced neither kept nor dropped proposals."""
-    # A link proposal names the candidate on either end, so both endpoints
-    # suppress; merges and conflicts only ever carry it in `target`.
-    proposed = {
-        (proposal.new_index, endpoint)
-        for proposal in proposal_set.proposals + proposal_set.dropped_merges
-        for endpoint in (proposal.target, proposal.source)
-        if endpoint is not None
-    }
-    return [
-        {
-            "batch_index": candidate.new_index,
-            "statement_id": candidate.statement_id,
-            "text": _snippet(text_of(candidate.statement_id) or ""),
-            "score": candidate.score,
-        }
-        for candidate in result.funnel.candidates
-        if (candidate.new_index, candidate.statement_id) not in proposed
-    ]
-
-
-def _assemble_connected_draft(
-    batch: list[BatchInput],
-    proposal_set: ProposalSet,
-    title: str | None,
-    text_of: Callable[[str], str | None],
-    flags: Sequence[FlagInput] = (),
-    cues: Sequence[CueResolution] = (),
-) -> tuple[str | None, dict[str, int], dict[str, Any] | None]:
-    """Write a non-empty connected batch and summarize its open draft."""
-    if (
-        not batch
-        and not flags
-        and not any(c.decision in ABSORBING_DECISIONS for c in cues)
-    ):
-        counts = {"links": 0, "merges": 0, "conflicts": 0}
-        return None, counts, None
-
-    # A dedicated connected draft must not match the session accumulator lookup
-    # in drafts_store.find_open_session_draft for unrelated later writes.
-    draft_id = connect_draft.assemble_draft(
-        _drafts_db(),
-        batch=batch,
-        proposals=proposal_set.proposals,
-        text_of=text_of,
-        created_by=_actor_id(),
-        title=title,
-        session_id=None,
-        flags=flags,
-        cues=cues,
-    )
-    summary = connect_draft.summarize(_drafts_db(), draft_id)
-    counts = {
-        "links": summary["links"],
-        "merges": summary["merges"],
-        "conflicts": summary["conflicts"],
-    }
-    op_count = (
-        (1 if batch else 0)
-        + counts["links"]
-        + counts["merges"]
-        + counts["conflicts"]
-        + summary["flags"]
-        + summary["aliases"]
-    )
-    return draft_id, counts, {"status": "open", "op_count": op_count}
-
-
-@dataclass
-class _ConnectedRun:
-    plan: _BatchPlan
-    new_of: dict[int, int]
-    pipeline_result: connect_pipeline.PipelineResult
-    proposal_set: ProposalSet
-    text_of: Callable[[str], str | None]
-    unresolved_hints: list[str]
-    flags: list[FlagInput]
-    cues: list[CueResolution]
-    draft_id: str | None
-    counts: dict[str, int]
-    draft: dict[str, Any] | None
-
-
-def _run_connected(
-    statements: list[ConnectedStatementSpec],
-    *,
-    title: str | None,
-    pre_rejected: set[int] | None = None,
-    flags: Sequence[FlagInput] = (),
-    cues: Sequence[CueResolution] = (),
-    flags_from_plan: Callable[[_BatchPlan], list[FlagInput]] | None = None,
-    cues_from_plan: Callable[[_BatchPlan], list[CueResolution]] | None = None,
-) -> _ConnectedRun:
-    """Plan, connect, and draft one batch of connected statement specs."""
-    plan = _plan_batch(statements, pre_rejected=pre_rejected)
-    combined_flags = list(flags)
-    if flags_from_plan is not None:
-        combined_flags.extend(flags_from_plan(plan))
-    combined_flags.sort(key=lambda flag: flag.fragment_index)
-    combined_cues = list(cues)
-    if cues_from_plan is not None:
-        combined_cues.extend(cues_from_plan(plan))
-
-    accepted, new_of, batch_inputs, batch = _prepare_connected_batch(statements, plan)
-    hints, unresolved_hints = _connected_hints(statements, accepted)
-    text_of = _connected_text_reader()
-    view = HintedView(LiveSubstrate(), hints)
-    pipeline_result = connect_pipeline.run(batch, view, text_of=text_of)
-    proposal_set = proposals_from(
-        funnel=pipeline_result.funnel,
-        links=pipeline_result.link_proposals,
-        verdicts=pipeline_result.verdicts,
-    )
-    draft_id, counts, draft = _assemble_connected_draft(
-        batch_inputs,
-        proposal_set,
-        title,
-        text_of,
-        flags=combined_flags,
-        cues=combined_cues,
-    )
-    return _ConnectedRun(
-        plan=plan,
-        new_of=new_of,
-        pipeline_result=pipeline_result,
-        proposal_set=proposal_set,
-        text_of=text_of,
-        unresolved_hints=unresolved_hints,
-        flags=combined_flags,
-        cues=combined_cues,
-        draft_id=draft_id,
-        counts=counts,
-        draft=draft,
-    )
-
-
-def _connected_response(
-    statements: list[ConnectedStatementSpec],
-    run: _ConnectedRun,
-    unsupported: set[int],
-) -> dict[str, Any]:
-    """Render the established connected-batch response shape."""
-    proposals = run.proposal_set.proposals
-    return {
-        "draft_id": run.draft_id,
-        "results": _connected_results(statements, run.plan, run.new_of, unsupported),
-        "proposals": run.counts,
-        "links": [
-            _connected_link(proposal)
-            for proposal in proposals
-            if proposal.kind == "link"
-        ],
-        "merges": [
-            _connected_merge(proposal, run.text_of)
-            for proposal in proposals
-            if proposal.kind == "merge"
-        ],
-        "conflicts": [
-            _connected_conflict(proposal, run.text_of)
-            for proposal in proposals
-            if proposal.kind == "conflict"
-        ],
-        "suppressed_negations": len(run.pipeline_result.suppressed_negations),
-        "suppressed_conflicts": run.proposal_set.suppressed_conflicts,
-        "related": _connected_related(
-            run.pipeline_result, run.proposal_set, run.text_of
-        ),
-        "dropped_merges": [
-            _connected_merge(proposal, run.text_of)
-            for proposal in run.proposal_set.dropped_merges
-        ],
-        "unresolved_hints": run.unresolved_hints,
-        "nli": run.pipeline_result.nli,
-        "nli_reason": run.pipeline_result.nli_reason,
-        "nli_pairs": {
-            "classified": run.pipeline_result.nli_pairs.classified,
-            "skipped": run.pipeline_result.nli_pairs.skipped,
-            "budget": run.pipeline_result.nli_pairs.budget,
-        },
-        "draft": run.draft,
-    }
-
-
-def _empty_connected_batch() -> dict[str, Any]:
-    """Return the no-op response for a batch with nothing to connect.
-
-    Same shape as a batch where every item was rejected, built without
-    touching the substrate, NLI configuration, or NLI model. An empty batch has
-    nothing to classify, so `nli` reports that no classification was needed and
-    the pair budget is zero because the pipeline never ran.
-    """
-    return {
-        "draft_id": None,
-        "results": [],
-        "proposals": {"links": 0, "merges": 0, "conflicts": 0},
-        "links": [],
-        "merges": [],
-        "conflicts": [],
-        "suppressed_negations": 0,
-        "suppressed_conflicts": 0,
-        "related": [],
-        "dropped_merges": [],
-        "unresolved_hints": [],
-        "nli": "nothing_to_classify",
-        "nli_reason": None,
-        "nli_pairs": {"classified": 0, "skipped": 0, "budget": 0},
-        "draft": None,
-    }
-
-
-@tool
-def submit_connected_batch(
-    statements: list[ConnectedStatementSpec],
-    title: str | None = None,
-) -> dict[str, Any]:
-    """Run an extracted batch through the connection pipeline into one draft.
-
-    Extraction stays on your side: this takes statements you have already
-    written, never raw source text. What it adds is the connecting — the
-    reads across what already exists that you would otherwise do by hand,
-    one `discover_facts` and one `search_statements` at a time.
-
-    Three things get proposed. **Typed links**, where an explicit relational
-    cue in your own text resolves to a sibling in this batch or to an
-    existing statement and the two kinds admit that link type. The cue also
-    decides the direction: each `links` entry carries explicit `source` and
-    `target` refs, so "X is a part of Y" proposes the resolved container as
-    the edge's source and the new statement as its target. **Merge
-    candidates**, from embedding similarity — turned into a real verdict by
-    bidirectional entailment when the `nli` extra is installed. **Contradiction
-    flags**, filed as knowledge gaps, where your text and an existing
-    statement can't both hold. A contradiction only becomes a conflict when
-    the statements share an entity, mentioned in the text or asserted via
-    `mention_hints`; suppressed contradictions are
-    counted in `suppressed_conflicts`, and the candidate still surfaces under
-    `related` unless another proposal already names it.
-    Negated catalog matches are counted in `suppressed_negations`; they never
-    become affirmative link proposals.
-
-    What it will not do is infer a relation the text doesn't state: emergent
-    behaviour and cross-feature interaction are still yours to author in
-    `links`. Nothing auto-applies and nothing reaches the substrate — the
-    batch and every proposal land as separate ops in one open draft, which is
-    why a drafter can call this safely. Read it with `get_draft`, strike what
-    you disagree with via `discard_draft_op(draft_id, seq)`, then
-    `submit_draft(draft_id)`. Candidates that were found but not proposed on
-    come back under `related` — often the link you want is one of those, and
-    yours to author.
-
-    Phrasing enforcement is `upsert_statements`' own, unchanged: per-item
-    rejection, `allow_phrasing_violations` to bypass it, and an `@N` reference
-    to a rejected item cascades. Rejected items never reach the draft. Links
-    are outgoing only: an item carrying `incoming_links` is rejected, because
-    the draft batch would not carry that edge.
-
-    `mention_hints` are name texts you assert a statement is about — they
-    widen candidate discovery for this call only, are never written as
-    mentions, and unknown names come back in `unresolved_hints` instead of
-    being created.
-
-    Two index spaces, and they diverge the moment anything is rejected:
-    `depends_on` reports the input positions you sent, while `batch_index`
-    — and any `@N` proposal target — reports the position in the draft's
-    batch, which counts accepted items only. Each accepted result carries its
-    `batch_index` so you can map between the two.
-
-    Returns:
-        ```
-        {
-          "draft_id": "drf_..." | null,
-          "results": [
-            {"accepted": true, "batch_index": 0},
-            {"accepted": true, "batch_index": 1, "phrasing_violations": [...]},
-            {"rejected": true, "errors": [...]},
-            {"rejected": true, "violations": [...]},
-            {"rejected": true, "reason": "depends_on_rejected",
-             "depends_on": [<input indexes>]},
-            {"rejected": true, "reason": "incoming_links_not_supported"}
-          ],
-          "proposals": {"links": 0, "merges": 0, "conflicts": 0},
-          "links": [
-            {"batch_index": 0, "source": "@0" | "stm_...",
-             "target": "@1" | "stm_...", "link_type": "...",
-             "cue": "...", "pattern": "...", "score": 0.0}
-          ],
-          "merges": [
-            {"batch_index": 0, "into": "stm_...", "into_text": "...",
-             "score": 0.0, "nli": {"forward": {...}, "backward": {...}} | null}
-          ],
-          "conflicts": [
-            {"batch_index": 0, "statement_id": "stm_...", "text": "...",
-             "nli": {...}, "score": 0.0}
-          ],
-          "suppressed_negations": 0,
-          "suppressed_conflicts": 0,
-          "related": [
-            {"batch_index": 0, "statement_id": "stm_...", "text": "...",
-             "score": 0.0}
-          ],
-          "dropped_merges": [<same shape as merges>],
-          "unresolved_hints": [...],
-          "nli": "ran" | "unavailable" | "nothing_to_classify",
-          "nli_reason": "NliUnavailable message" | null,
-          "nli_pairs": {"classified": <int>, "skipped": <int>,
-                        "budget": <int>},
-          "draft": {"status": "open", "op_count": <int>} | null
-        }
-        ```
-    """
-    if not statements:
-        return _empty_connected_batch()
-
-    unsupported = _items_with_incoming_links(statements)
-    run = _run_connected(statements, title=title, pre_rejected=unsupported)
-    return _connected_response(statements, run, unsupported)
-
-
-def _ingest_specs(
-    items: list[ExtractedItem],
-    condition_links: list[tuple[int, int, str]],
-    cut_links: list[tuple[int, int, str]],
-) -> list[ConnectedStatementSpec]:
-    """Build connected specs with the segmenter's conditional and cut links."""
-    specs: list[ConnectedStatementSpec] = [
-        {"kind": item.kind, "text": item.text} for item in items
-    ]
-    for claim_position, condition_position, link_type in condition_links:
-        specs[claim_position].setdefault("links", []).append(
-            {
-                "to_id": f"@{condition_position}",
-                "link_type": link_type,
-            }
-        )
-    for source_position, target_position, link_type in cut_links:
-        specs[source_position].setdefault("links", []).append(
-            {
-                "to_id": f"@{target_position}",
-                "link_type": link_type,
-            }
-        )
-    return specs
-
-
-def _ingest_plan_flags(items: list[ExtractedItem], plan: _BatchPlan) -> list[FlagInput]:
-    """Turn planner rejections into source-addressed curator flags."""
-    flags: list[FlagInput] = []
-    for index, item in enumerate(items):
-        if index not in plan.rejected:
-            continue
-        if plan.item_errors[index]:
-            reason = "flip"
-            detail = "; ".join(plan.item_errors[index])
-        elif index in plan.direct_rejected:
-            reason = "phrasing"
-            detail = violations_detail(plan.item_violations[index])
-        else:
-            reason = "depends_on_rejected"
-            dependencies = ", ".join(
-                str(items[dependency].fragment_index)
-                for dependency in plan.cascade_reasons[index]
-            )
-            detail = f"depends on rejected fragment(s) {dependencies}"
-        flags.append(
-            FlagInput(
-                fragment_index=item.fragment_index,
-                text=item.text,
-                reason=reason,
-                detail=detail,
-                sentence=item.sentence,
-                span=item.span,
-            )
-        )
-    return flags
-
-
-def _cue_resolver() -> Callable[[str], cue_gate.CueResolution]:
-    """Bind the configured mode and the stored alias vectors into one resolver."""
-    mode = cue_gate.resolution_mode()
-    # Most prose carries no unknown cue, so the vector table is loaded on the
-    # first candidate rather than on every ingest, and never in strict mode.
-    # A half-drained embedding queue reads as no vectors at all: a type whose
-    # other aliases are not embedded yet would look like it has no runner-up,
-    # and the gate would absorb confidently against an unfinished comparison
-    # set. No vectors resolves every cue as unresolved, which flags instead.
-    loaded: list[list[connect_aliases.AliasVector]] = []
-
-    def resolve(cue: str) -> cue_gate.CueResolution:
-        if mode != "strict" and not loaded:
-            loaded.append(connect_aliases.complete_alias_vectors(_db()))
-        return cue_gate.resolve_cue(
-            cue,
-            loaded[0] if loaded else (),
-            embed_text=embed.embed,
-            mode=mode,
-        )
-
-    return resolve
-
-
-def _surviving_cue_ops(extraction: Extraction, plan: _BatchPlan) -> list[CueResolution]:
-    """Keep the absorptions whose auto-typed edge survived planning."""
-    # Rejected content must not teach the vocabulary: a cue whose only edges
-    # were dropped with their statements has nothing left to have been right
-    # about.
-    surviving = {
-        cue
-        for left, right, _link_type, cue in extraction.cue_links
-        if left not in plan.rejected and right not in plan.rejected
-    }
-    return [
-        resolution
-        for resolution in extraction.cue_resolutions
-        if resolution.decision in ABSORBING_DECISIONS and resolution.cue in surviving
-    ]
-
-
-def _cue_response(
-    cues: Sequence[CueResolution],
-) -> tuple[dict[str, int], list[dict[str, Any]]]:
-    """Render cue-resolution counts and stable decision records."""
-    counts = {
-        "auto": 0,
-        "low_confidence": 0,
-        "unresolved": 0,
-        "direction_conflict": 0,
-        "negated": 0,
-        "strict": 0,
-    }
-    rendered: list[dict[str, Any]] = []
-    for resolution in cues:
-        if resolution.decision == "auto:low-confidence":
-            counts["low_confidence"] += 1
-        elif resolution.decision == "direction-conflict":
-            counts["direction_conflict"] += 1
-        elif resolution.decision == "negated":
-            counts["negated"] += 1
-        else:
-            counts[resolution.decision] += 1
-        rendered.append(
-            {
-                "cue": resolution.cue,
-                "decision": resolution.decision,
-                "link_type": resolution.link_type,
-                "alias": resolution.alias,
-                "score": resolution.score,
-                "candidates": [list(candidate) for candidate in resolution.candidates],
-            }
-        )
-    return counts, rendered
-
-
-def _empty_ingest_text() -> dict[str, Any]:
-    """Extend the shared empty connected response with extraction fields."""
-    return {
-        **_empty_connected_batch(),
-        "fragments": {"total": 0, "resolved": 0, "flagged": 0},
-        "items": [],
-        "flags": [],
-        "condition_links": 0,
-        "cues": {
-            "auto": 0,
-            "low_confidence": 0,
-            "unresolved": 0,
-            "direction_conflict": 0,
-            "negated": 0,
-            "strict": 0,
-        },
-        "cue_resolutions": [],
-    }
-
-
-@tool
-def ingest_text(text: str, title: str | None = None) -> dict[str, Any]:
-    """Turn raw or lightly structured prose into one open, unapplied draft.
-
-    Give it a paragraph, a few sentences, or a bullet list. It splits on the
-    phrasing catalog's own atomicity cues — semicolons, compound phrases,
-    conditionals, and conservative verb coordination — instead of rejecting
-    compound input. Every surviving fragment then faces the same catalog
-    validation as any other write.
-
-    A kind comes from phrasing shape matching, never a guess. A fragment whose
-    shape is ambiguous or matches nothing, or that is still compound after the
-    split, becomes a **`flag` op** in the draft: a TODO for whoever reads it.
-    A kind-independent catalog refusal before classification has reason
-    `rejected`; a classified statement refused during planning has reason
-    `phrasing`.
-
-    A conditional opener proposes a `requires` link from the claim to the
-    condition. A cut whose connective is a registered alias of exactly one link
-    type also proposes that link, oriented by the alias's registered direction
-    (forward reads left to right; a far-side phrasing like "is part of" reads
-    the other way); nothing else is inferred. This
-    uses no LLM, does not rewrite your words, and never guesses kinds. For input
-    too messy for these rules, extract statements yourself (or with the `ingest`
-    tool) and call `submit_connected_batch`.
-
-    A cut whose connective matches no registered alias goes to the embedding
-    gate: the cue is compared against every alias embedding, and a clear enough
-    winner types the link and queues the cue as a new alias of that type — an
-    `upsert_link_type_alias` op in the same draft, so approving the draft is what
-    teaches the vocabulary and rejecting it teaches nothing. A cue nothing is
-    close to becomes a `flag` op carrying the cue and its nearest types; it never
-    creates a link type. Set `MYCELIUM_CUE_RESOLUTION=strict` to flag every
-    unknown cue instead of resolving it.
-    A negated connective is also flagged and never reaches embedding resolution.
-
-    A decision is not an absorption: `cues` and `cue_resolutions` report every
-    decision the gate made, while a cue whose statements were all rejected in
-    planning writes no alias op. So `cues.auto` can exceed the alias ops in the
-    draft; `draft.aliases` is the count that were actually queued.
-
-    Flag ops do not replay: `apply_draft` skips them. Resolve a flag by rewriting
-    that fragment yourself and then `discard_draft_op`-ing the flag.
-
-    Returns:
-        ```
-        {
-          "draft_id": "drf_..." | null,
-          "fragments": {"total": 0, "resolved": 0, "flagged": 0},
-          "items": [
-            {"batch_index": 0, "fragment_index": 0, "kind": "event",
-             "text": "...", "sentence": 0, "note": "..."}
-          ],
-          "flags": [
-            {"fragment_index": 1, "reason": "unmatched", "text": "..."}
-          ],
-          "condition_links": 0,
-          # every gate decision, absorbed or not
-          "cues": {"auto": 0, "low_confidence": 0, "unresolved": 0,
-                   "direction_conflict": 0, "negated": 0, "strict": 0},
-          "cue_resolutions": [
-            {"cue": "...", "decision": "auto", "link_type": "...",
-             "alias": "...", "score": 0.0, "candidates": [["...", "...", 0.0]]}
-          ],
-          "results": [...],
-          "proposals": {"links": 0, "merges": 0, "conflicts": 0},
-          "links": [...], "merges": [...], "conflicts": [...],
-          "suppressed_negations": 0,
-          "suppressed_conflicts": 0,
-          "related": [...], "dropped_merges": [...],
-          "unresolved_hints": [...],
-          "nli": "ran" | "unavailable" | "nothing_to_classify",
-          "nli_reason": "NliUnavailable message" | null,
-          "nli_pairs": {"classified": <int>, "skipped": <int>,
-                        "budget": <int>},
-          "draft": {"status": "open", "op_count": 0, "flags": 0,
-                    "aliases": 0} | null
-        }
-        ```
-    """
-    extraction = extract(
-        text,
-        aliases=store.alias_lookup(_db()),
-        resolve_cue=_cue_resolver(),
-    )
-    if not extraction.items and not extraction.flags:
-        return _empty_ingest_text()
-
-    specs = _ingest_specs(
-        extraction.items, extraction.condition_links, extraction.cut_links
-    )
-    run = _run_connected(
-        specs,
-        title=title,
-        flags=extraction.flags,
-        flags_from_plan=lambda plan: _ingest_plan_flags(extraction.items, plan),
-        cues_from_plan=lambda plan: _surviving_cue_ops(extraction, plan),
-    )
-    connected = _connected_response(specs, run, set())
-    accepted_items: list[dict[str, Any]] = []
-    for index, item in enumerate(extraction.items):
-        if index not in run.new_of:
-            continue
-        rendered: dict[str, Any] = {
-            "batch_index": run.new_of[index],
-            "fragment_index": item.fragment_index,
-            "kind": item.kind,
-            "text": item.text,
-            "sentence": item.sentence,
-        }
-        if item.note:
-            rendered["note"] = item.note
-        accepted_items.append(rendered)
-
-    # A cue flag addresses a connective, so it never changes fragment counts.
-    extraction_fragment_flags = [
-        flag for flag in extraction.flags if flag.reason != "cue"
-    ]
-    fragment_flags = [flag for flag in run.flags if flag.reason != "cue"]
-    total = len(extraction.items) + len(extraction_fragment_flags)
-    condition_links = sum(
-        claim_position in run.new_of
-        for claim_position, _condition_position, _link_type in (
-            extraction.condition_links
-        )
-    )
-    # The response reports every decision the gate made; the draft carries only
-    # the absorptions whose edge survived, so the two counts can differ.
-    draft = (
-        None
-        if run.draft is None
-        else {
-            **run.draft,
-            "flags": len(run.flags),
-            "aliases": sum(c.decision in ABSORBING_DECISIONS for c in run.cues),
-        }
-    )
-    cues, cue_resolutions = _cue_response(extraction.cue_resolutions)
-    return {
-        **connected,
-        "fragments": {
-            "total": total,
-            "resolved": len(run.new_of),
-            "flagged": len(fragment_flags),
-        },
-        "items": accepted_items,
-        "flags": [
-            {
-                "fragment_index": flag.fragment_index,
-                "reason": flag.reason,
-                "text": flag.text,
-            }
-            for flag in run.flags
-        ],
-        "condition_links": condition_links,
-        "cues": cues,
-        "cue_resolutions": cue_resolutions,
-        "draft": draft,
-    }
 
 
 @tool
@@ -5814,12 +4929,10 @@ def upsert_link_type_alias(
     score: float | None = None,
     direction: str = "forward",
 ) -> dict[str, Any]:
-    """Create or update a cue-matcher phrasing for a canonical link type.
+    """Create or update an alternative phrasing for a canonical link type.
 
-    The alias is a phrasing the cue matcher will accept for this link type;
-    links still store the canonical `link_type`. The same alias may be
-    registered under more than one type. An alias ambiguous that way is not
-    resolved by the segmenter.
+    The alias is vocabulary only: links still store the canonical
+    `link_type`. The same alias may be registered under more than one type.
 
     `direction` says how the phrasing reads the edge: `forward` runs it left
     to right off the alias ("A contains B"), `reverse` names the relation
@@ -5827,11 +4940,10 @@ def upsert_link_type_alias(
 
     The alias set records where a phrasing came from: `curator` for a
     hand-authored one, or `auto`/`auto:low-confidence` with the deciding cosine
-    for one the ingest gate absorbed; a later curator write overwrites both
-    fields.
+    for one an automatic resolver proposed; a later curator write overwrites
+    both fields.
 
-    Embedding runs in the background, so `list_link_type_aliases` may briefly
-    show `embedded: false`. Returns
+    Returns
     `{link_type, alias, provenance, score, direction, created}` with the
     normalized alias and whether this call created it.
     """
@@ -5847,7 +4959,7 @@ def upsert_link_type_alias(
         raise ValueError(f"score must be a cosine in [-1, 1]: {score!r}")
     # An automatic absorption with no score is invisible to the audit sweep the
     # provenance tag exists for.
-    if provenance in ABSORBING_DECISIONS and score is None:
+    if provenance != "curator" and score is None:
         raise ValueError(f"provenance {provenance!r} requires a score")
     normalized = store.normalize_alias(alias)
     with store.transaction(_db()):
@@ -5859,10 +4971,6 @@ def upsert_link_type_alias(
             score=score,
             direction=direction,
         )
-
-    from . import alias_worker  # local import: avoid loading worker machinery eagerly
-
-    alias_worker.wake()
     return {
         "link_type": link_type,
         "alias": normalized,
@@ -5875,7 +4983,7 @@ def upsert_link_type_alias(
 
 @tool
 def delete_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
-    """Delete one cue-matcher phrasing from a canonical link type.
+    """Delete one alternative phrasing from a canonical link type.
 
     Reach for this to retire vocabulary without changing links already stored
     under the canonical type. Idempotent. Returns `{link_type, alias, deleted}`
@@ -5891,11 +4999,10 @@ def delete_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
 def list_link_type_aliases(
     link_type: str | None = None,
 ) -> list[dict[str, Any]]:
-    """List cue-matcher phrasings, optionally for one canonical link type.
+    """List link-type phrasings, optionally for one canonical link type.
 
-    Reach for this to inspect accepted vocabulary and whether its background
-    embedding is ready. Returns
-    `[{link_type, alias, provenance, score, direction, embedded}]`;
+    Reach for this to inspect accepted vocabulary. Returns
+    `[{link_type, alias, provenance, score, direction}]`;
     hand-authored and seeded aliases have `score: null`.
     """
     return [
@@ -5905,7 +5012,6 @@ def list_link_type_aliases(
             "provenance": row["provenance"],
             "score": row["score"],
             "direction": row["direction"],
-            "embedded": bool(row["embedded"]),
         }
         for row in store.list_link_type_aliases(_db(), link_type)
     ]

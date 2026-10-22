@@ -110,9 +110,8 @@ permissions, validation, budgets, and domain decisions.
 Provider choice is deterministic configuration. A model does not choose its own
 provider. Claude and OpenAI conversations retain their provider-specific history
 inside the adapter and cannot switch provider halfway through a run. Embeddings
-remain a separate Ollama configuration; local NLI classification also retains
-its existing model contract. Neither search indexes nor classifier models are
-changed by this screen.
+remain a separate Ollama configuration, and search indexes are not changed by
+this screen.
 
 ## Limits and repository integrations
 

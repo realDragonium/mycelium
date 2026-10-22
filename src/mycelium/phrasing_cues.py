@@ -1,11 +1,10 @@
-"""Shared lexical cues for phrasing validation and raw-text segmentation."""
+"""Lexical cues for phrasing validation."""
 
 from __future__ import annotations
 
 import re
 
 # Coordinating conjunctions that join two clauses into a compound statement.
-# The catalog rejects on these and the segmenter cuts on them — one vocabulary.
 COORDINATING_CONJUNCTIONS = frozenset({"and"})
 
 # Subordinating conjunctions that signal a precondition leaking into text
@@ -75,29 +74,3 @@ HIDDEN_EVENT_STATE_PHRASES = [
         '"gets marked as" hides the underlying event (the marking) and the resulting state',
     ),
 ]
-
-# Closed table of conditional openers the condition fragment is stripped of.
-# Longest match first; case-insensitive; the opener must be followed by whitespace.
-# "on" stands alone: a quantifier after it ("on any Tuesday") is condition
-# material, not part of the opener.
-SUBORDINATOR_STRIP: tuple[str, ...] = (
-    "as soon as",
-    "as long as",
-    "provided that",
-    "in case",
-    "whenever",
-    "unless",
-    "before",
-    "after",
-    "until",
-    "while",
-    "once",
-    "when",
-    "if",
-    "on",
-)
-
-# Confirmed in DRA-390: causal subordinators mark explanation, not a stated
-# requirement. They still cause a cut, but proposing `requires` would invent a
-# potentially false causal or legal relation.
-CAUSAL_SCONJ = frozenset({"since", "because", "though"})

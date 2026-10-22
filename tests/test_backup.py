@@ -372,23 +372,6 @@ def test_round_trip_preserves_alias_embedding_blob(tmp_path):
             "WHERE link_type = 'contains' AND alias = 'includes'"
         ).fetchone()
         assert row["embedding"] == embedding
-        embedded_job = conn.execute(
-            "SELECT 1 FROM link_type_alias_embed_queue "
-            "WHERE link_type = 'contains' AND alias = 'includes'"
-        ).fetchone()
-        assert embedded_job is None
-        missing_null_embedding_jobs = conn.execute(
-            "SELECT COUNT(*) AS n FROM link_type_aliases AS aliases "
-            "WHERE aliases.embedding IS NULL AND NOT EXISTS ("
-            "SELECT 1 FROM link_type_alias_embed_queue AS queue "
-            "WHERE queue.link_type = aliases.link_type "
-            "AND queue.alias = aliases.alias)"
-        ).fetchone()
-        assert missing_null_embedding_jobs["n"] == 0
-        assert (
-            conn.execute("SELECT 1 FROM link_type_alias_embed_queue LIMIT 1").fetchone()
-            is not None
-        )
     finally:
         conn.close()
 
@@ -533,14 +516,6 @@ def test_import_survives_manifest_stripped_of_config_row_counts(tmp_path):
         assert _row_count(dst, "link_type_aliases") == _row_count(
             src, "link_type_aliases"
         )
-        queued_null_alias = conn.execute(
-            "SELECT 1 FROM link_type_aliases AS aliases "
-            "JOIN link_type_alias_embed_queue AS queue "
-            "ON queue.link_type = aliases.link_type "
-            "AND queue.alias = aliases.alias "
-            "WHERE aliases.embedding IS NULL LIMIT 1"
-        ).fetchone()
-        assert queued_null_alias is not None
     finally:
         conn.close()
 

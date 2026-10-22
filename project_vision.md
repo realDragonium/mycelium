@@ -37,11 +37,11 @@ sentences, or lightly structured text and receive connected knowledge.
    together in a draft.
 5. Review the proposed changes before applying them to accepted knowledge.
 
-Current entry points serve different inputs: `ingest_text` runs deterministic
-segmentation and connection; `submit_connected_batch` accepts statements an
-agent has already extracted; `ingest` and research runs use an LLM to propose
-draft operations. Input the deterministic path cannot resolve becomes a flag
-for further work.
+Current entry points serve different inputs: `ingest` and research runs use an
+LLM to propose draft operations from prose; statements an agent has already
+extracted go in through `upsert_statements` and `submit_draft`. The internal
+draft reviewer then judges links, duplicates, and contradictions against the
+graph.
 
 Evaluation must start with source prose and expected statements, relationships,
 and matches to existing knowledge. Measuring whether already-extracted

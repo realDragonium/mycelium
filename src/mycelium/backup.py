@@ -604,19 +604,11 @@ def import_substrate(
             store.migrate(conn)  # DDL + seed; owns its own commit
             with store.transaction(conn):
                 cleared_tables = _clear_archived_ontology_tables(conn, row_counts)
-                cleared_tables |= _load_data_jsonl(
+                _load_data_jsonl(
                     conn,
                     staging / "data.jsonl",
                     already_cleared=cleared_tables,
                 )
-                if "link_type_aliases" in cleared_tables:
-                    conn.execute(
-                        "INSERT INTO link_type_alias_embed_queue "
-                        "(link_type, alias, enqueued_at) "
-                        "SELECT link_type, alias, ? FROM link_type_aliases "
-                        "WHERE embedding IS NULL",
-                        (_now_iso(),),
-                    )
                 if history_db_path is not None and (staging / "history.jsonl").exists():
                     _load_history_jsonl(conn, staging / "history.jsonl")
                 for entity in conn.execute(
@@ -668,8 +660,6 @@ def _clear_archived_ontology_tables(
     )
     for table in covered_tables:
         conn.execute(f"DELETE FROM {table}")
-    if "link_type_aliases" in covered_tables:
-        conn.execute("DELETE FROM link_type_alias_embed_queue")
     return frozenset(covered_tables)
 
 
@@ -746,7 +736,7 @@ def _load_data_jsonl(
     path: Path,
     *,
     already_cleared: frozenset[str],
-) -> frozenset[str]:
+) -> None:
     """Stream the JSONL back into the freshly-migrated DB. Each line
     becomes an INSERT into the table its `_kind` resolves to."""
     legacy_skipped = 0
@@ -779,8 +769,6 @@ def _load_data_jsonl(
                 # Records are authoritative too, so stripped manifests cannot
                 # leave seeds that collide with archived rows.
                 conn.execute(f"DELETE FROM {table}")
-                if table == "link_type_aliases":
-                    conn.execute("DELETE FROM link_type_alias_embed_queue")
                 lazily_cleared.add(table)
             if table == "link_type_aliases" and "direction" not in row:
                 raise ValueError(
@@ -802,7 +790,6 @@ def _load_data_jsonl(
             "skipped %d legacy annotation record(s) from pre-removal archive",
             legacy_skipped,
         )
-    return frozenset(lazily_cleared)
 
 
 def _restore_prompts(prompts_db_path: Path, path: Path) -> None:

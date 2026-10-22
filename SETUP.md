@@ -99,9 +99,9 @@ server configuration.
 
 ## 5. Add data
 
-For prose, call `ingest_text`. It segments the input into typed statements,
-proposes links, and returns a draft. Inspect the draft with `get_draft`, remove
-unwanted operations with `discard_draft_op`, then submit it with `submit_draft`.
+For prose, call `ingest`. It extracts typed statements, proposes links, and
+returns a draft. Inspect the draft with `get_draft`, remove unwanted operations
+with `discard_draft_op`, then submit it with `submit_draft`.
 
 For direct writes, create named entities with `upsert_entity`, then use
 `upsert_statement` or `upsert_statements`. Statements require a `kind`, `text`,
@@ -121,4 +121,4 @@ active vocabularies before authoring unfamiliar edges or kinds.
 - If the UI reports a data-load failure, confirm `mycelium-http` is running and
   open <http://127.0.0.1:8765/api/data> directly.
 - If a write is rejected, inspect its phrasing violations or submit prose
-  through `ingest_text` for a reviewable draft.
+  through `ingest` for a reviewable draft.
