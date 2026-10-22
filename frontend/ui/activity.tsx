@@ -284,7 +284,6 @@ function ContextNeighbors({ event }) {
   const router = useRouter();
   const idx = substrate.index;
   const data = substrate.data;
-  const { target_kind: k, target_id: id } = event;
 
   const model = useMemoAct(() => buildContextGraph(event, idx, data), [event, idx, data]);
 
@@ -389,7 +388,7 @@ function MiniGraph({ model, router }) {
 
   // Stack two anchors vertically; everything is laid out per-anchor.
   // For each anchor: left column = incoming + mentions, right column = outgoing, anchor in middle.
-  const groups = model.anchors.map((a, i) => {
+  const groups = model.anchors.map((a) => {
     const items = model.neighborsByAnchor[a.id] || [];
     const outs = items.filter(it => it.dir === 'out');
     const ins  = items.filter(it => it.dir === 'in');

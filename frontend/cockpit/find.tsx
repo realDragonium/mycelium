@@ -15,7 +15,7 @@ const MODES = {
     note: <>Splits your query into sub-queries and merges results. <b>No score floor</b> — the long tail rides along; you judge it.</> },
 };
 
-function FindLanes({ mode, query, onMode }) {
+function FindLanes({ mode, onMode }) {
   return (
     <div className="find-lanes">
       <span className="ll">mode</span>
@@ -109,7 +109,7 @@ function FindResults({ query, mode }) {
         <span className="fh-count">{loading ? 'searching…' : `${rows.length} result${rows.length === 1 ? '' : 's'}`}</span>
       </div>
 
-      <FindLanes mode={mode} query={query} onMode={(k) => router.go({ view: 'find', query, mode: k })} />
+      <FindLanes mode={mode} onMode={(k) => router.go({ view: 'find', query, mode: k })} />
 
       <div className="find-note"><I.find className="fn-icon" width="15" height="15" /><div>{m.note}</div></div>
 

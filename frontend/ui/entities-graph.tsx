@@ -992,7 +992,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
                 {selectedNeighbors.length === 0 && (
                   <div className="graph-empty-state">No entity↔entity links on this entity.</div>
                 )}
-                {selectedNeighbors.map((n, i) => {
+                {selectedNeighbors.map((n) => {
                   const fromId = n.dir === 'out' ? selected.id : n.target.id;
                   const toId = n.dir === 'out' ? n.target.id : selected.id;
                   const key = `${fromId}→${toId}|${n.link_type}`;

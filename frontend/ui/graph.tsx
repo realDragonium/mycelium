@@ -304,8 +304,6 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       // spreading out to fill thousands of virtual pixels the user
       // never sees.
       const COMPACT_MULT = embedded ? 0.45 : 1;
-      const SPREAD_W = Math.max(2400, width * 1.8) * spreadScale * COMPACT_MULT;
-      const SPREAD_H = Math.max(1800, height * 1.8) * spreadScale * COMPACT_MULT;
       const ORIGIN_X = width / 2, ORIGIN_Y = height / 2;
       // Deterministic PRNG (mulberry32) so refreshing the page lays
       // the graph out identically. Seed is a hash of the sorted node
@@ -741,19 +739,6 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     // less hard, so they sit naturally in their cluster instead of
     // being yanked into the center under cumulative load.
     const DEGREE_WEIGHTING = true;
-    // Center gravity, very weak. Just enough to keep disconnected
-    // components from drifting off; not strong enough to compete
-    // with springs for cluster placement.
-    //
-    // Lower than before because the entity-anchored seed already
-    // distributes nodes across a wide canvas — we don't want gravity
-    // slowly collapsing that spread back into a central blob over the
-    // many seconds the simulation runs.
-    // Scale inversely with spread so the equilibrium layout for large
-    // graphs sits at the same fraction of canvas as for small ones —
-    // otherwise gravity slowly squeezes a wide spawn back into a
-    // tighter blob and the extra spread is lost.
-    const CENTER_GRAVITY = 0.00015 / Math.max(1, sim.spreadScale || 1);
     // Per-entity "force field": each entity carves out a territory
     // proportional to the number of *other entities* it's directly
     // linked to. Nodes inside the field that aren't direct entity
@@ -791,7 +776,6 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     const step = () => {
       const now = performance.now();
       const N = sim.nodes.length;
-      const center = { x: width / 2, y: height / 2 };
       // Run 4 physics sub-steps per RAF frame. This keeps the layout
       // responsive to drags and data changes without making the
       // simulation feel sluggish — settling that would otherwise take

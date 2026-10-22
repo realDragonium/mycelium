@@ -88,7 +88,7 @@ function CommandBar({ variant }) {
       </form>
 
       {variant === 'hero' && intent === 'find' && (
-        <FindLanes mode={findMode} query={value} onMode={setFindMode} />
+        <FindLanes mode={findMode} onMode={setFindMode} />
       )}
     </div>
   );

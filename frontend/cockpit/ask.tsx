@@ -52,7 +52,7 @@ function Provenance({ items, idx }) {
   });
 }
 
-function Trace({ steps, idx }) {
+function Trace({ steps }) {
   const router = useRouter();
   return steps.map((st, i) => (
     <div key={i} className="trace-step">
@@ -101,7 +101,7 @@ function Answered({ r, idx }) {
           <Provenance items={r.provenance} idx={idx} />
         </Panel>
         <Panel icon="trace" title="Retrieval trace" count={`${r.trace.length} steps`} cls="trace reveal-3" collapsible openDefault={false}>
-          <Trace steps={r.trace} idx={idx} />
+          <Trace steps={r.trace} />
         </Panel>
       </div>
     </div>
