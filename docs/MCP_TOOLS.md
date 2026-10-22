@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 35 of its 87 registered tools over MCP. Every
+question. Mycelium therefore advertises 37 of its 87 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when the tool
 takes no arguments) and stays available to the in-process loops (Ask, Ingest, Research,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -11,15 +11,18 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. An asker sees only `ask`, and a reader sees 18 tools. A drafter sees 33
-because their writes are queued on a draft, but they do not see
-`request_documentation` or `revise_document`. A writer sees 33 and does not see
-`delete_statement` or `merge_statements`. An admin sees all 35.
+can invoke. An asker sees only `ask`, and a reader sees 18 tools. A drafter sees 34
+because their writes are queued on a draft, but they do not see `list_drafts`,
+`request_documentation` or `revise_document`. A writer sees 34 and does not see
+the admin-only `delete_statement`, `merge_statements` or `merge_entities`. An admin
+sees all 37.
 
 ## Over MCP
 
-MCP covers the read path, statement authoring, the caller's own drafts, and the
-model-backed entry points a client cannot reproduce itself.
+MCP covers the read path, statement and entity authoring, drafts, and the
+model-backed entry points a client cannot reproduce itself. Approval, reviewed
+application and the reviewer's own records stay off MCP: approval is the operator's
+decision, and the rest runs in-process.
 
 | Tool | Why it is on MCP |
 | --- | --- |
@@ -47,11 +50,13 @@ model-backed entry points a client cannot reproduce itself.
 | `add_entity_links` | Adds structural entity↔entity edges, as the authoring skill instructs. |
 | `remove_entity_links` | Removes entity↔entity edges. |
 | `merge_statements` | Consolidates a duplicate the caller found. Requires admin. |
+| `merge_entities` | The same consolidation for entities. Splitting the two merges across two surfaces would trip agents up. Requires admin. |
 | `delete_statement` | Removes a statement. Requires admin. |
 | `submit_draft` | Submits the caller's draft and starts internal review. |
 | `get_draft` | Inspects a draft and its review assessment. |
 | `discard_draft_op` | Lets the author correct their open draft. |
 | `list_my_drafts` | Lists the caller's own drafts. |
+| `list_drafts` | Lists the review queue across creators. An AI curator lists and investigates drafts, and a person approves or rejects them in the UI. This tool is the agent's side of that split, and only real writers and admins see it. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
 | `report_knowledge_gap` | Lets an agent report knowledge it could not find. |
 | `request_documentation` | Starts a documentation run. |
@@ -70,11 +75,10 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | --- | --- |
 | `survey_statements` | Its own docstring says it is interchangeable with `search_statements`. This is the one duplicate in the read path. An MCP client can split its own question, and `ask` handles broad questions. Ask and Documentation recon use it in-process. |
 | `retrieve_context` | Combines name lookup, entity reads, search, and fetch for the Ask loop's turn budget. It is a distinct primitive, but MCP clients can run the same reads. |
-| `find_duplicates` | Audits the whole substrate in near-quadratic time. This is curation, not retrieval. |
+| `find_duplicates` | Audits the whole substrate in near-quadratic time and takes no candidate text. This is curation, not retrieval, so it does not satisfy the Ingest and Research reconcile floor. |
 | `find_entity_duplicates` | Audits entity names. This is curation, and nothing calls it except its HTTP route. |
 | `get_mention_candidates` | Discovery view for the names workspace (`GET /api/mention-candidates`). |
 | `replace_text` | `patch_statement(id, text=...)` covers it. The UI and draft replay use it. |
-| `merge_entities` | Entity curation in the names workspace. |
 | `move_name` | Alias curation in the names workspace. |
 | `rename_name` | Alias curation in the names workspace. |
 | `delete_name` | Alias curation in the names workspace. |
@@ -109,7 +113,6 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `list_research_runs` | Research workspace. |
 | `get_research_run` | Research workspace. |
 | `list_research_sources` | Deployment configuration. |
-| `list_drafts` | The curator queue across all creators. Internal review now decides drafts. |
 | `attach_draft_source` | Records CI pull request provenance. Pipeline steps call it over HTTP. |
 | `find_my_draft_by_source` | Looks up a draft by CI provenance. Pipeline steps call it over HTTP. |
 | `revise_draft_operation` | Curator correction. Internal review calls it in-process. |

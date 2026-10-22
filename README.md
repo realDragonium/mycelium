@@ -79,7 +79,7 @@ Statements are typed claims. Their `kind` describes the shape of the claim,
 such as `event`, `state`, or `capability`. Entity mentions are derived from
 names found in statement text. Statement links use `to_id` and `from_id`.
 
-MCP advertises 35 tools. Every registered tool also has an HTTP route, so
+MCP advertises 37 tools. Every registered tool also has an HTTP route, so
 configuration, curation and draft-review tools remain available over HTTP and in
 the UI. See [the MCP tool manifest](docs/MCP_TOOLS.md) for which tools are
 advertised over MCP and why.
@@ -104,12 +104,14 @@ The authoring path is:
 - `upsert_statements` then `submit_draft` for statements you already wrote; the
   internal draft reviewer checks their links, duplicates, and contradictions
   against the graph. `set_draft_review_evidence` gives the reviewer your source.
-- `get_draft`, `discard_draft_op`, and `list_my_drafts` to inspect and revise drafts.
+- `get_draft`, `discard_draft_op`, and `list_my_drafts` to inspect and revise drafts;
+  curators use `list_drafts` to see the review queue.
 - `upsert_entity` and `upsert_name` for the entities statements mention.
 - `upsert_statement` to create or wholly replace one statement.
 - `patch_statement`, `add_links`, and `remove_links` for focused changes.
 - `add_entity_links` and `remove_entity_links` for entity↔entity structure.
-- `merge_statements` and `delete_statement` for consolidation and removal.
+- `merge_statements`, `merge_entities`, and `delete_statement` for consolidation
+  and removal.
 - `report_knowledge_gap` for knowledge you could not find.
 
 Documentation is requested with `request_documentation`, followed with

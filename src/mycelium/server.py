@@ -289,12 +289,14 @@ MCP_TOOLS = frozenset(
         "add_entity_links",
         "remove_entity_links",
         "merge_statements",
+        "merge_entities",
         "delete_statement",
         # Drafts
         "submit_draft",
         "get_draft",
         "discard_draft_op",
         "list_my_drafts",
+        "list_drafts",
         "set_draft_review_evidence",
         "report_knowledge_gap",
         # Documentation

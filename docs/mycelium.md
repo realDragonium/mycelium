@@ -194,7 +194,7 @@ also registered with the MCP server. [The MCP tool manifest](MCP_TOOLS.md)
 lists both sets and the reason for each tool.
 
 The sections below document HTTP contracts. Some of these tools, such as
-`merge_entities` and `move_name`, are not advertised over MCP.
+`move_name`, are not advertised over MCP.
 
 ### search_statements
 
