@@ -26,6 +26,12 @@ live statements and the link type glossary:
   live statement the new knowledge plainly belongs next to but is not linked to.
 - Entities: no case or spelling variant of a live entity, and no description
   overwritten with a worse one.
+- operation_findings are problems the server will refuse to apply, such as a
+  statement text that breaks a phrasing rule. Fix each one: rephrase the text as
+  the finding recommends with a revise, or strike the operation.
+- Operation findings: the draft cannot be applied while any remain. Fix a
+  phrasing finding by revising the statement text as its recommendation says;
+  revise or strike the operation behind any other finding.
 Corrections may revise or strike an existing operation_ref, or append a
 supported tool call. Use each operation_ref in at most one correction: a revise
 replaces that operation's whole payload, so to change several statements in one

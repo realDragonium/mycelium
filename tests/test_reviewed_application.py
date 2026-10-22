@@ -662,3 +662,26 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
         assert reviewed_finished.is_set()
         assert not failures, failures
         assert outcomes[0]["ok"] is True
+
+
+def test_inspection_reports_phrasing_the_replay_would_reject(tmp_path, monkeypatch):
+    with _app(tmp_path, monkeypatch):
+        evidence = _inspect_submitted(
+            "upsert_statements",
+            {
+                "statements": [
+                    {"kind": "event", "text": "A session is created"},
+                    {"kind": "event", "text": "session should expire after timeout"},
+                    {
+                        "kind": "event",
+                        "text": "session should expire after timeout",
+                        "allow_phrasing_violations": True,
+                    },
+                ]
+            },
+        )
+        findings = [item["finding"] for item in evidence["operation_findings"]]
+        assert findings
+        assert all(
+            finding.startswith("phrasing:statements[1]:") for finding in findings
+        )

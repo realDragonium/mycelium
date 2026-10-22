@@ -6900,6 +6900,50 @@ def _nested_parameter_findings(kind: str, payload: dict) -> list[str]:
     return findings
 
 
+def _unbypassed_phrasing_texts(kind: str, payload: dict) -> list[tuple[str, str, str]]:
+    if payload.get("allow_phrasing_violations"):
+        return []
+    if kind == "upsert_statements":
+        return [
+            (f"statements[{index}]", item["text"], item["kind"])
+            for index, item in enumerate(payload.get("statements", []))
+            if isinstance(item, dict)
+            and isinstance(item.get("text"), str)
+            and isinstance(item.get("kind"), str)
+            and not item.get("allow_phrasing_violations")
+        ]
+    if kind == "upsert_statement" and isinstance(payload.get("text"), str):
+        return [("text", payload["text"], str(payload.get("kind") or "event"))]
+    if kind in ("replace_text", "patch_statement") and isinstance(
+        payload.get("text"), str
+    ):
+        row = store.get_statement(_db(), str(payload.get("id")))
+        statement_kind = payload.get("kind") or (row["kind"] if row else None)
+        return [("text", payload["text"], str(statement_kind or "event"))]
+    return []
+
+
+def _phrasing_findings(kind: str, payload: dict) -> list[str]:
+    return [
+        f"phrasing:{position}:{violation['rule']}: {violation['recommendation']}"
+        for position, text, statement_kind in _unbypassed_phrasing_texts(kind, payload)
+        for violation in phrasing.check(text, kind=statement_kind)
+    ]
+
+
+def _rejections(result: JsonValue) -> list[JsonValue]:
+    if not isinstance(result, dict):
+        return []
+    if result.get("rejected") is True:
+        return [result.get("violations")]
+    items = result.get("results")
+    return [
+        {"index": index, "violations": item.get("violations")}
+        for index, item in enumerate(items if isinstance(items, list) else [])
+        if isinstance(item, dict) and item.get("rejected") is True
+    ]
+
+
 def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFinding]:
     from . import drafts_store
 
@@ -6930,6 +6974,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
             unknown = sorted(set(payload) - set(_ORIG_SIGNATURES[kind].parameters))
             messages = ["unknown_parameters:" + ",".join(unknown)] if unknown else []
             messages.extend(_nested_parameter_findings(kind, payload))
+            messages.extend(_phrasing_findings(kind, payload))
         for reference, result_index_text in re.findall(
             r'"@(\d+):(\d+)"', op["payload_json"]
         ):
@@ -7164,7 +7209,10 @@ def _replay_draft_op(
             isinstance(item, dict) and item.get("rejected") is True for item in items
         )
     if strict and rejected:
-        raise RuntimeError(f"op seq={seq} ({kind}) was rejected during replay")
+        raise RuntimeError(
+            f"op seq={seq} ({kind}) was rejected during replay: "
+            + _json.dumps(_rejections(result), default=str)
+        )
     results_by_seq[seq] = result
     return {"seq": seq, "kind": kind, "result": result}
 
