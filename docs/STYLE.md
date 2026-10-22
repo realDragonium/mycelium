@@ -5,7 +5,7 @@ else is judgment. When in doubt, match the surrounding code.
 
 ## Enforced by ruff (`uv run ruff check` / `uv run ruff format`)
 
-Run over `src tests scripts bench`, by the pre-commit hook and in CI.
+Run over `src tests scripts`, by the pre-commit hook and in CI.
 
 - **Line length 88**, double quotes, spaces — ruff format defaults. The
   formatter is the sole authority on layout; don't hand-wrap code.
@@ -18,8 +18,7 @@ Run over `src tests scripts bench`, by the pre-commit hook and in CI.
   in `pytest.raises(match=)` (`RUF043`), and unpacked values never used
   (`RUF059`). Deliberately a small set — a rule earns its place by
   catching real bugs, not by generating churn.
-- **Complexity ≤ 15** (`C901`, product code only — `scripts/` and `bench/`
-  exempt).
+- **Complexity ≤ 15** (`C901`, product code only — `scripts/` exempt).
   When a function trips it, decompose along its real phase seams
   (validate → normalize → write → respond), never by line count. The
   extracted pieces should be nameable — if you can't name it, it wasn't

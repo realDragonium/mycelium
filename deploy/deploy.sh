@@ -75,7 +75,6 @@ EXCLUDES=(
     --exclude '.ruff_cache'
     --exclude 'node_modules'
     --exclude 'tests'            # don't ship tests to prod
-    --exclude 'bench'
     --exclude '*.log'
     --exclude 'anns.json'        # local cache
     --exclude 'entity-positions.json'
