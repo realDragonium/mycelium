@@ -141,7 +141,8 @@ search_statements({
 
 For multi-statement prose, use `ingest`. An LLM extracts atomic statements,
 checks them against existing knowledge, proposes links, and returns a draft for
-review.
+review. While [internal draft review](docs/DRAFT_REVIEW.md) is on, the draft is
+submitted to the reviewer at once.
 
 Historical annotation tables may remain in old databases but are inert. The
 current migration runner leaves them intact for compatibility, and archive
