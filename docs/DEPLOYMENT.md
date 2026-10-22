@@ -67,21 +67,25 @@ The first deploy uploads everything; subsequent deploys are incremental.
 MYC_SSH_HOST=root@your-vps.example.com deploy/deploy.sh
 ```
 
-This does three things:
+This does four things:
 
-1. `rsync`s the source tree to `/opt/mycelium` on the server (excluding
+1. `rsync`s the source tree to a staging dir on the server (excluding
    `.git`, tests, the local `.mycelium` data dir, caches).
-2. Runs `uv sync --frozen` on the server, which installs the exact
-   dependency versions from `uv.lock` into a venv owned by the
-   `mycelium` user.
-3. Restarts the `mycelium` systemd service.
+2. Stops the service and snapshots the data dir — see
+   [Deploy snapshots](#deploy-snapshots). If the snapshot fails, the deploy
+   stops here and the running build is started again.
+3. Installs the build into `/opt/mycelium` and runs `uv sync --frozen`,
+   which installs the exact dependency versions from `uv.lock` into a venv
+   owned by the `mycelium` user.
+4. Starts the `mycelium` systemd service and checks it is still running a
+   few seconds later, so a migration that refuses at startup fails the
+   deploy.
 
-On the **first** deploy the service won't be enabled yet (we haven't
-written the env file), so the restart step will silently fail. That's
-fine — we'll start it for real at the end.
+On the **first** deploy there is no env file and no data yet, so skip the
+restart — we'll start the service for real at the end:
 
 ```bash
-# First deploy only — skip the restart attempt
+# First deploy only
 MYC_SSH_HOST=root@your-vps.example.com deploy/deploy.sh --skip-restart
 ```
 
@@ -281,32 +285,235 @@ mechanism; it is deprecated upstream, not removed.
 
 ## Subsequent deploys
 
-Just run the deploy script again — the systemd service restarts
-automatically:
+Just run the deploy script again:
 
 ```bash
 MYC_SSH_HOST=root@your-vps.example.com deploy/deploy.sh
 ```
 
-The data dir (`/var/lib/mycelium`) is excluded from the rsync, so
-substrate state survives deploys cleanly. Migrations (`store.migrate()`)
-run on startup so any schema additions are applied automatically.
+The data dir (`/var/lib/mycelium`) is never shipped or overwritten.
+Schema migrations run when the new build starts, after the deploy has
+snapshotted the data. A start also brings untouched seeded AI instructions
+up to the new build's defaults — see
+[Startup changes that are not migrations](#startup-changes-that-are-not-migrations).
 
 ---
 
-## Backups
+## Data and backups
 
-The substrate is a single SQLite file at `/var/lib/mycelium/main.db`
-(plus `history.db` for the audit log). Back it up the way you back
-up any small file:
+Everything an instance knows lives in `/var/lib/mycelium`:
+
+| File | Holds |
+|---|---|
+| `mycelium.db` | Knowledge: statements, entities, names, links and conditions, vocabularies, knowledge gaps |
+| `mycelium-history.db` | Audit log of substrate changes |
+| `mycelium-auth.db` | Users, MCP tokens, invites, OAuth clients |
+| `mycelium-drafts.db` | Drafts and their reviews, research and documentation runs, generated documents |
+| `mycelium-prompts.db` | AI instructions and their history, model, review and product settings, GitHub connections |
+| `mycelium-ops.db` | Bounded tool-call telemetry |
+| `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
+| `entity-positions.json` | Entity layout cache; rebuilt if missing |
+| `.uv-cache/` | uv's package cache, not data |
+
+The databases run in WAL mode, so copying a live `.db` file can produce a
+torn copy. Use one of the two methods below.
+
+### Backups: `mycelium export`
+
+`mycelium export` writes one archive holding every database above, the
+audit log and the vector indexes. Run it as the service user; it is safe
+while the service runs and reads each database as one consistent snapshot.
 
 ```bash
-# Take an online snapshot — SQLite handles concurrent reads safely.
-sudo -u mycelium sqlite3 /var/lib/mycelium/main.db ".backup /tmp/mycelium-$(date +%F).db"
+# once: the CLI wrapper and somewhere the service user may write
+sudo install -m 0755 /opt/mycelium/deploy/myc /usr/local/bin/myc
+sudo install -d -o mycelium -g mycelium -m 0700 /var/lib/mycelium-backups
+
+sudo myc export /var/lib/mycelium-backups/mycelium-$(date -u +%F).tar.gz
 ```
 
-For a real backup story, copy that snapshot off the VPS on a cron
-(rsync to S3, restic, borg — your call).
+It prints a row count per table. Copy archives off the VPS on a schedule,
+for example from root's crontab:
+
+```cron
+0 3 * * * /usr/local/bin/myc export /var/lib/mycelium-backups/mycelium-$(date -u +\%F).tar.gz && find /var/lib/mycelium-backups -name '*.tar.gz' -mtime +14 -delete
+```
+
+followed by your off-site copy (rsync to S3, restic, borg — your call).
+
+The archive is written owner-only and must be treated like the data dir:
+it holds token hashes, invite links and all knowledge. It deliberately
+leaves out OAuth authorization codes and consent screens (they expire
+within minutes), tool-call telemetry, and two internal bookkeeping tables;
+`UNARCHIVED_TABLES` in `src/mycelium/backup.py` lists them with reasons.
+It also does not hold anything outside the data dir: back up
+`/etc/mycelium.env` (session secret, OIDC and GitHub App secrets), the
+GitHub App private key, and your nginx and systemd edits separately.
+
+To check a backup, restore it into a scratch directory and compare the
+row counts it prints with the ones `export` printed:
+
+```bash
+sudo -u mycelium /opt/mycelium/.local/bin/uv --project /opt/mycelium run \
+  mycelium --data-dir /tmp/restore-check import /var/lib/mycelium-backups/<archive>
+sudo rm -rf /tmp/restore-check
+```
+
+### Deploy snapshots
+
+Every deploy that restarts the service first stops it and copies the data
+dir (without `.uv-cache`) to `/var/lib/mycelium-snapshots/<UTC time>/data/`,
+checks every database in it, and records the build that wrote the data in
+`/var/lib/mycelium-snapshots/<UTC time>/BUILD`. The newest five are kept
+(`MYC_KEEP_SNAPSHOTS`). Each is a full copy, so leave room for five data
+dirs on the disk.
+
+A snapshot is an exact copy of the files the previous build last wrote,
+for [Rolling back a deploy](#rolling-back-a-deploy). It lives on the same
+disk as the data, so it is not a backup.
+
+---
+
+## Moving to a fresh instance (export → import)
+
+Use this to move hosts, or when a change is too awkward to migrate in
+place: export with the current build, then import with the new build into
+an empty data dir. An archive imports into the build that wrote it or any
+newer build; an older build refuses it.
+
+1. Stop writes so nothing is lost between export and switch-over, then
+   export:
+
+   ```bash
+   sudo systemctl stop mycelium
+   sudo myc export /var/lib/mycelium-backups/move.tar.gz
+   ```
+
+2. On the new host, bootstrap and deploy as in sections 2–3 (with
+   `--skip-restart`), install `myc` and `/var/lib/mycelium-backups` as in
+   [Backups](#backups-mycelium-export), and copy over `/etc/mycelium.env`.
+   Keeping `MYCELIUM_SESSION_SECRET` keeps browser sessions valid; MCP
+   tokens are in the archive either way.
+3. Copy the archive into `/var/lib/mycelium-backups/` on the new host,
+   owned by `mycelium` and mode `0600`, so the service user can read it.
+4. Import into the empty data dir. Import refuses a dir that already holds
+   an instance; move such a dir aside rather than passing `--force`, whose
+   safety export is written beside the data dir in `/var/lib`, where the
+   service user cannot write.
+
+   ```bash
+   sudo myc import /var/lib/mycelium-backups/move.tar.gz
+   ```
+
+5. Start the service. If the archive was exported with `--no-vectors`, the
+   first start re-embeds every statement and name, which needs Ollama with
+   the same embedding model and takes time proportional to the knowledge
+   base.
+
+   ```bash
+   sudo systemctl start mycelium
+   sudo journalctl -u mycelium -n 50 --no-pager
+   ```
+
+6. Compare the row counts `import` printed with those `export` printed,
+   sign in, and run a search you know the answer to.
+
+GitHub App connections come back disabled; re-enable them under
+**Settings**. OAuth clients mid-authorization must start again.
+
+---
+
+## Rolling back a deploy
+
+When a deploy has started a new build and you need the previous one back:
+
+**If the substrate schema did not change**, deploy the previous build
+like any other — check it out and run `deploy/deploy.sh`. It snapshots
+first, as always. Whether the schema changed is visible in the startup
+log, and in `sudo -u mycelium sqlite3 /var/lib/mycelium/mycelium.db
+'PRAGMA user_version'` compared with the version the previous build
+expects.
+
+**If a migration ran**, the previous build will not start on the migrated
+data: it stops with `database schema version N is newer than this build's
+latest known version M`. That refusal is deliberate — there is no schema
+downgrade. Restore the snapshot the deploy took, then start the previous
+build:
+
+1. Find the snapshot. The newest one is from the deploy you are undoing;
+   its `BUILD` file names the build that wrote the data (`unknown` when
+   that build predates build recording — use your deploy history).
+
+   ```bash
+   sudo ls /var/lib/mycelium-snapshots/
+   sudo cat /var/lib/mycelium-snapshots/<time>/BUILD
+   ```
+
+2. If anything written since the deploy matters, export it now with the
+   new build (`sudo myc export /var/lib/mycelium-backups/after-deploy.tar.gz`).
+   The previous build cannot import that archive; keep it to recover those
+   records by hand or to re-import once the new build is fixed.
+3. Stop the service and set the current data aside. The `failed-` name
+   keeps it out of snapshot pruning.
+
+   ```bash
+   sudo systemctl stop mycelium
+   sudo rsync -a --exclude=.uv-cache/ /var/lib/mycelium/ \
+     /var/lib/mycelium-snapshots/failed-$(date -u +%Y%m%dT%H%M%SZ)/
+   ```
+
+4. Restore the snapshot over the data dir. `--delete` removes files the
+   new build created; the uv cache stays.
+
+   ```bash
+   sudo rsync -a --delete --exclude=.uv-cache/ \
+     /var/lib/mycelium-snapshots/<time>/data/ /var/lib/mycelium/
+   sudo chown -R mycelium:mycelium /var/lib/mycelium
+   ```
+
+5. From your laptop, deploy the build named in `BUILD` without restarting
+   (a normal deploy would snapshot again and could prune the snapshot you
+   just used), then start it on the server:
+
+   ```bash
+   git checkout <build>
+   MYC_SSH_HOST=root@your-vps.example.com deploy/deploy.sh --skip-restart
+   ```
+
+   ```bash
+   sudo systemctl start mycelium
+   sudo journalctl -u mycelium -n 50 --no-pager
+   ```
+
+**What comes back:** everything in the data dir as it was when the
+previous build stopped — knowledge, history, users and tokens, drafts,
+documents, AI instructions and settings, vector indexes.
+
+**What does not:** anything written after the deploy — knowledge, drafts,
+prompt edits, users, and tokens minted since (those tokens stop working;
+OAuth clients sign in again). Changes outside the data dir —
+`/etc/mycelium.env`, nginx, the systemd unit — are not in snapshots; undo
+them by hand. Snapshots older than the newest five are gone, so keep
+off-box exports for anything further back.
+
+A migration that fails partway leaves the database at the last version
+that completed, not the one it started from, so restoring the snapshot is
+also the way back from a failed migration.
+
+### Startup changes that are not migrations
+
+Each start also updates AI instructions (see
+[AI prompts](AI_PROMPTS.md#when-a-release-changes-a-default)): Ingestion,
+Research and Document generation instructions still authored by `seed` get
+the new build's default appended as a new version, and saved instructions
+that predate a newer default are logged as a warning. The first start of a
+build with this behaviour also creates `shipped_prompt_texts` in
+`mycelium-prompts.db` and records the defaults it saw.
+
+Restoring a snapshot undoes these with everything else. A code-only
+rollback does not: the previous build serves the appended versions and
+ignores the new table. To return to the earlier wording, restore it from
+**Version history** in **AI settings → Prompts**.
 
 ---
 
@@ -333,6 +540,8 @@ hosting), you can skip Ollama entirely.
 |---|---|
 | `503` from nginx | Service isn't running. `sudo systemctl status mycelium`, check journal. |
 | `502` from nginx | Service is up but uvicorn isn't bound to `127.0.0.1:8765`. Confirm `MYCELIUM_HTTP_HOST/PORT` in the systemd unit aren't being overridden by the env file. |
+| Service stops right after a deploy with `database schema version N is newer than this build's latest known version M` | An older build is running on migrated data. See [Rolling back a deploy](#rolling-back-a-deploy). |
+| Deploy aborts with `snapshot failed` | A database in `/var/lib/mycelium` failed its check, or the disk is full. The running build was restarted unchanged; read the message above it. |
 | `403` on every login | `MYCELIUM_BOOTSTRAP_ADMIN_EMAIL` doesn't match, or the database already has an admin. Inspect with sqlite3. |
 | MCP `/mcp` 401 with a token | Token might be revoked or the user suspended. Check via the Settings UI. |
 | MCP `/mcp` hangs | nginx is buffering. Confirm `proxy_buffering off` is in the `/mcp` location block. |
