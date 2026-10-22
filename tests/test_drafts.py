@@ -865,11 +865,17 @@ def test_list_drafts_curator_sees_all_creators(tmp_path, monkeypatch):
         assert {d["created_by"] for d in drafts} == {"d-a", "d-b"}
         assert all(d["op_count"] == 1 for d in drafts)
         assert all(d["status"] == "open" for d in drafts)
+        assert not any(
+            "review_assessment" in d or "review_evidence" in d for d in drafts
+        )
 
         # status filter narrows the set (nothing submitted yet).
         tokens = _push_principal(curator, "sess-cur")
         try:
             assert server.list_drafts(status="submitted") == []
+            assert [d["created_by"] for d in server.list_drafts(created_by="d-a")] == [
+                "d-a"
+            ]
         finally:
             _restore(tokens)
 

@@ -6412,14 +6412,17 @@ _DRAFT_STATUS_VALUES = (
 
 
 @tool(role="writer", real_role=True)
-def list_drafts(status: str = "all") -> list[dict[str, Any]]:
+def list_drafts(
+    status: str = "all", created_by: str | None = None
+) -> list[dict[str, Any]]:
     """List *every* draft across all creators, newest first (curators only).
 
     Unlike `list_my_drafts` (scoped to the caller), this returns the whole
     review queue so a curator can discover work awaiting review and then
-    `get_draft(<id>)` to inspect the queued ops. Each entry carries an
-    `op_count`. Filter with `status`: all / open / submitted / approved /
-    rejected / withdrawn.
+    `get_draft(<id>)` to inspect the queued ops and review assessment. Each
+    entry carries an `op_count` and omits review evidence and assessment.
+    Filter with `status`: all / open / submitted / approved / rejected /
+    withdrawn, and with `created_by`: one creator's principal id.
 
     Requires a real writer or admin role — same bar as approving or
     rejecting a draft. Drafters (whose writes get redirected into their own
@@ -6446,7 +6449,10 @@ def list_drafts(status: str = "all") -> list[dict[str, Any]]:
     counts = drafts_store.count_ops_by_draft(conn)
     out = []
     for r in rows:
+        if created_by is not None and r["created_by"] != created_by:
+            continue
         d = drafts_store.serialize_draft(r)
+        del d["review_evidence"], d["review_assessment"]
         d["op_count"] = counts.get(r["id"], 0)
         out.append(d)
     return out
