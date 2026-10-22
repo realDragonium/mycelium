@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from mcp.server.mcpserver import Context
 
 from mycelium import auth, embed, server, store, vector
+from mycelium.server import search
 from mycelium.statement_connections import MAX_TEXT_CHARS, Result
 from mycelium.store.connection_graph import ConnectionGraph
 
@@ -17,7 +18,7 @@ from mycelium.store.connection_graph import ConnectionGraph
 def conn(monkeypatch: pytest.MonkeyPatch) -> Iterator[sqlite3.Connection]:
     database = store.connect(":memory:")
     store.migrate(database)
-    monkeypatch.setattr(server, "_db", lambda: database)
+    monkeypatch.setattr(store, "substrate_connection", lambda: database)
     yield database
     database.close()
 
@@ -85,8 +86,8 @@ def test_real_vector_resolution_reuses_search_ranking_without_hydrating_links(
         store.set_vector_id(conn, sid, i)
         index.add(i, vec)
     conn.commit()
-    monkeypatch.setattr(server, "_idx", lambda: index)
-    monkeypatch.setattr(server, "_name_idx", lambda: names)
+    monkeypatch.setattr(search, "_idx", lambda: index)
+    monkeypatch.setattr(search, "_name_idx", lambda: names)
     monkeypatch.setattr(
         embed, "embed", lambda text: [1.0, 0.0] + [0.0] * (vector.DIM - 2)
     )
@@ -106,7 +107,7 @@ def test_unknown_and_ambiguous_endpoints_never_walk_graph(
 ):
     a, b = pair(conn)
     monkeypatch.setattr(
-        server,
+        search,
         "_search_statement_candidates",
         lambda *args: [(a, 0.9, 0.9), (b, 0.89, 0.89)],
     )
@@ -247,7 +248,7 @@ def test_required_text_and_ids_resolve_once_and_connect_on_separate_branches(
         searches.append(query)
         return [(page, 0.9, 0.9)]
 
-    monkeypatch.setattr(server, "_search_statement_candidates", candidates)
+    monkeypatch.setattr(search, "_search_statement_candidates", candidates)
     result = Result.model_validate(
         server.find_statement_connections(
             a,
@@ -272,7 +273,7 @@ def test_unresolved_requirement_blocks_the_walk_and_reports_candidates(
 ):
     a, b = pair(conn)
     monkeypatch.setattr(
-        server,
+        search,
         "_search_statement_candidates",
         lambda *args: [(a, 0.9, 0.9), (b, 0.89, 0.89)],
     )
@@ -340,7 +341,7 @@ def test_invalid_required_inputs_are_rejected_before_resolving(
     def unexpected_db() -> sqlite3.Connection:
         raise AssertionError("invalid requests must not read the substrate")
 
-    monkeypatch.setattr(server, "_db", unexpected_db)
+    monkeypatch.setattr(store, "substrate_connection", unexpected_db)
     with pytest.raises(ValueError):
         server.find_statement_connections("stm_a", "stm_b", required=required)
 

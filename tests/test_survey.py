@@ -219,7 +219,7 @@ def test_search_hits_fully_hydrated_with_capped_reverse_edges(tmp_path, monkeypa
     are capped per hit so a convergence hub can't dominate the result — a
     `*_truncated` count points at `get_statements` for the complete set, which
     is itself uncapped."""
-    from mycelium.server import _REVERSE_EDGE_CAP
+    from mycelium.server.hydration import _REVERSE_EDGE_CAP
 
     with _client(tmp_path, monkeypatch):
         target = _add("the flow ranks the statements")
