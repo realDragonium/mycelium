@@ -144,6 +144,7 @@ module = [
     "mycelium.server.draft_queue",
     "mycelium.server.hydration",
     "mycelium.server.indexes",
+    "mycelium.server.names",
     "mycelium.server.registry",
     "mycelium.server.runtime",
     "mycelium.server.specs",
