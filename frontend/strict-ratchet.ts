@@ -10,19 +10,13 @@ import { execFileSync } from 'node:child_process';
 import { relative } from 'node:path';
 
 const NOT_STRICT_YET = new Set([
-  'cockpit/tweaks-panel.tsx',
   'ui/activity.tsx',
   'ui/alias-suggestions.tsx',
-  'ui/components.tsx',
   'ui/documentation-workspace.tsx',
-  'ui/drafts.tsx',
   'ui/entities-graph.tsx',
-  'ui/gaps.tsx',
   'ui/glossary.tsx',
   'ui/graph.tsx',
   'ui/names-workspace.tsx',
-  'ui/screens.tsx',
-  'ui/tweaks-panel.tsx',
 ]);
 
 const here = new URL('.', import.meta.url).pathname;

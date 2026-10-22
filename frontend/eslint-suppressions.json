@@ -1,9 +1,4 @@
 {
-  "cockpit/tweaks-panel.tsx": {
-    "react-hooks/refs": {
-      "count": 4
-    }
-  },
   "ui/activity.tsx": {
     "react-hooks/immutability": {
       "count": 1
@@ -17,32 +12,14 @@
       "count": 1
     }
   },
-  "ui/components.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "ui/documentation-workspace.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 4
     }
   },
-  "ui/drafts.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    }
-  },
   "ui/entities-graph.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 4
-    }
-  },
-  "ui/gaps.tsx": {
-    "@typescript-eslint/no-unused-vars": {
-      "count": 1
-    },
-    "react-hooks/set-state-in-effect": {
-      "count": 1
     }
   },
   "ui/glossary.tsx": {
@@ -61,19 +38,6 @@
   "ui/names-workspace.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 3
-    }
-  },
-  "ui/screens.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 2
-    },
-    "react-hooks/static-components": {
-      "count": 2
-    }
-  },
-  "ui/tweaks-panel.tsx": {
-    "react-hooks/refs": {
-      "count": 4
     }
   }
 }
