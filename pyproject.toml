@@ -151,6 +151,7 @@ module = [
     "mycelium.server.runtime",
     "mycelium.server.search",
     "mycelium.server.specs",
+    "mycelium.server.write_checks",
     "mycelium.statement_connections",
     "mycelium.store",
     "mycelium.store.connection_graph",
