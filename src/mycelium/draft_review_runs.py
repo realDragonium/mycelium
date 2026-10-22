@@ -40,6 +40,7 @@ _spawn_lock = threading.Lock()
 _json_value: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _CONTEXT_LIMIT = 90000
 _RELATED_PER_STATEMENT = 5
+EVIDENCE_LIMIT = 30000
 _payload = TypeAdapter(dict[str, JsonValue])
 # These mutation families have entity/statement fingerprints in draft inspection.
 REVIEWABLE_OPERATIONS = frozenset(
@@ -230,7 +231,8 @@ def _context(
         "knowledge_scope": (
             "existing_knowledge holds the records the draft touches, followed by "
             "the closest live statements to each new statement, best matches "
-            "first. Supplied evidence, when present, comes from the producer."
+            "first. Supplied evidence, when present, comes from the producer, "
+            "followed by any answers a person gave to earlier review questions."
         ),
     }
     if previous_failure:
@@ -448,7 +450,8 @@ def _finish(
             run.detail = "Reviewed application gate is disabled; no automatic changes."
             return
         if run.label == "needs_context":
-            raise ValueError("automatic review must apply or reject, not ask questions")
+            _ask_person(run, inspection, reads)
+            return
         with store.transaction(drafts_store.connection()):
             _mutation_authority(run, inspection, settings)
             for correction in run.corrections:
@@ -495,6 +498,70 @@ def _finish(
                 f"{contradiction.statement_id}; the internal reviewer resolved it "
                 f"in favour of the draft: {contradiction.resolution}"
             )
+
+
+def _ask_person(
+    run: ReviewRun, inspection: DraftReviewInspection, reads: list[Read]
+) -> None:
+    from . import server  # local import: server registers the review tools
+
+    review = server.record_draft_review(
+        run.draft_id,
+        "needs_context",
+        run.rationale or "",
+        inspection["draft_revision"],
+        _supporting_preconditions(inspection, reads),
+        run.questions,
+    )
+    run.review_id = review["review_id"]
+    run.application = "needs_human"
+    run.detail = "Waiting for a person to answer the reviewer's questions."
+    _report_gap(
+        f"Draft {run.draft_id} needs a person to answer the internal reviewer: "
+        + " ".join(run.questions)
+    )
+
+
+def answer(
+    draft_id: str, text: str, expected_revision: int, principal: auth.Principal
+) -> ReviewRun:
+    """Add a person's answer to the reviewer's questions to the draft's
+    evidence, then review the draft again with it."""
+    text = text.strip()
+    if not text:
+        raise ValueError("answer is required")
+    if mode() == "off":
+        raise ValueError("internal draft review is off")
+    conn = drafts_store.connection()
+    with store.write_lock(), store.transaction(conn):
+        row = drafts_store.get_draft(conn, draft_id)
+        if row is None:
+            raise ValueError("draft not found")
+        drafts_store._check_revision(row, expected_revision)
+        run = draft_review_store.latest(conn, draft_id)
+        if (
+            drafts_store.status_for(row) != "submitted"
+            or run is None
+            or run.application != "needs_human"
+            or run.stale
+        ):
+            raise ValueError("the internal reviewer is not waiting for an answer")
+        asked = "\n".join(f"- {question}" for question in run.questions)
+        evidence = (
+            (row["review_evidence"] + "\n\n" if row["review_evidence"] else "")
+            + f"The internal reviewer asked:\n{asked}\n"
+            + f"{principal.name} answered:\n{text}"
+        )
+        if len(evidence) > EVIDENCE_LIMIT:
+            raise ValueError(
+                f"review evidence would exceed {EVIDENCE_LIMIT} characters"
+            )
+        conn.execute(
+            "UPDATE drafts SET review_evidence = ?, revision = revision + 1 "
+            "WHERE id = ?",
+            (evidence, draft_id),
+        )
+    return start(draft_id, rerun=True)
 
 
 def _follow_up(

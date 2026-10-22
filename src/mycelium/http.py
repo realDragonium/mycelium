@@ -1421,6 +1421,30 @@ def run_draft_review_http(
     return {"review": server.request_draft_review(draft_id, rerun=True)}
 
 
+class DraftReviewAnswerBody(BaseModel):
+    answer: str = PydField(min_length=1)
+    expected_revision: int
+
+
+@app.post("/api/drafts/{draft_id}/review/answer")
+def answer_draft_review_http(
+    draft_id: str, body: DraftReviewAnswerBody, request: Request
+) -> dict[str, dict[str, JsonValue]]:
+    """Answer the internal reviewer's questions; the draft is reviewed again."""
+    from fastapi import HTTPException
+
+    from . import draft_review_runs, drafts_store
+
+    principal = _enforce_curator(request, action="answering the internal reviewer")
+    try:
+        run = draft_review_runs.answer(
+            draft_id, body.answer, body.expected_revision, principal
+        )
+    except drafts_store.StaleDraftRevisionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    return {"review": run.model_dump(mode="json")}
+
+
 def _serialize_draft(row, *, ops=None) -> dict[str, Any]:
     from . import drafts_store
 

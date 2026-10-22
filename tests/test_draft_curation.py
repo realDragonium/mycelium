@@ -1,6 +1,7 @@
 """Model-produced drafts reach the internal reviewer without a person."""
 
 import dataclasses
+import json
 
 import pytest
 
@@ -8,11 +9,13 @@ from mycelium import (
     alias_suggestions,
     auth,
     draft_review_runs,
+    drafts_store,
     ingest,
     research_runs,
     server,
     store,
 )
+from mycelium.draft_review_store import Assessment
 from mycelium.ingest import loop as ingest_loop
 from mycelium.ingest.draft import InProcessDraftEmitter
 from mycelium.ingest.tools import EMIT_TOOL
@@ -172,3 +175,104 @@ def test_research_draft_is_applied_without_a_person(curated_app, tmp_path):
     assert run is not None and run["outcome"] == "draft_created"
     assert server.get_draft(run["draft_id"])["status"] == "approved"
     assert "Audit log" in _entity_names()
+
+
+QUESTION = "Is the Admin console the same concept as the Settings page?"
+
+
+def _asks_then_approves(monkeypatch):
+    contexts = []
+
+    def model(context):
+        contexts.append(json.loads(context))
+        if len(contexts) == 1:
+            return Assessment(
+                label="needs_context",
+                rationale="The draft may duplicate a live concept.",
+                questions=[QUESTION],
+                corrections=[],
+                contradictions=[],
+            )
+        return _assessment()
+
+    monkeypatch.setattr(draft_review_runs, "RUNNER", model)
+    return contexts
+
+
+def _ingested_draft(client, monkeypatch, entity_id):
+    _stub_ingest_model(monkeypatch, entity_id)
+    draft_id = client.post("/ingest", json={"text": TEXT}).json()["draft_id"]
+    draft_review_runs.wait_all()
+    return draft_id
+
+
+def test_reviewer_question_waits_for_a_person(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    _automatic()
+    _asks_then_approves(monkeypatch)
+
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+
+    draft = client.get(f"/api/drafts/{draft_id}").json()["draft"]
+    assert draft["status"] == "submitted"
+    assessment = draft["review_assessment"]
+    assert assessment["status"] == "completed"
+    assert assessment["label"] == "needs_context"
+    assert assessment["application"] == "needs_human"
+    assert assessment["questions"] == [QUESTION]
+    [review] = drafts_store.list_reviews(server._drafts_db(), draft_id)
+    assert review["outcome"] == "needs_context"
+    assert QUESTION in json.loads(review["unresolved_json"])
+    [gap] = [row["text"] for row in store.list_knowledge_gaps(server._db())]
+    assert draft_id in gap and QUESTION in gap
+    assert "Admin console" not in _entity_names()
+
+
+def test_answer_reviews_the_draft_again_with_it(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    _automatic()
+    contexts = _asks_then_approves(monkeypatch)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+    revision = server.get_draft(draft_id)["revision"]
+
+    response = client.post(
+        f"/api/drafts/{draft_id}/review/answer",
+        json={
+            "answer": "No, they are separate screens.",
+            "expected_revision": revision,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    draft_review_runs.wait_all()
+    evidence = contexts[1]["draft"]["review_evidence"]
+    assert QUESTION in evidence and "No, they are separate screens." in evidence
+    draft = server.get_draft(draft_id)
+    assert draft["status"] == "approved"
+    assert draft["review_assessment"]["application"] == "applied"
+    assert "Admin console" in _entity_names()
+
+
+def test_answer_requires_a_waiting_question_and_current_revision(
+    curated_app, monkeypatch
+):
+    client, entity_id = curated_app
+    _automatic()
+    _asks_then_approves(monkeypatch)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+    revision = server.get_draft(draft_id)["revision"]
+    url = f"/api/drafts/{draft_id}/review/answer"
+
+    stale = client.post(url, json={"answer": "No.", "expected_revision": revision - 1})
+    assert stale.status_code == 409
+    assert client.post(url, json={"answer": "No.", "expected_revision": revision})
+    draft_review_runs.wait_all()
+    again = client.post(
+        url,
+        json={
+            "answer": "No.",
+            "expected_revision": server.get_draft(draft_id)["revision"],
+        },
+    )
+    assert again.status_code == 400
+    assert "not waiting" in again.json()["detail"]
