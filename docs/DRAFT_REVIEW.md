@@ -199,7 +199,7 @@ made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question whose draft has
 changed since it was asked. Drafts containing only alias suggestions are excluded.
 `POST /api/draft-review/backlog` starts a review of each and returns their IDs.
-Both refuse while review is off.
+The list is available while review is off; starting the reviews is refused.
 
 In `review-only`, an advisory `reject` label leaves the draft submitted. Suggested corrections are
 validated without execution before they are published. Draft edits make the old
