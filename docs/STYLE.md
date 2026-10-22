@@ -80,7 +80,7 @@ it's there. Two legitimate reasons in this codebase:
 
 1. **Lazy optional/heavy deps** — e.g. `anthropic` is imported inside the
    functions that use it so the package stays importable without the SDK or
-   an API key. Same idea for `spacy`, `pyinstrument`, `matplotlib`.
+   an API key. Same idea for `spacy` and `pyinstrument`.
 2. **Cycle breaking** — the `server.py` ↔ `http.py` ↔ stores seam has
    import cycles that local imports resolve.
 
