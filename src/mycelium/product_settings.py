@@ -449,6 +449,13 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         destinations = []
         for destination in load_destinations(os.environ).values():
             github = parse_config(destination)
+            if github.connection is not None:
+                binding = github.connection
+            else:
+                assert github.token_env is not None  # parse_config demands one
+                binding = github_credentials.import_binding(
+                    conn, github.host, github.token_env
+                )
             destinations.append(
                 DestinationSettings(
                     name=destination.name,
@@ -456,9 +463,7 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
                     owner=github.owner,
                     repo=github.repo,
                     base_branch=github.base_branch,
-                    binding=github_credentials.import_binding(
-                        conn, github.host, github.token_env
-                    ),
+                    binding=binding,
                 )
             )
         return DocumentationSettings(
