@@ -12,7 +12,7 @@ from __future__ import annotations
 import functools
 import inspect
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
@@ -152,8 +152,8 @@ class _RoleFilteredTools:
 mcp.middleware.append(_RoleFilteredTools())
 
 #: Functions registered as tools — read by `mycelium.http` to auto-generate
-#: REST endpoints, and by the in-process loops and draft replay. Order is
-#: preserved.
+#: REST endpoints, and by the in-process loops and draft replay. `publish` puts
+#: them in their declared order once every tool module has registered.
 TOOLS: list[Callable[..., Any]] = []
 
 #: The tools advertised over MCP. Everything else in `TOOLS` keeps its HTTP
@@ -308,10 +308,6 @@ def tool(
             _add_draft_id_to_signature(func, wrapper)
 
         TOOLS.append(wrapper)
-        # http.py builds its sync FastAPI handlers from TOOLS (FastAPI does its
-        # own thread dispatch), so only the MCP side gets the offloading shim.
-        if func.__name__ in MCP_TOOLS:
-            mcp.tool()(_offloaded(wrapper))
         return wrapper
 
     # Allow both `@tool` and `@tool(role="reader")` forms.
@@ -369,3 +365,24 @@ def _add_draft_id_to_signature(
     new_sig = sig.replace(parameters=params, return_annotation=return_ann)
     wrapper.__signature__ = new_sig  # type: ignore[attr-defined]
     wrapper.__annotations__ = {**resolved, "draft_id": str | None, "return": return_ann}
+
+
+def publish(order: Sequence[str]) -> None:
+    """Put `TOOLS` in `order` and advertise the `MCP_TOOLS` among them over MCP.
+
+    Called once, by `mycelium.server`, after every tool module has registered.
+    Registration follows module import order, so the published order is
+    declared rather than inherited from where a tool happens to be defined: it
+    is the order MCP clients list, the REST routes and OpenAPI document follow,
+    and the in-process loops offer their model.
+    """
+    position = {name: index for index, name in enumerate(order)}
+    unlisted = sorted(w.__name__ for w in TOOLS if w.__name__ not in position)
+    if unlisted:
+        raise RuntimeError(f"tools missing from the published order: {unlisted}")
+    TOOLS.sort(key=lambda wrapper: position[wrapper.__name__])
+    # http.py builds its sync FastAPI handlers from TOOLS (FastAPI does its
+    # own thread dispatch), so only the MCP side gets the offloading shim.
+    for wrapper in TOOLS:
+        if wrapper.__name__ in MCP_TOOLS:
+            mcp.tool()(_offloaded(wrapper))
