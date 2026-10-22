@@ -407,6 +407,7 @@ def _accept(
     draft_id: str, operation_ref: str, suggestion: Suggestion, principal: auth.Principal
 ) -> Decision:
     from . import server  # local import: reuse persisted substrate writes
+    from .server import indexes  # local import: index persistence and recovery markers
 
     conn = server._db()
     receipt_id = "alias:" + operation_ref
@@ -441,7 +442,7 @@ def _accept(
         alias=suggestion.proposal.alias,
         decision=decision,
     )
-    with server._persisted_index_write(names=True):
+    with indexes._persisted_index_write(names=True):
         server.upsert_name(
             text=suggestion.proposal.alias, entity_id=suggestion.proposal.entity_id
         )

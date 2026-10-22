@@ -31,7 +31,7 @@ from .ask.substrate import InProcessSubstrate, _json_schema_for
 from .draft_review_store import Answer, Assessment, Mode, ReviewRun
 
 if TYPE_CHECKING:
-    from .server import DraftReviewInspection
+    from .server.draft_review import DraftReviewInspection
 
 logger = logging.getLogger(__name__)
 RUNNER: Callable[[str], Assessment] | None = None
@@ -82,9 +82,9 @@ def mode() -> Mode:
 
 
 def reviewer(creator: str | None, identity: str) -> auth.Principal:
-    from . import server  # local import: server registers the review tools
+    from .server import runtime  # local import: loading it loads the server package
 
-    principal = auth.resolve_session_user(server._auth_db(), identity)
+    principal = auth.resolve_session_user(runtime._auth_db(), identity)
     if principal is None or not auth.principal_has_real_role(principal, "writer"):
         raise ValueError(
             "configured review user must be an active real writer or admin"
@@ -335,13 +335,15 @@ def _save(run: ReviewRun) -> None:
 def _failed(run: ReviewRun, detail: str) -> None:
     run.status = "failed"
     run.detail = detail
-    from . import server  # local import: reconcile the separate substrate receipt
+    from .server import (
+        draft_application,  # local import: reconcile the separate substrate receipt
+    )
 
     draft_review_store.reconcile(
         drafts_store.connection(),
         run,
         lambda application_id: (
-            server._substrate_application_result(application_id) is not None
+            draft_application._substrate_application_result(application_id) is not None
         ),
     )
     run.finished_at = timestamps.now()
@@ -596,6 +598,7 @@ def _finish(
     reads: list[Read],
 ) -> None:
     from . import server  # local import: server registers the review tools
+    from .server import draft_application
 
     with store.write_lock():
         _validate_snapshot(inspection, reads)
@@ -612,7 +615,7 @@ def _finish(
             run.detail = "Advisory assessment only; automatic action disabled by mode or changed settings."
             return
         _mutation_authority(run, inspection, settings)
-        if not server._reviewed_apply_enabled():
+        if not draft_application._reviewed_apply_enabled():
             run.detail = "Reviewed application gate is disabled; no automatic changes."
             return
         if run.label == "needs_context":
@@ -719,14 +722,16 @@ def _follow_up(
     # failure was the model provider's rather than the draft's. A run that
     # already recorded its review failed while applying, which
     # apply_reviewed_draft recovers.
-    from . import server  # local import: server registers the review tools
+    from .server import (
+        draft_application,
+    )  # local import: loading it loads the server package
 
     if (
         run.mode != "review-and-apply"
         or mode() != "review-and-apply"
         or run.review_id is not None
         or run.application != "unapplied"
-        or not server._reviewed_apply_enabled()
+        or not draft_application._reviewed_apply_enabled()
     ):
         return
     try:
@@ -831,7 +836,9 @@ def _check_correction_knowledge(
 def _supporting_preconditions(
     inspection: DraftReviewInspection, reads: list[Read]
 ) -> list[draft_review_store.Precondition]:
-    from . import server  # local import: server defines fingerprint contracts
+    from .server import (
+        draft_review,
+    )  # local import: server defines fingerprint contracts
 
     conditions = {
         (item["kind"], item["id"]): item
@@ -844,7 +851,7 @@ def _supporting_preconditions(
                 conditions[("entity", identity)] = {
                     "kind": "entity",
                     "id": identity,
-                    "fingerprint": server._fingerprint(read.result),
+                    "fingerprint": draft_review._fingerprint(read.result),
                 }
             continue
         if read.name != "get_statements" or not isinstance(read.result, dict):
@@ -861,7 +868,7 @@ def _supporting_preconditions(
             conditions[("statement", identity)] = {
                 "kind": "statement",
                 "id": identity,
-                "fingerprint": server._fingerprint(
+                "fingerprint": draft_review._fingerprint(
                     {"statements": [statement], "missing": []}
                 ),
             }
@@ -872,6 +879,7 @@ def _validate_corrections(
     result: Assessment, inspection: DraftReviewInspection
 ) -> None:
     from . import server  # local import: validate registered tool contracts
+    from .server import draft_review
 
     ops = inspection["draft"].get("ops")
     if not isinstance(ops, list):
@@ -921,5 +929,5 @@ def _validate_corrections(
             TypeAdapter(tools_by_name[name].__annotations__[key]).validate_python(
                 value, strict=True
             )
-        if server._nested_parameter_findings(name, payload):
+        if draft_review._nested_parameter_findings(name, payload):
             raise ValueError("correction payload has unsupported nested parameters")

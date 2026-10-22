@@ -85,7 +85,7 @@ Configure the client to launch Mycelium from this checkout. For Claude Desktop:
 ```
 
 Restart the client after saving its configuration. The exact tool list comes
-from `src/mycelium/server.py`; `README.md` describes the main read and authoring
+from the `mycelium.server` package (`src/mycelium/server/`); `README.md` describes the main read and authoring
 paths.
 
 ## 4. Use a separate knowledge base

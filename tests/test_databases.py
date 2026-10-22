@@ -20,11 +20,7 @@ import pytest
 import instance_scenario
 from mycelium import databases, embed, phrasing, server, store
 from mycelium.http import app
-
-_NOT_RESTORED = {
-    "mycelium-ops.db": "bounded telemetry pruned on every start; losing it loses "
-    "nothing",
-}
+from mycelium.server import runtime
 
 _FIXTURES = sorted((Path(__file__).parent / "migration_fixtures").iterdir())
 _PEERS = [name for name in databases.FILES if name != databases.SUBSTRATE]
@@ -39,7 +35,7 @@ def populated(tmp_path, monkeypatch):
     instance_scenario.populate(source)
     store.set_actor(None)
     yield source
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _restore(source: Path, target: Path, names: list[str]) -> None:
@@ -75,18 +71,18 @@ def _probe() -> list[str]:
 def test_every_database_an_instance_writes_is_listed(populated):
     written = {path.name for path in populated.glob("*.db")}
 
-    assert written - set(_NOT_RESTORED) == set(databases.FILES)
+    assert written == set(databases.FILES)
 
 
 def test_a_complete_restore_starts_clean(populated, tmp_path, caplog):
     restored = tmp_path / "restored"
     _restore(populated, restored, list(databases.FILES))
 
-    server._ctx = None
+    runtime._ctx = None
     with caplog.at_level(logging.ERROR, logger="mycelium.databases"):
         server.init(restored)
 
-    assert server._context().partial_restore == ()
+    assert runtime._context().partial_restore == ()
     assert _probe() == []
     assert not caplog.records
 
@@ -99,11 +95,11 @@ def test_a_restore_missing_the_prompts_database_starts_and_shouts(
         populated, restored, [n for n in databases.FILES if n != "mycelium-prompts.db"]
     )
 
-    server._ctx = None
+    runtime._ctx = None
     with caplog.at_level(logging.ERROR, logger="mycelium.databases"):
         server.init(restored)
 
-    assert server._context().partial_restore == ("mycelium-prompts.db",)
+    assert runtime._context().partial_restore == ("mycelium-prompts.db",)
     assert _probe() == ["mycelium-prompts.db"]
     [record] = caplog.records
     assert record.levelno == logging.ERROR

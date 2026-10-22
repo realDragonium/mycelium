@@ -36,9 +36,6 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 FIXTURES = REPO / "tests" / "migration_fixtures"
 
-# Derived or bounded state that says nothing about upgrade safety.
-SKIPPED_FILES = ("mycelium-ops.db",)
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -71,8 +68,6 @@ def main() -> None:
         # rebuilds them, which is the path a fresh-instance restore takes.
         backup.export_substrate(data_dir, out / "export.tar.gz", include_vectors=False)
         for db in sorted(data_dir.glob("*.db")):
-            if db.name in SKIPPED_FILES:
-                continue
             with closing(sqlite3.connect(db)) as conn:
                 dump = "\n".join(conn.iterdump())
                 user_version = conn.execute("PRAGMA user_version").fetchone()[0]

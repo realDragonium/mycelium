@@ -21,6 +21,7 @@ from mycelium import (
 from mycelium import (
     draft_review_settings as settings,
 )
+from mycelium.server import draft_application, runtime
 from test_backup import _seed_substrate
 from test_internal_draft_review import (
     _assessment,
@@ -95,7 +96,7 @@ def test_save_persists_and_environment_cannot_override(configured_app, monkeypat
 @pytest.mark.parametrize("role", ["reader", "drafter", "writer", "admin"])
 def test_only_real_admin_can_configure(configured_app, role):
     client, _ = configured_app
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     with store.transaction(conn):
         user = auth.create_user(conn, name=role, role=role, type="service")
         raw, _ = auth.issue_token(conn, user_id=user, name="Fixture", scope=role)
@@ -111,12 +112,12 @@ def test_only_real_admin_can_configure(configured_app, role):
 
 def test_scoped_admin_token_cannot_configure(configured_app):
     client, _ = configured_app
-    with store.transaction(server._auth_db()):
+    with store.transaction(runtime._auth_db()):
         user = auth.create_user(
-            server._auth_db(), name="Admin", role="admin", type="service"
+            runtime._auth_db(), name="Admin", role="admin", type="service"
         )
         raw, _ = auth.issue_token(
-            server._auth_db(), user_id=user, name="Scoped", scope="writer"
+            runtime._auth_db(), user_id=user, name="Scoped", scope="writer"
         )
     response = client.patch(
         "/api/draft-review/settings",
@@ -203,9 +204,9 @@ def test_any_settings_generation_change_prevents_old_automatic_action(
         elif change == "provider":
             changes = {"provider": "claude", "model": "claude-new"}
         elif change == "reviewer":
-            with store.transaction(server._auth_db()):
+            with store.transaction(runtime._auth_db()):
                 other = auth.create_user(
-                    server._auth_db(), name="Other", role="writer", type="service"
+                    runtime._auth_db(), name="Other", role="writer", type="service"
                 )
             changes = {"reviewer_id": other}
         settings.save(
@@ -624,10 +625,12 @@ def test_review_controls_and_model_save_are_atomic_with_cas(configured_app):
 @pytest.mark.parametrize("role", ["reader", "drafter", "writer", "admin"])
 def test_model_settings_writes_require_admin(configured_app, role):
     client, _ = configured_app
-    with store.transaction(server._auth_db()):
-        user = auth.create_user(server._auth_db(), name=role, role=role, type="service")
+    with store.transaction(runtime._auth_db()):
+        user = auth.create_user(
+            runtime._auth_db(), name=role, role=role, type="service"
+        )
         raw, _ = auth.issue_token(
-            server._auth_db(), user_id=user, name="Fixture", scope=role
+            runtime._auth_db(), user_id=user, name="Fixture", scope=role
         )
     response = client.patch(
         "/api/model-settings/ask",
@@ -1002,13 +1005,13 @@ def test_manual_application_checks_permission_after_waiting_for_write_lock(
     finally:
         auth.current_principal.reset(token)
     waiting = threading.Event()
-    original = server._identified_principal
+    original = draft_application._identified_principal
 
     def identified():
         waiting.set()
         return original()
 
-    monkeypatch.setattr(server, "_identified_principal", identified)
+    monkeypatch.setattr(draft_application, "_identified_principal", identified)
 
     def apply():
         token = _principal()

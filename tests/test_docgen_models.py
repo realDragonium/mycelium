@@ -10,7 +10,15 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from mycelium import ai, auth, doc_runs, docgen, docs_store, model_settings
+from mycelium import (
+    ai,
+    auth,
+    doc_runs,
+    docgen,
+    docs_store,
+    drafts_store,
+    model_settings,
+)
 from mycelium.docgen.config import DocgenConfig, model_choices, resolve_provider
 from mycelium.docgen.loop import _execute
 from mycelium.docgen.schema import DocumentWritten, NothingWritten
@@ -333,7 +341,7 @@ def test_admission_captures_model_before_worker_wait(monkeypatch, tmp_path):
 def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
     from fastapi.testclient import TestClient
 
-    from mycelium import auth, guidelines, prompt_store, server
+    from mycelium import auth, guidelines, prompt_store
     from mycelium.http import AuthMiddleware, app
 
     principal = auth.Principal(id="fixture", name="Fixture", role=role, type="human")
@@ -349,7 +357,7 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
     prompts = prompt_store.connect(":memory:")
     prompt_store.migrate(prompts)
     prompt_store.save(prompts, type=guidelines.TYPE, name="public/how-to", text="steps")
-    monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    monkeypatch.setattr(drafts_store, "connection", lambda: conn)
     prompt_store.use_connection(prompts)
     save_model("docgen", openai_model="configured-gpt")
     monkeypatch.setattr(prompt_store, "connection", lambda: prompts)

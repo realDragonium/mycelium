@@ -1,6 +1,6 @@
 """The health probe must answer while every worker thread is busy.
 
-Tool calls run in anyio's worker pool (see `server._offloaded`). That pool is
+Tool calls run in anyio's worker pool (see `admission._offloaded`). That pool is
 bounded, so anything that also needs a thread queues behind the tools once they
 fill it — and when the queued request is a deployment's health check, a merely
 busy server is taken out of rotation and every caller gets a 503. Two things

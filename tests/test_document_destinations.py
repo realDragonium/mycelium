@@ -13,10 +13,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, docs_store, drafts_store, ops_ledger, server
+from mycelium import auth, docs_store, drafts_store, server
 from mycelium.docgen import destinations
 from mycelium.docgen.destinations import (
-    Delivery,
     DeliveryDocument,
     DestinationConfig,
     DestinationError,
@@ -1760,7 +1759,7 @@ def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
 
     conn = docs_store.connect(":memory:")
     docs_store.migrate(conn)
-    monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+    monkeypatch.setattr(drafts_store, "connection", lambda: conn)
     monkeypatch.setenv(
         "MYCELIUM_DOC_DESTINATIONS",
         json.dumps({"knowledge-base": _entry()}),
@@ -1798,76 +1797,6 @@ def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
         conn.close()
 
 
-def test_delivery_tool_never_captures_credentials_in_request_traces(monkeypatch):
-    from mycelium.http import app
-
-    conn = docs_store.connect(":memory:")
-    docs_store.migrate(conn)
-    ledger = ops_ledger.connect(":memory:")
-    ops_ledger.migrate(ledger)
-    document_id = docs_store.upsert_document(
-        conn, slug="example", title="Example", body="Body"
-    )
-    monkeypatch.setattr(server, "_drafts_db", lambda: conn)
-    monkeypatch.setenv(
-        "MYCELIUM_DOC_DESTINATIONS",
-        json.dumps({"knowledge-base": _entry()}),
-    )
-    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
-    import_product_environment()
-    monkeypatch.setenv("MYCELIUM_AUTH", "off")
-    monkeypatch.setenv("MYCELIUM_OPS_CAPTURE", "summary")
-    monkeypatch.setattr(ops_ledger, "enabled", lambda: True)
-    monkeypatch.setattr(ops_ledger, "connection", lambda: ledger)
-    monkeypatch.setattr(
-        destinations,
-        "deliver_document",
-        lambda configured, document: Delivery(
-            destination=configured.name,
-            path="docs/example.md",
-            reference="https://github.com/acme/handbook/pull/1",
-            content_revision="a" * 40,
-        ),
-    )
-
-    try:
-        result = server.deliver_document(
-            document_id=document_id, destination="knowledge-base"
-        )
-        assert result["reference"] == "https://github.com/acme/handbook/pull/1"
-
-        for call in (
-            lambda: server.deliver_document(
-                document_id=TOKEN, destination="knowledge-base"
-            ),
-            lambda: server.deliver_document(document_id=document_id, destination=TOKEN),
-        ):
-            with pytest.raises(ValueError):
-                call()
-
-        with TestClient(app) as client:
-            response = client.post(
-                "/deliver-document",
-                json={"document_id": TOKEN, "destination": "knowledge-base"},
-            )
-        assert response.status_code == 400
-
-        rows = ledger.execute(
-            "SELECT outcome, request_summary, error_message FROM operations"
-        ).fetchall()
-        assert len(rows) == 4
-        assert [row["outcome"] for row in rows].count("succeeded") == 1
-        assert [row["outcome"] for row in rows].count("failed") == 3
-        assert all(row["request_summary"] is None for row in rows)
-        assert all(
-            row["error_message"] is None or TOKEN not in row["error_message"]
-            for row in rows
-        )
-    finally:
-        ledger.close()
-        conn.close()
-
-
 def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(
     monkeypatch,
 ):
@@ -1882,7 +1811,6 @@ def test_listing_refuses_a_destination_whose_specific_config_cannot_be_parsed(
 def test_delivering_an_unknown_document_refuses_before_contacting_a_destination(
     monkeypatch,
 ):
-    from mycelium.docgen import destinations
 
     conn = docs_store.connect(":memory:")
     docs_store.migrate(conn)

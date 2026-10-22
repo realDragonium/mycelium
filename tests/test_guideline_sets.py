@@ -28,6 +28,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, guidelines, prompt_store, server, store
+from mycelium.server import runtime
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "seed_guideline_sets.py"
 
@@ -94,7 +95,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     prompt_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _app(tmp_path, monkeypatch):
@@ -184,7 +185,7 @@ def test_retiring_starter_template_survives_restart(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch):
         assert (
             "reference"
-            not in guidelines.catalogue(server._prompts_db())["kb-authoring"]
+            not in guidelines.catalogue(runtime._prompts_db())["kb-authoring"]
         )
         assert [
             item["version"]
@@ -396,7 +397,7 @@ def test_sets_share_the_type_and_separate_by_prefix(tmp_path, monkeypatch):
     seed = _seed_script()
     client = _app(tmp_path, monkeypatch)
     with client:
-        assert seed.seed(server._prompts_db(), guidelines.read_rows()) == []
+        assert seed.seed(runtime._prompts_db(), guidelines.read_rows()) == []
         for name, text in _INTERNAL_DOC.items():
             server.save_prompt_text("guideline-set", name, text)
 

@@ -5,7 +5,7 @@ from contextlib import closing
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, docs_store, server
+from mycelium import auth, docs_store, drafts_store, server
 from mycelium.http import AuthMiddleware, app
 
 
@@ -17,7 +17,7 @@ def workspace(tmp_path, monkeypatch):
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
     with closing(docs_store.connect(tmp_path / "drafts.db")) as conn:
         docs_store.migrate(conn)
-        monkeypatch.setattr(server, "_drafts_db", lambda: conn)
+        monkeypatch.setattr(drafts_store, "connection", lambda: conn)
         document = docs_store.upsert_document(
             conn,
             slug="page",

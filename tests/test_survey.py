@@ -23,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, drafts_store, embed, phrasing, server, store, survey
+from mycelium.server import runtime
 
 # --- concept-based fake embedder --------------------------------------------
 
@@ -130,7 +131,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _client(tmp_path, monkeypatch, embedder=concept_embed) -> TestClient:
@@ -218,7 +219,7 @@ def test_search_hits_fully_hydrated_with_capped_reverse_edges(tmp_path, monkeypa
     are capped per hit so a convergence hub can't dominate the result — a
     `*_truncated` count points at `get_statements` for the complete set, which
     is itself uncapped."""
-    from mycelium.server import _REVERSE_EDGE_CAP
+    from mycelium.server.hydration import _REVERSE_EDGE_CAP
 
     with _client(tmp_path, monkeypatch):
         target = _add("the flow ranks the statements")
@@ -269,13 +270,13 @@ def test_subquery_vector_dedup_collapses_identical_angles(tmp_path, monkeypatch)
         _add("the flow ranks the statements")
 
         calls = {"n": 0}
-        original = server._idx().search
+        original = runtime._idx().search
 
         def counting_search(vec, k):
             calls["n"] += 1
             return original(vec, k)
 
-        monkeypatch.setattr(server._idx(), "search", counting_search)
+        monkeypatch.setattr(runtime._idx(), "search", counting_search)
 
         # "rank" and "ranking" both embed to the rank axis → one vector.
         server.survey_statements("rank and ranking", k=5)
@@ -408,7 +409,7 @@ def test_index_search_retry_recovers_after_one_failure(tmp_path, monkeypatch):
     """Production requirement: retry once on a transient index failure."""
     with _client(tmp_path, monkeypatch):
         rank_id = _add("the flow ranks the statements")
-        original = server._idx().search
+        original = runtime._idx().search
         state = {"n": 0}
 
         def flaky_search(vec, k):
@@ -417,7 +418,7 @@ def test_index_search_retry_recovers_after_one_failure(tmp_path, monkeypatch):
                 raise RuntimeError("transient index")
             return original(vec, k)
 
-        monkeypatch.setattr(server._idx(), "search", flaky_search)
+        monkeypatch.setattr(runtime._idx(), "search", flaky_search)
         hits = server.survey_statements("rank", k=5)
         assert state["n"] == 2  # failed once, retried, succeeded
         assert rank_id in {h["id"] for h in hits}
@@ -432,7 +433,7 @@ def test_index_search_persistent_failure_yields_empty_not_error(tmp_path, monkey
         def always_raise(vec, k):
             raise RuntimeError("index down")
 
-        monkeypatch.setattr(server._idx(), "search", always_raise)
+        monkeypatch.setattr(runtime._idx(), "search", always_raise)
         # Every sub-query's search fails twice → empty union → empty result,
         # without raising.
         assert server.survey_statements("rank and permission", k=5) == []
@@ -466,7 +467,7 @@ def test_duplicate_vids_in_one_subquery_do_not_inflate_count(tmp_path, monkeypat
             return [(200, 0.1)]  # everything else → multi_id
 
         vid_map = {101: dup_id, 102: dup_id, 200: multi_id}
-        monkeypatch.setattr(server._idx(), "search", search)
+        monkeypatch.setattr(runtime._idx(), "search", search)
         monkeypatch.setattr(
             store, "get_statement_id_by_vector_id", lambda conn, vid: vid_map.get(vid)
         )

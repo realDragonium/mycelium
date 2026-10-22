@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from mycelium import embed, mention_worker, server, store
 from mycelium.http import _history_target_id
+from mycelium.server import runtime
 
 
 def fake_embed_factory():
@@ -27,7 +28,7 @@ def _client(tmp_path, monkeypatch, embedder):
     monkeypatch.setattr(embed, "embed", embedder)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
-    server._ctx = None
+    runtime._ctx = None
     from mycelium.http import app
 
     return TestClient(app)
@@ -2973,106 +2974,6 @@ def test_history_api_shows_deletes_and_link_composite(tmp_path, monkeypatch):
         assert del_ev["after"] is None
 
 
-# --- operation ledger records attempts through the shared seam --------------
-
-
-def test_operations_recorded_end_to_end(tmp_path, monkeypatch):
-    monkeypatch.delenv("MYCELIUM_OPS_LEDGER", raising=False)
-    with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
-        # A successful write, a no-hit search, and a phrasing-rejected write —
-        # three distinct outcomes, all through the one @tool seam.
-        client.post(
-            "/upsert-statement",
-            json={
-                "kind": "event",
-                "text": "User signs in",
-                "mentions": [],
-                "links": [],
-            },
-        )
-        client.post(
-            "/search-statements",
-            json={"query": "nothing matches xyzzy", "min_score": 0.9},
-        )
-        client.post(
-            "/upsert-statement",
-            json={
-                "kind": "event",
-                "text": "user must verify email",
-                "mentions": [],
-                "links": [],
-            },
-        )
-
-        body = client.get("/api/operations?limit=200").json()
-        assert body["enabled"] is True
-        by_tool_outcome = {(o["tool"], o["outcome"]) for o in body["operations"]}
-        assert ("upsert_statement", "succeeded") in by_tool_outcome
-        assert ("search_statements", "no_hit") in by_tool_outcome
-        assert ("upsert_statement", "rejected") in by_tool_outcome
-
-        # Every op is labelled with its transport and carries a latency.
-        assert all(o["transport"] == "rest" for o in body["operations"])
-        assert all(o["duration_ms"] is not None for o in body["operations"])
-
-
-def test_operations_filter_by_outcome(tmp_path, monkeypatch):
-    monkeypatch.delenv("MYCELIUM_OPS_LEDGER", raising=False)
-    with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
-        client.post(
-            "/search-statements",
-            json={"query": "no such thing zzz", "min_score": 0.9},
-        )
-        client.post(
-            "/upsert-statement",
-            json={
-                "kind": "event",
-                "text": "Server issues a token",
-                "mentions": [],
-                "links": [],
-            },
-        )
-        rows = client.get("/api/operations?outcome=no_hit&limit=200").json()[
-            "operations"
-        ]
-        assert rows and all(o["outcome"] == "no_hit" for o in rows)
-
-
-def test_operations_unknown_outcome_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.delenv("MYCELIUM_OPS_LEDGER", raising=False)
-    with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
-        client.post(
-            "/upsert-statement",
-            json={
-                "kind": "event",
-                "text": "A recorded op",
-                "mentions": [],
-                "links": [],
-            },
-        )
-        # An unknown outcome is an explicit filter that matches nothing — not a
-        # dropped filter that returns everything.
-        body = client.get("/api/operations?outcome=bogus&limit=200").json()
-        assert body["total"] == 0 and body["operations"] == []
-
-
-def test_operations_disabled_does_not_change_tool_result(tmp_path, monkeypatch):
-    monkeypatch.setenv("MYCELIUM_OPS_LEDGER", "0")
-    with _client(tmp_path, monkeypatch, fake_embed_factory()) as client:
-        r = client.post(
-            "/upsert-statement",
-            json={
-                "kind": "event",
-                "text": "Telemetry is off here",
-                "mentions": [],
-                "links": [],
-            },
-        )
-        assert r.status_code == 200 and r.json()["statement_id"].startswith("stm_")
-        body = client.get("/api/operations").json()
-        assert body["enabled"] is False and body["operations"] == []
-
-
 def test_init_prunes_stranded_name_vectors(tmp_path, monkeypatch):
     """A migration can delete name rows + vector mappings while the
     persisted hnsw file keeps the vectors (v6's variant merge does).
@@ -3106,4 +3007,4 @@ def test_init_prunes_stranded_name_vectors(tmp_path, monkeypatch):
 
     with _client(tmp_path, monkeypatch, deterministic_embed):
         for vid in stranded_vids:
-            assert server._name_idx().get_vector(vid) is None
+            assert runtime._name_idx().get_vector(vid) is None

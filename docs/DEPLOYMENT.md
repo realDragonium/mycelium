@@ -343,7 +343,7 @@ Everything an instance knows lives in `/var/lib/mycelium`:
 | `mycelium-auth.db` | Users, MCP tokens, invites, OAuth clients |
 | `mycelium-drafts.db` | Drafts and their reviews, research and documentation runs, generated documents |
 | `mycelium-prompts.db` | AI instructions and their history, model, review and product settings, GitHub connections |
-| `mycelium-ops.db` | Bounded tool-call telemetry |
+| `mycelium-ops.db` | Only on instances that predate its removal: tool-call telemetry that is no longer written or read, and not archived |
 | `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
 | `entity-positions.json` | Entity layout cache; rebuilt if missing |
 | `.uv-cache/` | uv's package cache, not data |

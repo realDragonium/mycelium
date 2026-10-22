@@ -33,6 +33,7 @@ import pytest
 
 import instance_scenario
 from mycelium import backup, embed, migrations, server, store
+from mycelium.server import runtime
 
 
 def _captured(fixture: Path) -> tuple[int, str]:
@@ -69,9 +70,6 @@ DROPPED_COLUMNS: dict[tuple[str, str, str], str] = {
     ),
 }
 
-# Databases a fixture deliberately omits (see the capture script).
-_UNCAPTURED = {"mycelium-ops.db"}
-
 
 def _load(fixture: Path, data_dir: Path) -> None:
     data_dir.mkdir()
@@ -81,7 +79,7 @@ def _load(fixture: Path, data_dir: Path) -> None:
 
 
 def _start(data_dir: Path) -> None:
-    server._ctx = None
+    runtime._ctx = None
     server.init(data_dir)
 
 
@@ -178,7 +176,7 @@ def _offline(monkeypatch):
     monkeypatch.setattr(embed, "embed", instance_scenario.embed)
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     yield
-    server._ctx = None
+    runtime._ctx = None
 
 
 @pytest.fixture(scope="module")
@@ -188,7 +186,7 @@ def fresh_schema(tmp_path_factory) -> dict[str, dict]:
         mp.setattr(embed, "embed", instance_scenario.embed)
         mp.setenv("MYCELIUM_AUTH", "off")
         _start(data_dir)
-        server._ctx = None
+        runtime._ctx = None
     return {db.name: _schema(db) for db in sorted(data_dir.glob("*.db"))}
 
 
@@ -289,8 +287,9 @@ def test_fixtures_cover_every_version_up_to_the_current_one():
 def test_newest_fixture_has_the_current_schema(tmp_path, fresh_schema):
     data_dir = tmp_path / "data"
     _load(FIXTURES[-1], data_dir)
-    expected = {k: v for k, v in fresh_schema.items() if k not in _UNCAPTURED}
-    assert {db.name: _schema(db) for db in sorted(data_dir.glob("*.db"))} == expected, (
+    assert {db.name: _schema(db) for db in sorted(data_dir.glob("*.db"))} == (
+        fresh_schema
+    ), (
         "the schema changed since the newest migration fixture; once the "
         "migration is written, capture the new shape with "
         "`uv run python scripts/capture_migration_fixture.py`"

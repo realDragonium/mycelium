@@ -9,6 +9,7 @@ from mycelium import auth, github_connections, github_credentials, prompt_store
 from mycelium import product_settings as settings
 from mycelium.ask.config import AskConfig, for_depth
 from mycelium.model_capacity import Capacity
+from mycelium.server import admission
 from test_internal_draft_review import running_app as running_app
 
 
@@ -434,18 +435,17 @@ def test_documentation_default_must_name_existing_guidelines(db):
 
 
 def test_http_concurrency_save_updates_existing_request_limiter(running_app):
-    from mycelium import server
 
     client, _ = running_app
     assert client.portal is not None
-    limiter = client.portal.call(server._model_loop_limiter)
+    limiter = client.portal.call(admission._model_loop_limiter)
     response = client.patch(
         "/api/product-settings",
         json={"revision": 1, "settings": {"kind": "concurrency", "model_loops": 3}},
     )
     assert response.status_code == 200, response.text
     assert limiter.total_tokens == 3
-    assert client.portal.call(server._model_loop_limiter) is limiter
+    assert client.portal.call(admission._model_loop_limiter) is limiter
     response = client.patch(
         "/api/product-settings",
         json={"revision": 2, "settings": {"kind": "concurrency", "model_loops": 2}},

@@ -15,6 +15,7 @@ from mycelium import (
     store,
 )
 from mycelium.draft_review_store import Assessment, Correction
+from mycelium.server import draft_review, runtime
 from settings_helpers import save_model
 from settings_helpers import set_review_controls as _set_review_controls
 from test_reviewed_application import _app, _principal
@@ -42,9 +43,9 @@ def running_app(tmp_path, monkeypatch):
     monkeypatch.delenv("MYCELIUM_REVIEWED_APPLY", raising=False)
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
     with _app(tmp_path, monkeypatch) as client:
-        with store.transaction(server._auth_db()):
+        with store.transaction(runtime._auth_db()):
             reviewer = auth.create_user(
-                server._auth_db(), name="Reviewer", role="writer", type="service"
+                runtime._auth_db(), name="Reviewer", role="writer", type="service"
             )
         _set_review_controls(reviewer_id=reviewer)
         _set_review_model("gpt-fixture")
@@ -184,16 +185,16 @@ def test_running_review_cannot_retain_mutation_privilege(
         if change in ("off", "review-only"):
             _set_review_controls(mode=change)
         elif change == "demote":
-            with store.transaction(server._auth_db()):
-                server._auth_db().execute(
+            with store.transaction(runtime._auth_db()):
+                runtime._auth_db().execute(
                     "UPDATE users SET role = 'drafter' WHERE id = ?", (reviewer,)
                 )
         elif change == "same-creator":
             _set_review_controls(reviewer_id="drafter-1")
         else:
-            with store.transaction(server._auth_db()):
+            with store.transaction(runtime._auth_db()):
                 other = auth.create_user(
-                    server._auth_db(), name="Other", role="writer", type="service"
+                    runtime._auth_db(), name="Other", role="writer", type="service"
                 )
             _set_review_controls(reviewer_id=other)
         return _assessment("reject")
@@ -412,7 +413,7 @@ def test_authoritative_support_preconditions_survive_later_apply(
             {
                 "kind": "statement",
                 "id": statement_id,
-                "fingerprint": server._fingerprint(
+                "fingerprint": draft_review._fingerprint(
                     server.get_statements([statement_id])
                 ),
             }
@@ -509,8 +510,8 @@ def test_drafter_cannot_request_or_impersonate_reviewer(running_app, monkeypatch
             server.request_draft_review(draft_id)
     finally:
         auth.current_principal.reset(token)
-    with store.transaction(server._auth_db()):
-        server._auth_db().execute(
+    with store.transaction(runtime._auth_db()):
+        runtime._auth_db().execute(
             "INSERT INTO users(id, name, role, type, status, created_at) VALUES ('drafter-1', 'Creator', 'writer', 'service', 'active', 'now')"
         )
     _set_review_controls(reviewer_id="drafter-1")
@@ -542,7 +543,7 @@ def test_model_failure_and_missing_configuration_are_visible(running_app, monkey
 def test_http_review_uses_real_curator_role(running_app, monkeypatch, role):
     client, _ = running_app
     draft_id = _draft()
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     with store.transaction(conn):
         user_id = auth.create_user(conn, name=role, role=role, type="service")
         raw, _ = auth.issue_token(conn, user_id=user_id, name="Fixture", scope=role)

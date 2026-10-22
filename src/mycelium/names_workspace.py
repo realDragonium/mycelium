@@ -455,9 +455,8 @@ def _perform(conn: sqlite3.Connection, action: Action) -> str:
 
 
 def apply(body: ApplyRequest) -> Applied:
-    from . import (
-        server,  # local import: server owns index persistence and recovery markers
-    )
+    from . import server  # local import: server owns the substrate accessors
+    from .server import indexes  # local import: index persistence and recovery markers
 
     conn = server._db()
     with store.write_lock():
@@ -466,7 +465,7 @@ def apply(body: ApplyRequest) -> Applied:
             raise Conflict(
                 "The vocabulary or previewed knowledge changed. Review a fresh preview before applying."
             )
-        with server._persisted_index_write(names=True):
+        with indexes._persisted_index_write(names=True):
             before = concept(conn, body.action.entity_id).model_dump()
             destination_before: dict[str, Any] | None = before
             if isinstance(body.action, (MoveAlias, MergeConcepts)):

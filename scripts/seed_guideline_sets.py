@@ -1,6 +1,6 @@
 """Push the packaged `kb-authoring` guideline set into an instance's store.
 
-Startup already seeds these rows (`server._seed_prompt_texts`), so a fresh
+Startup already seeds these rows (`server.prompt_texts._seed_prompt_texts`), so a fresh
 instance has the set before anything is run by hand. This script exists for
 the case startup deliberately refuses: the source files have moved on and you
 want the instance to follow. It compares each row against the stored latest

@@ -156,12 +156,12 @@ def _trace_log_path(data_dir: str) -> str:
 
 
 def _auto_submit(draft_id: object) -> None:
-    from . import server
+    from .server import drafts
 
     if not isinstance(draft_id, str):
         return
     try:
-        server._auto_submit(draft_id)
+        drafts._auto_submit(draft_id)
     except Exception:  # noqa: BLE001 — the run still produced its draft
         logger.exception("could not submit research draft %s", draft_id)
 

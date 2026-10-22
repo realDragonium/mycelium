@@ -399,9 +399,9 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         )
         result = Snapshot(revision=current.revision + 1, settings=request.settings)
     if isinstance(request.settings, ConcurrencySettings):
-        from . import server
+        from .server import admission
 
-        server._model_loop_budget().changed()
+        admission._model_loop_budget().changed()
     return result
 
 

@@ -6,8 +6,10 @@ keeps off the MCP surface. Path is the kebab-case tool name; method
 is GET when the tool takes no args, POST otherwise. The request body's
 Pydantic schema is derived from the function signature.
 
-Add a tool in `server.py` with `@tool` and you'll find it here too at
-`/<kebab-case-name>` after a server restart — no edits needed in this file.
+Add a tool to a module in `mycelium/server/` with `@tool`, list it in
+`mycelium.server.__all__` (its position there is its place in every listing),
+and you'll find it here too at `/<kebab-case-name>` after a server restart —
+no edits needed in this file.
 """
 
 import functools
@@ -44,7 +46,6 @@ from . import (
     names_workspace,
     oauth_server,
     oidc,
-    ops_ledger,
     product_settings,
     server,
     store,
@@ -54,6 +55,7 @@ from . import (
     draft_review_settings as review_settings,
 )
 from .docgen.schema import ManualDocument
+from .server import registry, runtime
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -62,7 +64,7 @@ from .docgen.schema import ManualDocument
 # 2025-era client's `initialize` handshake and a 2026-07-28 client's
 # self-describing requests — with nothing to configure.
 _MCP_SUBAPP = server.mcp.streamable_http_app(
-    transport_security=server._build_transport_security(),
+    transport_security=registry._build_transport_security(),
 )
 
 
@@ -277,13 +279,6 @@ class AuthMiddleware:
         # a principal-scoped key.
         session_id = request.headers.get("mcp-session-id")
         session_ctx = auth.current_session_id.set(session_id)
-        # The MCP streamable-HTTP app is mounted at `/mcp`; everything else is
-        # the REST mirror. Labels operation-ledger rows by transport. Match the
-        # mount exactly (or a sub-path) so a REST route like `/mcp-status` is
-        # never misfiled as MCP.
-        path = request.url.path
-        transport = "mcp" if path == "/mcp" or path.startswith("/mcp/") else "rest"
-        transport_ctx = auth.current_transport.set(transport)
         if principal is not None:
             store.set_actor(principal.id)
         try:
@@ -292,7 +287,6 @@ class AuthMiddleware:
             store.set_actor(None)
             auth.current_principal.reset(ctx_token)
             auth.current_session_id.reset(session_ctx)
-            auth.current_transport.reset(transport_ctx)
 
     @staticmethod
     def _credentials(request: Request) -> tuple[str | None, str | None]:
@@ -317,7 +311,7 @@ class AuthMiddleware:
         WRITES (last_used_at), so under concurrent traffic this waits on the
         single writer — which is why `_resolve` keeps it off the event loop."""
         try:
-            conn = server._auth_db()
+            conn = runtime._auth_db()
         except RuntimeError:
             # Lifespan hasn't run (e.g. ASGI tests hitting the app
             # without the context manager), so the auth store isn't
@@ -371,7 +365,7 @@ def _model_name_for(func_name: str) -> str:
 
 
 # Tool authorization — convention based. The classification helpers
-# live in `auth` so the MCP `@tool` wrapper (server.py) can apply the
+# live in `auth` so the MCP `@tool` wrapper (server/registry.py) can apply the
 # same policy without depending on the HTTP layer.
 
 
@@ -381,10 +375,10 @@ def _enforce_role(request: Request, required: str, real_role: bool = False) -> N
         from fastapi import HTTPException
 
         raise HTTPException(status_code=401, detail="authentication required")
-    # `server._satisfies` is the one rule the MCP wrapper and the tools/list
+    # `registry._satisfies` is the one rule the MCP wrapper and the tools/list
     # filter also ask, so a tool cannot be reachable over one transport and
     # gated on another.
-    if not server._satisfies(p, required, real_role):
+    if not registry._satisfies(p, required, real_role):
         from fastapi import HTTPException
 
         raise HTTPException(
@@ -749,91 +743,6 @@ def get_history(
     return {"events": events, "total": total, "limit": limit, "offset": offset}
 
 
-# --- operation ledger -----------------------------------------------------
-# The "Operations" half of Activity: attempted tool calls — searches,
-# no-hits, rejected/failed writes, queued drafts — with truthful outcome
-# and latency. Distinct from /api/history (successful knowledge changes).
-# A separate store, so this never contends with the substrate write lock.
-
-
-def _serialize_operation(row) -> dict[str, Any]:
-    return {
-        "op_id": row["op_id"],
-        "at_start": row["at_start"],
-        "at_end": row["at_end"],
-        "duration_ms": row["duration_ms"],
-        "actor": row["actor"],
-        "transport": row["transport"],
-        "tool": row["tool"],
-        "outcome": row["outcome"],
-        "correlation_id": row["correlation_id"],
-        "session_id": row["session_id"],
-        "request": json.loads(row["request_summary"])
-        if row["request_summary"]
-        else None,
-        "result": json.loads(row["result_summary"]) if row["result_summary"] else None,
-        "result_count": row["result_count"],
-        "result_ids": json.loads(row["result_ids"]) if row["result_ids"] else None,
-        "draft_id": row["draft_id"],
-        "error_class": row["error_class"],
-        "error_message": row["error_message"],
-    }
-
-
-@app.get("/api/operations")
-def get_operations(
-    request: Request,
-    limit: int = 50,
-    offset: int = 0,
-    tool: str | None = None,
-    outcome: str | None = None,
-    actor: str | None = None,
-) -> dict[str, Any]:
-    """Paginated, filterable view of attempted operations, newest first.
-
-    `enabled` is False when the ledger isn't configured or is switched off —
-    the UI shows an empty, explained state rather than an error.
-
-    Query params:
-      - tool: comma-separated tool names (open vocabulary)
-      - outcome: comma-separated subset of the outcome vocabulary
-      - actor: exact actor id match
-    """
-    _require_principal(request)
-    limit = max(1, min(int(limit), 500))
-    offset = max(0, int(offset))
-    if not ops_ledger.enabled():
-        return {
-            "operations": [],
-            "total": 0,
-            "limit": limit,
-            "offset": offset,
-            "enabled": False,
-        }
-
-    tools = {p.strip() for p in tool.split(",") if p.strip()} if tool else None
-    outcomes = (
-        {p.strip() for p in outcome.split(",") if p.strip()} & ops_ledger.OUTCOMES
-        if outcome
-        else None
-    )
-    rows, total = ops_ledger.query(
-        ops_ledger.connection(),
-        limit=limit,
-        offset=offset,
-        tools=tools,
-        outcomes=outcomes,
-        actor=(actor or None),
-    )
-    return {
-        "operations": [_serialize_operation(r) for r in rows],
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-        "enabled": True,
-    }
-
-
 # --- account & token endpoints --------------------------------------------
 # Used by the bundled UI's settings page. Authenticated principal is read
 # from `request.state.principal`, which the middleware populates from a
@@ -969,7 +878,7 @@ def get_entity_positions(request: Request) -> Any:
     from fastapi.responses import FileResponse
     from fastapi.responses import JSONResponse as _JSON
 
-    path = server._baker().output_path()
+    path = runtime._baker().output_path()
     if not path.exists():
         return _JSON(
             status_code=404, content={"detail": "entity positions not baked yet"}
@@ -1099,7 +1008,7 @@ async def get_server_info(request: Request) -> dict[str, Any]:
     a replacement task would restore the same incomplete set.
     """
     base = str(request.base_url).rstrip("/")
-    ctx = server._ctx
+    ctx = runtime._ctx
     return {
         "base_url": base,
         "mcp_url": f"{base}/mcp",
@@ -1129,7 +1038,7 @@ def list_my_tokens(request: Request) -> dict[str, Any]:
     list (UI greys them out) so a user can see what was revoked and
     when — useful when the same label was reused later."""
     p = _require_principal(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     rows = auth.list_tokens(conn, auth.owner_id_for(p))
     return {"tokens": [_serialize_token_row(r) for r in rows]}
 
@@ -1149,7 +1058,7 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
     it immediately; it cannot be retrieved later.
     """
     p = _require_principal(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     with store.transaction(conn):
         raw, row = auth.mint_own_token(
             conn, principal=p, name=body.name, scope=body.scope
@@ -1160,7 +1069,7 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
 @app.delete("/api/me/tokens/{token_id}")
 def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     try:
         with store.transaction(conn):
             auth.revoke_own_token(
@@ -1994,7 +1903,7 @@ def _serialize_user_row(row) -> dict[str, Any]:
 @app.get("/api/admin/users")
 def list_users(request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     rows = auth.list_users(conn)
     return {"users": [_serialize_user_row(r) for r in rows]}
 
@@ -2017,7 +1926,7 @@ def create_user(body: CreateUserBody, request: Request) -> dict[str, Any]:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=400, detail="human users require an email")
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     with store.transaction(conn):
         user_id = auth.create_user(
             conn,
@@ -2040,7 +1949,7 @@ class UpdateUserBody(BaseModel):
 @app.patch("/api/admin/users/{user_id}")
 def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     try:
         with store.transaction(conn):
             row = auth.update_user(
@@ -2060,7 +1969,7 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
 @app.get("/api/admin/users/{user_id}/tokens")
 def list_user_tokens(user_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     rows = auth.list_tokens(conn, user_id)
     return {"tokens": [_serialize_token_row(r) for r in rows]}
 
@@ -2078,7 +1987,7 @@ def mint_token_for_user(
     create the initial token for a freshly-created service account.
     The scope is still capped by the target user's role."""
     _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     try:
         with store.transaction(conn):
             raw, row = auth.mint_token_for_user(
@@ -2094,7 +2003,7 @@ def mint_token_for_user(
 @app.delete("/api/admin/tokens/{token_id}")
 def revoke_token_admin(token_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     with store.transaction(conn):
         auth.revoke_token(conn, token_id)
     return {"ok": True}
@@ -2114,7 +2023,7 @@ def _serialize_invite_row(row, *, request: Request) -> dict[str, Any]:
 @app.get("/api/admin/invites")
 def list_invites(request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     rows = auth.list_invites(conn)
     return {"invites": [_serialize_invite_row(r, request=request) for r in rows]}
 
@@ -2127,7 +2036,7 @@ class CreateInviteBody(BaseModel):
 @app.post("/api/admin/invites")
 def create_invite(body: CreateInviteBody, request: Request) -> dict[str, Any]:
     admin = _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     with store.transaction(conn):
         row = auth.create_invite(
             conn, email=body.email, role=body.role, invited_by=admin.id
@@ -2138,7 +2047,7 @@ def create_invite(body: CreateInviteBody, request: Request) -> dict[str, Any]:
 @app.delete("/api/admin/invites/{invite_id}")
 def revoke_invite(invite_id: str, request: Request) -> dict[str, Any]:
     _require_admin(request)
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     with store.transaction(conn):
         auth.revoke_invite(conn, invite_id)
     return {"ok": True}

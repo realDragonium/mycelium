@@ -16,6 +16,7 @@ import zlib
 import numpy as np
 
 from mycelium import embed, phrasing, server, store
+from mycelium.server import runtime
 
 
 def _embed(text: str) -> list[float]:
@@ -27,7 +28,7 @@ def _embed(text: str) -> list[float]:
 
 def _restart(data_dir) -> None:
     """Re-run init against the same dir, simulating a process restart."""
-    server._ctx = None
+    runtime._ctx = None
     server.init(data_dir)
 
 
@@ -37,7 +38,7 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
 
-    server._ctx = None
+    runtime._ctx = None
     server.init(tmp_path)
 
     server.upsert_entity(name="reviewer", description="a reviewer")
@@ -63,7 +64,7 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
     assert sid in {h["id"] for h in hits}
 
     # Name index rebuilt: querying the name text returns its mapping.
-    name_hits = server._name_idx().search(_embed("reviewer"), k=1)
+    name_hits = runtime._name_idx().search(_embed("reviewer"), k=1)
     assert name_hits, "name index is empty after restore"
     found_vid = name_hits[0][0]
     assert (

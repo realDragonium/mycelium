@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, prompt_store, server, store
+from mycelium.server import runtime
 
 
 def _conn() -> sqlite3.Connection:
@@ -27,7 +28,7 @@ def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     prompt_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
@@ -329,7 +330,7 @@ def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
     it still has to read as a role rejection, not a server fault."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_db()
+        conn = runtime._auth_db()
         uid = auth.create_user(
             conn, name="D", role="drafter", type="human", email="d@x.com"
         )
@@ -485,7 +486,7 @@ def test_a_store_level_tombstone_is_refilled_by_the_next_start(tmp_path, monkeyp
     client = _app(tmp_path, monkeypatch)
     with client:
         assert (
-            prompt_store.delete(server._prompts_db(), type="doctrine", name="ingest")
+            prompt_store.delete(runtime._prompts_db(), type="doctrine", name="ingest")
             is True
         )
         with pytest.raises(ValueError):

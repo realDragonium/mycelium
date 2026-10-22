@@ -15,6 +15,7 @@ from mycelium import (
     server,
     store,
 )
+from mycelium.server import runtime
 
 
 @pytest.fixture
@@ -32,7 +33,7 @@ def _app(tmp_path, monkeypatch):
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
     monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)
     from mycelium.http import app  # local import: avoid the server/http cycle
 

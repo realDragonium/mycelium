@@ -2,7 +2,7 @@
 
 What the substrate stores and which rules hold on every write. Tool signatures
 are not listed here: the MCP schema and the HTTP API docs at `/docs` are
-generated from `src/mycelium/server.py` and are authoritative.
+generated from `src/mycelium/server/` and are authoritative.
 [The MCP tool manifest](MCP_TOOLS.md) explains which tools MCP advertises.
 
 ## Records

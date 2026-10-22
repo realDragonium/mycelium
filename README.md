@@ -122,7 +122,7 @@ Documentation is requested with `request_documentation`, followed with
 `revise_document`.
 
 The MCP schema and `/docs` are the authoritative signature reference. Both are
-generated from the decorated functions in `src/mycelium/server.py`.
+generated from the decorated functions in `src/mycelium/server/`.
 
 ## Example
 

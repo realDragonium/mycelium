@@ -131,7 +131,6 @@ module = [
     "mycelium.model_settings",
     "mycelium.names_workspace",
     "mycelium.oauth_server",
-    "mycelium.ops_ledger",
     "mycelium.phrasing",
     "mycelium.phrasing_cues",
     "mycelium.plurals",
@@ -143,6 +142,30 @@ module = [
     "mycelium.research.sources",
     "mycelium.research.workspace",
     "mycelium.research_runs",
+    "mycelium.server",
+    "mycelium.server.admission",
+    "mycelium.server.authoring",
+    "mycelium.server.batch_planning",
+    "mycelium.server.documentation",
+    "mycelium.server.draft_application",
+    "mycelium.server.draft_queue",
+    "mycelium.server.draft_review",
+    "mycelium.server.drafts",
+    "mycelium.server.entities",
+    "mycelium.server.gaps",
+    "mycelium.server.hydration",
+    "mycelium.server.indexes",
+    "mycelium.server.links",
+    "mycelium.server.lookups",
+    "mycelium.server.model_loops",
+    "mycelium.server.names",
+    "mycelium.server.prompt_texts",
+    "mycelium.server.registry",
+    "mycelium.server.runtime",
+    "mycelium.server.search",
+    "mycelium.server.specs",
+    "mycelium.server.vocabulary",
+    "mycelium.server.write_checks",
     "mycelium.statement_connections",
     "mycelium.store",
     "mycelium.store.connection_graph",
@@ -180,13 +203,6 @@ warn_return_any = true
 [[tool.mypy.overrides]]
 module = "mycelium.docgen.loop"
 disable_error_code = ["func-returns-value"]
-
-# Reviewed-application receipts splice untyped JSON (apply_draft's result,
-# stored result_json) into the ReviewedApplicationReceipt TypedDict. Unblocked
-# by giving apply_draft a typed result, which belongs with the tool-surface cut.
-[[tool.mypy.overrides]]
-module = "mycelium.server"
-disable_error_code = ["typeddict-item"]
 
 [tool.ruff]
 line-length = 88

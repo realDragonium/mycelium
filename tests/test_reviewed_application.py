@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, drafts_store, server, store
+from mycelium.server import authoring, draft_application, runtime
 
 
 @contextmanager
@@ -17,7 +18,7 @@ def _app(tmp_path, monkeypatch, *, application_enabled=False):
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
     from mycelium import embed
 
     monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)
@@ -485,7 +486,7 @@ def test_soft_replay_rejection_rolls_back_and_records_failure(tmp_path, monkeypa
         drafts_store.set_submitted(conn, draft_id)
         token = _principal()
         monkeypatch.setattr(
-            server,
+            authoring,
             "_phrasing_gate",
             lambda *args: ([], {"rejected": True, "violations": ["test"]}),
         )
@@ -515,7 +516,7 @@ def test_failure_before_substrate_commit_is_durable(tmp_path, monkeypatch):
         token = _principal()
         review = _accepted_review(draft_id)
         monkeypatch.setattr(
-            server,
+            draft_application,
             "apply_draft",
             lambda *args, **kwargs: (_ for _ in ()).throw(
                 sqlite3.OperationalError("substrate commit failed")
@@ -564,7 +565,7 @@ def test_exception_after_substrate_commit_recovers_same_attempt(tmp_path, monkey
                 )
             raise KeyboardInterrupt("after commit")
 
-        monkeypatch.setattr(server, "apply_draft", commit_then_interrupt)
+        monkeypatch.setattr(draft_application, "apply_draft", commit_then_interrupt)
         try:
             result = server.apply_reviewed_draft(draft_id, review["review_id"])
         finally:

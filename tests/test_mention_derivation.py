@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from mycelium import embed, mention_worker, server, store
+from mycelium.server import runtime
 
 
 def _embed(text: str) -> list[float]:
@@ -22,7 +23,7 @@ def _embed(text: str) -> list[float]:
 def srv(tmp_path, monkeypatch):
     monkeypatch.setattr(embed, "embed", _embed)
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
-    server._ctx = None
+    runtime._ctx = None
     server.init(tmp_path)  # worker disabled in tests (conftest); we drain by hand
     return server
 

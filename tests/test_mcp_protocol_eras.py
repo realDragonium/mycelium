@@ -37,7 +37,8 @@ from mcp_types import (
     PROTOCOL_VERSION_META_KEY,
 )
 
-from mycelium import auth, auth_store, server, store
+from mycelium import auth, auth_store, store
+from mycelium.server import runtime
 
 # Both revisions negotiate content type through Accept; the transport wants to
 # know a client can take either a JSON body or an SSE stream.
@@ -61,7 +62,7 @@ def client(tmp_path_factory):
         mp.setenv("MYCELIUM_DISABLE_MCP_HTTP", "0")
         store.reset_substrate()
         auth_store.reset()
-        server._ctx = None
+        runtime._ctx = None
         from mycelium import embed
 
         mp.setattr(embed, "embed", lambda t: [0.0] * 768)
@@ -81,7 +82,7 @@ def bearer(client):
     Both writes commit in a single transaction so the request thread — which
     resolves bearers on its own connection — can see them.
     """
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     tokens = {}
     with store.transaction(conn):
         for role in ("admin", "reader"):

@@ -27,14 +27,15 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, auth_store, drafts_store, server, store, vector
+from mycelium import auth, auth_store, drafts_store, plurals, server, store, vector
+from mycelium.server import draft_application, runtime
 
 
 def _reset_server() -> None:
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
-    server._ctx = None
+    runtime._ctx = None
 
 
 def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
@@ -736,8 +737,8 @@ def test_approve_failure_restores_vector_indexes(tmp_path, monkeypatch):
         finally:
             _restore(tokens)
         draft_id = queued["draft_id"]
-        statement_ids_before = server._idx().ids()
-        name_ids_before = server._name_idx().ids()
+        statement_ids_before = runtime._idx().ids()
+        name_ids_before = runtime._name_idx().ids()
         assert statement_ids_before == []
         assert name_ids_before == []
 
@@ -749,8 +750,8 @@ def test_approve_failure_restores_vector_indexes(tmp_path, monkeypatch):
         conn = store.substrate_connection()
         assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
-        assert server._idx().ids() == statement_ids_before
-        assert server._name_idx().ids() == name_ids_before
+        assert runtime._idx().ids() == statement_ids_before
+        assert runtime._name_idx().ids() == name_ids_before
 
         index_path = tmp_path / "mycelium.vec"
         name_index_path = tmp_path / "mycelium-names.vec"
@@ -799,18 +800,18 @@ def test_commit_failure_rolls_back_and_restores_indexes(tmp_path, monkeypatch):
         conn = store.substrate_connection()
         assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
-        assert server._idx().ids() == []
-        assert server._name_idx().ids() == []
+        assert runtime._idx().ids() == []
+        assert runtime._name_idx().ids() == []
 
         # Suppress plural-name generation so "After" contributes exactly one
         # name vector and the count below stays exact.
-        monkeypatch.setattr(server.plurals, "regular_plural", lambda _: None)
+        monkeypatch.setattr(plurals, "regular_plural", lambda _: None)
         server.upsert_entity(name="After", description="x")
 
         assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 1
-        assert server._idx().ids() == []
-        assert len(server._name_idx().ids()) == 1
+        assert runtime._idx().ids() == []
+        assert len(runtime._name_idx().ids()) == 1
         assert list(tmp_path.glob("*.pre-apply*")) == []
 
 
@@ -1112,7 +1113,7 @@ def test_resolve_draft_refs_leaves_bare_batch_references_untouched():
     }
     results = {1: {"results": [{"statement_id": "stm_created"}]}}
 
-    assert server._resolve_draft_refs(payload, results) == {
+    assert draft_application._resolve_draft_refs(payload, results) == {
         "statements": [{"links": [{"to_id": "@2"}]}],
         "proposal": {"from_id": "stm_created"},
     }
