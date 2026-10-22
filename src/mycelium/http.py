@@ -2119,16 +2119,20 @@ def _root_redirect() -> RedirectResponse:
     return RedirectResponse(url="/connect")
 
 
-_UI_DIR = Path(__file__).resolve().parent / "ui"
+# Both browser apps are built from `frontend/` into `webui/`, which is committed
+# so the server runs without Node. The bundles of both apps live under
+# webui/ui/assets/, so the /ui mount serves cockpit's scripts too.
+_WEBUI_DIR = Path(__file__).resolve().parent / "webui"
+_UI_DIR = _WEBUI_DIR / "ui"
 app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
 # Second, parallel UI: the "cockpit" — an AI-native authoring surface
 # (Ask / Find / Ingest / Drafts / Coverage) recreated from a Claude Design
-# handoff. A static React/Babel bundle like /ui, wired to the live substrate
-# through the same endpoints (/api/data, /search-statements, /ask, /ingest,
-# /api/drafts, …) via its own api.js bridge. Gated by the same AuthMiddleware
-# as /ui — /cockpit is not in the auth-exempt list.
-_COCKPIT_DIR = Path(__file__).resolve().parent / "cockpit"
+# handoff. Wired to the live substrate through the same endpoints as /ui
+# (/api/data, /search-statements, /ask, /ingest, /api/drafts, …) via its own
+# api.ts bridge. Gated by the same AuthMiddleware as /ui — /cockpit is not in
+# the auth-exempt list.
+_COCKPIT_DIR = _WEBUI_DIR / "cockpit"
 app.mount(
     "/cockpit", StaticFiles(directory=str(_COCKPIT_DIR), html=True), name="cockpit"
 )
