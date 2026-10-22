@@ -142,6 +142,9 @@ def save(conn: sqlite3.Connection, run: ReviewRun) -> None:
     )
 
 
+WAITING_FOR_PERSON = "Waiting for a person to answer the reviewer's questions."
+
+
 def new(draft_id: str, mode: Mode, revision: int) -> ReviewRun:
     return ReviewRun(
         run_id="drv_" + uuid.uuid4().hex[:12],
@@ -173,10 +176,14 @@ def reconcile(
         row = conn.execute(
             "SELECT outcome FROM draft_reviews WHERE id = ?", (run.review_id,)
         ).fetchone()
-        if row is None or row["outcome"] != "rejected":
+        if row is not None and row["outcome"] == "needs_context":
+            run.application = "needs_human"
+            run.detail = WAITING_FOR_PERSON
+        elif row is not None and row["outcome"] == "rejected":
+            run.application = "rejected"
+            run.detail = "Draft rejection committed; recovered from its review record."
+        else:
             return False
-        run.application = "rejected"
-        run.detail = "Draft rejection committed; recovered from its review record."
     run.status = "completed"
     return True
 

@@ -497,3 +497,39 @@ def test_sweep_does_not_supersede_a_run_that_finished_after_selection(
     latest = _latest(draft_id)
     assert latest.application == "needs_human"
     assert server.get_draft(draft_id)["status"] == "submitted"
+
+
+def test_question_survives_a_failure_after_it_was_recorded(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    _automatic()
+    contexts = _asks_then_approves(monkeypatch)
+
+    def gaps_unavailable(text):
+        raise RuntimeError("substrate unavailable")
+
+    monkeypatch.setattr(draft_review_runs, "_report_gap", gaps_unavailable)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+
+    run = _latest(draft_id)
+    assert (run.status, run.application) == ("completed", "needs_human")
+    assert len(contexts) == 1
+    assert server.get_draft(draft_id)["status"] == "submitted"
+
+
+def test_question_survives_a_restart_after_it_was_recorded(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    _automatic()
+    _asks_then_approves(monkeypatch)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+    conn = server._drafts_db()
+    in_flight = _latest(draft_id).model_copy(update={"status": "running"})
+    with store.transaction(conn):
+        draft_review_store.save(conn, in_flight)
+
+    draft_review_store.mark_orphaned(conn)
+
+    recovered = _latest(draft_id)
+    assert (recovered.status, recovered.application) == ("completed", "needs_human")
+    far_future = datetime.fromisoformat("2100-01-01T00:00:00.000Z")
+    assert draft_review_runs.sweep(far_future) == []
+    assert _answer(client, draft_id, "No.").status_code == 200

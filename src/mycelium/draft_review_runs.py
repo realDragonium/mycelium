@@ -671,17 +671,20 @@ def _ask_person(
 ) -> None:
     from . import server  # local import: server registers the review tools
 
-    review = server.record_draft_review(
-        run.draft_id,
-        "needs_context",
-        run.rationale or "",
-        inspection["draft_revision"],
-        _supporting_preconditions(inspection, reads),
-        run.questions,
-    )
-    run.review_id = review["review_id"]
-    run.application = "needs_human"
-    run.detail = "Waiting for a person to answer the reviewer's questions."
+    conn = drafts_store.connection()
+    with store.transaction(conn):
+        review = server.record_draft_review(
+            run.draft_id,
+            "needs_context",
+            run.rationale or "",
+            inspection["draft_revision"],
+            _supporting_preconditions(inspection, reads),
+            run.questions,
+        )
+        run.review_id = review["review_id"]
+        run.application = "needs_human"
+        run.detail = draft_review_store.WAITING_FOR_PERSON
+        draft_review_store.save(conn, run)
     _report_gap(
         f"Draft {run.draft_id} needs a person to answer the internal reviewer: "
         + " ".join(run.questions)
