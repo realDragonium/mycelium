@@ -30,7 +30,7 @@ from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field, JsonValue
 
-from . import (
+from .. import (
     documentation_profiles,
     embed,
     link_authoring,
@@ -45,13 +45,13 @@ from . import (
     vector,
     when_expression,
 )
-from .app_context import AppContext
-from .auth import Principal as AuthPrincipal
-from .layout_baker import LayoutBaker
-from .model_capacity import Capacity
-from .require import require
-from .store.connection_graph import ConnectionGraph
-from .tracing import trace_span
+from ..app_context import AppContext
+from ..auth import Principal as AuthPrincipal
+from ..layout_baker import LayoutBaker
+from ..model_capacity import Capacity
+from ..require import require
+from ..store.connection_graph import ConnectionGraph
+from ..tracing import trace_span
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ def _satisfies(principal: Any, required: str, real_role: bool) -> bool:
     advertising one. Two callers, one rule: a tool that appears in
     `tools/list` is one the gate will let through.
     """
-    from . import auth as _auth
+    from .. import auth as _auth
 
     check = _auth.principal_has_real_role if real_role else _auth.principal_satisfies
     return check(principal, required)
@@ -150,7 +150,7 @@ class _RoleFilteredTools:
         if ctx.method != "tools/list" or not isinstance(result, dict):
             return result
 
-        from . import auth as _auth
+        from .. import auth as _auth
 
         principal = _auth.current_principal.get()
         if principal is None:
@@ -246,7 +246,7 @@ _MODEL_LOOP_MAX_CONCURRENT_ENV = "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT"
 
 
 def _model_loop_max_concurrent() -> int:
-    from . import product_settings
+    from .. import product_settings
 
     return product_settings.get(product_settings.ConcurrencySettings).model_loops
 
@@ -345,7 +345,7 @@ def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
     @functools.wraps(wrapper)
     async def offloaded(*args: Any, **kwargs: Any) -> Any:
         if name == "ask":
-            from .ask.events import run_cancellable
+            from ..ask.events import run_cancellable
 
             return await run_cancellable(
                 lambda: anyio.to_thread.run_sync(
@@ -398,7 +398,7 @@ def tool(
     the same declaration, so a tool can't be advertised to a caller the
     gate will then reject.
     """
-    from . import auth as _auth  # local import: auth is loaded lazily so
+    from .. import auth as _auth  # local import: auth is loaded lazily so
     # server.py stays importable in environments that don't have the auth
     # tables yet (notably some test fixtures).
 
@@ -579,8 +579,8 @@ def _resolve_draft_target(principal, draft_id: str | None) -> str | None:
          session-scoped open draft. Requires a session id.
       3. Anything else — return None.
     """
-    from . import auth as _auth
-    from . import drafts_store
+    from .. import auth as _auth
+    from .. import drafts_store
 
     if draft_id is not None:
         row = drafts_store.get_draft(_drafts_db(), draft_id)
@@ -624,7 +624,7 @@ def _list_from_draft(draft_id: str, kinds: tuple[str, ...]) -> list[dict[str, An
     """Return queued ops in a draft whose kind is in `kinds`, each shaped
     as the op payload plus `_seq`/`_kind` markers so the caller can map
     items back to specific ops. Raises if the draft id doesn't resolve."""
-    from . import drafts_store
+    from .. import drafts_store
 
     row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
@@ -646,7 +646,7 @@ def _queue_draft_op(
     """Append a queued op to the draft and return a JSON-friendly
     receipt. Used as the return value of the redirected tool call so the
     agent sees what happened instead of a normal substrate response."""
-    from . import drafts_store
+    from .. import drafts_store
 
     actor = principal.id if principal is not None else None
     # Drop None defaults so the stored payload only carries the args the
@@ -792,7 +792,7 @@ def _auth_db() -> sqlite3.Connection:
 
     Configured by `init`; each thread reopens lazily against the auth file.
     Raises if reached before the server is initialized."""
-    from . import auth_store
+    from .. import auth_store
 
     return auth_store.connection()
 
@@ -802,7 +802,7 @@ def _drafts_db() -> sqlite3.Connection:
 
     Configured by `init`; each thread reopens lazily against the drafts file.
     Raises if reached before the server is initialized."""
-    from . import drafts_store
+    from .. import drafts_store
 
     return drafts_store.connection()
 
@@ -812,7 +812,7 @@ def _prompts_db() -> sqlite3.Connection:
 
     Configured by `init`; each thread reopens lazily against the prompts file.
     Raises if reached before the server is initialized."""
-    from . import prompt_store
+    from .. import prompt_store
 
     return prompt_store.connection()
 
@@ -861,7 +861,7 @@ def init(data_dir: Path) -> None:
     # indexes against the new substrate.
     _ctx = None
 
-    from . import auth_store, docs_store, drafts_store, prompt_store, research_store
+    from .. import auth_store, docs_store, drafts_store, prompt_store, research_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
     prompt_store.configure(data_dir / "mycelium-prompts.db")
@@ -896,7 +896,7 @@ def init(data_dir: Path) -> None:
 
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
-    from . import draft_review_store
+    from .. import draft_review_store
 
     draft_review_store.mark_orphaned(
         _drafts_db(),
@@ -906,7 +906,7 @@ def init(data_dir: Path) -> None:
     )
     research_store.migrate(_drafts_db())
     docs_store.migrate(_drafts_db())
-    from .docgen import destinations
+    from ..docgen import destinations
 
     destinations.bind_legacy_deliveries(_drafts_db())
 
@@ -1010,24 +1010,24 @@ def init(data_dir: Path) -> None:
     # the test suite's "background worker off" switch, so tests can drain the
     # queue synchronously without thread races.
     if os.environ.get("MYCELIUM_DISABLE_MENTION_WORKER") != "1":
-        from . import mention_worker  # local import: workers are optional
+        from .. import mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
     if os.environ.get("MYCELIUM_DISABLE_REVIEW_SWEEP") != "1":
-        from . import draft_review_runs
+        from .. import draft_review_runs
 
         draft_review_runs.start_sweeper()
 
 
 def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
     """Loop doctrines whose packaged defaults remain available after restart."""
-    from .agentloop import DOCTRINE_TYPE
-    from .docgen.config import DOCTRINE_NAME as DOCGEN_DOCTRINE
-    from .docgen.config import DocgenConfig
-    from .ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
-    from .ingest.config import IngestConfig
-    from .research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
-    from .research.config import ResearchConfig
+    from ..agentloop import DOCTRINE_TYPE
+    from ..docgen.config import DOCTRINE_NAME as DOCGEN_DOCTRINE
+    from ..docgen.config import DocgenConfig
+    from ..ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
+    from ..ingest.config import IngestConfig
+    from ..research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
+    from ..research.config import ResearchConfig
 
     return (
         (
@@ -1059,8 +1059,8 @@ def _seed_prompt_texts() -> None:
     """Seed starter profiles once and the loop doctrines when absent, then
     bring untouched seeded texts up to this build's defaults and warn about
     saved texts that predate them (see `prompt_defaults`)."""
-    from . import ai_prompts, prompt_defaults, prompt_store
-    from .agentloop import DOCTRINE_TYPE
+    from .. import ai_prompts, prompt_defaults, prompt_store
+    from ..agentloop import DOCTRINE_TYPE
 
     try:
         documentation_profiles.seed_starters(_prompts_db())
@@ -1804,7 +1804,7 @@ def get_mention_candidates(
     next_after while has_more is true, even if a bounded scan returns no hits.
     Statement edits may change results between pages. Nothing is written.
     """
-    from .mention_candidates import find_candidates
+    from ..mention_candidates import find_candidates
 
     return find_candidates(_db(), entity_id, after=after, limit=limit).model_dump(
         mode="json"
@@ -2213,8 +2213,8 @@ def ask(
     a wall-clock budget; on exhaustion it degrades to a low-confidence partial
     answer rather than raising.
     """
-    from .ask import AskConfig, run_ask
-    from .ask.config import for_depth
+    from ..ask import AskConfig, run_ask
+    from ..ask.config import for_depth
 
     config = for_depth(AskConfig.from_env(), depth)
     if config.trace_log_path is None:
@@ -2262,7 +2262,7 @@ def ingest(text: str) -> dict[str, Any]:
     a wall-clock budget; on exhaustion it degrades to a forced emit (or
     `nothing_to_ingest`) rather than raising.
     """
-    from .ingest import IngestConfig, run_ingest
+    from ..ingest import IngestConfig, run_ingest
 
     config = IngestConfig.from_env()
     if config.trace_log_path is None:
@@ -2277,7 +2277,7 @@ def ingest(text: str) -> dict[str, Any]:
 
 
 def _resolve_research_source(name: str | None) -> str:
-    from .research import sources as research_sources
+    from ..research import sources as research_sources
 
     try:
         configured = research_sources.load_sources()
@@ -2314,8 +2314,8 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
     `source` is unknown, or when it is omitted with several sources
     configured. Returns {run row: id, topic, source, created_at, created_by,
     started_at, finished_at, outcome, draft_id, error, trace_ref, status}."""
-    from . import auth as _auth
-    from . import research_runs, research_store
+    from .. import auth as _auth
+    from .. import research_runs, research_store
 
     source_name = _resolve_research_source(source)
     principal = _auth.current_principal.get()
@@ -2339,7 +2339,7 @@ def list_research_runs() -> dict[str, Any]:
     (queued/running/draft_created/nothing_found/failed).
 
     Returns {"runs": [run rows]}."""
-    from . import research_store
+    from .. import research_store
 
     return {
         "runs": [
@@ -2355,7 +2355,7 @@ def get_research_run(run_id: str) -> dict[str, Any]:
     draft was created), error, and trace_ref.
 
     Returns the serialized run row. Raises for an unknown run_id."""
-    from . import research_store
+    from .. import research_store
 
     row = research_store.get_run(_drafts_db(), run_id)
     if row is None:
@@ -2383,7 +2383,7 @@ def _check_guideline_selection(
     generation loop resolves against — so a request this refuses is exactly a
     request the run could not have written, and vice versa.
     """
-    from . import guidelines
+    from .. import guidelines
 
     if guideline_set is None:
         return
@@ -2440,9 +2440,9 @@ def request_documentation(
     Returns {run row: id, prompt, guideline_set, document_type, provider, model, status,
     created_at, created_by, started_at, finished_at, outcome, document_id,
     error}."""
-    from . import auth as _auth
-    from . import doc_runs, docs_store
-    from .docgen import DocgenConfig
+    from .. import auth as _auth
+    from .. import doc_runs, docs_store
+    from ..docgen import DocgenConfig
 
     text = prompt.strip()
     if not text:
@@ -2483,8 +2483,8 @@ def revise_document(
     provider: Literal["claude", "openai"] | None = None,
 ) -> dict[str, object]:
     """Iterate on exactly the selected internal document version."""
-    from . import auth, doc_runs, docs_store
-    from .docgen.config import DocgenConfig
+    from .. import auth, doc_runs, docs_store
+    from ..docgen.config import DocgenConfig
 
     text = prompt.strip()
     if not text:
@@ -2515,7 +2515,7 @@ def revise_document(
 @tool
 def list_document_revisions(document_id: str) -> dict[str, object]:
     """List the stored versions of a document, newest first, without bodies."""
-    from . import docs_store
+    from .. import docs_store
 
     if docs_store.get_document(_drafts_db(), document_id) is None:
         raise ValueError("generated document not found")
@@ -2530,7 +2530,7 @@ def list_document_revisions(document_id: str) -> dict[str, object]:
 @tool
 def get_document_revision(document_id: str, revision: int) -> dict[str, object]:
     """Read an immutable version with grounding, review and generation backlink."""
-    from . import docs_store
+    from .. import docs_store
 
     row = docs_store.get_revision(_drafts_db(), document_id, revision)
     if row is None:
@@ -2563,7 +2563,7 @@ def get_document_revision(document_id: str, revision: int) -> dict[str, object]:
 @tool
 def list_documentation_models() -> dict[str, object]:
     """List configured documentation providers and safe availability reasons."""
-    from .docgen.config import model_choices, resolve_provider
+    from ..docgen.config import model_choices, resolve_provider
 
     return {"default_provider": resolve_provider(), "models": model_choices()}
 
@@ -2580,7 +2580,7 @@ def list_documentation_runs() -> dict[str, Any]:
     with get_documentation_run to read the text a refused run wrote.
 
     Returns {"runs": [run rows]}."""
-    from . import docs_store
+    from .. import docs_store
 
     return {
         "runs": [
@@ -2602,7 +2602,7 @@ def get_documentation_run(run_id: str) -> dict[str, Any]:
     text they quote. Both are null when no document was written.
 
     Returns the serialized run row. Raises for an unknown run_id."""
-    from . import docs_store
+    from .. import docs_store
 
     row = docs_store.get_run(_drafts_db(), run_id)
     if row is None:
@@ -2616,7 +2616,7 @@ def list_generated_documents() -> dict[str, Any]:
 
     Returns {"documents": [document summaries]}; get_generated_document returns
     the body."""
-    from . import docs_store
+    from .. import docs_store
 
     return {
         "documents": [
@@ -2631,7 +2631,7 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     """Fetch one generated document by id, including its body.
 
     Returns the serialized document row. Raises for an unknown document_id."""
-    from . import docs_store
+    from .. import docs_store
 
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
@@ -2651,8 +2651,8 @@ def deliver_document(
     belongs to the captured immutable version even when generation advances the
     document while GitHub is processing the publication.
     """
-    from . import docs_store
-    from .docgen import destinations
+    from .. import docs_store
+    from ..docgen import destinations
 
     with destinations.publication_lock(document_id):
         row = docs_store.get_document(_drafts_db(), document_id)
@@ -2712,7 +2712,7 @@ def list_documentation_destinations() -> dict[str, Any]:
 
     Returns no credential and no credential environment variable name.
     """
-    from .docgen import destinations
+    from ..docgen import destinations
 
     try:
         configured = destinations.load_destinations()
@@ -2737,7 +2737,7 @@ def list_research_sources() -> dict[str, Any]:
     coordinates only - never credentials).
 
     Returns {"sources": [{name, owner, repo, ref}]}."""
-    from .research import sources
+    from ..research import sources
 
     try:
         configured = sources.load_sources()
@@ -4110,8 +4110,8 @@ def retrieve_context(
     retrieval, NOT concept-seeded adjacency research. Re-search gathered concepts
     separately when required. `reads` records the primitives actually performed.
     """
-    from .ai.types import JSON_OBJECT
-    from .ask.retrieval import retrieve_context as retrieve
+    from ..ai.types import JSON_OBJECT
+    from ..ask.retrieval import retrieve_context as retrieve
 
     readers: dict[str, Callable[..., object]] = {
         "list_entities": list_entities,
@@ -4124,7 +4124,7 @@ def retrieve_context(
     def read(name: str, arguments: dict[str, JsonValue]) -> JsonValue:
         from pydantic import TypeAdapter
 
-        from .ask.events import current_stream
+        from ..ask.events import current_stream
 
         stream = current_stream.get()
         if stream:
@@ -5193,7 +5193,7 @@ def report_knowledge_gap(text: str) -> dict[str, Any]:
 
 
 def _actor_id() -> str | None:
-    from . import auth as _auth
+    from .. import auth as _auth
 
     principal = _auth.current_principal.get()
     return principal.id if principal is not None else None
@@ -5219,7 +5219,7 @@ def get_prompt_text(type: str, name: str) -> dict[str, Any]:
 
     Returns the row {id, type, name, text, version, deleted, created_at,
     created_by}. Raises when the name has never been saved or was retired."""
-    from . import prompt_store
+    from .. import prompt_store
 
     row = prompt_store.latest(_prompts_db(), type, name)
     if row is None:
@@ -5235,7 +5235,7 @@ def list_prompt_texts(type: str | None = None) -> dict[str, Any]:
     Bodies are left out — use `get_prompt_text` for one. Returns
     {"prompt_texts": [{type, name, version, chars, created_at, created_by}]}.
     """
-    from . import prompt_store
+    from .. import prompt_store
 
     return {
         "prompt_texts": [
@@ -5252,7 +5252,7 @@ def list_prompt_text_versions(type: str, name: str) -> dict[str, Any]:
     The store is append-only, so this is the full edit history — including
     the tombstone version left by `retire_prompt_text`. Bodies included.
     Returns {"versions": [prompt-text rows]}."""
-    from . import prompt_store
+    from .. import prompt_store
 
     return {
         "versions": [
@@ -5285,7 +5285,7 @@ def retire_prompt_text(
 
 
 def _prompt_principal() -> AuthPrincipal:
-    from . import auth
+    from .. import auth
 
     return auth.current_principal.get() or auth.LOCAL_ADMIN
 
@@ -5364,8 +5364,8 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
 
     Returns the submitted draft's id and final op count.
     """
-    from . import auth as _auth
-    from . import drafts_store
+    from .. import auth as _auth
+    from .. import drafts_store
 
     principal = _auth.current_principal.get()
 
@@ -5395,7 +5395,7 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
 
 
 def _submit_for_review(draft_id: str) -> None:
-    from . import draft_review_runs, drafts_store
+    from .. import draft_review_runs, drafts_store
 
     with store.transaction(_drafts_db()):
         drafts_store.set_submitted(_drafts_db(), draft_id)
@@ -5406,7 +5406,7 @@ def _auto_submit(draft_id: str) -> bool:
     """Submit a model-produced draft while internal review is on, so it reaches
     the reviewer instead of waiting for someone to submit it. With review off
     the draft stays open for a person to curate."""
-    from . import draft_review_runs, draft_review_settings, drafts_store
+    from .. import draft_review_runs, draft_review_settings, drafts_store
 
     try:
         if draft_review_runs.mode() == "off":
@@ -5429,7 +5429,7 @@ def request_draft_review(draft_id: str, rerun: bool = False) -> dict[str, JsonVa
     Requires an identified curator. Mode off refuses requests; configuration and
     execution failures remain visible on the draft's review_assessment.
     """
-    from . import draft_review_runs
+    from .. import draft_review_runs
 
     _identified_principal()
     return draft_review_runs.start(draft_id, rerun=rerun).model_dump(mode="json")
@@ -5438,7 +5438,7 @@ def request_draft_review(draft_id: str, rerun: bool = False) -> dict[str, JsonVa
 @tool
 def get_draft_review_run(run_id: str) -> dict[str, JsonValue]:
     """Inspect an internal review attempt, including failure and staleness."""
-    from . import draft_review_store
+    from .. import draft_review_store
 
     return draft_review_store.get(_drafts_db(), run_id).model_dump(mode="json")
 
@@ -5452,7 +5452,7 @@ def set_draft_review_evidence(
     Supply source excerpts, change descriptions, or concrete supporting facts,
     up to 30000 characters. URLs alone do not provide their contents.
     """
-    from . import drafts_store
+    from .. import drafts_store
 
     principal = _identified_principal()
     if len(evidence) > 30000:
@@ -5461,7 +5461,7 @@ def set_draft_review_evidence(
     with store.transaction(conn):
         row = _require_mutable_draft(draft_id)
         if row["created_by"] != principal.id:
-            from . import auth as _auth
+            from .. import auth as _auth
 
             raise _auth.RoleRequired(
                 "only the draft creator can supply review evidence"
@@ -5483,8 +5483,8 @@ def list_my_drafts() -> list[dict[str, Any]]:
     Useful for an agent to inspect what it queued in earlier sessions
     or check on the review state of submitted work.
     """
-    from . import auth as _auth
-    from . import drafts_store
+    from .. import auth as _auth
+    from .. import drafts_store
 
     principal = _auth.current_principal.get()
     creator = principal.id if principal is not None else None
@@ -5519,8 +5519,8 @@ def list_drafts(
     rejecting a draft. Drafters (whose writes get redirected into their own
     draft) do not pass, so they can't enumerate other people's drafts.
     """
-    from . import auth as _auth
-    from . import drafts_store
+    from .. import auth as _auth
+    from .. import drafts_store
 
     # The role gate is the decorator's (`real_role=True`, so a drafter does
     # not clear it). What remains here is the identity requirement: the
@@ -5560,7 +5560,7 @@ def get_draft(draft_id: str) -> dict[str, Any]:
     carries that id (an id that was never minted, or a draft already
     applied and swept).
     """
-    from . import drafts_store
+    from .. import drafts_store
 
     row, ops = drafts_store.get_draft_snapshot(_drafts_db(), draft_id)
     if row is None:
@@ -5583,7 +5583,7 @@ class DraftMutationReceipt(TypedDict):
 
 
 def _identified_principal():
-    from . import auth as _auth
+    from .. import auth as _auth
 
     principal = _auth.current_principal.get()
     if principal is None:
@@ -5592,7 +5592,7 @@ def _identified_principal():
 
 
 def _require_mutable_draft(draft_id: str):
-    from . import drafts_store
+    from .. import drafts_store
 
     row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
@@ -5614,14 +5614,14 @@ def attach_draft_source(
     expected_revision: int | None = None,
 ) -> dict[str, JsonValue]:
     """Attach complete PR and workflow evidence to the caller's draft."""
-    from . import drafts_store
+    from .. import drafts_store
 
     principal = _identified_principal()
     conn = _drafts_db()
     with store.transaction(conn):
         row = _require_mutable_draft(draft_id)
         if row["created_by"] != principal.id:
-            from . import auth as _auth
+            from .. import auth as _auth
 
             raise _auth.RoleRequired(
                 "draft source evidence may only be set by its creator"
@@ -5641,7 +5641,7 @@ def attach_draft_source(
 @tool(role="drafter")
 def find_my_draft_by_source(source: DraftSourceInput) -> dict[str, JsonValue]:
     """Locate the caller's draft from its complete PR workflow identity."""
-    from . import drafts_store
+    from .. import drafts_store
 
     principal = _identified_principal()
     row = drafts_store.find_draft_by_source(_drafts_db(), principal.id, source)
@@ -5658,7 +5658,7 @@ def revise_draft_operation(
     expected_revision: int | None = None,
 ) -> DraftMutationReceipt:
     """Replace one operation payload using its stable reference."""
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = _drafts_db()
     with store.transaction(conn):
@@ -5682,7 +5682,7 @@ def strike_draft_operation(
     expected_revision: int | None = None,
 ) -> DraftMutationReceipt:
     """Remove one operation using its stable reference."""
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = _drafts_db()
     with store.transaction(conn):
@@ -5709,7 +5709,7 @@ def discard_draft_op(
     sequence numbers (no renumbering) so any external references to a
     `(draft_id, seq)` pair stay stable.
     """
-    from . import drafts_store
+    from .. import drafts_store
 
     row = drafts_store.get_draft(_drafts_db(), draft_id)
     if row is None:
@@ -6036,7 +6036,7 @@ def _rejections(result: JsonValue) -> list[JsonValue]:
 
 
 def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFinding]:
-    from . import drafts_store
+    from .. import drafts_store
 
     findings: list[DraftOperationFinding] = []
     tools_by_name = {wrapper.__name__: wrapper for wrapper in TOOLS}
@@ -6045,7 +6045,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
         kind = op["kind"]
         operation_ref = op["id"]
         if kind == drafts_store.ALIAS_SUGGESTION_KIND:
-            from .alias_suggestions import Suggestion
+            from ..alias_suggestions import Suggestion
 
             suggestion = Suggestion.model_validate_json(op["payload_json"])
             messages = (
@@ -6089,7 +6089,7 @@ def _draft_operation_findings(ops: list[sqlite3.Row]) -> list[DraftOperationFind
 @tool(role="writer", real_role=True)
 def inspect_draft_review(draft_id: str) -> DraftReviewInspection:
     """Inspect exact draft content and affected knowledge for review."""
-    from . import drafts_store
+    from .. import drafts_store
 
     _identified_principal()
     row, ops = drafts_store.get_draft_snapshot(_drafts_db(), draft_id)
@@ -6120,7 +6120,7 @@ def append_draft_correction(
     expected_revision: int | None = None,
 ) -> DraftCorrectionReceipt:
     """Append one supported substrate mutation to an open or submitted draft."""
-    from . import drafts_store
+    from .. import drafts_store
 
     principal = _identified_principal()
     wrapper = next((item for item in TOOLS if item.__name__ == tool_name), None)
@@ -6164,7 +6164,7 @@ def record_draft_review(
     unresolved_questions: list[str] | None = None,
 ) -> DraftReviewRecord:
     """Record a durable outcome against exact inspected draft and knowledge state."""
-    from . import drafts_store
+    from .. import drafts_store
 
     principal = _identified_principal()
     if outcome not in _REVIEW_OUTCOMES:
@@ -6256,7 +6256,7 @@ def _replay_draft_op(
     strict: bool = False,
 ) -> dict[str, Any]:
     """Resolve and replay one draft operation with contextual errors."""
-    from . import drafts_store
+    from .. import drafts_store
 
     kind = op["kind"]
     seq = op["seq"]
@@ -6329,7 +6329,7 @@ def apply_draft(
     Returns `{applied: int, skipped: int, results: [...]}`. On failure,
     raises with the seq/kind that exploded.
     """
-    from . import drafts_store
+    from .. import drafts_store
 
     if (application_id is None) != (review_id is None):
         raise ValueError("application_id and review_id must be supplied together")
@@ -6350,7 +6350,7 @@ def apply_draft(
         )
 
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
-    from . import alias_suggestions
+    from .. import alias_suggestions
 
     if alias_suggestions.pending(ops):
         raise ValueError(
@@ -6449,7 +6449,7 @@ def apply_draft(
 
 
 def _reviewed_apply_enabled() -> bool:
-    from . import draft_review_settings
+    from .. import draft_review_settings
 
     return draft_review_settings.load_controls(_prompts_db()).application_enabled
 
@@ -6471,7 +6471,7 @@ def _substrate_application_result(
 @tool(role="writer", real_role=True)
 def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationReceipt:
     """Apply an accepted exact-version review with durable replay recovery."""
-    from . import drafts_store
+    from .. import drafts_store
 
     principal = _identified_principal()
     conn = _drafts_db()
