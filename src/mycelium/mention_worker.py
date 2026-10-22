@@ -23,6 +23,7 @@ have stranded — at-least-once, and recompute is idempotent.
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -40,7 +41,7 @@ _wake = threading.Event()
 _stop = threading.Event()
 
 
-def drain(conn, *, chunk: int = CHUNK) -> int:
+def drain(conn: sqlite3.Connection, *, chunk: int = CHUNK) -> int:
     """Drain the recompute queue to empty on `conn`, one chunk per
     transaction. Returns the number of statement recomputes performed.
 

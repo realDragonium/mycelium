@@ -634,7 +634,8 @@ def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
         return
 
-    from mycelium.store.link_type_aliases import _REVERSE_SEED, _now
+    from mycelium.store.kernel import _now
+    from mycelium.store.link_type_aliases import _REVERSE_SEED
 
     # The one reverse alias the pre-v9 seed never carried; an absent row for
     # any other pair means a curator deleted it, which stands.
@@ -674,7 +675,7 @@ def _migration_v10_belongs_to_aliases(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
         return
 
-    from mycelium.store.link_type_aliases import _now
+    from mycelium.store.kernel import _now
 
     now = _now()
     for link_type, alias in (
@@ -712,7 +713,7 @@ def _migration_v11_passive_by_aliases(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
         return
 
-    from mycelium.store.link_type_aliases import _now
+    from mycelium.store.kernel import _now
 
     now = _now()
     for link_type, alias in (

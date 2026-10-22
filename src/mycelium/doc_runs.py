@@ -29,7 +29,8 @@ import threading
 from typing import TYPE_CHECKING, Any, Callable
 
 from . import ai_prompts, docs_store, product_settings, prompt_store
-from .docgen.config import DocgenConfig, Provider
+from .ai import Provider
+from .docgen.config import DocgenConfig
 from .docgen.destinations import DestinationConfig, load_destinations
 from .docgen.schema import (
     CurrentDocument,

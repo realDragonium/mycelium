@@ -30,11 +30,12 @@ def create_statement(conn: sqlite3.Connection, kind: str, text: str) -> str:
 
 
 def get_statement(conn: sqlite3.Connection, statement_id: str) -> sqlite3.Row | None:
-    return conn.execute(
+    row: sqlite3.Row | None = conn.execute(
         "SELECT id, kind, text, created_at, updated_at, created_by, updated_by "
         "FROM statements WHERE id = ?",
         (statement_id,),
     ).fetchone()
+    return row
 
 
 def get_statement_kinds(

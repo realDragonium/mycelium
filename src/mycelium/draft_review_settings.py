@@ -8,9 +8,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from . import auth, model_settings, prompt_store, store
+from .ai import Provider
 from .ai.types import CLAUDE_EFFORT, ClaudeEffort, ReasoningEffort
 from .draft_review_store import Mode
-from .model_settings import Conflict, Provider, ProviderAvailability, Unavailable
+
+# Conflict and Unavailable are part of this module's interface; callers catch them.
+from .model_settings import Conflict as Conflict
+from .model_settings import ProviderAvailability
+from .model_settings import Unavailable as Unavailable
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS draft_review_settings (

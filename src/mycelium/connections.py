@@ -77,7 +77,7 @@ class ConnectionProvider(Generic[ConfigT]):
         returned when its epoch matches the current config, and reopened when
         it doesn't. Raises if nothing is configured and no override is pinned.
         """
-        override = getattr(self._tls, "override", None)
+        override: sqlite3.Connection | None = getattr(self._tls, "override", None)
         if override is not None:
             return override
         cfg = self._config
@@ -86,7 +86,7 @@ class ConnectionProvider(Generic[ConfigT]):
                 f"{self._name} connection not configured; call configure() or use()"
             )
         config, epoch = cfg
-        entry = getattr(self._tls, "entry", None)
+        entry: tuple[int, sqlite3.Connection] | None = getattr(self._tls, "entry", None)
         if entry is not None and entry[0] == epoch:
             return entry[1]
         if entry is not None:

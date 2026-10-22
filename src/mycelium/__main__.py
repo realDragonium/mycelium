@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def _auth_db_path(data_dir: Path) -> Path:
     return data_dir / "mycelium-auth.db"
 
 
-def _open_auth_conn(data_dir: Path):
+def _open_auth_conn(data_dir: Path) -> sqlite3.Connection:
     """Open the auth DB without going through `server.init` (which
     would also open the substrate, embed model, vector indexes — way
     more than `users` commands need). Returns a sqlite3 connection
