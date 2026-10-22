@@ -27,6 +27,7 @@ with ingest by construction.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from .. import ai_prompts, tracing
@@ -330,13 +331,28 @@ def _handle_emit(tool_use: Any, ctx: _RunContext) -> ResearchResult | None:
     return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=False)
 
 
+@dataclass
 class _RunContext:
-    """Plain bag of per-run harness state, so the helpers below don't need
-    ten positional parameters each (ingest predates this; research has two
-    extra read seams, which tipped the balance)."""
+    """Per-run harness state, so the helpers below don't need ten positional
+    parameters each (ingest predates this; research has two extra read seams,
+    which tipped the balance)."""
 
-    def __init__(self, **kw: Any) -> None:
-        self.__dict__.update(kw)
+    topic: str
+    source_name: str
+    system_prompt: str
+    client: Any
+    config: ResearchConfig
+    tools: list[dict]
+    messages: list[dict[str, Any]]
+    emitter: DraftEmitter
+    trace: TraceBuilder
+    start: float
+    substrate_reads: list[str]
+    workspace_reads: list[str]
+    files_read: set[str]
+    nudged: bool = False
+    floor_blocks: int = 0
+    malformed_retries: int = 0
 
 
 # --------------------------------------------------------------------------- #
