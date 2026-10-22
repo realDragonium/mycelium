@@ -423,9 +423,10 @@ def validate_secrets(settings: Body, *, conn: sqlite3.Connection | None = None) 
             )
             continue
         if item.binding and item.binding.startswith(github_connections.PREFIX):
-            raise ValueError(
-                "GitHub App connections currently support documentation only."
+            github_connections.resolve(item.binding, conn).require_target(
+                item.owner, item.repo
             )
+            continue
         if item.binding and item.binding not in bindings:
             raise ValueError(
                 "GitHub credential binding is unavailable. Choose a configured binding."
@@ -483,7 +484,7 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
                         **{
                             key: value
                             for key, value in asdict(source).items()
-                            if key != "token_env"
+                            if key not in ("token_env", "connection")
                         },
                         "binding": github_credentials.import_binding(
                             conn, source.host, source.token_env

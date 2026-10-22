@@ -154,6 +154,8 @@ hosts, and whether the referenced credential is present; it never accepts token
 values or arbitrary environment-variable names. A binding fixes the host to
 which its credential can be sent. Public research sources can omit a binding
 and supply a validated host. Documentation destinations require a binding.
+Either may instead use a [GitHub App connection](GITHUB_APP.md) to the same
+repository.
 Changing a token value rotates credentials without changing saved repository
 settings.
 

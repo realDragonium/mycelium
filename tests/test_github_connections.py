@@ -113,10 +113,12 @@ class FakeGitHub:
         if path == "/app/installations/12":
             return httpx.Response(200, json=self.installation)
         if path == "/app/installations/12/access_tokens":
-            assert json.loads(request.content) == {
-                "repository_ids": [34],
-                "permissions": {"contents": "write", "pull_requests": "write"},
-            }
+            body = json.loads(request.content)
+            assert body["repository_ids"] == [34]
+            assert body["permissions"] in (
+                {"contents": "write", "pull_requests": "write"},
+                {"contents": "read"},
+            )
             return httpx.Response(201, json={"token": APP_TOKEN})
         if path == "/repos/acme/handbook":
             return httpx.Response(200, json=self.repository)
@@ -357,7 +359,7 @@ def test_repository_replacement_and_revocation_block_publishing(
     assert APP_TOKEN not in str(error.value)
 
 
-def test_app_connection_settings_and_research_boundary(web: TestClient):
+def test_app_connection_settings_for_documentation_and_research(web: TestClient):
     name = connect(web)
     destination = product_settings.DestinationSettings(
         name="docs",
@@ -383,10 +385,62 @@ def test_app_connection_settings_and_research_boundary(web: TestClient):
     source = product_settings.SourceSettings(
         name="docs", owner="acme", repo="handbook", binding=name
     )
-    with pytest.raises(ValueError, match="documentation only"):
+    product_settings.validate_secrets(
+        product_settings.SourcesSettings(sources=(source,))
+    )
+    with pytest.raises(ValueError, match="different repository"):
         product_settings.validate_secrets(
-            product_settings.SourcesSettings(sources=(source,))
+            product_settings.SourcesSettings(
+                sources=(source.model_copy(update={"repo": "other"}),)
+            )
         )
+
+
+def test_research_clones_an_app_connection_with_a_read_only_token(
+    web: TestClient, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
+):
+    import subprocess
+
+    from mycelium.research import sources
+
+    name = connect(web)
+    body = product_settings.SourcesSettings(
+        sources=(
+            product_settings.SourceSettings(
+                name="handbook", owner="acme", repo="handbook", binding=name
+            ),
+        )
+    )
+    revision = product_settings.editable(body, prompt_store.connection()).revision
+    product_settings.save(
+        product_settings.SaveSettings(revision=revision, settings=body), ADMIN
+    )
+    source = sources.get_source("handbook")
+    clones = []
+
+    def clone(cmd, **kwargs):
+        clones.append(cmd)
+        (Path(cmd[-1]) / ".git").mkdir(parents=True)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", clone)
+    with sources.fetch(source) as root:
+        assert root.is_dir()
+
+    assert clones[0][-2] == (
+        f"https://x-access-token:{APP_TOKEN}@github.com/acme/handbook.git"
+    )
+    token_requests = [
+        json.loads(r.content)["permissions"]
+        for r in github.requests
+        if r.url.path.endswith("/access_tokens")
+    ]
+    assert token_requests[-1] == {"contents": "read"}
+
+    github_connections.disconnect(name)
+    with pytest.raises(sources.SourceError, match="disconnected"):
+        with sources.fetch(source):
+            pass
 
 
 def test_jwt_is_signed_and_short_lived(app_config: github_app.AppConfig):
