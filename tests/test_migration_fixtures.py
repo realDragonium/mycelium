@@ -55,6 +55,14 @@ REWRITES: dict[tuple[str, str], str] = {
     ),
 }
 
+# Columns a migration deliberately removes, with the reason. Any other
+# column a fixture had must still be there afterwards.
+DROPPED_COLUMNS: dict[tuple[str, str, str], str] = {
+    ("mycelium.db", "when_nodes", "link_kind"): (
+        "v14 removes the discriminator once only statement conditions remain"
+    ),
+}
+
 # Databases a fixture deliberately omits (see the capture script).
 _UNCAPTURED = {"mycelium-ops.db"}
 
@@ -100,7 +108,12 @@ def _schema(path: Path) -> dict:
                 indexes.add(
                     (unique, origin, partial, columns, " ".join((sql or "").split()))
                 )
+            table_sql = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()[0]
             tables[table] = {
+                "checks": _checks(table_sql),
                 "columns": sorted(
                     tuple(row[1:])
                     for row in conn.execute(f"PRAGMA table_xinfo({table})")
@@ -118,6 +131,25 @@ def _schema(path: Path) -> dict:
             )
         )
     return {"tables": tables, "triggers": triggers}
+
+
+def _checks(table_sql: str) -> list[str]:
+    """Every CHECK expression in a CREATE TABLE statement, whitespace-
+    normalized. Columns move when ALTER TABLE appends them, so the statement
+    text cannot be compared whole; its constraints can."""
+    checks = []
+    upper = table_sql.upper()
+    start = upper.find("CHECK")
+    while start != -1:
+        open_at = table_sql.index("(", start)
+        depth, end = 0, open_at
+        for end in range(open_at, len(table_sql)):
+            depth += {"(": 1, ")": -1}.get(table_sql[end], 0)
+            if depth == 0:
+                break
+        checks.append(" ".join(table_sql[open_at : end + 1].split()))
+        start = upper.find("CHECK", end)
+    return sorted(checks)
 
 
 def _rows(path: Path) -> dict[str, list[dict]]:
@@ -208,7 +240,15 @@ def _assert_rows_kept(before: dict[str, dict[str, list[dict]]], data_dir: Path) 
             assert table in after, f"{db_name}:{table} was dropped"
             with closing(sqlite3.connect(data_dir / db_name)) as conn:
                 kept = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
-            columns = set(rows[0]) & kept if rows else set()
+            columns = set(rows[0]) if rows else set()
+            dropped = {
+                c for c in columns - kept if (db_name, table, c) not in DROPPED_COLUMNS
+            }
+            assert not dropped, (
+                f"{db_name}:{table} lost columns {sorted(dropped)}; if a migration "
+                "removes them on purpose, declare them in DROPPED_COLUMNS"
+            )
+            columns &= kept
             missing = _projected(rows, columns) - _projected(after[table], columns)
             assert not missing, (
                 f"{db_name}:{table} lost rows; if a migration rewrites them on "
