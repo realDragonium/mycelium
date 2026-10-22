@@ -53,11 +53,23 @@ class CurrentDocument:
     content_revision: str | None = None
 
 
+#: Where a pull request stands at its destination.
+PullRequestState = Literal["open", "merged", "closed"]
+
+#: Which text a revision starts from: the internal head, or the destination's
+#: copy when people edited it there.
+RevisionBase = Literal["internal", "destination"]
+
+
 @dataclass(frozen=True)
 class RevisionTarget:
     document: ExistingDocument
     revision: int
+    #: The text the revision starts from. `content_revision` is the destination
+    #: blob it reflects, recorded as the document's new sync point; None keeps
+    #: the stored one.
     current: CurrentDocument
+    base: RevisionBase = "internal"
 
 
 class ReviewFinding(BaseModel):

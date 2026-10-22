@@ -23,7 +23,7 @@ from mycelium.docgen.destinations import (
     get_destination,
     load_destinations,
 )
-from mycelium.docgen.github_destination import deliver, read
+from mycelium.docgen.github_destination import deliver, pull_request_state, read
 from product_settings_helpers import import_product_environment
 
 TOKEN = "credential-sentinel-8d76"
@@ -393,6 +393,100 @@ def test_read_fetches_reviewer_edits_from_the_open_document_branch():
     }
 
 
+def test_read_reports_a_file_absent_from_the_base_as_no_document():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    current = read(
+        _config(),
+        "docs/recorded.md",
+        "gdc_123",
+        "configuring-sso",
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert current is None
+
+
+def test_redelivery_after_an_unmerged_close_recreates_the_absent_file():
+    requests, base_handler = _responses()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/contents/" in request.url.path:
+            requests.append(request)
+            return httpx.Response(404, json={"message": "Not Found"})
+        return base_handler(request)
+
+    delivery = deliver(
+        _config(),
+        replace(
+            _document(),
+            delivered_path="docs/configuring-sso.md",
+            delivered_content_revision=_blob_id("closed without merging"),
+        ),
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert delivery.content_revision == CONTENT_SHA
+    assert delivery.pull_request_number == 17
+    assert any(request.url.path.endswith("/git/blobs") for request in requests)
+
+
+def _pull_state_client(payload: dict) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/repos/acme/handbook/pulls/17"
+        return httpx.Response(200, json=payload)
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize(
+    ("state", "merged", "expected"),
+    [("open", False, "open"), ("closed", True, "merged"), ("closed", False, "closed")],
+)
+def test_pull_request_state_distinguishes_merged_from_closed(state, merged, expected):
+    payload = {
+        **_pull("https://github.com/acme/handbook/pull/17"),
+        "state": state,
+        "merged": merged,
+    }
+
+    assert (
+        pull_request_state(
+            _config(),
+            17,
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=_pull_state_client(payload),
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {**_pull("https://github.com/acme/handbook/pull/18"), "merged": False},
+        {**_pull("https://github.com/acme/handbook/pull/17"), "base": {"ref": "x"}},
+        {**_pull("https://github.com/acme/handbook/pull/17"), "state": "draft"},
+        {**_pull("https://github.com/acme/handbook/pull/17"), "merged": "yes"},
+        {"html_url": "https://github.com/acme/handbook/pull/17"},
+    ],
+)
+def test_pull_request_state_refuses_a_response_for_another_pull_request(payload):
+    with pytest.raises(DestinationError, match="invalid pull request response"):
+        pull_request_state(
+            _config(),
+            17,
+            {"DOCS_GITHUB_TOKEN": TOKEN},
+            client=_pull_state_client(payload),
+        )
+
+
 def test_redelivery_reuses_the_recorded_path_after_the_template_changes():
     requests, handler = _responses()
     client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -534,7 +628,10 @@ def test_redelivery_refuses_when_the_file_changed_after_generation():
         delivered_path="docs/configuring-sso.md",
         revision_source_content_revision="a" * 40,
     )
-    with pytest.raises(DestinationError, match="changed after generation"):
+    with pytest.raises(
+        DestinationError,
+        match="made after this revision was written",
+    ):
         deliver(
             _config(),
             document,
@@ -1444,6 +1541,7 @@ def test_the_delivery_tool_records_a_completed_delivery(tmp_path, monkeypatch):
         "path": "docs/configuring-sso.md",
         "reference": "https://github.com/acme/handbook/pull/17",
         "content_revision": CONTENT_SHA,
+        "pull_request_number": 17,
         "revision": 1,
     }
     assert document["body"] == "# Configuring SSO\n"

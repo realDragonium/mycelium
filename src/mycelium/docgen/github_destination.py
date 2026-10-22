@@ -8,13 +8,14 @@ import logging
 import os
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Literal, TypeAlias, overload
+from typing import Literal, TypeAlias, TypeVar, overload
 from urllib.parse import quote, urlsplit
 
 import httpx
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .destinations import (
     Delivery,
@@ -24,7 +25,7 @@ from .destinations import (
     _scrub,
     render_path,
 )
-from .schema import CurrentDocument
+from .schema import CurrentDocument, PullRequestState
 
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 _HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*(:[0-9]+)?\Z")
@@ -43,6 +44,85 @@ JsonValue: TypeAlias = (
 )
 JsonObject: TypeAlias = dict[str, JsonValue]
 JsonList: TypeAlias = list[JsonValue]
+
+
+class _Response(BaseModel):
+    """A GitHub response, validated for only the fields delivery relies on."""
+
+    model_config = ConfigDict(strict=True, frozen=True)
+
+
+class _Sha(_Response):
+    sha: str
+
+
+class _RefObject(_Response):
+    type: str
+    sha: str
+
+
+class _Ref(_Response):
+    ref: str
+    object: _RefObject
+
+
+class _ExistingRef(_Response):
+    object: _Sha
+
+
+class _Commit(_Response):
+    tree: _Sha
+
+
+class _BranchCommit(_Response):
+    sha: str
+    commit: _Commit
+
+
+class _Branch(_Response):
+    commit: _BranchCommit
+
+
+class _File(_Response):
+    content: str
+    encoding: str
+    sha: str
+
+
+class _Repository(_Response):
+    full_name: str
+
+
+class _Head(_Response):
+    ref: str
+    repo: _Repository
+
+
+class _Base(_Response):
+    ref: str
+
+
+class _Pull(_Response):
+    html_url: str
+    state: str
+    base: _Base
+    head: _Head
+    merged: bool = False
+
+
+_Model = TypeVar("_Model", bound=_Response)
+
+
+def _parse(
+    config: GitHubConfig, model: type[_Model], payload: object, name: str
+) -> _Model:
+    try:
+        return model.model_validate(payload)
+    except ValidationError:
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid {name} "
+            "response"
+        ) from None
 
 
 @dataclass(frozen=True)
@@ -140,32 +220,13 @@ def deliver(
     *,
     client: httpx.Client | None = None,
 ) -> Delivery:
-    config = GitHubConfig.parse(destination)
-    e = os.environ if env is None else env
-    token = _access_token(config, e)
-    credentials = tuple(_configured_credentials(e, token))
-    if not token:
-        raise DestinationError(
-            _scrub(f"missing token env var {config.token_env}", list(credentials))
-        )
-
-    context = _ACTIVE_CREDENTIALS.set(credentials)
-    try:
-        if client is not None:
-            return _deliver(client, config, document, token)
-        with _client(config, token) as owned_client:
-            return _deliver(owned_client, config, document, token)
-    except DestinationError as exc:
-        raise DestinationError(_scrub(str(exc), list(credentials))) from None
-    except Exception as exc:
-        raise DestinationError(
-            _scrub(
-                f"destination {destination.name!r} delivery failed: {exc}",
-                list(credentials),
-            )
-        ) from None
-    finally:
-        _ACTIVE_CREDENTIALS.reset(context)
+    return _call(
+        destination,
+        env,
+        client,
+        "delivery",
+        lambda active, config, token: _deliver(active, config, document, token),
+    )
 
 
 def read(
@@ -176,7 +237,71 @@ def read(
     env: Mapping[str, str] | None = None,
     *,
     client: httpx.Client | None = None,
-) -> CurrentDocument:
+) -> CurrentDocument | None:
+    """The file as it stands for review: on the open PR's branch, else the base.
+
+    None when the file is absent there, as it is after a PR closed unmerged.
+    """
+
+    def fetch(
+        active: httpx.Client, config: GitHubConfig, token: str
+    ) -> CurrentDocument | None:
+        branch = _branch_name(
+            config, DeliveryDocument(document_id, slug, "", "", "", "", ())
+        )
+        ref = (
+            branch
+            if _has_open_review(config, branch, active, token)
+            else config.base_branch
+        )
+        return _file(config, path, ref, active, token)
+
+    return _call(destination, env, client, "read", fetch)
+
+
+def pull_request_state(
+    destination: DestinationConfig,
+    number: int,
+    env: Mapping[str, str] | None = None,
+    *,
+    client: httpx.Client | None = None,
+) -> PullRequestState:
+    def fetch(
+        active: httpx.Client, config: GitHubConfig, token: str
+    ) -> PullRequestState:
+        payload = _request_json(active, config, token, "GET", f"/pulls/{number}")
+        pull = _parse(config, _Pull, payload, "pull request")
+        if (
+            _pull_number(config, pull.html_url) != number
+            or pull.base.ref != config.base_branch
+        ):
+            raise DestinationError(
+                f"destination {config.destination.name!r} returned an invalid pull "
+                "request response"
+            )
+        if pull.merged:
+            return "merged"
+        if pull.state in ("open", "closed"):
+            return "open" if pull.state == "open" else "closed"
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid pull "
+            "request response"
+        )
+
+    return _call(destination, env, client, "pull request read", fetch)
+
+
+_Result = TypeVar("_Result")
+
+
+def _call(
+    destination: DestinationConfig,
+    env: Mapping[str, str] | None,
+    client: httpx.Client | None,
+    action: str,
+    operation: Callable[[httpx.Client, GitHubConfig, str], _Result],
+) -> _Result:
+    """Run one operation with the destination's credential, scrubbing every error."""
     config = GitHubConfig.parse(destination)
     e = os.environ if env is None else env
     token = _access_token(config, e)
@@ -185,31 +310,19 @@ def read(
         raise DestinationError(
             _scrub(f"missing token env var {config.token_env}", list(credentials))
         )
-    branch = _branch_name(
-        config,
-        DeliveryDocument(document_id, slug, "", "", "", "", ()),
-    )
-
-    def fetch(active: httpx.Client) -> CurrentDocument:
-        ref = (
-            branch
-            if _has_open_review(config, branch, active, token)
-            else config.base_branch
-        )
-        return _file(config, path, ref, active, token)
 
     context = _ACTIVE_CREDENTIALS.set(credentials)
     try:
         if client is not None:
-            return fetch(client)
+            return operation(client, config, token)
         with _client(config, token) as owned_client:
-            return fetch(owned_client)
+            return operation(owned_client, config, token)
     except DestinationError as exc:
         raise DestinationError(_scrub(str(exc), list(credentials))) from None
     except Exception as exc:
         raise DestinationError(
             _scrub(
-                f"destination {destination.name!r} read failed: {exc}",
+                f"destination {destination.name!r} {action} failed: {exc}",
                 list(credentials),
             )
         ) from None
@@ -287,22 +400,31 @@ def _deliver(
     )
     if expected_revision is not None:
         ref = branch if reuse_branch else config.base_branch
+        # An absent file holds nothing to lose: the PR closed unmerged, or the
+        # file was removed, and delivery recreates it for review.
         current = _file(config, path, ref, client, token)
         intended_revision = _git_blob_id(document.body)
-        if current.content_revision == intended_revision and reuse_branch:
+        if (
+            current is not None
+            and current.content_revision == intended_revision
+            and reuse_branch
+        ):
             reference = _review(config, document, branch, client, token)
             return Delivery(
                 destination=config.destination.name,
                 path=path,
                 reference=reference,
                 content_revision=intended_revision,
+                pull_request_number=_pull_number(config, reference),
             )
-        if (
-            current.content_revision != intended_revision
-            and current.content_revision != expected_revision
+        if current is not None and current.content_revision not in (
+            intended_revision,
+            expected_revision,
         ):
             raise DestinationError(
-                f"destination {config.destination.name!r} document changed after generation; retry the documentation run"
+                f"destination {config.destination.name!r} has edits to {path} on "
+                f"{ref} made after this revision was written. Revise the document "
+                "so the new revision starts from that text, then publish again."
             )
     content_sha = _blob(config, document, client, token)
     tree_sha = _tree(config, path, base_tree_sha, content_sha, client, token)
@@ -329,6 +451,7 @@ def _deliver(
         path=path,
         reference=reference,
         content_revision=content_sha,
+        pull_request_number=_pull_number(config, reference),
     )
 
 
@@ -352,13 +475,9 @@ def _delivery_base(
     if existing is None:
         parent_sha, tree_sha = _base(config, client, token)
         return parent_sha, tree_sha, False, None
-    try:
-        parent_sha = _object_id(config, existing["object"]["sha"], "branch")
-    except (KeyError, TypeError):
-        raise DestinationError(
-            f"destination {config.destination.name!r} returned an invalid branch "
-            "response"
-        ) from None
+    parent_sha = _object_id(
+        config, _parse(config, _ExistingRef, existing, "branch").object.sha, "branch"
+    )
     if token and token in parent_sha:
         raise DestinationError(
             f"destination {config.destination.name!r} returned an invalid branch "
@@ -374,13 +493,7 @@ def _delivery_base(
         "GET",
         f"/git/commits/{quote(parent_sha, safe='')}",
     )
-    try:
-        tree_sha = payload["tree"]["sha"]
-    except (KeyError, TypeError):
-        raise DestinationError(
-            f"destination {config.destination.name!r} returned an invalid branch "
-            "commit response"
-        ) from None
+    tree_sha = _parse(config, _Commit, payload, "branch commit").tree.sha
     return parent_sha, _object_id(config, tree_sha, "branch tree"), True, None
 
 
@@ -405,12 +518,7 @@ def _has_open_review(
     )
     if not existing:
         return False
-    first = existing[0]
-    if not isinstance(first, dict):
-        raise DestinationError(
-            f"destination {config.destination.name!r} returned an invalid review response"
-        )
-    _review_reference(config, first, branch)
+    _review_reference(config, existing[0], branch)
     return True
 
 
@@ -420,22 +528,27 @@ def _file(
     ref: str,
     client: httpx.Client,
     token: str,
-) -> CurrentDocument:
+) -> CurrentDocument | None:
     payload = _request_json(
         client,
         config,
         token,
         "GET",
         f"/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}",
+        allow_not_found=True,
     )
-    encoded = payload.get("content")
-    if not isinstance(encoded, str) or payload.get("encoding") != "base64":
+    if payload is None:
+        return None
+    file = _parse(config, _File, payload, "file")
+    if file.encoding != "base64":
         raise DestinationError(
             f"destination {config.destination.name!r} returned an invalid file response"
         )
-    content_revision = _sha(config, payload, "file")
+    content_revision = _object_id(config, file.sha, "file")
     try:
-        body = base64.b64decode("".join(encoded.split()), validate=True).decode("utf-8")
+        body = base64.b64decode("".join(file.content.split()), validate=True).decode(
+            "utf-8"
+        )
     except (ValueError, UnicodeDecodeError):
         raise DestinationError(
             f"destination {config.destination.name!r} returned an invalid file response"
@@ -455,17 +568,10 @@ def _base(config: GitHubConfig, client: httpx.Client, token: str) -> tuple[str, 
         "GET",
         f"/branches/{quote(config.base_branch, safe='')}",
     )
-    try:
-        parent_sha = payload["commit"]["sha"]
-        tree_sha = payload["commit"]["commit"]["tree"]["sha"]
-    except (KeyError, TypeError):
-        raise DestinationError(
-            f"destination {config.destination.name!r} returned an invalid base "
-            "branch response"
-        ) from None
+    branch = _parse(config, _Branch, payload, "base branch")
     return (
-        _object_id(config, parent_sha, "base commit"),
-        _object_id(config, tree_sha, "base tree"),
+        _object_id(config, branch.commit.sha, "base commit"),
+        _object_id(config, branch.commit.commit.tree.sha, "base tree"),
     )
 
 
@@ -579,15 +685,14 @@ def _set_branch(
             branch_moved_on_conflict=True,
         )
     try:
-        returned_ref = payload["ref"]
-        object_type = payload["object"]["type"]
-        returned_sha = payload["object"]["sha"]
-    except (KeyError, TypeError):
-        returned_ref = object_type = returned_sha = None
+        returned = _Ref.model_validate(payload)
+    except ValidationError:
+        returned = None
     if (
-        returned_ref != f"refs/{ref}"
-        or object_type != "commit"
-        or returned_sha != commit_sha
+        returned is None
+        or returned.ref != f"refs/{ref}"
+        or returned.object.type != "commit"
+        or returned.object.sha != commit_sha
     ):
         raise DestinationError(
             f"destination {config.destination.name!r} returned an invalid branch "
@@ -616,13 +721,7 @@ def _review(
         },
     )
     if existing:
-        first = existing[0]
-        if not isinstance(first, dict):
-            raise DestinationError(
-                f"destination {config.destination.name!r} returned an invalid "
-                "review response"
-            )
-        return _review_reference(config, first, branch)
+        return _review_reference(config, existing[0], branch)
 
     provenance = "\n".join(
         f"- `{statement_id}`" for statement_id in document.statement_ids
@@ -643,28 +742,25 @@ def _review(
     return _review_reference(config, payload, branch)
 
 
-def _review_reference(config: GitHubConfig, payload: dict, branch: str) -> str:
-    reference = payload.get("html_url")
+def _review_reference(config: GitHubConfig, payload: JsonValue, branch: str) -> str:
     try:
-        state = payload["state"]
-        base = payload["base"]["ref"]
-        head = payload["head"]["ref"]
-        repository = payload["head"]["repo"]["full_name"]
-    except (KeyError, TypeError):
-        state = base = head = repository = None
+        pull = _Pull.model_validate(payload)
+    except ValidationError:
+        pull = None
     if (
-        not isinstance(reference, str)
-        or not _valid_reference(config, reference)
-        or state != "open"
-        or base != config.base_branch
-        or head != branch
-        or not isinstance(repository, str)
-        or _ascii_lower(repository) != _ascii_lower(f"{config.owner}/{config.repo}")
+        pull is None
+        or not _valid_reference(config, pull.html_url)
+        or pull.state != "open"
+        or pull.base.ref != config.base_branch
+        or pull.head.ref != branch
+        or _ascii_lower(pull.head.repo.full_name)
+        != _ascii_lower(f"{config.owner}/{config.repo}")
     ):
         raise DestinationError(
             f"destination {config.destination.name!r} returned an invalid review "
             "response"
         )
+    reference = pull.html_url
     credentials = list(_ACTIVE_CREDENTIALS.get())
     if any(credential and credential in reference for credential in credentials):
         raise DestinationError(
@@ -672,6 +768,16 @@ def _review_reference(config: GitHubConfig, payload: dict, branch: str) -> str:
             "review reference"
         )
     return reference
+
+
+def _pull_number(config: GitHubConfig, reference: str) -> int:
+    """The number in a reference `_valid_reference` accepted: `.../pull/<n>`."""
+    if not _valid_reference(config, reference):
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid review "
+            "response"
+        )
+    return int(reference.rsplit("/", 1)[1])
 
 
 def _valid_reference(config: GitHubConfig, reference: object) -> bool:
@@ -864,7 +970,7 @@ def _branch_name(config: GitHubConfig, document: DeliveryDocument) -> str:
     return f"mycelium/docs/{document.slug}-{document.id}"
 
 
-def _sha(config: GitHubConfig, payload: dict, object_name: str) -> str:
+def _sha(config: GitHubConfig, payload: JsonObject, object_name: str) -> str:
     return _object_id(config, payload.get("sha"), object_name)
 
 
