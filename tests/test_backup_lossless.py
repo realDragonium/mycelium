@@ -129,7 +129,7 @@ def test_fresh_instance_from_an_export_serves_the_same_knowledge(
     for key, (_, text) in instance_scenario.STATEMENTS.items():
         hits = server.search_statements(text, limit=1, name_boost=0.0)
         assert [hit["id"] for hit in hits] == [ids[key]]
-    names = server._name_idx().search(instance_scenario.embed("Sign-in"), k=1)
+    names = runtime._name_idx().search(instance_scenario.embed("Sign-in"), k=1)
     assert store.get_name_id_by_vector_id(store.substrate_connection(), names[0][0])
 
     with closing(auth_store.connect(restored / "mycelium-auth.db")) as conn:

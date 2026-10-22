@@ -140,7 +140,7 @@ def load(conn: sqlite3.Connection | None = None) -> Snapshot:
 
 
 def configuration_issues(settings: Settings) -> list[str]:
-    from . import server
+    from .server import runtime
 
     issues = []
     if not settings.model:
@@ -148,14 +148,14 @@ def configuration_issues(settings: Settings) -> list[str]:
     availability = model_settings.provider_availability(settings.provider)
     if availability.reason:
         issues.append(availability.reason)
-    principal = auth.resolve_session_user(server._auth_db(), settings.reviewer_id)
+    principal = auth.resolve_session_user(runtime._auth_db(), settings.reviewer_id)
     if principal is None or not auth.principal_has_real_role(principal, "writer"):
         issues.append("Select an active writer or admin as the independent reviewer.")
     return issues
 
 
 def view(principal: auth.Principal) -> SettingsView:
-    from . import server
+    from .server import runtime
 
     with store.write_lock():
         db = prompt_store.connection()
@@ -178,7 +178,7 @@ def view(principal: auth.Principal) -> SettingsView:
     if principal.is_admin:
         reviewers = [
             ReviewerChoice(id=row["id"], name=row["name"], role=row["role"])
-            for row in auth.list_users(server._auth_db())
+            for row in auth.list_users(runtime._auth_db())
             if row["status"] == "active" and row["role"] in ("writer", "admin")
         ]
     return SettingsView(

@@ -3007,4 +3007,4 @@ def test_init_prunes_stranded_name_vectors(tmp_path, monkeypatch):
 
     with _client(tmp_path, monkeypatch, deterministic_embed):
         for vid in stranded_vids:
-            assert server._name_idx().get_vector(vid) is None
+            assert runtime._name_idx().get_vector(vid) is None

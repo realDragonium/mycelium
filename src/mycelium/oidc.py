@@ -189,10 +189,11 @@ async def callback(request: Request):
     if not subject:
         raise HTTPException(status_code=400, detail="OIDC response missing subject")
 
-    from . import server, store
+    from . import store
+    from .server import runtime
 
     try:
-        conn = server._auth_db()
+        conn = runtime._auth_db()
     except RuntimeError:
         raise HTTPException(status_code=500, detail="auth store not initialized")
     with store.transaction(conn):

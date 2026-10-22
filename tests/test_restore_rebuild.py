@@ -64,7 +64,7 @@ def test_restore_without_vec_files_rebuilds_both_indexes(tmp_path, monkeypatch):
     assert sid in {h["id"] for h in hits}
 
     # Name index rebuilt: querying the name text returns its mapping.
-    name_hits = server._name_idx().search(_embed("reviewer"), k=1)
+    name_hits = runtime._name_idx().search(_embed("reviewer"), k=1)
     assert name_hits, "name index is empty after restore"
     found_vid = name_hits[0][0]
     assert (

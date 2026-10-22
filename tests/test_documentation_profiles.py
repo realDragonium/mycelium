@@ -9,6 +9,7 @@ import pytest
 
 from mycelium import ai_prompts, auth, guidelines, prompt_store, server
 from mycelium import documentation_profiles as profiles
+from mycelium.server import runtime
 from test_prompt_texts import _app, _as
 
 
@@ -236,12 +237,12 @@ def test_generic_mcp_restore_preserves_writer_permission(tmp_path, monkeypatch):
 def test_read_only_http_cannot_save_or_restore(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch, auth_mode="on") as client:
         owner = auth.create_user(
-            server._auth_db(), name="Read only", role="reader", type="human"
+            runtime._auth_db(), name="Read only", role="reader", type="human"
         )
         token, _ = auth.issue_token(
-            server._auth_db(), user_id=owner, name="reader", scope="reader"
+            runtime._auth_db(), user_id=owner, name="reader", scope="reader"
         )
-        server._auth_db().commit()
+        runtime._auth_db().commit()
         response = client.put(
             "/api/documentation/profiles/internal",
             headers={"Authorization": f"Bearer {token}"},

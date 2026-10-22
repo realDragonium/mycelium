@@ -6,6 +6,7 @@ import pytest
 from mycelium import ai, auth, drafts_store, model_settings, prompt_store, server, store
 from mycelium import alias_suggestions as aliases
 from mycelium.ingest.draft import InProcessDraftEmitter
+from mycelium.server import runtime
 from test_reviewed_application import _app
 
 
@@ -479,9 +480,9 @@ def test_auto_review_remains_advisory_even_if_model_proposes_acceptance(
     from settings_helpers import save_model, set_review_controls
 
     with vocabulary(tmp_path, monkeypatch) as (_, entity_id, statement_id):
-        with store.transaction(server._auth_db()):
+        with store.transaction(runtime._auth_db()):
             reviewer_id = auth.create_user(
-                server._auth_db(), name="Alias reviewer", role="writer", type="service"
+                runtime._auth_db(), name="Alias reviewer", role="writer", type="service"
             )
         set_review_controls(
             mode="review-and-apply", application_enabled=True, reviewer_id=reviewer_id

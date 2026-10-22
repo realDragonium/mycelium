@@ -185,7 +185,7 @@ def test_retiring_starter_template_survives_restart(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch):
         assert (
             "reference"
-            not in guidelines.catalogue(server._prompts_db())["kb-authoring"]
+            not in guidelines.catalogue(runtime._prompts_db())["kb-authoring"]
         )
         assert [
             item["version"]
@@ -397,7 +397,7 @@ def test_sets_share_the_type_and_separate_by_prefix(tmp_path, monkeypatch):
     seed = _seed_script()
     client = _app(tmp_path, monkeypatch)
     with client:
-        assert seed.seed(server._prompts_db(), guidelines.read_rows()) == []
+        assert seed.seed(runtime._prompts_db(), guidelines.read_rows()) == []
         for name, text in _INTERNAL_DOC.items():
             server.save_prompt_text("guideline-set", name, text)
 

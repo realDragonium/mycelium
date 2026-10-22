@@ -14,7 +14,7 @@ import secrets
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, auth_store, server, store
+from mycelium import auth, auth_store, store
 from mycelium.server import runtime
 
 
@@ -330,7 +330,7 @@ def _consent(
 def test_full_oauth_flow(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r, _, _, _ = _full_flow(client, admin_bearer=admin_bearer)
         assert r.status_code == 200, r.text
         body = r.json()
@@ -372,7 +372,7 @@ def test_authorize_redirects_to_login_when_unauthenticated(tmp_path, monkeypatch
 def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         # Drive the flow to a fresh code, then submit a verifier that
         # doesn't hash to the challenge we registered.
         _, _client_id, _real_verifier, _code = _full_flow(
@@ -430,7 +430,7 @@ def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
 def test_token_rejects_code_reuse(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r, client_id, verifier, code = _full_flow(client, admin_bearer=admin_bearer)
         assert r.status_code == 200, r.text
         # Replay the same exchange.
@@ -453,7 +453,7 @@ def test_denial_redirects_with_error(tmp_path, monkeypatch):
     receives ?error=access_denied (not an HTTP 4xx)."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         reg = client.post(
             "/register",
             json={"client_name": "X", "redirect_uris": ["http://localhost/cb"]},
@@ -494,7 +494,7 @@ def test_authorization_response_carries_iss(tmp_path, monkeypatch):
 
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         redirect_uri = "http://localhost:6274/cb"
         reg = client.post(
             "/register",
@@ -551,7 +551,7 @@ def test_token_rejects_a_resource_naming_a_different_server(tmp_path, monkeypatc
 
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         consent, _, _ = _consent(
             client,
             admin_bearer=admin_bearer,
@@ -574,7 +574,7 @@ def test_token_rejects_a_foreign_resource_on_an_otherwise_valid_code(
 
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         redirect_uri = "http://localhost:6274/cb"
         consent, client_id, verifier = _consent(
             client, admin_bearer=admin_bearer, redirect_uri=redirect_uri
@@ -634,7 +634,7 @@ def test_full_flow_succeeds_when_the_client_names_this_server(tmp_path, monkeypa
     token bound to nothing."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r, _, _, _ = _full_flow(
             client, admin_bearer=admin_bearer, resource="http://testserver/mcp"
         )
@@ -650,7 +650,7 @@ def test_token_rejects_a_resource_the_code_was_not_authorized_for(
     that binding is the whole point of sending `resource` twice."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r, _, _, _ = _full_flow(
             client,
             admin_bearer=admin_bearer,
@@ -762,7 +762,7 @@ def test_a_cimd_client_completes_the_flow_without_registering(
     _stub_cimd(monkeypatch, redirect_uris=(registered_redirect,))
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         verifier, challenge = _pkce_pair()
         headers = {"Authorization": f"Bearer {admin_bearer}"}
         form = {
@@ -818,7 +818,7 @@ def test_a_cimd_client_cannot_use_a_redirect_uri_outside_its_document(
     _stub_cimd(monkeypatch)
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r = client.get(
             "/authorize",
             params={
@@ -847,7 +847,7 @@ def test_an_unresolvable_document_is_simply_not_a_client(tmp_path, monkeypatch):
     monkeypatch.setattr(cimd, "fetch", _boom)
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r = client.get(
             "/authorize",
             params={
@@ -870,7 +870,7 @@ def test_loopback_only_clients_get_a_warning_on_the_consent_page(tmp_path, monke
     _stub_cimd(monkeypatch)
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         headers = {"Authorization": f"Bearer {admin_bearer}"}
         params = {
             "client_id": _CIMD_URL,
@@ -924,7 +924,7 @@ def test_a_hosted_redirect_does_not_silence_the_loopback_warning(tmp_path, monke
     )
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r = client.get(
             "/authorize",
             params={
@@ -967,7 +967,7 @@ def test_a_forged_submission_cannot_choose_the_oauth_parameters(tmp_path, monkey
     they picked valid ones — never that the user saw them."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         attacker = client.post(
             "/register",
             json={"client_name": "Evil", "redirect_uris": ["https://evil.example/cb"]},
@@ -995,7 +995,7 @@ def test_a_consent_can_only_be_answered_once(tmp_path, monkeypatch):
     a second code for the same approval the user gave once."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         consent_id = _pending_consent(client, admin_bearer)
         headers = {"Authorization": f"Bearer {admin_bearer}"}
 
@@ -1021,7 +1021,7 @@ def test_a_consent_belongs_to_the_user_it_was_shown_to(tmp_path, monkeypatch):
     answering it would be approving access on someone else's behalf."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        conn = server._auth_db()
+        conn = runtime._auth_db()
         admin_bearer, _ = _admin_bearer(conn)
         consent_id = _pending_consent(client, admin_bearer)
 
@@ -1049,7 +1049,7 @@ def test_a_consent_belongs_to_the_user_it_was_shown_to(tmp_path, monkeypatch):
 def test_an_unknown_consent_is_refused(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        admin_bearer, _ = _admin_bearer(server._auth_db())
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
         r = client.post(
             "/authorize/decide",
             data={"consent_id": "nope", "decision": "allow"},

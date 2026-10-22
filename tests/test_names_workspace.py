@@ -203,12 +203,12 @@ def test_writer_authorization_enforced_for_preview_and_apply(
     monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "names-workspace-test-secret")
     with _app(tmp_path, monkeypatch, auth_mode="on") as client:
         user_id = auth.create_user(
-            server._auth_db(), name=role, role=role, type="human"
+            runtime._auth_db(), name=role, role=role, type="human"
         )
         token, _ = auth.issue_token(
-            server._auth_db(), user_id=user_id, name=role, scope=role
+            runtime._auth_db(), user_id=user_id, name=role, scope=role
         )
-        server._auth_db().commit()
+        runtime._auth_db().commit()
         headers = {"Authorization": f"Bearer {token}"}
         assert (
             client.get("/api/names-workspace", headers=headers).json()["can_write"]
@@ -365,12 +365,12 @@ def test_writer_capabilities_and_preview_enforce_admin_actions(tmp_path, monkeyp
     monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "names-workspace-test-secret")
     with _app(tmp_path, monkeypatch, auth_mode="on") as client:
         user_id = auth.create_user(
-            server._auth_db(), name="Writer", role="writer", type="human"
+            runtime._auth_db(), name="Writer", role="writer", type="human"
         )
         token, _ = auth.issue_token(
-            server._auth_db(), user_id=user_id, name="Writer", scope="writer"
+            runtime._auth_db(), user_id=user_id, name="Writer", scope="writer"
         )
-        server._auth_db().commit()
+        runtime._auth_db().commit()
         headers = {"Authorization": f"Bearer {token}"}
         capabilities = client.get("/api/names-workspace", headers=headers).json()
         assert capabilities["can_write"]

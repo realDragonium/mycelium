@@ -22,6 +22,7 @@ from mycelium.draft_review_store import Assessment
 from mycelium.ingest import loop as ingest_loop
 from mycelium.ingest.draft import InProcessDraftEmitter
 from mycelium.ingest.tools import EMIT_TOOL
+from mycelium.server import runtime
 from settings_helpers import save_model, set_review_controls
 from test_ingest import (
     FakeAnthropic,
@@ -43,9 +44,9 @@ TEXT = "Single sign-on (SSO) is required in the Admin console."
 def curated_app(tmp_path, monkeypatch):
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
     with _app(tmp_path, monkeypatch) as client:
-        with store.transaction(server._auth_db()):
+        with store.transaction(runtime._auth_db()):
             reviewer = auth.create_user(
-                server._auth_db(), name="Reviewer", role="writer", type="service"
+                runtime._auth_db(), name="Reviewer", role="writer", type="service"
             )
         set_review_controls(reviewer_id=reviewer)
         save_model("draft_review", openai_model="gpt-fixture")

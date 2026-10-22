@@ -82,7 +82,7 @@ def test_a_complete_restore_starts_clean(populated, tmp_path, caplog):
     with caplog.at_level(logging.ERROR, logger="mycelium.databases"):
         server.init(restored)
 
-    assert server._context().partial_restore == ()
+    assert runtime._context().partial_restore == ()
     assert _probe() == []
     assert not caplog.records
 
@@ -99,7 +99,7 @@ def test_a_restore_missing_the_prompts_database_starts_and_shouts(
     with caplog.at_level(logging.ERROR, logger="mycelium.databases"):
         server.init(restored)
 
-    assert server._context().partial_restore == ("mycelium-prompts.db",)
+    assert runtime._context().partial_restore == ("mycelium-prompts.db",)
     assert _probe() == ["mycelium-prompts.db"]
     [record] = caplog.records
     assert record.levelno == logging.ERROR

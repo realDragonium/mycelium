@@ -737,8 +737,8 @@ def test_approve_failure_restores_vector_indexes(tmp_path, monkeypatch):
         finally:
             _restore(tokens)
         draft_id = queued["draft_id"]
-        statement_ids_before = server._idx().ids()
-        name_ids_before = server._name_idx().ids()
+        statement_ids_before = runtime._idx().ids()
+        name_ids_before = runtime._name_idx().ids()
         assert statement_ids_before == []
         assert name_ids_before == []
 
@@ -750,8 +750,8 @@ def test_approve_failure_restores_vector_indexes(tmp_path, monkeypatch):
         conn = store.substrate_connection()
         assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
-        assert server._idx().ids() == statement_ids_before
-        assert server._name_idx().ids() == name_ids_before
+        assert runtime._idx().ids() == statement_ids_before
+        assert runtime._name_idx().ids() == name_ids_before
 
         index_path = tmp_path / "mycelium.vec"
         name_index_path = tmp_path / "mycelium-names.vec"
@@ -800,8 +800,8 @@ def test_commit_failure_rolls_back_and_restores_indexes(tmp_path, monkeypatch):
         conn = store.substrate_connection()
         assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
-        assert server._idx().ids() == []
-        assert server._name_idx().ids() == []
+        assert runtime._idx().ids() == []
+        assert runtime._name_idx().ids() == []
 
         # Suppress plural-name generation so "After" contributes exactly one
         # name vector and the count below stays exact.
@@ -810,8 +810,8 @@ def test_commit_failure_rolls_back_and_restores_indexes(tmp_path, monkeypatch):
 
         assert conn.execute("SELECT COUNT(*) FROM statements").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 1
-        assert server._idx().ids() == []
-        assert len(server._name_idx().ids()) == 1
+        assert runtime._idx().ids() == []
+        assert len(runtime._name_idx().ids()) == 1
         assert list(tmp_path.glob("*.pre-apply*")) == []
 
 

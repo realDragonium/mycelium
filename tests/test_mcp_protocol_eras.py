@@ -37,7 +37,7 @@ from mcp_types import (
     PROTOCOL_VERSION_META_KEY,
 )
 
-from mycelium import auth, auth_store, server, store
+from mycelium import auth, auth_store, store
 from mycelium.server import runtime
 
 # Both revisions negotiate content type through Accept; the transport wants to
@@ -82,7 +82,7 @@ def bearer(client):
     Both writes commit in a single transaction so the request thread — which
     resolves bearers on its own connection — can see them.
     """
-    conn = server._auth_db()
+    conn = runtime._auth_db()
     tokens = {}
     with store.transaction(conn):
         for role in ("admin", "reader"):

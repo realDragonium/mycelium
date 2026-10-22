@@ -81,8 +81,8 @@ def test_index_persists_before_outermost_commit(
         assert not indexes._dirty_marker_path(index_path).exists()
         events.clear()
 
-    statement_path = server._idx_path()
-    name_path = server._name_idx_path()
+    statement_path = runtime._idx_path()
+    name_path = runtime._name_idx_path()
 
     server.upsert_statement(kind="state", text="alpha is ready", links=[])
     assert_persisted(statement_path)
@@ -165,10 +165,10 @@ def test_draft_replay_clears_markers_only_after_outermost_commit(
             transaction_depth -= 1
 
     def tracked_save(index: vector.Index, path: Path) -> None:
-        if index is server._idx():
-            live_path = server._idx_path()
-        elif index is server._name_idx():
-            live_path = server._name_idx_path()
+        if index is runtime._idx():
+            live_path = runtime._idx_path()
+        elif index is runtime._name_idx():
+            live_path = runtime._name_idx_path()
         else:
             raise AssertionError("unexpected index")
         assert indexes._dirty_marker_path(live_path).exists()
@@ -196,17 +196,17 @@ def test_draft_replay_clears_markers_only_after_outermost_commit(
     # The pre-apply snapshot saves also count as persist events, so require
     # the LIVE .vec files explicitly or the assertion passes vacuously.
     persisted_files = {event[1] for event in events if event[0] == "persist"}
-    assert server._idx_path().name in persisted_files
-    assert server._name_idx_path().name in persisted_files
+    assert runtime._idx_path().name in persisted_files
+    assert runtime._name_idx_path().name in persisted_files
     assert all(position < commit_positions[0] for position in persist_positions)
     assert clear_positions
     assert all(position > commit_positions[0] for position in clear_positions)
     assert {event[1] for event in events if event[0] == "clear"} == {
-        server._idx_path().name,
-        server._name_idx_path().name,
+        runtime._idx_path().name,
+        runtime._name_idx_path().name,
     }
-    assert not indexes._dirty_marker_path(server._idx_path()).exists()
-    assert not indexes._dirty_marker_path(server._name_idx_path()).exists()
+    assert not indexes._dirty_marker_path(runtime._idx_path()).exists()
+    assert not indexes._dirty_marker_path(runtime._name_idx_path()).exists()
 
 
 def test_startup_rebuilds_dirty_indexes(
@@ -228,17 +228,17 @@ def test_startup_rebuilds_dirty_indexes(
     assert statement_vector_id is not None
     assert name_vector_id is not None
 
-    indexes._write_dirty_marker(server._idx_path())
-    indexes._write_dirty_marker(server._name_idx_path())
-    vector.Index.empty().save(server._idx_path())
-    vector.Index.empty().save(server._name_idx_path())
+    indexes._write_dirty_marker(runtime._idx_path())
+    indexes._write_dirty_marker(runtime._name_idx_path())
+    vector.Index.empty().save(runtime._idx_path())
+    vector.Index.empty().save(runtime._name_idx_path())
 
     _restart(tmp_path)
 
-    assert not indexes._dirty_marker_path(server._idx_path()).exists()
-    assert not indexes._dirty_marker_path(server._name_idx_path()).exists()
-    assert server._idx().get_vector(statement_vector_id) is not None
-    name_hits = server._name_idx().search(_embed("reviewer"), k=1)
+    assert not indexes._dirty_marker_path(runtime._idx_path()).exists()
+    assert not indexes._dirty_marker_path(runtime._name_idx_path()).exists()
+    assert runtime._idx().get_vector(statement_vector_id) is not None
+    name_hits = runtime._name_idx().search(_embed("reviewer"), k=1)
     assert name_hits
     assert (
         store.get_name_id_by_vector_id(store.substrate_connection(), name_hits[0][0])
@@ -260,7 +260,7 @@ def test_persist_failure_marker_stays_sticky_until_restart(
         return statement_id
 
     def fail_live_statement_save(index: vector.Index, path: Path) -> None:
-        if path == server._idx_path():
+        if path == runtime._idx_path():
             raise OSError("simulated index persistence failure")
         original_save(index, path)
 
@@ -271,7 +271,7 @@ def test_persist_failure_marker_stays_sticky_until_restart(
         server.upsert_statement(kind="state", text="write is pending", links=[])
 
     assert len(created_ids) == 1
-    assert indexes._dirty_marker_path(server._idx_path()).exists()
+    assert indexes._dirty_marker_path(runtime._idx_path()).exists()
     assert store.get_statement(store.substrate_connection(), created_ids[0]) is None
 
     monkeypatch.setattr(vector.Index, "save", original_save)
@@ -280,12 +280,12 @@ def test_persist_failure_marker_stays_sticky_until_restart(
     )["statement_id"]
 
     assert len(created_ids) == 2
-    assert indexes._dirty_marker_path(server._idx_path()).exists()
+    assert indexes._dirty_marker_path(runtime._idx_path()).exists()
     assert store.get_statement(store.substrate_connection(), successful_id) is not None
 
     _restart(tmp_path)
 
-    assert not indexes._dirty_marker_path(server._idx_path()).exists()
+    assert not indexes._dirty_marker_path(runtime._idx_path()).exists()
     assert store.get_statement(store.substrate_connection(), created_ids[0]) is None
     assert store.get_statement(store.substrate_connection(), successful_id) is not None
     hits = server.search_statements("the later write succeeds", limit=5, name_boost=0.0)
@@ -324,21 +324,21 @@ def test_failed_draft_replay_leaves_markers_until_restart(
     finally:
         auth.current_principal.reset(curator_token)
 
-    assert indexes._dirty_marker_path(server._idx_path()).exists()
-    assert indexes._dirty_marker_path(server._name_idx_path()).exists()
+    assert indexes._dirty_marker_path(runtime._idx_path()).exists()
+    assert indexes._dirty_marker_path(runtime._name_idx_path()).exists()
     assert store.all_statements_with_text(store.substrate_connection()) == []
     assert store.list_all_names(store.substrate_connection()) == []
-    assert server._idx().ids() == []
-    assert server._name_idx().ids() == []
+    assert runtime._idx().ids() == []
+    assert runtime._name_idx().ids() == []
 
     _restart(tmp_path)
 
-    assert not indexes._dirty_marker_path(server._idx_path()).exists()
-    assert not indexes._dirty_marker_path(server._name_idx_path()).exists()
+    assert not indexes._dirty_marker_path(runtime._idx_path()).exists()
+    assert not indexes._dirty_marker_path(runtime._name_idx_path()).exists()
     assert store.all_statements_with_text(store.substrate_connection()) == []
     assert store.list_all_names(store.substrate_connection()) == []
-    assert server._idx().ids() == []
-    assert server._name_idx().ids() == []
+    assert runtime._idx().ids() == []
+    assert runtime._name_idx().ids() == []
 
 
 def test_kind_only_patch_does_not_mark_or_persist(
@@ -368,4 +368,4 @@ def test_kind_only_patch_does_not_mark_or_persist(
 
     assert save_calls == []
     assert marker_writes == []
-    assert not indexes._dirty_marker_path(server._idx_path()).exists()
+    assert not indexes._dirty_marker_path(runtime._idx_path()).exists()

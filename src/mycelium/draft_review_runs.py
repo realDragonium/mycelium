@@ -82,9 +82,9 @@ def mode() -> Mode:
 
 
 def reviewer(creator: str | None, identity: str) -> auth.Principal:
-    from . import server  # local import: server registers the review tools
+    from .server import runtime  # local import: loading it loads the server package
 
-    principal = auth.resolve_session_user(server._auth_db(), identity)
+    principal = auth.resolve_session_user(runtime._auth_db(), identity)
     if principal is None or not auth.principal_has_real_role(principal, "writer"):
         raise ValueError(
             "configured review user must be an active real writer or admin"
