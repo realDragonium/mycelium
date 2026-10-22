@@ -481,7 +481,7 @@ def _assemble_draft(
         return _nothing(reason, ctx)
 
     valid_kinds = _safe_valid_kinds(emitter)
-    validated: list[ProposedOp] = []
+    indexed: list[tuple[int, ProposedOp]] = []
     for idx, op in enumerate(ops):
         if op.get("op") == "alias_suggestion":
             from ..alias_suggestions import Proposal
@@ -497,7 +497,8 @@ def _assemble_draft(
                 continue
         kept = _validate_op(op, idx, valid_kinds, flagged, emitter)
         if kept is not None:
-            validated.append(kept)
+            indexed.append((idx, kept))
+    validated = [p for _, p in indexed]
 
     trace.proposed_ops = [p.model_dump() for p in validated]
     trace.flagged = flagged
@@ -531,10 +532,8 @@ def _assemble_draft(
     # human decision, and a draft holding one can be neither applied nor
     # closed until it is decided, so sharing a draft would hold the knowledge
     # back.
-    knowledge = [(i, p) for i, p in enumerate(validated) if p.op != "alias_suggestion"]
-    suggestions = [
-        (i, p) for i, p in enumerate(validated) if p.op == "alias_suggestion"
-    ]
+    knowledge = [(i, p) for i, p in indexed if p.op != "alias_suggestion"]
+    suggestions = [(i, p) for i, p in indexed if p.op == "alias_suggestion"]
     title = _draft_title(ctx.text)
     try:
         draft_id = (
@@ -579,6 +578,9 @@ def _assemble_draft(
     )
 
 
+_DRAFT_REFERENCE = re.compile(r"@(\d+):(\d+)")
+
+
 def _alias_draft(
     draft_id: str, title: str, ctx: _RunContext, flagged: list[str]
 ) -> str | None:
@@ -595,19 +597,50 @@ def _queue_ops(
     flagged: list[str],
     ctx: _RunContext,
 ) -> list[ProposedOp]:
+    # A `@seq:index` reference counts the model's emitted operations from 1.
+    # Alias suggestions and dropped operations are not queued here, so the
+    # draft numbers differ; rewrite each reference to the producer's real seq.
     queued: list[ProposedOp] = []
+    seqs: dict[int, int] = {}
     for i, p in ops:
-        try:
-            if p.op == "alias_suggestion":
+        if p.op == "alias_suggestion":
+            try:
                 ctx.emitter.add_op(draft_id, p.op, p.payload, source_text=ctx.text)
-            else:
-                ctx.emitter.add_op(draft_id, p.op, p.payload)
-            queued.append(p)
+                queued.append(p)
+            except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
+                flagged.append(
+                    f"op[{i}] ({p.op}) dropped: draft store error queueing it: {exc}"
+                )
+            continue
+        try:
+            payload = _renumber_references(p.payload, seqs)
+        except ValueError as exc:
+            flagged.append(f"op[{i}] ({p.op}) dropped: {exc}")
+            continue
+        try:
+            seqs[i + 1] = ctx.emitter.add_op(draft_id, p.op, payload)
+            queued.append(p.model_copy(update={"payload": payload}))
         except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
             flagged.append(
                 f"op[{i}] ({p.op}) dropped: draft store error queueing it: {exc}"
             )
     return queued
+
+
+def _renumber_references(value: Any, seqs: dict[int, int]) -> Any:
+    if isinstance(value, dict):
+        return {k: _renumber_references(v, seqs) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_renumber_references(v, seqs) for v in value]
+    if isinstance(value, str) and (match := _DRAFT_REFERENCE.fullmatch(value)):
+        producer, index = int(match[1]), match[2]
+        if producer not in seqs:
+            raise ValueError(
+                f"reference {value} names operation {producer}, which is not "
+                "queued in this draft"
+            )
+        return f"@{seqs[producer]}:{index}"
+    return value
 
 
 def _validate_op(

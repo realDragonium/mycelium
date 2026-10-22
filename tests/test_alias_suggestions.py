@@ -400,6 +400,77 @@ def test_ingest_puts_alias_suggestions_in_their_own_submitted_draft(with_knowled
         assert len(emitter.created) == 1
 
 
+def test_split_renumbers_references_to_the_knowledge_draft():
+    from mycelium.ingest.config import IngestConfig
+    from mycelium.ingest.loop import run_ingest
+    from mycelium.ingest.tools import EMIT_TOOL
+    from test_ingest import (
+        _DEFAULT_KINDS,
+        FakeAnthropic,
+        FakeEmitter,
+        FakeSubstrate,
+        _emit_input,
+        _ledger_row,
+        _message,
+        _op,
+        _reconcile_then_adjacency,
+        _tool_use,
+    )
+
+    statements = {
+        "statements": [
+            {"kind": "event", "text": "an invite is submitted", "links": []},
+            {"kind": "event", "text": "an invite is accepted", "links": []},
+        ]
+    }
+
+    def link(source, target):
+        return _op(
+            "add_links",
+            {"links": [{"from_id": source, "to_id": target, "link_type": "triggers"}]},
+        )
+
+    emission = _emit_input(
+        ops=[
+            _op(
+                "alias_suggestion",
+                proposal("ent_existing").model_dump(exclude_none=True),
+            ),
+            _op("upsert_statements", statements),
+            link("@2:0", "@2:1"),
+            link("@1:0", "@2:1"),
+        ],
+        ledger=[
+            _ledger_row(
+                text, "new", matched=["stm_99"], considered=["stm_99"], note="invite"
+            )
+            for text in ("an invite is submitted", "an invite is accepted")
+        ],
+    )
+    emitter = FakeEmitter(valid_kinds=_DEFAULT_KINDS | {"alias_suggestion"})
+    result = run_ingest(
+        "Single sign-on (SSO) is used when an invite is submitted.",
+        client=FakeAnthropic(
+            _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emission)])]
+        ),
+        substrate=FakeSubstrate(),
+        emitter=emitter,
+        config=IngestConfig(thinking=False, trace_log_path=None),
+    )
+
+    knowledge = [
+        (kind, payload)
+        for draft_id, kind, payload in emitter.queued
+        if draft_id == result.draft_id
+    ]
+    assert [kind for kind, _ in knowledge] == ["upsert_statements", "add_links"]
+    [edge] = knowledge[1][1]["links"]
+    assert (edge["from_id"], edge["to_id"]) == ("@1:0", "@1:1")
+    assert any(
+        "op[3]" in message and "not queued" in message for message in result.flagged
+    )
+
+
 def test_auto_review_remains_advisory_even_if_model_proposes_acceptance(
     tmp_path, monkeypatch
 ):
