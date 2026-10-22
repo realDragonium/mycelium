@@ -37,9 +37,10 @@ locally.
    `guideline_set` only when the operator names one; otherwise the run
    resolves them.
 2. Call `request_documentation(prompt=…)`. By default (`match_existing=true`)
-   the run may decide the request is an update to an existing document and
-   revise that one instead. Pass `match_existing=false` when the operator
-   wants a new document regardless.
+   the run first checks whether the request looks like an update to an
+   existing document. If it does, it writes nothing and its `error` names that
+   document; ask the operator, then either revise it (below) or request again
+   with `match_existing=false` for a separate document.
    - It refuses when the instance's active-run limit is reached. Tell the
      operator rather than retrying in a loop.
 3. Poll `get_documentation_run(run_id)` until `status` is neither `queued` nor `running`.
@@ -61,6 +62,12 @@ locally.
 2. `revise_document(document_id, expected_revision=<current_revision>, prompt=<the change>)`.
 3. Poll and report as above. If another revision landed first, the call is
    refused: read the document again and retry once with the new revision.
+
+A published document can be edited on GitHub. A revision then starts from the
+GitHub text and keeps those edits (the run's `revision_base` is
+`destination`). If the document also has an unpublished revision here, the
+call is refused with an explanation. Relay it to the operator; do not choose
+for them.
 
 ## Not here
 

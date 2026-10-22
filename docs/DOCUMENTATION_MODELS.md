@@ -17,9 +17,22 @@ of model access, quota, or compatibility. Failures never silently switch provide
 A new UI generation creates a document. To improve an existing one, open it from
 **Documents** and describe the change under **Create revision**. This targets the
 exact internal version on screen, preserving its identity and earlier revisions.
-It does not ask the model to select a different document or substitute GitHub's
-content. If another run changes the document first, reload its current revision
-before retrying. Old revisions remain readable and downloadable as Markdown.
+If another run changes the document first, reload its current revision before
+retrying. Old revisions remain readable and downloadable as Markdown.
+
+A published document can be edited on GitHub, on its pull request branch or on
+the base branch after merge. A revision therefore reads the published copy
+first. Mycelium recognises every text it published itself. Any other text there
+is someone's edit, and the revision starts from it, telling the writer to keep
+it. The run records this as `revision_base: destination`. If the document also
+has a revision here that was never published, Mycelium refuses rather than
+merging the two, and says how to continue. Either revise with
+`start_from_destination` (the unpublished revision stays in the history), or
+undo the GitHub edits or close the pull request without merging. If the
+published copy cannot be read, the revision is refused until the connection or
+credential binding is restored. A manual edit does not read GitHub, so
+publishing it is refused over edits it did not see. Revise first to bring them
+in.
 
 Generation records the model and a consistent snapshot of the available writing
 profiles at admission. The selected guidance, exposure rules, template, and their
@@ -66,9 +79,12 @@ REST exposes `request_documentation`, `list_generated_documents`,
 `get_documentation_run`, `get_generated_document`, and `revise_document`. Publishing
 stays in the UI; see [the MCP tool manifest](MCP_TOOLS.md).
 `revise_document` requires `document_id`, `expected_revision`, and instructions.
-The UI always supplies the current revision when publishing. Existing automation
-may retain automatic document matching through `request_documentation`'s default
-`match_existing=True`; the UI creation endpoint disables that matching.
+The UI always supplies the current revision when publishing. With
+`request_documentation`'s default `match_existing=True`, a request that looks
+like an update to an existing document writes nothing. Its run names that
+document in `matched_document_id` and `error`, and the caller decides whether
+to revise it. The model never chooses which document is overwritten. The UI
+creation endpoint disables matching.
 
 Readers can inspect documents and runs. Generation and publication require a real
 writer or admin role. Writing profiles describe an audience, not access controls.
