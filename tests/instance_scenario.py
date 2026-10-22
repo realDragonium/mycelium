@@ -15,6 +15,7 @@ stores directly.
 
 from __future__ import annotations
 
+import inspect
 import json
 import sqlite3
 import zlib
@@ -201,6 +202,12 @@ def _documentation(data_dir: Path) -> None:
         document = docs_store.upsert_document(
             conn, slug="sign-in", title="Sign-in", body="How to sign in.", run_id=run
         )
+        record = getattr(docs_store, "record_delivery", None)
+        if record is None or "binding" not in inspect.signature(record).parameters:
+            docs_store.finish_run(
+                conn, run, outcome="document_written", document_id=document
+            )
+            return
         docs_store.record_delivery(
             conn,
             document,

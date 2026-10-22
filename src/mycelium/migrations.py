@@ -20,8 +20,16 @@ A future schema change adds:
 1. A new migration function below.
 2. A new tuple in `MIGRATIONS`.
 3. Updates to `SCHEMA` in store.py so fresh DBs pick it up directly.
+4. A fixture of the new shape, captured once the tests pass:
+   `uv run python scripts/capture_migration_fixture.py`.
 
 That's it — no ad-hoc idempotent ALTER checks scattered through the code.
+`tests/test_migration_fixtures.py` starts the build on a populated instance
+from every shipped schema version and fails if the upgrade loses a row or
+ends in a schema a fresh database would not have. A migration that drops or
+rewrites rows on purpose declares it in that test's `REWRITES`. The same
+test covers the auxiliary databases (auth, drafts, prompts), whose stores
+upgrade themselves without a version number, so step 4 applies to them too.
 """
 
 from __future__ import annotations
