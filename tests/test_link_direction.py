@@ -5,9 +5,9 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, server, store
+from mycelium import embed, store
 from mycelium.link_rules import flip_error
-from mycelium.server import runtime
+from mycelium.server import batch_planning, runtime
 
 
 def _embed(text: str) -> list[float]:
@@ -374,7 +374,7 @@ def test_plan_batch_decides_flip_and_cascade_without_writing():
     store.migrate(conn)
     store.use_substrate_connection(conn)
     try:
-        plan = server._plan_batch(
+        plan = batch_planning._plan_batch(
             [
                 {
                     "kind": "capability",
