@@ -6,8 +6,10 @@ keeps off the MCP surface. Path is the kebab-case tool name; method
 is GET when the tool takes no args, POST otherwise. The request body's
 Pydantic schema is derived from the function signature.
 
-Add a tool in `server.py` with `@tool` and you'll find it here too at
-`/<kebab-case-name>` after a server restart — no edits needed in this file.
+Add a tool to a module in `mycelium/server/` with `@tool`, list it in
+`mycelium.server.__all__` (its position there is its place in every listing),
+and you'll find it here too at `/<kebab-case-name>` after a server restart —
+no edits needed in this file.
 """
 
 import functools
@@ -363,7 +365,7 @@ def _model_name_for(func_name: str) -> str:
 
 
 # Tool authorization — convention based. The classification helpers
-# live in `auth` so the MCP `@tool` wrapper (server.py) can apply the
+# live in `auth` so the MCP `@tool` wrapper (server/registry.py) can apply the
 # same policy without depending on the HTTP layer.
 
 

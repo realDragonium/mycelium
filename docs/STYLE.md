@@ -81,7 +81,7 @@ it's there. Two legitimate reasons in this codebase:
 1. **Lazy optional/heavy deps** — e.g. `anthropic` is imported inside the
    functions that use it so the package stays importable without the SDK or
    an API key. Same idea for `spacy` and `pyinstrument`.
-2. **Cycle breaking** — the `server.py` ↔ `http.py` ↔ stores seam has
+2. **Cycle breaking** — the `mycelium.server` ↔ `http.py` ↔ stores seam has
    import cycles that local imports resolve.
 
 When an import must stay local, say why in a trailing comment:
@@ -91,7 +91,7 @@ Rules that fight this pattern (e.g. `PLC0415`) stay disabled.
 ## Docstrings and comments
 
 - Module docstring: what the module is and the one non-obvious thing about
-  it (see `server.py`, `http.py` for the house style).
+  it (see `server/registry.py`, `http.py` for the house style).
 - Function docstrings: one imperative summary line; add detail only when the
   signature doesn't tell the story. No param-by-param boilerplate.
 - Comments state constraints the code can't express — not what the next

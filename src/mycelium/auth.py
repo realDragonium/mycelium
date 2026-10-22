@@ -132,11 +132,11 @@ current_session_id: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 
 # --- role classification --------------------------------------------------
-# Naming conventions in `server.py` are the source of truth for what a
+# Tool function names in `mycelium.server` are the source of truth for what a
 # tool does. Read tools start with one of `_READ_PREFIXES`; destructive
 # operations start with `_ADMIN_PREFIXES`; everything else is a write.
 # Used by both the REST mirror (http.py) and the MCP @tool wrapper
-# (server.py) so the two surfaces enforce the same policy.
+# (server/registry.py) so the two surfaces enforce the same policy.
 
 _READ_PREFIXES = ("list_", "get_", "search_", "grep_", "discover_", "find_")
 _ADMIN_PREFIXES = ("delete_", "merge_")

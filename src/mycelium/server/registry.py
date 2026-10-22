@@ -239,7 +239,7 @@ def tool(
     gate will then reject.
     """
     from .. import auth as _auth  # local import: auth is loaded lazily so
-    # server.py stays importable in environments that don't have the auth
+    # mycelium.server stays importable in environments that don't have the auth
     # tables yet (notably some test fixtures).
 
     def _register(func: Callable[..., Any]) -> Callable[..., Any]:

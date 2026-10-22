@@ -34,7 +34,7 @@ A tool's required role follows its name prefix unless the tool declares one:
 
 1. The REST mirror (`http.py`) checks before calling the underlying
    function.
-2. The MCP `@tool` wrapper (`server.py`) checks via the
+2. The MCP `@tool` wrapper (`server/registry.py`) checks via the
    `current_principal` ContextVar that the middleware populated.
 
 Both paths read the same declaration, so policy can't drift between
