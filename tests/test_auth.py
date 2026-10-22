@@ -445,16 +445,10 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
         writer = asyncio.run(call_with("writer"))
         admin = asyncio.run(call_with("admin"))
 
-        # Reader gets read-shaped tools plus any explicit role="reader"
-        # overrides: report_knowledge_gap (a write anyone may do),
-        # survey_statements (a read whose name isn't a read-prefix), and
-        # ask (the higher-level read entry point, likewise un-prefixed).
-        READER_OVERRIDES = {
-            "report_knowledge_gap",
-            "survey_statements",
-            "ask",
-            "retrieve_context",
-        }
+        # Reader gets read-shaped tools plus the explicit role="reader"
+        # overrides on the MCP surface: report_knowledge_gap (a write anyone
+        # may do) and ask (the higher-level read entry point, un-prefixed).
+        READER_OVERRIDES = {"report_knowledge_gap", "ask"}
         assert all(
             n.startswith(("list_", "get_", "search_", "grep_", "discover_", "find_"))
             or n in READER_OVERRIDES
@@ -479,11 +473,10 @@ def test_tool_list_hides_tools_whose_gate_is_stricter_than_its_prefix(
 ):
     """A listed tool must be one the caller can actually invoke.
 
-    Three tools declare `real_role=True`, dropping the drafter equivalence
-    that `principal_satisfies` grants. Deriving visibility from the name
-    prefix alone would advertise `list_drafts` to a reader (it starts with
-    `list_`) and the prompt-text editors to a drafter, and every one of
-    those calls would then be refused.
+    The documentation tools declare `real_role=True`, dropping the drafter
+    equivalence that `principal_satisfies` grants. Deriving visibility from
+    the name alone would advertise them to a drafter, and the call would
+    then be refused.
     """
     import asyncio
     from types import SimpleNamespace
@@ -516,17 +509,17 @@ def test_tool_list_hides_tools_whose_gate_is_stricter_than_its_prefix(
         writer = asyncio.run(listed_for("writer"))
         admin = asyncio.run(listed_for("admin"))
 
-        # Curator-only despite the `list_` prefix.
-        assert "list_drafts" not in reader
-        assert "list_drafts" not in drafter
-        assert "list_drafts" in writer
+        # Lands live, never queues onto a draft.
+        assert "request_documentation" not in reader
+        assert "request_documentation" not in drafter
+        assert "request_documentation" in writer
+        assert "revise_document" not in drafter
+        assert "revise_document" in writer
 
-        # Instance config: lands live, never queues onto a draft.
-        assert "save_prompt_text" not in drafter
-        assert "save_prompt_text" in writer
-        assert "retire_prompt_text" not in drafter
-        assert "retire_prompt_text" not in writer
-        assert "retire_prompt_text" in admin
+        # Admin-only by prefix; a drafter's call queues onto a draft instead.
+        assert "delete_statement" in drafter
+        assert "delete_statement" not in writer
+        assert "delete_statement" in admin
 
 
 def test_admin_can_delete(tmp_path, monkeypatch):

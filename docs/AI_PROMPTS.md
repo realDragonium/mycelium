@@ -32,7 +32,7 @@ Each reference records the action, version, source, and text digest. Saved alias
 suggestions retain the scan's reference. Historical records may lack this field.
 
 Texts use the existing versioned `doctrine` rows in `mycelium-prompts.db`, including
-the original `ingest`, `research`, and `docgen` rows. Existing MCP prompt-text tools
+the original `ingest`, `research`, and `docgen` rows. The prompt-text HTTP operations
 and backups continue to work. A missing or retired override uses the default;
 legacy doctrine file configuration remains the fallback for those three actions.
 If the prompt store is unavailable, runs record a diagnostic and use defaults,

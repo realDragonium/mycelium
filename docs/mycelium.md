@@ -186,16 +186,15 @@ not embedded.
 
 ## Tool surface
 
-Mycelium exposes twenty-four tools through a registry that backs both the
-MCP transport and the FastAPI HTTP transport. Adding a tool is a single
-`@tool` decorator on a Python function in `server.py`; the decorator
-appends the function to a registry that the HTTP module iterates to
-auto-generate REST endpoints, while also registering it with the MCP
-server.
+Adding a tool is a single `@tool` decorator on a Python function in
+`server.py`; the decorator appends the function to a registry that the HTTP
+module iterates to auto-generate REST endpoints and that the in-process loops
+discover their read tools from. Only tools named in `server.MCP_TOOLS` are
+also registered with the MCP server. [The MCP tool manifest](MCP_TOOLS.md)
+lists both sets and the reason for each tool.
 
-The tool registry is the canonical surface. Anything not registered as a
-tool — for example the HTTP-only browser-UI endpoints described below —
-is intentionally unavailable to MCP consumers.
+The sections below document HTTP contracts. Some of these tools, such as
+`move_name`, are not advertised over MCP.
 
 ### search_statements
 
@@ -651,9 +650,9 @@ process appears to hang when started by hand because stdio is occupied by
 the protocol — that is expected.
 
 The MCP server uses the official Anthropic `mcp` package and its
-`MCPServer` class. Tools are registered via `mcp.tool()` inside the
-`@tool` decorator, which means every registered tool's signature and
-docstring become the tool's MCP schema and description automatically.
+`MCPServer` class. The `@tool` decorator registers each tool named in
+`MCP_TOOLS` via `mcp.tool()`, so its signature and docstring become its MCP
+schema and description automatically.
 
 ### HTTP via FastAPI
 

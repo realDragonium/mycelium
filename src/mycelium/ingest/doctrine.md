@@ -150,8 +150,8 @@ This is the failure the harness exists to prevent. Hold to it:
 - **Reconcile every candidate before you classify it.** Use the read tools —
   `discover_facts` is the per-candidate primitive (it returns, per text, a
   status of `exists` / `near` / `new` plus the matching statements);
-  `find_duplicates`, `search_statements`, `survey_statements`, and
-  `grep_statements` for exact identifiers. Reconcile means *you actually
+  `search_statements`, `survey_statements`, and `grep_statements` for
+  exact identifiers. Reconcile means *you actually
   searched*, not that you assumed.
 - **For every NEW or REFINEMENT, attempt an adjacency search** for existing
   statements to link to, and **report it in the ledger**. The most relevant

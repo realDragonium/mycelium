@@ -162,8 +162,10 @@ class Op:
 
 
 def make_ops() -> list[Op]:
-    """Factories for every MCP tool. Every op listed here corresponds
-    1:1 to a `@tool`-decorated function in `mycelium.server`. Destructive
+    """Factories for a latency sample of substrate primitives. This is not a
+    mirror of the tool surface: `server.TOOLS` and `server.MCP_TOOLS` are the
+    registry (see docs/MCP_TOOLS.md), and ops here may sit on either side of
+    the MCP boundary since both run the same function. Destructive
     ops (`needs_writes=True`) get a smaller per-op run count and pull
     from disposable pools the factory pre-allocates against the
     substrate, so they don't deplete it past usefulness."""

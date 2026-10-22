@@ -119,7 +119,7 @@ execution safeguards and API contract, not the model's factual accuracy.
 
 ## Inspecting and rerunning
 
-An identified curator can call `request_draft_review(draft_id)` to start review
+An identified curator can call `request_draft_review(draft_id)` over HTTP to start review
 or retrieve the latest attempt. Pass `rerun=true` to start a new attempt after
 completion or failure. Requests while the mode is off are refused. A concurrent
 request returns the active attempt, even with `rerun=true`.

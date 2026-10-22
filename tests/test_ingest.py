@@ -354,6 +354,22 @@ def test_floor_blocks_premature_emit_then_proceeds():
     assert len(client.calls) == 4  # the premature emit did not terminate
 
 
+def test_corpus_duplicate_audit_does_not_reconcile_the_candidates():
+    """`find_duplicates` takes no candidate text, so it cannot meet the floor."""
+    responses = [
+        _message([_tool_use("find_duplicates", {"threshold": 0.92})]),
+        _message([_tool_use("grep_statements", {"query": "invite"})]),
+        _message([_tool_use(EMIT_TOOL, _good_new_op_emit(), id="early")]),
+        _message([_tool_use("discover_facts", {"texts": ["x"]})]),
+        _message([_tool_use(EMIT_TOOL, _good_new_op_emit(), id="real")]),
+    ]
+    result, client, _substrate, _emitter = _run(responses)
+
+    assert isinstance(result, DraftCreated)
+    assert result.trace["floor"]["reconcile_reads"] == 1
+    assert len(client.calls) == 5  # the audit-only emit did not terminate
+
+
 def test_floor_blocks_new_ledger_row_missing_matched_against():
     """A NEW ledger row with no matched_against fails ledger validation."""
     incomplete = _emit_input(

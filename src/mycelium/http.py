@@ -1,7 +1,8 @@
-"""FastAPI HTTP transport — auto-generated mirror of the MCP tool surface.
+"""FastAPI HTTP transport — auto-generated mirror of every registered tool.
 
 Every function in `server.TOOLS` (i.e., everything decorated with `@tool`)
-is exposed as an endpoint here. Path is the kebab-case tool name; method
+is exposed as an endpoint here, including the tools `server.MCP_TOOLS`
+keeps off the MCP surface. Path is the kebab-case tool name; method
 is GET when the tool takes no args, POST otherwise. The request body's
 Pydantic schema is derived from the function signature.
 

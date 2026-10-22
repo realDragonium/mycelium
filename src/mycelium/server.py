@@ -1,9 +1,10 @@
 """MCP server exposing the Mycelium substrate over stdio.
 
 Tools are registered with the local `@tool` decorator (not the bare
-`mcp.tool()`) so they show up in both the MCP transport AND the HTTP
-transport in `mycelium/http.py` — adding a new tool here gives you both
-interfaces for free.
+`mcp.tool()`) so they show up in the HTTP transport in `mycelium/http.py`
+and in the in-process loops. Only the names in `MCP_TOOLS` are also
+advertised over MCP: every MCP client pays for each schema it is sent, so
+that surface is a deliberate, documented subset (`docs/MCP_TOOLS.md`).
 """
 
 from __future__ import annotations
@@ -252,8 +253,59 @@ class _RoleFilteredTools:
 mcp.middleware.append(_RoleFilteredTools())
 
 #: Functions registered as tools — read by `mycelium.http` to auto-generate
-#: REST endpoints. Order is preserved.
+#: REST endpoints, and by the in-process loops and draft replay. Order is
+#: preserved.
 TOOLS: list[Callable[..., Any]] = []
+
+#: The tools advertised over MCP. Everything else in `TOOLS` keeps its HTTP
+#: route and its in-process callers; it is just not sent to MCP clients, which
+#: pay for every schema before their first question. `docs/MCP_TOOLS.md` gives
+#: the reason for each entry and for each tool left out.
+MCP_TOOLS = frozenset(
+    {
+        # Read
+        "search_statements",
+        "get_statements",
+        "find_statement_connections",
+        "grep_statements",
+        "list_statements",
+        "discover_facts",
+        "get_entity",
+        "list_entities",
+        "search_entities",
+        "list_link_types",
+        "list_statement_kinds",
+        "list_entity_link_types",
+        "ask",
+        # Author
+        "ingest",
+        "upsert_entity",
+        "upsert_name",
+        "upsert_statement",
+        "upsert_statements",
+        "patch_statement",
+        "add_links",
+        "remove_links",
+        "add_entity_links",
+        "remove_entity_links",
+        "merge_statements",
+        "merge_entities",
+        "delete_statement",
+        # Drafts
+        "submit_draft",
+        "get_draft",
+        "discard_draft_op",
+        "list_my_drafts",
+        "list_drafts",
+        "set_draft_review_evidence",
+        "report_knowledge_gap",
+        # Documentation
+        "request_documentation",
+        "get_documentation_run",
+        "get_generated_document",
+        "revise_document",
+    }
+)
 
 #: Tools that drive a multi-turn model loop, so they occupy a worker thread for
 #: tens of seconds and hold a model context worth of memory while they do. They
@@ -398,7 +450,8 @@ def tool(
     real_role: bool = False,
     capture_request: bool = True,
 ) -> Callable[..., Any]:
-    """Register `func` as both an MCP tool and an HTTP endpoint.
+    """Register `func` as an HTTP endpoint, and as an MCP tool when its name
+    is in `MCP_TOOLS`.
 
     The wrapper consults MYCELIUM_PROFILE on every call so the env var
     can be flipped at runtime — useful for tests and for switching
@@ -546,7 +599,8 @@ def tool(
         TOOLS.append(wrapper)
         # http.py builds its sync FastAPI handlers from TOOLS (FastAPI does its
         # own thread dispatch), so only the MCP side gets the offloading shim.
-        mcp.tool()(_offloaded(wrapper))
+        if func.__name__ in MCP_TOOLS:
+            mcp.tool()(_offloaded(wrapper))
         return wrapper
 
     # Allow both `@tool` and `@tool(role="reader")` forms.
@@ -1874,10 +1928,22 @@ def get_mention_candidates(
     )
 
 
+#: Ceiling on rows a paged or ranked read returns: hits are hydrated, so an
+#: unbounded `limit` can overrun a caller's context in one call.
+_MAX_LIMIT = 100
+ResultLimit = Annotated[int, Field(ge=1, le=_MAX_LIMIT)]
+
+
+def _check_limit(limit: int) -> None:
+    """Enforce `ResultLimit` for in-process callers, which skip validation."""
+    if not 1 <= limit <= _MAX_LIMIT:
+        raise ValueError(f"limit must be between 1 and {_MAX_LIMIT}; got {limit}")
+
+
 @tool
 def search_statements(
     query: str,
-    limit: int = 10,
+    limit: ResultLimit = 10,
     min_score: float = -1.0,
     depth: int = 0,
     direction: Literal["both", "children", "parents"] = "both",
@@ -1889,7 +1955,7 @@ def search_statements(
 ) -> list[dict[str, Any]]:
     """Vector-search statements by semantic similarity to `query`.
 
-    Returns up to `limit` direct hits with score >= `min_score`,
+    Returns up to `limit` (at most 100) direct hits with score >= `min_score`,
     sorted by score descending. Practical floors are usually 0.5–0.8.
 
     Scoring is cosine similarity + an alias-aware boost: the query is
@@ -1947,7 +2013,7 @@ def search_statements(
                          canonical queries unaffected when no name is
                          clearly relevant.
     """
-
+    _check_limit(limit)
     scored = _search_statement_candidates(
         query,
         limit,
@@ -4232,7 +4298,7 @@ def get_entity(id: str) -> dict[str, Any]:
 @tool
 def list_entities(
     prefix: str = "",
-    limit: int = 50,
+    limit: ResultLimit = 50,
     offset: int = 0,
 ) -> dict[str, Any]:
     """Page through entities, sorted by their alphabetically-first name.
@@ -4247,8 +4313,9 @@ def list_entities(
     `name` is the entity's alphabetically-first attached name, or the
     entity_id as a fallback if it has no names. To enumerate all aliases
     of one entity, use `get_entity(id)`. For conceptual (non-literal)
-    lookup, use `search_entities`.
+    lookup, use `search_entities`. `limit` is at most 100.
     """
+    _check_limit(limit)
     rows = store.list_entities(_db(), prefix=prefix or None, limit=limit, offset=offset)
     return {
         "total": store.count_entities(_db(), prefix=prefix or None),
@@ -4324,7 +4391,7 @@ def search_entities(
 
 @tool
 def list_statements(
-    limit: int = 50,
+    limit: ResultLimit = 50,
     offset: int = 0,
     entity_id: str | None = None,
     name: str | None = None,
@@ -4350,8 +4417,10 @@ def list_statements(
 
     Returns `{total, statements: [{id, kind, text}], missing}` — text only,
     with no mentions or links to keep the response light. To inspect a
-    single statement's full structure use `get_statements([id])`.
+    single statement's full structure use `get_statements([id])`. `limit` is
+    at most 100; page with `offset`.
     """
+    _check_limit(limit)
     if entity_id is not None and name is not None:
         raise ValueError("pass at most one of entity_id / name, not both")
     if name is not None:

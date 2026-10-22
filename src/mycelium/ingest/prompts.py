@@ -47,8 +47,8 @@ THE FLOW YOU DRIVE (one context)
 2. RECONCILE each extracted candidate against existing knowledge BEFORE you \
    classify it. `discover_facts` is the per-candidate primitive: pass the \
    candidate texts and it returns, per text, a status of exists / near / new \
-   plus the matching statements. Use `find_duplicates`, `search_statements`, \
-   `survey_statements`, `grep_statements` (lexical, for exact identifiers) too.
+   plus the matching statements. Use `search_statements`, `survey_statements`, \
+   `grep_statements` (lexical, for exact identifiers) too.
 3. CLASSIFY each candidate: NEW / DUPLICATE / REFINEMENT / CONTRADICTION.
 4. LINK the new facts — to each other AND to the existing statements they belong \
    beside — forming walkable chains, not spokes off one hub.
@@ -225,8 +225,8 @@ def floor_block_message(detail: str) -> str:
     """Appended when the floor blocks a premature emit_draft."""
     return (
         "Not yet — you cannot emit before the reconcile floor is met. " + detail + " "
-        "Do at least one reconcile read (discover_facts / find_duplicates / "
-        "search_statements / survey_statements) AND at least one adjacency search "
+        "Do at least one reconcile read (discover_facts / search_statements / "
+        "survey_statements) AND at least one adjacency search "
         "(search_statements / survey_statements / grep_statements), and make sure "
         "every NEW/REFINEMENT ledger entry has a non-empty matched_against and "
         "either link_candidates_considered or an explicit 'no adjacent statements "
