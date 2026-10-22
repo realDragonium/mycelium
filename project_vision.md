@@ -19,9 +19,10 @@ evidence for its own claims.
 - Aurora's persistent memory integration, with its own knowledge directory.
 - Future support and product reasoning workflows using the same primitives.
 
-The server's model-driven loops currently use Anthropic. Supporting GPT as
-another provider is a next-phase goal. The substrate and tool contracts
-should work independently of the model provider.
+The server's model-driven actions (ask, ingest, research, documentation, draft
+review and alias discovery) go through one provider boundary, `mycelium.ai`, and
+an administrator chooses Claude or OpenAI GPT for each action. The substrate and
+tool contracts work independently of the model provider.
 
 ## Ingestion
 
@@ -67,30 +68,40 @@ for domain knowledge. Historical migrations and archive compatibility still
 reference annotations; older databases may retain inert tables.
 
 Statement links can carry `when` expressions over statements using AND, OR,
-and NOT. Entity-to-entity links describe structural relationships. The current
-implementation also supports entity-to-statement links; their removal is
-unmerged work in DRA-393 and requires a decision about existing data.
+and NOT. Entity-to-entity links describe structural relationships. There are no
+entity-to-statement links: schema 14 removed them (DRA-393), and an instance
+that still holds any refuses to upgrade until their meaning has been rescued by
+hand, as `docs/ENTITY_STATEMENT_MIGRATION.md` describes.
 
 Kinds and link vocabulary can evolve. Direction checks, phrasing validation,
 and candidate compatibility rules keep writes and proposals coherent.
 
 ## Review and documentation
 
-Today, knowledge proposals accumulate in drafts until a curator resolves and
-applies them. The next phase should give an AI curator the tools to investigate,
-revise, and resolve the whole draft, including corrections and reconciliation.
-When evidence is unavailable, it should surface the specific question requiring
-human input. An independent review is the first useful delivery on that path.
+Knowledge proposals accumulate in drafts. An internal reviewer judges each
+submitted draft against the graph: duplicates, contradictions, link type and
+direction, and missing links to live neighbours. It trusts the producer on what
+the product does; it judges how the draft fits what is already known. In
+`review-and-apply` mode it can make small corrections and then apply or reject
+the draft without a person, and ingest and research submit their drafts to it
+themselves. When the available knowledge cannot settle a question a person
+could answer, the reviewer asks that question instead of rejecting: the draft
+waits, a knowledge gap records the question, and a curator's answer starts a
+fresh review. Rejections and resolved contradictions are filed as knowledge
+gaps, and reviews that failed are retried. The reviewer has no tools of its own
+to investigate sources; giving it that is the remaining step toward an AI
+curator that resolves the whole draft. See `docs/DRAFT_REVIEW.md`.
 
 Documentation starts with a concept and an intended audience, internal or
-user-facing. Mycelium should select suitable guidance and a template, write
-and review the document internally, and open a GitHub pull request. After
-merge, the destination repository's existing workflow owns deployment.
-Repeated requests should update the intended document.
-
-Requests, configurable guideline sets, a document registry, and independent
-exposure/conformance review already exist. Complete delivery, repeat updates,
-and automated draft curation are next-phase work. Generated documents remain
+user-facing. Mycelium selects guidance and a template from configurable
+guideline sets, writes and reviews the document internally, and keeps every
+version as an immutable revision; revising a document adds a revision to the
+same document. On request it opens or updates a GitHub pull request, through a
+GitHub App connection or server credentials. After merge, the destination
+repository's existing workflow owns deployment; Mycelium does not yet track
+whether the pull request merged. Repeated requests should update the intended
+document. Today that depends on a model choosing among existing titles, and
+only over MCP: the UI always creates a new document. Generated documents remain
 outputs and must not silently change the underlying knowledge.
 
 ## Implementation posture
@@ -102,7 +113,7 @@ one server process per data directory.
 
 Keep storage simple, core decisions testable, and external I/O at the edges.
 Improve the existing implementation in small verified steps. New providers,
-automated review, and documentation delivery should reuse the existing tools,
-drafts, and registry.
+review capabilities, and documentation features should reuse the existing
+tools, drafts, and registry.
 
 Project plans, decisions, and delivery issues live in Linear.
