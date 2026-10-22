@@ -2360,13 +2360,18 @@ def ingest(text: str) -> dict[str, Any]:
     in-process Sonnet loop that extracts atomic statements, reconciles each one
     against existing knowledge with the read primitives, classifies it
     (new/duplicate/refinement/contradiction), and proposes links — then queues
-    the result as a DRAFT for a human to review and apply. The inner model is
+    the result as a DRAFT for review before anything is applied. The inner model is
     given only read tools plus one terminal emit tool; it has no write path. The
     draft is created in deterministic code, so nothing is ever written live.
 
+    While internal draft review is on, the draft is submitted to the
+    reviewer at once; otherwise it stays open for curation. Alias
+    suggestions go to a separate draft, each awaiting a person's decision.
+
     Returns one of two shapes (discriminated by `outcome`):
-      * `draft_created` — `draft_id` ("drf_…"), the queued `ops`, `flagged`
-        contradictions, `skipped_duplicates`, and `trace`.
+      * `draft_created` — `draft_id` ("drf_…"), `alias_draft_id` (or null),
+        `submitted_for_review`, the queued `ops`, `flagged` contradictions,
+        `skipped_duplicates`, and `trace`.
       * `nothing_to_ingest` — a `reason` (all duplicates / nothing extractable /
         degraded) and `trace`.
 
@@ -2381,7 +2386,11 @@ def ingest(text: str) -> dict[str, Any]:
         config = replace(
             config, trace_log_path=str(_context().data_dir / "ingest_trace.jsonl")
         )
-    return run_ingest(text, config=config).model_dump()
+    result = run_ingest(text, config=config)
+    response = result.model_dump()
+    if result.outcome == "draft_created":
+        response["submitted_for_review"] = _auto_submit(result.draft_id)
+    return response
 
 
 def _resolve_research_source(name: str | None) -> str:
@@ -5497,13 +5506,37 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
                 f"only open drafts can be submitted"
             )
 
+    _submit_for_review(draft_id)
+    ops = drafts_store.list_ops(_drafts_db(), draft_id)
+    return {"draft_id": draft_id, "op_count": len(ops)}
+
+
+def _submit_for_review(draft_id: str) -> None:
+    from . import draft_review_runs, drafts_store
+
     with store.transaction(_drafts_db()):
         drafts_store.set_submitted(_drafts_db(), draft_id)
-    ops = drafts_store.list_ops(_drafts_db(), draft_id)
-    from . import draft_review_runs
-
     draft_review_runs.on_submitted(draft_id)
-    return {"draft_id": draft_id, "op_count": len(ops)}
+
+
+def _auto_submit(draft_id: str) -> bool:
+    """Submit a model-produced draft while internal review is on, so it reaches
+    the reviewer instead of waiting for someone to submit it. With review off
+    the draft stays open for a person to curate."""
+    from . import draft_review_runs, draft_review_settings, drafts_store
+
+    try:
+        if draft_review_runs.mode() == "off":
+            return False
+    except draft_review_settings.Unavailable:
+        return False
+    row = drafts_store.get_draft(_drafts_db(), draft_id)
+    if row is None or drafts_store.status_for(row) != "open":
+        return False
+    if not drafts_store.list_ops(_drafts_db(), draft_id):
+        return False
+    _submit_for_review(draft_id)
+    return True
 
 
 @tool(role="writer", real_role=True)
