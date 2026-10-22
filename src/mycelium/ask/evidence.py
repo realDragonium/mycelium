@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 
 from pydantic import JsonValue, TypeAdapter
 
-JSON = TypeAdapter(JsonValue)
+JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 MAX_CONTEXT_CHARS = 20_000
 
 

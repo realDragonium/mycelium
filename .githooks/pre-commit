@@ -4,5 +4,5 @@
 # Tests stay in CI — this hook only guards format/lint so commits stay quick.
 set -e
 
-uv run ruff check src tests scripts
-uv run ruff format --check src tests scripts
+uv run ruff check src tests scripts bench
+uv run ruff format --check src tests scripts bench

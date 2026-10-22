@@ -27,10 +27,11 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 # (kind, frame name, milliseconds-since-recorder-start); kind is "O" | "C".
 SpanEvent = tuple[str, str, float]
@@ -81,7 +82,7 @@ def emit_error(*, where: str, exc: BaseException, **fields: Any) -> None:
         pass
 
 
-_active: ContextVar["SpanRecorder | None"] = ContextVar(
+_active: ContextVar[SpanRecorder | None] = ContextVar(
     "mycelium_trace_recorder", default=None
 )
 # Reentrancy guard so a nested op (shouldn't happen today, but cheap insurance)
@@ -174,12 +175,12 @@ class SpanRecorder:
         return out
 
 
-def current_recorder() -> "SpanRecorder | None":
+def current_recorder() -> SpanRecorder | None:
     return _active.get()
 
 
 @contextmanager
-def use_recorder(recorder: "SpanRecorder") -> Iterator["SpanRecorder"]:
+def use_recorder(recorder: SpanRecorder) -> Iterator[SpanRecorder]:
     """Publish `recorder` as the ambient one for the duration of the block."""
     token = _active.set(recorder)
     try:

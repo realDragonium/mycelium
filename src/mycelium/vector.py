@@ -9,6 +9,7 @@ from pathlib import Path
 
 import hnswlib
 import numpy as np
+from numpy.typing import NDArray
 
 DIM = 768
 INITIAL_CAPACITY = 10_000
@@ -116,7 +117,7 @@ class Index:
         `delete()` don't care — it is idempotent."""
         return [int(x) for x in self._index.get_ids_list()]
 
-    def get_vector(self, vector_id: int) -> list[float] | None:
+    def get_vector(self, vector_id: int) -> NDArray[np.float32] | None:
         """Return the stored vector at `vector_id`, or `None` if the
         slot is missing from the index.
 
@@ -128,13 +129,16 @@ class Index:
         rather than crash the whole pass on the first one.
         """
         try:
-            return self._index.get_items([vector_id])[0]
+            row: NDArray[np.float32] = self._index.get_items([vector_id])[0]
+            return row
         except RuntimeError as exc:
             if "not found" in str(exc).lower():
                 return None
             raise
 
-    def search(self, vec: list[float], k: int) -> list[tuple[int, float]]:
+    def search(
+        self, vec: list[float] | NDArray[np.float32], k: int
+    ) -> list[tuple[int, float]]:
         if self._index.get_current_count() == 0:
             return []
         k = min(k, self._index.get_current_count())

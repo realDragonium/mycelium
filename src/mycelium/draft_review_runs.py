@@ -37,7 +37,7 @@ RUNNER: Callable[[str], Assessment] | None = None
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="draft-review")
 _futures: dict[str, Future[None]] = {}
 _spawn_lock = threading.Lock()
-_json_value = TypeAdapter(JsonValue)
+_json_value: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _CONTEXT_LIMIT = 90000
 _RELATED_PER_STATEMENT = 5
 _payload = TypeAdapter(dict[str, JsonValue])
@@ -220,10 +220,11 @@ def _context(
         for tool in server.TOOLS
         if tool.__name__ in REVIEWABLE_OPERATIONS
     }
+    existing_knowledge: list[JsonValue] = [read.result for read in reads]
     data = {
         "draft": draft,
         "operation_findings": inspection["operation_findings"],
-        "existing_knowledge": [read.result for read in reads],
+        "existing_knowledge": existing_knowledge,
         "link_types": _read(reader, "list_link_types", {}).result,
         "correction_tool_schemas": schemas,
         "knowledge_scope": (
@@ -244,9 +245,9 @@ def _context(
             continue
         seen.add(statement_id)
         read = _read(reader, "get_statements", {"ids": [statement_id]})
-        data["existing_knowledge"].append(read.result)
+        existing_knowledge.append(read.result)
         if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
-            data["existing_knowledge"].pop()
+            existing_knowledge.pop()
             break
         reads.append(read)
     context = json.dumps(data, ensure_ascii=False)
@@ -271,9 +272,9 @@ def _related_statement_ids(
             raise ValueError("related knowledge search returned an invalid result")
         rankings.append(
             [
-                hit["id"]
+                hit_id
                 for hit in hits
-                if isinstance(hit, dict) and isinstance(hit.get("id"), str)
+                if isinstance(hit, dict) and isinstance(hit_id := hit.get("id"), str)
             ]
         )
     return [
@@ -290,12 +291,14 @@ def _statement_texts(ops: JsonValue) -> list[str]:
         payload = op.get("payload") if isinstance(op, dict) else None
         if not isinstance(payload, dict):
             continue
-        if isinstance(payload.get("text"), str):
-            texts.append(payload["text"])
+        if isinstance(text := payload.get("text"), str):
+            texts.append(text)
         statements = payload.get("statements")
         for item in statements if isinstance(statements, list) else []:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
-                texts.append(item["text"])
+            if isinstance(item, dict) and isinstance(
+                item_text := item.get("text"), str
+            ):
+                texts.append(item_text)
     return texts
 
 
@@ -628,11 +631,11 @@ def _supporting_preconditions(
         if not isinstance(statements, list):
             continue
         for statement in statements:
-            if not isinstance(statement, dict) or not isinstance(
-                statement.get("id"), str
-            ):
+            if not isinstance(statement, dict):
                 continue
-            identity = statement["id"]
+            identity = statement.get("id")
+            if not isinstance(identity, str):
+                continue
             conditions[("statement", identity)] = {
                 "kind": "statement",
                 "id": identity,
@@ -660,13 +663,15 @@ def _validate_corrections(
     changed: set[str] = set()
     for correction in result.corrections:
         reference = correction.operation_ref
+        name: JsonValue
         if correction.action == "append":
             name = correction.tool_name
             if reference is not None or not name or name not in REVIEWABLE_OPERATIONS:
                 raise ValueError("append correction needs a supported tool_name only")
         else:
             if (
-                reference not in originals
+                reference is None
+                or reference not in originals
                 or reference in changed
                 or correction.tool_name is not None
             ):

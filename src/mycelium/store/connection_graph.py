@@ -20,7 +20,9 @@ from ..when_expression import validate
 from .kernel import _load_when_tree
 from .statements import get_statement
 
-_CONDITION = TypeAdapter(ConditionLeaf | ConditionGroup)
+_CONDITION: TypeAdapter[ConditionLeaf | ConditionGroup] = TypeAdapter(
+    ConditionLeaf | ConditionGroup
+)
 
 
 class ConnectionGraph:

@@ -140,7 +140,7 @@ def test_retarget_preserves_evidence_and_accepts_current_target(tmp_path, monkey
 
 
 def test_alias_evidence_cannot_be_fabricated(tmp_path, monkeypatch):
-    with vocabulary(tmp_path, monkeypatch) as (_, entity_id, statement_id):
+    with vocabulary(tmp_path, monkeypatch) as (_, entity_id, _statement_id):
         with pytest.raises(ValueError, match="quote"):
             aliases.prepare(server._db(), proposal(entity_id), "Unrelated source")
         with pytest.raises(ValueError, match="alias must occur"):

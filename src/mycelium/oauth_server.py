@@ -55,7 +55,7 @@ import secrets
 import sqlite3
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -98,7 +98,7 @@ CONSENT_TTL_SECONDS = 600
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _base_url(request: Request) -> str:
@@ -887,7 +887,7 @@ async def token_endpoint(
         if user_row is None or user_row["status"] != "active":
             return _oauth_error("invalid_grant", "user no longer active")
 
-        scope_to_grant: auth.Scope = user_row["role"]  # type: ignore[assignment]
+        scope_to_grant: auth.Scope = user_row["role"]
         raw, prefix, h = auth.generate_token()
         client_row = conn.execute(
             "SELECT client_name FROM oauth_clients WHERE client_id = ?",

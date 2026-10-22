@@ -286,7 +286,7 @@ def _run(responses, results=None, ws_results=None, emitter=None, **config_over):
 
 
 def test_tool_list_is_workspace_plus_substrate_reads_plus_emit_only():
-    result, client, *_ = _run(_full_run_turns())
+    _result, client, *_ = _run(_full_run_turns())
     names = [t["name"] for t in client.calls[0]["tools"]]
     assert set(_WS_NAMES) <= set(names)
     assert set(_READ_NAMES) <= set(names)
@@ -301,7 +301,7 @@ def test_tool_list_is_workspace_plus_substrate_reads_plus_emit_only():
 
 
 def test_happy_path_explore_reconcile_emit_creates_draft():
-    result, client, substrate, workspace, emitter = _run(_full_run_turns())
+    result, _client, _substrate, workspace, emitter = _run(_full_run_turns())
     assert isinstance(result, ResearchDraftCreated)
     assert result.draft_id == "drf_1"
     assert result.source == "acme"
@@ -318,7 +318,7 @@ def test_happy_path_explore_reconcile_emit_creates_draft():
 
 
 def test_draft_title_names_source_and_topic():
-    result, *_, emitter = _run(_full_run_turns())
+    _result, *_, emitter = _run(_full_run_turns())
     assert emitter.created == ["research: acme: how invites work"]
 
 

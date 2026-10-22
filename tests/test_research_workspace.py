@@ -129,16 +129,16 @@ def test_read_file_rejects_dotdot_absolute_and_empty(workspace_tree):
 def test_read_file_rejects_symlink_escape(workspace_tree):
     reader = WorkspaceReader(workspace_tree)
 
-    with pytest.raises(WorkspaceError, match="path outside workspace: escape.txt"):
+    with pytest.raises(WorkspaceError, match=r"path outside workspace: escape\.txt"):
         reader.call("ws_read_file", {"path": "escape.txt"})
 
 
 def test_read_file_refuses_binary_and_oversize(workspace_tree):
     reader = WorkspaceReader(workspace_tree, max_file_bytes=10)
 
-    with pytest.raises(WorkspaceError, match="binary file: binary.bin"):
+    with pytest.raises(WorkspaceError, match=r"binary file: binary\.bin"):
         reader.call("ws_read_file", {"path": "binary.bin"})
-    with pytest.raises(WorkspaceError, match="file too large: large.txt"):
+    with pytest.raises(WorkspaceError, match=r"file too large: large\.txt"):
         reader.call("ws_read_file", {"path": "large.txt"})
 
 

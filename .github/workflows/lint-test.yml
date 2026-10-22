@@ -1,7 +1,7 @@
 name: Lint & test
 
-# Keeps the shape from rotting: ruff (format + lint) and the test suite run
-# on every push/PR. Style conventions live in docs/STYLE.md and pyproject.toml.
+# Keeps the shape from rotting: ruff (format + lint), mypy and the test suite
+# run on every push/PR. Style conventions live in docs/STYLE.md and pyproject.toml.
 on:
   push:
     branches: ["master"]
@@ -24,8 +24,18 @@ jobs:
         with:
           cache-suffix: hnswlib-portable-v1
       - run: uv sync --locked
-      - run: uv run ruff check src tests scripts
-      - run: uv run ruff format --check src tests scripts
+      - run: uv run ruff check src tests scripts bench
+      - run: uv run ruff format --check src tests scripts bench
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          cache-suffix: hnswlib-portable-v1
+      - run: uv sync --locked
+      - run: uv run mypy src
 
   test:
     runs-on: ubuntu-latest

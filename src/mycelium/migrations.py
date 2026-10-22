@@ -27,7 +27,8 @@ That's it — no ad-hoc idempotent ALTER checks scattered through the code.
 from __future__ import annotations
 
 import sqlite3
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC
 
 # --- migration definitions --------------------------------------------------
 
@@ -322,9 +323,9 @@ def _migration_v5_derived_mentions(conn: sqlite3.Connection) -> None:
     # upgrade. scripts/backfill_derived_mentions.py does the same eagerly for
     # operators who want it finished before serving traffic.
     if _has_table(conn, "statements"):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        t = datetime.now(timezone.utc)
+        t = datetime.now(UTC)
         now = f"{t.strftime('%Y-%m-%dT%H:%M:%S')}.{t.microsecond // 1000:03d}Z"
         conn.execute(
             "INSERT INTO mention_recompute_queue (statement_id, enqueued_at) "
@@ -381,9 +382,9 @@ def _migration_v6_nocase_names(conn: sqlite3.Connection) -> None:
         _v6_absorb_entity(conn, eid, target)
 
     if affected and _has_table(conn, "mention_recompute_queue"):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
-        t = datetime.now(timezone.utc)
+        t = datetime.now(UTC)
         now = f"{t.strftime('%Y-%m-%dT%H:%M:%S')}.{t.microsecond // 1000:03d}Z"
         conn.executemany(
             "INSERT INTO mention_recompute_queue (statement_id, enqueued_at) "
@@ -634,7 +635,8 @@ def _migration_v9_alias_direction(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
         return
 
-    from mycelium.store.link_type_aliases import _REVERSE_SEED, _now
+    from mycelium.store.kernel import _now
+    from mycelium.store.link_type_aliases import _REVERSE_SEED
 
     # The one reverse alias the pre-v9 seed never carried; an absent row for
     # any other pair means a curator deleted it, which stands.
@@ -674,7 +676,7 @@ def _migration_v10_belongs_to_aliases(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
         return
 
-    from mycelium.store.link_type_aliases import _now
+    from mycelium.store.kernel import _now
 
     now = _now()
     for link_type, alias in (
@@ -712,7 +714,7 @@ def _migration_v11_passive_by_aliases(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT 1 FROM link_type_aliases LIMIT 1").fetchone() is None:
         return
 
-    from mycelium.store.link_type_aliases import _now
+    from mycelium.store.kernel import _now
 
     now = _now()
     for link_type, alias in (

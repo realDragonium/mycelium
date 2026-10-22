@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -468,7 +468,7 @@ def apply(body: ApplyRequest) -> Applied:
             )
         with server._persisted_index_write(names=True):
             before = concept(conn, body.action.entity_id).model_dump()
-            destination_before = before
+            destination_before: dict[str, Any] | None = before
             if isinstance(body.action, (MoveAlias, MergeConcepts)):
                 destination_before = concept(
                     conn, body.action.target_entity_id

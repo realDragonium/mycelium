@@ -36,8 +36,9 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from .. import ai, ai_prompts, tracing
 from ..agentloop import (
@@ -230,14 +231,40 @@ def _default_gap_reporter(text: str) -> Any:
 # --------------------------------------------------------------------------- #
 
 
+@dataclass
 class _RunContext:
-    """Plain bag of per-run harness state, so the handlers below don't each
-    need a dozen positional parameters (mirrors ask/ingest/research)."""
+    """Per-run harness state, so the handlers below don't each need a dozen
+    positional parameters (mirrors ask/ingest/research)."""
 
+    prompt: str
     manual_document: ManualDocument | None
-
-    def __init__(self, **kw: Any) -> None:
-        self.__dict__.update(kw)
+    client: Any
+    substrate: SubstrateReader
+    report_gap: Callable[[str], Any]
+    config: DocgenConfig
+    trace: TraceBuilder
+    start: float
+    review_instructions: str
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    system_prompt: str = ""
+    tools: list[dict] = field(default_factory=list)
+    guideline_set: str | None = None
+    document_type: str | None = None
+    exposure: str | None = None
+    template: str | None = None
+    review_error: str = ""
+    model_error: str | None = None
+    review: ReviewRecord | None = None
+    unresolved: str = ""
+    retrieved_ids: set[str] = field(default_factory=set)
+    successful_reads: int = 0
+    gaps: list[str] = field(default_factory=list)
+    nudged: bool = False
+    emit_blocks: int = 0
+    malformed_retries: int = 0
+    matched_document_id: str | None = None
+    matched_body_digest: str | None = None
+    matched_content_revision: str | None = None
 
 
 def _execute(
@@ -841,6 +868,8 @@ def _handle_emit(
         return _nothing(
             ctx, _review_refusal_reason(review), review=review, title=title, body=body
         )
+    # Guideline resolution runs before the first writing turn.
+    assert ctx.guideline_set is not None and ctx.document_type is not None
     return DocumentWritten(
         slug=_slug(title),
         title=title,
@@ -892,6 +921,8 @@ def _review(
             trace.notes.append(f"review statement hydration failed: {exc}")
 
     check_exposure = bool((ctx.exposure or "").strip())
+    # Guideline resolution runs before the first writing turn.
+    assert ctx.guideline_set is not None and ctx.document_type is not None
     system = prompts.build_review_system_prompt(
         instructions=ctx.review_instructions,
         guideline_set=ctx.guideline_set,

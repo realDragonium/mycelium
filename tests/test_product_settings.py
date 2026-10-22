@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from mycelium import auth, github_credentials, prompt_store
+from mycelium import auth, github_connections, github_credentials, prompt_store
 from mycelium import product_settings as settings
 from mycelium.ask.config import AskConfig, for_depth
 from mycelium.model_capacity import Capacity
@@ -171,6 +171,35 @@ def test_legacy_sources_and_destinations_import_bindings_without_tokens(
     from mycelium.research.sources import load_sources
 
     assert load_sources()["api"].repo == "api"
+
+
+def test_legacy_destination_with_app_connection_imports_that_connection(
+    db, monkeypatch
+):
+    connection = github_connections.Connection(
+        app_id=1, installation_id=2, repository_id=3, owner="acme", repo="docs"
+    )
+    github_connections.save(connection)
+    monkeypatch.setenv(
+        "MYCELIUM_DOC_DESTINATIONS",
+        json.dumps(
+            {
+                "docs": {
+                    "path_template": "docs/{slug}.md",
+                    "config": {
+                        "owner": "acme",
+                        "repo": "docs",
+                        "base_branch": "main",
+                        "connection": connection.name,
+                    },
+                }
+            }
+        ),
+    )
+    with prompt_store._writing(db):
+        settings.initialize(db, import_environment=True)
+    destination = settings.get(settings.DocumentationSettings).destinations[0]
+    assert destination.binding == connection.name
 
 
 def test_binding_requires_deployment_owned_reference(db, monkeypatch):

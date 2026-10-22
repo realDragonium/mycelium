@@ -122,7 +122,9 @@ def test_urls_naming_non_public_hosts_are_never_fetched():
         "https://127.0.0.1/client.json",
         "https://[::1]/client.json",
     ):
-        with pytest.raises(cimd.CimdError, match="non-public address|does not resolve"):
+        with pytest.raises(
+            cimd.CimdError, match=r"non-public address|does not resolve"
+        ):
             cimd.fetch(url, get=get)
 
     assert get.calls == [], "a rejected URL must not be requested at all"

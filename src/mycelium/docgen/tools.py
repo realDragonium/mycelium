@@ -27,7 +27,7 @@ the model having to remember a naming convention.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from ..agentloop import read_tool_defs
 from ..ask.substrate import ToolSpec
@@ -321,9 +321,10 @@ def parse_review_input(
 def _parse_review_check(value: Any, name: str) -> ReviewCheck:
     if not isinstance(value, dict):
         raise ValueError(f"{name} review is not an object")
-    status = value.get("status")
-    if status not in ("pass", "fail"):
+    raw_status = value.get("status")
+    if raw_status not in ("pass", "fail"):
         raise ValueError(f"{name} status must be pass or fail")
+    status: Literal["pass", "fail"] = "pass" if raw_status == "pass" else "fail"
     raw_findings = value.get("findings")
     if not isinstance(raw_findings, list):
         raise ValueError(f"{name} findings must be an array")

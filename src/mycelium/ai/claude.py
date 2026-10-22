@@ -179,10 +179,9 @@ def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
             ]
         messages[-1] = last
     validated = _SDK_MESSAGES.validate_python(messages)
-    for message in validated:
-        content = message["content"]
-        if not isinstance(content, str):
-            message["content"] = list(content)
+    for param in validated:
+        if not isinstance(param["content"], str):
+            param["content"] = list(param["content"])
     return validated
 
 

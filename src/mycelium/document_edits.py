@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from . import doc_runs, docs_store
-from .docgen.config import Provider
+from .ai import Provider
 from .docgen.schema import ManualDocument
 
 

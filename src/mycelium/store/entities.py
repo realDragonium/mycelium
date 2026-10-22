@@ -29,11 +29,12 @@ def create_entity(conn: sqlite3.Connection, description: str | None) -> str:
 
 
 def get_entity_by_id(conn: sqlite3.Connection, entity_id: str) -> sqlite3.Row | None:
-    return conn.execute(
+    row: sqlite3.Row | None = conn.execute(
         "SELECT id, description, preferred_name_id, created_at, updated_at, created_by, updated_by "
         "FROM entities WHERE id = ?",
         (entity_id,),
     ).fetchone()
+    return row
 
 
 def update_entity_description(

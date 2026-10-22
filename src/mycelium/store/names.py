@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from . import kernel
 from .entities import ensure_preferred_name

@@ -47,11 +47,12 @@ def list_knowledge_gaps(
 
 
 def get_knowledge_gap(conn: sqlite3.Connection, gap_id: str) -> sqlite3.Row | None:
-    return conn.execute(
+    row: sqlite3.Row | None = conn.execute(
         "SELECT id, text, created_at, created_by, resolved_at, resolved_by, "
         "       dismissed_at, dismissed_by FROM knowledge_gaps WHERE id = ?",
         (gap_id,),
     ).fetchone()
+    return row
 
 
 def set_knowledge_gap_status(
@@ -81,4 +82,7 @@ def set_knowledge_gap_status(
         )
     else:
         raise ValueError("action must be one of: resolve, dismiss, reopen")
-    return get_knowledge_gap(conn, gap_id)
+    row = get_knowledge_gap(conn, gap_id)
+    if row is None:
+        raise ValueError(f"knowledge gap not found: {gap_id}")
+    return row

@@ -116,7 +116,7 @@ def test_drain_skips_deleted_statement(tmp_path):
 
 def test_backfill_rebuilds_from_scratch(tmp_path, monkeypatch):
     conn = _fresh(tmp_path)
-    e1, _e2, s1, _s2 = _setup_corpus(conn)
+    _e1, _e2, s1, _s2 = _setup_corpus(conn)
     # Plant a stale/garbage mention the matcher would NOT produce.
     bad = store.create_entity(conn, None)
     bad_name = store.create_name(conn, "unrelated thing", bad)

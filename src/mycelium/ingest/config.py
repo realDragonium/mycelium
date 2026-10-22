@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort
@@ -29,7 +30,7 @@ _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 #: Prompt-store name the ingest doctrine is kept under (type `doctrine`).
 #: Startup seeds that row from `doctrine_path`; the loop reads it per run,
 #: so an edit through `save_prompt_text` lands on the next ingest.
-DOCTRINE_NAME = "ingest"
+DOCTRINE_NAME: Final = "ingest"
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,7 @@ class IngestConfig:
     trace_dir: str | None = None
 
     @classmethod
-    def from_env(cls) -> "IngestConfig":
+    def from_env(cls) -> IngestConfig:
         def _f(name: str, default: float) -> float:
             v = os.environ.get(name)
             return float(v) if v else default

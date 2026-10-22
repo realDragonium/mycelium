@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Iterable
+from collections.abc import Iterable
 
 from .. import mentions as mention_index
 from . import kernel
@@ -301,11 +301,12 @@ def list_pending_mentions(
 def get_pending_mention(
     conn: sqlite3.Connection, pending_id: int
 ) -> sqlite3.Row | None:
-    return conn.execute(
+    row: sqlite3.Row | None = conn.execute(
         "SELECT id, statement_id, name_id, approved_at, rejected_at "
         "FROM pending_mentions WHERE id = ?",
         (pending_id,),
     ).fetchone()
+    return row
 
 
 def approve_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:

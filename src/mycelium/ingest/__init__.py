@@ -24,18 +24,18 @@ from .schema import DraftCreated, IngestResult, NothingToIngest, ProposedOp
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from .loop import run_ingest as run_ingest
+else:
 
+    def run_ingest(text: str, **kwargs: Any) -> IngestResult:
+        """Lazy re-export of the loop entry point.
 
-def run_ingest(text: str, **kwargs: Any) -> IngestResult:
-    """Lazy re-export of the loop entry point.
+        `loop.py` pulls in `prompts`/`tools`; importing it lazily keeps the
+        package importable (and the config/schema/draft surface usable) without
+        those — and without an Anthropic client present.
+        """
+        from .loop import run_ingest as _run_ingest
 
-    `loop.py` pulls in `prompts`/`tools`; importing it lazily keeps the package
-    importable (and the config/schema/draft surface usable) without those — and
-    without an Anthropic client present.
-    """
-    from .loop import run_ingest as _run_ingest
-
-    return _run_ingest(text, **kwargs)
+        return _run_ingest(text, **kwargs)
 
 
 __all__ = [

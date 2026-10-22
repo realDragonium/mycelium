@@ -280,7 +280,7 @@ def test_parse_emit_input_parses_payload_json_string():
     data = _emit_input(
         ops=[_op("upsert_entity", {"name": "Acme", "description": "co"})]
     )
-    ops, ledger, flagged, skipped = parse_emit_input(data)
+    ops, _ledger, _flagged, _skipped = parse_emit_input(data)
     assert ops[0]["op"] == "upsert_entity"
     assert ops[0]["payload"] == {"name": "Acme", "description": "co"}
 
@@ -313,7 +313,7 @@ def test_well_formed_text_creates_draft_with_queued_op():
     responses = _reconcile_then_adjacency() + [
         _message([_tool_use(EMIT_TOOL, _good_new_op_emit())])
     ]
-    result, client, substrate, emitter = _run(responses)
+    result, _client, substrate, emitter = _run(responses)
 
     assert isinstance(result, DraftCreated)
     assert result.outcome == "draft_created"
@@ -1406,7 +1406,7 @@ def test_t10_wall_clock_forces_finalize():
     responses = [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
     # op_cap stays generous so the op_cap gate doesn't fire first; the wall clock
     # (checked after the op_cap gate) is what trips.
-    result, client, _sub, _e = _run(responses, wall_clock_s=0.0)
+    result, _client, _sub, _e = _run(responses, wall_clock_s=0.0)
     assert isinstance(result, DraftCreated)
     assert result.trace["forced_finalize"] == "wall_clock"
     assert result.trace["degraded"] is True
@@ -1427,7 +1427,7 @@ def test_t10_floor_stuck_forces_finalize_no_floorless_emit_accepted():
         # the forced-finalize turn (tool_choice forced) succeeds
         _message([_tool_use(EMIT_TOOL, emit, id="forced")]),
     ]
-    result, client, substrate, _e = _run(responses)
+    result, _client, substrate, _e = _run(responses)
     assert result.trace["forced_finalize"] == "floor_stuck"
     assert result.trace["degraded"] is True
     # the floor was never satisfied (no reconcile/adjacency reads happened)

@@ -127,15 +127,15 @@ def retrieve_context(
                 "candidates": selected,
                 "truncated": len(selected) < len(candidates)
                 or (
-                    isinstance(matches.get("total"), int)
-                    and matches["total"] > len(selected)
+                    isinstance(total := matches.get("total"), int)
+                    and total > len(selected)
                 ),
             }
         )
 
     direct_ids = list(statements)[:statement_limit]
     direct = [statements[sid] for sid in direct_ids]
-    frontier = list(
+    frontier: list[JsonValue] = list(
         dict.fromkeys(sid for sid in _pointers(direct) if sid not in direct_ids)
     )
     linked = (
@@ -154,7 +154,7 @@ def retrieve_context(
         "resolutions": resolutions,
         "entities": list(entities.values()),
         "statements": list(evidence.values()),
-        "direct_ids": direct_ids,
+        "direct_ids": [*direct_ids],
         "missing": linked.get("missing", []),
         "limits": {
             "entities": entity_limit,

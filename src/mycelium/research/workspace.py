@@ -136,6 +136,8 @@ class WorkspaceReader:
 
     def _grep(self, arguments: dict[str, Any]) -> dict[str, Any]:
         pattern = arguments.get("pattern")
+        if not isinstance(pattern, str):
+            raise WorkspaceError("pattern must be a string")
         try:
             regex = re.compile(pattern)
         except re.error as exc:
@@ -182,6 +184,8 @@ class WorkspaceReader:
 
     def _read_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
         rel = arguments.get("path")
+        if not isinstance(rel, str):
+            raise WorkspaceError("path must be a string")
         path = self._resolve(rel)
         if not path.is_file():
             raise WorkspaceError(f"file not found: {rel}")

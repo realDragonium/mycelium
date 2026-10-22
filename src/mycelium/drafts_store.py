@@ -24,12 +24,16 @@ from __future__ import annotations
 import json as _json
 import sqlite3
 import uuid as _uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from . import timestamps
 from .connections import ConnectionProvider
 from .link_authoring import reject_entity_statement_additions
+
+if TYPE_CHECKING:  # the record shape is the server's review contract
+    from .server import DraftReviewRecord
 
 DRAFTS_SCHEMA = """
 -- A drafter's pending change set. One open draft per MCP session;
@@ -319,6 +323,13 @@ def get_draft(conn: sqlite3.Connection, draft_id: str) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM drafts WHERE id = ?", (draft_id,)).fetchone()
 
 
+def current_revision(conn: sqlite3.Connection, draft_id: str) -> int:
+    """The revision of a draft the caller knows exists, e.g. one it just updated."""
+    row = get_draft(conn, draft_id)
+    assert row is not None
+    return int(row["revision"])
+
+
 def get_draft_snapshot(
     conn: sqlite3.Connection, draft_id: str
 ) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
@@ -485,7 +496,7 @@ def remove_op(
         if row is not None and expected_revision is not None:
             _check_revision(row, expected_revision)
         return None
-    return int(get_draft(conn, draft_id)["revision"])
+    return current_revision(conn, draft_id)
 
 
 def remove_op_by_ref(
@@ -519,7 +530,7 @@ def remove_op_by_ref(
         if row is not None and expected_revision is not None:
             _check_revision(row, expected_revision)
         return None
-    return int(get_draft(conn, draft_id)["revision"])
+    return current_revision(conn, draft_id)
 
 
 def update_op_payload(
@@ -557,7 +568,7 @@ def update_op_payload(
         if draft is not None and expected_revision is not None:
             _check_revision(draft, expected_revision)
         return None
-    return int(get_draft(conn, draft_id)["revision"])
+    return current_revision(conn, draft_id)
 
 
 def update_op_payload_by_ref(
@@ -604,7 +615,7 @@ def update_op_payload_by_ref(
         if draft is not None and expected_revision is not None:
             _check_revision(draft, expected_revision)
         return None
-    return int(get_draft(conn, draft_id)["revision"])
+    return current_revision(conn, draft_id)
 
 
 def set_submitted(conn: sqlite3.Connection, draft_id: str) -> None:
@@ -651,7 +662,7 @@ def create_review(
     outcome: str,
     rationale: str,
     draft_revision: int,
-    preconditions: list[dict],
+    preconditions: Sequence[Mapping[str, object]],
     unresolved_questions: list[str],
     reviewed_by: str,
 ) -> str:
@@ -780,7 +791,7 @@ def serialize_application(row: sqlite3.Row) -> dict:
     }
 
 
-def serialize_review(row: sqlite3.Row) -> dict:
+def serialize_review(row: sqlite3.Row) -> DraftReviewRecord:
     return {
         "review_id": row["id"],
         "draft_id": row["draft_id"],

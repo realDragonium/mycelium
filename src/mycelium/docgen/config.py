@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
+from typing import Final, TypedDict
 
 from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort
@@ -39,14 +39,16 @@ _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 #: Prompt-store name the docgen doctrine is kept under (type `doctrine`).
 #: Startup seeds that row from `doctrine_path`; the loop reads it per run,
 #: so an edit through `save_prompt_text` lands on the next documentation run.
-DOCTRINE_NAME = "docgen"
+DOCTRINE_NAME: Final = "docgen"
 
 
 def resolve_provider(value: str | None = None) -> Provider:
     selected = value if value is not None else model_settings.get("docgen").provider
-    if selected not in ("claude", "openai"):
-        raise ValueError("documentation provider must be claude or openai")
-    return selected
+    if selected == "claude":
+        return "claude"
+    if selected == "openai":
+        return "openai"
+    raise ValueError("documentation provider must be claude or openai")
 
 
 class ModelChoice(TypedDict):
@@ -137,7 +139,7 @@ class DocgenConfig:
     trace_dir: str | None = None
 
     @classmethod
-    def from_env(cls, *, provider: Provider | None = None) -> "DocgenConfig":
+    def from_env(cls, *, provider: Provider | None = None) -> DocgenConfig:
         limits = product_settings.get(product_settings.DocgenSettings)
         selected = model_settings.get("docgen")
         selected_provider = (

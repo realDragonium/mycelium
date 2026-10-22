@@ -40,6 +40,9 @@ mycelium-init = "mycelium.init_kb:main"
 
 [dependency-groups]
 dev = [
+    # Exact for the same reason as ruff below: new mypy releases add findings,
+    # and the CI gate must not start failing inside an unread lockfile diff.
+    "mypy==2.4.0",
     "pytest>=8.0",
     # Exact, not a floor: ruff is the formatter .githooks/pre-commit runs, and
     # its output changes between minor versions. A floor lets `uv lock --upgrade`
@@ -47,11 +50,148 @@ dev = [
     # in the tree reading as unformatted. Bumping this line is the deliberate
     # act, and the reformat belongs in the same commit.
     "ruff==0.15.20",
+    "types-authlib>=1.8.0.20260911",
+    "types-hnswlib>=0.8.0.20261021",
 ]
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.mypy]
+# The type gate. Two tiers over one baseline; docs/STYLE.md explains the
+# ratchet. `uv run mypy src` must exit 0.
+python_version = "3.11"
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+strict_equality = true
+extra_checks = true
+# Every ignore names its code; truthy-bool catches `if func:`-style tests that
+# are always true.
+enable_error_code = ["deprecated", "ignore-without-code", "truthy-bool"]
+
+# Strict tier: modules that already pass --strict. A module joins by passing
+# these flags; it never leaves.
+[[tool.mypy.overrides]]
+module = [
+    "mycelium",
+    "mycelium.__main__",
+    "mycelium.ai",
+    "mycelium.ai.claude",
+    "mycelium.ai.openai",
+    "mycelium.ai.types",
+    "mycelium.ai_prompts",
+    "mycelium.alias_suggestions",
+    "mycelium.app_context",
+    "mycelium.ask",
+    "mycelium.ask.config",
+    "mycelium.ask.events",
+    "mycelium.ask.evidence",
+    "mycelium.ask.prompts",
+    "mycelium.ask.retrieval",
+    "mycelium.ask.transport",
+    "mycelium.auth_store",
+    "mycelium.backup",
+    "mycelium.cimd",
+    "mycelium.connect_page",
+    "mycelium.connections",
+    "mycelium.doc_runs",
+    "mycelium.docgen",
+    "mycelium.docgen.config",
+    "mycelium.document_edits",
+    "mycelium.documentation_archive",
+    "mycelium.documentation_profiles",
+    "mycelium.draft_review_model",
+    "mycelium.draft_review_runs",
+    "mycelium.draft_review_settings",
+    "mycelium.draft_review_store",
+    "mycelium.embed",
+    "mycelium.github_app",
+    "mycelium.github_connect",
+    "mycelium.github_connections",
+    "mycelium.github_credentials",
+    "mycelium.guidelines",
+    "mycelium.ingest",
+    "mycelium.ingest.config",
+    "mycelium.ingest.prompts",
+    "mycelium.init_kb",
+    "mycelium.layout_baker",
+    "mycelium.link_authoring",
+    "mycelium.link_rules",
+    "mycelium.mention_candidates",
+    "mycelium.mention_worker",
+    "mycelium.mentions",
+    "mycelium.model_capacity",
+    "mycelium.model_credentials",
+    "mycelium.model_settings",
+    "mycelium.names_workspace",
+    "mycelium.oauth_server",
+    "mycelium.ops_ledger",
+    "mycelium.phrasing",
+    "mycelium.phrasing_cues",
+    "mycelium.plurals",
+    "mycelium.product_settings",
+    "mycelium.require",
+    "mycelium.research",
+    "mycelium.research.config",
+    "mycelium.research.prompts",
+    "mycelium.research.sources",
+    "mycelium.research.workspace",
+    "mycelium.research_runs",
+    "mycelium.statement_connections",
+    "mycelium.store",
+    "mycelium.store.connection_graph",
+    "mycelium.store.entities",
+    "mycelium.store.entity_links",
+    "mycelium.store.gaps",
+    "mycelium.store.kernel",
+    "mycelium.store.kind_link_matrix",
+    "mycelium.store.link_type_aliases",
+    "mycelium.store.links",
+    "mycelium.store.read_models",
+    "mycelium.store.statement_mentions",
+    "mycelium.store.statements",
+    "mycelium.survey",
+    "mycelium.timestamps",
+    "mycelium.tracing",
+    "mycelium.vector",
+    "mycelium.when_expression",
+]
+disallow_any_generics = true
+disallow_incomplete_defs = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_untyped_defs = true
+no_implicit_reexport = true
+warn_return_any = true
+
+# Ratchet: modules that fail one baseline check, each switched off only for
+# the codes it trips. Fix the blocker, delete the entry.
+
+# Parses GitHub responses EAFP-style (`payload["a"]["b"]` inside
+# `except (KeyError, TypeError)`), which mypy cannot follow through JsonValue.
+# Unblocked by validating each response into a pydantic model.
+[[tool.mypy.overrides]]
+module = "mycelium.docgen.github_destination"
+disable_error_code = ["assignment", "call-overload", "index"]
+
+# `return _unresolvable(ctx, reason)` records the reason on the run context and
+# returns None in one statement, which mypy reads as using a None result.
+# Unblocked by splitting each of the eight call sites into two statements.
+[[tool.mypy.overrides]]
+module = "mycelium.docgen.loop"
+disable_error_code = ["func-returns-value"]
+
+# Reviewed-application receipts splice untyped JSON (apply_draft's result,
+# stored result_json) into the ReviewedApplicationReceipt TypedDict. Unblocked
+# by giving apply_draft a typed result, which belongs with the tool-surface cut.
+[[tool.mypy.overrides]]
+module = "mycelium.server"
+disable_error_code = ["typeddict-item"]
 
 [tool.ruff]
 line-length = 88
@@ -59,9 +199,15 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 # Small, conservative set: pyflakes, pycodestyle errors, import sorting,
-# bugbear. Local (in-function) imports are intentional here (lazy heavy deps,
-# cycle breaking — see docs/STYLE.md); never enable PLC0415 or similar.
-select = ["E4", "E7", "E9", "F", "I", "B", "C901"]
+# bugbear, pyupgrade, and three bug-catching RUF rules. Rejected families and
+# why are in docs/STYLE.md. Local (in-function) imports are intentional here
+# (lazy heavy deps, cycle breaking); never enable PLC0415 or similar.
+select = [
+    "E4", "E7", "E9", "F", "I", "B", "C901", "UP",
+    "RUF021", # parenthesize chained and/or
+    "RUF043", # unescaped metacharacters in pytest.raises(match=)
+    "RUF059", # unpacked values never used
+]
 ignore = [
     "B006", # mutable-arg-default: fixing changes tool signatures/derived schemas
     "B904", # raise-without-from: adding `from err` changes exception chaining
@@ -73,8 +219,11 @@ ignore = [
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-# One-off operator scripts aren't held to the complexity gate.
+# One-off operator scripts aren't held to the complexity gate, nor is the
+# bench: make_ops is a flat registry of one closure per tool, so its score
+# counts the closures rather than branching.
 "scripts/*" = ["C901"]
+"bench/*" = ["C901"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["mycelium"]

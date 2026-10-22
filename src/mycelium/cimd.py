@@ -31,8 +31,9 @@ import ipaddress
 import json
 import socket
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlsplit
 
 #: Ceiling on the document body. Client metadata is a handful of fields; a
@@ -96,7 +97,7 @@ def _resolve_addresses(host: str, port: int) -> list[str]:
         infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise CimdError(f"client id host does not resolve: {host}") from exc
-    return [info[4][0] for info in infos]
+    return [str(info[4][0]) for info in infos]
 
 
 def _is_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

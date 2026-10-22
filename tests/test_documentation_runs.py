@@ -85,7 +85,7 @@ def test_status_for_rejects_a_row_that_did_not_come_from_get_run(tmp_path):
     ).fetchone()
 
     with pytest.raises(
-        ValueError, match="document_exists.*document_last_run_id.*get_run.*list_runs"
+        ValueError, match=r"document_exists.*document_last_run_id.*get_run.*list_runs"
     ):
         docs_store.status_for(raw_row)
     assert docs_store.status_for(docs_store.get_run(conn, run_id)) == "queued"
@@ -98,7 +98,7 @@ def test_status_for_rejects_a_row_that_did_not_come_from_get_run(tmp_path):
     ).fetchone()
 
     with pytest.raises(
-        ValueError, match="document_exists.*document_last_run_id.*get_run.*list_runs"
+        ValueError, match=r"document_exists.*document_last_run_id.*get_run.*list_runs"
     ):
         docs_store.status_for(raw_row)
     assert docs_store.status_for(docs_store.get_run(conn, run_id)) == "document_written"

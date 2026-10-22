@@ -39,7 +39,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 HASH_NONE = "NONE"
 
@@ -133,7 +134,8 @@ def _canonicalize_inner(expr: dict[str, Any]) -> dict[str, Any]:
         # distinct hash from X.
         child = children[0]
         if is_internal(child) and child["op"] == "not":
-            return child["of"][0]
+            grandchild: dict[str, Any] = child["of"][0]
+            return grandchild
         return {"op": "not", "of": [child]}
 
     # Associativity: pull up children that share our op. AND(X, AND(Y, Z))

@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -152,12 +153,25 @@ def run_ingest(
 # --------------------------------------------------------------------------- #
 
 
+@dataclass
 class _RunContext:
-    """Plain bag of per-run harness state, so the finalizers/handlers below
-    don't each need ten-plus positional parameters (mirrors research/loop.py)."""
+    """Per-run harness state, so the finalizers/handlers below don't each need
+    ten-plus positional parameters (mirrors research/loop.py)."""
 
-    def __init__(self, **kw: Any) -> None:
-        self.__dict__.update(kw)
+    text: str
+    system_prompt: str
+    client: Any
+    substrate: SubstrateReader
+    config: IngestConfig
+    tools: list[dict]
+    messages: list[dict[str, Any]]
+    emitter: DraftEmitter
+    trace: TraceBuilder
+    start: float
+    reads_after_vocab: list[str]
+    nudged: bool = False
+    floor_blocks: int = 0
+    malformed_retries: int = 0
 
 
 def _execute(

@@ -493,7 +493,7 @@ def retire_text(
         if current is None or current["deleted"]:
             return False
         if type == guidelines.TYPE:
-            profile, _, slot = name.partition("/")
+            profile, _, _slot = name.partition("/")
             remaining = {
                 str(row["name"]).partition("/")[2]: str(row["text"])
                 for row in _rows(conn)

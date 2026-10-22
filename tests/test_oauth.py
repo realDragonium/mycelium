@@ -352,7 +352,7 @@ def test_authorize_redirects_to_login_when_unauthenticated(tmp_path, monkeypatch
             "/register",
             json={"client_name": "X", "redirect_uris": ["http://localhost/cb"]},
         ).json()
-        verifier, challenge = _pkce_pair()
+        _verifier, challenge = _pkce_pair()
         r = client.get(
             "/authorize",
             params={
@@ -374,7 +374,7 @@ def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
         admin_bearer, _ = _admin_bearer(server._auth_db())
         # Drive the flow to a fresh code, then submit a verifier that
         # doesn't hash to the challenge we registered.
-        _, client_id, _real_verifier, code = _full_flow(
+        _, _client_id, _real_verifier, _code = _full_flow(
             client,
             admin_bearer=admin_bearer,
         )
@@ -499,7 +499,7 @@ def test_authorization_response_carries_iss(tmp_path, monkeypatch):
             "/register",
             json={"client_name": "Iss client", "redirect_uris": [redirect_uri]},
         ).json()
-        verifier, challenge = _pkce_pair()
+        _verifier, challenge = _pkce_pair()
 
         meta = client.get("/.well-known/oauth-authorization-server").json()
         # Emitting `iss` without advertising it leaves a strict client unable

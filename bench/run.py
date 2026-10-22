@@ -33,10 +33,9 @@ import sys
 import tempfile
 import time
 import zlib
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 
@@ -44,7 +43,6 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from mycelium import embed, server  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Embedder stub
@@ -130,7 +128,9 @@ def attach_existing(data_dir: Path, ollama: bool) -> Substrate:
 
     assert server._conn is not None
     sub = Substrate()
-    sub.behavior_ids = [r["id"] for r in server._conn.execute("SELECT id FROM behaviors").fetchall()]
+    sub.behavior_ids = [
+        r["id"] for r in server._conn.execute("SELECT id FROM behaviors").fetchall()
+    ]
     rows = server._conn.execute(
         "SELECT e.id AS id, MIN(n.text) AS name "
         "FROM entities e LEFT JOIN names n ON n.entity_id = e.id "
@@ -193,7 +193,9 @@ def make_ops() -> list[Op]:
         queries = [f"behavior {i} test" for i in range(20)]
 
         def f():
-            server.search_behaviors(query=queries[rng.integers(0, len(queries))], limit=10)
+            server.search_behaviors(
+                query=queries[rng.integers(0, len(queries))], limit=10
+            )
 
         return f
 
@@ -202,7 +204,9 @@ def make_ops() -> list[Op]:
 
         def f():
             server.search_behaviors(
-                query=queries[rng.integers(0, len(queries))], limit=10, depth=2,
+                query=queries[rng.integers(0, len(queries))],
+                limit=10,
+                depth=2,
             )
 
         return f
@@ -231,7 +235,9 @@ def make_ops() -> list[Op]:
         eids = sub.entity_ids
 
         def f():
-            server.list_behaviors(limit=50, offset=0, entity_id=eids[rng.integers(0, len(eids))])
+            server.list_behaviors(
+                limit=50, offset=0, entity_id=eids[rng.integers(0, len(eids))]
+            )
 
         return f
 
@@ -315,7 +321,11 @@ def make_ops() -> list[Op]:
             counter[0] += 1
             server.upsert_behaviors(
                 behaviors=[
-                    {"text": f"batch write {counter[0]}.{i}", "mentions": [], "links": []}
+                    {
+                        "text": f"batch write {counter[0]}.{i}",
+                        "mentions": [],
+                        "links": [],
+                    }
                     for i in range(10)
                 ],
             )
@@ -331,9 +341,7 @@ def make_ops() -> list[Op]:
         def f():
             counter[0] += 1
             target = ids[counter[0] % len(ids)]
-            server.replace_text(
-                id=target, text=f"replaced text {counter[0]} variation"
-            )
+            server.replace_text(id=target, text=f"replaced text {counter[0]} variation")
 
         return f
 
@@ -395,7 +403,13 @@ def make_ops() -> list[Op]:
                 a = ids[(counter[0] * 7 + j) % len(ids)]
                 b = ids[(counter[0] * 11 + j + 1) % len(ids)]
                 if a != b:
-                    edges.append({"from_behavior_id": a, "to_behavior_id": b, "link_type": "bench-link"})
+                    edges.append(
+                        {
+                            "from_behavior_id": a,
+                            "to_behavior_id": b,
+                            "link_type": "bench-link",
+                        }
+                    )
             if edges:
                 server.add_links(links=edges)
 
@@ -413,7 +427,13 @@ def make_ops() -> list[Op]:
                 a = ids[(counter[0] * 7 + j) % len(ids)]
                 b = ids[(counter[0] * 11 + j + 1) % len(ids)]
                 if a != b:
-                    edges.append({"from_behavior_id": a, "to_behavior_id": b, "link_type": "bench-link"})
+                    edges.append(
+                        {
+                            "from_behavior_id": a,
+                            "to_behavior_id": b,
+                            "link_type": "bench-link",
+                        }
+                    )
             if edges:
                 server.add_links(links=edges)
                 server.remove_links(links=edges)
@@ -431,7 +451,13 @@ def make_ops() -> list[Op]:
                 a = eids[(counter[0] * 3 + j) % len(eids)]
                 b = eids[(counter[0] * 5 + j + 1) % len(eids)]
                 if a != b:
-                    edges.append({"from_entity_id": a, "to_entity_id": b, "link_type": "bench-elink"})
+                    edges.append(
+                        {
+                            "from_entity_id": a,
+                            "to_entity_id": b,
+                            "link_type": "bench-elink",
+                        }
+                    )
             if edges:
                 server.add_entity_links(links=edges)
 
@@ -448,7 +474,13 @@ def make_ops() -> list[Op]:
                 a = eids[(counter[0] * 3 + j) % len(eids)]
                 b = eids[(counter[0] * 5 + j + 1) % len(eids)]
                 if a != b:
-                    edges.append({"from_entity_id": a, "to_entity_id": b, "link_type": "bench-elink"})
+                    edges.append(
+                        {
+                            "from_entity_id": a,
+                            "to_entity_id": b,
+                            "link_type": "bench-elink",
+                        }
+                    )
             if edges:
                 server.add_entity_links(links=edges)
                 server.remove_entity_links(links=edges)
@@ -468,7 +500,7 @@ def make_ops() -> list[Op]:
         for i in range(40):
             tag = f"bench_move_{i}_{rng.integers(0, 1_000_000)}"
             try:
-                r = server.upsert_entity(name=tag, description="")
+                server.upsert_entity(name=tag, description="")
                 # The name we want is the one auto-attached during
                 # upsert_entity; fetch its id.
                 name_row = server._conn.execute(  # type: ignore[union-attr]
@@ -507,11 +539,13 @@ def make_ops() -> list[Op]:
         for i in range(POOL):
             src = server.upsert_behavior(
                 text=f"bench_merge_src_{i}_{rng.integers(0, 1_000_000)}",
-                mentions=[], links=[],
+                mentions=[],
+                links=[],
             )["behavior_id"]
             tgt = server.upsert_behavior(
                 text=f"bench_merge_tgt_{i}_{rng.integers(0, 1_000_000)}",
-                mentions=[], links=[],
+                mentions=[],
+                links=[],
             )["behavior_id"]
             pairs.append((src, tgt))
         counter = [0]
@@ -559,7 +593,8 @@ def make_ops() -> list[Op]:
         for i in range(POOL):
             r = server.upsert_behavior(
                 text=f"bench_delete_victim_{i}_{rng.integers(0, 1_000_000)}",
-                mentions=[], links=[],
+                mentions=[],
+                links=[],
             )
             victims.append(r["behavior_id"])
         counter = [0]
@@ -675,7 +710,9 @@ def print_table(results: dict[str, dict[str, dict[str, float]]]) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_one(sub: Substrate, ops: list[Op], runs: int, label: str) -> dict[str, dict[str, float]]:
+def run_one(
+    sub: Substrate, ops: list[Op], runs: int, label: str
+) -> dict[str, dict[str, float]]:
     print(f"  [{label}] running {len(ops)} ops × {runs} samples ...", file=sys.stderr)
     out: dict[str, dict[str, float]] = {}
     for op in ops:
@@ -687,7 +724,9 @@ def run_one(sub: Substrate, ops: list[Op], runs: int, label: str) -> dict[str, d
             fn = op.factory(sub)
             out[op.label] = time_op(fn, op_runs)
         except Exception as exc:
-            print(f"    {op.label}: failed — {type(exc).__name__}: {exc}", file=sys.stderr)
+            print(
+                f"    {op.label}: failed — {type(exc).__name__}: {exc}", file=sys.stderr
+            )
             out[op.label] = {"p50_ms": float("nan"), "p95_ms": float("nan"), "n": 0}
     return out
 
@@ -715,7 +754,9 @@ def main() -> None:
         action="store_true",
         help="Use the real Ollama embedder (slower, includes per-call network latency)",
     )
-    parser.add_argument("--json", type=Path, default=None, help="Write results as JSON to this path")
+    parser.add_argument(
+        "--json", type=Path, default=None, help="Write results as JSON to this path"
+    )
     args = parser.parse_args()
 
     ops = make_ops()
@@ -735,7 +776,10 @@ def main() -> None:
             label = f"N={size}"
             with tempfile.TemporaryDirectory(prefix=f"mycelium-bench-{size}-") as td:
                 sub = build_synthetic(size, Path(td), ollama=args.ollama)
-                print(f"  built {size} behaviors, {len(sub.entity_ids)} entities", file=sys.stderr)
+                print(
+                    f"  built {size} behaviors, {len(sub.entity_ids)} entities",
+                    file=sys.stderr,
+                )
                 results[label] = run_one(sub, ops, args.runs, label)
 
     print()

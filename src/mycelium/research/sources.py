@@ -18,10 +18,10 @@ import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Mapping
 
 
 class SourceError(RuntimeError):
@@ -64,7 +64,7 @@ def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
 
         try:
             settings = product_settings.get(product_settings.SourcesSettings)
-            sources = {}
+            sources: dict[str, Source] = {}
             for item in settings.sources:
                 if item.binding and item.binding.startswith(github_connections.PREFIX):
                     raise ValueError(
@@ -100,7 +100,7 @@ def load_sources(env: Mapping[str, str] | None = None) -> dict[str, Source]:
     if not isinstance(parsed, dict):
         raise SourceError("MYCELIUM_SOURCES must be a JSON object keyed by source name")
 
-    sources: dict[str, Source] = {}
+    sources = {}
     for name, entry in parsed.items():
         if not isinstance(entry, dict):
             raise SourceError(f"source {name!r} must be a JSON object")

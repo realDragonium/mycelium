@@ -18,10 +18,11 @@ import json
 import sqlite3
 import threading
 from collections import defaultdict
+from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from .. import timestamps
 from ..connections import ConnectionProvider
@@ -684,6 +685,13 @@ def _insert_when_tree(
     return _insert_when_node(conn, link_id, None, 0, expr)
 
 
+def _inserted_rowid(cur: sqlite3.Cursor) -> int:
+    """The rowid an INSERT just wrote; sqlite3 types `lastrowid` as optional."""
+    rowid = cur.lastrowid
+    assert rowid is not None
+    return rowid
+
+
 def _insert_when_node(
     conn: sqlite3.Connection,
     link_id: int,
@@ -698,14 +706,14 @@ def _insert_when_node(
             "VALUES (?, ?, NULL, ?, ?)",
             (link_id, parent_id, expr["statement_id"], child_index),
         )
-        return cur.lastrowid
+        return _inserted_rowid(cur)
     cur = conn.execute(
         "INSERT INTO when_nodes "
         "(link_id, parent_id, op, statement_id, child_index) "
         "VALUES (?, ?, ?, NULL, ?)",
         (link_id, parent_id, expr["op"], child_index),
     )
-    node_id = cur.lastrowid
+    node_id = _inserted_rowid(cur)
     for i, child in enumerate(expr["of"]):
         _insert_when_node(conn, link_id, node_id, i, child)
     return node_id
