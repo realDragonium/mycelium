@@ -8,10 +8,10 @@ plus the layout baker's own module singleton; consolidating them gives one
 baker on.
 
 Deliberately narrow: it owns only what was previously loose in the ``server``
-module — the two vector indexes, the data dir, and the layout baker. The
-substrate / auth / drafts stores stay as independent modules with their own
-per-thread connections; they are already well-factored and do not belong in a
-single god-object.
+module — the two vector indexes, the data dir, and the layout baker — plus
+what ``init`` found wrong with that data dir. The substrate / auth / drafts
+stores stay as independent modules with their own per-thread connections; they
+are already well-factored and do not belong in a single god-object.
 
 Plain data, no framework imports — a tool can build one from plain values and
 test against it without starting a server. The ``index`` / ``name_index``
@@ -40,3 +40,6 @@ class AppContext:
     name_index: vector.Index
     name_index_path: Path
     layout_baker: LayoutBaker
+    #: Databases missing beside a populated substrate when ``init`` ran: a
+    #: partial restore, reported by the health endpoint (see ``databases``).
+    partial_restore: tuple[str, ...]

@@ -35,6 +35,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import Field, JsonValue
 
 from . import (
+    databases,
     documentation_profiles,
     embed,
     link_authoring,
@@ -993,6 +994,8 @@ def init(data_dir: Path) -> None:
     from . import auth_store, docs_store, drafts_store, prompt_store, research_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    # Before anything below recreates a missing database empty.
+    partial_restore = databases.check_restore(data_dir)
     prompt_store.configure(data_dir / "mycelium-prompts.db")
     prompts = _prompts_db()
     existing_settings_instance = (data_dir / "mycelium.db").exists() or prompts.execute(
@@ -1145,6 +1148,7 @@ def init(data_dir: Path) -> None:
         name_index=name_index,
         name_index_path=name_index_path,
         layout_baker=baker,
+        partial_restore=partial_restore,
     )
 
     # Start the background mention worker on its own thread and connection
