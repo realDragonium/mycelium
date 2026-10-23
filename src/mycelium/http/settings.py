@@ -1,5 +1,5 @@
-"""Admin settings: product settings, AI model choices, the draft-review setup
-and AI usage.
+"""Admin settings: product settings, AI model choices, the draft-review setup,
+AI usage and the setup checklist.
 
 Anyone authenticated may read them; only an admin may save. A conflicting save
 answers 409, and unavailable settings 503.
@@ -11,8 +11,16 @@ from typing import Annotated
 
 import anyio.from_thread
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel
 
-from .. import ai_usage, drafts_store, model_settings, product_settings, server
+from .. import (
+    ai_usage,
+    drafts_store,
+    model_settings,
+    product_settings,
+    server,
+    setup_checklist,
+)
 from .. import draft_review_settings as review_settings
 from .access import _require_admin, _require_principal
 
@@ -115,3 +123,30 @@ def ai_budget(request: Request) -> ai_usage.Budget | None:
     if not _require_principal(request).is_admin:
         return None
     return ai_usage.budget(drafts_store.connection(), _budget_settings())
+
+
+@router.get("/api/setup")
+def setup_view(request: Request) -> setup_checklist.SetupView:
+    _require_admin(request)
+    try:
+        return setup_checklist.view(server._db())
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+class DismissStep(BaseModel):
+    dismissed: bool
+
+
+@router.put("/api/setup/steps/{step}")
+def dismiss_setup_step(
+    step: product_settings.SetupStep, body: DismissStep, request: Request
+) -> setup_checklist.SetupView:
+    principal = _require_admin(request)
+    try:
+        setup_checklist.dismiss(step, body.dismissed, principal)
+        return setup_checklist.view(server._db())
+    except model_settings.Conflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
