@@ -42,6 +42,8 @@ def knowledge_health_http(request: Request) -> HealthView:
         selected = model_settings.get("connect")
     except model_settings.Unavailable as exc:
         return HealthView(counts=counts, connect=None, connect_error=str(exc))
+    if reason := model_settings.credentials_error("connect"):
+        return HealthView(counts=counts, connect=None, connect_error=reason)
     return HealthView(
         counts=counts,
         connect=ConnectLimits(

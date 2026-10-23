@@ -48,6 +48,7 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 |---|---|---|---|
 | You | Account & tokens | `#/settings/account` | Your name, role, audience and auth state; create and revoke MCP tokens; admins pick and change each token's audience |
 | | Appearance | `#/settings/appearance` | Theme, density and answer typeface, saved in this browser |
+| Instance | Set up Mycelium | `#/settings/setup` | Admins: the setup checklist (see below) |
 | People | Members & invites | `#/settings/members` | Admins: roles, audiences, suspension, invites, service accounts and their tokens |
 | AI | Models | `#/settings/models` | Provider, model and reasoning effort per action |
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
@@ -58,8 +59,51 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | | Audiences | `#/settings/audiences` | Who documents are written for; per audience, visible and unlabelled statements; labelling status, backfill progress and cost; statements by audience and label state, including curator labels whose text changed since the decision. See [Audiences](AUDIENCES.md) |
 
 What a person can change depends on their role; sections say so where it
-applies. Once estimated spend passes the monthly budget's warning percentage,
-admins see a banner on every screen linking to AI usage.
+applies. A save in any settings section reloads the other settings shown on
+the page and the banners, so a value saved in one card shows in the next
+without a page reload. A card with unsaved edits keeps them.
+
+Model ID fields are checked against their provider: a Claude field refuses an
+OpenAI model ID and the other way round. An ID this version does not know is
+saved with a warning, because its cost cannot be estimated.
+
+### Setup checklist
+
+Until every step is done or dismissed, admins see a **Set up Mycelium** card
+on Home listing the open steps; **Settings → Set up Mycelium** shows them all.
+Each step links to the section that completes it:
+
+| Step | Done when |
+|---|---|
+| AI provider credentials | The providers of the actions in use (Draft review only when it is on) have credentials on the server |
+| Models for each AI action | Every action in use has a model ID |
+| Audiences reviewed and statements labelled | An audience has been edited and every statement has a label |
+| A writing profile with an audience | A profile names an audience explicitly |
+| GitHub connection and destination (optional) | A publishing destination exists |
+| Draft review mode | Review settings were saved, or review is on |
+| Monthly AI budget (optional) | A monthly limit is set |
+
+Statuses are read from saved settings and counts; credentials are checked for
+presence only, never with a provider request. A dismissed step can be restored
+from the Settings section. `GET /api/setup` returns the checklist and
+`PUT /api/setup/steps/{step}` with `{"dismissed": true|false}` dismisses or
+restores a step; both are admin-only.
+
+### Banners
+
+Banners above every screen report conditions that last until an operator acts:
+
+- **Quarantine**: the server was started with `--quarantine`; background AI
+  work, draft review and GitHub publishing are off. See
+  [Opening a copy of production data](DEPLOYMENT.md#opening-a-copy-of-production-data).
+- **Partial restore**: startup found databases missing beside a populated
+  knowledge base.
+- **AI budget** (admins): estimated spend passed the monthly budget's warning
+  percentage.
+- **Background AI work is waiting** (admins): automatic draft review, audience
+  labelling or automatic document revision is on but its provider has no
+  credentials. Those workers wait without starting runs until credentials are
+  configured.
 
 ### Scoped to an audience
 

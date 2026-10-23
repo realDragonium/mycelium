@@ -193,7 +193,10 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
 
 def drain(conn: sqlite3.Connection, *, call: Call = _call) -> int:
     """Label due batches until none is due or one fails. Returns how many
-    statements were labelled."""
+    statements were labelled. Without provider credentials nothing is tried,
+    so the queue keeps its statements due instead of recording failures."""
+    if model_settings.credentials_error("audience_labelling"):
+        return 0
     total = 0
     while True:
         try:

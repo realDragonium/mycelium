@@ -10,6 +10,7 @@ missing here has no estimate rather than a guessed one.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from .types import Provider, Usage
@@ -90,3 +91,19 @@ _OPENAI: dict[str, Price] = {
 
 def price(provider: Provider, model: str) -> Price | None:
     return (_CLAUDE if provider == "claude" else _OPENAI).get(model)
+
+
+# Bedrock and Vertex ids wrap the Claude name (`us.anthropic.claude-…`,
+# `claude-…@20250101`), so a Claude id is recognised anywhere after a separator.
+_CLAUDE_ID = re.compile(r"(^|[.:/])claude-")
+_OPENAI_ID = re.compile(r"^(ft:)?(gpt-|chatgpt-|codex-|o\d)")
+
+
+def provider_of(model: str) -> Provider | None:
+    """The provider a model id belongs to, by the price table or the id's
+    shape; None for an id neither recognises."""
+    if model in _CLAUDE or _CLAUDE_ID.search(model):
+        return "claude"
+    if model in _OPENAI or _OPENAI_ID.match(model):
+        return "openai"
+    return None

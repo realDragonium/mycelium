@@ -174,6 +174,17 @@ class AIBudgetSettings(SettingsModel):
     pause_background: bool = False
 
 
+SetupStep = Literal[
+    "credentials", "models", "audiences", "profile", "github", "review", "budget"
+]
+
+
+class SetupSettings(SettingsModel):
+    kind: Literal["setup"] = "setup"
+    #: Checklist steps an admin set aside (see `setup_checklist`).
+    dismissed: tuple[SetupStep, ...] = Field(default=(), strict=False)
+
+
 class DestinationSettings(SettingsModel):
     name: str = Field(min_length=1, max_length=200)
     path_template: str = Field(min_length=1, max_length=1000)
@@ -254,6 +265,7 @@ Section = Literal[
     "concurrency",
     "documentation",
     "ai_budget",
+    "setup",
 ]
 Body = Annotated[
     AskSettings
@@ -267,7 +279,8 @@ Body = Annotated[
     | ConnectSettings
     | ConcurrencySettings
     | DocumentationSettings
-    | AIBudgetSettings,
+    | AIBudgetSettings
+    | SetupSettings,
     Field(discriminator="kind"),
 ]
 BODY: TypeAdapter[Body] = TypeAdapter(Body)
@@ -284,6 +297,7 @@ DEFAULTS: tuple[Body, ...] = (
     ConcurrencySettings(),
     DocumentationSettings(),
     AIBudgetSettings(),
+    SetupSettings(),
 )
 
 
@@ -335,7 +349,8 @@ T = TypeVar(
     | ConnectSettings
     | ConcurrencySettings
     | DocumentationSettings
-    | AIBudgetSettings,
+    | AIBudgetSettings
+    | SetupSettings,
 )
 
 
@@ -459,7 +474,8 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         | DocumentationPlanningSettings
         | AIBudgetSettings
         | DocumentationMaintenanceSettings
-        | ConnectSettings,
+        | ConnectSettings
+        | SetupSettings,
     ):
         return default
     if isinstance(default, DocumentationSettings):

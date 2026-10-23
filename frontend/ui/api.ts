@@ -70,8 +70,17 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
     try { parsed = JSON.parse(text); } catch { parsed = text; }
   }
   if (!res.ok) throw new HttpError(detailOf(parsed) || statusMessage(res.status), res.status, path, parsed && typeof parsed === 'object' && 'detail' in parsed ? parsed.detail : null, parsed);
+  if (method !== 'GET' && SETTINGS_PATHS.some(prefix => path.startsWith(prefix))) window.dispatchEvent(new Event(SETTINGS_SAVED));
   return parsed as T;
 }
+
+// Several screens and banners read the same settings; a save anywhere tells
+// them to load again (see `useOnSettingsSaved`).
+export const SETTINGS_SAVED = 'mycelium:settings-saved';
+const SETTINGS_PATHS = [
+  '/api/product-settings', '/api/model-settings', '/api/draft-review/settings', '/api/setup',
+  '/api/audiences', '/api/documentation/profiles', '/api/documentation/prompts', '/api/github',
+];
 
 export const getJSON = <T>(path: string, signal?: AbortSignal) => request<T>('GET', path, undefined, signal);
 export const postJSON = <T>(path: string, body: unknown = {}, signal?: AbortSignal) => request<T>('POST', path, body, signal);
@@ -93,8 +102,9 @@ export const getMe = () => getJSON<Me>('/api/me');
 export interface SubstrateCounts { statements: number; entities: number; names: number; links: number; entity_links: number }
 export const getSubstrateCounts = () => getJSON<SubstrateCounts>('/api/substrate-counts');
 // `partial_restore` names the databases startup found missing beside a
-// populated substrate; it is fixed for the life of the server process.
-export interface ServerInfo { partial_restore: string[] }
+// populated substrate; it and `quarantine` are fixed for the life of the
+// server process.
+export interface ServerInfo { partial_restore: string[]; quarantine: boolean }
 export const getServerInfo = () => getJSON<ServerInfo>('/api/server-info');
 
 /* -------------------------------- Find -------------------------------- */

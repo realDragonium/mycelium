@@ -41,6 +41,7 @@ TEXT = "Single sign-on (SSO) is required in the Admin console."
 
 @pytest.fixture
 def curated_app(tmp_path, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
     with _app(tmp_path, monkeypatch) as client:
         with store.transaction(runtime._auth_db()):
@@ -321,6 +322,18 @@ def test_sweep_retries_a_provider_failure_after_backoff(curated_app, monkeypatch
     assert retried.previous_failure == "Fixture provider outage"
     assert retried.application == "applied"
     assert server.get_draft(draft_id)["status"] == "approved"
+
+
+def test_sweep_waits_for_credentials_without_recording_runs(curated_app, monkeypatch):
+    _automatic()
+    _failing_provider(monkeypatch)
+    draft_id = _draft()
+    failed = _latest(draft_id)
+    monkeypatch.delenv("OPENAI_API_KEY")
+    later = _finished(failed) + timedelta(days=1)
+
+    assert draft_review_runs.sweep(later) == []
+    assert _latest(draft_id).run_id == failed.run_id
 
 
 def test_sweep_stops_after_the_last_attempt(curated_app, monkeypatch):

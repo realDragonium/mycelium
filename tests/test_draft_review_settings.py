@@ -656,6 +656,28 @@ def test_selected_model_required_but_alternate_optional(
     assert model_settings.get("docgen").model == "chosen-model"
 
 
+def test_a_model_id_of_the_other_provider_is_refused_and_an_unknown_one_warned(
+    configured_app,
+):
+    client, _ = configured_app
+    swapped = _model_body(client, "ask", provider="claude", claude_model="gpt-5.4")
+    response = client.patch("/api/model-settings/ask", json=swapped)
+    assert response.status_code == 400
+    assert "OpenAI" in response.json()["detail"]
+    alternate = _model_body(client, "ask", openai_model="claude-opus-5-5")
+    assert client.patch("/api/model-settings/ask", json=alternate).status_code == 400
+
+    unknown = _model_body(client, "ask", provider="claude", claude_model="claude-9")
+    saved = client.patch("/api/model-settings/ask", json=unknown)
+    assert saved.status_code == 200
+    assert "claude-9" in saved.json()["model_warning"]
+    known = _model_body(client, "ask", claude_model="claude-sonnet-5-5")
+    assert (
+        client.patch("/api/model-settings/ask", json=known).json()["model_warning"]
+        is None
+    )
+
+
 def test_empty_legacy_review_model_cannot_create_a_run(configured_app):
     draft_id = _draft()
     _set_review_controls(mode="review-only")

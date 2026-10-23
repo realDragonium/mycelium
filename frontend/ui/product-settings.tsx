@@ -4,7 +4,7 @@ import { useCallback, useState, type FormEvent } from 'react';
 import { GitHubConnection, type GitHubRepoConnection } from './github-connection';
 import { Card, LoadError, Loading, Notice } from './lib';
 import { HttpError, errorMessage, getJSON, patchJSON } from './api';
-import { useAsync } from './use-async';
+import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
 const TITLES: Record<string, string> = {
   ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation',
@@ -111,6 +111,12 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
 
   const change = (patch: Partial<Settings>) => { setForm(f => ({ ...f, ...patch })); setSaved(false); };
   const accept = (value: Section) => { setCurrent(value); setForm(value.settings); };
+  // A save elsewhere reloads the document; take this section unless it has edits.
+  const [seen, setSeen] = useState(snapshot);
+  if (snapshot !== seen) {
+    setSeen(snapshot);
+    if (snapshot.revision !== current.revision && JSON.stringify(form) === JSON.stringify(current.settings)) accept(snapshot);
+  }
   // A newly connected repository becomes a destination, named after the repo.
   const connected = (c: GitHubRepoConnection) => {
     setConnections(prev => [...prev.filter(x => x.name !== c.name), { ...c, enabled: true }]);
@@ -191,9 +197,9 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
 
 export function ProductSettings({ kinds }: { kinds: string[] }) {
   const { state, reload, update } = useAsync(useCallback(() => getJSON<ProductSettingsData>('/api/product-settings'), []));
-  if (state.status === 'loading') return <Loading what="settings" />;
-  if (state.status === 'error') return <LoadError error={state.error} what="settings" onRetry={reload} />;
-  const data = state.data;
+  useOnSettingsSaved(reload);
+  const data = dataOf(state);
+  if (!data) return state.status === 'error' ? <LoadError error={state.error} what="settings" onRetry={reload} /> : <Loading what="settings" />;
   return <>
     {data.github_configuration_error && <Notice tone="error">{data.github_configuration_error}</Notice>}
     {data.sections.filter(s => kinds.includes(s.settings.kind)).map(s => <ProductSettingsSection key={s.settings.kind} snapshot={s} data={data} onOptions={fresh => update(() => fresh)} />)}

@@ -26,6 +26,8 @@ T0 = datetime.now(UTC)
 def client(tmp_path, monkeypatch):
     from test_prompt_texts import _app
 
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+
     def runner(prompt, *, guideline_set, document_type):
         from mycelium import server
 
@@ -174,6 +176,28 @@ def test_propose_adds_one_update_item_briefed_with_the_change(client):
     assert client.get("/api/documentation/plans/public").json()["items"] == []
     (entry,) = client.get("/api/documentation/maintenance").json()["entries"]
     assert (entry["state"], entry["waiting"]) == ("approved", False)
+
+
+def test_auto_revise_waits_for_credentials(client, monkeypatch):
+    _profile("auto-revise", "external-technical")
+    document, statement = _document()
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+    _sweep(T0)
+    monkeypatch.delenv("ANTHROPIC_API_KEY")
+    monkeypatch.setattr(
+        document_maintenance.model_settings,
+        "claude_configuration_error",
+        lambda: "Configure Anthropic credentials on the server.",
+    )
+
+    assert _sweep(T0 + timedelta(hours=1)) == []
+    assert _revision(document) == 1
+
+    monkeypatch.setattr(
+        document_maintenance.model_settings, "claude_configuration_error", lambda: None
+    )
+    assert len(_sweep(T0 + timedelta(hours=2))) == 1
+    assert _revision(document) == 2
 
 
 def test_auto_revise_waits_for_quiet_and_revises_once(client):

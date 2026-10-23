@@ -71,6 +71,7 @@ class ReviewerChoice(BaseModel):
 
 class SettingsView(Snapshot):
     configuration_error: str | None = None
+    model_warning: str | None = None
     can_review: bool
     can_configure: bool
     application_enabled: bool
@@ -184,6 +185,7 @@ def view(principal: auth.Principal) -> SettingsView:
     return SettingsView(
         **settings.model_dump(),
         configuration_error=configuration_error,
+        model_warning=model_settings.model_warning(settings.provider, settings.model),
         claude_model=model.claude_model,
         openai_model=model.openai_model,
         claude_reasoning_effort=model.claude_reasoning_effort,
@@ -203,6 +205,7 @@ def view(principal: auth.Principal) -> SettingsView:
 def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
     if not principal.is_admin:
         raise auth.RoleRequired("admin role required")
+    model_settings.check_model_id(request.provider, request.model)
     desired = Controls(
         mode=request.mode,
         reviewer_id=request.reviewer_id,

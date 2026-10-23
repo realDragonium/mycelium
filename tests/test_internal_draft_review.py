@@ -41,6 +41,7 @@ def _set_review_model(model):
 def running_app(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODE", "off")
     monkeypatch.delenv("MYCELIUM_REVIEWED_APPLY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
     with _app(tmp_path, monkeypatch) as client:
         with store.transaction(runtime._auth_db()):
@@ -521,17 +522,14 @@ def test_drafter_cannot_request_or_impersonate_reviewer(running_app, monkeypatch
     assert "independent" in result["detail"]
 
 
-def test_model_failure_and_missing_configuration_are_visible(running_app, monkeypatch):
+def test_review_without_credentials_is_refused_before_a_run(running_app, monkeypatch):
     draft_id = _draft()
-    monkeypatch.setattr(draft_review_runs, "RUNNER", None)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("MYCELIUM_DRAFT_REVIEW_MODEL", raising=False)
     _set_review_controls(mode="review-only")
-    _request(draft_id)
-    result = _result(draft_id)
-    assert result["status"] == "failed"
-    assert "required" in result["detail"]
-    assert result["application"] == "unapplied"
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        _request(draft_id)
+    assert _result(draft_id) is None
+    monkeypatch.setenv("OPENAI_API_KEY", "fixture-key")
     monkeypatch.setattr(
         draft_review_runs, "RUNNER", lambda context: _assessment("needs_context")
     )

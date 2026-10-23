@@ -238,7 +238,26 @@ INFO:     Waiting for application startup.
 INFO:     StreamableHTTP session manager started
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+... INFO mycelium.server.startup: startup finished in 0.4s
 ```
+
+The server listens straight away and finishes starting in the background.
+Each migration it runs is logged with its version, name and duration, and
+an index rebuild logs its progress:
+
+```
+... INFO mycelium.migrations: substrate migration v21 (audience labels): starting
+... INFO mycelium.migrations: substrate migration v21 (audience labels): done in 3.2s
+... INFO mycelium.server.indexes: rebuilding statement vector index: 1200/6000 re-embedded (40s)
+```
+
+Until startup finishes, `/api/server-info` answers `503` with the state
+(`starting`, `migrating`, `indexing`, or `failed` with the reason), browsers
+get a page that reloads itself, and every other request gets `503` with a
+`Retry-After` header. Nothing reaches a database before the migrations are
+done. Once ready, `/api/server-info` answers `200` with `"state": "ready"`.
+If startup fails, the error is logged as a `MYCELIUM_ERROR` line and the
+process exits with status 1, so systemd restarts it.
 
 ---
 
@@ -481,6 +500,35 @@ sudo -u mycelium /opt/mycelium/.local/bin/uv --project /opt/mycelium run \
 sudo rm -rf /tmp/restore-check
 ```
 
+### Opening a copy of production data
+
+A restored copy holds the original's review settings, writing profiles and
+GitHub destinations. Started normally, it reviews submitted drafts, labels
+statements, revises out-of-date documents and opens pull requests against
+the original's repositories, all with your AI credentials. Start a copy you
+only want to inspect or test against in quarantine:
+
+```bash
+MYCELIUM_DATA_DIR=/tmp/restore-check mycelium-http --quarantine
+# or, for a service or container:
+MYCELIUM_QUARANTINE=1 mycelium-http
+```
+
+In quarantine:
+
+- the audience labeller, the draft-review sweeper and document maintenance
+  do not start;
+- draft review counts as off: submitted drafts are not reviewed, and a
+  review cannot be started by hand;
+- publishing to GitHub is refused.
+
+Nothing saved changes, so the same data dir starts normally once the flag
+is gone. `/api/server-info` reports `"quarantine": true`, and the web app
+shows a banner while it is on. Ask, ingest and document generation still
+work when someone starts them and credentials are set; leave the AI keys out
+of the environment as well if the copy should make no model calls at all.
+`mycelium serve --quarantine` does the same for the stdio server.
+
 ### Deploy snapshots
 
 Every deploy that restarts the service first stops it and copies the data
@@ -541,6 +589,10 @@ newer build; an older build refuses it.
 
 6. Compare the row counts `import` printed with those `export` printed,
    sign in, and run a search you know the answer to.
+
+   To look around before the new instance takes over, start it in
+   quarantine first (see [Opening a copy of production
+   data](#opening-a-copy-of-production-data)).
 
 GitHub App connections come back disabled; re-enable them under
 **Settings**. OAuth clients mid-authorization must start again.
@@ -669,6 +721,7 @@ hosting), you can skip Ollama entirely.
 | Symptom | Likely cause |
 |---|---|
 | `503` from nginx | Service isn't running. `sudo systemctl status mycelium`, check journal. |
+| `503` from Mycelium itself, "Mycelium is starting up" | Startup is still migrating or re-embedding. `curl -s localhost:8765/api/server-info` shows the step; the journal shows each migration's progress. |
 | `502` from nginx | Service is up but uvicorn isn't bound to `127.0.0.1:8765`. Confirm `MYCELIUM_HTTP_HOST/PORT` in the systemd unit aren't being overridden by the env file. |
 | Service stops right after a deploy with `database schema version N is newer than this build's latest known version M` | An older build is running on migrated data. See [Rolling back a deploy](#rolling-back-a-deploy). |
 | Deploy aborts with `snapshot failed` | A database in `/var/lib/mycelium` failed its check, or the disk is full. The running build was restarted unchanged; read the message above it. |

@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import logging
 import os
+import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
-from .. import databases, store, vector
+from .. import databases, quarantine, store, vector
 from ..app_context import AppContext
 from ..layout_baker import LayoutBaker
 from . import runtime
@@ -31,8 +34,77 @@ from .runtime import _auth_db, _db, _drafts_db, _prompts_db
 
 logger = logging.getLogger(__name__)
 
+Phase = Literal["starting", "migrating", "indexing", "ready", "failed"]
+
+
+@dataclass(frozen=True)
+class Startup:
+    state: Phase
+    #: The step under way, or why startup failed.
+    detail: str
+    started_at: float
+
+    @property
+    def elapsed_s(self) -> float:
+        return round(time.monotonic() - self.started_at, 1)
+
+
+#: None unless startup runs in the background (see `mark_starting`); a
+#: synchronous start completes before anything could ask.
+_startup: Startup | None = None
+
+#: Loggers whose lines narrate a slow start: each one becomes the detail.
+_PROGRESS_LOGGERS = ("mycelium.migrations", "mycelium.server.indexes")
+
+
+def status() -> Startup | None:
+    return _startup
+
+
+def mark_starting() -> None:
+    """Track a start that is about to run in the background, from before
+    `init` begins on its thread."""
+    global _startup
+    _startup = Startup("starting", "", time.monotonic())
+
+
+def _report(state: Phase, detail: str = "") -> None:
+    global _startup
+    if _startup is not None:
+        _startup = Startup(state, detail, _startup.started_at)
+
+
+class _Progress(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        if _startup is not None:
+            _report(_startup.state, record.getMessage())
+
 
 def init(data_dir: Path) -> None:
+    """Build the runtime context (see `_init`), reporting its progress through
+    `status` so a caller can tell a slow start from a broken one."""
+    started = time.monotonic()
+    progress = _Progress(logging.INFO)
+    loggers = [logging.getLogger(name) for name in _PROGRESS_LOGGERS]
+    levels = [item.level for item in loggers]
+    for item in loggers:
+        item.addHandler(progress)
+        if item.getEffectiveLevel() > logging.INFO:
+            item.setLevel(logging.INFO)
+    try:
+        _init(data_dir)
+    except BaseException as exc:
+        _report("failed", str(exc) or type(exc).__name__)
+        raise
+    finally:
+        for item, level in zip(loggers, levels, strict=True):
+            item.removeHandler(progress)
+            item.setLevel(level)
+    _report("ready")
+    logger.info("startup finished in %.1fs", time.monotonic() - started)
+
+
+def _init(data_dir: Path) -> None:
     """Open the substrate + auth DBs and load (or create) the two
     vector indexes (statements, entity names).
 
@@ -50,6 +122,7 @@ def init(data_dir: Path) -> None:
     from .. import ai_usage, auth_store, docs_store, drafts_store, prompt_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
+    _report("migrating", "Bringing the databases up to date")
     # Before anything below recreates a missing database empty.
     partial_restore = databases.check_restore(data_dir)
     prompt_store.configure(data_dir / "mycelium-prompts.db")
@@ -121,6 +194,7 @@ def init(data_dir: Path) -> None:
     # missing (a fresh checkout, or a restore of such a backup) or marked dirty
     # after an interrupted write, rebuild the index by re-embedding, or search
     # could silently use vectors that diverge from the populated substrate.
+    _report("indexing", "Loading the vector indexes")
     index_path = data_dir / "mycelium.vec"
     index_dirty = _dirty_marker_path(index_path).exists()
     if index_path.exists() and not index_dirty:
@@ -188,6 +262,7 @@ def init(data_dir: Path) -> None:
         _fsync_file(name_index_path)
         _clear_dirty_marker(name_index_path)
 
+    _report("starting", "Starting background workers")
     runtime._ctx = AppContext(
         data_dir=data_dir,
         index=index,
@@ -206,6 +281,12 @@ def init(data_dir: Path) -> None:
         from .. import mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
+    if quarantine.active():
+        logger.warning(
+            "quarantine: background AI workers, draft review and GitHub delivery "
+            "are off"
+        )
+        return
     if os.environ.get("MYCELIUM_DISABLE_AUDIENCE_WORKER") != "1":
         from .. import audience_labelling
 

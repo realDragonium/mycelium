@@ -64,6 +64,15 @@ profiles. The settings screen shows local credential availability; it does not
 make a provider request to test a model or establish account access. Provider
 errors remain explicit and never cause fallback to a different model.
 
+Background AI work checks credentials before it collects evidence or calls a
+model. Without them, the review sweeper, the audience labeller and automatic
+document revision leave their queues untouched, and admins see one banner
+naming each waiting worker instead of a stream of failed runs.
+
+A model ID must belong to its provider: saving an OpenAI ID in a Claude field,
+or the reverse, is refused. IDs this version does not know are accepted with a
+warning, since their cost cannot be estimated.
+
 A fresh instance starts every action on Claude with its built-in Claude model,
 except Draft review, which starts on OpenAI with no model selected. OpenAI model
 IDs have no implicit default. Each action’s provider and both model IDs come

@@ -2,7 +2,7 @@
 import { useCallback, useState, type FormEvent } from 'react';
 import { Card, LoadError, Loading, Notice } from './lib';
 import { HttpError, errorMessage, getJSON, patchJSON, postJSON } from './api';
-import { useAsync } from './use-async';
+import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
 type Provider = 'claude' | 'openai';
 type Effort = string | null;
@@ -47,7 +47,7 @@ function saveError(e: unknown, what: string): { message: string; conflict: boole
 interface ActionSettings {
   action: string; provider: Provider; model: string; source: string; revision: number | string;
   claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
-  configuration_error?: string | null; providers: ProviderStatus[];
+  configuration_error?: string | null; model_warning?: string | null; providers: ProviderStatus[];
 }
 interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
 const ACTION_TITLES: Record<string, string> = { ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation', alias_discovery: 'Alias discovery', audience_labelling: 'Audience labelling', documentation_planning: 'Documentation planning', connect: 'Connecting statements' };
@@ -55,6 +55,8 @@ const ACTION_TITLES: Record<string, string> = { ask: 'Questions (Ask)', ingest: 
 function formOf(s: ActionSettings) {
   return { provider: s.provider, claude_model: s.claude_model, openai_model: s.openai_model, claude_reasoning_effort: s.claude_reasoning_effort ?? null, openai_reasoning_effort: s.openai_reasoning_effort ?? null, revision: s.revision };
 }
+
+const sameForm = <T,>(a: T, b: T) => JSON.stringify(a) === JSON.stringify(b);
 
 function ActionModelSettings({ settings, canConfigure }: { settings: ActionSettings; canConfigure: boolean }) {
   const [current, setCurrent] = useState(settings);
@@ -69,6 +71,12 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
   const effort = claude ? form.claude_reasoning_effort : form.openai_reasoning_effort;
   const available = current.providers.find(p => p.provider === form.provider);
   const accept = (value: ActionSettings) => { setCurrent(value); setForm(formOf(value)); };
+  // A save elsewhere reloads the list; take its value unless this form has edits.
+  const [seen, setSeen] = useState(settings);
+  if (settings !== seen) {
+    setSeen(settings);
+    if (settings.revision !== current.revision && sameForm(form, formOf(current))) accept(settings);
+  }
   const edit = (patch: Partial<ReturnType<typeof formOf>>) => { setForm(f => ({ ...f, ...patch })); setSaved(false); };
 
   const reload = async () => {
@@ -97,6 +105,7 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
       </p>
       {settings.action === 'docgen' && <p className="hint">The default for new documents. Choosing another provider when generating uses that provider's saved model and effort.</p>}
       {current.configuration_error && <Notice tone="error">{current.configuration_error} Save valid settings to enable this action.</Notice>}
+      {current.model_warning && <Notice tone="warn">{current.model_warning}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {canConfigure ? (
         <form onSubmit={save}>
@@ -122,11 +131,12 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
 
 export function ActionModels() {
   const { state, reload } = useAsync(useCallback(() => getJSON<ModelSettings>('/api/model-settings'), []));
-  if (state.status === 'loading') return <Loading what="model settings" />;
-  if (state.status === 'error') return <LoadError error={state.error} what="model settings" onRetry={reload} />;
+  useOnSettingsSaved(reload);
+  const data = dataOf(state);
+  if (!data) return state.status === 'error' ? <LoadError error={state.error} what="model settings" onRetry={reload} /> : <Loading what="model settings" />;
   return <>
     <p className="muted">Each action picks its provider and model independently. Saved choices apply to new runs. API credentials stay on the server; model access is checked when a run starts. The draft reviewer's model is under Draft review.</p>
-    {state.data.actions.filter(a => a.action !== 'draft_review').map(a => <ActionModelSettings key={a.action} settings={a} canConfigure={state.data.can_configure} />)}
+    {data.actions.filter(a => a.action !== 'draft_review').map(a => <ActionModelSettings key={a.action} settings={a} canConfigure={data.can_configure} />)}
   </>;
 }
 
@@ -137,7 +147,7 @@ interface ReviewConfig {
   mode: ReviewMode; application_enabled: boolean; provider: Provider; model: string; reasoning_effort?: Effort;
   claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
   reviewer_id: string; revision: number | string; model_revision: number | string;
-  source: string; issues: string[]; can_configure: boolean; providers: ProviderStatus[]; reviewers: Reviewer[];
+  source: string; issues: string[]; model_warning?: string | null; can_configure: boolean; providers: ProviderStatus[]; reviewers: Reviewer[];
 }
 interface ReviewForm { application_enabled: boolean; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; revision: number | string; model_revision: number | string }
 
@@ -152,9 +162,10 @@ const MODE_LABEL: Record<ReviewMode, string> = { off: 'Off', 'review-only': 'Rev
 
 export function DraftReviewSettings() {
   const { state, reload } = useAsync(useCallback(() => getJSON<ReviewConfig>('/api/draft-review/settings'), []));
-  if (state.status === 'loading') return <Loading what="draft review settings" />;
-  if (state.status === 'error') return <LoadError error={state.error} what="draft review settings" onRetry={reload} />;
-  return <DraftReviewForm initial={state.data} onReload={reload} />;
+  useOnSettingsSaved(reload);
+  const data = dataOf(state);
+  if (!data) return state.status === 'error' ? <LoadError error={state.error} what="draft review settings" onRetry={reload} /> : <Loading what="draft review settings" />;
+  return <DraftReviewForm initial={data} onReload={reload} />;
 }
 
 // Drafts submitted while review was off are not reviewed retroactively. When
@@ -196,6 +207,19 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
   const [accountName, setAccountName] = useState('');
   const [backlogCheck, setBacklogCheck] = useState(0);
   const change = (patch: Partial<ReviewForm>) => { setForm(f => ({ ...f, ...patch })); setSaved(false); };
+  // A save elsewhere reloads the settings; take them unless this form has
+  // edits. Reload takes them regardless.
+  const [seen, setSeen] = useState(initial);
+  const [reloading, setReloading] = useState(false);
+  if (initial !== seen) {
+    setSeen(initial);
+    const changed = initial.revision !== settings.revision || initial.model_revision !== settings.model_revision;
+    if (reloading || (changed && sameForm(form, reviewForm(settings)))) {
+      setSettings(initial); setForm(reviewForm(initial)); setReviewers(initial.reviewers);
+      setReloading(false); setConflict(false); setError(null); setSaved(false);
+    }
+  }
+  const reload = () => { setReloading(true); onReload(); };
 
   const provider = settings.providers.find(p => p.provider === form.provider);
   const reviewerExists = reviewers.some(r => r.id === form.reviewer_id);
@@ -206,7 +230,6 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
     try {
       const value = await patchJSON<ReviewConfig>('/api/draft-review/settings', { ...form, model: form.model.trim() });
       setSettings(value); setForm(reviewForm(value)); setSaved(true); setBacklogCheck(n => n + 1);
-      window.dispatchEvent(new Event('draft-review-settings-changed'));
     } catch (ex) { const r = saveError(ex, 'the review settings'); setError(r.message); setConflict(r.conflict); }
     finally { setBusy(false); }
   };
@@ -220,13 +243,14 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
   };
 
   return (
-    <Card title="Automatic draft review" actions={<button type="button" className="btn ghost sm" onClick={onReload} disabled={busy}>Reload</button>}>
+    <Card title="Automatic draft review" actions={<button type="button" className="btn ghost sm" onClick={reload} disabled={busy}>Reload</button>}>
       <p className="muted">
         Now: {MODE_LABEL[settings.mode]} · {draftReviewProviderName(settings.provider)} · {settings.model || 'no model configured'} · effort {settings.reasoning_effort ?? 'model default'} · {settings.source === 'saved' ? 'saved here' : 'built-in defaults'}.
         {' '}Applying accepted reviews is <b>{settings.application_enabled ? 'allowed' : 'not allowed'}</b>; that permission covers both a curator applying a review and automatic application.
       </p>
       {settings.can_configure && settings.mode !== 'off' && <BacklogOffer key={backlogCheck} />}
       {settings.issues.length > 0 && <Notice tone="warn"><ul>{settings.issues.map(i => <li key={i}>{i}</li>)}</ul></Notice>}
+      {settings.model_warning && <Notice tone="warn">{settings.model_warning}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
       {settings.can_configure ? (
         <form onSubmit={save}>

@@ -8,7 +8,7 @@ import { EmptyState, I, KindTag, LinkTag, LoadError, Loading, Notice, PageHeader
 import { Link, useRouter, type Route } from './router';
 import { HttpError, deleteJSON, enc, errorMessage, getJSON, patchJSON, postJSON } from './api';
 import { buildIndex, substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Name, type Statement, type SubstrateData } from './data';
-import { dataOf, useAsync } from './use-async';
+import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
 /* ============================ wire shapes ============================ */
 type DraftStatus = 'open' | 'submitted' | 'approved' | 'rejected' | 'withdrawn';
@@ -409,12 +409,12 @@ export function DraftReview({ id }: { id: string }) {
   const settings = settingsQ.state.status === 'ready' ? settingsQ.state.data : null;
 
   // Review settings change elsewhere (Settings, another tab): re-read them
-  // when the window regains focus or Settings saves.
+  // when the window regains focus or a setting is saved.
   const reloadSettings = settingsQ.reload;
+  useOnSettingsSaved(reloadSettings);
   useEffect(() => {
     window.addEventListener('focus', reloadSettings);
-    window.addEventListener('draft-review-settings-changed', reloadSettings);
-    return () => { window.removeEventListener('focus', reloadSettings); window.removeEventListener('draft-review-settings-changed', reloadSettings); };
+    return () => window.removeEventListener('focus', reloadSettings);
   }, [reloadSettings]);
 
   // Poll while an AI review runs.

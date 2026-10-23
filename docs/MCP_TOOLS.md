@@ -81,7 +81,7 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `retrieve_context` | Combines name lookup, entity reads, search, and fetch for the Ask loop's turn budget. It is a distinct primitive, but MCP clients can run the same reads. |
 | `find_duplicates` | Audits the whole substrate in near-quadratic time and takes no candidate text. This is curation, not retrieval, so it does not satisfy the Ingest reconcile floor. |
 | `find_entity_duplicates` | Audits entity names. This is curation; the Names & aliases workspace lists its results. |
-| `connect_statements` | Curation from the Knowledge health screen: proposes links and concept mentions for statements nothing reaches, as a reviewed draft. Each call spends money under the connect action's limits, so it stays where a curator chooses the batch. |
+| `connect_statements` | Curation from the Knowledge health screen: proposes links and concept mentions for statements nothing reaches, as a reviewed draft. Each call spends money under the connect action's limits, so it stays where a curator chooses the batch. Refused before collecting evidence when the connect action's provider has no credentials. |
 | `get_mention_candidates` | Discovery view for the names workspace (`GET /api/mention-candidates`). |
 | `replace_text` | `patch_statement(id, text=...)` covers it. The UI and draft replay use it. |
 | `move_name` | Alias curation in the names workspace. |

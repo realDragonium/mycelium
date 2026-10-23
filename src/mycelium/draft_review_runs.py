@@ -23,7 +23,9 @@ from . import (
     draft_review_settings,
     draft_review_store,
     drafts_store,
+    model_settings,
     product_settings,
+    quarantine,
     store,
     timestamps,
 )
@@ -77,8 +79,22 @@ class Read:
     result: JsonValue
 
 
+def _settings() -> draft_review_settings.Snapshot:
+    """The review settings in force. Quarantine turns review off without
+    changing what is saved."""
+    settings = draft_review_settings.load()
+    return (
+        settings.model_copy(update={"mode": "off"}) if quarantine.active() else settings
+    )
+
+
 def mode() -> Mode:
-    return draft_review_settings.load().mode
+    return _settings().mode
+
+
+def credentials_error(settings: draft_review_settings.Snapshot) -> str | None:
+    reason = model_settings.provider_availability(settings.provider).reason
+    return None if reason is None else f"Internal draft review cannot run: {reason}"
 
 
 def reviewer(creator: str | None, identity: str) -> auth.Principal:
@@ -109,12 +125,16 @@ def start(
     supersede a run that finished in between."""
     from . import server  # local import: server registers the review tools
 
-    settings = draft_review_settings.load()
+    settings = _settings()
     limits = product_settings.get(product_settings.ReviewSettings)
     if settings.mode == "off":
         raise ValueError("internal draft review is off")
     if not settings.model:
         raise ValueError("Choose a model ID before starting an internal draft review.")
+    # Checked before a run is recorded: without credentials every attempt
+    # fails, and a restored copy would otherwise fill up with failed runs.
+    if reason := credentials_error(settings):
+        raise ValueError(reason)
     conn = server._drafts_db()
     with _spawn_lock, store.transaction(conn):
         row = drafts_store.get_draft(conn, draft_id)
@@ -182,7 +202,8 @@ def start(
 
 def on_submitted(draft_id: str) -> None:
     try:
-        if mode() != "off":
+        settings = _settings()
+        if settings.mode != "off" and not credentials_error(settings):
             start(draft_id)
     except Exception:
         # Submission already committed; failure here must not turn it into a retry.
@@ -205,9 +226,10 @@ def sweep(now: datetime | None = None) -> list[str]:
     or a run interrupted by a restart. Returns the draft ids started."""
     now = now or datetime.now(UTC)
     try:
-        if mode() == "off":
-            return []
+        settings = _settings()
     except draft_review_settings.Unavailable:
+        return []
+    if settings.mode == "off" or credentials_error(settings):
         return []
     started = []
     conn = drafts_store.connection()
@@ -284,9 +306,12 @@ def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
 
 def review_backlog() -> list[str]:
     """Start a review of every draft in the backlog. Returns their ids."""
-    current = mode()
+    settings = _settings()
+    current = settings.mode
     if current == "off":
         raise ValueError("internal draft review is off")
+    if reason := credentials_error(settings):
+        raise ValueError(reason)
     started = []
     for draft_id in backlog():
         try:

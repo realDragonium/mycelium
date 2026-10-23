@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { SETTINGS_SAVED } from './api';
 
 export type Async<T> =
   | { status: 'loading'; previous: T | undefined }
@@ -44,4 +45,12 @@ function lastData<T>(settled: Settled<T> | null): T | undefined {
 // The loaded value, or the last one while a reload is in flight.
 export function dataOf<T>(state: Async<T>): T | undefined {
   return state.status === 'ready' ? state.data : state.previous;
+}
+
+// Calls `reload` after any settings save in this tab (memoize it).
+export function useOnSettingsSaved(reload: () => void): void {
+  useEffect(() => {
+    window.addEventListener(SETTINGS_SAVED, reload);
+    return () => window.removeEventListener(SETTINGS_SAVED, reload);
+  }, [reload]);
 }

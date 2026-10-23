@@ -33,6 +33,7 @@ from . import (
     document_freshness,
     documentation_planning,
     documentation_profiles,
+    model_settings,
     product_settings,
     timestamps,
 )
@@ -99,6 +100,9 @@ def sweep(now: datetime | None = None) -> list[str]:
         product_settings.ConcurrencySettings
     ).documentation_runs
     snapshot = documentation_profiles.capture()
+    # Without credentials a revision would only fail, so the document waits
+    # unclaimed and is revised once they are configured.
+    can_revise = model_settings.credentials_error("docgen") is None
     started: list[str] = []
     for profile in snapshot.profiles:
         audience = snapshot.audience(profile.name)
@@ -123,7 +127,8 @@ def sweep(now: datetime | None = None) -> list[str]:
                 _propose(drafts, profile.name, audience.id, document, now)
                 continue
             if (
-                now - datetime.fromisoformat(row["changed_at"])
+                not can_revise
+                or now - datetime.fromisoformat(row["changed_at"])
                 < timedelta(minutes=limits.quiet_minutes)
                 or _revisions_today(drafts, profile.name, now)
                 >= limits.revisions_per_day
