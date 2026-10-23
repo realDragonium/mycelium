@@ -33,6 +33,7 @@ from .. import (
     oauth_server,
     oidc,
     quarantine,
+    request_timing,
     server,
     tracing,
 )
@@ -155,6 +156,8 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     app.add_middleware(StartupGate)
     # Outermost, so error responses from the layers inside get the headers too.
     app.add_middleware(SecurityHeadersMiddleware)
+    # Outside everything, so a request's time includes every layer's.
+    app.add_middleware(request_timing.RequestTimingMiddleware)
 
     app.router.routes.extend(_routes())
 

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 from collections import defaultdict
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
@@ -24,7 +23,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
-from .. import timestamps
+from .. import request_timing, timestamps
 from ..connections import ConnectionProvider
 
 # --- audit context ----------------------------------------------------------
@@ -73,7 +72,7 @@ def get_actor() -> str | None:
 # one thread ever mutates the map at a time, and a thread only nests on its
 # own connection. Entries are never removed: a recycled id would only ever
 # find a zero depth (transaction() always restores it on exit).
-_write_lock = threading.RLock()
+_write_lock = request_timing.TimedLock()
 _txn_depth: dict[int, int] = {}
 
 
@@ -85,7 +84,7 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     rolls back on exception. Reentrant: an inner block on the same thread
     joins the outer transaction and the outermost block decides.
     """
-    with _write_lock:
+    with _write_lock.held():
         depth = _txn_depth.get(id(conn), 0)
         _txn_depth[id(conn)] = depth + 1
         try:
@@ -120,7 +119,7 @@ def write_lock() -> Iterator[None]:
     after a failed commit must hold it directly: opening a transaction on that
     connection could commit the changes the failed commit left pending.
     """
-    with _write_lock:
+    with _write_lock.held():
         yield
 
 
@@ -567,7 +566,9 @@ def connect(
     Passing `history_path=None` disables history recording entirely;
     used by tests that don't care, and by tools that only read.
     """
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = sqlite3.connect(
+        str(db_path), check_same_thread=False, factory=request_timing.TimedConnection
+    )
     conn.row_factory = sqlite3.Row
     # Enforce the REFERENCES clauses already declared in the schema.
     # This catches dangling-reference bugs at write time without

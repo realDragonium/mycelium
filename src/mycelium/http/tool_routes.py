@@ -20,14 +20,14 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-import anyio.to_thread
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, create_model
 
-from .. import auth, server, tracing
+from .. import auth, request_timing, server, tracing
+from ..request_timing import TimedRoute
 from .access import _enforce_role
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 def _path_for(func_name: str) -> str:
@@ -83,7 +83,7 @@ def _offload(func: Callable[..., Any], kwargs: dict[str, Any]) -> Awaitable[Any]
     shares the same worker pool FastAPI already dispatches sync endpoints to.
     Contextvars — including the resolved principal — propagate either way.
     """
-    return anyio.to_thread.run_sync(
+    return request_timing.run_sync(
         functools.partial(func, **kwargs), limiter=server.limiter_for(func.__name__)
     )
 

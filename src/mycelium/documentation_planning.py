@@ -37,6 +37,7 @@ from . import (
     drafts_store,
     model_settings,
     product_settings,
+    request_timing,
     store,
 )
 from .ai.pricing import price
@@ -537,6 +538,7 @@ def target(
     return Target(guideline_set, audience, profile.templates)
 
 
+@request_timing.tracked("background documentation plan")
 def plan(
     drafts: sqlite3.Connection,
     substrate: sqlite3.Connection,

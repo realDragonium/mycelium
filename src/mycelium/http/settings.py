@@ -22,9 +22,10 @@ from .. import (
     setup_checklist,
 )
 from .. import draft_review_settings as review_settings
+from ..request_timing import TimedRoute
 from .access import _require_admin, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/api/product-settings")

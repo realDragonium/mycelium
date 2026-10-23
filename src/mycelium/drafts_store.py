@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Literal, Self, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import errors, timestamps
+from . import errors, request_timing, timestamps
 from .connections import ConnectionProvider
 from .link_authoring import reject_entity_statement_additions
 
@@ -190,7 +190,9 @@ class ActiveApplicationError(errors.Conflict):
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn = sqlite3.connect(
+        str(db_path), check_same_thread=False, factory=request_timing.TimedConnection
+    )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # WAL + a busy timeout so the drafts DB tolerates a background writer: a

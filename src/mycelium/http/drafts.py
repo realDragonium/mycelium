@@ -15,10 +15,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import server, store
+from ..request_timing import TimedRoute
 from ..server.draft_queue import _require_draft_owner
 from .access import _enforce_curator, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/api/drafts")

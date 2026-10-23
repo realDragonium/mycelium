@@ -16,9 +16,10 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from .. import tracing
+from ..request_timing import TimedRoute
 from .access import _enforce_role
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 _TRACE_SUFFIX = tracing.TRACE_SUFFIX

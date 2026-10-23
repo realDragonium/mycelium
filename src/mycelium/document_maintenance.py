@@ -36,6 +36,7 @@ from . import (
     drafts_store,
     model_settings,
     product_settings,
+    request_timing,
     store,
     timestamps,
 )
@@ -88,6 +89,7 @@ def mark_interrupted(conn: sqlite3.Connection) -> None:
 # --- the sweep -----------------------------------------------------------------
 
 
+@request_timing.tracked("background maintenance sweep")
 def sweep(now: datetime | None = None) -> list[str]:
     """Act on every out-of-date document of a profile that is not maintained
     by hand, and publish finished automatic revisions. Returns the ids of

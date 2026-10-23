@@ -12,9 +12,10 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from .. import principal_audience, store
+from ..request_timing import TimedRoute
 from .access import _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 _ALLOWED_OPS = {

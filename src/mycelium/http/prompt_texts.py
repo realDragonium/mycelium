@@ -11,9 +11,10 @@ from pydantic import BaseModel
 from pydantic import Field as PydField
 
 from .. import ai_prompts, auth, documentation_profiles
+from ..request_timing import TimedRoute
 from .access import _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/api/documentation/profiles")

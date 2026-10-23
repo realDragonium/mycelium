@@ -13,8 +13,9 @@ from fastapi import APIRouter
 from fastapi.responses import RedirectResponse
 
 from .. import connect_page
+from ..request_timing import TimedRoute
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 @router.get("/connect", include_in_schema=False)

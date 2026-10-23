@@ -68,8 +68,9 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from . import audiences, auth, cimd, principal_audience, store
+from .request_timing import TimedRoute
 
-router = APIRouter(tags=["oauth"])
+router = APIRouter(tags=["oauth"], route_class=TimedRoute)
 
 
 def _require_oauth_enabled() -> None:

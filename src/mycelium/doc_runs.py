@@ -31,7 +31,15 @@ import threading
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
-from . import ai, ai_prompts, docs_store, model_settings, product_settings, prompt_store
+from . import (
+    ai,
+    ai_prompts,
+    docs_store,
+    model_settings,
+    product_settings,
+    prompt_store,
+    request_timing,
+)
 from .ai import Provider
 from .docgen import publication
 from .docgen.config import DocgenConfig
@@ -419,6 +427,7 @@ def _default_runner(
     )
 
 
+@request_timing.tracked("background documentation run")
 def _execute_run(
     run_id: str,
     prompt: str,

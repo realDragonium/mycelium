@@ -16,6 +16,7 @@ from typing import Any, TypeVar
 import anyio
 import anyio.to_thread
 
+from .. import request_timing
 from ..model_capacity import Capacity
 
 R = TypeVar("R")
@@ -123,17 +124,18 @@ def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(wrapper)
     async def offloaded(*args: Any, **kwargs: Any) -> Any:
+        request_timing.relabel(f"MCP {name}")
         if name == "ask":
             from ..ask.events import run_cancellable
 
             return await run_cancellable(
-                lambda: anyio.to_thread.run_sync(
+                lambda: request_timing.run_sync(
                     functools.partial(wrapper, *args, **kwargs),
                     limiter=limiter_for(name),
                     abandon_on_cancel=True,
                 )
             )
-        return await anyio.to_thread.run_sync(
+        return await request_timing.run_sync(
             functools.partial(wrapper, *args, **kwargs), limiter=limiter_for(name)
         )
 

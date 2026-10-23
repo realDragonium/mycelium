@@ -21,10 +21,11 @@ from .. import (
     store,
 )
 from ..ai.pricing import price
+from ..request_timing import TimedRoute
 from ..server import runtime
 from .access import _require_admin, _require_principal
 
-router = APIRouter()
+router = APIRouter(route_class=TimedRoute)
 
 
 class ConnectLimits(BaseModel):

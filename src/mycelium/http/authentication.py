@@ -7,17 +7,17 @@ wrapper inside the mounted transport read the same identity.
 
 from __future__ import annotations
 
+import functools
 import os
 import secrets
 from urllib.parse import urlsplit
 
-import anyio.to_thread
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .. import auth, hosts, principal_audience, store
+from .. import auth, hosts, principal_audience, request_timing, store
 from ..server import runtime
 
 # Resolves a `Principal` for every request and stashes it on
@@ -316,7 +316,9 @@ class AuthMiddleware:
         probe cheap even while every thread is busy serving tool calls."""
         if raw is None and not user_id:
             return None
-        return await anyio.to_thread.run_sync(cls._lookup, raw, user_id)
+        return await request_timing.run_sync(
+            functools.partial(cls._lookup, raw, user_id)
+        )
 
 
 # Nothing Mycelium serves is meant to be embedded. Framed by another page, the
