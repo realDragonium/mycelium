@@ -10,7 +10,7 @@ import pytest
 
 from mycelium import ai
 from mycelium.ingest import DraftCreated, IngestConfig, NothingToIngest
-from mycelium.ingest.connect import Target, run_connect
+from mycelium.ingest.connect import Looked, Target, looked_at, run_connect
 from test_ingest import (
     FakeAnthropic,
     FakeEmitter,
@@ -25,11 +25,11 @@ from test_ingest import (
 EXPORT = Target("stm_export", "event", "an invoice export is started")
 QUEUED = Target("stm_queued", "state", "the export job is queued")
 BATCH = (EXPORT, QUEUED)
-NEIGHBOUR = {
-    "id": "stm_invoice",
-    "kind": "capability",
-    "text": "an admin can export invoices",
-}
+NEIGHBOURS = [
+    {"id": "stm_invoice", "kind": "capability", "text": "an admin can export invoices"},
+    {"id": "stm_other", "kind": "rule", "text": "an export job retries twice"},
+    {"id": "stm_paused", "kind": "state", "text": "the export job is paused"},
+]
 
 
 def _reads():
@@ -40,7 +40,7 @@ def _reads():
 
 
 def _statements(_arguments):
-    rows = [NEIGHBOUR] + [{"id": t.id, "kind": t.kind, "text": t.text} for t in BATCH]
+    rows = NEIGHBOURS + [{"id": t.id, "kind": t.kind, "text": t.text} for t in BATCH]
     return {"statements": rows}
 
 
@@ -81,7 +81,11 @@ def test_queues_links_that_touch_the_batch_as_one_draft():
     assert isinstance(result, DraftCreated)
     assert emitter.created == ["connect: 2 statements"]
     assert emitter.queued == [
-        (result.draft_id, "add_links", {"links": [_edge("stm_invoice", "stm_export")]})
+        (
+            result.draft_id,
+            "add_links",
+            {"links": [_edge("stm_invoice", "stm_export")]},
+        )
     ]
     opening = str(client.calls[0]["messages"][0]["content"])
     assert "stm_export" in opening and "the export job is queued" in opening
@@ -147,6 +151,73 @@ def test_a_batch_statement_may_be_the_condition_but_not_of_its_own_edge():
     assert [e["to_id"] for e in emitter.queued[0][2]["links"]] == ["stm_other"]
     assert isinstance(result, DraftCreated)
     assert any("one of its own ends" in line for line in result.flagged)
+
+
+def test_never_joins_two_states_with_composes():
+    result, emitter, _ = _connect(
+        [
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        _edge("stm_queued", "stm_paused", "composes"),
+                        _edge("stm_invoice", "stm_export"),
+                    ]
+                },
+            )
+        ]
+    )
+
+    assert emitter.queued[0][2] == {"links": [_edge("stm_invoice", "stm_export")]}
+    assert isinstance(result, DraftCreated)
+    assert any("joins two states" in line for line in result.flagged)
+
+
+def test_leaves_a_statement_it_finds_badly_phrased_unlinked():
+    emit = _emit_input(
+        ops=[
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        _edge("stm_invoice", "stm_queued"),
+                        {
+                            **_edge("stm_invoice", "stm_other"),
+                            "when": {"statement_id": "stm_queued"},
+                        },
+                        _edge("stm_invoice", "stm_export"),
+                    ]
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "stm_export", "new", matched=["stm_invoice"], considered=["stm_invoice"]
+            ),
+            _ledger_row(
+                "stm_queued",
+                "unphraseable",
+                matched=["stm_invoice"],
+                considered=["stm_invoice"],
+                note="say what is queued",
+            ),
+        ],
+    )
+    client = FakeAnthropic([*_reads(), _message([_tool_use("emit_draft", emit)])])
+    emitter = FakeEmitter({"add_links"})
+
+    result = run_connect(
+        BATCH,
+        known_name=lambda _name: False,
+        client=client,
+        substrate=FakeSubstrate({"get_statements": _statements}),
+        emitter=emitter,
+        config=IngestConfig(trace_log_path=None),
+    )
+
+    assert emitter.queued[0][2] == {"links": [_edge("stm_invoice", "stm_export")]}
+    assert isinstance(result, DraftCreated)
+    assert sum("rephrase first" in line for line in result.flagged) == 2
 
 
 def test_drops_a_wrong_way_edge_like_ingest():
@@ -230,9 +301,13 @@ def test_an_alias_must_come_from_a_batch_statement_that_uses_it():
     assert result.alias_draft_id == result.draft_id
 
 
-def test_stops_reading_once_the_spending_cap_is_reached():
+def test_stops_reading_while_another_turn_and_the_final_emit_fit_under_the_cap():
+    # A read over 10k cached tokens costs $0.0031, but the forced emit writes
+    # that history to the cache again ($0.0376): the next read would not fit.
+    read = _reads()[0]
+    read.usage.cache_read_input_tokens = 10_000
     emit = _emit_input(ledger=[_ledger_row("stm_export", "unphraseable", note="none")])
-    client = FakeAnthropic([_reads()[0], _message([_tool_use("emit_draft", emit)])])
+    client = FakeAnthropic([read, _message([_tool_use("emit_draft", emit)])])
 
     result = run_connect(
         BATCH,
@@ -242,7 +317,7 @@ def test_stops_reading_once_the_spending_cap_is_reached():
         emitter=FakeEmitter(),
         config=IngestConfig(
             trace_log_path=None,
-            max_cost_usd=0.00001,
+            max_cost_usd=0.04,
             input_per_mtok=3.0,
             output_per_mtok=15.0,
         ),
@@ -250,6 +325,7 @@ def test_stops_reading_once_the_spending_cap_is_reached():
 
     assert result.trace["forced_finalize"] == "cost_cap"
     assert len(client.calls) == 2
+    assert result.trace["cost_usd"] < 0.04
 
 
 def test_its_model_calls_are_metered_as_connect_and_a_spent_budget_pauses_it():
@@ -266,3 +342,25 @@ def test_its_model_calls_are_metered_as_connect_and_a_spent_budget_pauses_it():
         ai.usage.install(None)
 
     assert calls and {call.action for call in calls} == {"connect"}
+
+
+def test_reports_what_it_made_of_each_statement_it_reached():
+    trace = {
+        "candidate_ledger": [
+            _ledger_row(
+                "stm_export",
+                "new",
+                matched=["stm_invoice", "stm_export"],
+                considered=["stm_other", "stm_invoice", "ent_job"],
+            ),
+            _ledger_row("stm_queued", "unphraseable", note="say what is queued"),
+            _ledger_row("stm_invoice", "new"),
+        ]
+    }
+
+    assert looked_at(trace, BATCH) == [
+        Looked("stm_export", ("stm_invoice", "stm_other"), None),
+        Looked("stm_queued", (), "say what is queued"),
+    ]
+    trace["candidate_ledger"][1]["classification"] = "unprocessed"
+    assert [item.statement_id for item in looked_at(trace, BATCH)] == ["stm_export"]
