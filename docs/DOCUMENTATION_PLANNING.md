@@ -48,7 +48,10 @@ document of the profile about them.
 
 **Approve** starts the same run as **Generate** (`request_documentation` with
 the concept), or a revision for an update; the item then shows its run's
-status and links the document when it is written. Select several items to
+status and links the document when it is written. When that run wrote
+nothing, **Retry** starts it again and the item follows the new run; when the
+review refused it, **Retry with these notes** also briefs the writer with the
+review's findings (see [Documentation models](DOCUMENTATION_MODELS.md)). Select several items to
 approve them together, up to the batch limit (2 by default); each is its own
 documentation run and counts against the active-run limit. **Dismiss** is
 remembered per profile, so a later plan drops the same proposal. A dismissed
