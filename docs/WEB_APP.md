@@ -29,6 +29,7 @@ focuses it.
 | | Documents | `#/documentation` | Plan which documents a profile's audience needs, then approve or dismiss each proposal ([Documentation planning](DOCUMENTATION_PLANNING.md)); generate (optionally about a concept; the form says whether it revises an existing document), edit, review and publish documents; see each pull request's state; see which documents are out of date with their sources and revise them; under **Updates** (counted on the Documents badge), see documents revised automatically since your last visit and those waiting on someone, with what changed and the new revision's diff ([Documentation maintenance](DOCUMENTATION_MODELS.md#keeping-documents-up-to-date)); revise from the published copy when both sides changed; read a document's sources as statement text linked to each statement; retry a run that wrote nothing, or see why the review refused it and retry it with those notes briefed to the writer, also from the plan; follow a run as it works and see what it spent (turns, duration, tokens, estimated cost, statements retrieved and cited, gaps filed) on the run and in the generation history |
 | Add knowledge | Ingest text | `#/ingest` | Paste prose; a loop extracts a draft |
 | Curate | Drafts | `#/drafts`, `#/drafts/<id>` | Review, edit, submit, approve, reject or withdraw drafts; answer the reviewer's questions. Approving is all-or-nothing: if any statement is refused (the phrasing linter), nothing is applied and each refusal is listed with its reasons. Applying a draft resolves the gaps reported about it |
+| | Knowledge health | `#/health`, `#/health/<list>` | Counts of what needs a curator, each opening its list: isolated statements, statements naming no concept, concepts without a description or without statements, statements without an audience label, open gaps, out-of-date documents, pending drafts. Connect the next N isolated or unnamed statements with AI, or a selected batch, as a reviewed draft ([Knowledge health](KNOWLEDGE_HEALTH.md)) |
 | | Knowledge gaps | `#/gaps` | Resolve, dismiss or reopen reported gaps; follow a gap to the statement, draft or document it names |
 | | Names & aliases | `#/names` | Curate a concept's names; merge or dismiss possible duplicate concepts, and restore dismissed pairs; decide AI alias suggestions |
 | | Glossary | `#/glossary` | Statement kinds and link types |
@@ -80,7 +81,7 @@ is rewritten to the current form.
 
 At start the app loads the whole substrate from `GET /api/data` and builds an
 index in memory. Find, Ask, drafts, gaps, activity, documents, names and
-settings use their own endpoints. These screens still read the in-memory dump:
+settings use their own endpoints, and so does Knowledge health, which counts on the server. These screens still read the in-memory dump:
 Browse, statement and entity detail, both graphs, the draft graph, activity's
 context panel, Find's grep entity strip, Ask's provenance titles, the
 Documents concept picker, and Home's counts.

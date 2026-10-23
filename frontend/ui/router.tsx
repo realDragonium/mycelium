@@ -2,7 +2,7 @@
 // hashes from the former /ui and /cockpit apps still resolve (see ALIASES in
 // parseHash) and are rewritten to the canonical one, so bookmarks survive.
 import { createContext, useContext, useEffect, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
-import { isFindMode, type FindMode } from './api';
+import { isFindMode, isHealthList, type FindMode, type HealthList } from './api';
 
 export const SETTINGS_SECTIONS = [
   'account', 'appearance', 'members', 'models', 'prompts', 'review', 'limits', 'usage', 'documentation', 'audiences',
@@ -26,6 +26,7 @@ export type Route =
   | { view: 'drafts' }
   | { view: 'draft'; id: string }
   | { view: 'gaps' }
+  | { view: 'health'; list: HealthList | null }
   | { view: 'names' }
   | { view: 'glossary' }
   | ({ view: 'activity' } & ActivityParams)
@@ -63,6 +64,7 @@ export function parseHash(hash: string): Route {
     case 'ingest': return { view: 'ingest' };
     case 'drafts': case 'draft': return arg ? { view: 'draft', id: arg } : { view: 'drafts' };
     case 'gaps': case 'coverage': return { view: 'gaps' };
+    case 'health': return { view: 'health', list: arg && isHealthList(arg) ? arg : null };
     case 'names': case 'mentions': case 'pending': return { view: 'names' };
     case 'glossary': return { view: 'glossary' };
     case 'activity': return {
@@ -98,6 +100,7 @@ export function routeToHash(route: Route): string {
     case 'drafts': return '#/drafts';
     case 'draft': return `#/drafts/${e(route.id)}`;
     case 'gaps': return '#/gaps';
+    case 'health': return route.list ? `#/health/${route.list}` : '#/health';
     case 'names': return '#/names';
     case 'glossary': return '#/glossary';
     case 'activity': return `#/activity${query({ page: route.page === 1 ? null : route.page, sel: route.selected, ops: route.ops, kinds: route.kinds, q: route.q })}`;

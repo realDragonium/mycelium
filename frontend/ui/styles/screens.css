@@ -630,3 +630,16 @@ main.page.home { padding-top: 56px; }
 .usage-bar > span { display: block; width: 100%; background: var(--bio-dim); border-radius: 2px 2px 0 0; }
 .usage-bar:hover > span { background: var(--bio); }
 .usage-axis { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; font-family: var(--mono); font-size: var(--fs-2xs); color: var(--ink-4); }
+
+/* Knowledge health */
+.health-grid { margin-bottom: 20px; }
+.health-connect h2 { margin: 0 0 6px; font-size: var(--fs-md); }
+.health-connect-run { align-items: center; margin: 10px 0 4px; flex-wrap: wrap; }
+.health-count { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--ink-3); }
+.health-count input { width: 64px; }
+.health-select { align-items: center; margin-bottom: 10px; }
+.health-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 16px; margin-bottom: 8px; }
+.health-row input[type="checkbox"] { margin-top: 4px; }
+.health-row-body { min-width: 0; flex: 1; }
+.health-row-body > a { color: var(--ink); }
+.health-error { color: var(--danger); }
