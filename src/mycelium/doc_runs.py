@@ -329,6 +329,7 @@ def _record_profile(
             strict=True,
         )
     )
+    audience = profiles.audience(set_name)
     conn.execute(
         "UPDATE documentation_runs SET profile_revisions = ?, profile_snapshot = ? WHERE id = ?",
         (
@@ -339,6 +340,7 @@ def _record_profile(
                     "document_type": document_type,
                     "texts": texts,
                     "references": references,
+                    "audience": asdict(audience) if audience is not None else None,
                 }
             ),
             run_id,

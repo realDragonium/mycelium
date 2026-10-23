@@ -10,6 +10,7 @@ destination, such as a GitHub pull request.
 from __future__ import annotations
 
 import json as _json
+import sqlite3
 from typing import Any, Literal
 
 from .. import store
@@ -313,9 +314,14 @@ def list_generated_documents() -> dict[str, Any]:
 
     rows = docs_store.list_documents(_drafts_db(), limit=None)
     stale = _freshness([str(row["id"]) for row in rows])
+    audiences = _document_audiences(rows)
     return {
         "documents": [
-            {**docs_store.serialize_document_summary(row), "stale": stale[row["id"]]}
+            {
+                **docs_store.serialize_document_summary(row),
+                "stale": stale[row["id"]],
+                "audience": audiences[row["id"]],
+            }
             for row in rows
         ]
     }
@@ -340,7 +346,34 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     return {
         **docs_store.serialize_document(row),
         "stale": _freshness([document_id])[document_id],
+        "audience": _document_audiences([row])[document_id],
     }
+
+
+def _document_audiences(
+    rows: list[sqlite3.Row],
+) -> dict[str, dict[str, str] | None]:
+    """The audience the run behind each document's current revision wrote
+    for, from that run's profile snapshot. None for a document written
+    before runs recorded one."""
+    run_ids = sorted({str(row["last_run_id"]) for row in rows if row["last_run_id"]})
+    written: dict[str, dict[str, str]] = {}
+    for offset in range(0, len(run_ids), 500):
+        chunk = run_ids[offset : offset + 500]
+        for run in _drafts_db().execute(
+            "SELECT id, json_extract(profile_snapshot, '$.audience') AS audience "
+            f"FROM documentation_runs WHERE id IN ({', '.join('?' for _ in chunk)})",
+            chunk,
+        ):
+            if run["audience"] is None:
+                continue
+            audience = _json.loads(run["audience"])
+            written[str(run["id"])] = {
+                "id": str(audience["id"]),
+                "name": str(audience["name"]),
+                "scope": str(audience["scope"]),
+            }
+    return {str(row["id"]): written.get(str(row["last_run_id"])) for row in rows}
 
 
 def _freshness(document_ids: list[str]) -> dict[str, dict[str, object]]:

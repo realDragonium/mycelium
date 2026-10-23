@@ -14,6 +14,8 @@ from __future__ import annotations
 # Re-export the top-level text-matching engine: the pre-split module imported
 # it, so callers use `store.mentions.match_text`.
 from .. import mentions
+from . import audience_labels
+from .audience_labels import visible_statement_ids
 from .entities import (
     create_entity,
     delete_entity,
@@ -179,6 +181,7 @@ __all__ = [
     "all_statement_ids",
     "all_statements_with_text",
     "approve_pending_mention",
+    "audience_labels",
     "build_name_index",
     "claim_recompute_batch",
     "clear_derived_for_statement",
@@ -306,5 +309,6 @@ __all__ = [
     "upsert_statement_kind_glossary",
     "upsert_statement_link_type_glossary",
     "use_substrate_connection",
+    "visible_statement_ids",
     "write_lock",
 ]

@@ -4,6 +4,7 @@ import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import { ActionModels, DraftReviewSettings } from './ai-settings';
 import { AIInstructions, DocumentationProfiles } from './documentation-profiles';
 import { ProductSettings } from './product-settings';
+import { AudiencesSettings } from './audiences';
 import { Card, I, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
 import { Link, type SettingsSection } from './router';
 import { deleteJSON, enc, errorMessage, getJSON, patchJSON, postJSON, type Me, type Role } from './api';
@@ -29,6 +30,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
   ] },
   { title: 'Publishing', sections: [
     { id: 'documentation', label: 'Documentation', blurb: 'Writing profiles and templates, and the GitHub repositories documents publish to.' },
+    { id: 'audiences', label: 'Audiences', blurb: 'Who documentation is written for, and which statements each audience may see.' },
   ] },
 ];
 const SECTIONS = GROUPS.flatMap(g => g.sections);
@@ -61,8 +63,9 @@ function Section({ id }: { id: SettingsSection }) {
     case 'models': return <ActionModels />;
     case 'prompts': return <AIInstructions />;
     case 'review': return <DraftReviewSettings />;
-    case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'docgen', 'draft_review', 'alias_discovery', 'concurrency']} />;
+    case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'docgen', 'draft_review', 'alias_discovery', 'audience_labelling', 'concurrency']} />;
     case 'documentation': return <><ProductSettings kinds={['documentation']} /><DocumentationProfiles /></>;
+    case 'audiences': return <AudiencesSettings />;
   }
 }
 

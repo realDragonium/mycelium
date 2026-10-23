@@ -196,6 +196,10 @@ def init(data_dir: Path) -> None:
         from .. import mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
+    if os.environ.get("MYCELIUM_DISABLE_AUDIENCE_WORKER") != "1":
+        from .. import audience_labelling
+
+        audience_labelling.start(data_dir)
     if os.environ.get("MYCELIUM_DISABLE_REVIEW_SWEEP") != "1":
         from .. import draft_review_runs
 

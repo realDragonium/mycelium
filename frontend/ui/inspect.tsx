@@ -1,9 +1,11 @@
 // Statement and entity detail: where provenance links and graph clicks land.
-import { Fragment, useState, type MouseEvent } from 'react';
-import { EditableStatementText, EmptyState, EntityChip, I, KindTag, PageHeader, useDataCtx } from './lib';
+import { Fragment, useCallback, useState, type FormEvent, type MouseEvent } from 'react';
+import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LoadError, Loading, Notice, PageHeader, formatDate, useDataCtx } from './lib';
 import { Link, useRouter } from './router';
-import { errorMessage, upsertEntity, upsertName } from './api';
+import { deleteJSON, enc, errorMessage, getJSON, putJSON, upsertEntity, upsertName } from './api';
 import { substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Statement, type SubstrateIndex, type When } from './data';
+import { AudienceIdentity, type AudienceLabel, type AudienceRef } from './audiences';
+import { useAsync } from './use-async';
 
 /* ============================ when-conditions ============================ */
 // A when-tree as one line: leaves are statement titles, groups use AND / OR.
@@ -339,9 +341,53 @@ function CopyId({ id }: { id: string }) {
   return <button className="btn ghost sm" onClick={() => { void navigator.clipboard?.writeText(id); setCopied(true); }}>{copied ? 'Copied' : 'Copy id'}</button>;
 }
 
+interface StatementAudience extends AudienceRef { visible: boolean }
+interface StatementAudienceData {
+  statement_id: string; label: AudienceLabel | null; queued: boolean; audiences: StatementAudience[]; can_curate: boolean;
+}
+
+function AudienceCuration({ data, onSaved }: { data: StatementAudienceData; onSaved: (value: StatementAudienceData) => void }) {
+  const [selected, setSelected] = useState(() => { const live = new Set(data.audiences.map(audience => audience.id)); return new Set((data.label?.audiences || []).filter(id => live.has(id))); });
+  const [reason, setReason] = useState(data.label?.source === 'curator' ? data.label.reason : '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const toggle = (id: string) => setSelected(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; });
+  const save = async (event: FormEvent) => {
+    event.preventDefault(); setBusy(true); setError(null);
+    try { onSaved(await putJSON<StatementAudienceData>(`/api/statements/${enc(data.statement_id)}/audiences`, { audiences: [...selected], reason: reason.trim() })); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  const handBack = async () => {
+    setBusy(true); setError(null);
+    try { onSaved(await deleteJSON<StatementAudienceData>(`/api/statements/${enc(data.statement_id)}/audiences`)); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  return <form className="audience-curation" onSubmit={save}><fieldset disabled={busy}>
+    <div className="audience-checks">{data.audiences.map(audience => <label key={audience.id} className="check"><input type="checkbox" checked={selected.has(audience.id)} onChange={() => toggle(audience.id)} /><AudienceIdentity audience={audience} /></label>)}</div>
+    <label className="field"><span>Override reason</span><input className="input" required maxLength={500} value={reason} onChange={event => setReason(event.target.value)} /></label>
+    <div className="row gap-sm wrap"><button type="submit" className="btn primary sm" disabled={!reason.trim()}>{busy ? 'Saving…' : 'Save override'}</button>{data.label?.source === 'curator' && <button type="button" className="btn ghost sm" onClick={() => void handBack()}>Hand back to AI</button>}</div>
+  </fieldset>{error && <Notice tone="error">{error}</Notice>}</form>;
+}
+
+function StatementAudiences({ id }: { id: string }) {
+  const { state, reload, update } = useAsync(useCallback((signal: AbortSignal) => getJSON<StatementAudienceData>(`/api/statements/${enc(id)}/audiences`, signal), [id]));
+  return <section className="card statement-audiences" aria-label="Audiences"><h2 className="section-label">Audiences</h2>
+    {state.status === 'loading' && <Loading what="statement audiences" />}
+    {state.status === 'error' && <LoadError error={state.error} what="statement audiences" onRetry={reload} />}
+    {state.status === 'ready' && (() => { const data = state.data; const label = data.label; return <>
+      {data.queued && <Notice>Queued for labelling.</Notice>}
+      {!label ? <Notice tone="warn">Unlabelled: internal audiences only.</Notice> : <p className="audience-label-summary"><b>{label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}`}</b> · {formatDate(label.labelled_at)}<br />{label.reason}</p>}
+      <div className="statement-audience-list">{data.audiences.map(audience => <div key={audience.id}><AudienceIdentity audience={audience} /><span className={`audience-visible ${audience.visible ? 'yes' : 'no'}`}>{audience.visible ? 'Visible' : 'Hidden'}</span></div>)}</div>
+      {data.can_curate && <AudienceCuration key={`${label?.labelled_at || 'none'}:${data.queued}`} data={data} onSaved={value => update(() => value)} />}
+    </>; })()}
+  </section>;
+}
+
 export function StatementDetail({ id }: { id: string }) {
   const { go } = useRouter();
-  const [, setEdits] = useState(0);
+  const [edits, setEdits] = useState(0);
   const idx = substrate.index;
   const s = idx.statements[id];
   if (!s) return <main className="page narrow"><EmptyState title="Statement not found" blurb={`No statement has the id ${id}. It may have been merged or deleted.`}><Link to={{ view: 'browse' }} className="btn">Browse records</Link></EmptyState></main>;
@@ -381,6 +427,8 @@ export function StatementDetail({ id }: { id: string }) {
             {mentions.length > 0 && <div className="chip-row">{mentions.map(e => <EntityChip key={e.id} entity={e} />)}</div>}
             <AddMention />
           </section>
+
+          <StatementAudiences key={`${s.id}:${edits}`} id={s.id} />
 
           <Connections statement={s} />
         </div>

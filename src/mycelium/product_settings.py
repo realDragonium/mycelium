@@ -105,6 +105,17 @@ class AliasDiscoverySettings(RequestLimits):
     max_input_chars: int = Field(default=100000, gt=0)
 
 
+class AudienceLabellingSettings(RequestLimits):
+    kind: Literal["audience_labelling"] = "audience_labelling"
+    #: Label new and changed statements in the background. A backfill runs
+    #: either way, since an admin starts it.
+    automatic: bool = True
+    batch_size: int = Field(default=25, gt=0, le=100)
+    max_tokens: int = Field(default=6000, gt=0)
+    max_retries: int = Field(default=2, ge=0)
+    request_timeout_s: float = Field(default=90.0, gt=0)
+
+
 class ConcurrencySettings(SettingsModel):
     kind: Literal["concurrency"] = "concurrency"
     model_loops: int = Field(default=2, gt=0)
@@ -184,6 +195,7 @@ Section = Literal[
     "docgen",
     "draft_review",
     "alias_discovery",
+    "audience_labelling",
     "concurrency",
     "documentation",
 ]
@@ -193,6 +205,7 @@ Body = Annotated[
     | DocgenSettings
     | ReviewSettings
     | AliasDiscoverySettings
+    | AudienceLabellingSettings
     | ConcurrencySettings
     | DocumentationSettings,
     Field(discriminator="kind"),
@@ -204,6 +217,7 @@ DEFAULTS: tuple[Body, ...] = (
     DocgenSettings(),
     ReviewSettings(),
     AliasDiscoverySettings(),
+    AudienceLabellingSettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
 )
@@ -251,6 +265,7 @@ T = TypeVar(
     | DocgenSettings
     | ReviewSettings
     | AliasDiscoverySettings
+    | AudienceLabellingSettings
     | ConcurrencySettings
     | DocumentationSettings,
 )
@@ -369,7 +384,7 @@ def validate_secrets(settings: Body, *, conn: sqlite3.Connection | None = None) 
 
 
 def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
-    if isinstance(default, AliasDiscoverySettings):
+    if isinstance(default, AliasDiscoverySettings | AudienceLabellingSettings):
         return default
     if isinstance(default, DocumentationSettings):
         from .docgen.destinations import load_destinations

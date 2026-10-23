@@ -5,7 +5,7 @@ import { createContext, useContext, useEffect, useState, type CSSProperties, typ
 import { isFindMode, type FindMode } from './api';
 
 export const SETTINGS_SECTIONS = [
-  'account', 'appearance', 'members', 'models', 'prompts', 'review', 'limits', 'documentation',
+  'account', 'appearance', 'members', 'models', 'prompts', 'review', 'limits', 'documentation', 'audiences',
 ] as const;
 export type SettingsSection = typeof SETTINGS_SECTIONS[number];
 const isSettingsSection = (value: string): value is SettingsSection => (SETTINGS_SECTIONS as readonly string[]).includes(value);

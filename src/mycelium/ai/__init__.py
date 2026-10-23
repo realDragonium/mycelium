@@ -40,6 +40,7 @@ __all__ = [
     "ToolUse",
     "Usage",
     "structured",
+    "structured_with_usage",
     "turn",
 ]
 
@@ -113,6 +114,16 @@ def structured(
     *,
     client: httpx.Client | None = None,
 ) -> Output:
+    return structured_with_usage(task, config, client=client)[0]
+
+
+def structured_with_usage(
+    task: StructuredTask[Output],
+    config: ModelConfig,
+    *,
+    client: httpx.Client | None = None,
+) -> tuple[Output, Usage]:
+    """`structured`, plus the tokens the request used."""
     try:
         if config.provider == "claude":
             return claude.structured(task, config, client)

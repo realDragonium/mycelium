@@ -24,10 +24,15 @@ GUIDANCE_SLOT = "guidance"
 #: write subtracts it.
 EXPOSURE_SLOT = "exposure"
 
+#: The set-wide audience slot: its text is the id of the documentation
+#: audience the set writes for (see `mycelium.audiences`). A set without one
+#: writes for the default internal audience.
+AUDIENCE_SLOT = "audience"
+
 #: Slots that steer every document in a set rather than naming something the
 #: set can write. Keeping the subtraction here makes another set-wide slot a
 #: one-line addition rather than another catalogue special case.
-NON_TYPE_SLOTS = frozenset({GUIDANCE_SLOT, EXPOSURE_SLOT})
+NON_TYPE_SLOTS = frozenset({GUIDANCE_SLOT, EXPOSURE_SLOT, AUDIENCE_SLOT})
 
 #: The one set that ships. A second set is data — added through the tools,
 #: with no source files and no entry here (see `internal-doc` in the doc).

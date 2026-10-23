@@ -487,6 +487,41 @@ main.page.home { padding-top: 56px; }
 .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 760px) { .compare { grid-template-columns: 1fr; } }
 
+/* ---------- audiences ---------- */
+.audience-badge { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); font-family: var(--mono); font-size: 9.5px; line-height: 1.3; color: var(--ink-3); background: var(--bg-2); vertical-align: middle; }
+.audience-badge.internal { color: var(--cyan); border-color: var(--cyan-line); background: var(--cyan-bg); }
+.audience-badge.external { color: var(--write); border-color: var(--write-line); background: var(--write-bg); }
+.audience-identity { display: inline-flex; align-items: center; gap: 6px; }
+.audience-metrics { display: grid; grid-template-columns: repeat(5, minmax(90px, 1fr)); gap: 8px; margin: 12px 0; }
+.audience-metrics > div { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--bg-2); }
+.audience-metrics b { font-family: var(--mono); font-size: var(--fs-lg); font-weight: 500; color: var(--ink); }
+.audience-metrics span { font-size: var(--fs-2xs); color: var(--ink-4); }
+.audience-list { display: grid; gap: 10px; }
+.audience-item { padding: 14px 16px; border: 1px solid var(--line-soft); border-radius: var(--r-md); background: var(--bg-2); }
+.audience-item.retired { opacity: 0.7; }
+.audience-item-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.audience-item-head h3 { margin: 0; font-size: var(--fs-sm); }
+.audience-item p { margin: 7px 0; color: var(--ink-3); font-size: var(--fs-sm); }
+.audience-item-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 8px 0; font-family: var(--mono); font-size: var(--fs-2xs); color: var(--ink-4); }
+.audience-item-meta .link-btn { font-family: inherit; font-size: inherit; }
+.audience-filters { scroll-margin-top: calc(var(--topbar-h) + 16px); }
+.audience-statements { display: grid; }
+.audience-statement { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 10px 4px; border-bottom: 1px solid var(--line-soft); color: var(--ink-2); }
+.audience-statement:hover .audience-statement-text { color: var(--bio); }
+.audience-statement-text { font-size: var(--fs-sm); line-height: 1.45; }
+.audience-statement-label { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--ink-4); white-space: nowrap; }
+.audience-pages { justify-content: flex-end; margin-top: 14px; }
+.statement-audiences { margin-top: 22px; }
+.audience-label-summary { color: var(--ink-3); font-size: var(--fs-sm); }
+.statement-audience-list { display: grid; gap: 6px; margin: 12px 0; }
+.statement-audience-list > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--line-soft); }
+.audience-visible { font-family: var(--mono); font-size: var(--fs-2xs); }
+.audience-visible.yes { color: var(--bio); }
+.audience-visible.no { color: var(--ink-4); }
+.audience-curation { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.audience-checks { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+@media (max-width: 680px) { .audience-metrics { grid-template-columns: repeat(2, 1fr); } .audience-statement { grid-template-columns: auto minmax(0, 1fr); } .audience-statement-label { grid-column: 2; } }
+
 /* ---------- names workspace (its own layout, shared controls) ---------- */
 .names-workspace .names-layout { display: grid; grid-template-columns: minmax(210px, 280px) minmax(0, 1fr); gap: 24px; align-items: start; }
 .names-workspace label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-size: var(--fs-xs); font-weight: 500; color: var(--ink-2); }

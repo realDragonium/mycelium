@@ -22,6 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .. import (
     alias_suggestions,
+    audiences,
     auth,
     documentation_profiles,
     github_connect,
@@ -36,6 +37,7 @@ from ..server import registry
 from . import (
     account,
     admin,
+    audience_routes,
     documentation,
     draft_review,
     drafts,
@@ -122,6 +124,7 @@ app.exception_handler(BothSidesEdited)(documentation._both_sides_edited_handler)
 app.exception_handler(documentation_profiles.Conflict)(prompt_texts._profile_conflict)
 app.exception_handler(names_workspace.Conflict)(names._names_conflict)
 app.exception_handler(alias_suggestions.Conflict)(names.alias_suggestion_conflict)
+app.exception_handler(audiences.Conflict)(audience_routes._audience_conflict)
 
 
 # Middleware in Starlette runs in *reverse* registration order (last
@@ -147,6 +150,7 @@ app.include_router(gaps.router)
 app.include_router(traces.router)
 app.include_router(account.router)
 app.include_router(names.router)
+app.include_router(audience_routes.router)
 app.include_router(prompt_texts.router)
 app.include_router(settings.router)
 app.include_router(draft_review.router)

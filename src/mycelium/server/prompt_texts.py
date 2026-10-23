@@ -14,7 +14,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from .. import documentation_profiles
+from .. import audiences, documentation_profiles
 from ..auth import Principal as AuthPrincipal
 from .registry import tool
 from .runtime import _prompts_db
@@ -62,6 +62,10 @@ def _seed_prompt_texts() -> None:
         documentation_profiles.seed_starters(_prompts_db())
     except Exception:
         logger.warning("could not seed documentation starter profiles", exc_info=True)
+    try:
+        audiences.seed(_prompts_db())
+    except Exception:
+        logger.warning("could not seed documentation audiences", exc_info=True)
 
     for type, name, source in _seeded_prompt_texts():
         try:
@@ -219,14 +223,21 @@ def save_documentation_profile(
     guidance: str = "",
     exposure: str = "",
     templates: list[documentation_profiles.Template] | None = None,
+    audience: str | None = None,
 ) -> dict[str, object]:
-    """Save a complete profile atomically. Removing existing slots requires admin."""
+    """Save a complete profile atomically. Removing existing slots requires admin.
+
+    `audience` is the id of the audience the profile writes for; omitted, the
+    profile keeps its current audience. Changing it requires admin."""
     body = documentation_profiles.SaveProfile.model_validate(
         {
             "revision": revision,
             "guidance": guidance,
             "exposure": exposure,
             "templates": templates or [],
+            "audience": audience
+            if audience is not None
+            else documentation_profiles.read(name).audience,
         }
     )
     return documentation_profiles.save(name, body, _prompt_principal()).model_dump()

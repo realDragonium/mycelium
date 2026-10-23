@@ -22,7 +22,7 @@ focuses it.
 | | Ask | `#/ask?q=…` | A reasoned answer with confidence, gaps, provenance and a trace; report a gap from it |
 | | Find | `#/find?q=…&mode=semantic\|grep\|survey` | Raw scored statements, plus entities whose names match |
 | Explore | Browse | `#/browse` | Every statement, entity and name as a table |
-| | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage |
+| | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage, audiences with their label's source and reason (curators override) |
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links |
 | | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities |
 | | Entity map | `#/entities?focus=<id>` | Entities and their links; add and remove entity links |
@@ -52,7 +52,8 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
 | | Draft review | `#/settings/review` | Automatic review mode, reviewer, model, whether reviews may apply; review the backlog |
 | | Limits | `#/settings/limits` | Token, time and operation budgets per action; concurrent runs |
-| Publishing | Documentation | `#/settings/documentation` | GitHub connection (disconnecting asks first), publishing destinations, writing profiles and templates |
+| Publishing | Documentation | `#/settings/documentation` | GitHub connection (disconnecting asks first), publishing destinations, writing profiles, their audience and templates |
+| | Audiences | `#/settings/audiences` | Who documents are written for; per audience, visible and unlabelled statements; labelling status, backfill progress and cost; statements by audience and label state. See [Audiences](AUDIENCES.md) |
 
 What a person can change depends on their role; sections say so where it
 applies.
