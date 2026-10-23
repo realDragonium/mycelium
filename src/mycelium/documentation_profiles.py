@@ -13,7 +13,7 @@ from typing import Literal, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from . import ai_prompts, audiences, auth, guidelines, prompt_store, store
+from . import ai_prompts, audiences, auth, errors, guidelines, prompt_store, store
 from .audiences import Audience
 
 INSTRUCTIONS = ai_prompts.ACTIONS
@@ -23,7 +23,7 @@ INSTRUCTIONS = ai_prompts.ACTIONS
 Maintenance = Literal["manual", "propose", "auto-revise"]
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 
@@ -302,10 +302,15 @@ def _profile(
         )
     if not live.get("guidance", "").strip():
         issues.append("No writing guidance is configured.")
-    if not live.get("exposure", "").strip():
-        issues.append("No disclosure rules are configured; exposure will be unchecked.")
     chosen = live.get(guidelines.AUDIENCE_SLOT, "").strip() or None
     effective = audiences.resolve(chosen, live_audiences)
+    if not live.get("exposure", "").strip():
+        issues.append(
+            "No disclosure rules are configured; exposure is checked only "
+            "against the audience's description."
+            if effective is not None
+            else "No disclosure rules are configured; exposure will be unchecked."
+        )
     if effective is None:
         issues.append(
             "The audience this profile writes for was retired; choose another."

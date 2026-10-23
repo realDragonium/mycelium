@@ -34,28 +34,17 @@ class Archive(BaseModel):
     tables: dict[str, list[dict[str, str | int | float | None]]]
 
 
-def write(data_dir: Path, staging: Path) -> dict[str, int] | None:
-    path = data_dir / DB_NAME
-    if not path.exists():
-        return None
-    with closing(
-        sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
-    ) as source:
-        with closing(docs_store.connect(":memory:")) as snapshot:
-            source.backup(snapshot)
-            docs_store.migrate(snapshot)
-            archive = Archive(
-                version=3,
-                tables={
-                    table: [
-                        dict(row)
-                        for row in snapshot.execute(
-                            f"SELECT * FROM {table} ORDER BY rowid"
-                        )
-                    ]
-                    for table in TABLES
-                },
-            )
+def write(conn: sqlite3.Connection, staging: Path) -> dict[str, int]:
+    archive = Archive(
+        version=3,
+        tables={
+            table: [
+                dict(row)
+                for row in conn.execute(f"SELECT * FROM {table} ORDER BY rowid")
+            ]
+            for table in TABLES
+        },
+    )
     (staging / FILE_NAME).write_text(archive.model_dump_json(), encoding="utf-8")
     return {table: len(rows) for table, rows in archive.tables.items()}
 

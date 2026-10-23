@@ -14,6 +14,7 @@ from . import (
     ai_prompts,
     auth,
     drafts_store,
+    errors,
     model_settings,
     product_settings,
     store,
@@ -24,7 +25,7 @@ from .require import require
 KIND = drafts_store.ALIAS_SUGGESTION_KIND
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 
@@ -241,11 +242,10 @@ def _entry(conn: sqlite3.Connection, draft: sqlite3.Row, op: sqlite3.Row) -> Ent
 
 
 def list_entries(status: str = "pending") -> list[Entry]:
-    from . import server  # local import: server owns initialized connections
 
     if status not in ("pending", "accepted", "rejected", "all"):
         raise ValueError("Unknown alias suggestion status.")
-    conn, drafts = server._db(), server._drafts_db()
+    conn, drafts = store.substrate_connection(), drafts_store.connection()
     result: list[Entry] = []
     for draft in drafts_store.list_drafts(drafts, status="all"):
         for op in drafts_store.list_ops(drafts, draft["id"]):
@@ -283,14 +283,14 @@ def build_system_prompt(instructions: str) -> str:
 
 
 def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
-    from . import server  # local import: server owns AI admission and connections
+    from . import server  # local import: server owns AI admission
 
     if not principal.can_write:
         raise auth.RoleRequired("writer role required")
     limits = product_settings.get(product_settings.AliasDiscoverySettings)
     selected = model_settings.get("alias_discovery")
     instructions = ai_prompts.resolve("alias_discovery")
-    conn = server._db()
+    conn = store.substrate_connection()
     with store.write_lock():
         revision = vocabulary_revision(conn)
         statements: dict[str, str] = {}
@@ -368,7 +368,7 @@ def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
             return ScanResult(
                 prompt=instructions.reference(), suggestions=[], skipped=skipped
             )
-        drafts = server._drafts_db()
+        drafts = drafts_store.connection()
         with store.transaction(drafts):
             draft_id = drafts_store.create_draft(
                 drafts,
@@ -409,7 +409,7 @@ def _accept(
     from . import server  # local import: reuse persisted substrate writes
     from .server import indexes  # local import: index persistence and recovery markers
 
-    conn = server._db()
+    conn = store.substrate_connection()
     receipt_id = "alias:" + operation_ref
     receipt = conn.execute(
         "SELECT result_json FROM reviewed_draft_applications WHERE application_id = ?",
@@ -462,10 +462,9 @@ def _accept(
 def review(
     draft_id: str, operation_ref: str, request: ReviewRequest, principal: auth.Principal
 ) -> Entry:
-    from . import server  # local import: server owns initialized connections
 
     _require_human(principal)
-    conn, drafts = server._db(), server._drafts_db()
+    conn, drafts = store.substrate_connection(), drafts_store.connection()
     with store.write_lock():
         draft = drafts_store.get_draft(drafts, draft_id)
         if draft is None:
@@ -516,7 +515,6 @@ def _review_change(
     request: ReviewRequest,
     principal: auth.Principal,
 ) -> Suggestion:
-    from . import server  # local import: server owns initialized connections
 
     if request.action == "accept":
         decision = _accept(draft_id, operation_ref, suggestion, principal)
@@ -540,13 +538,13 @@ def _review_change(
     )
     if not entity_id:
         raise ValueError("Choose a target concept.")
-    if not _source_current(server._db(), suggestion):
+    if not _source_current(store.substrate_connection(), suggestion):
         raise Conflict(
             "The supporting statement changed. Reject this suggestion and scan the current statement."
         )
     target_proposal = suggestion.proposal.model_copy(update={"entity_id": entity_id})
-    _check_alias_owner(server._db(), target_proposal)
-    names = target_names(server._db(), entity_id)
+    _check_alias_owner(store.substrate_connection(), target_proposal)
+    names = target_names(store.substrate_connection(), entity_id)
     decision = Decision(
         action="retargeted" if request.action == "retarget" else "refreshed",
         entity_id=entity_id,
@@ -558,7 +556,7 @@ def _review_change(
             "proposal": target_proposal,
             "target_names": names,
             "vocabulary_revision": proposal_revision(
-                server._db(),
+                store.substrate_connection(),
                 target_proposal,
             ),
             "history": [*suggestion.history, decision],

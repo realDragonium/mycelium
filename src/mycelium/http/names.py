@@ -7,8 +7,7 @@ writer.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Request
 from pydantic import JsonValue
 
 from .. import alias_suggestions, auth, names_workspace, server
@@ -23,12 +22,6 @@ def mention_candidates(
 ) -> dict[str, JsonValue]:
     _require_principal(request)
     return server.get_mention_candidates(entity_id=entity_id, after=after, limit=limit)
-
-
-async def _names_conflict(
-    request: Request, exc: names_workspace.Conflict
-) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @router.get("/api/names-workspace")
@@ -93,12 +86,6 @@ def names_detail_http(entity_id: str, request: Request) -> names_workspace.Detai
     return names_workspace.detail(server._db(), entity_id)
 
 
-async def alias_suggestion_conflict(
-    request: Request, exc: alias_suggestions.Conflict
-) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
-
-
 @router.get("/api/alias-suggestions")
 def alias_suggestions_http(
     request: Request, status: str = "pending"
@@ -130,15 +117,7 @@ def review_alias_suggestion_http(
     body: alias_suggestions.ReviewRequest,
 ) -> dict[str, object]:
     _enforce_role(request, "writer", real_role=True)
-    from .. import drafts_store
-
-    try:
-        entry = alias_suggestions.review(
-            draft_id, operation_ref, body, _require_principal(request)
-        )
-    except (
-        drafts_store.StaleDraftRevisionError,
-        drafts_store.ActiveApplicationError,
-    ) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    entry = alias_suggestions.review(
+        draft_id, operation_ref, body, _require_principal(request)
+    )
     return entry.model_dump(mode="json")

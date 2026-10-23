@@ -3,8 +3,10 @@
 Server-side mutations that change the entity topology (create/delete
 entity, add/remove entity-link) call ``schedule_rebake()``. This sets
 a debounce timer; when the timer fires with no further calls in the
-intervening window, the offline layout script is spawned in a
+intervening window, the packaged layout module is spawned in a
 detached subprocess. The browser picks up the new JSON on next reload.
+If a bake is still running, the timer is re-armed until it finishes,
+then one more bake captures the pending mutations.
 
 Why debounce: a single MCP request that creates a statement with 8
 new mentions calls ``store.create_entity`` 8 times. Without debouncing
@@ -27,9 +29,6 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_SCRIPT = _REPO_ROOT / "scripts" / "build_entity_layout.py"
-
 # Wait this long after the last schedule_rebake() call before firing.
 # Tuned to absorb the burst of writes from a single upsert_statements
 # batch (typically completes well under 1s for normal workloads).
@@ -37,13 +36,14 @@ DEBOUNCE_SECONDS = 5.0
 
 
 def _bake_argv(db_path: Path, output_path: Path) -> list[str]:
-    """The subprocess argv for invoking the offline layout script against
+    """The subprocess argv for invoking the packaged layout module against
     `db_path`, writing positions to `output_path`. Shared by the initial
     synchronous bake and the debounced background rebake so both spawn
     the identical command."""
     return [
         sys.executable,
-        str(_SCRIPT),
+        "-m",
+        "mycelium.entity_layout",
         "--db",
         str(db_path),
         "--output",
@@ -85,7 +85,7 @@ class LayoutBaker:
         bake once on startup (blocks for a few seconds on the first run only;
         subsequent starts skip this entirely).
         """
-        if not self._enabled or not _SCRIPT.exists():
+        if not self._enabled:
             return
         if self._output_path.exists():
             return
@@ -98,7 +98,6 @@ class LayoutBaker:
             _bake_argv(self._db_path, self._output_path),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            cwd=str(_REPO_ROOT),
         )
         if result.returncode != 0:
             log.warning(
@@ -113,27 +112,27 @@ class LayoutBaker:
         window elapses with no further calls."""
         if not self._enabled:
             return
-        if not _SCRIPT.exists():
-            log.warning("layout baker script not found at %s", _SCRIPT)
-            return
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
-            self._timer = threading.Timer(DEBOUNCE_SECONDS, self._fire)
-            self._timer.daemon = True
-            self._timer.start()
+            self._arm_timer()
+
+    def _arm_timer(self) -> None:
+        self._timer = threading.Timer(DEBOUNCE_SECONDS, self._fire)
+        self._timer.daemon = True
+        self._timer.start()
 
     def _fire(self) -> None:
-        """Spawn the rebake subprocess. Skipped if a previous rebake is
-        still running — the next schedule_rebake() call will catch it."""
+        """Spawn the rebake subprocess, deferring while a prior bake runs."""
         with self._lock:
+            self._timer = None
             if self._process is not None and self._process.poll() is None:
-                log.info("previous rebake still running; skipping this trigger")
+                log.info("previous rebake still running; deferring this trigger")
+                self._arm_timer()
                 return
             log.info("triggering layout rebake (db=%s)", self._db_path)
             self._process = subprocess.Popen(
                 _bake_argv(self._db_path, self._output_path),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                cwd=str(_REPO_ROOT),
             )

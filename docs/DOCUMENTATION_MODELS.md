@@ -144,10 +144,10 @@ in place. Merging and deployment happen in GitHub; Mycelium does not perform the
 
 ### Storage and automation
 
-Documents, immutable revisions, generation runs, and publication receipts live
-in `mycelium-drafts.db`. Instance exports include those tables in
-`documentation.json`, alongside prompt history and configuration. Unrelated draft
-operations and credentials are excluded. Older installations receive a snapshot
+Documents, immutable revisions, generation runs, publication receipts, plans and
+maintenance decisions live in `mycelium-drafts.db`. Instance exports carry those
+tables in their own archive member, `documentation.json`, beside the drafts,
+prompt history and configuration the rest of the archive holds. Older installations receive a snapshot
 of their current document body; overwritten bodies cannot be reconstructed.
 Legacy publication timestamps remain unknown rather than inferred from edit times.
 Archives predating document backups contain no document library to restore.

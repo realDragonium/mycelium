@@ -27,8 +27,8 @@ What is NOT shared with `ingest`
 Ingest's loop terminates in substrate ops, so it carries op validation, ledger
 normalization, draft assembly and the phrasing gate. A loop terminating in a
 document body can use none of that. What it does share is `..agentloop` — the
-injectable client, `load_doctrine`, the budget gate, tool-result
-serialization, the trace mechanics — and the package layout. The resemblance
+budget gate, tool-result serialization and trace mechanics — plus prompt
+resolution through `..ai_prompts` and the package layout. The resemblance
 between the three packages is a layout, not a common implementation.
 """
 
@@ -209,7 +209,7 @@ def run_docgen(
 def _store_catalogue() -> dict[str, list[str]]:
     """What sets are configured, best-effort.
 
-    Same posture as `load_doctrine`: no store wired up (a bench script, a unit
+    Same posture as prompt resolution: no store wired up (a bench script, a unit
     test) and a broken store both read as "nothing configured", and the run
     then refuses on its own terms instead of taking an exception to the
     caller.
@@ -534,8 +534,8 @@ def _resolve(
     """Settle which guideline set and document type the run writes against.
 
     The catalogue is the store's, so what is selectable is what is
-    configured — a set added as three `save_prompt_text` calls is choosable
-    here with no code change. A request that named a valid pair is taken as
+    configured — a set added in documentation settings is choosable here with
+    no code change. A request that named a valid pair is taken as
     given and costs no model turn; anything else is one forced tool call, and
     a pair that does not appear together in the catalogue is sent back once
     rather than accepted.

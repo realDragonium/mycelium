@@ -1,11 +1,11 @@
 """Offline entity-graph layout baker.
 
 Reads the entity nodes and entity-to-entity links from the substrate DB,
-runs a ForceAtlas2-style layout in LinLog mode, and writes the resulting
-2D coordinates to ``src/mycelium/ui/data/entity-positions.json`` for the
-web UI to render statically.
+runs stress majorization (default) or a ForceAtlas2-style layout in LinLog
+mode, and writes the resulting 2D coordinates to ``entity-positions.json``
+next to the DB for the web UI.
 
-The algorithm:
+The ForceAtlas2 algorithm:
 
   - Repulsion: every node repels every other with force proportional to
     (1 + deg(i)) * (1 + deg(j)) / dist. Hubs push harder.
@@ -19,8 +19,8 @@ The algorithm:
     nodes the O(N²) loop in numpy is fine (vectorised, ~100ms/iter).
 
 Run:
-    python scripts/build_entity_layout.py
-    python scripts/build_entity_layout.py --iters 1500 --seed 42
+    python -m mycelium.entity_layout
+    python -m mycelium.entity_layout --iters 1500 --seed 42
 
 Output is deterministic given the same seed and substrate state.
 """
@@ -34,17 +34,18 @@ import sqlite3
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB = REPO_ROOT / ".mycelium" / "mycelium.db"
-DEFAULT_OUTPUT = (
-    REPO_ROOT / "src" / "mycelium" / "ui" / "data" / "entity-positions.json"
-)
+from numpy.typing import NDArray
 
 
-def load_graph(db_path: Path) -> tuple[list[dict], list[tuple[int, int]]]:
+class Entity(TypedDict):
+    id: str
+    name: str
+
+
+def load_graph(db_path: Path) -> tuple[list[Entity], list[tuple[int, int]]]:
     """Pull entities + their (deduplicated, undirected) link list."""
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -55,7 +56,7 @@ def load_graph(db_path: Path) -> tuple[list[dict], list[tuple[int, int]]]:
         primary_name.setdefault(r["entity_id"], r["text"])
 
     entity_rows = conn.execute("SELECT id FROM entities").fetchall()
-    entities = [
+    entities: list[Entity] = [
         {"id": r["id"], "name": primary_name.get(r["id"], r["id"])} for r in entity_rows
     ]
 
@@ -81,7 +82,7 @@ def load_graph(db_path: Path) -> tuple[list[dict], list[tuple[int, int]]]:
     return entities, edges
 
 
-def compute_degree(n: int, edges: list[tuple[int, int]]) -> np.ndarray:
+def compute_degree(n: int, edges: list[tuple[int, int]]) -> NDArray[np.float64]:
     deg = np.zeros(n, dtype=np.float64)
     for a, b in edges:
         deg[a] += 1
@@ -89,7 +90,7 @@ def compute_degree(n: int, edges: list[tuple[int, int]]) -> np.ndarray:
     return deg
 
 
-def connected_components(n: int, edges: list[tuple[int, int]]) -> np.ndarray:
+def connected_components(n: int, edges: list[tuple[int, int]]) -> NDArray[np.int64]:
     """Return an array of component ids, one per node."""
     adj: list[list[int]] = [[] for _ in range(n)]
     for a, b in edges:
@@ -112,7 +113,9 @@ def connected_components(n: int, edges: list[tuple[int, int]]) -> np.ndarray:
     return comp
 
 
-def graph_centroid(n: int, edges: list[tuple[int, int]], comp: np.ndarray) -> int:
+def graph_centroid(
+    n: int, edges: list[tuple[int, int]], comp: NDArray[np.int64]
+) -> int:
     """Pick the 1-median vertex of the largest component (min sum of
     shortest-path distances to other nodes in the same component)."""
     # find largest component
@@ -133,7 +136,7 @@ def graph_centroid(n: int, edges: list[tuple[int, int]], comp: np.ndarray) -> in
         src = int(src)
         dist = {src: 0}
         q = deque([src])
-        s = 0
+        s = 0.0
         while q:
             cur = q.popleft()
             d = dist[cur]
@@ -182,8 +185,8 @@ def _component_membership(n: int, edges: list[tuple[int, int]]) -> list[list[int
 def _all_pairs_shortest_paths(
     members: list[int],
     edges: list[tuple[int, int]],
-    edge_weight: np.ndarray | None = None,
-) -> np.ndarray:
+    edge_weight: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
     """Shortest-path distances from every node in `members` to every
     other. ``edge_weight`` is a per-edge weight array aligned with the
     full ``edges`` list — when omitted, every edge counts as 1 hop and
@@ -238,8 +241,8 @@ def stress_majorization(
     iters: int = 300,
     seed: int = 42,
     component_pad: float = 4.0,
-    edge_weight: np.ndarray | None = None,
-) -> np.ndarray:
+    edge_weight: NDArray[np.float64] | None = None,
+) -> NDArray[np.float64]:
     """Stress majorization layout.
 
     For each connected component independently we minimise
@@ -328,13 +331,13 @@ def stress_majorization(
 
 
 def relax_overlaps(
-    pos: np.ndarray,
-    deg: np.ndarray,
+    pos: NDArray[np.float64],
+    deg: NDArray[np.float64],
     *,
     min_dist: float = 0.7,
     iters: int = 120,
     step: float = 0.5,
-) -> np.ndarray:
+) -> NDArray[np.float64]:
     """Mass-weighted overlap relaxation.
 
     All pairs share a single small ``min_dist`` threshold — the goal is
@@ -381,14 +384,14 @@ def relax_overlaps(
 def force_atlas_linlog(
     n: int,
     edges: list[tuple[int, int]],
-    deg: np.ndarray,
+    deg: NDArray[np.float64],
     *,
     iters: int = 1200,
     seed: int = 42,
     scaling: float = 30.0,
     gravity: float = 0.5,
     dissuade_hubs: bool = True,
-) -> np.ndarray:
+) -> NDArray[np.float64]:
     """Vectorised ForceAtlas2 in LinLog attraction mode with optional
     "dissuade hubs". Returns an (n, 2) float array of positions.
 
@@ -474,7 +477,9 @@ def force_atlas_linlog(
     return pos
 
 
-def normalize_positions(pos: np.ndarray, target_radius: float = 2000.0) -> np.ndarray:
+def normalize_positions(
+    pos: NDArray[np.float64], target_radius: float = 2000.0
+) -> NDArray[np.float64]:
     """Centre on origin and scale so the 95th-percentile radius equals
     ``target_radius``. Robust to a handful of far-flung outliers."""
     if pos.size == 0:
@@ -487,10 +492,11 @@ def normalize_positions(pos: np.ndarray, target_radius: float = 2000.0) -> np.nd
     return pos
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", type=Path, default=DEFAULT_DB)
-    ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
+    ap.add_argument("--db", type=Path, default=data_dir / "mycelium.db")
+    ap.add_argument("--output", type=Path, default=None)
     ap.add_argument(
         "--algorithm",
         choices=["sm", "fa2"],
@@ -534,7 +540,8 @@ def main() -> None:
         "(graph-hop units). Mass-weighted so hubs don't "
         "move. Set 0 to disable.",
     )
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    output_path = args.output or args.db.parent / "entity-positions.json"
 
     if not args.db.exists():
         raise SystemExit(f"DB not found: {args.db}")
@@ -557,7 +564,7 @@ def main() -> None:
         iters = args.iters if args.iters is not None else 300
         # Per-edge weight: (1 + alpha * max(deg_a, deg_b)). Edges
         # touching a degree-100 hub count as ~9 hops with alpha=0.08.
-        edge_weight: np.ndarray | None = None
+        edge_weight: NDArray[np.float64] | None = None
         if args.hub_edge_scale > 0 and edges:
             # Edges where one endpoint is a pendant (degree-1 leaf with no
             # other connections) keep weight=1 — pendants sit one hop from
@@ -628,10 +635,10 @@ def main() -> None:
         "nodes": nodes,
     }
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(payload, indent=2))
-    sz = os.path.getsize(args.output) / 1024
-    print(f"wrote {args.output} ({sz:.1f} KB)")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2))
+    sz = os.path.getsize(output_path) / 1024
+    print(f"wrote {output_path} ({sz:.1f} KB)")
 
 
 if __name__ == "__main__":

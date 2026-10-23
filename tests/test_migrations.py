@@ -311,7 +311,7 @@ def test_v5_upgrade_enqueues_existing_statements_for_rederive():
     # removed. Ambiguity no longer creates a review task.
     mention_worker.drain(conn)
     assert store.get_mentions(conn, sid) == []
-    assert store.list_pending_mentions(conn) == []
+    assert conn.execute("SELECT * FROM pending_mentions").fetchall() == []
 
 
 def _downgrade_names_to_case_sensitive(conn):

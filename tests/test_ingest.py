@@ -1275,14 +1275,19 @@ def test_g_unreadable_store_falls_back_to_the_packaged_file():
 
 
 def test_g_saved_doctrine_applies_to_the_next_run_without_a_restart():
-    """The edit loop end to end: save through the tool, and the very next
+    """The edit loop end to end: save a prompt, and the very next
     run's system prompt carries the new text."""
-    from mycelium import server
+    from mycelium import prompt_store
 
     _prompt_store()
     assert _FILE_MARKER in _system_prompt_of_one_run()
 
-    server.save_prompt_text("doctrine", "ingest", "EDITED DOCTRINE MARKER 777")
+    prompt_store.save(
+        prompt_store.connection(),
+        type="doctrine",
+        name="ingest",
+        text="EDITED DOCTRINE MARKER 777",
+    )
 
     system_prompt = _system_prompt_of_one_run()
     assert "EDITED DOCTRINE MARKER 777" in system_prompt

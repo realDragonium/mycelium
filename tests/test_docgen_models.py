@@ -608,3 +608,50 @@ def test_provider_failure_reaches_run_result_without_api_body(monkeypatch):
     assert "OPENAI_API_KEY" in result.reason
     assert "401" in result.reason
     assert "private provider error" not in result.reason
+
+
+@pytest.mark.parametrize("provider", ["claude", "openai"])
+@pytest.mark.parametrize("override", [False, True])
+def test_missing_credentials_refuse_selected_provider_before_creating_run(
+    monkeypatch, provider, override
+):
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_PROFILE",
+        "OPENAI_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    other = "openai" if provider == "claude" else "claude"
+    monkeypatch.setenv(
+        "OPENAI_API_KEY" if other == "openai" else "ANTHROPIC_API_KEY", "fixture-key"
+    )
+    save_model(
+        "docgen",
+        provider=other if override else provider,
+        claude_model="configured-claude",
+        openai_model="configured-gpt",
+    )
+    reason = model_settings.provider_availability(provider).reason
+    assert reason is not None
+    choice = next(
+        choice for choice in model_choices() if choice["provider"] == provider
+    )
+    assert choice["reason"] == reason
+    assert choice["available"] is False
+    conn = docs_store.connect(":memory:")
+    docs_store.migrate(conn)
+    try:
+        with pytest.raises(ValueError) as error:
+            doc_runs.start_run(
+                prompt="Document workspace login",
+                guideline_set=None,
+                document_type=None,
+                created_by=None,
+                conn=conn,
+                provider=provider if override else None,
+            )
+        assert str(error.value) == reason
+        assert docs_store.list_runs(conn) == []
+    finally:
+        conn.close()

@@ -317,10 +317,11 @@ def start(data_dir: Path | str, *, poll_interval: float = POLL_INTERVAL_S) -> No
         conn = store.connect(db_path, history_path=history_path)
         while not _stop.is_set():
             forced = _forced.is_set()
-            _forced.clear()
             if forced or _automatic():
                 try:
                     drain(conn)
+                    if forced and store.audience_labels.queue_counts(conn)[0] == 0:
+                        _forced.clear()
                 except Exception:  # never let the thread die on one bad drain
                     logger.exception("audience labelling drain failed")
             _wake.wait(poll_interval)
@@ -364,40 +365,31 @@ class Status(BaseModel):
 
 
 def status(conn: sqlite3.Connection) -> Status:
-    counts = conn.execute(
-        "SELECT (SELECT COUNT(*) FROM statements) AS total, "
-        "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'ai') AS ai, "
-        "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'curator') AS curator, "
-        "(SELECT COALESCE(SUM(cost_usd), 0) FROM statement_audience_labels) AS cost"
-    ).fetchone()
+    total, ai, curator, cost = store.audience_labels.label_counts(conn)
     queued, failed, error = store.audience_labels.queue_counts(conn)
     selected = model_settings.get("audience_labelling")
     started = _last_backfill
     progress = (
-        conn.execute(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost "
-            "FROM statement_audience_labels WHERE source = 'ai' AND labelled_at >= ?",
-            (started.started_at,),
-        ).fetchone()
+        store.audience_labels.backfill_counts(conn, started.started_at)
         if started is not None
         else None
     )
     return Status(
-        statements=int(counts["total"]),
-        labelled_ai=int(counts["ai"]),
-        labelled_curator=int(counts["curator"]),
-        unlabelled=int(counts["total"]) - int(counts["ai"]) - int(counts["curator"]),
+        statements=total,
+        labelled_ai=ai,
+        labelled_curator=curator,
+        unlabelled=total - ai - curator,
         queued=queued,
         failed=failed,
         last_error=error,
-        cost_usd=round(float(counts["cost"]), 4),
+        cost_usd=round(cost, 4),
         automatic=_automatic(),
         model=selected.model,
         provider=selected.provider,
         backfill=BackfillProgress(
             **started.model_dump(),
-            labelled=int(progress["n"]),
-            cost_usd=round(float(progress["cost"]), 4),
+            labelled=progress[0],
+            cost_usd=round(progress[1], 4),
         )
         if started is not None and progress is not None
         else None,

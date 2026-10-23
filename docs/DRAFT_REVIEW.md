@@ -62,7 +62,7 @@ current account status and permissions before automatic changes.
 
 Review controls and shared per-action model settings live in dedicated tables in
 `mycelium-prompts.db`, separate from editable
-prompt texts and disposable drafts. They survive draft cleanup and backup/restore.
+prompt texts and from drafts. They survive draft cleanup and backup/restore.
 Conflicting admin saves return a conflict and require reloading. Unreadable saved
 settings disable review instead of reviving environment defaults. The settings
 form reports the error and allows an administrator to save an explicit repair;
@@ -145,6 +145,11 @@ hours and forty minutes), such as those in a restored copy of another
 instance or from before a long outage: the sweep does not review, and possibly
 apply, them unasked.
 
+An attempt stopped by the monthly AI budget (see [AI models](AI_MODELS.md)) is
+`paused`, not failed: it uses no retry, is not rerun, and is not in the backlog.
+The sweep resumes it once the budget allows, after a budget change or when the
+month rolls over, with the attempt and retry counts it had.
+
 When the supplied knowledge cannot settle how the draft fits and a person's
 answer would, such as whether a new concept is the same as a live one, the
 reviewer answers `needs_context` with specific questions. With the application
@@ -162,7 +167,7 @@ The gap records the draft id, and the contradicted statement's id, as
 references as well as in its text. When the reviewer applies a draft it
 resolves that draft's open gaps, so an answered question closes once its
 draft lands. Contradiction gaps are filed after the application and stay open
-for a person to check. A draft approved by hand does not yet resolve its gaps.
+for a person to check. A draft approved by hand resolves its gaps the same way.
 An automated assessment remains a model judgment; isolated tests verify the
 execution safeguards and API contract, not the model's factual accuracy.
 
@@ -183,7 +188,8 @@ result does not itself authorize application.
 `get_draft_review_run(run_id)` retrieves an attempt. `get_draft`, draft lists, and
 both browser interfaces expose the latest `review_assessment`, including:
 
-- Status (`running`, `completed`, `failed`), assessed revision, and staleness.
+- Status (`running`, `completed`, `failed`, `paused`), assessed revision, and
+  staleness.
 - Selected provider/model, reviewer ID, and control/model settings revisions. Historical attempts
   retain unknown metadata; a selected model does not imply a provider was called.
 - Label (`good`, `changes_suggested`, `reject`, `needs_context`), rationale,
@@ -252,6 +258,13 @@ not retried.
 When a reviewed application still needs finalization, inspect its durable receipt
 and use the existing `apply_reviewed_draft(draft_id, review_id)` recovery path.
 No startup recovery launches model work or replays an uncommitted application.
+
+A curator's **Approve** uses the same receipt. It records an `accepted` review
+by that curator ("Approved by hand.") and claims the application in one drafts
+transaction, then applies the draft. Unlike a reviewed application, it accepts an
+open draft and does not require reviewed application to be enabled. If the
+process dies after the substrate commits, approving again finalizes the recorded
+result instead of applying the draft twice.
 
 OpenAI uses the [Responses structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs)
 with `store=false`. Claude uses the Anthropic SDK's

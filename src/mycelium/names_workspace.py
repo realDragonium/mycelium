@@ -14,7 +14,7 @@ from pydantic import (
     StringConstraints,
 )
 
-from . import plurals, store
+from . import errors, plurals, store
 from .store.kernel import _record
 
 NameText = Annotated[
@@ -181,7 +181,7 @@ class DismissedDuplicates(Model):
     dismissed: list[DismissedDuplicate]
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 
@@ -475,10 +475,9 @@ def _perform(conn: sqlite3.Connection, action: Action) -> tuple[str, int]:
 
 
 def apply(body: ApplyRequest) -> Applied:
-    from . import server  # local import: server owns the substrate accessors
     from .server import indexes  # local import: index persistence and recovery markers
 
-    conn = server._db()
+    conn = store.substrate_connection()
     with store.write_lock():
         current = preview(conn, body.action)
         if body.expected_revision != current.revision:

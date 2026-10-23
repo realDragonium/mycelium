@@ -613,12 +613,14 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
         outcomes = []
         failures: list[BaseException] = []
 
-        def blocking_manual_apply(target):
+        original_apply = draft_application.apply_draft
+
+        def blocking_manual_apply(target, **kwargs):
             entered.set()
             assert release.wait(2)
-            return {"applied": 1, "skipped": 0, "results": []}
+            return original_apply(target, **kwargs)
 
-        monkeypatch.setattr(server, "apply_draft", blocking_manual_apply)
+        monkeypatch.setattr(draft_application, "apply_draft", blocking_manual_apply)
 
         class Request:
             class state:
@@ -632,10 +634,13 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
         def manual():
             from mycelium.http.drafts import approve_draft
 
+            principal = auth.current_principal.set(Request.state.principal)
             try:
                 outcomes.append(approve_draft(draft_id, Request()))
             except BaseException as exc:
                 failures.append(exc)
+            finally:
+                auth.current_principal.reset(principal)
 
         def reviewed():
             principal = _principal()

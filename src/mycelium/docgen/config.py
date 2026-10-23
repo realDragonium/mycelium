@@ -28,16 +28,13 @@ from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort, pricing
 from ..guidelines import SET_NAME
 from ..ingest.config import DEFAULT_MODEL
-from ..model_credentials import (
-    claude_configuration_error as _claude_configuration_error,
-)
 
 #: The generation doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 
 #: Prompt-store name the docgen doctrine is kept under (type `doctrine`).
 #: Startup seeds that row from `doctrine_path`; the loop reads it per run,
-#: so an edit through `save_prompt_text` lands on the next documentation run.
+#: so an edit in Settings → Prompts lands on the next documentation run.
 DOCTRINE_NAME: Final = "docgen"
 
 
@@ -63,7 +60,6 @@ def model_choices() -> list[ModelChoice]:
     choices: list[ModelChoice] = []
     for provider in ("claude", "openai"):
         config = DocgenConfig.from_env(provider=resolve_provider(provider))
-        key = "ANTHROPIC_API_KEY" if provider == "claude" else "OPENAI_API_KEY"
         reason = None
         if not config.model:
             reason = (
@@ -71,10 +67,8 @@ def model_choices() -> list[ModelChoice]:
                 if provider == "openai"
                 else "Choose a Claude documentation model in AI settings."
             )
-        elif provider == "claude":
-            reason = _claude_configuration_error()
-        elif not os.environ.get(key, "").strip():
-            reason = f"Set {key} on the server."
+        else:
+            reason = model_settings.provider_availability(config.provider).reason
         choices.append(
             {
                 "provider": config.provider,

@@ -40,6 +40,7 @@ from .draft_application import (
     ReviewedApplicationReceipt,
     apply_draft,
     apply_reviewed_draft,
+    approve_draft,
 )
 from .draft_review import (
     DraftCorrectionReceipt,
@@ -89,16 +90,9 @@ from .names import (
     upsert_name,
 )
 from .prompt_texts import (
-    get_documentation_profile,
     get_prompt_text,
-    list_documentation_profiles,
-    list_prompt_text_versions,
     list_prompt_texts,
-    restore_prompt_text,
-    retire_documentation_profile,
     retire_prompt_text,
-    save_documentation_profile,
-    save_prompt_text,
 )
 from .registry import _ORIG_SIGNATURES, MCP_TOOLS, TOOLS, mcp, publish, tool
 from .runtime import _db, _drafts_db
@@ -198,16 +192,9 @@ __all__ = [
     "delete_entity_link_type",
     "grep_statements",
     "report_knowledge_gap",
-    "save_prompt_text",
     "get_prompt_text",
     "list_prompt_texts",
-    "list_prompt_text_versions",
     "retire_prompt_text",
-    "list_documentation_profiles",
-    "get_documentation_profile",
-    "save_documentation_profile",
-    "retire_documentation_profile",
-    "restore_prompt_text",
     "submit_draft",
     "request_draft_review",
     "get_draft_review_run",
@@ -252,6 +239,7 @@ __all__ = [
     "DraftOpsRejectedError",
     "RejectedStatement",
     "apply_draft",
+    "approve_draft",
     # Read off this module object by the in-process draft emitter
     # (`ingest.draft.InProcessDraftEmitter`, injectable for tests), which
     # accepts every parameter when `_ORIG_SIGNATURES` is missing. Exported so

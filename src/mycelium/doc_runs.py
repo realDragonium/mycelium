@@ -26,13 +26,12 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
-import os
 import sqlite3
 import threading
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
-from . import ai, ai_prompts, docs_store, product_settings, prompt_store
+from . import ai, ai_prompts, docs_store, model_settings, product_settings, prompt_store
 from .ai import Provider
 from .docgen import publication
 from .docgen.config import DocgenConfig
@@ -90,9 +89,8 @@ def start_run(
         raise ValueError(
             f"Choose a {config.provider} documentation model in AI settings."
         )
-    if config.provider == "openai":
-        if not os.environ.get("OPENAI_API_KEY", "").strip():
-            raise ValueError("Set OPENAI_API_KEY on the server.")
+    if reason := model_settings.provider_availability(config.provider).reason:
+        raise ValueError(reason)
     max_active = product_settings.get(
         product_settings.ConcurrencySettings
     ).documentation_runs

@@ -27,19 +27,15 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import BaseRoute
 
 from .. import (
-    alias_suggestions,
-    audiences,
     auth,
-    documentation_profiles,
+    errors,
     github_connect,
-    names_workspace,
     oauth_server,
     oidc,
     quarantine,
     server,
     tracing,
 )
-from ..docgen.publication import BothSidesEdited
 from ..server import registry, startup
 from . import (
     account,
@@ -136,15 +132,9 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     app = FastAPI(title="Mycelium", lifespan=lifespan)
 
     app.exception_handler(ValueError)(_value_error_handler)
+    app.exception_handler(errors.Conflict)(_conflict_handler)
     app.exception_handler(auth.RoleRequired)(_role_required_handler)
     app.exception_handler(Exception)(_unhandled_error_handler)
-    app.exception_handler(BothSidesEdited)(documentation._both_sides_edited_handler)
-    app.exception_handler(documentation_profiles.Conflict)(
-        prompt_texts._profile_conflict
-    )
-    app.exception_handler(names_workspace.Conflict)(names._names_conflict)
-    app.exception_handler(alias_suggestions.Conflict)(names.alias_suggestion_conflict)
-    app.exception_handler(audiences.Conflict)(audience_routes._audience_conflict)
 
     # Middleware in Starlette runs in *reverse* registration order (last
     # added wraps the outermost). We want session decoding to happen
@@ -223,6 +213,13 @@ def _routes() -> tuple[BaseRoute, ...]:
 
 async def _value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+async def _conflict_handler(request: Request, exc: errors.Conflict) -> JSONResponse:
+    content = {"detail": str(exc)}
+    if exc.code is not None:
+        content["code"] = exc.code
+    return JSONResponse(status_code=409, content=content)
 
 
 async def _role_required_handler(

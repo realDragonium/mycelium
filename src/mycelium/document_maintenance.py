@@ -33,6 +33,7 @@ from . import (
     document_freshness,
     documentation_planning,
     documentation_profiles,
+    drafts_store,
     model_settings,
     product_settings,
     store,
@@ -94,7 +95,7 @@ def sweep(now: datetime | None = None) -> list[str]:
     from . import server
 
     now = now or datetime.now(UTC)
-    drafts = server._drafts_db()
+    drafts = drafts_store.connection()
     _publish_finished(drafts)
     limits = product_settings.get(product_settings.DocumentationMaintenanceSettings)
     max_active = product_settings.get(
@@ -147,7 +148,6 @@ def _awaiting_labels(document: ExistingDocument) -> bool:
     """An edit drops a statement's AI label until it is labelled again, so
     until then the edit looks like the statement was hidden from the
     audience. Acting on that would remove the fact instead of updating it."""
-    from . import server
 
     hidden = [
         change.statement_id
@@ -155,7 +155,7 @@ def _awaiting_labels(document: ExistingDocument) -> bool:
         if change.change == "no_longer_visible"
     ]
     return bool(hidden) and bool(
-        store.audience_labels.awaiting_label(server._db(), hidden)
+        store.audience_labels.awaiting_label(store.substrate_connection(), hidden)
     )
 
 

@@ -41,7 +41,8 @@ statement. Audience ids it invents grant nothing.
 - A failed batch is retried with backoff; after five failures the statement
   waits for the next backfill. Its statements stay unlabelled meanwhile.
 - **Label unlabelled statements** queues every unlabelled statement and runs
-  even with automatic labelling off. **Relabel AI labels** also queues AI
+  even with automatic labelling off, until no queued statement has attempts
+  left; a failed batch or a budget pause delays it but does not end it. **Relabel AI labels** also queues AI
   labels. Both show progress and the cost so far, also after leaving and
   reopening the page (`backfill` on `GET /api/audiences/labelling`); a server
   restart forgets the progress, not the queue.

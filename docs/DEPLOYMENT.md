@@ -145,10 +145,11 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
 | `EMBED_TIMEOUT_S` | `30` | Seconds before one Ollama embedding request fails instead of hanging. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
-| `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling traces and loop traces are written. |
-| `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_DIR` | `MYCELIUM_TRACE_DIR` | Per-action override of the trace directory. |
+| `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling flamegraphs and metadata sidecars are written. |
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
-| `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude model ran from a built-in list-price table, including cache reads and writes; other providers get no estimate. |
+| `MYCELIUM_TRACE_LOG_MAX_BYTES` | `10000000` (10 MB) | Rotate JSONL trace logs before exceeding this size; keep one older generation. `0` disables rotation. |
+| `MYCELIUM_TRACE_KEEP` | `200` | Keep this many newest traces per directory by mtime; a flamegraph and sidecar count as one. `0` disables pruning. |
+| `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude or OpenAI model ran from a built-in list-price table, including cache reads and writes; a model missing from the table gets no estimate. |
 | `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
 | `MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token issued through the OAuth flow. See [OAuth token lifetime](#oauth-token-lifetime). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
@@ -398,7 +399,7 @@ up to the new build's defaults — see
 
 ### Upgrading an instance at schema v14
 
-An instance last deployed at substrate schema v14 runs eight migrations on
+An instance last deployed at substrate schema v14 runs ten migrations on
 the first start of a current build:
 
 | Version | Change |
@@ -411,6 +412,8 @@ the first start of a current build:
 | v20 | Adds the table of entity pairs dismissed as not duplicates. |
 | v21 | Adds statement audience labels and their queue. |
 | v22 | Records when a curator label's statement text changed after the decision. |
+| v23 | Adds the connect pass's memory of the statements it looked at. |
+| v24 | Widens that memory to every curation item and adds the claims outside agents take on them. |
 
 The drafts and prompts databases upgrade themselves on the same start. The
 research feature's data is deleted, as are its settings (see
@@ -449,14 +452,15 @@ Everything an instance knows lives in `/var/lib/mycelium`:
 
 | File | Holds |
 |---|---|
-| `mycelium.db` | Knowledge: statements, entities, names, links and conditions, vocabularies, knowledge gaps |
+| `mycelium.db` | Knowledge: statements, entities, names, links and conditions, vocabularies, knowledge gaps, audience labels; the queues of work against it |
 | `mycelium-history.db` | Audit log of substrate changes |
 | `mycelium-auth.db` | Users, MCP tokens, invites, OAuth clients |
-| `mycelium-drafts.db` | Drafts and their reviews, documentation runs, generated documents |
-| `mycelium-prompts.db` | AI instructions and their history, model, review and product settings, GitHub connections |
+| `mycelium-drafts.db` | Drafts, their reviews and applications; generated documents, their revisions, runs, publication receipts, plans and maintenance decisions; the AI usage ledger |
+| `mycelium-prompts.db` | AI instructions and writing profiles with their history, audiences, model, review and product settings, GitHub connections |
 | `mycelium-ops.db` | Only on instances that predate its removal: tool-call telemetry that is no longer written or read, and not archived |
 | `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
 | `entity-positions.json` | Entity layout cache; rebuilt if missing |
+| `ask_trace.jsonl`, `ingest_trace.jsonl`, `traces/` | Run traces and profiling output, not data; not archived |
 | `.uv-cache/` | uv's package cache, not data |
 
 The databases run in WAL mode, so copying a live `.db` file can produce a
@@ -464,9 +468,12 @@ torn copy. Use one of the two methods below.
 
 ### Backups: `mycelium export`
 
-`mycelium export` writes one archive holding every database above, the
-audit log and the vector indexes. Run it as the service user; it is safe
-while the service runs and reads each database as one consistent snapshot.
+`mycelium export` writes one archive holding the databases above, the
+audit log and the vector indexes, less the exclusions listed below. Run it
+as the service user; it is safe while the service runs. It reads each
+database as one consistent snapshot, one database after another, so a write
+that lands meanwhile can be in one database's part and missing from a
+later one's.
 
 ```bash
 # once: the CLI wrapper and somewhere the service user may write
@@ -494,12 +501,16 @@ It also does not hold anything outside the data dir: back up
 `/etc/mycelium.env` (session secret, OIDC and GitHub App secrets), the
 GitHub App private key, and your nginx and systemd edits separately.
 
-To check a backup, restore it into a scratch directory and compare the
-row counts it prints with the ones `export` printed:
+To check a backup, restore it into a scratch directory. `import` prints the
+row counts recorded in the archive, not what it restored, so count a few
+tables in the restored copy and compare them with the counts `export`
+printed:
 
 ```bash
 sudo -u mycelium /opt/mycelium/.local/bin/uv --project /opt/mycelium run \
   mycelium --data-dir /tmp/restore-check import /var/lib/mycelium-backups/<archive>
+sudo -u mycelium sqlite3 /tmp/restore-check/mycelium.db \
+  'SELECT (SELECT COUNT(*) FROM statements), (SELECT COUNT(*) FROM entities)'
 sudo rm -rf /tmp/restore-check
 ```
 
@@ -590,8 +601,9 @@ newer build; an older build refuses it.
    sudo journalctl -u mycelium -n 50 --no-pager
    ```
 
-6. Compare the row counts `import` printed with those `export` printed,
-   sign in, and run a search you know the answer to.
+6. Count a few tables in the new data dir (`statements`, `entities`,
+   `users`) and compare them with the counts `export` printed, then sign
+   in and run a search you know the answer to.
 
    To look around before the new instance takes over, start it in
    quarantine first (see [Opening a copy of production
@@ -611,7 +623,10 @@ like any other — check it out and run `deploy/deploy.sh`. It snapshots
 first, as always. Whether the schema changed is visible in the startup
 log, and in `sudo -u mycelium sqlite3 /var/lib/mycelium/mycelium.db
 'PRAGMA user_version'` compared with the version the previous build
-expects.
+expects. Only the substrate carries a schema version: the other databases
+upgrade themselves on start and an older build does not refuse them, so
+read the release notes for changes to them, and restore the snapshot when
+in doubt.
 
 **If a migration ran**, the previous build will not start on the migrated
 data: it stops with `database schema version N is newer than this build's

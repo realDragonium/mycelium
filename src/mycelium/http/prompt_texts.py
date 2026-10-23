@@ -7,7 +7,6 @@ decided by `documentation_profiles` and `ai_prompts` from that principal.
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
@@ -15,12 +14,6 @@ from .. import ai_prompts, auth, documentation_profiles
 from .access import _require_principal
 
 router = APIRouter()
-
-
-async def _profile_conflict(
-    request: Request, exc: documentation_profiles.Conflict
-) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 @router.get("/api/documentation/profiles")

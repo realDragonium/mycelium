@@ -5,10 +5,11 @@ an explicit `draft_id`) wants to apply. The substrate isn't touched
 until a curator approves the draft, at which point the ops are replayed
 all-or-nothing as the curator's principal.
 
-Why a separate file: drafts are pending, possibly-incorrect work. Keeping
-them off the substrate means a snapshot/restore of the substrate doesn't
-carry half-applied drafts, and a wipe of drafts (e.g. after a bad batch)
-doesn't risk the live KB.
+Why a separate file: drafts are pending, possibly-incorrect work, kept off
+the substrate so it never carries half-applied changes. The file is not
+disposable, though: it also holds the work built on the substrate (generated
+documents and their revisions, documentation runs, plans and maintenance
+decisions) and the AI usage ledger. Cleaning up drafts must leave those alone.
 
 State model — terminal-timestamp style, no `status` column. A draft's
 status is derived from which timestamp is set:
@@ -30,7 +31,7 @@ from typing import TYPE_CHECKING, Literal, Self, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import timestamps
+from . import errors, timestamps
 from .connections import ConnectionProvider
 from .link_authoring import reject_entity_statement_additions
 
@@ -180,11 +181,11 @@ class Evidence(BaseModel):
 MAX_EVIDENCE = 5
 
 
-class StaleDraftRevisionError(ValueError):
+class StaleDraftRevisionError(errors.Conflict):
     pass
 
 
-class ActiveApplicationError(ValueError):
+class ActiveApplicationError(errors.Conflict):
     pass
 
 
@@ -738,8 +739,10 @@ def create_review(
     preconditions: Sequence[Mapping[str, object]],
     unresolved_questions: list[str],
     reviewed_by: str,
+    review_id: str | None = None,
 ) -> str:
-    review_id = "rev_" + _uuid.uuid4().hex[:12]
+    if review_id is None:
+        review_id = "rev_" + _uuid.uuid4().hex[:12]
     conn.execute(
         "INSERT INTO draft_reviews (id, draft_id, outcome, rationale, "
         "draft_revision, preconditions_json, unresolved_json, reviewed_at, "

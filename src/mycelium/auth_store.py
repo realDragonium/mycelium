@@ -359,7 +359,9 @@ def _drop_role_check(conn: sqlite3.Connection) -> bool:
             col_list = ", ".join(cols)
             conn.execute("BEGIN")
             try:
-                conn.executescript(new_ddl)
+                # An earlier build could leave a half-copied table behind.
+                conn.execute(f"DROP TABLE IF EXISTS {table}_new")
+                conn.execute(new_ddl)
                 conn.execute(
                     f"INSERT INTO {table}_new ({col_list}) SELECT {col_list} FROM {table}"
                 )

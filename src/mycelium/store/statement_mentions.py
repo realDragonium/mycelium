@@ -6,8 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 
 from .. import mentions as mention_index
-from . import kernel
-from .kernel import _now, _record
+from .kernel import _now
 from .statements import list_all_names
 
 # --- mentions ---------------------------------------------------------------
@@ -257,102 +256,4 @@ def count_open_recompute(conn: sqlite3.Connection) -> int:
         conn.execute(
             "SELECT COUNT(*) FROM mention_recompute_queue WHERE claimed_at IS NULL"
         ).fetchone()[0]
-    )
-
-
-# --- pending mentions (suspect-match review queue) --------------------------
-#
-# Never exposed through MCP. The website reviews these; approving inserts
-# the real statement_mentions row.
-
-
-def list_pending_mentions(
-    conn: sqlite3.Connection,
-    status: str = "open",
-    limit: int = 100,
-    offset: int = 0,
-) -> list[sqlite3.Row]:
-    """Hydrated suspect occurrences for review. `status` is open /
-    approved / rejected / all. Each row carries the statement text and the
-    suspect name so a reviewer can judge the occurrence in context."""
-    where = {
-        "open": "WHERE p.approved_at IS NULL AND p.rejected_at IS NULL",
-        "approved": "WHERE p.approved_at IS NOT NULL",
-        "rejected": "WHERE p.rejected_at IS NOT NULL",
-        "all": "",
-    }.get(status, "WHERE p.approved_at IS NULL AND p.rejected_at IS NULL")
-    return conn.execute(
-        f"""
-        SELECT p.id AS id, p.statement_id, p.name_id, p.created_at,
-               p.approved_at, p.rejected_at,
-               n.text AS name, n.entity_id AS entity_id,
-               s.text AS statement_text, s.kind AS statement_kind
-        FROM pending_mentions p
-        JOIN names n      ON n.id = p.name_id
-        JOIN statements s ON s.id = p.statement_id
-        {where}
-        ORDER BY p.created_at DESC, p.id DESC
-        LIMIT ? OFFSET ?
-        """,
-        (limit, offset),
-    ).fetchall()
-
-
-def get_pending_mention(
-    conn: sqlite3.Connection, pending_id: int
-) -> sqlite3.Row | None:
-    row: sqlite3.Row | None = conn.execute(
-        "SELECT id, statement_id, name_id, approved_at, rejected_at "
-        "FROM pending_mentions WHERE id = ?",
-        (pending_id,),
-    ).fetchone()
-    return row
-
-
-def approve_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:
-    """Approve a suspect occurrence: stamp approved_at and materialize the
-    real mention. No-op (returns False) if already resolved or unknown."""
-    row = get_pending_mention(conn, pending_id)
-    if row is None or row["approved_at"] is not None or row["rejected_at"] is not None:
-        return False
-    conn.execute(
-        "UPDATE pending_mentions SET approved_at = ?, approved_by = ? WHERE id = ?",
-        (_now(), kernel.get_actor(), pending_id),
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO statement_mentions (statement_id, name_id) VALUES (?, ?)",
-        (row["statement_id"], row["name_id"]),
-    )
-    _record(
-        conn,
-        "link",
-        "statement_mention",
-        f"{row['statement_id']}|{row['name_id']}",
-        context={"reason": "approve_pending_mention", "pending_id": pending_id},
-    )
-    return True
-
-
-def reject_pending_mention(conn: sqlite3.Connection, pending_id: int) -> bool:
-    """Reject a suspect occurrence: stamp rejected_at, write no mention.
-    No-op (returns False) if already resolved or unknown."""
-    row = get_pending_mention(conn, pending_id)
-    if row is None or row["approved_at"] is not None or row["rejected_at"] is not None:
-        return False
-    conn.execute(
-        "UPDATE pending_mentions SET rejected_at = ?, rejected_by = ? WHERE id = ?",
-        (_now(), kernel.get_actor(), pending_id),
-    )
-    return True
-
-
-def count_pending_mentions(conn: sqlite3.Connection, status: str = "open") -> int:
-    where = {
-        "open": "WHERE approved_at IS NULL AND rejected_at IS NULL",
-        "approved": "WHERE approved_at IS NOT NULL",
-        "rejected": "WHERE rejected_at IS NOT NULL",
-        "all": "",
-    }.get(status, "WHERE approved_at IS NULL AND rejected_at IS NULL")
-    return int(
-        conn.execute(f"SELECT COUNT(*) FROM pending_mentions {where}").fetchone()[0]
     )

@@ -14,11 +14,12 @@ import logging
 import sqlite3
 import tarfile
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 
-from mycelium import backup, prompt_store, store
+from mycelium import backup, docs_store, drafts_store, prompt_store, store
 
 # Build the substrate via the same store helpers normal writes go
 # through, so audit columns and history events populate naturally.
@@ -164,6 +165,46 @@ def test_export_no_history_omits_history(tmp_path):
         assert member is not None
         manifest = json.loads(member.read())
     assert manifest["includes_history"] is False
+
+
+def test_export_documentation_uses_the_drafts_snapshot(tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    drafts_path = src / "mycelium-drafts.db"
+    with closing(drafts_store.connect(drafts_path)) as conn:
+        drafts_store.migrate(conn)
+        docs_store.migrate(conn)
+        docs_store.upsert_document(
+            conn, slug="login", title="Login", body="How to log in."
+        )
+
+    write_section = backup._write_section
+
+    def write_meanwhile(section, conn, staging, row_counts):
+        write_section(section, conn, staging, row_counts)
+        if section.member == "drafts.jsonl":
+            with closing(docs_store.connect(drafts_path)) as live:
+                docs_store.upsert_document(
+                    live, slug="sso", title="SSO", body="How to configure SSO."
+                )
+
+    monkeypatch.setattr(backup, "_write_section", write_meanwhile)
+    archive = tmp_path / "snap.tar.gz"
+    manifest = backup.export_substrate(src, archive, include_vectors=False)
+
+    with closing(docs_store.connect(drafts_path)) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM generated_documents").fetchone()[0] == 2
+        )
+    with tarfile.open(archive) as tar:
+        member = tar.extractfile("documentation.json")
+        assert member is not None
+        documents = json.loads(member.read())["tables"]["generated_documents"]
+    assert [document["slug"] for document in documents] == ["login"]
+    assert manifest["includes_drafts"] is True
+    assert manifest["includes_documentation"] is True
+    assert manifest["row_counts"]["generated_documents"] == 1
 
 
 # --- import -----------------------------------------------------------------
@@ -1157,7 +1198,12 @@ def test_historical_mention_approval_survives_archive_and_recompute(tmp_path):
     try:
         store.derive_mentions(conn, sid, "SSO is enabled", store.build_name_index(conn))
         assert [r["name"] for r in store.get_mentions(conn, sid)] == ["SSO"]
-        assert store.list_pending_mentions(conn, "approved")[0]["name"] == "SSO"
+        assert (
+            conn.execute(
+                "SELECT name_id FROM pending_mentions WHERE approved_at IS NOT NULL"
+            ).fetchone()["name_id"]
+            == nid
+        )
     finally:
         conn.close()
 

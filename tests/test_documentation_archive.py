@@ -173,7 +173,7 @@ def test_unresolved_legacy_destination_remains_restorable(tmp_path):
             (document,),
         )
         conn.commit()
-    documentation_archive.write(source, staging)
+        documentation_archive.write(conn, staging)
     prepared = documentation_archive.prepare(staging, required=True)
     assert prepared is not None
     with closing(docs_store.connect(prepared)) as conn:
@@ -233,7 +233,7 @@ def test_archive_rejects_publication_that_disagrees_with_receipt(tmp_path, field
             content_revision="sha",
             revision=1,
         )
-    documentation_archive.write(source, staging)
+        documentation_archive.write(conn, staging)
     path = staging / documentation_archive.FILE_NAME
     payload = json.loads(path.read_text())
     # Equivalent coordinate JSON stays valid despite different whitespace/key order.
@@ -260,7 +260,7 @@ def test_an_archive_from_before_plans_restores_without_them(tmp_path):
     with closing(docs_store.connect(source / documentation_archive.DB_NAME)) as conn:
         docs_store.migrate(conn)
         docs_store.upsert_document(conn, slug="page", title="Page", body="Body")
-    documentation_archive.write(source, staging)
+        documentation_archive.write(conn, staging)
     section = staging / documentation_archive.FILE_NAME
     payload = json.loads(section.read_text())
     for table in (

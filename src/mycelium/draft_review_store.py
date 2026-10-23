@@ -61,7 +61,7 @@ class ReviewRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
     run_id: str
     draft_id: str
-    status: Literal["running", "completed", "failed"] = "running"
+    status: Literal["running", "completed", "failed", "paused"] = "running"
     mode: Mode
     draft_revision: int
     provider: Literal["claude", "openai"] | None = None

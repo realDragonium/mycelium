@@ -2,7 +2,8 @@
 delivering them to a destination.
 
 Reads are open to any authenticated caller; anything that starts a run or
-delivers needs a real writer. A stale `expected_revision` answers 409.
+delivers needs a real writer. The shared conflict handler answers 409 for a stale
+`expected_revision` or edits on both sides, preserving the latter's response code.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ import difflib
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
@@ -22,7 +22,6 @@ from .. import (
     product_settings,
     server,
 )
-from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from .access import _enforce_role, _require_principal
 
@@ -98,8 +97,6 @@ class RetryRunBody(BaseModel):
 def retry_documentation_run_http(
     run_id: str, body: RetryRunBody, request: Request
 ) -> dict[str, object]:
-    from .. import docs_store
-
     _enforce_role(request, "writer", real_role=True)
     try:
         return server.retry_documentation_run(
@@ -107,10 +104,6 @@ def retry_documentation_run_http(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except docs_store.RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class DocumentEditBody(ManualDocument):
@@ -131,21 +124,18 @@ def preview_document_edit(body: ManualDocument, request: Request) -> dict[str, o
 def edit_saved_document_http(
     document_id: str, body: SavedDocumentEditBody, request: Request
 ) -> dict[str, object]:
-    from .. import docs_store, document_edits
+    from .. import document_edits
 
     _enforce_role(request, "writer", real_role=True)
     principal = _require_principal(request)
-    try:
-        run_id = document_edits.start_document_edit(
-            server._drafts_db(),
-            document_id,
-            body.expected_revision,
-            ManualDocument(title=body.title, body=body.body),
-            created_by=principal.id,
-            provider=body.provider,
-        )
-    except docs_store.RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    run_id = document_edits.start_document_edit(
+        server._drafts_db(),
+        document_id,
+        body.expected_revision,
+        ManualDocument(title=body.title, body=body.body),
+        created_by=principal.id,
+        provider=body.provider,
+    )
     return server.get_documentation_run(run_id)
 
 
@@ -153,20 +143,17 @@ def edit_saved_document_http(
 def edit_document_draft_http(
     run_id: str, body: DocumentEditBody, request: Request
 ) -> dict[str, object]:
-    from .. import docs_store, document_edits
+    from .. import document_edits
 
     _enforce_role(request, "writer", real_role=True)
     principal = _require_principal(request)
-    try:
-        new_run_id = document_edits.start_draft_edit(
-            server._drafts_db(),
-            run_id,
-            ManualDocument(title=body.title, body=body.body),
-            created_by=principal.id,
-            provider=body.provider,
-        )
-    except docs_store.RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    new_run_id = document_edits.start_draft_edit(
+        server._drafts_db(),
+        run_id,
+        ManualDocument(title=body.title, body=body.body),
+        created_by=principal.id,
+        provider=body.provider,
+    )
     return server.get_documentation_run(new_run_id)
 
 
@@ -294,40 +281,20 @@ def document_maintenance_http(request: Request) -> document_maintenance.Feed:
     return document_maintenance.feed(server._drafts_db())
 
 
-async def _both_sides_edited_handler(
-    request: Request, exc: BothSidesEdited
-) -> JSONResponse:
-    """A conflict the caller resolves by choosing a side, so the client gets a
-    code to offer `start_from_destination` on rather than a message to parse."""
-    return JSONResponse(
-        status_code=409, content={"detail": str(exc), "code": "both_sides_edited"}
-    )
-
-
 @router.post("/api/documentation/documents/{document_id}/revisions")
 def revise_document_http(
     document_id: str, body: DocumentRevisionBody, request: Request
 ) -> dict[str, object]:
-    from ..docs_store import RevisionConflict
-
     _enforce_role(request, "writer", real_role=True)
-    try:
-        return server.revise_document(document_id, **body.model_dump())
-    except RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return server.revise_document(document_id, **body.model_dump())
 
 
 @router.post("/api/documentation/documents/{document_id}/delivery")
 def deliver_document_http(
     document_id: str, body: DocumentDeliveryBody, request: Request
 ) -> dict[str, object]:
-    from ..docs_store import RevisionConflict
-
     _enforce_role(request, "writer", real_role=True)
-    try:
-        return server.deliver_document(document_id, **body.model_dump())
-    except RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return server.deliver_document(document_id, **body.model_dump())
 
 
 # --- documentation planning ------------------------------------------------------
@@ -390,8 +357,6 @@ def approve_plan_items_http(
 def retry_plan_item_http(
     item_id: str, body: RetryRunBody, request: Request
 ) -> dict[str, object]:
-    from .. import docs_store
-
     _enforce_role(request, "writer", real_role=True)
     try:
         return documentation_planning.retry(
@@ -399,10 +364,6 @@ def retry_plan_item_http(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except docs_store.RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/documentation/plan-items/{item_id}/dismiss")
@@ -425,8 +386,6 @@ class StaleDismissalBody(BaseModel):
 def dismiss_stale_document_http(
     guideline_set: str, document_id: str, body: StaleDismissalBody, request: Request
 ) -> dict[str, bool]:
-    from ..docs_store import RevisionConflict
-
     _enforce_role(request, "writer", real_role=True)
     try:
         documentation_planning.dismiss_stale(
@@ -437,6 +396,4 @@ def dismiss_stale_document_http(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RevisionConflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"dismissed": True}

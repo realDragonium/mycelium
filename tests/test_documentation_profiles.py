@@ -1,4 +1,4 @@
-"""Profile configuration stays versioned, atomic, and shared by HTTP and MCP."""
+"""Profile configuration stays versioned, atomic, and available through dedicated HTTP routes."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 from mycelium import ai_prompts, audiences, auth, guidelines, prompt_store, server
 from mycelium import documentation_profiles as profiles
 from mycelium.server import runtime
-from test_prompt_texts import _app, _as
+from test_prompt_texts import _app
 
 
 @pytest.fixture
@@ -166,10 +166,20 @@ def test_starter_seeding_respects_any_history_including_retirement(db):
     assert profiles.capture(db).catalogue() == {}
 
 
-def test_ui_and_mcp_share_versions_validation_and_roles(tmp_path, monkeypatch):
+def test_profile_and_prompt_routes_share_versions_and_validation(tmp_path, monkeypatch):
     with _app(tmp_path, monkeypatch) as client:
-        with _as("writer"):
-            server.save_prompt_text(guidelines.TYPE, "internal/guidance", "First step")
+        assert (
+            client.put(
+                "/api/documentation/prompts",
+                json={
+                    "type": guidelines.TYPE,
+                    "name": "internal/guidance",
+                    "text": "First step",
+                    "revision": 0,
+                },
+            ).status_code
+            == 200
+        )
         listing = client.get("/api/documentation/profiles").json()
         profile = next(
             item for item in listing["profiles"] if item["name"] == "internal"
@@ -183,8 +193,18 @@ def test_ui_and_mcp_share_versions_validation_and_roles(tmp_path, monkeypatch):
         }
         response = client.put("/api/documentation/profiles/internal", json=body)
         assert response.status_code == 200
-        with _as("writer"):
-            server.save_prompt_text(guidelines.TYPE, "internal/reference", "MCP update")
+        assert (
+            client.put(
+                "/api/documentation/prompts",
+                json={
+                    "type": guidelines.TYPE,
+                    "name": "internal/reference",
+                    "text": "Updated template",
+                    "revision": 1,
+                },
+            ).status_code
+            == 200
+        )
         assert (
             client.put("/api/documentation/profiles/internal", json=body).status_code
             == 409
@@ -205,7 +225,7 @@ def test_ui_and_mcp_share_versions_validation_and_roles(tmp_path, monkeypatch):
             "/api/documentation/prompts/history",
             params={"type": guidelines.TYPE, "name": "internal/reference"},
         ).json()["versions"]
-        assert [item["text"] for item in history] == ["MCP update", "Template"]
+        assert [item["text"] for item in history] == ["Updated template", "Template"]
         restored = client.post(
             "/api/documentation/prompts/restore",
             json={
@@ -221,18 +241,37 @@ def test_ui_and_mcp_share_versions_validation_and_roles(tmp_path, monkeypatch):
         )
 
 
-def test_generic_mcp_restore_preserves_writer_permission(tmp_path, monkeypatch):
-    with _app(tmp_path, monkeypatch):
-        with _as("writer"):
-            server.save_prompt_text("doctrine", "ingest", "Edited instructions")
-            restored = server.restore_prompt_text("doctrine", "ingest", 1, 2)
-            assert restored["version"] == 3
-        with _as("drafter"), pytest.raises(auth.RoleRequired):
-            server.restore_prompt_text("doctrine", "ingest", 1, 3)
-        with _as("writer"), pytest.raises(auth.RoleRequired):
-            server.retire_documentation_profile(
-                "kb-authoring", profiles.read("kb-authoring").revision
-            )
+@pytest.mark.parametrize("role, expected", [("writer", 200), ("drafter", 403)])
+def test_prompt_routes_require_a_real_writer(tmp_path, monkeypatch, role, expected):
+    from mycelium.http.authentication import AuthMiddleware
+
+    async def resolve(*_):
+        return principal(role)
+
+    monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
+    with _app(tmp_path, monkeypatch, auth_mode="on") as client:
+        prompt_store.save(
+            prompt_store.connection(),
+            type="doctrine",
+            name="ingest",
+            text="Edited instructions",
+        )
+        response = client.post(
+            "/api/documentation/prompts/restore",
+            json={"type": "doctrine", "name": "ingest", "version": 1, "revision": 2},
+        )
+        assert response.status_code == expected
+        if expected == 200:
+            assert response.json()["version"] == 3
+            assert response.json()["created_by"] == role
+        assert (
+            client.request(
+                "DELETE",
+                "/api/documentation/profiles/kb-authoring",
+                json={"revision": profiles.read("kb-authoring").revision},
+            ).status_code
+            == 403
+        )
 
 
 def test_read_only_http_cannot_save_or_restore(tmp_path, monkeypatch):
@@ -263,10 +302,27 @@ def test_versioned_prompt_retirement_rejects_stale_heads_and_preserves_legacy_ca
     tmp_path, monkeypatch
 ):
     with _app(tmp_path, monkeypatch) as client:
-        first = server.save_prompt_text(
-            guidelines.TYPE, "internal/reference", "Version one"
+        first = client.put(
+            "/api/documentation/prompts",
+            json={
+                "type": guidelines.TYPE,
+                "name": "internal/reference",
+                "text": "Version one",
+                "revision": 0,
+            },
+        ).json()
+        assert (
+            client.put(
+                "/api/documentation/prompts",
+                json={
+                    "type": guidelines.TYPE,
+                    "name": "internal/reference",
+                    "text": "Version two",
+                    "revision": 1,
+                },
+            ).status_code
+            == 200
         )
-        server.save_prompt_text(guidelines.TYPE, "internal/reference", "Version two")
         body = {
             "type": guidelines.TYPE,
             "name": "internal/reference",
@@ -285,7 +341,18 @@ def test_versioned_prompt_retirement_rejects_stale_heads_and_preserves_legacy_ca
         assert client.post("/retire-prompt-text", json=body).json() == {
             "retired": False
         }
-        server.restore_prompt_text(guidelines.TYPE, "internal/reference", 1, 3)
+        assert (
+            client.post(
+                "/api/documentation/prompts/restore",
+                json={
+                    "type": guidelines.TYPE,
+                    "name": "internal/reference",
+                    "version": 1,
+                    "revision": 3,
+                },
+            ).status_code
+            == 200
+        )
         assert client.post("/retire-prompt-text", json=body).status_code == 409
         assert server.retire_prompt_text(guidelines.TYPE, "internal/reference") == {
             "retired": True

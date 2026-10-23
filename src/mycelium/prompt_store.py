@@ -7,8 +7,9 @@ applies to the next run without a restart.
 
 Its own SQLite file (`mycelium-prompts.db`). Not the substrate: prompt texts
 are instance config and must never enter the draft pipeline. Not the drafts
-DB either: drafts are disposable — wiping them must not take an instance's
-prompt configuration with it.
+DB either: that holds operational work, while this file is the instance's
+configuration (prompt texts, audiences, model, review and product settings,
+GitHub connections).
 
 Append-only. A save inserts a row carrying the next `version` for its
 (type, name); reads serve the highest version. A delete appends a tombstone
