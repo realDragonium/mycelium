@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, docs_store, drafts_store, server
-from mycelium.http import app
+from mycelium.http import create_app
 from mycelium.http.authentication import AuthMiddleware
 
 
@@ -25,7 +25,7 @@ def workspace(tmp_path, monkeypatch):
             title="Page",
             body="# Welcome\n\n<script>alert(1)</script>\n\n[bad](javascript:alert(1))\n\n![image](https://example.com/track.png)",
         )
-        yield TestClient(app), conn, document
+        yield TestClient(create_app()), conn, document
 
 
 def test_library_renders_safe_markdown_and_reads_historical_body(workspace):

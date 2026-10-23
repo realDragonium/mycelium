@@ -147,7 +147,9 @@ def test_rest_mirror_routes_bounded_tools_through_an_async_handler():
     """The REST handlers are built from the raw sync wrapper in `server.TOOLS`,
     not from the MCP offloading shim — so a bounded tool needs its own async
     handler here, or posting to `/ingest` walks straight past the bound."""
-    from mycelium.http import app
+    from mycelium.http import create_app
+
+    app = create_app()
 
     for name in sorted(admission._MODEL_LOOP_TOOLS):
         route = next(r for r in app.routes if getattr(r, "name", None) == name)

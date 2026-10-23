@@ -253,3 +253,9 @@ known-first-party = ["mycelium"]
 # readable ordering). Four workers matches CI's runners: each worker pays
 # ~2.5 s of import and collection, so more workers stop helping.
 addopts = "-n 4"
+filterwarnings = [
+    # Starlette's TestClient names `anyio.abc.BlockingPortal`, an alias anyio
+    # 4.15 deprecated. Fixed upstream in Kludex/starlette#3498 (issue #3497);
+    # drop this once the locked starlette includes it.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning:starlette.testclient",
+]

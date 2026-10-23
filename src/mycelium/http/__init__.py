@@ -8,6 +8,7 @@ mount and, last, the MCP sub-app at `/`, which matches every path and so
 would shadow any route registered after it.
 """
 
+import functools
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -15,11 +16,12 @@ from pathlib import Path
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from mcp.server.transport_security import RequestBodyLimitMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.routing import BaseRoute
 
 from .. import (
     alias_suggestions,
@@ -69,48 +71,128 @@ def _max_body_bytes() -> int:
     return int(raw) if raw else 4 * 1024 * 1024
 
 
-# Build the streamable-HTTP sub-app once at import time. Transport
-# configuration lives here rather than on the MCPServer: `MCPServer` holds
-# the server's identity and tools, the app builder decides how they are
-# served. The same endpoint answers both MCP protocol revisions — a
-# 2025-era client's `initialize` handshake and a 2026-07-28 client's
-# self-describing requests — with nothing to configure.
-_MCP_SUBAPP = server.mcp.streamable_http_app(
-    transport_security=registry._build_transport_security(),
-    max_request_body_size=_max_body_bytes(),
-)
+def create_app() -> FastAPI:
+    """Build a fresh app, reading its configuration from the environment now.
 
+    Each call gets its own MCP session manager, whose `run()` may only be
+    entered once, so every app can go through one lifespan of its own."""
+    # Transport configuration lives here rather than on the MCPServer:
+    # `MCPServer` holds the server's identity and tools, the app builder
+    # decides how they are served. The same endpoint answers both MCP
+    # protocol revisions — a 2025-era client's `initialize` handshake and a
+    # 2026-07-28 client's self-describing requests — with nothing to configure.
+    mcp_subapp = server.mcp.streamable_http_app(
+        transport_security=registry._build_transport_security(),
+        max_request_body_size=_max_body_bytes(),
+    )
+    # `streamable_http_app` replaces the server's session manager with a new
+    # one on every call; keep the one that belongs to this sub-app.
+    session_manager = server.mcp.session_manager
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
-    server.init(data_dir)
-    # Start the MCP session manager under our lifespan. A mounted sub-app's
-    # own lifespan never runs, so nothing else initialises it — without this
-    # every `/mcp` call fails with "Task group is not initialized".
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
+        server.init(data_dir)
+        # Start the MCP session manager under our lifespan. A mounted
+        # sub-app's own lifespan never runs, so nothing else initialises it —
+        # without this every `/mcp` call fails with "Task group is not
+        # initialized". `MYCELIUM_DISABLE_MCP_HTTP=1` serves the REST mirror
+        # and /api/* without the `/mcp` endpoint.
+        if os.environ.get("MYCELIUM_DISABLE_MCP_HTTP") == "1":
+            yield
+            return
+        async with session_manager.run():
+            yield
+
+    app = FastAPI(title="Mycelium", lifespan=lifespan)
+
+    app.exception_handler(ValueError)(_value_error_handler)
+    app.exception_handler(auth.RoleRequired)(_role_required_handler)
+    app.exception_handler(Exception)(_unhandled_error_handler)
+    app.exception_handler(BothSidesEdited)(documentation._both_sides_edited_handler)
+    app.exception_handler(documentation_profiles.Conflict)(
+        prompt_texts._profile_conflict
+    )
+    app.exception_handler(names_workspace.Conflict)(names._names_conflict)
+    app.exception_handler(alias_suggestions.Conflict)(names.alias_suggestion_conflict)
+    app.exception_handler(audiences.Conflict)(audience_routes._audience_conflict)
+
+    # Middleware in Starlette runs in *reverse* registration order (last
+    # added wraps the outermost). We want session decoding to happen
+    # *before* auth resolution reads from `request.session`, so register
+    # AuthMiddleware FIRST (inner) and SessionMiddleware LAST (outer).
+    app.add_middleware(AuthMiddleware)
+    app.add_middleware(
+        SessionMiddleware,
+        secret_key=_session_secret(),
+        session_cookie="myc_session",
+        same_site="lax",
+        https_only=session_cookie_secure(),
+    )
+    app.add_middleware(RequestBodyLimitMiddleware, max_body_size=_max_body_bytes())
+    app.add_middleware(HostAllowlistMiddleware)
+    # Outermost, so error responses from the layers inside get the headers too.
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    app.router.routes.extend(_routes())
+
+    # --- MCP transport mount ----------------------------------------------
+    # Remote MCP clients (Claude Desktop, Claude Code) connect to
+    # `https://host/mcp`. The streamable-HTTP sub-app exposes `/mcp`
+    # at its root, so mounting that sub-app at `/` makes the public path
+    # `/mcp` exactly. Mounted last so it can't shadow explicit routes
+    # above — Starlette matches routes in registration order, and a
+    # zero-prefix mount matches everything.
     #
-    # `MYCELIUM_DISABLE_MCP_HTTP=1` skips this; the test suite sets the flag
-    # because `StreamableHTTPSessionManager.run()` may only be called once
-    # per instance, and a test that brings up a second TestClient against
-    # this module would otherwise raise on the second lifespan entry. The
-    # REST mirror and the auth-gated /api/* endpoints work without the
-    # manager; only `/mcp` JSON-RPC needs it.
-    if os.environ.get("MYCELIUM_DISABLE_MCP_HTTP") == "1":
-        yield
-        return
-    async with server.mcp.session_manager.run():
-        yield
+    # Auth: `AuthMiddleware` is installed on the parent app and applies to
+    # mounted sub-apps. It resolves the bearer header into a `Principal`
+    # and stashes it in the `current_principal` ContextVar before the
+    # JSON-RPC dispatcher inside the sub-app runs. The per-tool role gate
+    # in `server.tool` reads that ContextVar.
+    app.mount("/", mcp_subapp)
+    return app
 
 
-app = FastAPI(title="Mycelium", lifespan=lifespan)
+@functools.cache
+def _routes() -> tuple[BaseRoute, ...]:
+    """Every route but the MCP mount, built once per process and shared by
+    every app. None of them depends on the environment, and FastAPI rebuilds
+    each route it includes, which for the tool routes alone costs more than
+    the rest of an app build. Being assembled on a bare router, they don't
+    see an app's `dependency_overrides`; nothing here uses them."""
+    combined = APIRouter()
+    for router in (
+        oidc.router,
+        oauth_server.router,
+        github_connect.router,
+        tool_routes.router,
+        history.router,
+        substrate.router,
+        gaps.router,
+        health.router,
+        traces.router,
+        account.router,
+        names.router,
+        audience_routes.router,
+        prompt_texts.router,
+        settings.router,
+        draft_review.router,
+        documentation.router,
+        drafts.router,
+        admin.router,
+        webui.router,
+    ):
+        combined.include_router(router)
+    combined.mount(
+        "/ui", StaticFiles(directory=str(webui._UI_DIR), html=True), name="ui"
+    )
+    return tuple(combined.routes)
 
 
-@app.exception_handler(ValueError)
 async def _value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
-@app.exception_handler(auth.RoleRequired)
 async def _role_required_handler(
     request: Request, exc: auth.RoleRequired
 ) -> JSONResponse:
@@ -121,7 +203,6 @@ async def _role_required_handler(
     return JSONResponse(status_code=403, content={"detail": str(exc)})
 
 
-@app.exception_handler(Exception)
 async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Last-resort capture for any error that isn't a deliberate 4xx. Emits one
     structured `MYCELIUM_ERROR` line (→ stderr, where a deployment's log-metric
@@ -137,67 +218,19 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 
-app.exception_handler(BothSidesEdited)(documentation._both_sides_edited_handler)
-app.exception_handler(documentation_profiles.Conflict)(prompt_texts._profile_conflict)
-app.exception_handler(names_workspace.Conflict)(names._names_conflict)
-app.exception_handler(alias_suggestions.Conflict)(names.alias_suggestion_conflict)
-app.exception_handler(audiences.Conflict)(audience_routes._audience_conflict)
+@functools.cache
+def _default_app() -> FastAPI:
+    return create_app()
 
 
-# Middleware in Starlette runs in *reverse* registration order (last
-# added wraps the outermost). We want session decoding to happen
-# *before* auth resolution reads from `request.session`, so register
-# AuthMiddleware FIRST (inner) and SessionMiddleware LAST (outer).
-app.add_middleware(AuthMiddleware)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=_session_secret(),
-    session_cookie="myc_session",
-    same_site="lax",
-    https_only=session_cookie_secure(),
-)
-app.add_middleware(RequestBodyLimitMiddleware, max_body_size=_max_body_bytes())
-app.add_middleware(HostAllowlistMiddleware)
-# Outermost, so error responses from the layers inside get the headers too.
-app.add_middleware(SecurityHeadersMiddleware)
-
-app.include_router(oidc.router)
-app.include_router(oauth_server.router)
-app.include_router(github_connect.router)
-app.include_router(tool_routes.router)
-app.include_router(history.router)
-app.include_router(substrate.router)
-app.include_router(gaps.router)
-app.include_router(health.router)
-app.include_router(traces.router)
-app.include_router(account.router)
-app.include_router(names.router)
-app.include_router(audience_routes.router)
-app.include_router(prompt_texts.router)
-app.include_router(settings.router)
-app.include_router(draft_review.router)
-app.include_router(documentation.router)
-app.include_router(drafts.router)
-app.include_router(admin.router)
-app.include_router(webui.router)
-
-app.mount("/ui", StaticFiles(directory=str(webui._UI_DIR), html=True), name="ui")
-
-
-# --- MCP transport mount --------------------------------------------------
-# Remote MCP clients (Claude Desktop, Claude Code) connect to
-# `https://host/mcp`. The streamable-HTTP sub-app exposes `/mcp`
-# at its root, so mounting that sub-app at `/` makes the public path
-# `/mcp` exactly. Mounted last so it can't shadow explicit routes
-# above — Starlette matches routes in registration order, and a
-# zero-prefix mount matches everything.
-#
-# Auth: `AuthMiddleware` is installed on the parent app and applies to
-# mounted sub-apps. It resolves the bearer header into a `Principal`
-# and stashes it in the `current_principal` ContextVar before the
-# JSON-RPC dispatcher inside the sub-app runs. The per-tool role gate
-# in `server.tool` reads that ContextVar.
-app.mount("/", _MCP_SUBAPP)
+def __getattr__(name: str) -> FastAPI:
+    """`mycelium.http:app`, for uvicorn and other ASGI servers, built on first
+    access rather than at import: importing any `mycelium.http` module would
+    otherwise fix the app's configuration to whatever the environment held at
+    that moment."""
+    if name == "app":
+        return _default_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def main() -> None:
@@ -207,4 +240,4 @@ def main() -> None:
     load_dotenv()
     host = os.environ.get("MYCELIUM_HTTP_HOST", "127.0.0.1")
     port = int(os.environ.get("MYCELIUM_HTTP_PORT", "8765"))
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(create_app(), host=host, port=port)

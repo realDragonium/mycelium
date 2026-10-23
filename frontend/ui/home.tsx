@@ -1,31 +1,32 @@
 // Home: the Ask | Find entry point, what the knowledge base holds, and what
 // is waiting for a person.
-import { useCallback } from 'react';
 import { CommandBar } from './command-bar';
 import { I, useGoIngest } from './lib';
 import { Link } from './router';
-import { getJSON, type KnowledgeGap } from './api';
+import { getJSON, getSubstrateCounts, type KnowledgeGap } from './api';
 import { asksPerson, type DraftSummary } from './draft-review';
-import { substrate } from './data';
 import { useAsync } from './use-async';
 
-export function HomeScreen() {
-  const data = substrate.data;
-  const goIngest = useGoIngest();
-  const load = useCallback(() => Promise.all([
-    getJSON<{ drafts: DraftSummary[] }>('/api/drafts?status=all'),
-    getJSON<{ gaps: KnowledgeGap[] }>('/api/knowledge-gaps?status=open'),
-  ]), []);
-  const queue = useAsync(load).state;
-  const drafts = queue.status === 'ready' ? queue.data[0].drafts : [];
-  const submitted = drafts.filter(d => d.status === 'submitted').length;
-  const open = drafts.filter(d => d.status === 'open').length;
-  const questions = drafts.filter(d => d.status === 'submitted' && asksPerson(d.review_assessment)).length;
-  const gaps = queue.status === 'ready' ? queue.data[1].gaps.length : 0;
+const loadQueue = () => Promise.all([
+  getJSON<{ drafts: DraftSummary[] }>('/api/drafts?status=submitted'),
+  getJSON<{ drafts: DraftSummary[] }>('/api/drafts?status=open'),
+  getJSON<{ gaps: KnowledgeGap[] }>('/api/knowledge-gaps?status=open'),
+]);
 
+export function HomeScreen() {
+  const goIngest = useGoIngest();
+  const queue = useAsync(loadQueue).state;
+  const counts = useAsync(getSubstrateCounts).state;
+  const [submittedDrafts, openDrafts, openGaps] = queue.status === 'ready' ? queue.data : [{ drafts: [] }, { drafts: [] }, { gaps: [] }];
+  const submitted = submittedDrafts.drafts.length;
+  const open = openDrafts.drafts.length;
+  const questions = submittedDrafts.drafts.filter(d => asksPerson(d.review_assessment)).length;
+  const gaps = openGaps.gaps.length;
+
+  const n = counts.status === 'ready' ? counts.data : { statements: 0, entities: 0, names: 0, links: 0, entity_links: 0 };
   const stats: [number, string][] = [
-    [data.statements.length, 'statements'], [data.entities.length, 'entities'], [data.names.length, 'names'],
-    [data.links.length, 'links'], [(data.entity_links || []).length, 'entity links'],
+    [n.statements, 'statements'], [n.entities, 'entities'], [n.names, 'names'],
+    [n.links, 'links'], [n.entity_links, 'entity links'],
   ];
 
   return (

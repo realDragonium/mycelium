@@ -1,11 +1,7 @@
 """Test-wide setup.
 
-Disables the MCP-over-HTTP transport for the whole suite.
-`StreamableHTTPSessionManager.run()` may only be called once per instance,
-so multiple TestClient lifespans against the same module raise on the
-second startup. The REST mirror and `/api/*` endpoints don't depend on the
-session manager — only `/mcp` JSON-RPC does, which is why the dedicated
-protocol test in `test_mcp_protocol_eras.py` builds its own app.
+A test that serves HTTP builds its own app with `mycelium.http.create_app()`,
+under the environment it set up, and runs at most one lifespan on it.
 """
 
 import os
@@ -37,7 +33,6 @@ def pytest_configure(config):
     # share ./.mycelium (or an exported instance) with every other test,
     # worker and local server. Unusable on purpose: it fails at mkdir.
     os.environ["MYCELIUM_DATA_DIR"] = os.path.join(os.devnull, "mycelium")
-    os.environ.setdefault("MYCELIUM_DISABLE_MCP_HTTP", "1")
     # TestClient's default host; the server refuses hosts it was not told of.
     os.environ.setdefault("MYCELIUM_ALLOWED_HOSTS", "testserver")
     # The async mention-recompute worker spawns a daemon thread per

@@ -125,8 +125,10 @@ from .names import (
     set_name_entity,
 )
 from .read_models import (
+    SubstrateCounts,
     activity_feed,
     history_feed,
+    substrate_counts,
     substrate_dump,
 )
 from .statement_mentions import (
@@ -302,6 +304,8 @@ __all__ = [
     "statements_mentioning_name",
     "statements_sharing_entities",
     "substrate_connection",
+    "SubstrateCounts",
+    "substrate_counts",
     "substrate_dump",
     "transaction",
     "update_entity_description",

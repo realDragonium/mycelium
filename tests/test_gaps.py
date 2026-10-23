@@ -22,14 +22,14 @@ def _reset_server() -> None:
 def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", auth_mode)
-    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
+    monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "test-session-secret")
     _reset_server()
     from mycelium import embed
 
     monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
-    from mycelium.http import app
+    from mycelium.http import create_app
 
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 def test_report_knowledge_gap_creates_open_row(tmp_path, monkeypatch):

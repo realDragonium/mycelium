@@ -1755,7 +1755,9 @@ def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
 def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
     monkeypatch, tmp_path
 ):
-    from mycelium.http import app
+    from mycelium.http import create_app
+
+    app = create_app()
 
     conn = docs_store.connect(":memory:")
     docs_store.migrate(conn)

@@ -678,7 +678,9 @@ def test_the_http_routes_track_the_pull_request_and_offer_both_sides(
     from fastapi.testclient import TestClient
 
     from mycelium import auth, drafts_store, guidelines, prompt_store
-    from mycelium.http import app
+    from mycelium.http import create_app
+
+    app = create_app()
     from mycelium.http.authentication import AuthMiddleware
 
     async def writer(*_):

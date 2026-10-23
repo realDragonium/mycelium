@@ -11,12 +11,6 @@ and the role filter applies to both.
 This is the compatibility guarantee that lets existing users keep working
 after the server adopts the stateless revision, so it is asserted on the wire
 rather than assumed.
-
-Unlike the rest of the suite (see `conftest`), these tests need the MCP
-session manager actually running. `StreamableHTTPSessionManager.run()` may
-only be called once per instance, so the whole module shares ONE client
-through a module-scoped fixture — a second `TestClient` lifespan here would
-raise on entry.
 """
 
 import json
@@ -58,15 +52,15 @@ def client(tmp_path_factory):
         # synthetic local-admin and the filter has nothing to narrow.
         mp.setenv("MYCELIUM_AUTH", "on")
         mp.setenv("MYCELIUM_SESSION_SECRET", "era-test-secret")
-        # The one place in the suite that wants the real JSON-RPC endpoint.
-        mp.setenv("MYCELIUM_DISABLE_MCP_HTTP", "0")
         store.reset_substrate()
         auth_store.reset()
         runtime._ctx = None
         from mycelium import embed
 
         mp.setattr(embed, "embed", lambda t: [0.0] * 768)
-        from mycelium.http import app
+        from mycelium.http import create_app
+
+        app = create_app()
 
         # TestClient's default `testserver` host is rejected by the transport's
         # DNS-rebinding protection, which allows `127.0.0.1:*` unless

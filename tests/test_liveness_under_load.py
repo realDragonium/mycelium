@@ -21,7 +21,7 @@ import httpx
 import pytest
 
 from mycelium import auth
-from mycelium.http import app
+from mycelium.http import create_app
 from mycelium.http.account import get_server_info
 from mycelium.http.authentication import AuthMiddleware
 
@@ -32,7 +32,7 @@ def test_health_endpoint_is_async_so_it_never_needs_a_worker_thread():
 
 def test_health_route_is_registered_as_the_async_endpoint():
     route = next(
-        r for r in app.routes if getattr(r, "path", None) == "/api/server-info"
+        r for r in create_app().routes if getattr(r, "path", None) == "/api/server-info"
     )
 
     assert inspect.iscoroutinefunction(route.endpoint)
@@ -128,7 +128,7 @@ def test_health_answers_while_the_worker_pool_is_saturated(tmp_path, monkeypatch
             assert occupied.is_set()
 
             try:
-                transport = httpx.ASGITransport(app=app)
+                transport = httpx.ASGITransport(app=create_app())
                 async with httpx.AsyncClient(
                     transport=transport, base_url="http://probe"
                 ) as client:

@@ -79,12 +79,15 @@ is rewritten to the current form.
 
 ## Data the app loads
 
-At start the app loads the whole substrate from `GET /api/data` and builds an
-index in memory. Find, Ask, drafts, gaps, activity, documents, names and
-settings use their own endpoints, and so does Knowledge health, which counts on the server. These screens still read the in-memory dump:
-Browse, statement and entity detail, both graphs, the draft graph, activity's
-context panel, Find's grep entity strip, Ask's provenance titles, the
-Documents concept picker, and Home's counts.
+Home reads only its own endpoints, so it opens without the substrate: its
+counts come from `GET /api/substrate-counts`. The first other screen opened
+loads the whole substrate from `GET /api/data` and builds an index in memory,
+which every later screen reuses. Find, Ask, drafts, gaps, activity, documents,
+names and settings use their own endpoints, and so does Knowledge health, which
+counts on the server. These screens still read the in-memory dump: Browse,
+statement and entity detail, both graphs, the draft graph, activity's context
+panel, Find's grep entity strip, Ask's provenance titles and the Documents
+concept picker.
 
 ## Design system
 

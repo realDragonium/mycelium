@@ -14,7 +14,6 @@ from mycelium.server import authoring, draft_application, runtime
 def _app(tmp_path, monkeypatch, *, application_enabled=False):
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
-    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
@@ -22,7 +21,9 @@ def _app(tmp_path, monkeypatch, *, application_enabled=False):
     from mycelium import embed
 
     monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)
-    from mycelium.http import app
+    from mycelium.http import create_app
+
+    app = create_app()
 
     with TestClient(app) as client:
         from settings_helpers import set_review_controls

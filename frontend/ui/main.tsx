@@ -1,9 +1,10 @@
-// Entry: load the substrate dump, then mount the app.
+// Entry: check this session may read the knowledge base, then mount the app.
+// The probe is the cheapest read an asker is refused, so an asker still gets
+// the sign-in card here rather than an app whose screens all fail.
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './shell';
-import { errorMessage, isAuthError } from './api';
-import { loadSubstrate } from './data';
+import { errorMessage, getSubstrateCounts, isAuthError } from './api';
 import { PrefsProvider } from './prefs';
 
 type Boot = { phase: 'loading' } | { phase: 'ready' } | { phase: 'error'; error: unknown };
@@ -13,7 +14,7 @@ function Root() {
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    loadSubstrate().then(
+    getSubstrateCounts().then(
       () => { if (live) setBoot({ phase: 'ready' }); },
       error => { if (live) setBoot({ phase: 'error', error }); },
     );

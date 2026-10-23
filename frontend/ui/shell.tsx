@@ -1,6 +1,6 @@
 // The app shell: sidebar navigation, the Ask | Find command bar, and the
 // screen for the current route.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ActivityScreen } from './activity';
 import { AskSurface } from './ask';
 import { BrowseScreen } from './browse';
@@ -19,10 +19,10 @@ import { KnowledgeHealthScreen } from './knowledge-health';
 import { NamesWorkspace } from './names-workspace';
 import { SettingsScreen } from './settings';
 import { usd, type Budget } from './ai-usage';
-import { DataCtx, ErrorBoundary, GoIngestCtx, I, MeCtx, type IconName } from './lib';
+import { DataCtx, ErrorBoundary, GoIngestCtx, I, LoadError, Loading, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
 import { getJSON, getMe, getServerInfo, type KnowledgeGap, type Me } from './api';
-import { loadSubstrate } from './data';
+import { ensureSubstrate, loadSubstrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
 import { useAsync } from './use-async';
 
@@ -162,7 +162,22 @@ function BudgetBanner() {
 }
 
 /* ---------------- Screen for a route ---------------- */
-function Screen({ route, ingestNonce, refresh }: { route: Route; ingestNonce: number; refresh: () => Promise<void> }) {
+type ScreenProps = { route: Route; ingestNonce: number; refresh: () => Promise<void> };
+
+// Home reads only its own endpoints; any other screen may read the dump.
+function Screen(props: ScreenProps) {
+  const screen = <RouteScreen {...props} />;
+  return props.route.view === 'home' ? screen : <NeedsSubstrate>{screen}</NeedsSubstrate>;
+}
+
+function NeedsSubstrate({ children }: { children: ReactNode }) {
+  const { state, reload } = useAsync(ensureSubstrate);
+  if (substrateLoaded()) return <>{children}</>;
+  if (state.status === 'error') return <main className="page"><LoadError error={state.error} what="the knowledge base" onRetry={reload} /></main>;
+  return <main className="page"><Loading what="the knowledge base" /></main>;
+}
+
+function RouteScreen({ route, ingestNonce, refresh }: ScreenProps) {
   switch (route.view) {
     case 'home': return <HomeScreen />;
     case 'ask': return <AskSurface key={route.query} query={route.query} />;

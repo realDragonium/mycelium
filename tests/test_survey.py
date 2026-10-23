@@ -137,14 +137,13 @@ def _reset_server() -> None:
 def _client(tmp_path, monkeypatch, embedder=concept_embed) -> TestClient:
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
-    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
     _reset_server()
     monkeypatch.setattr(embed, "embed", embedder)
     # Bypass phrasing (and its spaCy load) so test statements insert cleanly.
     monkeypatch.setattr(phrasing, "check", lambda text, kind=None: [])
-    from mycelium.http import app
+    from mycelium.http import create_app
 
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 def _add(text: str) -> str:

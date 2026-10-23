@@ -142,6 +142,25 @@ def test_statement_roundtrip_with_mentions_and_links():
     assert store.list_link_types(conn) == ["triggers"]
 
 
+def test_substrate_counts_match_the_dump():
+    conn = fresh_conn()
+    workspace = store.create_entity(conn, None)
+    invoice = store.create_entity(conn, None)
+    store.create_name(conn, "Workspace", workspace)
+    store.create_name(conn, "Team space", workspace)
+    store.create_name(conn, "Invoice", invoice)
+    created = store.create_statement(conn, "event", "An admin creates a workspace")
+    billed = store.create_statement(conn, "event", "The workspace receives an invoice")
+    store.replace_links(conn, created, [(billed, "triggers", None)])
+    store.insert_entity_links(conn, [(invoice, workspace, "belongs-to")])
+
+    dump = store.substrate_dump(conn)
+    assert store.substrate_counts(conn) == {
+        key: len(dump[key])
+        for key in ("statements", "entities", "names", "links", "entity_links")
+    }
+
+
 def test_statement_kind_round_trips_starting_vocabulary():
     """The starting vocabulary (event/state/capability) plus a custom
     kind all round-trip. Substrate is open: it doesn't reject novel kinds."""

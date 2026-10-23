@@ -206,7 +206,9 @@ def test_rest_and_mcp_dispatch_return_the_same_graph_for_a_reader(
     monkeypatch: pytest.MonkeyPatch,
 ):
     a, b = pair(conn)
-    from mycelium.http import app
+    from mycelium.http import create_app
+
+    app = create_app()
 
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     # No lifespan: this test supplies only an isolated, in-memory substrate.
@@ -315,7 +317,9 @@ def test_required_statements_work_through_http_and_mcp(
     a, b = pair(conn)
     page = store.create_statement(conn, "event", "The settings page opens.")
     store.insert_links(conn, [(page, a, "configures", None)])
-    from mycelium.http import app
+    from mycelium.http import create_app
+
+    app = create_app()
 
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     arguments = {"source": a, "target": b, "required": [page]}
@@ -355,7 +359,9 @@ def test_invalid_required_inputs_are_rejected_before_resolving(
     ],
 )
 def test_rest_rejects_invalid_requests_without_search(body: dict[str, str | int]):
-    from mycelium.http import app
+    from mycelium.http import create_app
+
+    app = create_app()
 
     response = TestClient(app).post("/find-statement-connections", json=body)
     assert response.status_code in (400, 422)

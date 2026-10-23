@@ -85,6 +85,8 @@ export const enc = encodeURIComponent;
 export type Role = 'reader' | 'drafter' | 'writer' | 'admin';
 export interface Me { id: string; name: string; role: Role; type: string; auth_enabled: boolean }
 export const getMe = () => getJSON<Me>('/api/me');
+export interface SubstrateCounts { statements: number; entities: number; names: number; links: number; entity_links: number }
+export const getSubstrateCounts = () => getJSON<SubstrateCounts>('/api/substrate-counts');
 // `partial_restore` names the databases startup found missing beside a
 // populated substrate; it is fixed for the life of the server process.
 export interface ServerInfo { partial_restore: string[] }

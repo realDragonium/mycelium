@@ -1,9 +1,10 @@
 // The substrate as the app holds it: the /api/data dump in its wire shape,
 // the adjacency index built from it, and the vocabularies.
 //
-// Every screen that still reads the whole dump goes through here; screens
-// that have their own endpoint (Find, drafts, gaps, settings, activity)
-// fetch through api.ts instead.
+// Every screen that still reads the whole dump goes through here, and loads
+// it on first use with `ensureSubstrate`; screens that have their own
+// endpoint (Home, Find, drafts, gaps, settings, activity) fetch through
+// api.ts instead.
 
 import { getJSON, postJSON } from './api';
 
@@ -150,7 +151,20 @@ export async function loadSubstrate(): Promise<SubstrateData> {
   substrate.data = data;
   substrate.index = buildIndex(data);
   substrate.vocab = { statementKinds };
+  loaded = true;
   return data;
+}
+
+let loaded = false;
+let first: Promise<SubstrateData> | null = null;
+
+export const substrateLoaded = () => loaded;
+
+// The first load, shared by every screen that needs the dump. A failed load
+// is forgotten so the next caller retries it.
+export function ensureSubstrate(): Promise<SubstrateData> {
+  first ??= loadSubstrate().catch((error: unknown) => { first = null; throw error; });
+  return first;
 }
 
 // After a live edit, patch the cached statement so open views reflect it
