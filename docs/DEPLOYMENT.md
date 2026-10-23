@@ -154,6 +154,9 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
 | `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |
 | `MYCELIUM_DISABLE_REVIEW_SWEEP` | unset | `1` stops the sweep that retries failed draft reviews. Meant for tests. |
+| `MYCELIUM_DISABLE_AUDIENCE_WORKER` | unset | `1` stops the background worker that labels statements with audiences. Meant for tests. |
+| `MYCELIUM_DISABLE_MAINTENANCE_WORKER` | unset | `1` stops the background worker that keeps generated documents current. Meant for tests. |
+| `MYCELIUM_DISABLE_LAYOUT_BAKE` | unset | `1` stops recomputing the entity graph layout after entity changes. Meant for tests. |
 
 > **Leave `MYCELIUM_AUTH=on` on anything reachable from a network.** With
 > auth off every caller is `local-admin`, so it is for a single user on their

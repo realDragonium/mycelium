@@ -182,19 +182,6 @@ def _load_destination(name: str, entry: object) -> DestinationConfig:
     return config
 
 
-def get_destination(
-    name: str, env: Mapping[str, str] | None = None
-) -> DestinationConfig:
-    configured = load_destinations(env)
-    try:
-        return configured[name]
-    except KeyError:
-        names = ", ".join(sorted(configured)) or "(none)"
-        raise DestinationError(
-            f"unknown destination; configured destinations: {names}"
-        ) from None
-
-
 def render_path(config: DestinationConfig, document: DeliveryDocument) -> str:
     try:
         path = config.path_template.format(

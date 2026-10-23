@@ -22,7 +22,6 @@ StatementFilter = Literal["isolated", "unmentioned", "unlabelled"]
 EntityFilter = Literal["undescribed", "unused"]
 Filter = StatementFilter | EntityFilter
 STATEMENT_FILTERS: tuple[StatementFilter, ...] = get_args(StatementFilter)
-ENTITY_FILTERS: tuple[EntityFilter, ...] = get_args(EntityFilter)
 
 _UNLINKED = (
     "NOT EXISTS (SELECT 1 FROM statement_links l WHERE l.from_statement_id = s.id) "

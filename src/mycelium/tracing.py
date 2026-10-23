@@ -193,10 +193,6 @@ class SpanRecorder:
         return out
 
 
-def current_recorder() -> SpanRecorder | None:
-    return _active.get()
-
-
 @contextmanager
 def use_recorder(recorder: SpanRecorder) -> Iterator[SpanRecorder]:
     """Publish `recorder` as the ambient one for the duration of the block."""

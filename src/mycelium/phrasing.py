@@ -325,10 +325,6 @@ def _token_span(tok: Token) -> tuple[int, int]:
     return (tok.idx, tok.idx + len(tok.text))
 
 
-def _phrase_span(tokens: list[Token]) -> tuple[int, int]:
-    return (tokens[0].idx, tokens[-1].idx + len(tokens[-1].text))
-
-
 # ─── per-category detection ─────────────────────────────────────────────────
 
 

@@ -13,7 +13,7 @@ import types
 import pytest
 
 from mycelium.agentloop import ids_present_in, serialize
-from mycelium.ask import Answered, AskConfig, NeedsClarification, run_ask
+from mycelium.ask import Answered, AskConfig, NeedsClarification, prompts, run_ask
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 
 # --------------------------------------------------------------------------- #
@@ -944,10 +944,7 @@ def test_caching_off_sends_plain_system_and_no_breakpoints():
     _result, client, _sub = _run(responses, cache=False)
 
     call = client.calls[0]
-    assert (
-        call["system"]
-        == __import__("mycelium.ask.prompts", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT
-    )
+    assert call["system"] == prompts.build_system_prompt(prompts.DEFAULT_INSTRUCTIONS)
     last = _last_block(call["messages"][-1])
     if isinstance(last, dict):
         assert "cache_control" not in last

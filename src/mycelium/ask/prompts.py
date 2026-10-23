@@ -125,9 +125,6 @@ def build_system_prompt(instructions: str) -> str:
     return _FIXED_PROTOCOL + "\n\n=== BEHAVIORAL INSTRUCTIONS ===\n" + instructions
 
 
-SYSTEM_PROMPT = build_system_prompt(DEFAULT_INSTRUCTIONS)
-
-
 def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
     """Trim a hydrated statement for the recon context — keep the signal
     (id, kind, text, score, link targets, mentioned entities), drop the bulk."""
