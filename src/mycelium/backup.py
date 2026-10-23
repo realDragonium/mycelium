@@ -6,6 +6,9 @@ automated backups ("snapshot this on a schedule"). Future automated
 destinations (S3, cron, etc.) wrap the same `export_substrate` function;
 they don't reimplement serialization.
 
+Each database is read as one consistent snapshot; different databases are read
+one after another.
+
 Archive layout
 --------------
     manifest.json              metadata + row counts + flags
@@ -20,6 +23,7 @@ Archive layout
     documentation.json         generated documents, revisions, runs and deliveries
     draft-review-settings.json saved review controls (when configured)
     model-settings.json        saved per-action models (when configured)
+    product-settings.json      saved product controls (when configured)
     vectors/mycelium.vec       statement vector index (omit with --no-vectors)
     vectors/mycelium-names.vec
 
@@ -59,14 +63,14 @@ import shutil
 import sqlite3
 import tarfile
 import tempfile
-from collections.abc import Callable
-from contextlib import closing
+from collections.abc import Callable, Iterator
+from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from . import documentation_archive, migrations, store
+from . import docs_store, documentation_archive, migrations, store
 
 logger = logging.getLogger(__name__)
 
@@ -298,12 +302,9 @@ def export_substrate(
     if not db_path.exists():
         raise FileNotFoundError(f"no substrate at {data_dir!r}")
     history_db_path = data_dir / "mycelium-history.db"
-    prompts_db_path = data_dir / PROMPTS_DB_NAME
-
     # Read everything via a fresh connection — never touch the live one
     # the running server (if any) may be using.
-    conn = store.connect(db_path)
-    try:
+    with closing(store.connect(db_path)) as conn:
         migrations.require_rescued_entity_statement_links(conn)
         with tempfile.TemporaryDirectory() as staging_str:
             staging = Path(staging_str)
@@ -321,29 +322,40 @@ def export_substrate(
             conn.rollback()
 
             if include_history and history_db_path.exists():
-                history_count = _write_history(
-                    history_db_path, staging / "history.jsonl"
-                )
+                with closing(sqlite3.connect(history_db_path)) as history_conn:
+                    history_conn.row_factory = sqlite3.Row
+                    history_count = _write_history(
+                        history_conn, staging / "history.jsonl"
+                    )
                 row_counts["history_events"] = history_count
 
-            sections_included = {
-                section.manifest_flag: _write_section(
-                    section, data_dir, staging, row_counts
-                )
-                for section in _SECTIONS
-            }
-
-            prompts_count = _archive_prompts(prompts_db_path, staging / "prompts.jsonl")
-            if prompts_count is not None:
-                row_counts["prompt_texts"] = prompts_count
-
-            documentation_counts = documentation_archive.write(data_dir, staging)
-            if documentation_counts is not None:
-                row_counts.update(documentation_counts)
-
-            models_included, settings_included, products_included = (
-                _archive_instance_settings(prompts_db_path, staging)
-            )
+            sections_included = {section.manifest_flag: False for section in _SECTIONS}
+            prompts_count = None
+            documentation_counts = None
+            models_included = settings_included = products_included = False
+            for section in _SECTIONS:
+                path = data_dir / section.db_name
+                if not path.exists():
+                    continue
+                with _snapshot(path) as snapshot:
+                    section.migrate(snapshot)
+                    _write_section(section, snapshot, staging, row_counts)
+                    sections_included[section.manifest_flag] = True
+                    if section.db_name == PROMPTS_DB_NAME:
+                        prompts_count = _archive_prompts(
+                            snapshot, staging / "prompts.jsonl"
+                        )
+                        if prompts_count is not None:
+                            row_counts["prompt_texts"] = prompts_count
+                        models_included, settings_included, products_included = (
+                            _archive_instance_settings(snapshot, staging)
+                        )
+                    elif section.db_name == documentation_archive.DB_NAME:
+                        docs_store.migrate(snapshot)
+                        documentation_counts = documentation_archive.write(
+                            snapshot, staging
+                        )
+                        row_counts.update(documentation_counts)
 
             if include_vectors:
                 vectors_dir = staging / "vectors"
@@ -372,8 +384,19 @@ def export_substrate(
 
             _make_archive(staging, out_path)
             return manifest
-    finally:
-        conn.close()
+
+
+@contextmanager
+def _snapshot(path: Path) -> Iterator[sqlite3.Connection]:
+    """Copy an auxiliary database into memory, so the copy can be migrated
+    to this build's shape without touching the live file."""
+    with closing(sqlite3.connect(":memory:")) as snapshot:
+        with closing(
+            sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        ) as source:
+            source.backup(snapshot)
+        snapshot.row_factory = sqlite3.Row
+        yield snapshot
 
 
 def _write_tables(
@@ -405,121 +428,78 @@ def _write_tables(
 
 
 def _write_section(
-    section: _Section, data_dir: Path, staging: Path, row_counts: dict[str, int]
-) -> bool:
-    """Dump a section's tables from one consistent snapshot of its database.
-
-    The snapshot is migrated in memory first, so a database the running build
-    has not opened since an upgrade still exports in this build's shape."""
-    path = data_dir / section.db_name
-    if not path.exists():
-        return False
-    with (
-        closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as src,
-        closing(sqlite3.connect(":memory:")) as snapshot,
-    ):
-        src.backup(snapshot)
-        snapshot.row_factory = sqlite3.Row
-        section.migrate(snapshot)
-        with (staging / section.member).open("w", encoding="utf-8") as fp:
-            _write_tables(
-                snapshot, fp, section.tables, row_counts, {t: t for t in section.tables}
-            )
-    return True
+    section: _Section,
+    conn: sqlite3.Connection,
+    staging: Path,
+    row_counts: dict[str, int],
+) -> None:
+    """Dump a section's tables from the migrated database snapshot."""
+    with (staging / section.member).open("w", encoding="utf-8") as fp:
+        _write_tables(
+            conn, fp, section.tables, row_counts, {t: t for t in section.tables}
+        )
 
 
-def _write_history(history_db_path: Path, out_path: Path) -> int:
+def _write_history(conn: sqlite3.Connection, out_path: Path) -> int:
     """Dump every history event row, one JSONL line per event. Returns
     rows written."""
-    conn = sqlite3.connect(str(history_db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        count = 0
-        with out_path.open("w", encoding="utf-8") as fp:
-            for row in conn.execute("SELECT * FROM history_events ORDER BY event_id"):
-                payload: dict[str, Any] = {"_kind": "history_event"}
-                for col in row.keys():
-                    payload[col] = row[col]
-                fp.write(json.dumps(payload) + "\n")
-                count += 1
-        return count
-    finally:
-        conn.close()
+    count = 0
+    with out_path.open("w", encoding="utf-8") as fp:
+        for row in conn.execute("SELECT * FROM history_events ORDER BY event_id"):
+            payload: dict[str, Any] = {"_kind": "history_event"}
+            for col in row.keys():
+                payload[col] = row[col]
+            fp.write(json.dumps(payload) + "\n")
+            count += 1
+    return count
 
 
-def _archive_prompts(prompts_db_path: Path, out_path: Path) -> int | None:
+def _archive_prompts(conn: sqlite3.Connection, out_path: Path) -> int | None:
     """Dump every prompt-text row to JSONL. Returns rows written, or None
     when the archive carries no prompts section at all.
 
-    None covers both "this instance has no prompts DB" (a fresh data dir, or
-    one from before prompt texts existed) and "its prompts DB would not
-    read". Neither aborts the export: the substrate is the payload, and an
-    instance restored without steering texts re-seeds the packaged defaults
-    at startup.
-
-    Anything the section throws is anything the export survives — a DB that
-    won't open, a row SQLite serves but JSON can't hold (a BLOB where text
-    belongs, after a hand repair). Scheduled backups and the force-restore
-    safety snapshot both run through here, and neither may be stopped by
-    the smaller of the two payloads."""
-    if not prompts_db_path.exists():
-        return None
+    Rows that cannot be serialized (such as a BLOB where text belongs) omit
+    this member without aborting export. Restoring without prompt texts
+    re-seeds the packaged defaults at startup. Configuration settings from
+    the same snapshot are still required to serialize successfully."""
     try:
-        return _write_prompts(prompts_db_path, out_path)
+        return _write_prompts(conn, out_path)
     except Exception:
         logger.warning(
-            "could not read prompt texts from %s; the archive carries none",
-            prompts_db_path,
+            "could not read prompt texts; the archive carries none",
             exc_info=True,
         )
         out_path.unlink(missing_ok=True)
         return None
 
 
-def _write_prompts(prompts_db_path: Path, out_path: Path) -> int:
+def _write_prompts(conn: sqlite3.Connection, out_path: Path) -> int:
     """Dump the whole `prompt_texts` table — every version of every name,
     tombstones included — one JSONL line per row. Returns rows written.
 
     Ordered by (type, name, version) so a hand-read archive shows each
-    name's history in the order it was written. Opened through the store's
-    own `connect`, whose busy timeout is what lets this read overlap a live
-    server saving a version instead of failing the section outright."""
-    from . import prompt_store
-
-    conn = prompt_store.connect(prompts_db_path)
-    try:
-        count = 0
-        with out_path.open("w", encoding="utf-8") as fp:
-            for row in conn.execute(
-                "SELECT * FROM prompt_texts ORDER BY type, name, version"
-            ):
-                payload: dict[str, Any] = {"_kind": "prompt_text"}
-                for col in row.keys():
-                    payload[col] = row[col]
-                fp.write(json.dumps(payload) + "\n")
-                count += 1
-        return count
-    finally:
-        conn.close()
+    name's history in the order it was written."""
+    count = 0
+    with out_path.open("w", encoding="utf-8") as fp:
+        for row in conn.execute(
+            "SELECT * FROM prompt_texts ORDER BY type, name, version"
+        ):
+            payload: dict[str, Any] = {"_kind": "prompt_text"}
+            for col in row.keys():
+                payload[col] = row[col]
+            fp.write(json.dumps(payload) + "\n")
+            count += 1
+    return count
 
 
-def _archive_instance_settings(db_path: Path, staging: Path) -> tuple[bool, bool, bool]:
-    from . import prompt_store
-
-    if not db_path.exists():
-        return False, False, False
-    with closing(prompt_store.connect(db_path)) as conn:
-        # Both settings sections describe one database snapshot, even when a
-        # separate server process saves a model and review controls together.
-        conn.execute("BEGIN")
-        try:
-            return (
-                _archive_model_settings(conn, staging / "model-settings.json"),
-                _archive_review_settings(conn, staging / "draft-review-settings.json"),
-                _archive_product_settings(conn, staging / "product-settings.json"),
-            )
-        finally:
-            conn.rollback()
+def _archive_instance_settings(
+    conn: sqlite3.Connection, staging: Path
+) -> tuple[bool, bool, bool]:
+    return (
+        _archive_model_settings(conn, staging / "model-settings.json"),
+        _archive_review_settings(conn, staging / "draft-review-settings.json"),
+        _archive_product_settings(conn, staging / "product-settings.json"),
+    )
 
 
 def _archive_review_settings(conn: sqlite3.Connection, out_path: Path) -> bool:

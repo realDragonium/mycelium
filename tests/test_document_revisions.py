@@ -597,12 +597,9 @@ def test_explicit_receipt_without_coordinates_keeps_unknown_target_consistent(
     documentation_archive._validate_history(db)
 
     destinations.bind_legacy_deliveries(db)
-    source, staging = tmp_path / "source", tmp_path / "staging"
-    source.mkdir()
+    staging = tmp_path / "staging"
     staging.mkdir()
-    with closing(docs_store.connect(source / documentation_archive.DB_NAME)) as copied:
-        db.backup(copied)
-    documentation_archive.write(source, staging)
+    documentation_archive.write(db, staging)
     prepared = documentation_archive.prepare(staging, required=True)
     assert prepared is not None
     with closing(docs_store.connect(prepared)) as restored:
