@@ -99,7 +99,7 @@ class SubstrateError(RuntimeError):
 def _json_schema_for(func: Callable[..., Any]) -> dict:
     """Build a JSON Schema for a primitive's parameters from its signature.
 
-    Mirrors how `http.py` derives a pydantic body model from the same
+    Mirrors how `http/tool_routes.py` derives a pydantic body model from the same
     signature, then emits JSON Schema for the Anthropic tool definition.
     """
     sig = inspect.signature(func)

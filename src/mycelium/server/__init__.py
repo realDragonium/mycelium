@@ -1,7 +1,7 @@
 """MCP server exposing the Mycelium substrate over stdio.
 
 Tools are registered with the local `@tool` decorator (not the bare
-`mcp.tool()`) so they show up in the HTTP transport in `mycelium/http.py`
+`mcp.tool()`) so they show up in the HTTP transport in `mycelium/http/`
 and in the in-process loops. Only the names in `MCP_TOOLS` are also
 advertised over MCP: every MCP client pays for each schema it is sent, so
 that surface is a deliberate, documented subset (`docs/MCP_TOOLS.md`).

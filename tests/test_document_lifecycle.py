@@ -678,7 +678,8 @@ def test_the_http_routes_track_the_pull_request_and_offer_both_sides(
     from fastapi.testclient import TestClient
 
     from mycelium import auth, drafts_store, guidelines, prompt_store
-    from mycelium.http import AuthMiddleware, app
+    from mycelium.http import app
+    from mycelium.http.authentication import AuthMiddleware
 
     async def writer(*_):
         return auth.Principal(id="w", name="Writer", role="writer", type="human")

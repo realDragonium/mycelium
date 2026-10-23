@@ -994,7 +994,7 @@ def test_drafter_cannot_approve_their_own_draft(tmp_path, monkeypatch):
             # with a stub request that carries our drafter principal.
             from fastapi import HTTPException
 
-            from mycelium.http import approve_draft
+            from mycelium.http.drafts import approve_draft
 
             class _Req:
                 class state:

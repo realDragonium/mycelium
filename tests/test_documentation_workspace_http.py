@@ -6,7 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, docs_store, drafts_store, server
-from mycelium.http import AuthMiddleware, app
+from mycelium.http import app
+from mycelium.http.authentication import AuthMiddleware
 
 
 @pytest.fixture

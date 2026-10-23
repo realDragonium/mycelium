@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from mycelium import server
-from mycelium.http import _path_for, app
+from mycelium.http import app
+from mycelium.http.tool_routes import _path_for
 
 _MANIFEST = Path(__file__).resolve().parents[1] / "docs" / "MCP_TOOLS.md"
 

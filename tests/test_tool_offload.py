@@ -153,10 +153,10 @@ def test_rest_mirror_routes_bounded_tools_through_an_async_handler():
     """The REST handlers are built from the raw sync wrapper in `server.TOOLS`,
     not from the MCP offloading shim — so a bounded tool needs its own async
     handler here, or posting to `/ingest` walks straight past the bound."""
-    from mycelium import http
+    from mycelium.http import app
 
     for name in sorted(admission._MODEL_LOOP_TOOLS):
-        route = next(r for r in http.app.routes if getattr(r, "name", None) == name)
+        route = next(r for r in app.routes if getattr(r, "name", None) == name)
         assert inspect.iscoroutinefunction(route.endpoint), name
 
 
@@ -166,7 +166,7 @@ def test_rest_offload_applies_the_same_bound(monkeypatch):
     set_product(product_settings.ConcurrencySettings(model_loops=2))
     admission._model_loop_limiter.cache_clear()
 
-    from mycelium import http
+    from mycelium.http import tool_routes
 
     peak = 0
     live = 0
@@ -184,7 +184,7 @@ def test_rest_offload_applies_the_same_bound(monkeypatch):
     model_loop.__name__ = "ingest"
 
     async def scenario():
-        await asyncio.gather(*(http._offload(model_loop, {}) for _ in range(6)))
+        await asyncio.gather(*(tool_routes._offload(model_loop, {}) for _ in range(6)))
 
     try:
         asyncio.run(scenario())

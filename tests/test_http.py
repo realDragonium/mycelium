@@ -4,7 +4,7 @@ import numpy as np
 from fastapi.testclient import TestClient
 
 from mycelium import embed, mention_worker, server, store
-from mycelium.http import _history_target_id
+from mycelium.http.history import _history_target_id
 from mycelium.server import runtime
 
 

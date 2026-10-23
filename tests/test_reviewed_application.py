@@ -629,7 +629,7 @@ def test_manual_approval_serializes_against_reviewed_apply(tmp_path, monkeypatch
                 )
 
         def manual():
-            from mycelium.http import approve_draft
+            from mycelium.http.drafts import approve_draft
 
             try:
                 outcomes.append(approve_draft(draft_id, Request()))

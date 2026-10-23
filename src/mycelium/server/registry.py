@@ -1,10 +1,10 @@
 """The tool registry: the `@tool` decorator and the MCP server it feeds.
 
 Decorating a function registers it once for every surface: `TOOLS` drives the
-REST mirror in `mycelium.http` and the in-process loops, and the names in
-`MCP_TOOLS` are also advertised over MCP. The wrapper is where every call is
-gated — role check, draft redirect, model-loop admission — so the policy is the
-same whichever transport the call arrived on.
+REST mirror in `mycelium.http.tool_routes` and the in-process loops, and the
+names in `MCP_TOOLS` are also advertised over MCP. The wrapper is where every
+call is gated — role check, draft redirect, model-loop admission — so the policy
+is the same whichever transport the call arrived on.
 """
 
 from __future__ import annotations
@@ -148,9 +148,10 @@ class _RoleFilteredTools:
 # Appended, so it runs inside the SDK's own built-in middleware.
 mcp.middleware.append(_RoleFilteredTools())
 
-#: Functions registered as tools — read by `mycelium.http` to auto-generate
-#: REST endpoints, and by the in-process loops and draft replay. `publish` puts
-#: them in their declared order once every tool module has registered.
+#: Functions registered as tools — read by `mycelium.http.tool_routes` to
+#: auto-generate REST endpoints, and by the in-process loops and draft replay.
+#: `publish` puts them in their declared order once every tool module has
+#: registered.
 TOOLS: list[Callable[..., Any]] = []
 
 #: The tools advertised over MCP. Everything else in `TOOLS` keeps its HTTP
@@ -214,7 +215,7 @@ def tool(
     is in `MCP_TOOLS`.
 
     Also enforces the per-tool role gate when invoked through the MCP
-    transport. The REST mirror in `http.py` performs its own pre-call
+    transport. The REST mirror in `http/tool_routes.py` performs its own pre-call
     check inside the FastAPI handler; we re-check here so the SAME
     policy applies to MCP-over-stdio and MCP-over-HTTP. The check
     short-circuits when no principal is in the contextvar (the stdio
@@ -293,7 +294,7 @@ def tool(
             return _run_tool(func, args, kwargs, budgeted=is_model_loop)
 
         # Expose the required role on the wrapper so other layers
-        # (e.g. http.py's role-classifier loop and the tools/list
+        # (e.g. http/tool_routes.py's role-classifier loop and the tools/list
         # filter in this module) can read it without re-deriving.
         wrapper._mycelium_required_role = required  # type: ignore[attr-defined]
         wrapper._mycelium_real_role = real_role  # type: ignore[attr-defined]
@@ -320,7 +321,7 @@ def _add_draft_id_to_signature(
     func: Callable[..., Any], wrapper: Callable[..., Any]
 ) -> None:
     """Splice an optional `draft_id: str | None = None` onto the wrapper's
-    public signature. The MCP server's tool-schema introspection and http.py's
+    public signature. The MCP server's tool-schema introspection and tool_routes.py's
     body-model generation both read `inspect.signature(wrapper)`, so
     overriding `__signature__` + `__annotations__` is enough to make the
     new param appear in both surfaces.
@@ -375,7 +376,7 @@ def publish(order: Sequence[str]) -> None:
     if unlisted:
         raise RuntimeError(f"tools missing from the published order: {unlisted}")
     TOOLS.sort(key=lambda wrapper: position[wrapper.__name__])
-    # http.py builds its sync FastAPI handlers from TOOLS (FastAPI does its
+    # http/tool_routes.py builds its sync FastAPI handlers from TOOLS (FastAPI does its
     # own thread dispatch), so only the MCP side gets the offloading shim.
     for wrapper in TOOLS:
         if wrapper.__name__ in MCP_TOOLS:
