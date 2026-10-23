@@ -135,9 +135,11 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
     model has no known price). Refused while the monthly AI budget pauses
     background actions.
     """
-    from .. import ai, knowledge_health, product_settings, store
+    from .. import ai, knowledge_health, model_settings, product_settings, store
     from ..ingest.connect import config_from_settings, run_connect
 
+    if reason := model_settings.credentials_error("connect"):
+        raise ValueError(reason)
     limits = product_settings.get(product_settings.ConnectSettings)
     ids = list(dict.fromkeys(statement_ids))
     if not ids:

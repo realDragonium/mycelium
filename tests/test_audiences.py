@@ -228,6 +228,23 @@ def test_a_failed_batch_leaves_statements_unlabelled_and_backs_off(db, prompts):
     assert store.audience_labels.queue_counts(db) == (1, 0, "provider down")
 
 
+def test_without_credentials_the_worker_leaves_the_queue_untouched(
+    db, prompts, monkeypatch
+):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(
+        audience_labelling.model_settings,
+        "claude_configuration_error",
+        lambda: "Configure Anthropic credentials on the server.",
+    )
+    store.create_statement(db, "state", "exports are csv")
+    call, calls = _answer()
+
+    assert audience_labelling.drain(db, call=call) == 0
+    assert calls == []
+    assert store.audience_labels.queue_counts(db) == (1, 0, None)
+
+
 # --- HTTP ----------------------------------------------------------------------
 
 
