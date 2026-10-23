@@ -13,6 +13,7 @@ when to use it; Claude loads it when a task matches, or you invoke it as
 | `mycelium-draft-review` | Work the draft queue alongside the internal reviewer and recommend approve, reject, answer or correct | Real writer or admin |
 | `mycelium-documentation` | Have the server write, revise and plan documents from the knowledge base | Real writer or admin |
 | `mycelium-curation` | Read knowledge health, run the connect pass, consolidate duplicates, triage knowledge gaps | Reader to look; writer, admin or curator to fix |
+| `mycelium-code-curation` | From a product's repository, claim curation work, check it against the code and propose links, concepts and corrections with code evidence | Drafter token |
 
 ## Install
 

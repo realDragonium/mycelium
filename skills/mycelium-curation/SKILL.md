@@ -1,6 +1,6 @@
 ---
 name: mycelium-curation
-description: Keep a Mycelium knowledge base healthy. Reads the knowledge-health counts and lists (isolated statements, statements naming no concept, concepts without a description or without statements, statements without an audience label), runs the AI connect pass as a reviewed draft, finds and consolidates duplicate statements and concepts, and works the knowledge-gap queue. Use when someone asks to clean up, tidy, audit, deduplicate or connect the knowledge base, or to triage knowledge gaps. Reads work on any connection; the connect pass needs a writer or drafter, merges need an admin, and gap status changes need a real curator.
+description: Keep a Mycelium knowledge base healthy. Reads the knowledge-health counts and lists (isolated statements, statements naming no concept, concepts without a description or without statements, statements without an audience label), runs the AI connect pass as a reviewed draft, finds and consolidates duplicate statements and concepts, and works the knowledge-gap queue. Use when someone asks to clean up, tidy, audit, deduplicate or connect the knowledge base, or to triage knowledge gaps. Reads work on any connection; the connect pass needs a writer or drafter, merges need an admin, and gap status changes need a real curator. To check queue items against a product's code from its repository, use mycelium-code-curation.
 ---
 
 # Curating a Mycelium knowledge base
@@ -74,6 +74,17 @@ asking for a rephrase instead.
 Connect by hand instead when the right link is clear from reading: it is
 free, and you can run the flip test yourself. Follow `mycelium-authoring` for
 link types and direction.
+
+## Curation with code access
+
+The connect pass sees only the knowledge base. An agent in the product's
+repository (Claude Code there, or a CI job) can check whether statements
+really relate: it claims the same lists as leased work with
+`claim_curation_work`, proposes through a draft with code evidence on each
+operation, and releases each item with its outcome. Use
+`mycelium-code-curation` for that work. Items an agent holds or has settled
+are left out of `to_connect=true`, and Knowledge health shows who holds what
+and the outcomes.
 
 ## Duplicates
 
