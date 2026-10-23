@@ -574,6 +574,27 @@ def test_trace_record_is_complete():
     json.dumps(trace)
 
 
+def test_trace_prices_any_listed_claude_model_per_turn():
+    responses = [
+        _message([_tool_use("search_statements", {"query": "retry"})]),
+        _message(
+            [
+                _tool_use(
+                    "survey_statements",
+                    {"query": "retry adj", "adjacency_sources": ["s1"]},
+                )
+            ]
+        ),
+        _message([_tool_use("submit_answer", _submit_input())]),
+    ]
+    result, _client, _sub = _run(responses, model="claude-sonnet-4-6")
+
+    turn = {"input": 10, "cache_read": 0, "cache_creation": 0, "output": 5}
+    assert result.trace["turn_usage"] == [turn] * 3
+    # 3 turns of 10 input tokens at $3/MTok and 5 output tokens at $15/MTok.
+    assert result.trace["cost_usd"] == pytest.approx(3 * (10 * 3 + 5 * 15) / 1e6)
+
+
 def test_trace_written_to_jsonl_file(tmp_path):
     """The trace is appended as a single JSONL line when a sink is configured."""
     log = tmp_path / "ask_trace.jsonl"

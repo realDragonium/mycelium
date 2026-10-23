@@ -18,7 +18,8 @@ from pydantic import JsonValue
 
 from .. import agentloop, ai_prompts
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
-from ..ai import Provider
+from ..ai import Provider, Usage
+from ..ai.pricing import Price
 from ..tracing import SpanRecorder
 
 
@@ -41,6 +42,9 @@ class TraceBuilder:
             "cache_creation": 0,
         }
     )
+    #: Token usage per model turn, in order, so a cost can be attributed to
+    #: the turn that spent it.
+    turn_usage: list[dict[str, int]] = field(default_factory=list)
     sub_question_ledger: list[dict] = field(default_factory=list)
     adjacency_note: str | None = None
     evidence_checks: list[dict[str, JsonValue]] = field(default_factory=list)
@@ -72,13 +76,31 @@ class TraceBuilder:
 
     def add_usage(self, usage: Any) -> None:
         agentloop.add_usage(self, usage)
+        if usage is not None:
+            self.turn_usage.append(
+                {
+                    "input": int(getattr(usage, "input_tokens", 0) or 0),
+                    "cache_read": int(
+                        getattr(usage, "cache_read_input_tokens", 0) or 0
+                    ),
+                    "cache_creation": int(
+                        getattr(usage, "cache_creation_input_tokens", 0) or 0
+                    ),
+                    "output": int(getattr(usage, "output_tokens", 0) or 0),
+                }
+            )
 
-    def cost_usd(
-        self, input_per_mtok: float | None, output_per_mtok: float | None
-    ) -> float | None:
-        if input_per_mtok is None or output_per_mtok is None:
+    def cost_usd(self, price: Price | None) -> float | None:
+        if price is None:
             return None
-        return agentloop.cost_usd(self.tokens, input_per_mtok, output_per_mtok)
+        return price.cost_usd(
+            Usage(
+                input_tokens=self.tokens["input"],
+                output_tokens=self.tokens["output"],
+                cache_read_input_tokens=self.tokens["cache_read"],
+                cache_creation_input_tokens=self.tokens["cache_creation"],
+            )
+        )
 
     def build(
         self,
@@ -86,8 +108,7 @@ class TraceBuilder:
         outcome: str,
         latency_ms: float,
         floor: dict,
-        input_per_mtok: float | None,
-        output_per_mtok: float | None,
+        price: Price | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
@@ -119,7 +140,8 @@ class TraceBuilder:
             "evidence_checks": self.evidence_checks,
             "combined_reads": self.combined_reads,
             "tokens": tokens,
-            "cost_usd": self.cost_usd(input_per_mtok, output_per_mtok),
+            "turn_usage": self.turn_usage,
+            "cost_usd": self.cost_usd(price),
             "forced_finalize": self.forced_finalize,
             "degraded": self.degraded,
             "notes": self.notes,
