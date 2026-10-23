@@ -22,11 +22,7 @@ def mention_candidates(
     request: Request, entity_id: str, after: int = 0, limit: int = 50
 ) -> dict[str, JsonValue]:
     _require_principal(request)
-    # `@tool` erases the signature, so name the type the tool declares.
-    candidates: dict[str, JsonValue] = server.get_mention_candidates(
-        entity_id=entity_id, after=after, limit=limit
-    )
-    return candidates
+    return server.get_mention_candidates(entity_id=entity_id, after=after, limit=limit)
 
 
 async def _names_conflict(
