@@ -140,7 +140,8 @@ settings (see [AI model configuration](AI_MODELS.md)).
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. |
+| `MYCELIUM_ALLOWED_EMAIL_DOMAINS` | unset (any domain) | Comma-separated email domains. When set, only people whose email is in one of them can log in or use a session or token; invites to other domains are refused. Exact match, no subdomains; service accounts are exempt. See [Restricting access to your email domains](USERS.md#restricting-access-to-your-email-domains). |
+| `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, each must also be allowed or the server refuses to start. |
 | `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
 | `EMBED_TIMEOUT_S` | `30` | Seconds before one Ollama embedding request fails instead of hanging. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
@@ -671,7 +672,7 @@ hosting), you can skip Ollama entirely.
 | `502` from nginx | Service is up but uvicorn isn't bound to `127.0.0.1:8765`. Confirm `MYCELIUM_HTTP_HOST/PORT` in the systemd unit aren't being overridden by the env file. |
 | Service stops right after a deploy with `database schema version N is newer than this build's latest known version M` | An older build is running on migrated data. See [Rolling back a deploy](#rolling-back-a-deploy). |
 | Deploy aborts with `snapshot failed` | A database in `/var/lib/mycelium` failed its check, or the disk is full. The running build was restarted unchanged; read the message above it. |
-| `403` on every login | `MYCELIUM_BOOTSTRAP_ADMIN_EMAIL` doesn't match, or the database already has an admin. Inspect with sqlite3. |
+| `403` on every login | `MYCELIUM_BOOTSTRAP_ADMIN_EMAIL` doesn't match, or the database already has an admin. Inspect with sqlite3. With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, the email's domain must be listed too. |
 | MCP `/mcp` 401 with a token | Token might be revoked or the user suspended. Check via the Settings UI. |
 | MCP `/mcp` hangs | nginx is buffering. Confirm `proxy_buffering off` is in the `/mcp` location block. |
 | Auth0 callback "redirect URI mismatch" | The URL in Auth0's allowed callbacks must be an exact match for `MYCELIUM_OIDC_REDIRECT_URI`, scheme included. |

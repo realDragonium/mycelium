@@ -34,6 +34,9 @@ def _serialize_user_row(row: sqlite3.Row) -> dict[str, Any]:
         "oidc_issuer": row["oidc_issuer"],
         "created_at": row["created_at"],
         "last_login_at": row["last_login_at"],
+        "blocked_by_domain_policy": auth.blocked_by_domain_policy(
+            row["type"], row["email"]
+        ),
     }
 
 

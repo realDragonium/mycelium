@@ -194,6 +194,71 @@ def is_enabled() -> bool:
     return (os.environ.get("MYCELIUM_AUTH") or "off").lower() == "on"
 
 
+# --- email-domain policy ----------------------------------------------------
+
+
+def _domain_list(var: str) -> frozenset[str]:
+    """A comma-separated domain list from env var `var`, lowercased, with a
+    leading `@` tolerated so both `example.com` and `@example.com` work."""
+    raw = os.environ.get(var) or ""
+    return frozenset(d.strip().lstrip("@").lower() for d in raw.split(",") if d.strip())
+
+
+def _email_domain(email: str | None) -> str | None:
+    if not email or "@" not in email:
+        return None
+    return email.strip().rpartition("@")[2].lower() or None
+
+
+def allowed_email_domains() -> frozenset[str] | None:
+    """`MYCELIUM_ALLOWED_EMAIL_DOMAINS`, or None when no domain policy applies
+    (unset, or auth off). A domain matches exactly: subdomains are not
+    included, so `example.com` admits neither `sub.example.com` nor
+    `evil-example.com`."""
+    if not is_enabled():
+        return None
+    return _domain_list("MYCELIUM_ALLOWED_EMAIL_DOMAINS") or None
+
+
+def email_domain_allowed(email: str | None) -> bool:
+    allowed = allowed_email_domains()
+    return allowed is None or _email_domain(email) in allowed
+
+
+def blocked_by_domain_policy(user_type: str, email: str | None) -> bool:
+    """Whether the domain policy shuts this user out. Service accounts are
+    token-only identities an admin creates, with no email to judge, so the
+    policy leaves them alone; a human without a stored email is blocked."""
+    return user_type == "human" and not email_domain_allowed(email)
+
+
+def _log_domain_refusal(where: str, email: str | None, reason: str) -> None:
+    logging.getLogger("mycelium.auth").info(
+        "domain policy refused %s: %s (domain=%s)",
+        where,
+        reason,
+        _email_domain(email) or "-",
+    )
+
+
+def check_domain_policy() -> None:
+    """Refuse to start when a JIT domain lies outside the allowed domains: the
+    operator asked to auto-provision people the policy would then shut out."""
+    allowed = allowed_email_domains()
+    if allowed is None:
+        return
+    stray = _domain_list("MYCELIUM_JIT_DOMAINS") - allowed
+    if stray:
+        raise RuntimeError(
+            "MYCELIUM_JIT_DOMAINS lists domains missing from "
+            f"MYCELIUM_ALLOWED_EMAIL_DOMAINS: {', '.join(sorted(stray))}"
+        )
+
+
+class EmailDomainNotAllowed(PermissionError):
+    """An OIDC login whose verified email is outside the allowed domains."""
+
+
 # --- token helpers --------------------------------------------------------
 
 
@@ -256,7 +321,7 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
     row = conn.execute(
         """
         SELECT t.id AS token_id, t.scope, t.revoked_at, t.expires_at,
-               u.id AS user_id, u.name, u.role, u.type, u.status
+               u.id AS user_id, u.name, u.role, u.type, u.status, u.email
         FROM mcp_tokens t
         JOIN users u ON u.id = t.user_id
         WHERE t.hash = ?
@@ -275,6 +340,11 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
         return None
     if row["status"] != "active":
         return None
+    if blocked_by_domain_policy(row["type"], row["email"]):
+        _log_domain_refusal(
+            f"token of user {row['user_id']}", row["email"], "email domain not allowed"
+        )
+        return None
     conn.execute(
         "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
         (now.isoformat(), row["token_id"]),
@@ -292,14 +362,19 @@ def resolve_session_user(
 ) -> Principal | None:
     """Look up a session-cookie-derived user id. Returns None when the
     id no longer maps to an active user (account deleted or suspended
-    mid-session)."""
+    mid-session) or whose email domain the policy no longer allows."""
     if not user_id:
         return None
     row = conn.execute(
-        "SELECT id, name, role, type, status FROM users WHERE id = ?",
+        "SELECT id, name, role, type, status, email FROM users WHERE id = ?",
         (user_id,),
     ).fetchone()
     if row is None or row["status"] != "active":
+        return None
+    if blocked_by_domain_policy(row["type"], row["email"]):
+        _log_domain_refusal(
+            f"user {row['id']}", row["email"], "email domain not allowed"
+        )
         return None
     return Principal(
         id=row["id"],
@@ -553,13 +628,19 @@ def create_invite(
 ) -> sqlite3.Row:
     """Create an invite binding a normalized email to a role and return its
     row. The email is stripped and lowercased; the opaque token is generated
-    here."""
+    here. Refuses an address the domain policy would keep out."""
+    email = email.strip().lower()
+    if not email_domain_allowed(email):
+        raise ValueError(
+            f"cannot invite {email}: the domain {_email_domain(email) or '(none)'} "
+            "is not in MYCELIUM_ALLOWED_EMAIL_DOMAINS"
+        )
     invite_id = str(uuid.uuid4())
     token = secrets.token_urlsafe(24)
     conn.execute(
         "INSERT INTO invites (id, email, role, token, invited_by, created_at) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        (invite_id, email.strip().lower(), role, token, invited_by, _now()),
+        (invite_id, email, role, token, invited_by, _now()),
     )
     row = conn.execute(
         "SELECT id, email, role, token, created_at, expires_at FROM invites WHERE id = ?",
@@ -582,15 +663,14 @@ def revoke_invite(conn: sqlite3.Connection, invite_id: str) -> None:
 # handles the protocol round-trip and hands the claims here.
 
 
-def _jit_domains() -> set[str]:
+def _jit_domains() -> frozenset[str]:
     """Email domains pre-registered for just-in-time provisioning.
 
     Read from `MYCELIUM_JIT_DOMAINS` — a comma-separated list, e.g.
     `example.com, internal.org`. Empty or unset means JIT is off and the
     server stays invite-only. Each entry is lowercased and a leading `@`
     is tolerated, so both `example.com` and `@example.com` work."""
-    raw = os.environ.get("MYCELIUM_JIT_DOMAINS") or ""
-    return {d.strip().lstrip("@").lower() for d in raw.split(",") if d.strip()}
+    return _domain_list("MYCELIUM_JIT_DOMAINS")
 
 
 def _jit_default_role() -> Role | None:
@@ -635,6 +715,19 @@ def _accept_invite(conn: sqlite3.Connection, email: str, user_id: str) -> None:
     )
 
 
+def _require_allowed_login_email(
+    email: str | None, email_verified: bool, subject: str
+) -> None:
+    if allowed_email_domains() is None:
+        return
+    if not email or not email_verified:
+        _log_domain_refusal("login", email, "no verified email")
+        raise EmailDomainNotAllowed(subject)
+    if not email_domain_allowed(email):
+        _log_domain_refusal("login", email, "email domain not allowed")
+        raise EmailDomainNotAllowed(subject)
+
+
 def find_or_create_user(
     conn: sqlite3.Connection,
     *,
@@ -667,13 +760,27 @@ def find_or_create_user(
     unverified match would hand them that person's account, invite or the
     bootstrap admin.
 
+    With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, every step first needs a
+    verified email in an allowed domain, and step 1 also the stored email
+    that later requests are judged by; otherwise `EmailDomainNotAllowed` is
+    raised before anything is written.
+
     Anything else: refuse.
     """
+    _require_allowed_login_email(email, email_verified, subject)
+
     row = conn.execute(
-        "SELECT id FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
+        "SELECT id, type, email FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
         (issuer, subject),
     ).fetchone()
     if row is not None:
+        if blocked_by_domain_policy(row["type"], row["email"]):
+            _log_domain_refusal(
+                f"login of user {row['id']}",
+                row["email"],
+                "stored email domain not allowed",
+            )
+            raise EmailDomainNotAllowed(subject)
         conn.execute(
             "UPDATE users SET last_login_at = ? WHERE id = ?",
             (_now(), row["id"]),

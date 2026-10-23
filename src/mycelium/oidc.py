@@ -47,6 +47,8 @@ Config (env vars)
 - `MYCELIUM_JIT_DOMAINS` — optional, comma-separated email domains
   pre-registered for just-in-time provisioning. Unset = invite-only.
 - `MYCELIUM_JIT_DEFAULT_ROLE` — role for JIT users (default `reader`).
+- `MYCELIUM_ALLOWED_EMAIL_DOMAINS` — optional; when set, every login needs a
+  verified email in one of these domains (see `auth.find_or_create_user`).
 """
 
 from __future__ import annotations
@@ -186,15 +188,13 @@ async def callback(request: Request):
 
     # Log the identity we extracted from the OIDC response. Helpful for
     # diagnosing "this account is not authorized" 403s — tells you
-    # whether the email claim is present and matches the bootstrap /
-    # invite list. Doesn't log the raw token (too sensitive); only the
-    # provisioning-relevant claims.
+    # whether the email claim is present and which domain it is in.
+    # Doesn't log the raw token (too sensitive) or the full address.
     logging.getLogger("mycelium.oidc").info(
-        "OIDC callback: issuer=%s subject=%s email=%s name=%s claim_keys=%s",
+        "OIDC callback: issuer=%s subject=%s email_domain=%s claim_keys=%s",
         issuer,
         subject,
-        email,
-        name,
+        email.rpartition("@")[2] if isinstance(email, str) else None,
         sorted(claims.keys()),
     )
 
@@ -208,14 +208,21 @@ async def callback(request: Request):
         conn = runtime._auth_db()
     except RuntimeError:
         raise HTTPException(status_code=500, detail="auth store not initialized")
-    with store.transaction(conn):
-        user_id = auth.find_or_create_user(
-            conn,
-            issuer=issuer,
-            subject=subject,
-            email=email,
-            email_verified=email_verified(claims),
-            name=name,
+    try:
+        with store.transaction(conn):
+            user_id = auth.find_or_create_user(
+                conn,
+                issuer=issuer,
+                subject=subject,
+                email=email,
+                email_verified=email_verified(claims),
+                name=name,
+            )
+    except auth.EmailDomainNotAllowed:
+        raise HTTPException(
+            status_code=403,
+            detail="this service only admits verified email addresses in its "
+            "allowed domains — sign in with your work account",
         )
     if user_id is None:
         # Refuse to silently create unauthorized users — the user sees

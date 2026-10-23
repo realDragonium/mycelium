@@ -91,6 +91,7 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        auth.check_domain_policy()
         data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
         server.init(data_dir)
         # Start the MCP session manager under our lifespan. A mounted

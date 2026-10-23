@@ -921,11 +921,13 @@ async def token_endpoint(
         # mirror the user's full role into the token — same convention as
         # manually-minted "default scope" tokens.
         user_row = conn.execute(
-            "SELECT id, role, status FROM users WHERE id = ?",
+            "SELECT id, role, status, type, email FROM users WHERE id = ?",
             (row["user_id"],),
         ).fetchone()
         if user_row is None or user_row["status"] != "active":
             return _oauth_error("invalid_grant", "user no longer active")
+        if auth.blocked_by_domain_policy(user_row["type"], user_row["email"]):
+            return _oauth_error("invalid_grant", "email domain not allowed")
 
         scope_to_grant: auth.Scope = user_row["role"]
         raw, prefix, h = auth.generate_token()
@@ -980,7 +982,7 @@ def _refresh(
     with store.transaction(conn):
         row = conn.execute(
             "SELECT r.token_id, r.expires_at, r.used_at, t.client_id, t.prefix, "
-            "       t.scope, t.revoked_at, u.status "
+            "       t.scope, t.revoked_at, u.status, u.type, u.email "
             "FROM oauth_refresh_tokens r "
             "JOIN mcp_tokens t ON t.id = r.token_id "
             "JOIN users u ON u.id = t.user_id "
@@ -1004,6 +1006,8 @@ def _refresh(
             return _oauth_error("invalid_grant", "refresh token expired")
         if row["status"] != "active":
             return _oauth_error("invalid_grant", "user no longer active")
+        if auth.blocked_by_domain_policy(row["type"], row["email"]):
+            return _oauth_error("invalid_grant", "email domain not allowed")
 
         conn.execute(
             "UPDATE oauth_refresh_tokens SET used_at = ? WHERE hash = ?",
