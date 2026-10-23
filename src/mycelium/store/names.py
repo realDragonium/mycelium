@@ -164,6 +164,18 @@ def list_entities(
     return rows
 
 
+def find_names_containing(
+    conn: sqlite3.Connection, query: str, limit: int
+) -> list[sqlite3.Row]:
+    """Names containing `query`, case-insensitively, in insertion order."""
+    return conn.execute(
+        "SELECT id, text, entity_id FROM names "
+        "WHERE instr(lower(text), lower(?)) > 0 "
+        "ORDER BY (text = ? COLLATE NOCASE) DESC, rowid LIMIT ?",
+        (query, query, limit),
+    ).fetchall()
+
+
 def list_statements(
     conn: sqlite3.Connection,
     limit: int = 50,
@@ -278,6 +290,45 @@ def grep_statements(
         f"JOIN names n              ON n.id           = bm.name_id "
         f"WHERE n.entity_id = ? AND {predicate.format(col='b.text')}{kind_extra_join} "
         f"ORDER BY rid LIMIT ? OFFSET ?",
+        args,
+    ).fetchall()
+
+
+def keyword_statement_candidates(
+    conn: sqlite3.Connection,
+    tokens: list[str],
+    *,
+    kind: str | None,
+    required_entity_ids: set[str],
+    limit: int = 500,
+) -> list[sqlite3.Row]:
+    """Return a bounded pool matching any token and all requested entities."""
+    if not tokens:
+        return []
+
+    def escape_like(token: str) -> str:
+        return token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    token_clause = " OR ".join("lower(b.text) LIKE ? ESCAPE '\\'" for _token in tokens)
+    args: list[Any] = [f"%{escape_like(token)}%" for token in tokens]
+    filters = [f"({token_clause})"]
+    if kind is not None:
+        filters.append("b.kind = ?")
+        args.append(kind)
+    if required_entity_ids:
+        placeholders = ", ".join("?" for _entity_id in required_entity_ids)
+        filters.append(
+            "(SELECT COUNT(DISTINCT n.entity_id) FROM statement_mentions sm "
+            "JOIN names n ON n.id = sm.name_id "
+            f"WHERE sm.statement_id = b.id AND n.entity_id IN ({placeholders})) = ?"
+        )
+        args.extend(sorted(required_entity_ids))
+        args.append(len(required_entity_ids))
+    args.append(limit)
+    return conn.execute(
+        "SELECT b.id, b.text, b.rowid AS rid FROM statements b WHERE "
+        + " AND ".join(filters)
+        + " ORDER BY b.rowid LIMIT ?",
         args,
     ).fetchall()
 

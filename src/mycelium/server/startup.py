@@ -315,6 +315,15 @@ def _init(data_dir: Path) -> None:
         partial_restore=partial_restore,
     )
 
+    pending_statements = store.count_pending_statements(_db())
+    pending_names = store.count_pending_names(_db())
+    if pending_statements or pending_names:
+        index_logger.info(
+            "pending embeddings: %d statement(s), %d name(s)",
+            pending_statements,
+            pending_names,
+        )
+
     # Start the background mention worker on its own thread and connection
     # (transport-agnostic: both stdio and HTTP funnel through init). The flag is
     # the test suite's "background worker off" switch, so tests can drain the
@@ -323,6 +332,10 @@ def _init(data_dir: Path) -> None:
         from .. import mention_worker  # local import: workers are optional
 
         mention_worker.start(data_dir)
+    if os.environ.get("MYCELIUM_DISABLE_EMBED_WORKER") != "1":
+        from .. import embedding_worker
+
+        embedding_worker.start()
     if quarantine.active():
         logger.warning(
             "quarantine: background AI workers, draft review and GitHub delivery "

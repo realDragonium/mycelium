@@ -69,6 +69,8 @@ def pytest_configure(config):
     # assertions and leaks threads. Tests that exercise recompute call
     # `mention_worker.drain(conn)` synchronously instead.
     os.environ.setdefault("MYCELIUM_DISABLE_MENTION_WORKER", "1")
+    # Embedding retries are exercised synchronously through `reembed_pending`.
+    os.environ.setdefault("MYCELIUM_DISABLE_EMBED_WORKER", "1")
     # The review sweep wakes on a timer; tests call `draft_review_runs.sweep`
     # with an explicit clock instead.
     os.environ.setdefault("MYCELIUM_DISABLE_REVIEW_SWEEP", "1")

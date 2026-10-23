@@ -264,8 +264,36 @@ def test_embed_does_not_cache_failures(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with pytest.raises(embed_module.EmbeddingError):
         embed_module.embed("5")
+    monkeypatch.setattr(embed_module, "_unavailable_until", 0.0)
     assert embed_module.embed("5")[0] == 5.0
     assert attempts == 2
+
+
+def test_a_failure_fails_fast_until_the_pause_ends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_openai(monkeypatch)
+    now = 100.0
+    monkeypatch.setattr(embed_module, "_clock", lambda: now)
+    attempts = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(401, json={"error": "invalid key"})
+        return _response(json.loads(request.content)["input"])
+
+    embed_module._openai_client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(embed_module.EmbeddingError):
+        embed_module.embed("5")
+    with pytest.raises(embed_module.EmbeddingError):
+        embed_module.embed_many(["5"])
+    assert attempts == 1
+
+    now += embed_module.UNAVAILABLE_S
+    assert embed_module.embed("5")[0] == 5.0
 
 
 def test_wrong_dimension_is_an_embedding_error(

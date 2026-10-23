@@ -40,6 +40,9 @@ OPENAI_BATCH = 100
 QUERY_CACHE_SIZE = 2048
 #: A longer rate-limit wait is a failure: callers fall back rather than stall.
 MAX_RETRY_AFTER_S = 20.0
+#: After a request fails, calls fail at once for this long, so searches fall
+#: back to keywords immediately instead of each waiting out timeouts.
+UNAVAILABLE_S = 30.0
 
 # The provider clients default to no useful bound for this workload, and every
 # embed occupies a worker thread for its whole duration. An unresponsive
@@ -130,6 +133,8 @@ _client_lock = threading.Lock()
 _client: ollama.Client | None = None
 _openai_client: httpx.Client | None = None
 _sleep = time.sleep
+_clock = time.monotonic
+_unavailable_until = 0.0
 _warned_threshold_models: set[tuple[Provider, str]] = set()
 
 
@@ -207,6 +212,8 @@ def reset() -> None:
         _client = None
         _openai_client = None
         _warned_threshold_models.clear()
+    global _unavailable_until
+    _unavailable_until = 0.0
     settings.cache_clear()
     _cached_embed.cache_clear()
 
@@ -323,25 +330,34 @@ def _openai_batch(texts: list[str], configured: Settings) -> list[list[float]]:
     raise EmbeddingError(f"OpenAI embedding request failed for {configured.model}")
 
 
+def _available(texts: list[str]) -> list[list[float]]:
+    global _unavailable_until
+    if _clock() < _unavailable_until:
+        raise EmbeddingError("The embedding provider failed recently; retrying later")
+    configured = settings()
+    try:
+        if configured.provider == "ollama":
+            return [_ollama_embed(text, configured) for text in texts]
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), OPENAI_BATCH):
+            vectors.extend(
+                _openai_batch(texts[start : start + OPENAI_BATCH], configured)
+            )
+        return vectors
+    except EmbeddingError:
+        _unavailable_until = _clock() + UNAVAILABLE_S
+        raise
+
+
 def embed_many(texts: Sequence[str]) -> list[list[float]]:
     """Embed texts in input order, batching requests where the provider allows."""
     if not texts:
         return []
-    configured = settings()
-    items = list(texts)
-    if configured.provider == "ollama":
-        return [_ollama_embed(text, configured) for text in items]
-    vectors: list[list[float]] = []
-    for start in range(0, len(items), OPENAI_BATCH):
-        vectors.extend(_openai_batch(items[start : start + OPENAI_BATCH], configured))
-    return vectors
+    return _available(list(texts))
 
 
 def _embed_one(text: str) -> list[float]:
-    configured = settings()
-    if configured.provider == "ollama":
-        return _ollama_embed(text, configured)
-    return _openai_batch([text], configured)[0]
+    return _available([text])[0]
 
 
 @lru_cache(maxsize=QUERY_CACHE_SIZE)

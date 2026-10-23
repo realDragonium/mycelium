@@ -19,37 +19,29 @@ from typing import Any, Literal, TypedDict
 from pydantic import JsonValue
 
 from .. import embed, mentions, plurals, store
-from .indexes import _persisted_index_write
+from .indexes import (
+    _persisted_index_write,
+    _set_name_vector,
+    _try_embed,
+)
 from .registry import draftable_tool, tool
 from .runtime import _db, _name_idx
 
 
 def _index_name(name_id: str, text: str) -> None:
-    """Embed `text` and register its in-memory vector under `name_id`.
+    """Try to embed `text` and register its vector under `name_id`.
 
     The wrapping `_persisted_index_write` persists the index.
     """
-    vid = store.next_name_vector_id(_db())
-    vec = embed.embed(text)
-    _name_idx().add(vid, vec)
-    store.set_name_vector_id(_db(), name_id, vid)
+    _set_name_vector(name_id, _try_embed(text))
 
 
 def _reindex_name(name_id: str, new_text: str) -> None:
-    """Replace an indexed name's in-memory vector.
+    """Replace a name vector, or remove it until embedding recovers.
 
     The wrapping `_persisted_index_write` persists the index.
     """
-    vid = store.get_name_vector_id(_db(), name_id)
-    vec = embed.embed(new_text)
-    if vid is None:
-        # Name exists in SQL but never got an index entry (e.g. created
-        # before this feature existed and backfill missed it). Add fresh.
-        vid = store.next_name_vector_id(_db())
-        _name_idx().add(vid, vec)
-        store.set_name_vector_id(_db(), name_id, vid)
-    else:
-        _name_idx().replace(vid, vec)
+    _set_name_vector(name_id, _try_embed(new_text))
 
 
 def _drop_name_from_index(name_id: str) -> None:

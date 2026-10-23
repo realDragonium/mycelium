@@ -28,6 +28,83 @@ _REBUILD_BATCH = embed.OPENAI_BATCH
 _INVALID_IDENTITY = "<invalid index identity>"
 
 
+def _try_embed(text: str) -> list[float] | None:
+    try:
+        return embed.embed(text)
+    except embed.EmbeddingError as exc:
+        logger.warning("embedding deferred: %s", exc)
+        return None
+
+
+def _set_statement_vector(statement_id: str, vec: list[float] | None) -> None:
+    vector_id = store.get_vector_id(_db(), statement_id)
+    if vec is None:
+        if vector_id is not None:
+            _idx().delete(vector_id)
+            store.drop_vector_id(_db(), statement_id)
+        return
+    if vector_id is None:
+        vector_id = store.next_vector_id(_db())
+        store.set_vector_id(_db(), statement_id, vector_id)
+        _idx().add(vector_id, vec)
+    else:
+        _idx().replace(vector_id, vec)
+
+
+def _set_name_vector(name_id: str, vec: list[float] | None) -> None:
+    vector_id = store.get_name_vector_id(_db(), name_id)
+    if vec is None:
+        if vector_id is not None:
+            _name_idx().delete(vector_id)
+            store.delete_name_vector_mapping(_db(), name_id)
+        return
+    if vector_id is None:
+        vector_id = store.next_name_vector_id(_db())
+        store.set_name_vector_id(_db(), name_id, vector_id)
+        _name_idx().add(vector_id, vec)
+    else:
+        _name_idx().replace(vector_id, vec)
+
+
+def reembed_pending(limit: int = 256) -> int:
+    """Embed pending statements and names whose text remains unchanged."""
+    if limit <= 0:
+        return 0
+    statement_rows = store.list_pending_statements(_db(), limit)
+    name_rows = store.list_pending_names(_db(), limit - len(statement_rows))
+    pending = [
+        ("statement", str(row["id"]), str(row["text"])) for row in statement_rows
+    ] + [("name", str(row["id"]), str(row["text"])) for row in name_rows]
+    if not pending:
+        return 0
+    try:
+        vectors = embed.embed_many([text for _kind, _row_id, text in pending])
+    except embed.EmbeddingError as exc:
+        logger.warning("pending embedding pass failed: %s", exc)
+        return 0
+
+    embedded = 0
+    with _persisted_index_write(
+        statements=bool(statement_rows),
+        names=bool(name_rows),
+    ):
+        for (kind, row_id, text), vec in zip(pending, vectors, strict=True):
+            if kind == "statement":
+                row = store.get_statement(_db(), row_id)
+                mapped = store.get_vector_id(_db(), row_id)
+            else:
+                row = store.get_name_by_id(_db(), row_id)
+                mapped = store.get_name_vector_id(_db(), row_id)
+            if row is None or row["text"] != text or mapped is not None:
+                continue
+            if kind == "statement":
+                _set_statement_vector(row_id, vec)
+            else:
+                _set_name_vector(row_id, vec)
+            embedded += 1
+    return embedded
+
+
 def _rebuild_vector_index(
     index: vector.Index,
     rows: list[sqlite3.Row],

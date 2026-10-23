@@ -9,6 +9,7 @@ rebaked whenever they change.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, TypedDict
 
 from .. import docs_store, embed, store
@@ -17,6 +18,8 @@ from .names import _create_name_with_plural, _drop_name_from_index
 from .registry import draft_listing_tool, draftable_tool, tool
 from .runtime import _baker, _db, _drafts_db, _name_idx
 from .specs import EntityEdgeSpec, ResultLimit, _check_limit
+
+search_logger = logging.getLogger("mycelium.server.search")
 
 
 @draftable_tool
@@ -265,43 +268,63 @@ def search_entities(
     `list_entities`); `matched_name` is the alias that actually
     matched. The configured embedding model supplies the default score
     (0.3 for nomic-embed-text). Follow up with `get_entity(id)` for all aliases.
+
+    If embedding is unavailable, case-insensitive name substrings are returned.
     """
     if not query:
         raise ValueError("query must be a non-empty string")
     min_score = embed.thresholds().entity_search if min_score is None else min_score
-    vec = embed.embed(query)
-    # Over-fetch: several aliases of one entity can occupy top slots,
-    # and dedup-to-entity may otherwise leave fewer than k results.
     best: dict[str, tuple[float, str]] = {}
-    for vid, distance in _name_idx().search(vec, k=max(k * 3, 20)):
-        score = 1.0 - distance
-        if score < min_score:
-            continue
-        nid = store.get_name_id_by_vector_id(_db(), vid)
-        if nid is None:
-            continue
-        name_row = store.get_name_by_id(_db(), nid)
-        if name_row is None:
-            continue
-        eid = name_row["entity_id"]
-        if eid not in best or score > best[eid][0]:
-            best[eid] = (score, name_row["text"])
-    ranked = sorted(best.items(), key=lambda item: item[1][0], reverse=True)[:k]
+    keyword_fallback = False
+    try:
+        vec = embed.embed(query)
+    except embed.EmbeddingError as exc:
+        search_logger.warning(
+            "entity embedding search failed; using keyword retrieval: %s", exc
+        )
+        keyword_fallback = True
+        for row in store.find_names_containing(_db(), query, max(k * 3, 20)):
+            score = 1.0 if row["text"].casefold() == query.casefold() else 0.5
+            if score < min_score:
+                continue
+            entity_id = str(row["entity_id"])
+            if entity_id not in best or score > best[entity_id][0]:
+                best[entity_id] = (score, str(row["text"]))
+    else:
+        # Over-fetch: several aliases of one entity can occupy top slots,
+        # and dedup-to-entity may otherwise leave fewer than k results.
+        for vid, distance in _name_idx().search(vec, k=max(k * 3, 20)):
+            score = 1.0 - distance
+            if score < min_score:
+                continue
+            nid = store.get_name_id_by_vector_id(_db(), vid)
+            if nid is None:
+                continue
+            name_row = store.get_name_by_id(_db(), nid)
+            if name_row is None:
+                continue
+            eid = name_row["entity_id"]
+            if eid not in best or score > best[eid][0]:
+                best[eid] = (score, name_row["text"])
+    ranked = sorted(
+        best.items(), key=lambda item: (-item[1][0], item[1][1].casefold())
+    )[:k]
     entities: list[dict[str, Any]] = []
     for eid, (score, matched_name) in ranked:
         entity = store.get_entity_by_id(_db(), eid)
         if entity is None:
             continue
         names = store.get_names_by_entity(_db(), eid)
-        entities.append(
-            {
-                "id": eid,
-                "name": names[0]["text"] if names else eid,
-                "matched_name": matched_name,
-                "score": score,
-                "description": entity["description"] or "",
-            }
-        )
+        item: dict[str, Any] = {
+            "id": eid,
+            "name": names[0]["text"] if names else eid,
+            "matched_name": matched_name,
+            "score": score,
+            "description": entity["description"] or "",
+        }
+        if keyword_fallback:
+            item["retrieval"] = "keyword"
+        entities.append(item)
     return {"entities": entities}
 
 

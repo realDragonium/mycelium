@@ -178,6 +178,12 @@ def set_vector_id(conn: sqlite3.Connection, statement_id: str, vector_id: int) -
     )
 
 
+def drop_vector_id(conn: sqlite3.Connection, statement_id: str) -> None:
+    conn.execute(
+        "DELETE FROM statement_vector_ids WHERE statement_id = ?", (statement_id,)
+    )
+
+
 def get_vector_id(conn: sqlite3.Connection, statement_id: str) -> int | None:
     row = conn.execute(
         "SELECT vector_id FROM statement_vector_ids WHERE statement_id = ?",
@@ -248,6 +254,40 @@ def get_name_id_by_vector_id(conn: sqlite3.Connection, vector_id: int) -> str | 
 
 def delete_name_vector_mapping(conn: sqlite3.Connection, name_id: str) -> None:
     conn.execute("DELETE FROM name_vector_ids WHERE name_id = ?", (name_id,))
+
+
+def list_pending_statements(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT id, text FROM statements "
+        "WHERE id NOT IN (SELECT statement_id FROM statement_vector_ids) "
+        "ORDER BY rowid LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def list_pending_names(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT id, text FROM names "
+        "WHERE id NOT IN (SELECT name_id FROM name_vector_ids) "
+        "ORDER BY rowid LIMIT ?",
+        (limit,),
+    ).fetchall()
+
+
+def count_pending_statements(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM statements "
+        "WHERE id NOT IN (SELECT statement_id FROM statement_vector_ids)"
+    ).fetchone()
+    return int(row["n"])
+
+
+def count_pending_names(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM names "
+        "WHERE id NOT IN (SELECT name_id FROM name_vector_ids)"
+    ).fetchone()
+    return int(row["n"])
 
 
 def list_all_names(conn: sqlite3.Connection) -> list[sqlite3.Row]:

@@ -237,6 +237,21 @@ def test_whole_query_fallback_when_decomposition_is_dry(tmp_path, monkeypatch):
         assert seen == [query]
 
 
+def test_total_embed_outage_falls_back_to_keywords(tmp_path, monkeypatch):
+    def boom(text):
+        raise embed.EmbeddingError("embedding provider down")
+
+    with _client(tmp_path, monkeypatch):
+        statement_id = _add("Workspace exports include invoice totals")
+        monkeypatch.setattr(embed, "embed", boom)
+
+        hits = _decomposed("workspace and invoice exports", 5)
+
+        assert hits[0]["id"] == statement_id
+        assert hits[0]["retrieval"] == "keyword"
+        assert hits[0]["score"] == 1.0
+
+
 def test_dedup_subqueries_threshold_value_and_direction():
     """The 0.95 default must actually be 0.95: a 0.96-similar pair collapses,
     a 0.94-similar pair is kept. Pins both the constant and the comparison

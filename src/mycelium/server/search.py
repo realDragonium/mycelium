@@ -9,6 +9,8 @@ author check candidate texts before writing them.
 
 from __future__ import annotations
 
+import logging
+import re
 from typing import Any, Literal
 
 from pydantic import JsonValue
@@ -20,6 +22,8 @@ from .hydration import _REVERSE_EDGE_CAP, _expand_graph, _hydrate_statement_full
 from .registry import tool
 from .runtime import _db, _idx, _name_idx
 from .specs import ResultLimit, _check_limit
+
+logger = logging.getLogger(__name__)
 
 
 def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
@@ -145,6 +149,92 @@ def _score_candidates(
     return scored
 
 
+def _keyword_candidates(
+    query: str,
+    limit: int,
+    kind: str | None,
+    required_entity_ids: set[str],
+) -> list[tuple[str, float, float]]:
+    tokens = list(
+        dict.fromkeys(
+            token
+            for token in re.findall(r"[^\W_]+", query.lower())
+            if len(token) >= 3 and token not in survey.STOPWORDS
+        )
+    )
+    if not tokens:
+        return []
+    rows = store.keyword_statement_candidates(
+        _db(),
+        tokens,
+        kind=kind,
+        required_entity_ids=required_entity_ids,
+    )
+    ranked: list[tuple[str, float, int, int]] = []
+    for row in rows:
+        text = str(row["text"]).lower()
+        matched = sum(token in text for token in tokens)
+        occurrences = sum(text.count(token) for token in tokens)
+        ranked.append(
+            (str(row["id"]), matched / len(tokens), occurrences, int(row["rid"]))
+        )
+    ranked.sort(key=lambda item: (-item[1], -item[2], item[3]))
+    return [(statement_id, score, score) for statement_id, score, _n, _rid in ranked][
+        :limit
+    ]
+
+
+def _keyword_fallback(
+    query: str,
+    limit: int,
+    min_score: float,
+    kind: str | None,
+    required_entity_ids: set[str],
+    error: embed.EmbeddingError,
+) -> list[tuple[str, float, float]]:
+    logger.warning("embedding search failed; using keyword retrieval: %s", error)
+    candidates = _keyword_candidates(query, limit, kind, required_entity_ids)
+    return [item for item in candidates if item[1] >= min_score]
+
+
+def _search_statement_candidates_with_mode(
+    query: str,
+    limit: int,
+    min_score: float,
+    mentions: list[str] = [],
+    kind: str | None = None,
+    name_boost: float = 0.3,
+    name_top_k: int = 5,
+    name_min_score: float | None = None,
+) -> tuple[list[tuple[str, float, float]], bool]:
+    """Rank hits without hydrating them; return whether keyword fallback ran."""
+    resolved_name_min_score = (
+        embed.thresholds().name_match if name_min_score is None else name_min_score
+    )
+    required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
+    try:
+        with trace_span("embed"):
+            vec = embed.embed(query)
+    except embed.EmbeddingError as exc:
+        return (
+            _keyword_fallback(query, limit, min_score, kind, required_entity_ids, exc),
+            True,
+        )
+    return (
+        _vector_candidates(
+            vec,
+            limit,
+            min_score,
+            required_entity_ids,
+            kind,
+            name_boost,
+            name_top_k,
+            resolved_name_min_score,
+        ),
+        False,
+    )
+
+
 def _search_statement_candidates(
     query: str,
     limit: int,
@@ -155,23 +245,17 @@ def _search_statement_candidates(
     name_top_k: int = 5,
     name_min_score: float | None = None,
 ) -> list[tuple[str, float, float]]:
-    """Rank semantic hits without hydrating their graph neighborhoods."""
-    resolved_name_min_score = (
-        embed.thresholds().name_match if name_min_score is None else name_min_score
-    )
-    required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
-    with trace_span("embed"):
-        vec = embed.embed(query)
-    return _vector_candidates(
-        vec,
+    """Rank vector hits, falling back to keyword candidates on provider failure."""
+    return _search_statement_candidates_with_mode(
+        query,
         limit,
         min_score,
-        required_entity_ids,
+        mentions,
         kind,
         name_boost,
         name_top_k,
-        resolved_name_min_score,
-    )
+        name_min_score,
+    )[0]
 
 
 def _vector_candidates(
@@ -210,19 +294,27 @@ def _decomposed_candidates(
     name_boost: float,
     name_top_k: int,
     name_min_score: float,
-) -> list[tuple[str, float]]:
+) -> tuple[list[tuple[str, float]], bool]:
     """Search each clause of `query` separately and rank the union: first by
-    how many clauses surfaced a statement, then by its best score."""
+    how many clauses surfaced a statement, then by its best score. Returns
+    whether keyword fallback ran."""
     required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
     parts: list[tuple[str, list[float]]] = []
-    with trace_span("embed"):
-        for part in survey.decompose(query):
-            if survey.usable(part):
-                parts.append((part, embed.embed(part)))
-    parts = survey.dedup_subqueries(parts, threshold=embed.thresholds().subquery_dedup)
-    if not parts:
+    try:
         with trace_span("embed"):
-            parts = [(query, embed.embed(query))]
+            for part in survey.decompose(query):
+                if survey.usable(part):
+                    parts.append((part, embed.embed(part)))
+            parts = survey.dedup_subqueries(
+                parts, threshold=embed.thresholds().subquery_dedup
+            )
+            if not parts:
+                parts = [(query, embed.embed(query))]
+    except embed.EmbeddingError as exc:
+        keyword = _keyword_fallback(
+            query, limit, min_score, kind, required_entity_ids, exc
+        )
+        return [(sid, score) for sid, score, _cosine in keyword], True
     union: dict[str, tuple[int, float]] = {}
     for _part, vec in parts:
         for sid, final, _cosine in _vector_candidates(
@@ -237,7 +329,7 @@ def _decomposed_candidates(
         ):
             count, best = union.get(sid, (0, float("-inf")))
             union[sid] = (count + 1, max(best, final))
-    return survey.rank_statements(union)
+    return survey.rank_statements(union), False
 
 
 @tool
@@ -313,6 +405,9 @@ def search_statements(
     the union comes back deduped: statements surfaced by more parts first,
     then by best score. The result can therefore hold more than `limit` hits.
 
+    If embedding is unavailable, keyword matching is used, hits carry
+    `retrieval: "keyword"`, and scores are the fraction of query words matched.
+
     Boost tunables (defaults usually fine):
       `name_boost`     — weight applied to the best matching entity-name
                          score. 0 disables alias-aware retrieval.
@@ -324,7 +419,7 @@ def search_statements(
     """
     _check_limit(limit)
     if decompose:
-        ranked = _decomposed_candidates(
+        ranked, keyword_fallback = _decomposed_candidates(
             query,
             limit,
             min_score,
@@ -335,24 +430,24 @@ def search_statements(
             embed.thresholds().name_match if name_min_score is None else name_min_score,
         )
     else:
-        ranked = [
-            (sid, final)
-            for sid, final, _cos in _search_statement_candidates(
-                query,
-                limit,
-                min_score,
-                mentions,
-                kind,
-                name_boost,
-                name_top_k,
-                name_min_score,
-            )
-        ]
+        scored, keyword_fallback = _search_statement_candidates_with_mode(
+            query,
+            limit,
+            min_score,
+            mentions,
+            kind,
+            name_boost,
+            name_top_k,
+            name_min_score,
+        )
+        ranked = [(sid, final) for sid, final, _cos in scored]
 
-    direct = [
-        _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
-        for sid, score in ranked
-    ]
+    direct: list[dict[str, Any]] = []
+    for sid, score in ranked:
+        hit = _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
+        if keyword_fallback:
+            hit["retrieval"] = "keyword"
+        direct.append(hit)
     seen = {sid for sid, _score in ranked}
 
     if depth <= 0:
