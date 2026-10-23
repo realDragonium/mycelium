@@ -1,6 +1,6 @@
 // Shared primitives: icons, tags, statement text, page chrome, error boundary.
 import { Component, createContext, useContext, useState, type ErrorInfo, type ReactNode, type SVGProps } from 'react';
-import { editStatement, errorMessage, isAuthError, type Me } from './api';
+import { editStatement, errorMessage, isAuthError, isScoped, type Me } from './api';
 import { layerOf, refreshStatement, substrate, type Entity, type Statement } from './data';
 import { Link, useRouter } from './router';
 
@@ -188,6 +188,7 @@ function violationText(v: unknown): string {
 export function EditableStatementText({ statement, className, onSaved, compact, highlightQuery }: {
   statement: Pick<Statement, 'id' | 'text' | 'mentions'>; className?: string; onSaved?: () => void; compact?: boolean; highlightQuery?: string;
 }) {
+  const me = useMe();
   const { go } = useRouter();
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(statement.text);
@@ -197,6 +198,12 @@ export function EditableStatementText({ statement, className, onSaved, compact, 
   const [note, setNote] = useState<EditNote | null>(null);
   const [shown, setShown] = useState(statement);
   if (shown.id !== statement.id) { setShown(statement); setNote(null); setEditing(false); }
+
+  if (isScoped(me)) {
+    return highlightQuery != null
+      ? <p className={className}>{highlight(shown.text, highlightQuery)}</p>
+      : <StatementText statement={shown} className={className} />;
+  }
 
   const begin = () => { setVal(shown.text); setEditing(true); setErr(null); setViolations(null); setNote(null); };
   const cancel = () => { setEditing(false); setErr(null); setViolations(null); };

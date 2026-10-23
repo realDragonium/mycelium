@@ -15,7 +15,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
-from .. import auth, store
+from .. import auth, principal_audience, store
 from ..server import runtime
 from .access import _require_admin
 from .account import _serialize_token_row
@@ -37,6 +37,7 @@ def _serialize_user_row(row: sqlite3.Row) -> dict[str, Any]:
         "blocked_by_domain_policy": auth.blocked_by_domain_policy(
             row["type"], row["email"]
         ),
+        "audience_id": row["audience_id"],
     }
 
 
@@ -83,11 +84,16 @@ class UpdateUserBody(BaseModel):
     role: auth.Role | None = None
     status: str | None = None  # 'active' | 'suspended'
     name: str | None = None
+    #: Sent: the audience the user reads as, null for full access by role.
+    audience_id: str | None = None
 
 
 @router.patch("/api/admin/users/{user_id}")
 def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[str, Any]:
     _require_admin(request)
+    rescope = "audience_id" in body.model_fields_set
+    if rescope:
+        principal_audience.require_live(body.audience_id)
     conn = runtime._auth_db()
     try:
         with store.transaction(conn):
@@ -98,6 +104,8 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
                 status=body.status,
                 name=body.name,
             )
+            if rescope:
+                row = auth.set_user_audience(conn, user_id, body.audience_id)
     except LookupError as ex:
         raise HTTPException(status_code=404, detail=str(ex))
     return {"user": _serialize_user_row(row)}
@@ -114,6 +122,7 @@ def list_user_tokens(user_id: str, request: Request) -> dict[str, Any]:
 class MintTokenBody(BaseModel):
     name: str = PydField(..., min_length=1, max_length=80)
     scope: auth.Scope = "writer"
+    audience_id: str | None = None
 
 
 @router.post("/api/admin/users/{user_id}/tokens")
@@ -124,15 +133,42 @@ def mint_token_for_user(
     create the initial token for a freshly-created service account.
     The scope is still capped by the target user's role."""
     _require_admin(request)
+    principal_audience.require_live(body.audience_id)
     conn = runtime._auth_db()
     try:
         with store.transaction(conn):
             raw, row = auth.mint_token_for_user(
-                conn, user_id=user_id, name=body.name, scope=body.scope
+                conn,
+                user_id=user_id,
+                name=body.name,
+                scope=body.scope,
+                audience_id=body.audience_id,
             )
     except LookupError as ex:
         raise HTTPException(status_code=404, detail=str(ex))
     return {"token": raw, **_serialize_token_row(row)}
+
+
+class TokenAudienceBody(BaseModel):
+    audience_id: str | None
+
+
+@router.patch("/api/admin/tokens/{token_id}")
+def set_token_audience(
+    token_id: str, body: TokenAudienceBody, request: Request
+) -> dict[str, Any]:
+    """Scope any token, personal or OAuth, to an audience, or clear its
+    scope. An OAuth grant keeps it across refreshes: a refresh replaces the
+    secret on the same row."""
+    _require_admin(request)
+    principal_audience.require_live(body.audience_id)
+    conn = runtime._auth_db()
+    try:
+        with store.transaction(conn):
+            row = auth.set_token_audience(conn, token_id, body.audience_id)
+    except LookupError as ex:
+        raise HTTPException(status_code=404, detail=str(ex))
+    return _serialize_token_row(row)
 
 
 @router.delete("/api/admin/tokens/{token_id}")

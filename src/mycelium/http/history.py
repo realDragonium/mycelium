@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
-from .. import store
+from .. import principal_audience, store
+from .access import _require_principal
 
 router = APIRouter()
 
@@ -72,6 +73,7 @@ def _history_target_id(
 
 @router.get("/api/history")
 def get_history(
+    request: Request,
     limit: int = 50,
     offset: int = 0,
     op: str | None = None,
@@ -98,7 +100,28 @@ def get_history(
         {create,update,delete,link,unlink,attach,detach}
       - target_kind: comma-separated subset of the target kinds
       - q: case-insensitive substring match on target_id
+
+    A caller scoped to an audience sees only events about statements,
+    concepts and names its audience may see now, without their
+    `before`/`after`/`context` snapshots: an old version of a visible
+    statement may hold text its audience was never meant to read.
     """
+    principal = _require_principal(request)
+    with principal_audience.reads(principal):
+        return _history(
+            limit, offset, op, target_kind, q, scoped=principal.audience_id is not None
+        )
+
+
+def _history(
+    limit: int,
+    offset: int,
+    op: str | None,
+    target_kind: str | None,
+    q: str | None,
+    *,
+    scoped: bool,
+) -> dict[str, Any]:
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
 
@@ -109,13 +132,21 @@ def get_history(
     conn = store.substrate_connection()
     if store.has_history(conn):
         rows, total = store.history_feed(
-            conn, limit=limit, offset=offset, ops=ops, kinds=kinds, query=query
+            conn,
+            limit=limit,
+            offset=offset,
+            ops=ops,
+            kinds=kinds,
+            query=query,
+            visible_only=scoped,
         )
         events = []
         for r in rows:
             before = json.loads(r["before_json"]) if r["before_json"] else None
             after = json.loads(r["after_json"]) if r["after_json"] else None
             context = json.loads(r["context_json"]) if r["context_json"] else None
+            if scoped:
+                before = after = context = None
             events.append(
                 {
                     "event_id": r["event_id"],

@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TEXT NOT NULL,
     created_by    TEXT,
     last_login_at TEXT,
+    audience_id   TEXT,  -- set: reads only what this audience may see; see principal_audience
     UNIQUE (oidc_issuer, oidc_subject),
     UNIQUE (email)
 );
@@ -78,7 +79,8 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
     last_used_at TEXT,
     revoked_at   TEXT,
     client_id    TEXT REFERENCES oauth_clients(client_id) ON DELETE SET NULL,
-    expires_at   TEXT
+    expires_at   TEXT,
+    audience_id  TEXT
 );
 CREATE INDEX IF NOT EXISTS mcp_tokens_user   ON mcp_tokens (user_id);
 CREATE INDEX IF NOT EXISTS mcp_tokens_hash   ON mcp_tokens (hash);
@@ -128,7 +130,8 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     resource              TEXT,
     created_at            TEXT NOT NULL,
     expires_at            TEXT NOT NULL,
-    used_at               TEXT
+    used_at               TEXT,
+    audience_id           TEXT
 );
 CREATE INDEX IF NOT EXISTS oauth_codes_expiry ON oauth_codes (expires_at);
 
@@ -214,6 +217,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     """
     conn.executescript(AUTH_SCHEMA)
     _add_oauth_code_resource(conn)
+    _add_audience_columns(conn)
     rebuilt = _drop_role_check(conn)
     if rebuilt:
         # Rebuild dropped explicit indexes along with the old table;
@@ -238,6 +242,17 @@ def _add_oauth_code_resource(conn: sqlite3.Connection) -> None:
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_codes)")}
     if "resource" not in columns:
         conn.execute("ALTER TABLE oauth_codes ADD COLUMN resource TEXT")
+
+
+def _add_audience_columns(conn: sqlite3.Connection) -> None:
+    """Add the audience a user, token or pending OAuth code is scoped to,
+    for a DB created before principals had one. NULL is today's full
+    access by role. Runs before the role-check rebuild, whose new tables
+    carry the column."""
+    for table in ("users", "mcp_tokens", "oauth_codes"):
+        columns = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if "audience_id" not in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN audience_id TEXT")
 
 
 # Long enough that a client in daily use is not cut off by the upgrade itself.
@@ -286,6 +301,7 @@ def _drop_role_check(conn: sqlite3.Connection) -> bool:
                 created_at    TEXT NOT NULL,
                 created_by    TEXT,
                 last_login_at TEXT,
+                audience_id   TEXT,
                 UNIQUE (oidc_issuer, oidc_subject),
                 UNIQUE (email)
             )
@@ -302,7 +318,8 @@ def _drop_role_check(conn: sqlite3.Connection) -> bool:
                 last_used_at TEXT,
                 revoked_at   TEXT,
                 client_id    TEXT REFERENCES oauth_clients(client_id) ON DELETE SET NULL,
-                expires_at   TEXT
+                expires_at   TEXT,
+                audience_id  TEXT
             )
         """,
         "invites": """

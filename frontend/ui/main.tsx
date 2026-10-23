@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './shell';
-import { errorMessage, getSubstrateCounts, isAuthError } from './api';
+import { errorMessage, getMe, getSubstrateCounts, isAuthError } from './api';
 import { PrefsProvider } from './prefs';
 
 type Boot = { phase: 'loading' } | { phase: 'ready' } | { phase: 'error'; error: unknown };
@@ -14,7 +14,7 @@ function Root() {
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    getSubstrateCounts().then(
+    getMe().then(me => me.audience_id && !me.audience ? undefined : getSubstrateCounts()).then(
       () => { if (live) setBoot({ phase: 'ready' }); },
       error => { if (live) setBoot({ phase: 'error', error }); },
     );

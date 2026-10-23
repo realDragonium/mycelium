@@ -65,7 +65,9 @@ def capture(conn: sqlite3.Connection, audience: Audience) -> Scope:
 _VIEWS: tuple[tuple[str, str], ...] = (
     (
         "statements",
-        "SELECT * FROM main.statements WHERE id IN (SELECT id FROM temp.audience_visible)",
+        # A view has no rowid of its own; reads page and order by the table's.
+        "SELECT rowid AS rowid, * FROM main.statements "
+        "WHERE id IN (SELECT id FROM temp.audience_visible)",
     ),
     (
         "statement_vector_ids",

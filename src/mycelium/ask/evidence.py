@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from pydantic import JsonValue, TypeAdapter
@@ -131,3 +133,38 @@ class Evidence:
             if sid not in result:
                 result.append(sid)
         return result
+
+
+_REF = r"s\d+"
+_REF_GROUP = re.compile(
+    rf"([ \t]*)[(\[][ \t]*({_REF}(?:[ \t]*(?:,|;|and)[ \t]*{_REF})*)[ \t]*[)\]]"
+)
+_BARE_REF = re.compile(rf"([ \t]*)(?<![\w-]){_REF}(?![\w-])")
+
+
+def number_refs(
+    answer: str, by_ref: Mapping[str, str], provenance: Sequence[str]
+) -> str:
+    """Rewrite the run-local refs (`s3`) the model left in its prose as the
+    numbers the provenance list shows (`[2]`), and drop refs to statements
+    the answer does not cite. Only refs this run supplied are touched, so
+    ordinary text that happens to look like one stays."""
+    position = {sid: index + 1 for index, sid in enumerate(provenance)}
+
+    def cited(refs: list[str]) -> str:
+        found = {position.get(by_ref[ref]) for ref in refs}
+        numbers = sorted(number for number in found if number is not None)
+        return "[" + ", ".join(map(str, numbers)) + "]" if numbers else ""
+
+    def replace(match: re.Match[str], refs: list[str]) -> str:
+        if not all(ref in by_ref for ref in refs):
+            return match.group(0)
+        numbered = cited(refs)
+        return match.group(1) + numbered if numbered else ""
+
+    text = _REF_GROUP.sub(
+        lambda match: replace(match, re.findall(_REF, match.group(2))), answer
+    )
+    return _BARE_REF.sub(
+        lambda match: replace(match, [match.group(0)[len(match.group(1)) :]]), text
+    )

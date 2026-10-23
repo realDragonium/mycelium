@@ -555,3 +555,36 @@ def test_cancellation_during_recon_records_incomplete_trace(tmp_path):
     assert trace["outcome"] == "cancelled"
     assert trace["model_turns"] == 0
     assert "completion_ms" not in trace["stream_timing_ms"]
+
+
+def test_answer_refs_become_the_provenance_numbers_without_retracting_the_stream(
+    monkeypatch,
+):
+    answer = call(
+        "submit_answer",
+        _submit_input(
+            answer="It retries (s2). The worker (s1, s2) runs it; see s1, not s9.",
+            provenance=["s2", "s1"],
+        ),
+    )
+    result, events, _requests = execute(
+        monkeypatch,
+        [[call("get_statements", {"ids": ["stm_2"]}, "get")], [answer]],
+    )
+
+    assert (
+        result.answer == "It retries [1]. The worker [1, 2] runs it; see [2], not s9."
+    )
+    assert not any(event.type == "answer_reset" for event in events)
+    assert events[-1].type == "complete"
+    assert events[-1].result["answer"] == result.answer
+
+
+def test_refs_to_uncited_statements_are_dropped():
+    from mycelium.ask.evidence import number_refs
+
+    by_ref = {"s1": "stm_a", "s2": "stm_b"}
+    assert number_refs("Exports run nightly (s2).", by_ref, ["stm_a"]) == (
+        "Exports run nightly."
+    )
+    assert number_refs("See s2 for details.", by_ref, ["stm_a"]) == "See for details."

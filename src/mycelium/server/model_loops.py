@@ -53,15 +53,25 @@ def ask(
     a wall-clock budget; on exhaustion it degrades to a low-confidence partial
     answer rather than raising.
     """
+    from .. import audience_scope, principal_audience
     from ..ask import AskConfig, run_ask
     from ..ask.config import for_depth
+    from ..ask.substrate import InProcessSubstrate
 
     config = for_depth(AskConfig.from_env(), depth)
     if config.trace_log_path is None:
         config = replace(
             config, trace_log_path=str(_context().data_dir / "ask_trace.jsonl")
         )
-    result = run_ask(question, config=config)
+    # A scoped caller's whole loop reads one snapshot of what its audience
+    # may see, so no answer or citation can rest on anything else.
+    scope = principal_audience.current_scope()
+    substrate = (
+        None
+        if scope is None
+        else audience_scope.ScopedSubstrate(InProcessSubstrate(), scope)
+    )
+    result = run_ask(question, config=config, substrate=substrate)
     if verbose:
         return result.model_dump()
     if result.outcome == "answered":

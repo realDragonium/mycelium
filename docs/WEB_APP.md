@@ -46,9 +46,9 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 
 | Group | Section | Address | Contents |
 |---|---|---|---|
-| You | Account & tokens | `#/settings/account` | Your name, role and auth state; create and revoke MCP tokens |
+| You | Account & tokens | `#/settings/account` | Your name, role, audience and auth state; create and revoke MCP tokens; admins pick and change each token's audience |
 | | Appearance | `#/settings/appearance` | Theme, density and answer typeface, saved in this browser |
-| People | Members & invites | `#/settings/members` | Admins: roles, suspension, invites, service accounts and their tokens |
+| People | Members & invites | `#/settings/members` | Admins: roles, audiences, suspension, invites, service accounts and their tokens |
 | AI | Models | `#/settings/models` | Provider, model and reasoning effort per action |
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
 | | Draft review | `#/settings/review` | Automatic review mode, reviewer, model, whether reviews may apply; review the backlog |
@@ -60,6 +60,18 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 What a person can change depends on their role; sections say so where it
 applies. Once estimated spend passes the monthly budget's warning percentage,
 admins see a banner on every screen linking to AI usage.
+
+### Scoped to an audience
+
+A user scoped to an [audience](AUDIENCES.md#scoped-users-and-tokens) sees the
+audience beside their role in the sidebar and on Account & tokens. The app
+shows them only what they can read: Home without its waiting-for-you queue,
+Browse, the statement and entity pages without editing, the graphs, Glossary,
+and Documents as a read-only library of the documents written for their
+audience. Ask runs without the report-a-gap control. Ingest, Curate and every
+settings section other than Account & tokens and Appearance are hidden. A user
+whose audience was retired is held on Account & tokens until an admin
+rescopes them.
 
 ## Older addresses
 

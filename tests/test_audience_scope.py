@@ -81,6 +81,13 @@ def test_an_internal_audience_sees_unlabelled_statements_and_curator_prose(db):
     assert _read(db, INTERNAL, "SELECT COUNT(*) FROM entity_links") == [(1,)]
 
 
+def test_scoped_reads_page_by_the_statement_rowid(db):
+    public, *_rest = _corpus(db)
+    assert _read(
+        db, EXTERNAL, "SELECT s.id FROM statements s WHERE s.rowid > 0 ORDER BY rowid"
+    ) == [(public,)]
+
+
 def test_the_scope_is_gone_after_the_read(db):
     _corpus(db)
     _read(db, EXTERNAL, "SELECT 1")

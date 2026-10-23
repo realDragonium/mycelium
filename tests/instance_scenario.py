@@ -179,6 +179,14 @@ def _auth(data_dir: Path) -> str:
                 "'2026-08-31T00:00:00+00:00')",
                 (auth.hash_token("mycr_scenario"), grant),
             )
+        if "audience_id" in {r[1] for r in conn.execute("PRAGMA table_info(users)")}:
+            _, scoped = auth.issue_token(
+                conn, user_id=admin, name="external", scope="reader"
+            )
+            conn.execute(
+                "UPDATE mcp_tokens SET audience_id = 'external-technical' WHERE id = ?",
+                (scoped,),
+            )
         conn.commit()
     return token
 

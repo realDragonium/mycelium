@@ -79,6 +79,10 @@ class Principal:
     is disabled. Handlers that record attribution should still write
     `id` to `created_by` — having `local-admin` show up in audit fields
     is the honest answer when no real user is signed in.
+
+    `audience_id` scopes the principal to one documentation audience: it
+    reads only what that audience may see (`principal_audience`) and its
+    role is clamped to reader at resolution, so it can never write.
     """
 
     id: str
@@ -86,6 +90,7 @@ class Principal:
     role: Role
     type: UserType
     synthetic: bool = False
+    audience_id: str | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -313,6 +318,16 @@ def _clamp_scope(scope: str, role: str) -> Role:
     return role  # type: ignore[return-value]
 
 
+def _scoped(
+    *, id: str, name: str, role: Role, type: UserType, audience_id: str | None
+) -> Principal:
+    """A principal, its role clamped to reader when it has an audience: a
+    scoped principal reads and never writes, whatever its stored role."""
+    if audience_id is not None:
+        role = _clamp_scope("reader", role)
+    return Principal(id=id, name=name, role=role, type=type, audience_id=audience_id)
+
+
 def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
     """Look up a bearer token and return the authenticated principal.
     Returns None when the token is unknown, revoked, expired, or its owner
@@ -321,7 +336,9 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
     row = conn.execute(
         """
         SELECT t.id AS token_id, t.scope, t.revoked_at, t.expires_at,
-               u.id AS user_id, u.name, u.role, u.type, u.status, u.email
+               t.audience_id AS token_audience_id,
+               u.id AS user_id, u.name, u.role, u.type, u.status, u.email,
+               u.audience_id AS user_audience_id
         FROM mcp_tokens t
         JOIN users u ON u.id = t.user_id
         WHERE t.hash = ?
@@ -349,11 +366,13 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
         "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
         (now.isoformat(), row["token_id"]),
     )
-    return Principal(
+    # A scoped user's audience binds every token they hold.
+    return _scoped(
         id=row["user_id"],
         name=row["name"],
         role=_clamp_scope(row["scope"], row["role"]),
         type=row["type"],
+        audience_id=row["user_audience_id"] or row["token_audience_id"],
     )
 
 
@@ -366,7 +385,8 @@ def resolve_session_user(
     if not user_id:
         return None
     row = conn.execute(
-        "SELECT id, name, role, type, status, email FROM users WHERE id = ?",
+        "SELECT id, name, role, type, status, email, audience_id FROM users "
+        "WHERE id = ?",
         (user_id,),
     ).fetchone()
     if row is None or row["status"] != "active":
@@ -376,11 +396,12 @@ def resolve_session_user(
             f"user {row['id']}", row["email"], "email domain not allowed"
         )
         return None
-    return Principal(
+    return _scoped(
         id=row["id"],
         name=row["name"],
         role=row["role"],
         type=row["type"],
+        audience_id=row["audience_id"],
     )
 
 
@@ -432,6 +453,7 @@ def issue_token(
     user_id: str,
     name: str,
     scope: Scope,
+    audience_id: str | None = None,
 ) -> tuple[str, str]:
     """Mint and persist a new MCP token. Returns `(raw_token, token_id)`.
     The raw token is the one-time secret to show the user; the token_id
@@ -447,10 +469,10 @@ def issue_token(
     conn.execute(
         """
         INSERT INTO mcp_tokens
-            (id, user_id, name, prefix, hash, scope, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, user_id, name, prefix, hash, scope, created_at, audience_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (token_id, user_id, name, prefix, h, scope, _now()),
+        (token_id, user_id, name, prefix, h, scope, _now(), audience_id),
     )
     return raw, token_id
 
@@ -480,12 +502,18 @@ def owner_id_for(principal: Principal) -> str:
     return LOCAL_ADMIN_ID if principal.synthetic else principal.id
 
 
+_TOKEN_COLUMNS = (
+    "id, user_id, name, prefix, scope, created_at, last_used_at, revoked_at, "
+    "client_id, audience_id"
+)
+
+
 def list_tokens(conn: sqlite3.Connection, user_id: str) -> list[sqlite3.Row]:
     """Every MCP token owned by `user_id`, newest first. Revoked tokens are
     included (the UI greys them out rather than hiding them)."""
     return conn.execute(
-        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
-        "FROM mcp_tokens WHERE user_id = ? ORDER BY created_at DESC",
+        f"SELECT {_TOKEN_COLUMNS} FROM mcp_tokens "
+        "WHERE user_id = ? ORDER BY created_at DESC",
         (user_id,),
     ).fetchall()
 
@@ -494,8 +522,7 @@ def get_token(conn: sqlite3.Connection, token_id: str) -> sqlite3.Row | None:
     """A single token row by id, or None. Used to read back a freshly minted
     token for serialization."""
     return conn.execute(
-        "SELECT id, name, prefix, scope, created_at, last_used_at, revoked_at "
-        "FROM mcp_tokens WHERE id = ?",
+        f"SELECT {_TOKEN_COLUMNS} FROM mcp_tokens WHERE id = ?",
         (token_id,),
     ).fetchone()
 
@@ -522,13 +549,22 @@ def mint_own_token(
     principal: Principal,
     name: str,
     scope: Scope,
+    audience_id: str | None = None,
 ) -> tuple[str, sqlite3.Row]:
     """Mint a token owned by the calling principal, capping `scope` at the
-    principal's current role. Returns `(raw_token, token_row)` — the raw
-    secret to show once plus the persisted row for serialization."""
+    principal's current role. A scoped principal's token keeps its audience,
+    so a scoped token cannot mint its way out. Returns `(raw_token,
+    token_row)` — the raw secret to show once plus the persisted row for
+    serialization."""
     capped = _clamp_scope(scope, principal.role)
     owner_id = _ensure_local_admin_row(conn) if principal.synthetic else principal.id
-    raw, token_id = issue_token(conn, user_id=owner_id, name=name, scope=capped)
+    raw, token_id = issue_token(
+        conn,
+        user_id=owner_id,
+        name=name,
+        scope=capped,
+        audience_id=principal.audience_id or audience_id,
+    )
     row = require(get_token(conn, token_id), "token just issued")
     return raw, row
 
@@ -546,7 +582,12 @@ def revoke_own_token(conn: sqlite3.Connection, *, token_id: str, owner_id: str) 
 
 
 def mint_token_for_user(
-    conn: sqlite3.Connection, *, user_id: str, name: str, scope: Scope
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    name: str,
+    scope: Scope,
+    audience_id: str | None = None,
 ) -> tuple[str, sqlite3.Row]:
     """Admin path: mint a token for any user, capping `scope` at that user's
     role. Raises `LookupError` (→ 404) when the user is unknown. Returns
@@ -555,26 +596,68 @@ def mint_token_for_user(
     if user is None:
         raise LookupError("user not found")
     capped = _clamp_scope(scope, user["role"])
-    raw, token_id = issue_token(conn, user_id=user_id, name=name, scope=capped)
+    raw, token_id = issue_token(
+        conn, user_id=user_id, name=name, scope=capped, audience_id=audience_id
+    )
     row = require(get_token(conn, token_id), "token just issued")
     return raw, row
+
+
+def set_token_audience(
+    conn: sqlite3.Connection, token_id: str, audience_id: str | None
+) -> sqlite3.Row:
+    """Scope a token to an audience, or clear its scope with None. Raises
+    `LookupError` (→ 404) for an unknown token."""
+    if get_token(conn, token_id) is None:
+        raise LookupError("token not found")
+    conn.execute(
+        "UPDATE mcp_tokens SET audience_id = ? WHERE id = ?", (audience_id, token_id)
+    )
+    return require(get_token(conn, token_id), "token just updated")
+
+
+_USER_COLUMNS = (
+    "id, type, email, name, role, status, oidc_issuer, created_at, "
+    "last_login_at, audience_id"
+)
 
 
 def list_users(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """All users, oldest first."""
     return conn.execute(
-        "SELECT id, type, email, name, role, status, oidc_issuer, created_at, "
-        "last_login_at FROM users ORDER BY created_at ASC"
+        f"SELECT {_USER_COLUMNS} FROM users ORDER BY created_at ASC"
     ).fetchall()
 
 
 def get_user(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row | None:
     """A single user row by id, or None."""
     return conn.execute(
-        "SELECT id, type, email, name, role, status, oidc_issuer, created_at, "
-        "last_login_at FROM users WHERE id = ?",
-        (user_id,),
+        f"SELECT {_USER_COLUMNS} FROM users WHERE id = ?", (user_id,)
     ).fetchone()
+
+
+def set_user_audience(
+    conn: sqlite3.Connection, user_id: str, audience_id: str | None
+) -> sqlite3.Row:
+    """Scope a user, and so every token they hold, to an audience; None
+    restores full access by role. Raises `LookupError` for an unknown user,
+    and refuses to scope the last active admin, whose scoped session could
+    no longer administer anything."""
+    row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
+    if row is None:
+        raise LookupError("user not found")
+    if audience_id is not None and row["role"] == "admin":
+        n_admins = conn.execute(
+            "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' "
+            "AND status = 'active' AND audience_id IS NULL AND id != ?",
+            (user_id,),
+        ).fetchone()["n"]
+        if n_admins == 0:
+            raise ValueError("cannot scope the last admin to an audience")
+    conn.execute(
+        "UPDATE users SET audience_id = ? WHERE id = ?", (audience_id, user_id)
+    )
+    return require(get_user(conn, user_id), "user just updated")
 
 
 def update_user(

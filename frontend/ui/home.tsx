@@ -1,23 +1,25 @@
 // Home: the Ask | Find entry point, what the knowledge base holds, and what
 // is waiting for a person.
+import { useCallback } from 'react';
 import { CommandBar } from './command-bar';
-import { I, useGoIngest } from './lib';
+import { I, useGoIngest, useMe } from './lib';
 import { Link } from './router';
-import { getJSON, getSubstrateCounts, type KnowledgeGap } from './api';
+import { getJSON, getSubstrateCounts, isScoped, type KnowledgeGap } from './api';
 import { asksPerson, type DraftSummary } from './draft-review';
 import { useAsync } from './use-async';
 
-const loadQueue = () => Promise.all([
+const loadQueue = (scoped: boolean) => scoped ? Promise.resolve(null) : Promise.all([
   getJSON<{ drafts: DraftSummary[] }>('/api/drafts?status=submitted'),
   getJSON<{ drafts: DraftSummary[] }>('/api/drafts?status=open'),
   getJSON<{ gaps: KnowledgeGap[] }>('/api/knowledge-gaps?status=open'),
 ]);
 
 export function HomeScreen() {
+  const scoped = isScoped(useMe());
   const goIngest = useGoIngest();
-  const queue = useAsync(loadQueue).state;
+  const queue = useAsync(useCallback(() => loadQueue(scoped), [scoped])).state;
   const counts = useAsync(getSubstrateCounts).state;
-  const [submittedDrafts, openDrafts, openGaps] = queue.status === 'ready' ? queue.data : [{ drafts: [] }, { drafts: [] }, { gaps: [] }];
+  const [submittedDrafts, openDrafts, openGaps] = queue.status === 'ready' && queue.data ? queue.data : [{ drafts: [] }, { drafts: [] }, { gaps: [] }];
   const submitted = submittedDrafts.drafts.length;
   const open = openDrafts.drafts.length;
   const questions = submittedDrafts.drafts.filter(d => asksPerson(d.review_assessment)).length;
@@ -53,7 +55,7 @@ export function HomeScreen() {
         </div>
       </div>
 
-      <section className="home-section" aria-labelledby="home-attention">
+      {!scoped && <section className="home-section" aria-labelledby="home-attention">
         <h2 id="home-attention" className="section-label">Waiting for you</h2>
         <div className="attention-grid">
           {questions > 0 && <Link to={{ view: 'drafts' }} className="attention-card asks">
@@ -77,7 +79,7 @@ export function HomeScreen() {
             <span className="ac-sub">Paste a doc or transcript; you review the draft before anything is written.</span>
           </button>
         </div>
-      </section>
+      </section>}
 
       <section className="home-section" aria-labelledby="home-holds">
         <h2 id="home-holds" className="section-label">What it holds</h2>
