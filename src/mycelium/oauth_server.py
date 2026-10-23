@@ -788,6 +788,9 @@ async def authorize_decide(
                 status_code=403, detail="only an admin can scope a grant to an audience"
             )
         principal_audience.require_live(audience_id)
+    # A scoped principal's own audience binds the grant, so the stored code
+    # never claims more than the person consenting could see.
+    grant_audience = principal.audience_id or audience_id or None
 
     # Mint a code. TTL is short; client must exchange within
     # CODE_TTL_SECONDS or restart the flow.
@@ -813,7 +816,7 @@ async def authorize_decide(
                 resource or None,
                 _now().isoformat(),
                 expires_at.isoformat(),
-                audience_id or None,
+                grant_audience,
             ),
         )
     return RedirectResponse(

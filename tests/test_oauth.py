@@ -1247,3 +1247,27 @@ def test_oauth_tokens_issued_before_expiry_existed_get_a_deadline():
         ).fetchone()[0]
         == deadline
     )
+
+
+def test_a_scoped_user_s_grant_carries_their_audience(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        admin_bearer, uid = _admin_bearer(conn)
+        from mycelium import audiences
+
+        audience = audiences.live()[0].id
+        with store.transaction(conn):
+            conn.execute(
+                "UPDATE users SET audience_id = ? WHERE id = ?", (audience, uid)
+            )
+
+        consent, _, _ = _consent(client, admin_bearer=admin_bearer)
+
+        from urllib.parse import parse_qs, urlparse
+
+        code = parse_qs(urlparse(consent.headers["location"]).query)["code"][0]
+        row = conn.execute(
+            "SELECT audience_id FROM oauth_codes WHERE code = ?", (code,)
+        ).fetchone()
+        assert row["audience_id"] == audience
