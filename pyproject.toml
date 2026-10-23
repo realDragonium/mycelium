@@ -122,6 +122,7 @@ module = [
     "mycelium.http.history",
     "mycelium.http.substrate",
     "mycelium.http.tool_routes",
+    "mycelium.http.traces",
     "mycelium.ingest",
     "mycelium.ingest.config",
     "mycelium.ingest.prompts",
