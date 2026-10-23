@@ -13,6 +13,7 @@ import contextlib
 import logging
 import os
 import sqlite3
+import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -44,12 +45,22 @@ def _rebuild_vector_index(
         logger.info(
             "rebuilding %s vector index: re-embedding %d row(s)", label, len(rows)
         )
-    for row in rows:
+    started = time.monotonic()
+    step = max(1, len(rows) // 20)
+    for done, row in enumerate(rows, start=1):
         existing = get_id(_db(), row["id"])
         vid = existing if existing is not None else next_id(_db())
         index.add(vid, embed.embed(row["text"]))
         if existing is None:
             set_id(_db(), row["id"], vid)
+        if done % step == 0 or done == len(rows):
+            logger.info(
+                "rebuilding %s vector index: %d/%d re-embedded (%.0fs)",
+                label,
+                done,
+                len(rows),
+                time.monotonic() - started,
+            )
 
 
 def _persist_index() -> None:

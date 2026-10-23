@@ -1,7 +1,8 @@
 """Mycelium CLI entrypoint.
 
 Subcommands:
-    serve              (default) run the MCP server
+    serve              (default) run the MCP server over stdio; --quarantine
+                       opens a copy of production data safely
     export             write a .tar.gz snapshot of the whole instance
     import             restore a snapshot into the data dir
     databases          print the database files a deployment must restore
@@ -25,8 +26,11 @@ def _default_data_dir() -> Path:
 
 
 def _cmd_serve(args: argparse.Namespace) -> None:
-    from . import server
+    from . import quarantine, server, tracing
 
+    if getattr(args, "quarantine", False):
+        quarantine.enable()
+    tracing.configure_logging()
     server.init(args.data_dir)
     server.run()
 
@@ -162,6 +166,12 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd")
 
     p_serve = sub.add_parser("serve", help="run the MCP server (default)")
+    p_serve.add_argument(
+        "--quarantine",
+        action="store_true",
+        help="open a copy of production data safely: no background AI workers, "
+        "draft review or GitHub delivery (mycelium-http takes the same flag)",
+    )
     p_serve.set_defaults(func=_cmd_serve)
 
     p_export = sub.add_parser("export", help="snapshot the whole instance to a .tar.gz")

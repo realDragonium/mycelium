@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
-from .. import auth, store
+from .. import auth, quarantine, store
 from ..server import runtime
 from .access import _require_principal
 
@@ -65,6 +65,9 @@ async def get_server_info(request: Request) -> dict[str, Any]:
         "mcp_url": f"{base}/mcp",
         "auth_enabled": auth.is_enabled(),
         "partial_restore": list(ctx.partial_restore) if ctx else [],
+        "quarantine": quarantine.active(),
+        # Before startup is ready the startup gate answers this path instead.
+        "state": "ready",
     }
 
 

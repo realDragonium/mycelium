@@ -8,9 +8,12 @@ mount and, last, the MCP sub-app at `/`, which matches every path and so
 would shadow any route registered after it.
 """
 
+import argparse
 import functools
 import os
-from collections.abc import AsyncIterator
+import sys
+import threading
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -32,11 +35,12 @@ from .. import (
     names_workspace,
     oauth_server,
     oidc,
+    quarantine,
     server,
     tracing,
 )
 from ..docgen.publication import BothSidesEdited
-from ..server import registry
+from ..server import registry, startup
 from . import (
     account,
     admin,
@@ -62,6 +66,7 @@ from .authentication import (
     _session_secret,
     session_cookie_secure,
 )
+from .startup_gate import StartupGate
 
 
 def _max_body_bytes() -> int:
@@ -71,11 +76,23 @@ def _max_body_bytes() -> int:
     return int(raw) if raw else 4 * 1024 * 1024
 
 
-def create_app() -> FastAPI:
+def _start_in_background(data_dir: Path, on_failure: Callable[[], None]) -> None:
+    try:
+        server.init(data_dir)
+    except BaseException as exc:
+        tracing.emit_error(where="startup", exc=exc)
+        on_failure()
+
+
+def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastAPI:
     """Build a fresh app, reading its configuration from the environment now.
 
     Each call gets its own MCP session manager, whose `run()` may only be
-    entered once, so every app can go through one lifespan of its own."""
+    entered once, so every app can go through one lifespan of its own.
+
+    With `on_startup_failure`, the app serves while startup runs on a thread
+    (see `StartupGate`) and calls it if startup fails. Without it, as in
+    tests, startup completes before the app serves its first request."""
     # Transport configuration lives here rather than on the MCPServer:
     # `MCPServer` holds the server's identity and tools, the app builder
     # decides how they are served. The same endpoint answers both MCP
@@ -91,9 +108,20 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # Before listening: a contradictory policy is a configuration error
+        # the operator must fix, not a slow start to wait out.
         auth.check_domain_policy()
         data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
-        server.init(data_dir)
+        if on_startup_failure is None:
+            server.init(data_dir)
+        else:
+            startup.mark_starting()
+            threading.Thread(
+                target=_start_in_background,
+                args=(data_dir, on_startup_failure),
+                name="startup",
+                daemon=True,
+            ).start()
         # Start the MCP session manager under our lifespan. A mounted
         # sub-app's own lifespan never runs, so nothing else initialises it —
         # without this every `/mcp` call fails with "Task group is not
@@ -132,6 +160,9 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(RequestBodyLimitMiddleware, max_body_size=_max_body_bytes())
     app.add_middleware(HostAllowlistMiddleware)
+    # Outside every layer that reads a database, so nothing reaches one
+    # mid-startup.
+    app.add_middleware(StartupGate)
     # Outermost, so error responses from the layers inside get the headers too.
     app.add_middleware(SecurityHeadersMiddleware)
 
@@ -239,6 +270,30 @@ def main() -> None:
     # deploy — ECS/systemd inject env before the process starts, and
     # load_dotenv never overrides an already-set variable.
     load_dotenv()
+    parser = argparse.ArgumentParser(
+        prog="mycelium-http", description="Serve Mycelium over HTTP."
+    )
+    parser.add_argument(
+        "--quarantine",
+        action="store_true",
+        help="open a copy of production data safely: no background AI "
+        f"workers, draft review or GitHub delivery (same as {quarantine.ENV}=1)",
+    )
+    if parser.parse_args().quarantine:
+        quarantine.enable()
+    tracing.configure_logging()
     host = os.environ.get("MYCELIUM_HTTP_HOST", "127.0.0.1")
     port = int(os.environ.get("MYCELIUM_HTTP_PORT", "8765"))
-    uvicorn.run(create_app(), host=host, port=port)
+
+    def stop() -> None:
+        listener.should_exit = True
+
+    listener = uvicorn.Server(
+        uvicorn.Config(create_app(on_startup_failure=stop), host=host, port=port)
+    )
+    listener.run()
+    current = startup.status()
+    # `started` stays False when the lifespan refused to start, as on a
+    # contradictory domain policy.
+    if not listener.started or (current is not None and current.state == "failed"):
+        sys.exit(1)

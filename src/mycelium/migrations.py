@@ -35,9 +35,13 @@ upgrade themselves without a version number, so step 4 applies to them too.
 from __future__ import annotations
 
 import hashlib
+import logging
 import sqlite3
+import time
 from collections.abc import Callable
 from datetime import UTC
+
+logger = logging.getLogger(__name__)
 
 # --- migration definitions --------------------------------------------------
 
@@ -1112,9 +1116,23 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
     for target, fn in MIGRATIONS:
         if target <= current:
             continue
+        name = _migration_name(fn)
+        logger.info("substrate migration v%d (%s): starting", target, name)
+        started = time.monotonic()
         fn(conn)
         _set_user_version(conn, target)
         conn.commit()
+        logger.info(
+            "substrate migration v%d (%s): done in %.1fs",
+            target,
+            name,
+            time.monotonic() - started,
+        )
+
+
+def _migration_name(fn: Callable[[sqlite3.Connection], None]) -> str:
+    """`_migration_v21_audience_labels` → `audience labels`."""
+    return fn.__name__.removeprefix("_migration_").partition("_")[2].replace("_", " ")
 
 
 # --- helpers ---------------------------------------------------------------

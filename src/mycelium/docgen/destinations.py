@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Protocol, cast
 
+from .. import quarantine
 from .schema import CurrentDocument, PullRequestState
 
 
@@ -214,6 +215,11 @@ def deliver_document(
     document: DeliveryDocument,
     env: Mapping[str, str] | None = None,
 ) -> Delivery:
+    if quarantine.active():
+        raise DestinationError(
+            "Publishing is off: this server runs in quarantine, so nothing is "
+            "sent to GitHub."
+        )
     implementation = _backend(config)
     return implementation.deliver(config, document, env)
 

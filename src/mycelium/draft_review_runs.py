@@ -25,6 +25,7 @@ from . import (
     drafts_store,
     model_settings,
     product_settings,
+    quarantine,
     store,
     timestamps,
 )
@@ -79,7 +80,12 @@ class Read:
 
 
 def _settings() -> draft_review_settings.Snapshot:
-    return draft_review_settings.load()
+    """The review settings in force. Quarantine turns review off without
+    changing what is saved."""
+    settings = draft_review_settings.load()
+    return (
+        settings.model_copy(update={"mode": "off"}) if quarantine.active() else settings
+    )
 
 
 def mode() -> Mode:

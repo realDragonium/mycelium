@@ -58,6 +58,24 @@ if not _ERROR_LOG.handlers:
     _ERROR_LOG.setLevel(logging.INFO)
 
 
+def configure_logging() -> None:
+    """Send the server's own INFO lines (startup progress, migrations) to
+    stderr, once each. For the entry points only: a dependency may configure
+    the root logger, and the trace and error loggers keep their own handlers,
+    so none of them propagate."""
+    root = logging.getLogger("mycelium")
+    if not root.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    root.propagate = False
+    _TRACE_LOG.propagate = False
+    _ERROR_LOG.propagate = False
+
+
 def emit_error(*, where: str, exc: BaseException, **fields: Any) -> None:
     """Log one structured, greppable line for an uncaught error to stderr, with
     the traceback attached via ``exc_info``.
