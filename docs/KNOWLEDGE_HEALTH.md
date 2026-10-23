@@ -67,3 +67,7 @@ final emit still finish, so a run can end slightly over it. A model without a
 known price shows no cost and the cap cannot apply; the operation cap and run
 time still bound the run. Each run's cost is shown with its result and written
 to `connect_trace.jsonl` in the data directory.
+
+Its model calls count towards the monthly AI budget as the connect pass, a
+background action: while the budget pauses background actions, a run is
+refused with that reason.

@@ -132,9 +132,10 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
     at most `batch_size` statements per call, an operation cap, a wall clock
     and a spending cap. The draft goes to review exactly as an ingest draft
     does. Returns the same shapes as `ingest`, with `cost_usd` (null when the
-    model has no known price).
+    model has no known price). Refused while the monthly AI budget pauses
+    background actions.
     """
-    from .. import knowledge_health, product_settings, store
+    from .. import ai, knowledge_health, product_settings, store
     from ..ingest.connect import config_from_settings, run_connect
 
     limits = product_settings.get(product_settings.ConnectSettings)
@@ -150,11 +151,14 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
         config_from_settings(),
         trace_log_path=str(_context().data_dir / "connect_trace.jsonl"),
     )
-    result = run_connect(
-        targets,
-        known_name=lambda name: store.get_name_by_text(_db(), name) is not None,
-        config=config,
-    )
+    try:
+        result = run_connect(
+            targets,
+            known_name=lambda name: store.get_name_by_text(_db(), name) is not None,
+            config=config,
+        )
+    except ai.usage.Paused as exc:
+        raise ValueError(str(exc)) from exc
     response = result.model_dump()
     response["cost_usd"] = result.trace.get("cost_usd")
     if result.outcome == "draft_created":

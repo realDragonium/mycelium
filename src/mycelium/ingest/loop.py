@@ -159,7 +159,10 @@ def run(
     if emitter is None:
         emitter = InProcessDraftEmitter()
 
-    with tracing.profile_to_html(label, f"{len(task.text)} chars"):
+    with (
+        tracing.profile_to_html(label, f"{len(task.text)} chars"),
+        ai.usage.attributed(label),
+    ):
         result = _execute(task, client, substrate, emitter, config)
 
     result.trace["prompts"] = [instructions.reference().model_dump(mode="json")]
@@ -277,6 +280,8 @@ def _execute(
                 resp = _model_turn(
                     client, config, task.system_prompt, messages, tools, force=False
                 )
+        except ai.usage.Paused:
+            raise  # nothing was sent, and a forced finalize would be refused too
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             if isinstance(exc, ai.IncompleteTurn):
                 trace.add_usage(exc.usage)
@@ -1232,28 +1237,27 @@ def _model_turn(
     # Stream when no client is injected: an emit_draft turn can outlast
     # request_timeout_s as one blocking read, but not between streamed chunks.
     owned = client is None
-    with ai.usage.attributed("ingest"):
-        return ai.turn(
-            ai.ToolTask(
-                system=system_prompt,
-                messages=messages,
-                tools=tools,
-                force_tool=EMIT_TOOL if force else None,
-                parallel_tools=not force,
-                on_tool_delta=_discard_tool_delta if owned else None,
-            ),
-            ai.ModelConfig(
-                provider=config.provider,
-                model=config.model,
-                max_tokens=config.max_tokens,
-                request_timeout_s=config.request_timeout_s,
-                max_retries=config.max_retries,
-                thinking=config.thinking,
-                reasoning_effort=config.reasoning_effort,
-                cache=True,
-            ),
-            client=client,
-        )
+    return ai.turn(
+        ai.ToolTask(
+            system=system_prompt,
+            messages=messages,
+            tools=tools,
+            force_tool=EMIT_TOOL if force else None,
+            parallel_tools=not force,
+            on_tool_delta=_discard_tool_delta if owned else None,
+        ),
+        ai.ModelConfig(
+            provider=config.provider,
+            model=config.model,
+            max_tokens=config.max_tokens,
+            request_timeout_s=config.request_timeout_s,
+            max_retries=config.max_retries,
+            thinking=config.thinking,
+            reasoning_effort=config.reasoning_effort,
+            cache=True,
+        ),
+        client=client,
+    )
 
 
 def _discard_tool_delta(_id: str, _name: str, _delta: str) -> None:
