@@ -387,6 +387,28 @@ def test_claude_learns_that_a_model_refuses_thinking_with_a_forced_tool(
     assert [r.args for r in learnt] == [("claude-older-model",)]
 
 
+def test_claude_keeps_the_finished_part_of_a_tool_call_cut_off_at_max_tokens() -> None:
+    cut = {
+        "type": "tool_use",
+        "id": "call-1",
+        "name": "read",
+        "input": {"id": "record", "items": [{"n": 1}, {"n": 2}, {"n": 3, "te": ""}]},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _reply(request, _envelope("claude", [cut], stop="max_tokens"))
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ai.IncompleteTurn) as caught:
+            ai.turn(_task(), _config("claude"), client=client)
+
+    assert caught.value.usage.input_tokens == 8
+    truncated = caught.value.truncated
+    assert truncated is not None and truncated.id == "call-1"
+    # The last array was still being written: its last item may be partial.
+    assert truncated.input == {"id": "record", "items": [{"n": 1}, {"n": 2}]}
+
+
 def test_claude_asks_for_a_required_tool_on_a_model_that_cannot_be_forced() -> None:
     sent: list[dict[str, JsonValue]] = []
     thinking: dict[str, JsonValue] = {

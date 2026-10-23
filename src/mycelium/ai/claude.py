@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from .types import (
     CLAUDE_EFFORT,
+    JSON_OBJECT,
     MESSAGES,
     TOOLS,
     IncompleteTurn,
@@ -176,6 +177,20 @@ def _refuses_thinking_when_forced(error: BadRequestError) -> bool:
     return "tool_choice" in message and "thinking" in message.lower()
 
 
+def _completed(data: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """The finished part of a tool input cut off mid-output. Output follows the
+    input's key order, so the value being written was the last key's, or the
+    last item of that key's array."""
+    if not data:
+        return {}
+    *done, last = data
+    kept = {key: data[key] for key in done}
+    value = data[last]
+    if isinstance(value, list) and len(value) > 1:
+        kept[last] = value[:-1]
+    return kept
+
+
 def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
     forced = _forced(task, config)
     messages: list[dict[str, JsonValue]] = []
@@ -277,10 +292,20 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
     response = _send_learning(task, config, client, system, tools)
     output = [_block(block) for block in response.content]
     if response.stop_reason not in ("end_turn", "tool_use"):
+        cut = [block for block in output if block.get("type") == "tool_use"]
+        truncated = None
+        if cut and response.stop_reason == "max_tokens":
+            last = cut[-1]
+            truncated = ToolUse(
+                id=str(last["id"]),
+                name=str(last["name"]),
+                input=_completed(JSON_OBJECT.validate_python(last.get("input") or {})),
+            )
         raise IncompleteTurn(
             "Claude response was incomplete or unsuccessful "
             f"(stop_reason={response.stop_reason})",
             response.usage,
+            truncated,
         )
     calls = [
         ToolUse.model_validate(

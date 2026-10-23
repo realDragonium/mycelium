@@ -109,11 +109,15 @@ class ModelError(ValueError):
 
 class IncompleteTurn(ModelError):
     """A turn the provider stopped early or answered unusably. It was still
-    generated and billed, so it carries what it used."""
+    generated and billed, so it carries what it used, and the tool call it was
+    writing when it stopped, holding only the input it had finished."""
 
-    def __init__(self, message: str, usage: Usage) -> None:
+    def __init__(
+        self, message: str, usage: Usage, truncated: ToolUse | None = None
+    ) -> None:
         super().__init__(message)
         self.usage = usage
+        self.truncated = truncated
 
 
 class Message(BaseModel):

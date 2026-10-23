@@ -289,13 +289,21 @@ def _execute(
         try:
             with trace.span("model_turn"):
                 resp = _model_turn(
-                    client, config, task.system_prompt, messages, tools, force=False
+                    client,
+                    config,
+                    task.system_prompt,
+                    messages,
+                    tools,
+                    force=False,
                 )
         except ai.usage.Paused:
             raise  # nothing was sent, and a forced finalize would be refused too
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             if isinstance(exc, ai.IncompleteTurn):
                 trace.add_usage(exc.usage)
+                kept = _cut_emit(exc, "max_tokens", ctx)
+                if kept is not None:
+                    return kept
             trace.notes.append(f"model error: {exc}")
             return _forced_finalize("api_error", ctx)
         trace.model_turns += 1
@@ -586,8 +594,31 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, ai.IncompleteTurn):
             trace.add_usage(exc.usage)
+            kept = _cut_emit(exc, "max_tokens", ctx)
+            if kept is not None:
+                return kept
         trace.notes.append(f"forced finalize failed: {exc}")
     return _degrade_no_draft(f"degraded: could not assemble a draft ({reason})", ctx)
+
+
+def _cut_emit(
+    exc: ai.IncompleteTurn, cause: str, ctx: _RunContext
+) -> IngestResult | None:
+    """A draft from the ops an emit_draft had finished when its output was cut
+    off, or None when the cut turn was not an emit or kept nothing usable."""
+    call = exc.truncated
+    if call is None or call.name != EMIT_TOOL:
+        return None
+    try:
+        ops, ledger, flagged, skipped = parse_emit_input(dict(call.input))
+    except ValueError as error:
+        ctx.trace.notes.append(f"emit_draft cut off ({cause}), unusable: {error}")
+        return None
+    ctx.trace.notes.append(
+        f"emit_draft cut off ({cause}); kept the {len(ops)} ops it had finished"
+    )
+    ctx.trace.forced_finalize = ctx.trace.forced_finalize or cause
+    return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=True)
 
 
 # --------------------------------------------------------------------------- #

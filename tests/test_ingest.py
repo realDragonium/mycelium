@@ -1353,6 +1353,20 @@ def test_h_vocabulary_fetched_at_session_start():
     ]
 
 
+def test_an_emit_cut_off_at_max_tokens_keeps_the_ops_it_had_finished():
+    finished = _good_new_op_emit()["ops"][0]
+    cut = _tool_use(EMIT_TOOL, {"ops": [finished, {"op": "upsert_statement"}]})
+    result, _client, _sub, emitter = _run(
+        [_message([cut], stop="max_tokens")], op_cap=3
+    )
+
+    assert isinstance(result, DraftCreated)
+    assert [kind for _d, kind, _p in emitter.queued] == ["upsert_statement"]
+    assert result.trace["degraded"] is True
+    assert result.trace["forced_finalize"] == "op_cap"
+    assert any("cut off (max_tokens)" in note for note in result.trace["notes"])
+
+
 # (i) trace + graceful cap — tiny op_cap degrades, records the gap, still emits a
 #     draft (or NothingToIngest), never an exception.
 def test_i_tiny_op_cap_degrades_records_gap_and_still_emits_draft():
