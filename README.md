@@ -159,4 +159,9 @@ uv run ruff check
 uv run ruff format --check
 ```
 
+The suite runs on four [pytest-xdist](https://pytest-xdist.readthedocs.io/)
+workers by default. Use `uv run pytest -n0` to run it in one process when
+debugging with `pdb` or `-s`. Each test gets its own temporary data
+directory, and the suite fails a test that starts the server without one.
+
 Ask streaming, combined retrieval, provenance and client compatibility are documented in [docs/ASK.md](docs/ASK.md).

@@ -21,29 +21,23 @@ from mycelium.server import admission
 from product_settings_helpers import set_product
 
 
-async def _ticks_during(call):
-    """How many times the event loop got a turn while `call` was in flight.
-    Inline execution yields 1 (the loop only resumes once the call returns);
-    a genuinely offloaded call yields many."""
-    task = asyncio.ensure_future(call)
-    ticks = 0
-    while not task.done():
-        await asyncio.sleep(0.01)
-        ticks += 1
-    await task
-    return ticks
-
-
 def test_offloaded_call_leaves_the_event_loop_free():
-    def blocking_tool(seconds: float) -> str:
-        time.sleep(seconds)
+    released = threading.Event()
+
+    def blocking_tool() -> str:
+        assert released.wait(5)
         return "done"
 
     offloaded = admission._offloaded(blocking_tool)
 
-    ticks = asyncio.run(_ticks_during(offloaded(0.5)))
+    async def scenario():
+        task = asyncio.ensure_future(offloaded())
+        await asyncio.sleep(0)
+        # Inline execution would block here until the tool's wait timed out.
+        released.set()
+        return await task
 
-    assert ticks > 5
+    assert asyncio.run(scenario()) == "done"
 
 
 def test_offloaded_call_returns_the_wrapped_result():

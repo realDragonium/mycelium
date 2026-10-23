@@ -1753,7 +1753,7 @@ def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
 
 
 def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
     from mycelium.http import app
 
@@ -1767,6 +1767,7 @@ def test_delivery_lookup_does_not_reflect_a_credential_used_as_document_id(
     monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
     import_product_environment()
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
+    monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
 
     try:
         for deliver_document in (

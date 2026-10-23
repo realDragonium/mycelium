@@ -72,7 +72,10 @@ def init(data_dir: Path) -> None:
         data_dir / "mycelium.db",
         history_path=data_dir / "mycelium-history.db",
     )
-    baker = LayoutBaker(data_dir / "mycelium.db")
+    baker = LayoutBaker(
+        data_dir / "mycelium.db",
+        enabled=os.environ.get("MYCELIUM_DISABLE_LAYOUT_BAKE") != "1",
+    )
     store.migrate(_db())
     baker.ensure_initial()
 

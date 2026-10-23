@@ -65,8 +65,9 @@ class LayoutBaker:
     systemd hardening's ProtectSystem=strict boundary.
     """
 
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, enabled: bool = True) -> None:
         self._db_path = db_path
+        self._enabled = enabled
         self._output_path = db_path.parent / "entity-positions.json"
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
@@ -84,7 +85,7 @@ class LayoutBaker:
         bake once on startup (blocks for a few seconds on the first run only;
         subsequent starts skip this entirely).
         """
-        if not _SCRIPT.exists():
+        if not self._enabled or not _SCRIPT.exists():
             return
         if self._output_path.exists():
             return
@@ -110,6 +111,8 @@ class LayoutBaker:
         """Schedule a layout rebake. Safe to call from any thread. Rapid
         successive calls collapse to a single rebake after the debounce
         window elapses with no further calls."""
+        if not self._enabled:
+            return
         if not _SCRIPT.exists():
             log.warning("layout baker script not found at %s", _SCRIPT)
             return

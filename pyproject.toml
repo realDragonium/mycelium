@@ -48,6 +48,7 @@ dev = [
     # move it inside a lockfile hash diff nobody reads, which leaves every file
     # in the tree reading as unformatted. Bumping this line is the deliberate
     # act, and the reformat belongs in the same commit.
+    "pytest-xdist>=3.8.0",
     "ruff==0.15.20",
     "types-authlib>=1.8.0.20260911",
     "types-hnswlib>=0.8.0.20261021",
@@ -246,3 +247,9 @@ max-complexity = 15
 
 [tool.ruff.lint.isort]
 known-first-party = ["mycelium"]
+
+[tool.pytest.ini_options]
+# Parallel by default; run `uv run pytest -n0` to debug serially (pdb, -s,
+# readable ordering). Four workers matches CI's runners: each worker pays
+# ~2.5 s of import and collection, so more workers stop helping.
+addopts = "-n 4"
