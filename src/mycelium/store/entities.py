@@ -136,6 +136,25 @@ def dismiss_entity_duplicate(conn: sqlite3.Connection, a: str, b: str) -> None:
     )
 
 
+def restore_entity_duplicate(conn: sqlite3.Connection, a: str, b: str) -> None:
+    """Forget a dismissal so the pair can be proposed again. Idempotent."""
+    first, second = sorted((a, b))
+    conn.execute(
+        "DELETE FROM entity_duplicate_dismissals "
+        "WHERE a_entity_id = ? AND b_entity_id = ?",
+        (first, second),
+    )
+
+
+def list_entity_duplicate_dismissals(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Every dismissal, newest first."""
+    return conn.execute(
+        "SELECT a_entity_id, b_entity_id, dismissed_at, dismissed_by "
+        "FROM entity_duplicate_dismissals "
+        "ORDER BY dismissed_at DESC, a_entity_id, b_entity_id"
+    ).fetchall()
+
+
 def dismissed_entity_duplicates(conn: sqlite3.Connection) -> set[tuple[str, str]]:
     """Every dismissed pair, ids sorted."""
     return {

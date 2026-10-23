@@ -23,6 +23,8 @@ from .entities import (
     dismissed_entity_duplicates,
     ensure_preferred_name,
     get_entity_by_id,
+    list_entity_duplicate_dismissals,
+    restore_entity_duplicate,
     set_preferred_name,
     update_entity_description,
 )
@@ -203,6 +205,8 @@ __all__ = [
     "delete_entity",
     "dismiss_entity_duplicate",
     "dismissed_entity_duplicates",
+    "list_entity_duplicate_dismissals",
+    "restore_entity_duplicate",
     "delete_entity_link_type_glossary",
     "delete_entity_links",
     "delete_entity_links_touching",

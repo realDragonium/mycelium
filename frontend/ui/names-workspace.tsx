@@ -2,7 +2,7 @@ import React from 'react';
 import { AliasSuggestions } from './alias-suggestions';
 import {
   errorMessage, namesWorkspace,
-  type DuplicateCandidate, type DuplicateMatch, type MentionCandidate, type MentionCandidatePage, type NameAction, type NameActionKind,
+  type DismissedDuplicate, type DuplicateCandidate, type DuplicateMatch, type MentionCandidate, type MentionCandidatePage, type NameAction, type NameActionKind,
   type NamesCatalogue, type NamesDetail, type NamesExample, type NamesPreview,
   type NamesRelationship, type WorkspaceConcept,
 } from './api';
@@ -163,7 +163,34 @@ interface NamesDuplicatesProps {
   onReview: (preview: NamesPreview) => void;
 }
 
+function DismissedDuplicates({label, canWrite, onRestored}: { label: (id: string) => string; canWrite: boolean; onRestored: () => void }) {
+  const {state, reload, update} = useAsync(React.useCallback((signal: AbortSignal) => namesWorkspace.dismissedDuplicates(signal), []));
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const dismissed = dataOf(state)?.dismissed;
+  const restore = async (pair: DismissedDuplicate) => {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try {
+      await namesWorkspace.restoreDuplicate(pair.a_entity_id, pair.b_entity_id);
+      update(current => ({dismissed: current.dismissed.filter(item => item !== pair)}));
+      onRestored();
+    } catch (error) { setError(errorMessage(error)); } finally { setBusy(false); }
+  };
+  return <section className="names-panel"><p>Pairs marked as not a duplicate. Restore a pair to have it proposed again.</p>
+    {error && <p role="alert">{error}</p>}
+    {state.status === 'error' && <p role="alert">{errorMessage(state.error)} <button onClick={reload}>Retry</button></p>}
+    {!dismissed ? state.status === 'loading' && <p>Loading dismissed pairs…</p> : !dismissed.length ? <p>No dismissed pairs.</p> :
+      <ul className="names-duplicates">{dismissed.map(pair => <li key={pair.a_entity_id + ':' + pair.b_entity_id}>
+        <p><b>{label(pair.a_entity_id)}</b> and <b>{label(pair.b_entity_id)}</b></p>
+        <small>Dismissed {new Date(pair.dismissed_at).toLocaleString()}{pair.dismissed_by ? ` by ${pair.dismissed_by}` : ''}</small>
+        {canWrite && <div className="names-duplicate-actions"><button disabled={busy} onClick={() => void restore(pair)}>Restore</button></div>}
+      </li>)}</ul>}
+  </section>;
+}
+
 function NamesDuplicates({entities, canWrite, canMerge, onReview}: NamesDuplicatesProps) {
+  const [showDismissed, setShowDismissed] = React.useState(false);
   const [limit, setLimit] = React.useState(DUPLICATES_PAGE);
   const {state, reload, update} = useAsync(React.useCallback((signal: AbortSignal) => namesWorkspace.duplicates(limit, signal), [limit]));
   const [busy, setBusy] = React.useState(false);
@@ -192,7 +219,9 @@ function NamesDuplicates({entities, canWrite, canMerge, onReview}: NamesDuplicat
     await namesWorkspace.dismissDuplicate(candidate.a_entity_id, candidate.b_entity_id);
     update(current => ({candidates: current.candidates.filter(item => item !== candidate), total: current.total - 1}));
   });
-  return <section className="names-panel"><p>Concepts whose names look alike. Review a merge, or mark a pair as not a duplicate so it stops appearing here.</p>
+  const views = <nav className="tabs" aria-label="Duplicate pairs"><button className={showDismissed ? '' : 'on'} aria-pressed={!showDismissed} onClick={() => setShowDismissed(false)}>Possible</button><button className={showDismissed ? 'on' : ''} aria-pressed={showDismissed} onClick={() => setShowDismissed(true)}>Dismissed</button></nav>;
+  if (showDismissed) return <>{views}<DismissedDuplicates label={label} canWrite={canWrite} onRestored={reload} /></>;
+  return <>{views}<section className="names-panel"><p>Concepts whose names look alike. Review a merge, or mark a pair as not a duplicate so it stops appearing here.</p>
     {!canMerge && canWrite && <p>Admin access is required to merge concepts.</p>}
     {error && <p role="alert">{error}</p>}
     {state.status === 'error' && <p role="alert">{errorMessage(state.error)} <button onClick={reload}>Retry</button></p>}
@@ -210,7 +239,7 @@ function NamesDuplicates({entities, canWrite, canMerge, onReview}: NamesDuplicat
         </li>;
       })}</ul>}
     {page && candidates && candidates.length < page.total && <p>Showing {candidates.length} of {page.total} possible duplicates. <button disabled={state.status === 'loading'} onClick={() => setLimit(candidates.length + DUPLICATES_PAGE)}>Show more</button></p>}
-  </section>;
+  </section></>;
 }
 
 function NamesWorkspace({onDataChanged}: { onDataChanged?: () => Promise<void> }) {
