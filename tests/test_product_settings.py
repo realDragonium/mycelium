@@ -70,6 +70,20 @@ def test_fresh_and_restored_instances_ignore_legacy_environment(db, monkeypatch)
     assert settings.get(settings.AskSettings).op_cap == 25
 
 
+def test_ingest_output_budget_is_raised_once_from_the_old_default(db):
+    db.execute(
+        "INSERT INTO product_settings VALUES ('ingest', 1, ?)",
+        (settings.IngestSettings(max_tokens=8000).model_dump_json(),),
+    )
+    with prompt_store._writing(db):
+        settings.raise_ingest_output_budget(db)
+    assert settings.get(settings.IngestSettings).max_tokens == 32000
+    save(settings.IngestSettings(max_tokens=8000))
+    with prompt_store._writing(db):
+        settings.raise_ingest_output_budget(db)
+    assert settings.get(settings.IngestSettings).max_tokens == 8000
+
+
 def test_independent_cas_and_unchanged_save(db):
     one = save(settings.AskSettings(max_tokens=1000))
     save(settings.IngestSettings(max_tokens=2000))

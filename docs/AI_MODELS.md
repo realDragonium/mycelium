@@ -116,7 +116,10 @@ model.
 The defaults preserve the existing runtime budgets, including Ask's 90-second
 run and 75-second request budgets. Quick Ask still applies ceilings of 8
 operations, 25 seconds per run, and 20 seconds per request, and disables its
-retrieval floor. Smaller saved limits remain effective.
+retrieval floor. Smaller saved limits remain effective. Ingest allows 32,000
+output tokens per request, thinking included, because a full draft outgrew the
+earlier 8,000; an instance whose saved Ingest limit was still 8,000 is raised
+once on upgrade.
 
 Shared model concurrency and the documentation active-run limit are
 editable. Lowering shared concurrency lets current work finish and holds new

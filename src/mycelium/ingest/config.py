@@ -45,8 +45,9 @@ class IngestConfig:
     #: Whole-call wall-clock budget, seconds. On exhaustion we degrade to a
     #: forced emit (or NothingToIngest) rather than throwing.
     wall_clock_s: float = 120.0
-    #: max_tokens per model turn. Comfortably above a structured emit.
-    max_tokens: int = 8000
+    #: max_tokens per model turn, thinking included. Adaptive thinking plus a
+    #: full emit_draft outgrew 8000 in most drafts.
+    max_tokens: int = 32000
     #: Provider retries cover 429/5xx/connection with exponential backoff;
     #: this raises its default 2 for the slow-substrate environment.
     max_retries: int = 4
