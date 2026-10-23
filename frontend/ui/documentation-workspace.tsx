@@ -273,7 +273,7 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
   };
   return <>
     <section className="docw-panel">
-      <button onClick={() => docNavigate({ tab: 'library' })}>← All documents</button>
+      <div className="docw-actions"><button onClick={() => docNavigate({ tab: 'library' })}>← All documents</button><button onClick={onUpdated}>Refresh</button></div>
       <h2>{selected.title}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type} · revision {revision || current.current_revision}{current.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: current.anchor_entity_id }}>{docEntityName(current.anchor_entity_id)}</Link></>}</p>
       <label>Revision history<select value={revision || current.current_revision} onChange={event => docNavigate({ document: id, revision: event.target.value })}>{history.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}{item.revision === current.current_revision ? ' (current)' : ''} · {docDate(item.created_at)}</option>)}</select></label>
       {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to edit or publish</button></p>}
