@@ -450,9 +450,20 @@ CPU that took about a minute for 4,000 statements.
 
 ### Upgrading to schema v25: confirming external grants
 
-v25 adds two columns to the statement audience labels: the external grants
-waiting for a curator, and the curator's decisions on AI grants. Grants
-already in force stay in force; nothing becomes hidden on upgrade. From this
+v25 adds columns to the statement audience labels (the external grants
+waiting for a curator, the curator's decisions on AI grants, and why a relabel
+after an edit narrowed a label) and the previous label to the labelling queue.
+Grants already in force stay in force; nothing becomes hidden on upgrade.
+
+On startup the seeded audiences get their includes (external technical and
+internal non-technical include external non-technical; internal technical
+includes the other three), unless an administrator saved them since. This
+widens visibility at once: external technical now sees every statement granted
+to external non-technical. Check **Settings → Audiences** before the start of
+documentation runs if that is not wanted. If the audience labelling
+instructions were customised in **Settings → Prompts**, compare them with the
+new default, which names only the most restricted audiences a statement fits
+and keeps an edited statement's audiences. From this
 build on, an AI grant that would newly show a statement to an external
 audience waits for a curator while **Settings → Limits → Audience labelling →
 Confirm external grants** is on, which is the default.
