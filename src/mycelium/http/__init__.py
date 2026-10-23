@@ -51,7 +51,7 @@ from .. import (
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from ..server import registry, runtime
-from . import history, tool_routes
+from . import history, substrate, tool_routes
 from .access import _enforce_curator, _enforce_role, _require_admin, _require_principal
 from .authentication import AuthMiddleware, _session_secret
 
@@ -140,25 +140,11 @@ app.include_router(oauth_server.router)
 app.include_router(github_connect.router)
 app.include_router(tool_routes.router)
 app.include_router(history.router)
+app.include_router(substrate.router)
 
 
 # MCP-over-HTTP is mounted at the bottom of this file so it doesn't
 # shadow more-specific routes; search for "MCP transport mount" below.
-
-
-# --- HTTP-only endpoints (NOT exposed via MCP) ----------------------------
-# These are read-side helpers for the bundled web UI. They are deliberately
-# not registered with @tool because they're shaped for a browser, not for an
-# AI consumer composing primitives over MCP.
-
-
-@app.get("/api/data")
-def get_substrate_dump() -> dict[str, Any]:
-    """Dump the entire substrate in the shape the UI expects.
-
-    See `store.substrate_dump` for the returned shape.
-    """
-    return store.substrate_dump(store.substrate_connection())
 
 
 # --- account & token endpoints --------------------------------------------
@@ -271,28 +257,6 @@ def mention_candidates(
 ) -> dict[str, JsonValue]:
     _require_principal(request)
     return server.get_mention_candidates(entity_id=entity_id, after=after, limit=limit)
-
-
-@app.get("/api/entity-positions", include_in_schema=False)
-def get_entity_positions(request: Request) -> Any:
-    """Stream the baked entity layout JSON.
-
-    The bake artifact lives in the data dir (next to the substrate
-    DB), not the source tree — so deploys can't accidentally wipe
-    it and the systemd hardening's read-only-system protection
-    permits the bake to write. The UI fetches from this route
-    instead of a static /ui/data/ path; the URL is stable even if
-    we change where the file lives on disk.
-    """
-    from fastapi.responses import FileResponse
-    from fastapi.responses import JSONResponse as _JSON
-
-    path = runtime._baker().output_path()
-    if not path.exists():
-        return _JSON(
-            status_code=404, content={"detail": "entity positions not baked yet"}
-        )
-    return FileResponse(path, media_type="application/json")
 
 
 # --- timing traces (pyinstrument flamegraphs) -----------------------------

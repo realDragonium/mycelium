@@ -119,6 +119,7 @@ module = [
     "mycelium.http.access",
     "mycelium.http.authentication",
     "mycelium.http.history",
+    "mycelium.http.substrate",
     "mycelium.http.tool_routes",
     "mycelium.ingest",
     "mycelium.ingest.config",
