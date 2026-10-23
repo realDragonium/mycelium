@@ -47,6 +47,8 @@ Config (env vars)
 - `MYCELIUM_JIT_DOMAINS` — optional, comma-separated email domains
   pre-registered for just-in-time provisioning. Unset = invite-only.
 - `MYCELIUM_JIT_DEFAULT_ROLE` — role for JIT users (default `reader`).
+- `MYCELIUM_ALLOWED_EMAIL_DOMAINS` — optional; when set, every login needs a
+  verified email in one of these domains (see `auth.find_or_create_user`).
 """
 
 from __future__ import annotations

@@ -67,6 +67,38 @@ becomes useless.
 
 ---
 
+## Restricting access to your email domains
+
+Set `MYCELIUM_ALLOWED_EMAIL_DOMAINS` (comma-separated, for example
+`example.com, example.org`) and only people whose email is in one of
+those domains can use the server at all. Without it, anyone an admin
+invites, the bootstrap admin and existing users are let in whatever their
+domain.
+
+- **Exact match, case-insensitive.** `example.com` admits
+  `ann@Example.com`, but not `ann@sub.example.com` or
+  `ann@evil-example.com`. List each subdomain you want.
+- **Every way in is checked.** An OIDC login needs a *verified* email in an
+  allowed domain, whether it matches an existing account, an invite, the
+  bootstrap admin or a JIT domain; nothing is created or bound otherwise.
+  Every request from an existing session, every personal or OAuth token,
+  the OAuth consent screen, OAuth token exchange and refresh are judged by
+  the user's stored email. Setting or narrowing the list shuts people out
+  on their next request, without waiting for sessions to expire.
+- **Invites are refused** for an address outside the allowed domains.
+- **Service accounts are exempt.** They have no email and log in only
+  with tokens an admin minted, so the policy has nothing to judge. A human
+  account without an email is blocked.
+- **Members & invites** labels a person the policy shuts out as *blocked
+  by domain policy*. Their row is left alone: widening the list lets them
+  back in. Each refusal is logged once, with the domain but not the full
+  address.
+- `MYCELIUM_JIT_DOMAINS` must be a subset of the allowed domains; the
+  server refuses to start otherwise.
+- With `MYCELIUM_AUTH=off` the setting has no effect.
+
+---
+
 ## Creating a service account
 
 For automated agents that should write to Mycelium without a human
@@ -127,6 +159,10 @@ Same table, **Suspend** button. A suspended account:
   status and rejects when not `active`.
 - Stays in the table so you can re-activate later without losing the
   attribution history.
+
+A person outside `MYCELIUM_ALLOWED_EMAIL_DOMAINS` is shut out the same
+way without being suspended; see
+[Restricting access to your email domains](#restricting-access-to-your-email-domains).
 
 Useful when an employee leaves, when a service-account credential
 might be compromised, or as a "soft delete" before you decide to

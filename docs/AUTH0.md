@@ -119,7 +119,12 @@ either:
 - Turn on **Disable Sign Ups** on the database connection (forces
   every account to come from a social provider you've vetted), or
 - Add an Action that rejects logins where the email domain doesn't
-  match (Auth0 → Actions → Library → Custom).
+  match (Auth0 → Actions → Library → Custom), or
+- Set `MYCELIUM_ALLOWED_EMAIL_DOMAINS` in Mycelium. It checks the verified
+  email at every login and the stored email on every later request and
+  token, so it also shuts out existing users and invites outside those
+  domains. See
+  [USERS.md](USERS.md#restricting-access-to-your-email-domains).
 
 Mycelium itself rejects logins from un-invited emails (see
 [USERS.md](USERS.md)), so even if Auth0 lets anyone sign in, only invited
@@ -193,6 +198,11 @@ Inspect the DB:
 sudo -u mycelium sqlite3 /var/lib/mycelium/mycelium-auth.db \
   "SELECT email, role, status, created_at FROM users"
 ```
+
+**Mycelium 403 "this service only admits verified email addresses in its
+allowed domains"** — `MYCELIUM_ALLOWED_EMAIL_DOMAINS` is set and the
+login's email is unverified or in another domain (subdomains don't count).
+The server log has a `domain policy refused login` line naming the domain.
 
 **`No 'sub' claim`** — Auth0 isn't returning an ID token. Make sure
 your application type is **Regular Web Application** (not SPA or M2M)
