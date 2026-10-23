@@ -1,0 +1,12 @@
+{
+  "name": "mycelium",
+  "displayName": "Mycelium",
+  "description": "Skills for agents that use a Mycelium knowledge base: read and cite it, author and draft knowledge, work the draft queue, request documentation and curate.",
+  "author": {
+    "name": "realDragonium"
+  },
+  "homepage": "https://github.com/realDragonium/mycelium/tree/master/skills",
+  "repository": "https://github.com/realDragonium/mycelium",
+  "keywords": ["mycelium", "knowledge-base", "mcp", "documentation"],
+  "skills": ["./"]
+}
