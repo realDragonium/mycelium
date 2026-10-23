@@ -1,84 +1,159 @@
 ---
-name: kb-authoring
-description: >
-  Have the Mycelium server write or revise a knowledge-base document from the mycelium
-  substrate, using its configured guideline set and Diátaxis templates (tutorial, how-to,
-  reference, explanation, troubleshooting), through request_documentation and
-  revise_document. Use this skill when someone asks to create or update a standalone
-  knowledge-base article from product knowledge — when the source of truth is the mycelium
-  graph rather than features/, backend/, or frontend/ docs. Needs a writer or admin MCP
-  connection.
+name: mycelium-documentation
+description: Have a Mycelium server write, revise and maintain documents from its knowledge base. The server writes; this skill helps choose the writing profile, document type and concept anchor, starts runs with request_documentation or revise_document, follows them with get_documentation_run, retries refused runs with the review's notes, brings out-of-date documents current, and works the documentation plan (which documents a profile's audience needs). Use when someone asks for a knowledge-base article, how-to, reference or troubleshooting page from product knowledge, or to update, retry or plan such documents. Needs a real writer or admin connection to start runs.
 ---
 
-# Knowledge-base documents from the substrate
+# Documents from a Mycelium server
 
-The Mycelium server writes these documents itself. A documentation run queries
-the substrate, writes from the instance's guideline set and template, reviews
-the result in a separate model conversation, and stores it as a generated
-document with revision history (see `docs/DOCUMENTATION_MODELS.md`). This skill
-asks for that run and reports what it produced. It does not write the document
-locally.
+The server writes the documents. A documentation run reads the knowledge
+base through its profile's audience boundary, writes from the profile's
+guidance and template, has a separate review conversation check the result,
+and stores it as a generated document with revision history
+(`docs/DOCUMENTATION_MODELS.md`). This skill asks for runs, follows them and
+reports what they produced. **Never write the document yourself**, from the
+code or from memory: a missing fact is a knowledge gap to fill first.
 
 ## Before you start
 
-- `request_documentation` must be in your tool list. It is visible only to a
-  real writer or admin; on a drafter, reader or asker connection, say so and
-  stop.
-- The guidance and templates belong to the server. The starter guideline set
-  is `kb-authoring`, with document types `tutorial`, `how-to`, `reference`,
-  `explanation` and `troubleshooting`; an instance may configure others under
-  Documentation → Profiles & templates. Do not paste guidance into the prompt.
+- Starting runs (`request_documentation`, `revise_document`) needs a **real**
+  writer or admin. A drafter, reader or asker sees neither; say so and stop.
+  Readers can still follow runs and read documents.
+- Several steps below are HTTP routes, not MCP tools. Call them with the same
+  base URL and a bearer token for a real writer
+  (`-H "Authorization: Bearer $MYCELIUM_TOKEN"`). When you have no token, the
+  same action is a button in **Documents** (`#/documentation`); tell the
+  operator which.
+- Every run costs model spend on the server and counts against its
+  active-run limit. A refusal for that limit is an answer, not a transient
+  error: tell the operator rather than retrying in a loop.
 
-## A new document
+## Choose profile, type and anchor
 
-1. Write the prompt: the concept, the intended audience (internal or
-   user-facing), and what the reader needs to do or understand. Pass
-   `document_type` only when the request makes the type clear, and
-   `guideline_set` only when the operator names one; otherwise the run
-   resolves them.
-2. Check `list_generated_documents` for a document on the same topic; if one
-   exists, revise it (below) instead. Otherwise call
-   `request_documentation(prompt=…)`. When the document is about one concept,
-   pass its `anchor_entity_id` with `guideline_set` and `document_type`: a
-   later request for the same concept then revises the same document.
-   - It refuses when the instance's active-run limit is reached. Tell the
-     operator rather than retrying in a loop.
-3. Poll `get_documentation_run(run_id)` until `status` is neither `queued` nor `running`.
-   Runs take minutes, so poll sparingly.
-4. Report by outcome:
-   - **Document written**: `get_generated_document(document_id)`, then give the
-     title, id, `current_revision` and the body (or a summary of a long one),
-     with the run's review result.
-   - **Nothing written**: give the run's `error`. When the review gate turned
-     the document down, the run carries the refused `draft_title` and
-     `draft_body`; summarize the findings against them.
-   - **Failed**: give `error`.
-   Facts the substrate could not supply are reported as knowledge gaps; name
-   them so the operator can fill them in the substrate first.
+- **Profile** (`guideline_set`) decides the guidance, the templates and the
+  **audience** the document is for, which decides what it may draw on.
+  `GET /list-documentation-profiles` lists them with `effective_audience`,
+  templates, `ready` and `issues`. Pass one when the request or the operator
+  names it, or the audience makes it clear (a customer-facing page needs a
+  profile that writes for an external audience); otherwise the run chooses
+  among the ready profiles. The starter profile is `kb-authoring`.
+- **Type** (`document_type`) is a template of that profile; the starter
+  profile has `tutorial`, `how-to`, `reference`, `explanation` and
+  `troubleshooting`. Pass it when the request makes it clear: "how do I"
+  is a how-to, "what are the limits" a reference, "why does" an
+  explanation, "it fails when" troubleshooting.
+- **Anchor** (`anchor_entity_id`) names the one concept the document is
+  about, found with `search_entities` / `list_entities`. With a profile and
+  a type, it gives the document a stable identity: a later request for the
+  same concept, profile and type revises that document instead of creating
+  another. Anchor every document that is about one concept; leave it out for
+  a document that spans several.
 
-## Revising a document
+Without an anchor, `request_documentation` always creates a new document. To
+change an existing one, revise it.
 
-1. `get_generated_document(document_id)` for its `current_revision`.
-2. `revise_document(document_id, expected_revision=<current_revision>, prompt=<the change>)`.
-3. Poll and report as above. If another revision landed first, the call is
-   refused: read the document again and retry once with the new revision.
+## Write a new document
 
-When `get_generated_document` reports `stale.status` `out_of_date`, statements
-the document cites changed since it was written. Revise with
-`update_sources=true` (no prompt needed) to bring it up to date.
+1. Look for an existing document on the topic:
+   `GET /list-generated-documents`. If one exists, revise it instead.
+2. Write the prompt: the topic, who reads it and what they need to do or
+   understand. Do not paste guidance or templates; the profile has them.
+3. `request_documentation(prompt=…, guideline_set=…, document_type=…,
+   anchor_entity_id=…)` with only the parts you chose. It returns the run.
+4. Follow the run (below).
 
-A published document can be edited on GitHub. A revision then starts from the
-GitHub text and keeps those edits (the run's `revision_base` is
-`destination`). If the document also has an unpublished revision here, the
-call is refused with an explanation. Relay it to the operator; do not choose
-for them, and do not undo GitHub edits yourself.
+## Follow a run
+
+Poll `get_documentation_run(run_id)` until `status` is neither `queued` nor
+`running`. Runs take several minutes; poll every minute or so, not faster.
+`summary` reports what the run is doing while it runs, then its turns,
+tokens, cost, the statements it retrieved and cited, and the gaps it filed.
+
+| `status` | Report |
+|---|---|
+| `document_written` | `get_generated_document(document_id)`: title, id, `current_revision`, audience, and the body or a summary of a long one |
+| `nothing_written` | `error`. When the review refused the document, `summary.review_findings` lists the failed findings and `draft_title` / `draft_body` hold the refused text; summarize the findings against it |
+| `failed` | `error` |
+| `document_superseded` | a later run replaced this document; follow that one |
+
+Facts the knowledge base could not supply are filed as knowledge gaps during
+the run. Name them so the operator can fill them in the knowledge base (the
+`mycelium-draft` or `mycelium-authoring` skill) before the next run.
+
+## Retry
+
+`retryable` on the run says whether it can start again as it was: it wrote
+nothing and was not a manual edit.
+
+- **Retry**: `POST /api/documentation/runs/{run_id}/retry` with
+  `{"with_review_notes": false}` starts the same request again. Use it after a
+  failure that has gone away (a provider error, a limit since raised).
+- **Retry with notes**: `{"with_review_notes": true}` briefs the new writer
+  with the review's findings. Use it when the review refused the document for
+  something the writer can fix. The notes go to the writer only; the next
+  review judges the unchanged request. The new run lists them in
+  `review_notes`.
+
+Do not retry a refusal caused by missing knowledge: fill the gap first.
+
+## Revise a document
+
+1. `get_generated_document(document_id)` for `current_revision`, `stale` and
+   `pull_request`.
+2. `revise_document(document_id, expected_revision=<current_revision>,
+   prompt=<the change>)`.
+3. Follow the run. If another revision landed first, the call is refused:
+   read the document again and retry once with the new revision.
+
+**Out of date.** When `stale.status` is `out_of_date`, statements the
+document cites were edited, deleted, merged away or are no longer visible to
+its audience; `stale.changes` shows old and new text. Revise with
+`update_sources=true` (no prompt needed) to brief the run with exactly those
+changes.
+
+**Edited on GitHub.** A published document can be edited on its pull
+request branch or after merge. A revision then starts from the published
+text and keeps those edits (`revision_base: destination`). If the document
+also has a revision here that was never published, the call is refused.
+Relay the choice to the operator: keep the GitHub edits with
+`start_from_destination=true`, or undo them on GitHub. Do not choose for them.
+
+## Plan which documents an audience needs
+
+The planner proposes documents for one profile's audience; nothing is
+written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
+
+1. `GET /api/documentation/plans/{guideline_set}` shows the latest plan:
+   `items` (each `create` or `update`, with title, type, concept, rationale,
+   priority and the statements it would draw on), `stale` (out-of-date
+   documents), `coverage` (concepts with many visible statements and no
+   document), and `replan_hint` when enough new knowledge became visible.
+2. To plan again, `POST /api/documentation/plans/{guideline_set}` (one model
+   call). Re-planning is manual.
+3. Present the items to the operator with your view of each. Approving starts
+   a documentation run per item, so the operator decides which.
+4. Approve the chosen ones with `POST /api/documentation/plan-items/approve`
+   and `{"item_ids": […]}`, at most `approve_batch` at a time; each result
+   carries its run or the reason it could not start. Follow the runs as
+   above. `POST /api/documentation/plan-items/{item_id}/retry` (same body as
+   a run retry) restarts an item whose run wrote nothing;
+   `POST /api/documentation/plan-items/{item_id}/dismiss` drops a proposal so
+   later plans do not offer it again.
+
+## Maintenance
+
+Each profile has a maintenance policy: `manual` (out-of-date documents wait
+for a revision), `propose` (they become update items in the plan) or
+`auto-revise` (the server revises them itself, after a quiet period and up to
+a daily cap). `GET /api/documentation/maintenance` lists what it revised and
+what waits on a person: a proposal to approve, a pull request to merge, a
+document still out of date. Report those; revise the ones the operator asks
+for.
 
 ## Not here
 
-- **Publishing** a document as a GitHub pull request is a UI action
-  (Documentation → open the document → Create / update GitHub PR); it is not
-  on MCP. Tell the operator the document is ready to publish there.
-- **Missing facts.** If the run reports gaps, do not fill them from the code or
-  from memory in the document. Suggest documenting them in the substrate (the
-  `mycelium-draft` skill) and running the request again.
-- **Server unavailable.** Report it. Do not write the article by hand instead.
+- **Publishing** a document as a GitHub pull request is a UI decision
+  (open the document → **Create / update GitHub PR**). Tell the operator the
+  document is ready to publish there.
+- **Missing facts.** Fill them in the knowledge base, then run the request
+  again.
+- **Server unavailable.** Report it. Do not write the document by hand.
