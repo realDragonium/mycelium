@@ -9,9 +9,11 @@ export interface AudienceRef { id: string; name: string; scope: AudienceScope }
 export interface AudienceLabel {
   audiences: string[]; source: 'ai' | 'curator'; reason: string; model: string | null;
   labelled_at: string; labelled_by: string | null; text_changed_at: string | null; pending: string[];
+  narrowed: Narrowed | null;
 }
+export interface Narrowed { previous: string[]; lost: string[]; reason: string }
 export interface AudienceView extends AudienceRef {
-  description: string; version: number; retired: boolean; default: boolean; profiles: string[];
+  description: string; includes: string[]; version: number; retired: boolean; default: boolean; profiles: string[];
   visible_statements: number; unlabelled_statements: number; pending_statements: number;
 }
 export interface AudienceStatus {
@@ -34,13 +36,13 @@ type LabelState = '' | 'unlabelled' | 'ai' | 'curator' | 'text_changed' | 'pendi
 const LABEL_STATES = ['unlabelled', 'ai', 'curator', 'text_changed', 'pending', 'queued'] as const;
 const isLabelState = (value: string): value is Exclude<LabelState, ''> => (LABEL_STATES as readonly string[]).includes(value);
 interface StatementFilter { audience: string; visibility: Visibility; state: LabelState }
-interface AudienceDraft { id: string; name: string; scope: AudienceScope; description: string }
+interface AudienceDraft { id: string; name: string; scope: AudienceScope; description: string; includes: string[] }
 
 export const AudienceBadge = ({ scope }: { scope: AudienceScope }) => <span className={`audience-badge ${scope}`}>{scope}</span>;
 export const AudienceIdentity = ({ audience }: { audience: AudienceRef }) => <span className="audience-identity"><span>{audience.name}</span><AudienceBadge scope={audience.scope} /></span>;
 
 const formatCost = (value: number | null) => value === null ? '—' : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
-const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : `${label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`}${label.pending.length ? ' · waiting for confirmation' : ''}`;
+const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : `${label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`}${label.pending.length ? ' · waiting for confirmation' : ''}${label.narrowed ? ` · narrowed after an edit: ${label.narrowed.reason}` : ''}`;
 
 export function TextChangedActions({ statementId, onDone }: { statementId: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -212,15 +214,21 @@ function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: 
   </Card>;
 }
 
-function AudienceEditor({ audience, onCancel, onSaved }: { audience: AudienceView | null; onCancel: () => void; onSaved: () => void }) {
-  const [draft, setDraft] = useState<AudienceDraft>(() => ({ id: audience?.id || '', name: audience?.name || '', scope: audience?.scope || 'internal', description: audience?.description || '' }));
+// An external audience may only include external audiences.
+const includable = (others: AudienceView[], scope: AudienceScope) => others.filter(other => !other.retired && (scope === 'internal' || other.scope === 'external'));
+
+function AudienceEditor({ audience, others, onCancel, onSaved }: { audience: AudienceView | null; others: AudienceView[]; onCancel: () => void; onSaved: () => void }) {
+  const [draft, setDraft] = useState<AudienceDraft>(() => ({ id: audience?.id || '', name: audience?.name || '', scope: audience?.scope || 'internal', description: audience?.description || '', includes: audience?.includes || [] }));
+  const options = includable(others, draft.scope);
+  const includes = draft.includes.filter(id => options.some(option => option.id === id));
+  const toggle = (id: string) => setDraft(value => ({ ...value, includes: value.includes.includes(id) ? value.includes.filter(item => item !== id) : [...value.includes, id] }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const save = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError(null);
     try {
-      if (audience) await putJSON<{ id: string }>(`/api/audiences/${enc(audience.id)}`, { name: draft.name.trim(), scope: draft.scope, description: draft.description.trim(), revision: audience.version });
-      else await postJSON<{ id: string }>('/api/audiences', { name: draft.name.trim(), scope: draft.scope, description: draft.description.trim(), ...(draft.id.trim() ? { id: draft.id.trim() } : {}) });
+      if (audience) await putJSON<{ id: string }>(`/api/audiences/${enc(audience.id)}`, { name: draft.name.trim(), scope: draft.scope, description: draft.description.trim(), includes, revision: audience.version });
+      else await postJSON<{ id: string }>('/api/audiences', { name: draft.name.trim(), scope: draft.scope, description: draft.description.trim(), includes, ...(draft.id.trim() ? { id: draft.id.trim() } : {}) });
       onSaved();
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
@@ -234,6 +242,7 @@ function AudienceEditor({ audience, onCancel, onSaved }: { audience: AudienceVie
       <label className="field"><span>Scope</span><select className="input" value={draft.scope} onChange={event => setDraft(value => ({ ...value, scope: event.target.value === 'external' ? 'external' : 'internal' }))}><option value="internal">Internal</option><option value="external">External</option></select></label>
     </div>
     <label className="field"><span>Description</span><textarea className="input" rows={4} required maxLength={4000} value={draft.description} onChange={event => setDraft(value => ({ ...value, description: event.target.value }))} /></label>
+    {!!options.length && <div className="field"><span>Includes</span><p className="hint">This audience also sees everything the audiences it includes may see.</p><div className="audience-checks">{options.map(option => <label key={option.id} className="check"><input type="checkbox" checked={includes.includes(option.id)} onChange={() => toggle(option.id)} /><AudienceIdentity audience={option} /></label>)}</div></div>}
     <div className="row gap-sm"><button type="submit" className="btn primary sm">{busy ? 'Saving…' : 'Save audience'}</button><button type="button" className="btn ghost sm" onClick={onCancel}>Cancel</button></div>
   </fieldset></form>;
 }
@@ -246,7 +255,7 @@ function AudienceList({ data, onReload, onFilter }: { data: AudiencesResponse; o
     if (!restore && !window.confirm(`Retire ${audience.name}? Its history will remain.`)) return;
     setBusyId(audience.id); setError(null);
     try {
-      if (restore) await putJSON<{ id: string }>(`/api/audiences/${enc(audience.id)}`, { name: audience.name, scope: audience.scope, description: audience.description, revision: audience.version });
+      if (restore) await putJSON<{ id: string }>(`/api/audiences/${enc(audience.id)}`, { name: audience.name, scope: audience.scope, description: audience.description, includes: audience.includes.filter(id => includable(data.audiences, audience.scope).some(other => other.id === id)), revision: audience.version });
       else await postJSON<{ retired: true }>(`/api/audiences/${enc(audience.id)}/retire`, { revision: audience.version });
       onReload();
     } catch (cause) { setError(errorMessage(cause)); }
@@ -256,10 +265,11 @@ function AudienceList({ data, onReload, onFilter }: { data: AudiencesResponse; o
   return <Card title="Audiences" actions={data.can_configure && <button type="button" className="btn sm" onClick={() => setEditing('new')}>New audience</button>}>
     <p className="muted">Unlabelled statements fail closed: they are visible to internal audiences only.</p>
     {error && <Notice tone="error">{error}</Notice>}
-    {editing && <AudienceEditor key={editing === 'new' ? 'new' : editing.id} audience={editing === 'new' ? null : editing} onCancel={() => setEditing(null)} onSaved={saved} />}
+    {editing && <AudienceEditor key={editing === 'new' ? 'new' : editing.id} audience={editing === 'new' ? null : editing} others={data.audiences.filter(other => editing === 'new' || other.id !== editing.id)} onCancel={() => setEditing(null)} onSaved={saved} />}
     <div className="audience-list">{data.audiences.map(audience => <article key={audience.id} className={`audience-item${audience.retired ? ' retired' : ''}`}>
       <div className="audience-item-head"><h3>{audience.name}</h3><AudienceBadge scope={audience.scope} />{audience.default && <span className="status-badge ok">Default</span>}{audience.retired && <span className="status-badge">Retired</span>}</div>
       <p>{audience.description}</p>
+      {!!audience.includes.length && <p className="hint">Includes {audience.includes.map(id => data.audiences.find(other => other.id === id)?.name || id).join(', ')}.</p>}
       <div className="audience-item-meta">{audience.retired ? <><span>{audience.visible_statements} of {data.statements} visible</span><span>{audience.unlabelled_statements} unlabelled</span></> : <><button type="button" className="link-btn" onClick={() => onFilter({ audience: audience.id, visibility: 'visible', state: '' })}>{audience.visible_statements} of {data.statements} visible</button><button type="button" className="link-btn" onClick={() => onFilter({ audience: '', visibility: '', state: 'unlabelled' })}>{audience.unlabelled_statements} unlabelled</button></>}<span>{audience.profiles.length ? `Profiles: ${audience.profiles.join(', ')}` : 'No writing profiles'}</span></div>
       {data.can_configure && <div className="row gap-sm wrap">{!audience.retired && <button type="button" className="btn ghost xs" disabled={busyId === audience.id} onClick={() => setEditing(audience)}>Edit</button>}{audience.retired ? <button type="button" className="btn ghost xs" disabled={busyId === audience.id} onClick={() => void mutate(audience, true)}>Restore</button> : <button type="button" className="btn danger xs" disabled={busyId === audience.id} onClick={() => void mutate(audience, false)}>Retire</button>}</div>}
     </article>)}</div>
