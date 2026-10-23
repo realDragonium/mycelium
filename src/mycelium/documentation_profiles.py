@@ -302,10 +302,15 @@ def _profile(
         )
     if not live.get("guidance", "").strip():
         issues.append("No writing guidance is configured.")
-    if not live.get("exposure", "").strip():
-        issues.append("No disclosure rules are configured; exposure will be unchecked.")
     chosen = live.get(guidelines.AUDIENCE_SLOT, "").strip() or None
     effective = audiences.resolve(chosen, live_audiences)
+    if not live.get("exposure", "").strip():
+        issues.append(
+            "No disclosure rules are configured; exposure is checked only "
+            "against the audience's description."
+            if effective is not None
+            else "No disclosure rules are configured; exposure will be unchecked."
+        )
     if effective is None:
         issues.append(
             "The audience this profile writes for was retired; choose another."

@@ -30,7 +30,9 @@ other statements.
 
 A **mention** associates a statement with a *name*, not directly with an entity.
 Mentions are derived from the distinctive names found in a statement's text
-and recomputed when names change; no caller asserts them. Keeping the name preserves which alias matched, and the
+and recomputed when names change; no caller asserts them. An ambiguous match
+also counts while an earlier curator approval of it still matches (see
+[Mentions](MENTIONS.md)). Keeping the name preserves which alias matched, and the
 mention's entity is whichever entity that name currently belongs to, so
 merging entities or moving a name re-points mentions without rewriting text.
 See [Mentions](MENTIONS.md).
@@ -94,11 +96,15 @@ not list is accepted. What the substrate does enforce is below.
   condition is rewritten or removed.
 - **Entity links** cannot point an entity at itself.
 - **Drafters do not write directly.** For a `drafter` principal, every
-  mutating tool queues its call as an operation on an open draft instead of
-  changing the substrate; see [Managing users](USERS.md#roles) and
+  substrate write tool queues its call as an operation on an open draft
+  instead of changing the substrate. Other tools that change state (draft
+  submission, documentation runs, settings) keep their own role checks; see [Managing users](USERS.md#roles) and
   [Internal draft review](DRAFT_REVIEW.md).
-- **History.** Every state-changing write records an event in the history
-  database, in the same transaction as the write.
+- **History.** Every change to entities, names, statements, mentions,
+  statement links and entity links records an event in the history database,
+  in the same transaction as the write. Changes to audience labels, knowledge
+  gaps, the glossaries, link type aliases and duplicate dismissals are not
+  recorded there.
 
 ## Storage
 
@@ -106,21 +112,28 @@ All state lives in `MYCELIUM_DATA_DIR` (default `./.mycelium/`):
 
 | File | Holds |
 | --- | --- |
-| `mycelium.db` | Entities, names, statements, mentions, links, glossaries |
+| `mycelium.db` | The substrate: entities, names, statements, mentions, links and conditions, glossaries and link type aliases, knowledge gaps, audience labels, historical mention decisions and dismissed duplicate pairs. Also the work queued against it (audience labelling and mention recompute queues, curation attempts and leases), receipts of applied reviewed drafts, and the vector-id mappings |
 | `mycelium-history.db` | The audit log of substrate changes |
-| `mycelium-drafts.db` | Drafts, reviews, documentation runs, generated documents and their revisions |
-| `mycelium-auth.db` | Users, tokens, invites and OAuth clients |
-| `mycelium-prompts.db` | Editable prompts, guideline sets, AI and product settings |
+| `mycelium-drafts.db` | Operational work built on the substrate: drafts, their operations, reviews, review runs and applications; generated documents, their revisions, documentation runs, publication receipts, documentation plans and maintenance decisions; the AI usage ledger. Not disposable |
+| `mycelium-auth.db` | Users, tokens, invites, OAuth clients and pending OAuth codes and consents |
+| `mycelium-prompts.db` | Instance configuration: editable prompts and writing profiles with their history, audiences, model, draft review and product settings, GitHub connections and credential references (the secrets stay in the environment) |
 | `mycelium.vec`, `mycelium-names.vec` | hnswlib indexes of statement and name embeddings |
+| `entity-positions.json` | The entity map layout, rebuilt when missing |
+| `ask_trace.jsonl`, `ingest_trace.jsonl`, `traces/` | Run traces and profiling output; see [Deployment](DEPLOYMENT.md) |
 
-`mycelium export` writes all of it to one archive and `mycelium import`
-restores it; see [Deployment](DEPLOYMENT.md). An index file missing at startup
-is rebuilt by re-embedding the stored text, which needs the embedding service.
+Instances that predate its removal may also hold `mycelium-ops.db`, which
+nothing reads.
+
+`mycelium export` writes the instance to one archive and `mycelium import`
+restores it; see [Deployment](DEPLOYMENT.md) for what it leaves out. An index
+file missing at startup is rebuilt by re-embedding the stored text, which
+needs the embedding service.
 
 Writes are serialized within one process, and each request reads from its own
 connection. Serialization does not extend across processes: run one server
-process per data directory. Versioned schema migrations run whenever the store
-opens and upgrade older schemas in place.
+process per data directory. Startup upgrades every database in place before
+serving: the substrate through versioned migrations, the other databases by
+upgrading themselves.
 
 Embeddings come from Ollama (`OLLAMA_URL`, default `http://localhost:11434`;
 `EMBED_MODEL`, default `nomic-embed-text`). The indexes are 768-dimensional

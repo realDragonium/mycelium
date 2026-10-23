@@ -84,7 +84,7 @@ The administrator controls **Allow applying accepted reviews** in **Settings →
 ## Persistence and API
 
 Privileged configuration uses dedicated tables in `mycelium-prompts.db`, separate
-from editable prompt text and disposable draft data. Backup/restore includes
+from editable prompt text and from draft data. Backup/restore includes
 saved models and review controls. Unreadable saved configuration fails closed;
 it never silently reactivates environment defaults. The settings screen isolates
 an invalid action, reports the configuration error, and presents blank fields

@@ -62,7 +62,7 @@ current account status and permissions before automatic changes.
 
 Review controls and shared per-action model settings live in dedicated tables in
 `mycelium-prompts.db`, separate from editable
-prompt texts and disposable drafts. They survive draft cleanup and backup/restore.
+prompt texts and from drafts. They survive draft cleanup and backup/restore.
 Conflicting admin saves return a conflict and require reloading. Unreadable saved
 settings disable review instead of reviving environment defaults. The settings
 form reports the error and allows an administrator to save an explicit repair;
@@ -162,7 +162,7 @@ The gap records the draft id, and the contradicted statement's id, as
 references as well as in its text. When the reviewer applies a draft it
 resolves that draft's open gaps, so an answered question closes once its
 draft lands. Contradiction gaps are filed after the application and stay open
-for a person to check. A draft approved by hand does not yet resolve its gaps.
+for a person to check. A draft approved by hand resolves its gaps the same way.
 An automated assessment remains a model judgment; isolated tests verify the
 execution safeguards and API contract, not the model's factual accuracy.
 

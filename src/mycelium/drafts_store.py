@@ -5,10 +5,11 @@ an explicit `draft_id`) wants to apply. The substrate isn't touched
 until a curator approves the draft, at which point the ops are replayed
 all-or-nothing as the curator's principal.
 
-Why a separate file: drafts are pending, possibly-incorrect work. Keeping
-them off the substrate means a snapshot/restore of the substrate doesn't
-carry half-applied drafts, and a wipe of drafts (e.g. after a bad batch)
-doesn't risk the live KB.
+Why a separate file: drafts are pending, possibly-incorrect work, kept off
+the substrate so it never carries half-applied changes. The file is not
+disposable, though: it also holds the work built on the substrate (generated
+documents and their revisions, documentation runs, plans and maintenance
+decisions) and the AI usage ledger. Cleaning up drafts must leave those alone.
 
 State model — terminal-timestamp style, no `status` column. A draft's
 status is derived from which timestamp is set:
