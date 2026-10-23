@@ -105,8 +105,10 @@ a curator confirms. Confirmation applies per granted audience: confirming
 external non-technical shows the statement to external technical too. So that
 internal readers do not lose it meanwhile, the label grants the narrowest
 internal audiences that include the waiting one (and keeps any audience that
-already saw the statement). The label stores the waiting grant beside the
-granted audiences, with the AI's reason.
+already saw the statement). Confirming the grant drops those internal grants
+again, since the internal audiences now see the statement through it. The
+label stores the waiting grant beside the granted audiences, with the AI's
+reason.
 
 **Settings → Audiences → Waiting for confirmation** lists, per external
 audience, the waiting grants grouped by the concept each statement names (the
@@ -115,8 +117,9 @@ concepts. The count shows on the card and on the Audiences link. A curator,
 who needs a real writer role like any label override, can:
 
 - **Confirm** a grant: the statement becomes visible to the audience, and the
-  label records who confirmed it and when. The label stays an AI label, so a
-  later text change withdraws the grant until it is confirmed again.
+  label records who confirmed it and when. The label stays an AI label; see
+  [Edits to confirmed statements](#edits-to-confirmed-statements) for what a
+  later text change does.
 - **Reject** a grant: the label becomes a curator label without that audience,
   so the AI does not grant it again. **Hand back to AI** undoes that.
 - **Confirm all** or **Reject all** for a concept group.
@@ -133,7 +136,8 @@ The statement page shows a waiting grant as **Waiting for confirmation**, with
 Confirm and Reject. The label-state filter finds every statement with a
 waiting grant.
 
-Changing a statement's text withdraws its waiting grants. Deleting or merging
+Changing a statement's text withdraws its waiting grants; a confirmed grant
+is withdrawn until the relabel, which may keep it (see below). Deleting or merging
 a statement removes its label, waiting grants included, and backups carry
 them. A confirmation counts as newly visible for documentation planning. A
 document citing a statement whose grant was withdrawn is out of date, but
@@ -144,13 +148,41 @@ rejection lets maintenance act.
 Turning the switch off applies the AI's external grants at once again. Grants
 already waiting stay waiting until a curator decides them.
 
+### Edits to confirmed statements
+
+An edit drops the AI label, so the statement is visible to internal audiences
+only until the labeller has judged the new text. When the relabel still
+grants an external audience a curator confirmed, and reveals the statement to
+no external audience the confirmed grants did not, that grant stays in force
+and keeps its confirmation; it is not held again. Any other external grant in
+the relabel, including every one when it reveals the statement to a new
+external audience, waits for confirmation as usual. With **Confirm external
+grants** off, nothing is held and nothing is kept for a check.
+
+So that nobody has to trust the relabel blindly, every statement that kept a
+confirmed grant this way is listed in **Settings → Audiences → Recently edited
+external statements**, with the text the grant was confirmed for, the new
+text and the audiences that still see it. Being on the list hides nothing. A
+curator can:
+
+- **Confirm**: the grant is confirmed again, for the new text, by them.
+- **Narrow**: the kept grants are withdrawn in one click. The label becomes
+  their curator label, so the AI does not grant them again, and still grants
+  the narrowest internal audiences that saw the statement through them.
+
+A further edit or relabel takes the statement off the list, unless that
+relabel keeps a confirmed grant again; the list then still shows the text the
+grant was last confirmed for.
+
 ## Media
 
 Screenshots and recordings carry their own label, decided by a curator, with
-the same rules: unlabelled media is internal only, and replacing a labelled
-item's file flags the label to confirm. An image is shown to a reader, token or
-run only when its own label allows that audience, whatever the label of the
-statement it is attached to. See [Media](MEDIA.md#audience-labels).
+the same rules: unlabelled media is internal only, an item is visible to the
+audiences its label grants and every audience that includes one of them, and
+replacing a labelled item's file flags the label to confirm. A media label is
+a curator's decision, so none of its grants waits for confirmation. An image
+is shown to a reader, token or run only when its own label allows that
+audience, whatever the label of the statement it is attached to. See [Media](MEDIA.md#audience-labels).
 
 ## What a documentation run sees
 

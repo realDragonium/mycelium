@@ -451,8 +451,9 @@ CPU that took about a minute for 4,000 statements.
 ### Upgrading to schema v25: confirming external grants
 
 v25 adds columns to the statement audience labels (the external grants
-waiting for a curator, the curator's decisions on AI grants, and why a relabel
-after an edit narrowed a label) and the previous label to the labelling queue.
+waiting for a curator, the curator's decisions on AI grants, why a relabel
+after an edit narrowed a label, and the confirmed grants an edit kept for a
+spot check) and the previous label to the labelling queue.
 Grants already in force stay in force; nothing becomes hidden on upgrade.
 
 On startup the seeded audiences get their includes (external technical and
