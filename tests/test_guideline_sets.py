@@ -135,8 +135,11 @@ def test_startup_leaves_an_edited_row_alone(tmp_path, monkeypatch):
     and the rows nobody touched gain none either."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text(
-            "guideline-set", "kb-authoring/how-to", "our house style"
+        prompt_store.save(
+            prompt_store.connection(),
+            type="guideline-set",
+            name="kb-authoring/how-to",
+            text="our house style",
         )
 
     _reset_server()
@@ -146,9 +149,9 @@ def test_startup_leaves_an_edited_row_alone(tmp_path, monkeypatch):
         assert edited["text"] == "our house style"
         assert edited["version"] == 2
 
-        untouched = server.list_prompt_text_versions(
-            "guideline-set", "kb-authoring/tutorial"
-        )["versions"]
+        untouched = prompt_store.history(
+            prompt_store.connection(), "guideline-set", "kb-authoring/tutorial"
+        )
         assert [v["version"] for v in untouched] == [1]
 
 
@@ -177,9 +180,9 @@ def test_retiring_starter_template_survives_restart(tmp_path, monkeypatch):
         }
         assert [
             item["deleted"]
-            for item in server.list_prompt_text_versions(
-                "guideline-set", "kb-authoring/reference"
-            )["versions"]
+            for item in prompt_store.history(
+                prompt_store.connection(), "guideline-set", "kb-authoring/reference"
+            )
         ] == [True, False]
     with _app(tmp_path, monkeypatch):
         assert (
@@ -188,9 +191,9 @@ def test_retiring_starter_template_survives_restart(tmp_path, monkeypatch):
         )
         assert [
             item["version"]
-            for item in server.list_prompt_text_versions(
-                "guideline-set", "kb-authoring/reference"
-            )["versions"]
+            for item in prompt_store.history(
+                prompt_store.connection(), "guideline-set", "kb-authoring/reference"
+            )
         ] == [2, 1]
 
 
@@ -371,13 +374,22 @@ def test_the_two_sets_answer_the_exposure_slot_differently():
     assert "live credentials, tokens, and private keys" in internal_exposure
 
 
-def test_variant_set_is_added_through_tools_only(tmp_path, monkeypatch):
-    """`internal-doc` reaches the store by `save_prompt_text` and nothing
-    else, and comes back out listable by its type and readable by name."""
+def test_variant_set_is_added_through_prompt_routes(tmp_path, monkeypatch):
+    """A profile saved through HTTP is listable and readable through tools."""
     client = _app(tmp_path, monkeypatch)
     with client:
         for name, text in _INTERNAL_DOC.items():
-            saved = server.save_prompt_text("guideline-set", name, text)
+            response = client.put(
+                "/api/documentation/prompts",
+                json={
+                    "type": "guideline-set",
+                    "name": name,
+                    "text": text,
+                    "revision": 0,
+                },
+            )
+            assert response.status_code == 200
+            saved = response.json()
             assert saved["version"] == 1
 
         listed = server.list_prompt_texts(type="guideline-set")["prompt_texts"]
@@ -398,7 +410,9 @@ def test_sets_share_the_type_and_separate_by_prefix(tmp_path, monkeypatch):
     with client:
         assert seed.seed(runtime._prompts_db(), guidelines.read_rows()) == []
         for name, text in _INTERNAL_DOC.items():
-            server.save_prompt_text("guideline-set", name, text)
+            prompt_store.save(
+                prompt_store.connection(), type="guideline-set", name=name, text=text
+            )
 
         names = [
             p["name"]

@@ -31,7 +31,7 @@ code or from memory: a missing fact is a knowledge gap to fill first.
 
 - **Profile** (`guideline_set`) decides the guidance, the templates and the
   **audience** the document is for, which decides what it may draw on.
-  `GET /list-documentation-profiles` lists them with `effective_audience`,
+  `GET /api/documentation/profiles` lists them with `effective_audience`,
   templates, `ready` and `issues`. Pass one when the request or the operator
   names it, or the audience makes it clear (a customer-facing page needs a
   profile that writes for an external audience); otherwise the run chooses

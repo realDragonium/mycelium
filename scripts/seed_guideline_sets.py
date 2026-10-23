@@ -17,7 +17,7 @@ Idempotent. The store is append-only, so re-running against unchanged sources
 writes nothing and creates no versions. `--dry-run` reports which rows would
 be superseded before you commit to it.
 
-Writes through `prompt_store` rather than the `save_prompt_text` tool: the
+Writes through `prompt_store` rather than the prompt routes: the
 rows land in an instance's own SQLite file, so there is no server to boot
 and no role to satisfy.
 

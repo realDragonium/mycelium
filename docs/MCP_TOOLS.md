@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 40 of its 86 registered tools over MCP. Every
+question. Mycelium therefore advertises 40 of its 79 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -99,16 +99,9 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `list_link_type_aliases` | Vocabulary administration. |
 | `upsert_entity_link_type` | Vocabulary administration. |
 | `delete_entity_link_type` | Vocabulary administration. |
-| `save_prompt_text` | Prompt configuration. |
 | `get_prompt_text` | Prompt configuration. |
 | `list_prompt_texts` | Prompt configuration. |
-| `list_prompt_text_versions` | Prompt configuration history. |
 | `retire_prompt_text` | Prompt configuration. |
-| `restore_prompt_text` | Prompt configuration. |
-| `list_documentation_profiles` | Documentation profile configuration. |
-| `get_documentation_profile` | Documentation profile configuration. |
-| `save_documentation_profile` | Documentation profile configuration. `audience` chooses the audience the profile writes for; omitted, it keeps the current one. Changing it on an existing profile needs an admin. |
-| `retire_documentation_profile` | Documentation profile configuration. |
 | `list_documentation_models` | Provider configuration. `request_documentation` uses saved settings when the provider is omitted. |
 | `list_documentation_runs` | Run history for the documentation workspace. |
 | `list_generated_documents` | Document library browsing. |

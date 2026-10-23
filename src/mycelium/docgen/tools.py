@@ -157,9 +157,9 @@ def gap_tool_def() -> dict:
 def resolve_tool_def(catalogue: dict[str, list[str]], preferred: str | None) -> dict:
     """The forced tool of the resolution turn, built from the live catalogue.
 
-    The enums ARE the store's contents, so a set added as three
-    `save_prompt_text` calls is selectable on the next run and the model
-    cannot name one that does not exist. `document_type` spans every set's
+    The enums ARE the store's contents, so a set added in documentation
+    settings is selectable on the next run and the model cannot name one
+    that does not exist. `document_type` spans every set's
     types because a strict schema has no way to say "depends on the other
     field" — the pair is checked against the catalogue afterwards, and a
     mismatched pair is sent back rather than accepted.

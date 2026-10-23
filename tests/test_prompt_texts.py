@@ -1,11 +1,4 @@
-"""Editable prompt texts — store semantics + management tools.
-
-Two layers. The store tests drive `prompt_store` against an in-memory DB
-and pin the append-only contract: latest-wins reads, ordered history, a
-tombstone that hides a name without touching its past versions. The tool
-tests go through the `@tool` registry, so they also cover the derived role
-gates and the REST mirror the decorator generates.
-"""
+"""Prompt store semantics, retained read/retirement tools and startup seeding."""
 
 import contextlib
 import pathlib
@@ -199,16 +192,22 @@ def test_blank_key_or_text_rejected():
 
 
 def test_tool_round_trip(tmp_path, monkeypatch):
-    """save → get → list through the registry, and a second save is visible
-    to the next read with no restart in between."""
+    """Prompt edits reach the read tools without a restart."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        saved = server.save_prompt_text("preamble", "ask", "Be precise.")
-        assert saved["version"] == 1 and saved["deleted"] is False
+        saved = prompt_store.save(
+            prompt_store.connection(), type="preamble", name="ask", text="Be precise."
+        )
+        assert saved["version"] == 1 and not saved["deleted"]
 
         assert server.get_prompt_text("preamble", "ask")["text"] == "Be precise."
 
-        server.save_prompt_text("preamble", "ask", "Be very precise.")
+        prompt_store.save(
+            prompt_store.connection(),
+            type="preamble",
+            name="ask",
+            text="Be very precise.",
+        )
         assert server.get_prompt_text("preamble", "ask")["text"] == "Be very precise."
 
         listed = server.list_prompt_texts(type="preamble")["prompt_texts"]
@@ -223,15 +222,19 @@ def test_tool_round_trip(tmp_path, monkeypatch):
             }
         ]
 
-        versions = server.list_prompt_text_versions("preamble", "ask")["versions"]
+        versions = prompt_store.history(prompt_store.connection(), "preamble", "ask")
         assert [v["text"] for v in versions] == ["Be very precise.", "Be precise."]
 
 
 def test_tool_list_by_type(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text("preamble", "ask", "a")
-        server.save_prompt_text("guidelines", "tutorial", "t")
+        prompt_store.save(
+            prompt_store.connection(), type="preamble", name="ask", text="a"
+        )
+        prompt_store.save(
+            prompt_store.connection(), type="guidelines", name="tutorial", text="t"
+        )
 
         names = [
             p["name"] for p in server.list_prompt_texts(type="preamble")["prompt_texts"]
@@ -242,7 +245,9 @@ def test_tool_list_by_type(tmp_path, monkeypatch):
 def test_tool_retire(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text("preamble", "ask", "v1")
+        prompt_store.save(
+            prompt_store.connection(), type="preamble", name="ask", text="v1"
+        )
         assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
         assert server.retire_prompt_text("preamble", "ask") == {"retired": False}
 
@@ -251,7 +256,7 @@ def test_tool_retire(tmp_path, monkeypatch):
             server.get_prompt_text("preamble", "ask")
 
         # History survives the tombstone.
-        versions = server.list_prompt_text_versions("preamble", "ask")["versions"]
+        versions = prompt_store.history(prompt_store.connection(), "preamble", "ask")
         assert [v["deleted"] for v in versions] == [True, False]
 
 
@@ -260,48 +265,21 @@ def test_unknown_name_raises(tmp_path, monkeypatch):
     with client:
         with pytest.raises(ValueError):
             server.get_prompt_text("doctrine", "nope")
-        assert server.list_prompt_text_versions("doctrine", "nope") == {"versions": []}
+        assert prompt_store.history(prompt_store.connection(), "doctrine", "nope") == []
 
 
-def test_save_records_the_caller(tmp_path, monkeypatch):
-    client = _app(tmp_path, monkeypatch, auth_mode="on")
-    with client:
-        with _as("writer"):
-            saved = server.save_prompt_text("preamble", "ask", "v1")
-        assert saved["created_by"] == "w"
-
-
-def test_role_gates(tmp_path, monkeypatch):
-    """Names carry the gate: `save_`/`get_`/`list_` derive writer/reader,
-    and `retire_` is explicitly admin — nothing here is draftable."""
-    client = _app(tmp_path, monkeypatch, auth_mode="on")
-    with client:
-        with _as("reader"):
-            with pytest.raises(PermissionError):
-                server.save_prompt_text("preamble", "ask", "v1")
-            assert server.list_prompt_texts(type="preamble")["prompt_texts"] == []
-
-        with _as("writer"):
-            server.save_prompt_text("preamble", "ask", "v1")
-            with pytest.raises(PermissionError):
-                server.retire_prompt_text("preamble", "ask")
-
-        with _as("admin"):
-            assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
-
-
-def test_drafter_cannot_edit_prompt_texts(tmp_path, monkeypatch):
+def test_drafter_cannot_retire_prompt_texts(tmp_path, monkeypatch):
     """A drafter clears writer/admin gates only because their substrate
-    writes get redirected onto a draft. These tools are outside that
-    machinery, so the write path rejects them and queues nothing; reads
+    writes get redirected onto a draft. Retirement is outside that
+    machinery, so it rejects them and queues nothing; reads
     still work."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
-        server.save_prompt_text("preamble", "ask", "v1")
+        prompt_store.save(
+            prompt_store.connection(), type="preamble", name="ask", text="v1"
+        )
 
         with _as("drafter"):
-            with pytest.raises(auth.RoleRequired):
-                server.save_prompt_text("preamble", "ask", "hijacked")
             with pytest.raises(auth.RoleRequired):
                 server.retire_prompt_text("preamble", "ask")
             assert server.get_prompt_text("preamble", "ask")["text"] == "v1"
@@ -309,25 +287,32 @@ def test_drafter_cannot_edit_prompt_texts(tmp_path, monkeypatch):
 
 
 def test_rest_mirror(tmp_path, monkeypatch):
-    """The @tool decorator generates the REST routes; no custom HTTP code."""
+    """Dedicated prompt saves are visible through the read tool routes."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        r = client.post(
-            "/save-prompt-text",
-            json={"type": "preamble", "name": "ask", "text": "v1"},
+        r = client.put(
+            "/api/documentation/prompts",
+            json={
+                "type": "guideline-set",
+                "name": "internal/reference",
+                "text": "v1",
+                "revision": 0,
+            },
         )
         assert r.status_code == 200 and r.json()["version"] == 1
 
-        r = client.post("/get-prompt-text", json={"type": "preamble", "name": "ask"})
+        r = client.post(
+            "/get-prompt-text",
+            json={"type": "guideline-set", "name": "internal/reference"},
+        )
         assert r.json()["text"] == "v1"
 
-        r = client.post("/list-prompt-texts", json={"type": "preamble"})
-        assert [p["name"] for p in r.json()["prompt_texts"]] == ["ask"]
+        r = client.post("/list-prompt-texts", json={"type": "guideline-set"})
+        assert "internal/reference" in [p["name"] for p in r.json()["prompt_texts"]]
 
 
 def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
-    """The real-role check runs inside the tool, past the route's own gate —
-    it still has to read as a role rejection, not a server fault."""
+    """Prompt edits and retirement require real writer/admin roles."""
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         conn = runtime._auth_db()
@@ -339,9 +324,9 @@ def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
         conn.commit()
         h = {"Authorization": f"Bearer {raw}"}
 
-        r = client.post(
-            "/save-prompt-text",
-            json={"type": "preamble", "name": "ask", "text": "v1"},
+        r = client.put(
+            "/api/documentation/prompts",
+            json={"type": "doctrine", "name": "ingest", "text": "v1", "revision": 1},
             headers=h,
         )
         assert r.status_code == 403
@@ -349,7 +334,7 @@ def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
 
         r = client.post(
             "/retire-prompt-text",
-            json={"type": "preamble", "name": "ask"},
+            json={"type": "doctrine", "name": "ingest"},
             headers=h,
         )
         assert r.status_code == 403
@@ -391,16 +376,22 @@ def test_seeding_leaves_an_edit_alone_and_adds_no_versions(tmp_path, monkeypatch
     a doctrine keeps it — same version, same text, no duplicate row."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text("doctrine", "ingest", "operator edit")
+        prompt_store.save(
+            prompt_store.connection(),
+            type="doctrine",
+            name="ingest",
+            text="operator edit",
+        )
 
     _reset_server()
     client = _app(tmp_path, monkeypatch)  # restart against the same data dir
     with client:
         assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
         assert (
-            len(server.list_prompt_text_versions("doctrine", "ingest")["versions"]) == 2
+            len(prompt_store.history(prompt_store.connection(), "doctrine", "ingest"))
+            == 2
         )
-        docgen = server.list_prompt_text_versions("doctrine", "docgen")["versions"]
+        docgen = prompt_store.history(prompt_store.connection(), "doctrine", "docgen")
         assert len(docgen) == 1  # untouched by the second startup
 
 
@@ -431,7 +422,7 @@ def test_retiring_a_seeded_doctrine_is_refused(tmp_path, monkeypatch):
             assert server.get_prompt_text("doctrine", name)["text"] == _doctrine_file(
                 name
             )
-            versions = server.list_prompt_text_versions("doctrine", name)["versions"]
+            versions = prompt_store.history(prompt_store.connection(), "doctrine", name)
             assert [v["deleted"] for v in versions] == [False]
 
         r = client.post(
@@ -439,7 +430,7 @@ def test_retiring_a_seeded_doctrine_is_refused(tmp_path, monkeypatch):
         )
         assert r.status_code == 400
         assert "seeded at startup" in r.json()["detail"]
-        assert "save_prompt_text" in r.json()["detail"]
+        assert "Settings → Prompts" in r.json()["detail"]
 
 
 def test_an_unseeded_doctrine_is_still_retirable(tmp_path, monkeypatch):
@@ -447,7 +438,9 @@ def test_an_unseeded_doctrine_is_still_retirable(tmp_path, monkeypatch):
     seed is an ordinary prompt text."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text("doctrine", "curation", "v1")
+        prompt_store.save(
+            prompt_store.connection(), type="doctrine", name="curation", text="v1"
+        )
         assert server.retire_prompt_text("doctrine", "curation") == {"retired": True}
         assert [
             p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
@@ -462,7 +455,12 @@ def test_a_seeded_doctrine_survives_a_restart_after_a_refused_retire(
     text, no seed row added on top."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        server.save_prompt_text("doctrine", "ingest", "operator edit")
+        prompt_store.save(
+            prompt_store.connection(),
+            type="doctrine",
+            name="ingest",
+            text="operator edit",
+        )
         with pytest.raises(ValueError, match="seeded at startup"):
             server.retire_prompt_text("doctrine", "ingest")
 
@@ -470,7 +468,7 @@ def test_a_seeded_doctrine_survives_a_restart_after_a_refused_retire(
     client = _app(tmp_path, monkeypatch)  # restart against the same data dir
     with client:
         assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
-        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        versions = prompt_store.history(prompt_store.connection(), "doctrine", "ingest")
         assert [v["version"] for v in versions] == [2, 1]
 
 
@@ -507,8 +505,15 @@ def test_a_restore_brings_back_the_edits_instead_of_re_seeding(tmp_path, monkeyp
     src, dst = tmp_path / "src", tmp_path / "dst"
     client = _app(src, monkeypatch)
     with client:
-        server.save_prompt_text("doctrine", "ingest", "operator edit")
-        server.save_prompt_text("preamble", "ask", "v1")
+        prompt_store.save(
+            prompt_store.connection(),
+            type="doctrine",
+            name="ingest",
+            text="operator edit",
+        )
+        prompt_store.save(
+            prompt_store.connection(), type="preamble", name="ask", text="v1"
+        )
         assert server.retire_prompt_text("preamble", "ask") == {"retired": True}
 
     archive = tmp_path / "snap.tar.gz"
@@ -519,18 +524,18 @@ def test_a_restore_brings_back_the_edits_instead_of_re_seeding(tmp_path, monkeyp
     client = _app(dst, monkeypatch)  # a fresh instance on the restored dir
     with client:
         assert server.get_prompt_text("doctrine", "ingest")["text"] == "operator edit"
-        versions = server.list_prompt_text_versions("doctrine", "ingest")["versions"]
+        versions = prompt_store.history(prompt_store.connection(), "doctrine", "ingest")
         assert [v["version"] for v in versions] == [2, 1]
         assert [v["created_by"] for v in versions] == [None, "seed"]
 
         # The packaged docgen doctrine came back too, unduplicated.
-        docgen = server.list_prompt_text_versions("doctrine", "docgen")["versions"]
+        docgen = prompt_store.history(prompt_store.connection(), "doctrine", "docgen")
         assert [v["version"] for v in docgen] == [1]
         assert docgen[0]["text"] == _doctrine_file("docgen")
 
         with pytest.raises(ValueError):
             server.get_prompt_text("preamble", "ask")
-        retired = server.list_prompt_text_versions("preamble", "ask")["versions"]
+        retired = prompt_store.history(prompt_store.connection(), "preamble", "ask")
         assert [v["deleted"] for v in retired] == [True, False]
 
 

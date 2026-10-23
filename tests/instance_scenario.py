@@ -56,7 +56,7 @@ def populate(data_dir: Path) -> dict[str, str]:
     ids["token"] = _auth(data_dir)
     _drafts(data_dir, ids)
     _documentation(data_dir)
-    _prompts(server)
+    _prompts(data_dir)
     _github(data_dir)
     return ids
 
@@ -374,9 +374,13 @@ def _documentation_plans(conn, run: str) -> None:
     doc_plans.dismiss(conn, "kb-authoring", "create:reference:title:sso", "SSO", "ada")
 
 
-def _prompts(server) -> None:
-    if hasattr(server, "save_prompt_text"):
-        server.save_prompt_text(type="doctrine", name="ingest", text="Operator edit.")
+def _prompts(data_dir: Path) -> None:
+    try:
+        from mycelium import prompt_store
+    except ImportError:
+        return
+    with closing(prompt_store.connect(data_dir / "mycelium-prompts.db")) as conn:
+        prompt_store.save(conn, type="doctrine", name="ingest", text="Operator edit.")
 
 
 def _github(data_dir: Path) -> None:

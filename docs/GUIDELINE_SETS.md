@@ -38,16 +38,21 @@ with theirs.
 
 - `<set>` is the variant's name, kebab-case: `kb-authoring`, `internal-doc`.
   It is the shared prefix that makes a set greppable in a listing.
-- `<slot>` is what the row is for. Four shapes:
+- `<slot>` is what the row is for. Five shapes:
   - `guidance` — the set-wide instructions: how to research, what counts as
     a fact, how to mark uncertainty, what "done" means. Exactly one per set.
   - `exposure` — the set-wide disclosure boundary: what a finished document
-    may reveal and what must stay internal. At most one per set; a set without
-    one can still write, but its exposure goes unchecked.
+    may reveal and what must stay internal. At most one per set. A set without
+    one can still write; its documents are then checked for exposure only
+    against the audience's description.
   - `audience` — the id of the audience the set writes for (see
     [Audiences](AUDIENCES.md)). At most one per set; without one the set
     writes for the default internal audience. Set it through the profile
-    editor or `save_documentation_profile`; only an admin changes it.
+    editor; only an admin changes it.
+  - `maintenance` — what happens when one of the set's documents goes out of
+    date: `manual` (the default when the row is absent), `propose` or
+    `auto-revise`; see [Documentation](DOCUMENTATION_MODELS.md). At most one
+    per set.
   - a **document type** — `tutorial`, `how-to`, `reference`, `explanation`,
     `troubleshooting`, … — the template for producing that type. As many as
     the set supports.
@@ -78,7 +83,7 @@ caller who does not can just describe the document.
 The run's choice is bounded by the same listing this document describes: the
 loop reads `guideline-set` rows, groups them into sets, and offers the model
 exactly those set names and document types to choose between. It is not a
-list in code — a set saved with three `save_prompt_text` calls is choosable
+list in code — a set saved with three rows is choosable
 on the next run, and one whose rows were retired stops being offered. A pair
 that does not appear together is sent back once and then refused; the run
 writes nothing rather than falling back to a set nobody configured.
@@ -139,15 +144,11 @@ a set-wide slot is for.
 
 ## Adding a variant set
 
-Save the rows. That is the whole procedure — `internal-doc` was created with
-exactly these calls:
-
-```python
-save_prompt_text("guideline-set", "internal-doc/guidance",  "…")
-save_prompt_text("guideline-set", "internal-doc/exposure",  "…")
-save_prompt_text("guideline-set", "internal-doc/how-to",    "…")
-save_prompt_text("guideline-set", "internal-doc/reference", "…")
-```
+Save the rows. That is the whole procedure: create the profile in
+**Settings → Documentation**, or save it in one request with
+`PUT /api/documentation/profiles/<set>`, whose body carries the guidance,
+exposure, audience and templates (`internal-doc` has guidance, exposure, a
+`how-to` and a `reference` template).
 
 Then check it:
 
@@ -156,8 +157,10 @@ list_prompt_texts(type="guideline-set")   # the set's rows are in the listing
 get_prompt_text("guideline-set", "internal-doc/how-to")
 ```
 
-Editing a row is another `save_prompt_text` (it appends a version;
-`list_prompt_text_versions` shows the history). Withdrawing one is
+Editing a row appends a version (`PUT /api/documentation/prompts`;
+`GET /api/documentation/prompts/history` shows the history and
+`POST /api/documentation/prompts/restore` brings an earlier one back).
+Withdrawing one is
 `retire_prompt_text`, which hides the name and keeps its past. Bundled templates
 can also be retired, subject to the configured default reference.
 
