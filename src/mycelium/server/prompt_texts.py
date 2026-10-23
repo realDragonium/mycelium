@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 
 def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
     """Loop doctrines whose packaged defaults remain available after restart."""
-    from ..agentloop import DOCTRINE_TYPE
     from ..docgen.config import DOCTRINE_NAME as DOCGEN_DOCTRINE
     from ..docgen.config import DocgenConfig
     from ..ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
@@ -32,12 +31,12 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
 
     return (
         (
-            DOCTRINE_TYPE,
+            "doctrine",
             INGEST_DOCTRINE,
             lambda: Path(IngestConfig.from_env().doctrine_path),
         ),
         (
-            DOCTRINE_TYPE,
+            "doctrine",
             DOCGEN_DOCTRINE,
             lambda: Path(DocgenConfig.from_env().doctrine_path),
         ),
@@ -56,7 +55,6 @@ def _seed_prompt_texts() -> None:
     bring untouched seeded texts up to this build's defaults and warn about
     saved texts that predate them (see `prompt_defaults`)."""
     from .. import ai_prompts, prompt_defaults, prompt_store
-    from ..agentloop import DOCTRINE_TYPE
 
     try:
         documentation_profiles.seed_starters(_prompts_db())
@@ -87,7 +85,7 @@ def _seed_prompt_texts() -> None:
     for action in ai_prompts.ACTIONS:
         try:
             since = prompt_defaults.sync(
-                _prompts_db(), DOCTRINE_TYPE, action, ai_prompts.shipped_text(action)
+                _prompts_db(), "doctrine", action, ai_prompts.shipped_text(action)
             )
         except Exception:
             logger.warning(

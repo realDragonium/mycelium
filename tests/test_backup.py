@@ -1198,7 +1198,12 @@ def test_historical_mention_approval_survives_archive_and_recompute(tmp_path):
     try:
         store.derive_mentions(conn, sid, "SSO is enabled", store.build_name_index(conn))
         assert [r["name"] for r in store.get_mentions(conn, sid)] == ["SSO"]
-        assert store.list_pending_mentions(conn, "approved")[0]["name"] == "SSO"
+        assert (
+            conn.execute(
+                "SELECT name_id FROM pending_mentions WHERE approved_at IS NOT NULL"
+            ).fetchone()["name_id"]
+            == nid
+        )
     finally:
         conn.close()
 

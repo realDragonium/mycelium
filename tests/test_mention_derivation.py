@@ -37,7 +37,14 @@ def _mentions(sid: str) -> list[str]:
 def _pending(status: str = "open") -> list[str]:
     return sorted(
         p["name"]
-        for p in store.list_pending_mentions(store.substrate_connection(), status)
+        for p in store.substrate_connection().execute(
+            "SELECT n.text AS name FROM pending_mentions p JOIN names n ON n.id = p.name_id "
+            + {
+                "open": "WHERE p.approved_at IS NULL AND p.rejected_at IS NULL",
+                "approved": "WHERE p.approved_at IS NOT NULL",
+                "all": "",
+            }[status]
+        )
     )
 
 
@@ -102,11 +109,14 @@ def _legacy_approve(sid: str, name: str) -> None:
     conn = store.substrate_connection()
     nid = store.get_name_by_text(conn, name)["id"]
     conn.execute(
-        "INSERT INTO pending_mentions (statement_id, name_id, created_at) VALUES (?, ?, '2026-08-01')",
+        "INSERT INTO pending_mentions (statement_id, name_id, created_at, approved_at) "
+        "VALUES (?, ?, '2026-08-01', '2026-08-01')",
         (sid, nid),
     )
-    pid = store.list_pending_mentions(conn)[0]["id"]
-    store.approve_pending_mention(conn, pid)
+    conn.execute(
+        "INSERT INTO statement_mentions (statement_id, name_id) VALUES (?, ?)",
+        (sid, nid),
+    )
 
 
 def test_approved_mention_survives_unrelated_recompute(srv):
@@ -140,7 +150,7 @@ def test_approved_mention_dropped_when_text_no_longer_matches(srv):
     assert _mentions(sid) == ["flow"]
     srv.replace_text(id=sid, text="the system halts")  # "flow" gone from text
     assert _mentions(sid) == []
-    assert store.count_pending_mentions(store.substrate_connection(), "all") == 0
+    assert _pending("all") == []
 
 
 # ─── auto-plurals ──────────────────────────────────────────────────────────
@@ -238,4 +248,4 @@ def test_delete_statement_clears_derived_rows(srv):
     assert _pending("approved") == ["flow"]
     srv.delete_statement(id=sid)
     assert store.get_mentions(store.substrate_connection(), sid) == []
-    assert store.count_pending_mentions(store.substrate_connection()) == 0
+    assert _pending() == []

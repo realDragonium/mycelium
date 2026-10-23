@@ -15,7 +15,6 @@ are routed separately through `mycelium.ai`.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import threading
@@ -26,62 +25,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import prompt_store
-
-logger = logging.getLogger(__name__)
 _TRACE_WRITE_LOCK = threading.Lock()
 
 #: Cap on a serialized tool_result fed back to the model.
 _TOOL_RESULT_MAX_CHARS = 20000
-
-#: Prompt-store `type` the loop doctrines live under. The `name` is the loop's
-#: own — `"ingest"` / `"docgen"`, declared beside each package's config.
-DOCTRINE_TYPE = "doctrine"
-
-
-# --------------------------------------------------------------------------- #
-# Doctrine loading
-# --------------------------------------------------------------------------- #
-
-
-def load_doctrine(doctrine_path: str, *, name: str) -> tuple[str, str | None]:
-    """Read the doctrine in force for `name` best-effort.
-
-    The editable store decides: a text saved under (`doctrine`, `name`) wins,
-    and because the read happens at run start an edit applies to the next run
-    without a restart. `doctrine_path` — the packaged file, or whatever
-    MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH points at — is the seed startup
-    writes into the store and the fallback when the store holds nothing. So
-    the path chooses what a fresh instance starts from; the store chooses
-    what a run reads.
-
-    On total failure, return ("", note) so the loop proceeds on the base
-    prompt and records why.
-    """
-    stored = _stored_doctrine(name)
-    if stored is not None:
-        return stored, None
-    try:
-        return Path(doctrine_path).read_text(encoding="utf-8"), None
-    except Exception as exc:  # noqa: BLE001 — best-effort; proceed without it
-        return "", f"doctrine unreadable ({doctrine_path}): {exc}"
-
-
-def _stored_doctrine(name: str) -> str | None:
-    """The doctrine text held in the editable store, or None when there is
-    none. Both "no store wired up" (a bench script, a unit test) and "the
-    store is broken" resolve to the packaged file — a prompts DB that can't
-    be read must degrade a run, never fail it."""
-    if not prompt_store.is_configured():
-        return None
-    try:
-        return prompt_store.latest_text(prompt_store.connection(), DOCTRINE_TYPE, name)
-    except Exception:  # noqa: BLE001 — best-effort; the file is the fallback
-        logger.warning(
-            "prompt store unreadable; reading the %s doctrine file", name, exc_info=True
-        )
-        return None
-
 
 # --------------------------------------------------------------------------- #
 # Budget gate
