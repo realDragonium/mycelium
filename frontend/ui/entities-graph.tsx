@@ -7,8 +7,8 @@
 // fine, no spatial grid required.
 import React from 'react';
 import { useState as useStateE, useEffect as useEffectE, useRef as useRefE, useMemo as useMemoE } from 'react';
-import { RecordTag, useDataCtx } from './lib';
-import { errorMessage, getJSON, postJSON } from './api';
+import { RecordTag, useDataCtx, useMe } from './lib';
+import { errorMessage, getJSON, isScoped, postJSON } from './api';
 import { usePrefs, type Prefs } from './prefs';
 import { useRouter } from './router';
 import { substrate, type Entity } from './data';
@@ -151,6 +151,7 @@ function EntityLinkAddForm({ self, entities, knownTypes, onCreated, onCancel }: 
 }
 
 function EntitiesGraph({ focusId }: { focusId?: string | null }) {
+  const scoped = isScoped(useMe());
   const router = useRouter();
   const { theme } = usePrefs().prefs;
   // Reading `version` makes the whole component re-render after a UI
@@ -897,13 +898,13 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
           >
             🏝 islands{islandIds.size > 0 ? ` · ${islandIds.size}` : ''}
           </button>
-          <button
+          {!scoped && <button
             className={`graph-pill${editMode ? ' is-primary' : ' is-off'}`}
             onClick={() => setEditMode(!editMode)}
             title={editMode ? 'Disable edit affordances' : 'Enable edit affordances'}
           >
             ✎ {editMode ? 'edit · on' : 'edit · off'}
-          </button>
+          </button>}
           <span className="graph-pill is-off" style={{cursor:'default'}}>
             <span className="swatch" style={{background: theme === 'dark' ? '#22d3ee' : '#0e7490', transform:'rotate(45deg)'}} />
             entities · {data.entities.length}
@@ -998,7 +999,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
             <div>
               <div style={{display:'flex', alignItems:'baseline', justifyContent:'space-between', gap:8}}>
                 <h3 style={{margin:0}}>Entity links · {selectedNeighbors.length}</h3>
-                {editMode && !adding && (
+                {!scoped && editMode && !adding && (
                   <button
                     className="graph-pill is-primary"
                     onClick={() => setAdding(true)}
@@ -1009,7 +1010,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
                 )}
               </div>
 
-              {editMode && adding && (
+              {!scoped && editMode && adding && (
                 <EntityLinkAddForm
                   self={selected}
                   entities={sortedEntities}
@@ -1033,7 +1034,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
                       key={key}
                       style={{
                         display:'grid',
-                        gridTemplateColumns: editMode ? 'auto 1fr auto' : 'auto 1fr',
+                        gridTemplateColumns: !scoped && editMode ? 'auto 1fr auto' : 'auto 1fr',
                         gap:10,
                         padding:'8px 0',
                         borderBottom:'1px dashed var(--rule)',
@@ -1057,7 +1058,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
                       >
                         {n.target.name}
                       </span>
-                      {editMode && (
+                      {!scoped && editMode && (
                         <button
                           className="ent-edit-remove"
                           onClick={() => removeLink(n)}

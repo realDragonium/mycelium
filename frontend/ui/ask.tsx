@@ -2,9 +2,9 @@
 // (answered or needs clarification), real errors with retry, and a way to
 // report what the knowledge base could not answer.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { I } from './lib';
+import { I, useMe } from './lib';
 import { Link } from './router';
-import { ask, errorMessage, isAuthError, knowledgeGaps, type AskEvent, type AskTrace, type Confidence, type RawAnswered, type RawClarification } from './api';
+import { ask, errorMessage, isAuthError, isScoped, knowledgeGaps, type AskEvent, type AskTrace, type Confidence, type RawAnswered, type RawClarification } from './api';
 import { substrate } from './data';
 
 /* ---- view shapes ---- */
@@ -117,9 +117,11 @@ function Panel({ icon, title, count, cls = '', children, collapsible, openDefaul
 // Files a knowledge gap through report_knowledge_gap; the text is editable
 // before it is sent.
 function ReportGap({ question, detail }: { question: string; detail: string }) {
+  const scoped = isScoped(useMe());
   const [open, setOpen] = useState(false);
   const [text, setText] = useState(`Ask could not answer: "${question}". ${detail}`);
   const [state, setState] = useState<{ phase: 'idle' | 'sending' | 'sent' } | { phase: 'error'; message: string }>({ phase: 'idle' });
+  if (scoped) return null;
   if (state.phase === 'sent') return <p className="flag answered report-done"><I.check width="13" height="13" />Gap reported. It is listed under <Link to={{ view: 'gaps' }}>Knowledge gaps</Link>.</p>;
   if (!open) return <button className="btn" onClick={() => setOpen(true)}><I.gap width="14" height="14" />Report a gap</button>;
   const send = () => {
