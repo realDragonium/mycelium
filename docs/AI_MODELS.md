@@ -43,14 +43,25 @@ model accepts every level. Check the selected model’s
 An unsupported combination fails explicitly without changing models or effort.
 
 Claude’s existing extended-thinking toggle remains separate: effort controls
-response work even without thinking blocks. Forced final tool calls retain the
-existing thinking policy and still receive the configured effort. Claude Fable
+response work even without thinking blocks. Forced final tool calls keep
+thinking on when it is configured, so they read the cached system prompt and
+tools, and still receive the configured effort. A model that refuses thinking
+with a forced tool choice is retried once without it and is forced without
+thinking until the server restarts. Claude Fable
 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 refuse a forced tool choice, so on
 those models a turn that needs a tool asks for it in the prompt instead, keeps
 thinking, and still fails unless the reply is exactly that one call. Any other
 model that answers a forced tool choice with that refusal is retried once the
 same way and is not forced again until the server restarts. Increasing
 effort does not raise token, timeout, or whole-run limits automatically.
+
+An ingest or connect run's wall clock bounds the whole run, final emit
+included. Turns stream, so a turn still running at the deadline is stopped
+between events; reading stops two thirds of the way in to leave the final
+emit the rest. An emit cut off by the deadline or by `max_tokens` keeps the
+operations it had finished, and the draft is marked degraded. The ingest
+default is 300 seconds; an instance still at the old 120-second default is
+raised once on upgrade.
 
 Effort is captured when work starts and included in saved draft-review attempts
 and documentation runs. Existing settings and backups without effort use Model
@@ -125,8 +136,9 @@ this screen.
 own accounting. Each call becomes one row in the `ai_usage` table of
 `mycelium-drafts.db`: time, action, provider, model, input, cache-read,
 cache-write and output tokens, estimated cost, duration, success, and the run
-and draft it served when there is one (documentation runs, documentation plans
-and draft review runs). A call is attributed by the action around it with
+and draft it served when there is one (documentation runs, documentation plans,
+draft review runs, and connect passes, whose `cnr_` id is also in the
+`connect_statements` response's trace). A call is attributed by the action around it with
 `ai.usage.attributed(action, run_id=..., draft_id=...)`; a call made outside
 any attribution is still recorded, as `other`. Truncated turns and turns
 rejected after the provider answered (a missing required tool call, an

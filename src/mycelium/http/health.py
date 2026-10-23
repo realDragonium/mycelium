@@ -120,13 +120,12 @@ def health_statements_http(
     to_connect: bool = False,
 ) -> knowledge_health.StatementPage:
     _require_principal(request)
+    if to_connect:
+        return knowledge_health.to_connect(
+            server._db(), server._drafts_db(), which, limit=limit
+        )
     return knowledge_health.statements(
-        server._db(),
-        server._drafts_db(),
-        which,
-        after=after,
-        limit=limit,
-        to_connect=to_connect,
+        server._db(), server._drafts_db(), which, after=after, limit=limit
     )
 
 

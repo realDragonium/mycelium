@@ -99,7 +99,7 @@ def test_the_connect_pass_shares_the_memory(conn, drafts):
     knowledge_health.record_attempts(conn, {"stm_a": []})
 
     assert _claim(conn, drafts, limit=1)[0] == ["stm_b"]
-    listed = knowledge_health.statements(conn, drafts, "isolated", to_connect=True)
+    listed = knowledge_health.to_connect(conn, drafts, "isolated", limit=50)
     assert [i.id for i in listed.items] == ["stm_c"]
 
 

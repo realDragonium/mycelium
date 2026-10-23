@@ -104,6 +104,13 @@ _MAX_SLUG_CHARS = 80
 #: mentioned by more names the rest and how to page through them.
 _MAX_ANCHOR_STATEMENTS = 200
 _ANCHOR_PAGE = 100
+#: Words of this harness that mean nothing to a document's reader.
+_INTERNAL_VOCABULARY = re.compile(
+    r"\bsubstrate\b|\b(?:stm|ent)_\w+|\b(?:"
+    + "|".join(sorted(READ_TOOLS | {EMIT_TOOL, GAP_TOOL}))
+    + r")\b",
+    re.IGNORECASE,
+)
 
 if TYPE_CHECKING:
     from ..audiences import Audience
@@ -929,7 +936,12 @@ def _handle_emit(
             ctx.malformed_retries = 0
             return None
         return _nothing(
-            ctx, _review_refusal_reason(review), review=review, title=title, body=body
+            ctx,
+            _review_refusal_reason(review),
+            review=review,
+            title=title,
+            body=body,
+            cited=ids,
         )
     # Guideline resolution runs before the first writing turn.
     assert ctx.guideline_set is not None and ctx.document_type is not None
@@ -1110,6 +1122,16 @@ def _emit_problem(
             f"{shown}. Retrieve them with get_statements, or cite only what "
             "you read"
         )
+    internal = sorted(
+        {m.group(0).lower() for m in _INTERNAL_VOCABULARY.finditer(title + body)}
+    )
+    if internal:
+        return (
+            f"the document uses internal vocabulary: {', '.join(internal)}. "
+            "Its reader never sees the knowledge base: leave out statement and "
+            "concept ids and tool names, and say what is not known in the "
+            "reader's terms"
+        )
     return None
 
 
@@ -1156,6 +1178,7 @@ def _nothing(
     review: ReviewRecord | None = None,
     title: str | None = None,
     body: str | None = None,
+    cited: list[str] | None = None,
 ) -> NothingWritten:
     if ctx.manual_document is not None:
         title, body = ctx.manual_document.title, ctx.manual_document.body
@@ -1168,7 +1191,7 @@ def _nothing(
         title=title,
         body=body,
         gaps=list(ctx.gaps),
-        trace=_build_trace(ctx, "nothing_written", cited=[]),
+        trace=_build_trace(ctx, "nothing_written", cited=cited or []),
     )
 
 
@@ -1209,6 +1232,7 @@ def _build_trace(ctx: _RunContext, outcome: str, *, cited: list[str]) -> dict:
             "cited_ids": len(cited),
             "gaps_filed": len(trace.reported_gaps),
         },
+        cited=cited,
         price=config.price,
     )
     tracing.emit_trace(

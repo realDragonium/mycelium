@@ -44,8 +44,10 @@ statement. Audience ids it invents grant nothing.
   even with automatic labelling off, until no queued statement has attempts
   left; a failed batch or a budget pause delays it but does not end it. **Relabel AI labels** also queues AI
   labels. Both show progress and the cost so far, also after leaving and
-  reopening the page (`backfill` on `GET /api/audiences/labelling`); a server
-  restart forgets the progress, not the queue.
+  reopening the page or restarting the server (`backfill` on
+  `GET /api/audiences/labelling`). Progress is read from the queue: it counts
+  from when the oldest waiting statement was queued, including statements
+  queued by edits meanwhile, and is gone once the queue is empty.
 - A curator sets a label on the statement page; the AI never replaces it.
   **Hand back to AI** removes the curator label and queues the statement.
 - Changing the text of a statement with a curator label keeps the label but

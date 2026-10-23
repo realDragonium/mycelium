@@ -339,7 +339,7 @@ def test_sweep_leaves_a_failure_older_than_the_retry_window_to_the_backlog(
 
     assert draft_review_runs.sweep(_finished(failed) + timedelta(days=1)) == []
     assert _latest(draft_id).run_id == failed.run_id
-    assert client.get("/api/draft-review/backlog").json() == {"draft_ids": [draft_id]}
+    assert client.get("/api/draft-review/backlog").json()["draft_ids"] == [draft_id]
 
 
 def test_sweep_waits_for_credentials_without_recording_runs(curated_app, monkeypatch):
@@ -418,9 +418,9 @@ def test_backlog_is_offered_and_reviewed_once_when_switched_on(
     set_review_controls(mode="review-only")
     advisory = _draft()
     assert _latest(advisory).status == "completed"
-    assert client.get("/api/draft-review/backlog").json() == {
-        "draft_ids": [submitted_while_off]
-    }
+    assert client.get("/api/draft-review/backlog").json()["draft_ids"] == [
+        submitted_while_off
+    ]
 
     _automatic()
     offered = client.get("/api/draft-review/backlog").json()["draft_ids"]
@@ -433,7 +433,7 @@ def test_backlog_is_offered_and_reviewed_once_when_switched_on(
     assert server.get_draft(submitted_while_off)["status"] == "approved"
     assert server.get_draft(advisory)["status"] == "approved"
     assert server.get_draft(alias_only)["status"] == "submitted"
-    assert client.get("/api/draft-review/backlog").json() == {"draft_ids": []}
+    assert client.get("/api/draft-review/backlog").json()["draft_ids"] == []
 
 
 def test_backlog_review_is_refused_while_review_is_off(curated_app):

@@ -216,22 +216,15 @@ class Backfill(BaseModel):
     queued: int
 
 
-#: The last backfill an admin started, kept by the process so its progress
-#: survives leaving the page. A restart forgets it; the queue it filled stays.
-_last_backfill: Backfill | None = None
-
-
 def backfill(*, relabel_ai: bool) -> Backfill:
     """Queue every unlabelled statement (and AI-labelled ones when
     `relabel_ai`) and wake the worker."""
-    global _last_backfill
     conn = store.substrate_connection()
-    started_at = timestamps.now()
     with store.transaction(conn):
         queued = store.audience_labels.enqueue_backfill(conn, relabel_ai=relabel_ai)
-    _last_backfill = Backfill(started_at=started_at, queued=queued)
+        started_at = store.audience_labels.queue_started_at(conn) or timestamps.now()
     wake(force=True)
-    return _last_backfill
+    return Backfill(started_at=started_at, queued=queued)
 
 
 # --- curator decisions ---------------------------------------------------------
@@ -368,9 +361,11 @@ def status(conn: sqlite3.Connection) -> Status:
     total, ai, curator, cost = store.audience_labels.label_counts(conn)
     queued, failed, error = store.audience_labels.queue_counts(conn)
     selected = model_settings.get("audience_labelling")
-    started = _last_backfill
+    # Progress is read from the queue, so it survives a restart: the run
+    # began when its oldest waiting statement was queued.
+    started = store.audience_labels.queue_started_at(conn)
     progress = (
-        store.audience_labels.backfill_counts(conn, started.started_at)
+        store.audience_labels.backfill_counts(conn, started)
         if started is not None
         else None
     )
@@ -387,7 +382,8 @@ def status(conn: sqlite3.Connection) -> Status:
         model=selected.model,
         provider=selected.provider,
         backfill=BackfillProgress(
-            **started.model_dump(),
+            started_at=started,
+            queued=queued + progress[0],
             labelled=progress[0],
             cost_usd=round(progress[1], 4),
         )

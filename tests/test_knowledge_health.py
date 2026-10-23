@@ -161,9 +161,7 @@ def test_skips_statements_an_undecided_draft_already_connects(conn, drafts):
     )
 
     marked = knowledge_health.statements(conn, drafts, "isolated")
-    skipped = knowledge_health.statements(
-        conn, drafts, "isolated", limit=1, to_connect=True
-    )
+    skipped = knowledge_health.to_connect(conn, drafts, "isolated", limit=1)
 
     assert [(i.id, i.in_pending_draft) for i in marked.items] == [
         ("stm_c", True),
@@ -176,7 +174,7 @@ def test_offers_a_looked_at_statement_again_once_it_or_its_neighbourhood_changes
     conn, drafts
 ):
     def to_connect():
-        page = knowledge_health.statements(conn, drafts, "isolated", to_connect=True)
+        page = knowledge_health.to_connect(conn, drafts, "isolated", limit=50)
         return [i.id for i in page.items]
 
     knowledge_health.record_attempts(conn, {"stm_c": ["stm_a"], "stm_d": []})
@@ -199,6 +197,20 @@ def test_offers_a_looked_at_statement_again_once_it_or_its_neighbourhood_changes
     )
     conn.execute("INSERT INTO statement_mentions VALUES ('stm_f', 'nam_sso')")
     assert to_connect() == ["stm_c", "stm_d", "stm_f"]
+
+
+def test_offers_statements_beside_connected_knowledge_first(conn, drafts):
+    # stm_a is linked and names the invoice concept; stm_f names it too, so
+    # it comes before the isolated statements that sit earlier in id order.
+    conn.execute(
+        "INSERT INTO statements (id, kind, text) "
+        "VALUES ('stm_f', 'rule', 'an invoice is numbered')"
+    )
+    conn.execute("INSERT INTO statement_mentions VALUES ('stm_f', 'nam_invoice')")
+
+    page = knowledge_health.to_connect(conn, drafts, "isolated", limit=2)
+
+    assert [i.id for i in page.items] == ["stm_f", "stm_c"]
 
 
 def test_knows_whether_a_statement_has_an_open_gap(conn):

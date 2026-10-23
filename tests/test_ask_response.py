@@ -41,7 +41,7 @@ def test_tool_response(monkeypatch, result, verbose):
         ask.AskConfig, "from_env", lambda: ask.AskConfig(trace_log_path="unused")
     )
     monkeypatch.setattr(
-        ask, "run_ask", lambda question, *, config, substrate=None: result
+        ask, "run_ask", lambda question, *, config, substrate=None, scoped: result
     )
     arguments = {"verbose": True} if verbose else {}
     response = server.ask.__wrapped__("When is an invoice reminder sent?", **arguments)
@@ -54,6 +54,28 @@ def test_tool_response(monkeypatch, result, verbose):
         )
         expected = {key: value for key, value in expected.items() if key in fields}
     assert response == expected
+
+
+def test_a_scoped_caller_gets_a_scoped_answer(monkeypatch, result):
+    from mycelium import principal_audience
+
+    monkeypatch.setattr(
+        ask.AskConfig, "from_env", lambda: ask.AskConfig(trace_log_path="unused")
+    )
+    seen = []
+    monkeypatch.setattr(
+        ask,
+        "run_ask",
+        lambda question, *, config, substrate=None, scoped: (
+            seen.append(scoped) or result
+        ),
+    )
+    monkeypatch.setattr(principal_audience, "current_scope", lambda: None)
+    server.ask.__wrapped__("How do I export invoices?")
+    monkeypatch.setattr(principal_audience, "current_scope", lambda: object())
+    server.ask.__wrapped__("How do I export invoices?")
+
+    assert seen == [False, True]
 
 
 def test_sse_uses_public_result_instead_of_internal_completion():

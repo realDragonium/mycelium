@@ -279,6 +279,15 @@ def record_failure(
         )
 
 
+def queue_started_at(conn: sqlite3.Connection) -> str | None:
+    """When the oldest statement still waiting for the worker was queued."""
+    row = conn.execute(
+        "SELECT MIN(enqueued_at) AS at FROM audience_label_queue WHERE attempts < ?",
+        (MAX_ATTEMPTS,),
+    ).fetchone()
+    return None if row["at"] is None else str(row["at"])
+
+
 def queue_counts(conn: sqlite3.Connection) -> tuple[int, int, str | None]:
     """(waiting, failed, last error)."""
     row = conn.execute(

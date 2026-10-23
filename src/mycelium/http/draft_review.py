@@ -7,6 +7,8 @@ admin-only.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, JsonValue
 
@@ -17,17 +19,30 @@ from .access import _enforce_curator, _require_admin
 router = APIRouter()
 
 
+class Backlog(BaseModel):
+    draft_ids: list[str]
+    #: What reviewing them all is likely to cost, from what a review has
+    #: cost over the last 30 days; None without a priced review on record.
+    estimated_cost_usd: float | None
+
+
 @router.get("/api/draft-review/backlog")
-def draft_review_backlog(request: Request) -> dict[str, list[str]]:
+def draft_review_backlog(request: Request) -> Backlog:
     """Submitted drafts the current review configuration has not reached, to
     offer reviewing them once when review is switched on."""
-    from .. import draft_review_runs
+    from .. import ai_usage, draft_review_runs, drafts_store, timestamps
 
     _require_admin(request)
     try:
-        return {"draft_ids": draft_review_runs.backlog()}
+        draft_ids = draft_review_runs.backlog()
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
+    since = timestamps.of(datetime.now(UTC) - timedelta(days=30))
+    mean = ai_usage.mean_run_cost(drafts_store.connection(), "draft_review", since)
+    return Backlog(
+        draft_ids=draft_ids,
+        estimated_cost_usd=None if mean is None else len(draft_ids) * mean,
+    )
 
 
 @router.post("/api/draft-review/backlog")

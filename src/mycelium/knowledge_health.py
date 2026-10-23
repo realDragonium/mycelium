@@ -185,37 +185,58 @@ def statements(
     *,
     after: str | None = None,
     limit: int = 50,
-    to_connect: bool = False,
 ) -> StatementPage:
-    """A page of statements matching `which`, in id order. `to_connect`
-    leaves out what the connect pass should not be offered again: statements
-    an undecided draft covers, settled attempts and items an agent holds."""
-    pending = pending_statement_ids(drafts)
-    where = STATEMENT_WHERE[which] + (
-        f" AND NOT {SETTLED} AND NOT {CLAIMED}" if to_connect else ""
-    )
-    chosen: list[sqlite3.Row] = []
-    cursor = after or ""
-    next_after: str | None = None
-    while next_after is None:
-        rows = conn.execute(
-            f"SELECT s.id, s.kind, s.text FROM statements s "
-            f"WHERE s.id > :after AND {where} ORDER BY s.id LIMIT :limit",
-            {"after": cursor, "limit": limit, "now": kernel._now()},
-        ).fetchall()
-        for row in rows:
-            if len(chosen) == limit:
-                next_after = str(chosen[-1]["id"])
-                break
-            cursor = str(row["id"])
-            if not (to_connect and cursor in pending):
-                chosen.append(row)
-        if next_after is None and len(rows) < limit:
-            break
+    """A page of statements matching `which`, in id order."""
+    rows = conn.execute(
+        f"SELECT s.id, s.kind, s.text FROM statements s "
+        f"WHERE s.id > ? AND {STATEMENT_WHERE[which]} ORDER BY s.id LIMIT ?",
+        (after or "", limit + 1),
+    ).fetchall()
+    page = rows[:limit]
     return StatementPage(
         filter=which,
-        items=_statement_items(conn, chosen, pending),
-        next_after=next_after,
+        items=_statement_items(conn, page, pending_statement_ids(drafts)),
+        next_after=str(page[-1]["id"]) if len(rows) > limit else None,
+    )
+
+
+#: How many linked statements name one of the concepts `s` names. A
+#: statement beside connected knowledge is the likeliest to find a partner;
+#: one naming nothing, or only concepts nothing links around, the least.
+_CONNECTED_NEIGHBOURS = (
+    "(SELECT COUNT(DISTINCT om.statement_id) FROM statement_mentions m "
+    "JOIN names mine ON mine.id = m.name_id "
+    "JOIN names theirs ON theirs.entity_id = mine.entity_id "
+    "JOIN statement_mentions om ON om.name_id = theirs.id "
+    "WHERE m.statement_id = s.id AND om.statement_id <> s.id "
+    "AND (EXISTS (SELECT 1 FROM statement_links l "
+    "WHERE l.from_statement_id = om.statement_id) "
+    "OR EXISTS (SELECT 1 FROM statement_links l "
+    "WHERE l.to_statement_id = om.statement_id)))"
+)
+
+
+def to_connect(
+    conn: sqlite3.Connection,
+    drafts: sqlite3.Connection,
+    which: StatementFilter,
+    *,
+    limit: int,
+) -> StatementPage:
+    """The statements matching `which` the connect pass should take next,
+    likeliest to connect first. Leaves out what it should not be offered
+    again: statements an undecided draft covers, settled attempts and items
+    an agent holds."""
+    pending = pending_statement_ids(drafts)
+    rows = conn.execute(
+        f"SELECT s.id, s.kind, s.text FROM statements s "
+        f"WHERE {STATEMENT_WHERE[which]} AND NOT {SETTLED} AND NOT {CLAIMED} "
+        f"ORDER BY {_CONNECTED_NEIGHBOURS} DESC, s.id",
+        {"now": kernel._now()},
+    )
+    chosen = [row for row in rows if str(row["id"]) not in pending][:limit]
+    return StatementPage(
+        filter=which, items=_statement_items(conn, chosen, pending), next_after=None
     )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import Protocol, TypedDict, runtime_checkable
@@ -21,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from .types import (
     CLAUDE_EFFORT,
+    JSON_OBJECT,
     MESSAGES,
     TOOLS,
     IncompleteTurn,
@@ -137,6 +139,9 @@ def _block(block: object) -> dict[str, JsonValue]:
 
 _LOG = logging.getLogger(__name__)
 
+#: Stop reason of a streamed turn the caller's deadline ended.
+_DEADLINE = "deadline"
+
 #: Models that reject a forced `tool_choice` ("tool" or "any") with a 400 and
 #: tie thinking blocks to an unedited history. A required tool is asked for in
 #: the prompt instead, and `validate_calls` still insists on that one call.
@@ -146,6 +151,10 @@ _UNFORCEABLE = frozenset(
 #: Models outside that list that turned out to refuse a forced tool choice,
 #: learnt from the refusal and kept for the life of the process.
 _refused_forcing: set[str] = set()
+#: Models that refused a forced tool choice while thinking, learnt the same
+#: way. Elsewhere a forced turn keeps thinking: switching it off changes the
+#: request ahead of the history, so the turn could not read the cached prefix.
+_refused_thinking_when_forced: set[str] = set()
 
 
 def _forced(task: ToolTask, config: ModelConfig) -> bool:
@@ -156,9 +165,34 @@ def _forced(task: ToolTask, config: ModelConfig) -> bool:
     )
 
 
+def _thinking(task: ToolTask, config: ModelConfig) -> bool:
+    return config.thinking and not (
+        _forced(task, config) and config.model in _refused_thinking_when_forced
+    )
+
+
 def _refuses_forcing(error: BadRequestError) -> bool:
     message = str(error)
     return "tool_choice" in message and "not supported for this model" in message
+
+
+def _refuses_thinking_when_forced(error: BadRequestError) -> bool:
+    message = str(error)
+    return "tool_choice" in message and "thinking" in message.lower()
+
+
+def _completed(data: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    """The finished part of a tool input cut off mid-output. Output follows the
+    input's key order, so the value being written was the last key's, or the
+    last item of that key's array."""
+    if not data:
+        return {}
+    *done, last = data
+    kept = {key: data[key] for key in done}
+    value = data[last]
+    if isinstance(value, list) and len(value) > 1:
+        kept[last] = value[:-1]
+    return kept
 
 
 def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
@@ -183,7 +217,7 @@ def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
                 if data.get("type") == "tool_use" and continuation:
                     continue
                 blocks.append(data)
-        if forced:
+        if forced and not _thinking(task, config):
             blocks = [
                 block
                 for block in blocks
@@ -259,24 +293,24 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-    try:
-        response = _send(task, config, client, system, tools)
-    except BadRequestError as error:
-        if not (_forced(task, config) and _refuses_forcing(error)):
-            raise
-        _refused_forcing.add(config.model)
-        _LOG.warning(
-            "Model %s refuses a forced tool_choice; add it to _UNFORCEABLE.",
-            config.model,
-        )
-        response = _send(task, config, client, system, tools)
+    response = _send_learning(task, config, client, system, tools)
+    output = [_block(block) for block in response.content]
     if response.stop_reason not in ("end_turn", "tool_use"):
+        cut = [block for block in output if block.get("type") == "tool_use"]
+        truncated = None
+        if cut and response.stop_reason in ("max_tokens", _DEADLINE):
+            last = cut[-1]
+            truncated = ToolUse(
+                id=str(last["id"]),
+                name=str(last["name"]),
+                input=_completed(JSON_OBJECT.validate_python(last.get("input") or {})),
+            )
         raise IncompleteTurn(
             "Claude response was incomplete or unsuccessful "
             f"(stop_reason={response.stop_reason})",
             response.usage,
+            truncated,
         )
-    output = [_block(block) for block in response.content]
     calls = [
         ToolUse.model_validate(
             {
@@ -297,6 +331,36 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         usage=response.usage,
         stop_reason=response.stop_reason,
     )
+
+
+def _send_learning(
+    task: ToolTask,
+    config: ModelConfig,
+    client: ClaudeClient,
+    system: str | list[TextBlockParam],
+    tools: list[ToolDefinition],
+) -> _Response:
+    """`_send`, retried once after learning that the model refuses forcing, or
+    refuses thinking while forced."""
+    try:
+        return _send(task, config, client, system, tools)
+    except BadRequestError as error:
+        if not _forced(task, config):
+            raise
+        if _refuses_forcing(error):
+            _refused_forcing.add(config.model)
+            _LOG.warning(
+                "Model %s refuses a forced tool_choice; add it to _UNFORCEABLE.",
+                config.model,
+            )
+        elif _thinking(task, config) and _refuses_thinking_when_forced(error):
+            _refused_thinking_when_forced.add(config.model)
+            _LOG.warning(
+                "Model %s refuses thinking with a forced tool_choice.", config.model
+            )
+        else:
+            raise
+        return _send(task, config, client, system, tools)
 
 
 def _send(
@@ -330,7 +394,7 @@ def _send(
         request["output_config"] = {
             "effort": CLAUDE_EFFORT.validate_python(config.reasoning_effort)
         }
-    if config.thinking and not forced:
+    if _thinking(task, config):
         request["thinking"] = {"type": "adaptive"}
     configured = client.with_options(
         timeout=config.request_timeout_s, max_retries=config.max_retries
@@ -353,6 +417,23 @@ def _stream_turn(task: ToolTask, request: _Request, client: Anthropic) -> _Respo
         for event in stream:
             if task.check_cancel:
                 task.check_cancel()
+            if task.deadline is not None and time.monotonic() >= task.deadline:
+                # Leaving the stream closes the connection, which ends
+                # generation. Output usage arrives only with the last event,
+                # so count what was streamed, at about four characters a
+                # token: a floor, since hidden thinking streams no text.
+                snapshot = stream.current_message_snapshot
+                usage = Usage.model_validate(snapshot.usage)
+                streamed = sum(len(b.model_dump_json()) for b in snapshot.content)
+                return _Response(
+                    content=list(snapshot.content),
+                    usage=usage.model_copy(
+                        update={
+                            "output_tokens": max(usage.output_tokens, streamed // 4)
+                        }
+                    ),
+                    stop_reason=_DEADLINE,
+                )
             if event.type == "message_stop":
                 stopped = True
             if (

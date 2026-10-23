@@ -42,9 +42,10 @@ class IngestConfig:
     #: reconcile read counts toward it. Higher than ask's: ingest reconciles
     #: per-candidate, so it spends far more reads.
     op_cap: int = 50
-    #: Whole-call wall-clock budget, seconds. On exhaustion we degrade to a
+    #: Whole-call wall-clock budget, seconds, the final emit included: reading
+    #: stops early enough to leave it a third. On exhaustion we degrade to a
     #: forced emit (or NothingToIngest) rather than throwing.
-    wall_clock_s: float = 120.0
+    wall_clock_s: float = 300.0
     #: max_tokens per model turn, thinking included. Adaptive thinking plus a
     #: full emit_draft outgrew 8000 in most drafts.
     max_tokens: int = 32000
@@ -54,8 +55,8 @@ class IngestConfig:
     #: Per-model-call timeout, seconds. Kept under the wall clock so a
     #: single hung call can't blow the whole budget.
     request_timeout_s: float = 90.0
-    #: Adaptive thinking in the loop (disabled only on the forced emit call,
-    #: where a forced tool_choice is incompatible with it).
+    #: Adaptive thinking in the loop, kept on the forced emit where the model
+    #: accepts it with a forced tool_choice.
     thinking: bool = True
     #: Cap on input text. Longer input is head-truncated and a gap recorded —
     #: never silently blown past.

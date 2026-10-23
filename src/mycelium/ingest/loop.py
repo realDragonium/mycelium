@@ -100,6 +100,10 @@ _MAX_FLOOR_BLOCKS = 3
 _MAX_MALFORMED_RETRIES = 1
 #: Hard ceiling on model turns, well above any real run (op cap bounds reads).
 _TURN_HEADROOM = 16
+#: Share of the wall clock held back for the final emit. Reading turns stop
+#: where the rest ends; an emit still running at the wall clock keeps the ops
+#: it had finished.
+_FINAL_TURN_SHARE = 1 / 3
 
 
 def run_ingest(
@@ -149,6 +153,7 @@ def run(
     emitter: DraftEmitter | None,
     config: IngestConfig,
     label: str,
+    run_id: str | None = None,
 ) -> IngestResult:
     """Run the loop for `task`, recording which `instructions` it ran under."""
     if substrate is None:
@@ -158,10 +163,12 @@ def run(
 
     with (
         tracing.profile_to_html(label, f"{len(task.text)} chars"),
-        ai.usage.attributed(label),
+        ai.usage.attributed(label, run_id=run_id),
     ):
         result = _execute(task, client, substrate, emitter, config)
 
+    if run_id is not None:
+        result.trace["run_id"] = run_id
     result.trace["prompts"] = [instructions.reference().model_dump(mode="json")]
 
     if config.trace_log_path:
@@ -220,6 +227,9 @@ class _RunContext:
     trace: TraceBuilder
     start: float
     reads_after_vocab: list[str]
+    #: Monotonic times reading turns, and the whole run, must end by.
+    reading_until: float
+    deadline: float
     nudged: bool = False
     floor_blocks: int = 0
     malformed_retries: int = 0
@@ -271,6 +281,8 @@ def _execute(
         trace=trace,
         start=start,
         reads_after_vocab=reads_after_vocab,
+        reading_until=start + config.wall_clock_s * (1 - _FINAL_TURN_SHARE),
+        deadline=start + config.wall_clock_s,
         nudged=False,
         floor_blocks=0,
         malformed_retries=0,
@@ -278,8 +290,10 @@ def _execute(
 
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
-        reason = check_budget(trace, config, start, max_turns) or _cost_reached(
-            trace, config, _reserve(ctx, config)
+        reason = (
+            check_budget(trace, config, start, max_turns)
+            or ("wall_clock" if time.monotonic() >= ctx.reading_until else None)
+            or _cost_reached(trace, config, _reserve(ctx, config))
         )
         if reason:
             return _forced_finalize(reason, ctx)
@@ -289,15 +303,25 @@ def _execute(
         try:
             with trace.span("model_turn"):
                 resp = _model_turn(
-                    client, config, task.system_prompt, messages, tools, force=False
+                    client,
+                    config,
+                    task.system_prompt,
+                    messages,
+                    tools,
+                    force=False,
+                    until=ctx.reading_until,
                 )
         except ai.usage.Paused:
             raise  # nothing was sent, and a forced finalize would be refused too
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
+            stopped = time.monotonic() >= ctx.reading_until
             if isinstance(exc, ai.IncompleteTurn):
                 trace.add_usage(exc.usage)
+                kept = _cut_emit(exc, "wall_clock" if stopped else "max_tokens", ctx)
+                if kept is not None:
+                    return kept
             trace.notes.append(f"model error: {exc}")
-            return _forced_finalize("api_error", ctx)
+            return _forced_finalize("wall_clock" if stopped else "api_error", ctx)
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
         _note_turn(ctx, config, spent_before, tokens_before)
@@ -370,9 +394,9 @@ def _note_turn(
 
 def _reserve(ctx: _RunContext, config: IngestConfig) -> float:
     """What the run may still spend after this check: one more reading turn
-    like the dearest so far, then the forced emit. Forcing the emit turns
-    thinking off and so invalidates the cached history: that turn writes the
-    whole history to the cache again."""
+    like the dearest so far, then the forced emit. Forcing the tool choice
+    invalidates the cached history: that turn writes the whole history to the
+    cache again."""
     if config.input_per_mtok is None or config.output_per_mtok is None:
         return 0.0
     emit = {
@@ -548,8 +572,8 @@ def _dispatch_read(
 
 
 def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
-    """Last resort: force one emit_draft turn (floor bypassed, thinking off),
-    else give up gracefully with NothingToIngest. Never throws, never partial
+    """Last resort: force one emit_draft turn (floor bypassed) in the time
+    left, else give up gracefully with NothingToIngest. Never throws, never partial
     live-write."""
     trace: TraceBuilder = ctx.trace
     trace.forced_finalize = reason
@@ -566,6 +590,7 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
                 ctx.messages,
                 ctx.tools,
                 force=True,
+                until=ctx.deadline,
             )
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
@@ -586,8 +611,32 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
     except Exception as exc:  # noqa: BLE001
         if isinstance(exc, ai.IncompleteTurn):
             trace.add_usage(exc.usage)
+            stopped = time.monotonic() >= ctx.deadline
+            kept = _cut_emit(exc, "wall_clock" if stopped else "max_tokens", ctx)
+            if kept is not None:
+                return kept
         trace.notes.append(f"forced finalize failed: {exc}")
     return _degrade_no_draft(f"degraded: could not assemble a draft ({reason})", ctx)
+
+
+def _cut_emit(
+    exc: ai.IncompleteTurn, cause: str, ctx: _RunContext
+) -> IngestResult | None:
+    """A draft from the ops an emit_draft had finished when its output was cut
+    off, or None when the cut turn was not an emit or kept nothing usable."""
+    call = exc.truncated
+    if call is None or call.name != EMIT_TOOL:
+        return None
+    try:
+        ops, ledger, flagged, skipped = parse_emit_input(dict(call.input))
+    except ValueError as error:
+        ctx.trace.notes.append(f"emit_draft cut off ({cause}), unusable: {error}")
+        return None
+    ctx.trace.notes.append(
+        f"emit_draft cut off ({cause}); kept the {len(ops)} ops it had finished"
+    )
+    ctx.trace.forced_finalize = ctx.trace.forced_finalize or cause
+    return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -1296,10 +1345,12 @@ def _model_turn(
     tools: Sequence[Mapping[str, object]],
     *,
     force: bool,
+    until: float,
 ) -> ai.ModelResponse:
     # Stream when no client is injected: an emit_draft turn can outlast
     # request_timeout_s as one blocking read, but not between streamed chunks.
     owned = client is None
+    remaining = max(until - time.monotonic(), 1.0)
     return ai.turn(
         ai.ToolTask(
             system=system_prompt,
@@ -1308,12 +1359,13 @@ def _model_turn(
             force_tool=EMIT_TOOL if force else None,
             parallel_tools=not force,
             on_tool_delta=_discard_tool_delta if owned else None,
+            deadline=until,
         ),
         ai.ModelConfig(
             provider=config.provider,
             model=config.model,
             max_tokens=config.max_tokens,
-            request_timeout_s=config.request_timeout_s,
+            request_timeout_s=min(config.request_timeout_s, remaining),
             max_retries=config.max_retries,
             thinking=config.thinking,
             reasoning_effort=config.reasoning_effort,

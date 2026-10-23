@@ -2,6 +2,7 @@
 import { useCallback, useState, type FormEvent } from 'react';
 import { Card, LoadError, Loading, Notice } from './lib';
 import { HttpError, errorMessage, getJSON, patchJSON, postJSON } from './api';
+import { usd } from './ai-usage';
 import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
 type Provider = 'claude' | 'openai';
@@ -171,14 +172,14 @@ export function DraftReviewSettings() {
 // Drafts submitted while review was off are not reviewed retroactively. When
 // review is on, an admin is offered to review them once.
 function BacklogOffer() {
-  const load = useCallback(() => getJSON<{ draft_ids: string[] }>('/api/draft-review/backlog').then(r => r.draft_ids), []);
+  const load = useCallback(() => getJSON<{ draft_ids: string[]; estimated_cost_usd: number | null }>('/api/draft-review/backlog'), []);
   const { state, reload } = useAsync(load);
   const [started, setStarted] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   if (started !== null) return <Notice tone="success">Started reviewing {started} waiting draft{started === 1 ? '' : 's'}. Progress shows under Drafts.</Notice>;
-  if (state.status !== 'ready' || state.data.length === 0) return null;
-  const n = state.data.length;
+  if (state.status !== 'ready' || state.data.draft_ids.length === 0) return null;
+  const n = state.data.draft_ids.length, cost = state.data.estimated_cost_usd;
   const start = async () => {
     setBusy(true); setError(null);
     try { setStarted((await postJSON<{ draft_ids: string[] }>('/api/draft-review/backlog', {})).draft_ids.length); }
@@ -189,7 +190,7 @@ function BacklogOffer() {
     <Notice tone="warn">
       <div className="stack-sm">
         <div><b>{n} submitted draft{n === 1 ? ' is' : 's are'} waiting from before review was on.</b> {n === 1 ? 'It is' : 'They are'} not reviewed automatically. Review {n === 1 ? 'it' : 'them'} now under these settings?</div>
-        <div className="row gap-sm"><button className="btn primary sm" disabled={busy} onClick={() => void start()}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}`}</button></div>
+        <div className="row gap-sm"><button className="btn primary sm" disabled={busy} onClick={() => void start()}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}${cost === null ? '' : ` (about ${usd(cost)})`}`}</button>{cost === null && <span className="hint">Cost not estimated: no priced review in the last 30 days.</span>}</div>
         {error && <p className="form-error">{error}</p>}
       </div>
     </Notice>

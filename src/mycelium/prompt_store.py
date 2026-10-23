@@ -167,7 +167,7 @@ def initialize_settings(
     prepare_settings(conn, import_environment=import_environment)
     with _writing(conn):
         product_settings.initialize(conn, import_environment=import_environment)
-        product_settings.raise_output_budgets(conn)
+        product_settings.raise_outgrown_defaults(conn)
         if conn.execute(
             "SELECT 1 FROM instance_settings_migrations WHERE name = 'models-and-review-controls'"
         ).fetchone():

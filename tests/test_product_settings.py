@@ -71,21 +71,25 @@ def test_fresh_and_restored_instances_ignore_legacy_environment(db, monkeypatch)
 
 
 @pytest.mark.parametrize(
-    ("model", "old"),
-    [(settings.IngestSettings, 8000), (settings.DocgenSettings, 12000)],
+    ("model", "field", "old"),
+    [
+        (settings.IngestSettings, "max_tokens", 8000),
+        (settings.DocgenSettings, "max_tokens", 12000),
+        (settings.IngestSettings, "wall_clock_s", 120.0),
+    ],
 )
-def test_an_outgrown_output_budget_is_raised_once_from_the_old_default(db, model, old):
+def test_an_outgrown_default_is_raised_once_from_the_old_value(db, model, field, old):
     db.execute(
         "INSERT INTO product_settings VALUES (?, 1, ?)",
-        (model().kind, model(max_tokens=old).model_dump_json()),
+        (model().kind, model(**{field: old}).model_dump_json()),
     )
     with prompt_store._writing(db):
-        settings.raise_output_budgets(db)
-    assert settings.get(model).max_tokens == 32000
-    save(model(max_tokens=old))
+        settings.raise_outgrown_defaults(db)
+    assert getattr(settings.get(model), field) == getattr(model(), field)
+    save(model(**{field: old}))
     with prompt_store._writing(db):
-        settings.raise_output_budgets(db)
-    assert settings.get(model).max_tokens == old
+        settings.raise_outgrown_defaults(db)
+    assert getattr(settings.get(model), field) == old
 
 
 def test_independent_cas_and_unchanged_save(db):

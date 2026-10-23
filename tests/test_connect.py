@@ -332,7 +332,9 @@ def test_its_model_calls_are_metered_as_connect_and_a_spent_budget_pauses_it():
     calls: list[ai.usage.Call] = []
     ai.usage.install(calls.append)
     try:
-        _connect([_op("add_links", {"links": [_edge("stm_invoice", "stm_export")]})])
+        result, _, _ = _connect(
+            [_op("add_links", {"links": [_edge("stm_invoice", "stm_export")]})]
+        )
         ai.usage.install(
             calls.append, lambda action: "Budget spent" if action == "connect" else None
         )
@@ -342,6 +344,7 @@ def test_its_model_calls_are_metered_as_connect_and_a_spent_budget_pauses_it():
         ai.usage.install(None)
 
     assert calls and {call.action for call in calls} == {"connect"}
+    assert {call.run_id for call in calls} == {result.trace["run_id"]}
 
 
 def test_reports_what_it_made_of_each_statement_it_reached():

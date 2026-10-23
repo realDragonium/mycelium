@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from mycelium import audiences, auth, product_settings, server, store
+from mycelium import (
+    audiences,
+    auth,
+    product_settings,
+    quarantine,
+    server,
+    setup_checklist,
+    store,
+)
 from product_settings_helpers import set_product
 from settings_helpers import save_model, set_review_controls
 from test_reviewed_application import _app
@@ -111,3 +119,28 @@ def test_only_admins_see_the_checklist(client):
         raw, _ = auth.issue_token(conn, user_id=user, name="t", scope="writer")
     response = client.get("/api/setup", headers={"Authorization": f"Bearer {raw}"})
     assert response.status_code == 403
+
+
+def test_quarantine_does_not_count_a_destination_as_publishing(monkeypatch):
+    destination = product_settings.DestinationSettings(
+        name="docs",
+        path_template="docs/{slug}.md",
+        owner="example",
+        repo="handbook",
+        base_branch="main",
+        binding="github",
+    )
+    monkeypatch.setattr(
+        product_settings,
+        "get",
+        lambda model, conn=None: product_settings.DocumentationSettings(
+            destinations=(destination,)
+        ),
+    )
+    assert setup_checklist._github(None)[0] == "done"
+
+    monkeypatch.setenv(quarantine.ENV, "1")
+    assert setup_checklist._github(None) == (
+        "todo",
+        "Quarantine refuses GitHub delivery, so docs gets nothing.",
+    )

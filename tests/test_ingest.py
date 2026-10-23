@@ -13,6 +13,7 @@ only thing that creates a draft is the injected emitter.
 from __future__ import annotations
 
 import json
+import time
 import types
 
 import pytest
@@ -650,8 +651,8 @@ def test_phrasing_violation_sets_allow_flag_not_dropped(monkeypatch):
 
 
 def test_op_cap_forces_finalize_with_forced_tool_choice():
-    """Hitting the op cap forces a final emit_draft with forced tool_choice and
-    thinking dropped."""
+    """Hitting the op cap forces a final emit_draft with forced tool_choice,
+    still thinking so the turn keeps the cached prefix."""
     # op_cap=3: 3 vocab calls hit the cap; the next iteration forces finalize.
     responses = [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
     result, client, _sub, _e = _run(responses, op_cap=3)
@@ -661,7 +662,7 @@ def test_op_cap_forces_finalize_with_forced_tool_choice():
     forced_call = client.calls[-1]
     assert forced_call["tool_choice"]["type"] == "tool"
     assert forced_call["tool_choice"]["name"] == EMIT_TOOL
-    assert "thinking" not in forced_call
+    assert forced_call["thinking"] == {"type": "adaptive"}
 
 
 def test_op_cap_with_unresponsive_model_returns_nothing_never_raises():
@@ -1358,6 +1359,50 @@ def test_h_vocabulary_fetched_at_session_start():
     ]
 
 
+def test_reading_stops_in_time_for_the_final_emit(monkeypatch):
+    """The wall clock bounds the whole run: reading turns stop once only the
+    final emit's share of it is left, instead of reading up to the limit and
+    emitting after it."""
+    now = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+
+    class SlowAnthropic(FakeAnthropic):
+        def create(self, **kwargs):
+            now[0] += 50.0
+            return super().create(**kwargs)
+
+    reads = _reconcile_then_adjacency()
+    client = SlowAnthropic(
+        [*reads, _message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
+    )
+    result = run_ingest(
+        "An invite is submitted.",
+        client=client,
+        substrate=FakeSubstrate(),
+        emitter=FakeEmitter(),
+        config=IngestConfig(thinking=True, trace_log_path=None, wall_clock_s=120.0),
+    )
+
+    assert isinstance(result, DraftCreated)
+    assert result.trace["forced_finalize"] == "wall_clock"
+    assert client.calls[-1]["tool_choice"]["type"] == "tool"
+    assert len(client.calls) == 3
+
+
+def test_an_emit_cut_off_at_max_tokens_keeps_the_ops_it_had_finished():
+    finished = _good_new_op_emit()["ops"][0]
+    cut = _tool_use(EMIT_TOOL, {"ops": [finished, {"op": "upsert_statement"}]})
+    result, _client, _sub, emitter = _run(
+        [_message([cut], stop="max_tokens")], op_cap=3
+    )
+
+    assert isinstance(result, DraftCreated)
+    assert [kind for _d, kind, _p in emitter.queued] == ["upsert_statement"]
+    assert result.trace["degraded"] is True
+    assert result.trace["forced_finalize"] == "op_cap"
+    assert any("cut off (max_tokens)" in note for note in result.trace["notes"])
+
+
 # (i) trace + graceful cap — tiny op_cap degrades, records the gap, still emits a
 #     draft (or NothingToIngest), never an exception.
 def test_i_tiny_op_cap_degrades_records_gap_and_still_emits_draft():
@@ -1392,7 +1437,7 @@ def test_i_tiny_op_cap_degrades_records_gap_and_still_emits_draft():
         "name": EMIT_TOOL,
         "disable_parallel_tool_use": True,
     }
-    assert "thinking" not in forced_call
+    assert forced_call["thinking"] == {"type": "adaptive"}
 
 
 # --------------------------------------------------------------------------- #
@@ -1966,13 +2011,17 @@ def test_model_turns_cache_and_stream_only_on_the_owned_transport(monkeypatch):
     monkeypatch.setattr(
         loop.ai, "turn", lambda task, config, client: seen.append((task, config))
     )
-    cfg = IngestConfig(trace_log_path=None)
-    loop._model_turn(None, cfg, "sys", [], [], force=False)
-    loop._model_turn(FakeAnthropic([]), cfg, "sys", [], [], force=False)
+    cfg = IngestConfig(trace_log_path=None, request_timeout_s=90)
+    until = time.monotonic() + 30
+    loop._model_turn(None, cfg, "sys", [], [], force=False, until=until)
+    loop._model_turn(FakeAnthropic([]), cfg, "sys", [], [], force=False, until=until)
     (owned, owned_config), (injected, _) = seen
     assert owned_config.cache is True
     assert owned.on_tool_delta is not None
     assert injected.on_tool_delta is None
+    # A turn stops at the run's deadline, and no single request outlasts it.
+    assert owned.deadline == until
+    assert owned_config.request_timeout_s <= 30
 
 
 def test_reads_of_one_turn_are_answered_together():

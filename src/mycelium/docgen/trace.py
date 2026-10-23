@@ -51,6 +51,8 @@ class RunSummary(TypedDict):
     statements_retrieved: int
     statements_cited: int
     gaps_filed: int
+    #: The statements the finished document cited, written or refused.
+    cited_statement_ids: NotRequired[list[str]]
     #: Why the review refused the document, when it did.
     review_findings: NotRequired[list[ReviewNote]]
 
@@ -152,7 +154,6 @@ class TraceBuilder:
         elapsed_s: float,
         retrieved: int,
         price: Price | None,
-        cited: int = 0,
     ) -> RunSummary:
         return {
             "activity": activity,
@@ -161,7 +162,7 @@ class TraceBuilder:
             "tokens": dict(self.tokens),
             "cost_usd": self.cost_usd(price),
             "statements_retrieved": retrieved,
-            "statements_cited": cited,
+            "statements_cited": 0,
             "gaps_filed": len(self.reported_gaps),
         }
 
@@ -171,6 +172,7 @@ class TraceBuilder:
         outcome: str,
         latency_ms: float,
         grounding: dict,
+        cited: list[str],
         price: Price | None,
     ) -> dict:
         tokens = dict(self.tokens)
@@ -207,9 +209,9 @@ class TraceBuilder:
                 None,
                 elapsed_s=latency_ms / 1000.0,
                 retrieved=grounding["retrieved_ids"],
-                cited=grounding["cited_ids"],
                 price=price,
-            ),
+            )
+            | {"statements_cited": len(cited), "cited_statement_ids": cited},
             "forced_finalize": self.forced_finalize,
             "degraded": self.degraded,
             "notes": self.notes,

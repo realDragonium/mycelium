@@ -191,6 +191,9 @@ def _stream_events(
     for line in response.iter_lines():
         if task.check_cancel:
             task.check_cancel()
+        if task.deadline is not None and time.monotonic() >= task.deadline:
+            # Usage arrives only with the completed response.
+            raise IncompleteTurn("OpenAI turn stopped at its deadline", Usage())
         if not line.startswith("data: ") or line == "data: [DONE]":
             continue
         if not started:

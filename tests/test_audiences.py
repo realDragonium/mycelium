@@ -178,6 +178,25 @@ def test_backfill_queues_unlabelled_and_optionally_ai_labels_never_curated(db):
     assert _queued(db) == {unlabelled, ai_id}
 
 
+def test_backfill_progress_is_read_from_the_queue(db, prompts):
+    """Nothing is held in memory, so a restarted server shows the same run."""
+    first, second = (
+        store.create_statement(db, "state", text)
+        for text in ("a login fails", "a login locks")
+    )
+    db.execute("DELETE FROM audience_label_queue")
+    assert audience_labelling.status(db).backfill is None
+    store.audience_labels.enqueue_backfill(db, relabel_ai=False)
+    store.audience_labels.apply_ai_label(
+        db, first, [], reason="r", model="m", cost_usd=0.01
+    )
+
+    progress = audience_labelling.status(db).backfill
+    assert progress is not None
+    assert (progress.queued, progress.labelled, progress.cost_usd) == (2, 1, 0.01)
+    assert _queued(db) == {second}
+
+
 # --- the labeller --------------------------------------------------------------
 
 
@@ -299,7 +318,6 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     monkeypatch.setattr(audience_labelling, "_thread", None)
     for name in ("_stop", "_wake", "_forced"):
         monkeypatch.setattr(audience_labelling, name, threading.Event())
-    monkeypatch.setattr(audience_labelling, "_last_backfill", None)
     monkeypatch.setattr(audience_labelling.store, "connect", lambda *args, **kwargs: db)
     monkeypatch.setattr(threading.Thread, "start", lambda thread: thread.run())
     assert audience_labelling.backfill(relabel_ai=False).queued == 2

@@ -890,6 +890,7 @@ def test_progress_and_the_summary_describe_the_run(kb_set):
     }
     assert summary["cost_usd"] == round((20 * 3 + 10 * 15) / 1_000_000, 6)
     assert (summary["statements_retrieved"], summary["statements_cited"]) == (1, 1)
+    assert summary["cited_statement_ids"] == ["stm_1"]
     assert summary["gaps_filed"] == 0
 
 
@@ -1063,6 +1064,24 @@ def test_a_blank_title_or_body_is_refused(kb_set):
 
     assert isinstance(result, DocumentWritten)
     assert result.trace["refused_emits"] == ["the title is blank", "the body is blank"]
+
+
+@pytest.mark.parametrize(
+    ("body", "word"),
+    [
+        ("The substrate does not say how long a session lasts.", "substrate"),
+        ("Single sign-on is per workspace (stm_1).", "stm_1"),
+        ("Run get_statements to learn more.", "get_statements"),
+    ],
+)
+def test_a_document_using_internal_vocabulary_is_refused(kb_set, body, word):
+    client = FakeAnthropic([_emit(body=body), _emit(), _review_ok()])
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    [refusal] = result.trace["refused_emits"]
+    assert f"internal vocabulary: {word}" in refusal
 
 
 def test_a_malformed_emit_is_retried_once_then_refused(kb_set):
@@ -1440,6 +1459,7 @@ def test_a_second_failed_review_finishes_the_run_with_the_findings(kb_set):
     assert result.review.passed is False
     assert result.review.attempts == 2
     assert problem in result.reason
+    assert result.trace["summary"]["cited_statement_ids"] == ["stm_1"]
 
 
 def test_findings_make_a_check_fail_however_the_reviewer_labelled_it(kb_set):

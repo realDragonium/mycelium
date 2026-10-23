@@ -111,6 +111,10 @@ WHAT THE HARNESS WILL REFUSE
   actually read; if you want to cite something the map only mentioned, \
   `get_statements` it first.
 - A blank title or a blank body.
+- A title or body using this harness's vocabulary: the word "substrate", a \
+statement or entity id, or a tool name. The reader never sees any of them; \
+say what is not known in the reader's terms ("this is not documented yet"), \
+and let the cited ids travel beside the document.
 These are checked before anything is stored, and you will be asked again.
 
 WHEN THE SUBSTRATE FALLS SHORT
@@ -179,6 +183,11 @@ field the knowledge base cannot fill, and to file a knowledge gap for it. Such \
 an omission conforms to the template. Fail CONFORMANCE for the shape of the \
 document type, for a placeholder left in, or for structure the cited \
 statements could have filled; never for material the statements do not hold.
+
+The reader never sees the knowledge base behind the document. Fail EXPOSURE, \
+or CONFORMANCE when there is no exposure check, for text that talks about it: \
+"substrate", statements, statement or entity ids, tool names, or what the \
+knowledge base holds, where the reader needs only the product.
 
 {instructions}
 
