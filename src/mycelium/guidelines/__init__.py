@@ -29,10 +29,17 @@ EXPOSURE_SLOT = "exposure"
 #: writes for the default internal audience.
 AUDIENCE_SLOT = "audience"
 
+#: The set-wide maintenance slot: its text is the policy for documents that
+#: went out of date (see `mycelium.document_maintenance`). A set without one
+#: is maintained by hand.
+MAINTENANCE_SLOT = "maintenance"
+
 #: Slots that steer every document in a set rather than naming something the
 #: set can write. Keeping the subtraction here makes another set-wide slot a
 #: one-line addition rather than another catalogue special case.
-NON_TYPE_SLOTS = frozenset({GUIDANCE_SLOT, EXPOSURE_SLOT, AUDIENCE_SLOT})
+NON_TYPE_SLOTS = frozenset(
+    {GUIDANCE_SLOT, EXPOSURE_SLOT, AUDIENCE_SLOT, MAINTENANCE_SLOT}
+)
 
 #: The one set that ships. A second set is data — added through the tools,
 #: with no source files and no entry here (see `internal-doc` in the doc).

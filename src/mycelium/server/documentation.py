@@ -361,10 +361,11 @@ def list_generated_documents() -> dict[str, Any]:
 
     Each carries `stale`: {status, changes}. `status` is "out_of_date" once a
     statement the current revision cites was edited, deleted or merged away
-    since it was reviewed, "current" otherwise, and "unknown" for a revision
-    saved before citations were recorded. Each change gives `statement_id`,
-    `change` (edited/deleted/merged), `old_text`, `new_text` and `merged_into`;
-    revise_document(update_sources=True) addresses them.
+    since it was reviewed, or relabelled so the document's audience may no
+    longer see it; "current" otherwise, and "unknown" for a revision saved
+    before citations were recorded. Each change gives `statement_id`, `change`
+    (edited/deleted/merged/no_longer_visible), `old_text`, `new_text` and
+    `merged_into`; revise_document(update_sources=True) addresses them.
 
     Returns {"documents": [document summaries]}; get_generated_document returns
     the body."""

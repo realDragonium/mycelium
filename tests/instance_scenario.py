@@ -265,6 +265,22 @@ def _documentation(data_dir: Path) -> None:
             conn, run, outcome="document_written", document_id=document
         )
         _documentation_plans(conn, run)
+        _document_maintenance(conn, document, run)
+
+
+def _document_maintenance(conn, document: str, run: str) -> None:
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'document_maintenance'"
+    ).fetchone():
+        return
+    with conn:
+        conn.execute(
+            "INSERT INTO document_maintenance (document_id, revision, guideline_set, "
+            "changes, changed_at, action, acted_at, run_id, delivery) "
+            "VALUES (?, 1, 'kb-authoring', '[]', '2026-01-01T00:00:00.000Z', "
+            "'auto-revise', '2026-01-01T00:30:00.000Z', ?, 'published')",
+            (document, run),
+        )
 
 
 def _documentation_plans(conn, run: str) -> None:

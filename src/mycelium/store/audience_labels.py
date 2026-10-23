@@ -45,6 +45,29 @@ def visible_statement_ids(
     )
 
 
+def visible_among(
+    conn: sqlite3.Connection,
+    audience_id: str,
+    internal: bool,
+    statement_ids: Sequence[str],
+) -> frozenset[str]:
+    """Which of `statement_ids` the audience may see."""
+    clause, params = visibility_clause(audience_id, internal)
+    visible: set[str] = set()
+    for offset in range(0, len(statement_ids), 500):
+        chunk = list(statement_ids[offset : offset + 500])
+        placeholders = ", ".join("?" for _ in chunk)
+        visible.update(
+            str(row["id"])
+            for row in conn.execute(
+                "SELECT s.id FROM statements s LEFT JOIN statement_audience_labels l "
+                f"ON l.statement_id = s.id WHERE s.id IN ({placeholders}) AND {clause}",
+                (*chunk, *params),
+            )
+        )
+    return frozenset(visible)
+
+
 def get_label(conn: sqlite3.Connection, statement_id: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM statement_audience_labels WHERE statement_id = ?",

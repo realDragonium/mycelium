@@ -695,7 +695,9 @@ def approve(item_id: str, *, decided_by: str | None) -> dict[str, object]:
     row = doc_plans.claim(drafts, item_id, decided_by)
     try:
         prompt = _brief(row, DocgenConfig.from_env().max_prompt_chars)
-        if row["action"] == "create":
+        if str(row["key"]).startswith("stale:"):
+            run = _bring_up_to_date(drafts, row)
+        elif row["action"] == "create":
             run = server.request_documentation(
                 prompt=prompt,
                 guideline_set=str(row["guideline_set"]),
@@ -716,6 +718,22 @@ def approve(item_id: str, *, decided_by: str | None) -> dict[str, object]:
         raise
     doc_plans.record_run(drafts, item_id, str(run["id"]))
     return run
+
+
+def _bring_up_to_date(
+    drafts: sqlite3.Connection, row: sqlite3.Row
+) -> dict[str, object]:
+    """Revise the document a maintenance item names, briefed with what
+    changed by the time it is approved rather than when it was proposed."""
+    from . import server
+
+    document = docs_store.get_document(drafts, str(row["document_id"]))
+    if document is None:
+        raise ValueError("The document this item updates no longer exists.")
+    revision = int(document["current_revision"])
+    if row["key"] != f"stale:{document['id']}:r{revision}":
+        raise ValueError("The document was revised since this item was proposed.")
+    return server.revise_document(str(document["id"]), revision, update_sources=True)
 
 
 _retry_lock = threading.Lock()
@@ -805,6 +823,9 @@ class PlanItem(BaseModel):
     statement_ids: list[str]
     state: str
     run: RunState | None
+    #: Proposed by the maintenance worker because cited statements changed,
+    #: rather than by the planner.
+    maintenance: bool = False
 
 
 class StatementChange(BaseModel):
@@ -943,6 +964,7 @@ def view(guideline_set: str) -> PlanView:
         )
     anchored = {document.anchor_entity_id for document in documents}
     items = doc_plans.items(drafts, str(planned_row["id"])) if planned_row else []
+    maintained = _maintenance_items(drafts, guideline_set, documents)
     return PlanView(
         guideline_set=guideline_set,
         audience=AudienceRef(
@@ -954,7 +976,13 @@ def view(guideline_set: str) -> PlanView:
         else None,
         unavailable=unavailable,
         latest=_summary(latest) if latest is not None else None,
-        items=[_item(drafts, row, counts) for row in items],
+        items=[
+            *(_item(drafts, row, counts) for row in items),
+            *(
+                _item(drafts, row, counts).model_copy(update={"maintenance": True})
+                for row in maintained
+            ),
+        ],
         stale=[
             StaleItem(
                 document_id=document.id,
@@ -975,6 +1003,7 @@ def view(guideline_set: str) -> PlanView:
             for document in documents
             if document.freshness.status == "out_of_date"
             and stale_key(document) not in dismissed
+            and stale_key(document) not in {str(row["key"]) for row in maintained}
         ],
         coverage=[
             CoverageGap(entity_id=entity, name=name, statements=count)
@@ -989,6 +1018,29 @@ def view(guideline_set: str) -> PlanView:
         dismissed=len(dismissed),
         approve_batch=limits.approve_batch,
     )
+
+
+def _maintenance_items(
+    drafts: sqlite3.Connection, guideline_set: str, documents: list[ExistingDocument]
+) -> list[sqlite3.Row]:
+    """Maintenance items about a document's current revision: proposed while
+    it is out of date, approved until the revision they started is saved."""
+    plan_id = doc_plans.maintenance_plan(drafts, guideline_set)
+    if plan_id is None:
+        return []
+    shown = {
+        stale_key(document): document.freshness.status == "out_of_date"
+        for document in documents
+    }
+    return [
+        row
+        for row in doc_plans.items(drafts, plan_id)
+        if str(row["key"]) in shown
+        and (
+            row["state"] == "approved"
+            or (row["state"] == "proposed" and shown[str(row["key"])])
+        )
+    ]
 
 
 def _item(

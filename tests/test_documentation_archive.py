@@ -267,6 +267,7 @@ def test_an_archive_from_before_plans_restores_without_them(tmp_path):
         "documentation_plans",
         "documentation_plan_items",
         "documentation_plan_dismissals",
+        "document_maintenance",
     ):
         del payload["tables"][table]
     section.write_text(json.dumps({**payload, "version": 1}))

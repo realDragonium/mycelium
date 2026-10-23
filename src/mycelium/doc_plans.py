@@ -5,6 +5,10 @@ A plan is one planning call for one writing profile. Its items are what the
 model proposed after this module's checks; each is proposed, approved (with
 the run it started) or dismissed. A dismissal is also kept per profile under
 the item's identity key, so a later plan proposing the same thing drops it.
+
+Besides the plans the model makes, each profile may have one standing
+`maintenance` plan holding the update items the maintenance worker proposes
+for out-of-date documents. It is never the profile's latest plan.
 """
 
 from __future__ import annotations
@@ -72,6 +76,12 @@ Priority = Literal["high", "medium", "low"]
 
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(documentation_plans)")}
+    if "kind" not in columns:
+        conn.execute(
+            "ALTER TABLE documentation_plans ADD COLUMN kind TEXT NOT NULL "
+            "DEFAULT 'model' CHECK (kind IN ('model', 'maintenance'))"
+        )
 
 
 @dataclass(frozen=True)
@@ -168,7 +178,7 @@ def finish_plan(
 def active_plan(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM documentation_plans WHERE guideline_set = ? "
-        "AND finished_at IS NULL",
+        "AND kind = 'model' AND finished_at IS NULL",
         (guideline_set,),
     ).fetchone()
     return row
@@ -177,7 +187,7 @@ def active_plan(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | N
 def latest_plan(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM documentation_plans WHERE guideline_set = ? "
-        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        "AND kind = 'model' ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (guideline_set,),
     ).fetchone()
     return row
@@ -186,10 +196,61 @@ def latest_plan(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | N
 def latest_planned(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM documentation_plans WHERE guideline_set = ? "
-        "AND outcome = 'planned' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        "AND kind = 'model' AND outcome = 'planned' "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (guideline_set,),
     ).fetchone()
     return row
+
+
+def maintenance_plan(conn: sqlite3.Connection, guideline_set: str) -> str | None:
+    row = conn.execute(
+        "SELECT id FROM documentation_plans WHERE guideline_set = ? "
+        "AND kind = 'maintenance'",
+        (guideline_set,),
+    ).fetchone()
+    return None if row is None else str(row["id"])
+
+
+def propose_update(
+    conn: sqlite3.Connection, guideline_set: str, audience_id: str, item: Item
+) -> None:
+    """Add an item to the profile's maintenance plan, creating the plan the
+    first time. Does not commit."""
+    plan_id = maintenance_plan(conn, guideline_set)
+    if plan_id is None:
+        plan_id = "dpl_" + uuid.uuid4().hex[:16]
+        now = timestamps.now()
+        conn.execute(
+            "INSERT INTO documentation_plans (id, guideline_set, audience_id, "
+            "created_at, finished_at, outcome, kind) "
+            "VALUES (?, ?, ?, ?, ?, 'planned', 'maintenance')",
+            (plan_id, guideline_set, audience_id, now, now),
+        )
+    position = conn.execute(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM documentation_plan_items "
+        "WHERE plan_id = ?",
+        (plan_id,),
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO documentation_plan_items (id, plan_id, position, key, action, "
+        "title, document_type, anchor_entity_id, document_id, rationale, priority, "
+        "statement_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "dpi_" + uuid.uuid4().hex[:16],
+            plan_id,
+            position,
+            item.key,
+            item.action,
+            item.title,
+            item.document_type,
+            item.anchor_entity_id,
+            item.document_id,
+            item.rationale,
+            item.priority,
+            json.dumps(list(item.statement_ids)),
+        ),
+    )
 
 
 def items(conn: sqlite3.Connection, plan_id: str) -> list[sqlite3.Row]:

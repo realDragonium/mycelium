@@ -136,6 +136,17 @@ class DocumentationPlanningSettings(RequestLimits):
     approve_batch: int = Field(default=2, gt=0, le=10)
 
 
+class DocumentationMaintenanceSettings(SettingsModel):
+    """Guard rails for profiles whose out-of-date documents revise themselves."""
+
+    kind: Literal["documentation_maintenance"] = "documentation_maintenance"
+    #: Minutes without a further change to a document's cited statements
+    #: before it is revised, so a burst of edits causes one revision.
+    quiet_minutes: int = Field(default=30, ge=0)
+    #: Automatic revisions one profile may start in any 24 hours.
+    revisions_per_day: int = Field(default=5, ge=0)
+
+
 class ConcurrencySettings(SettingsModel):
     kind: Literal["concurrency"] = "concurrency"
     model_loops: int = Field(default=2, gt=0)
@@ -217,6 +228,7 @@ Section = Literal[
     "alias_discovery",
     "audience_labelling",
     "documentation_planning",
+    "documentation_maintenance",
     "concurrency",
     "documentation",
 ]
@@ -228,6 +240,7 @@ Body = Annotated[
     | AliasDiscoverySettings
     | AudienceLabellingSettings
     | DocumentationPlanningSettings
+    | DocumentationMaintenanceSettings
     | ConcurrencySettings
     | DocumentationSettings,
     Field(discriminator="kind"),
@@ -241,6 +254,7 @@ DEFAULTS: tuple[Body, ...] = (
     AliasDiscoverySettings(),
     AudienceLabellingSettings(),
     DocumentationPlanningSettings(),
+    DocumentationMaintenanceSettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
 )
@@ -290,6 +304,7 @@ T = TypeVar(
     | AliasDiscoverySettings
     | AudienceLabellingSettings
     | DocumentationPlanningSettings
+    | DocumentationMaintenanceSettings
     | ConcurrencySettings
     | DocumentationSettings,
 )
@@ -412,7 +427,8 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         default,
         AliasDiscoverySettings
         | AudienceLabellingSettings
-        | DocumentationPlanningSettings,
+        | DocumentationPlanningSettings
+        | DocumentationMaintenanceSettings,
     ):
         return default
     if isinstance(default, DocumentationSettings):

@@ -7,6 +7,7 @@ delivers needs a real writer. A stale `expected_revision` answers 409.
 
 from __future__ import annotations
 
+import difflib
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -14,7 +15,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
-from .. import auth, documentation_planning, product_settings, server
+from .. import (
+    auth,
+    document_maintenance,
+    documentation_planning,
+    product_settings,
+    server,
+)
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from .access import _enforce_role, _require_principal
@@ -224,6 +231,67 @@ def document_revision_http(
         return _document_preview(server.get_document_revision(document_id, revision))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+_DIFF_OPS: dict[str, Literal["+", "-", " "]] = {"+": "+", "-": "-", " ": " "}
+
+
+class DiffLine(BaseModel):
+    #: "+" added, "-" removed, " " unchanged context, "@" a hunk header.
+    op: Literal["+", "-", " ", "@"]
+    text: str
+
+
+class RevisionDiff(BaseModel):
+    document_id: str
+    from_revision: int
+    to_revision: int
+    lines: list[DiffLine]
+
+
+@router.get("/api/documentation/documents/{document_id}/revisions/{revision}/diff")
+def document_revision_diff_http(
+    document_id: str, revision: int, request: Request
+) -> RevisionDiff:
+    """A revision's body against the one it was revised from."""
+    from .. import docs_store
+
+    _require_principal(request)
+    conn = server._drafts_db()
+    new = docs_store.get_revision(conn, document_id, revision)
+    if new is None:
+        raise HTTPException(status_code=404, detail="revision not found")
+    previous_revision = int(new["parent_revision"] or revision - 1)
+    old = docs_store.get_revision(conn, document_id, previous_revision)
+    if old is None:
+        raise HTTPException(status_code=404, detail="no earlier revision to compare")
+    diff = list(
+        difflib.unified_diff(
+            str(old["body"]).splitlines(),
+            str(new["body"]).splitlines(),
+            lineterm="",
+            n=2,
+        )
+    )[2:]  # the ---/+++ file headers
+    lines = [
+        DiffLine(op="@", text=line)
+        if line.startswith("@@")
+        else DiffLine(op=_DIFF_OPS[line[0]], text=line[1:])
+        for line in diff
+    ]
+    return RevisionDiff(
+        document_id=document_id,
+        from_revision=previous_revision,
+        to_revision=revision,
+        lines=lines,
+    )
+
+
+@router.get("/api/documentation/maintenance")
+def document_maintenance_http(request: Request) -> document_maintenance.Feed:
+    """Documents kept up to date by their profile's maintenance policy."""
+    _require_principal(request)
+    return document_maintenance.feed(server._drafts_db())
 
 
 async def _both_sides_edited_handler(

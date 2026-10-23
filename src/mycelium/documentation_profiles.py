@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from dataclasses import dataclass
+from typing import Literal, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -16,6 +17,10 @@ from . import ai_prompts, audiences, auth, guidelines, prompt_store, store
 from .audiences import Audience
 
 INSTRUCTIONS = ai_prompts.ACTIONS
+#: What happens to a profile's document once a statement it cites changes:
+#: nothing until someone revises it, an update item in the profile's plan, or
+#: a revision that runs by itself (see `mycelium.document_maintenance`).
+Maintenance = Literal["manual", "propose", "auto-revise"]
 
 
 class Conflict(ValueError):
@@ -43,7 +48,9 @@ class Template(Model):
     def valid_name(cls, value: str) -> str:
         value = _part(value)
         if value in guidelines.NON_TYPE_SLOTS:
-            raise ValueError("guidance, exposure and audience are reserved names.")
+            raise ValueError(
+                "guidance, exposure, audience and maintenance are reserved names."
+            )
         return value
 
     @field_validator("text")
@@ -60,6 +67,7 @@ class ProfileBody(Model):
     #: The audience id this profile writes for; None writes for the default
     #: internal audience.
     audience: str | None = None
+    maintenance: Maintenance = "manual"
     templates: tuple[Template, ...] = ()
 
     @model_validator(mode="after")
@@ -147,6 +155,7 @@ class ProfileSnapshot:
     exposure: PromptRevision | None
     templates: tuple[TemplateSnapshot, ...]
     audience: PromptRevision | None = None
+    maintenance: Maintenance = "manual"
 
 
 @dataclass(frozen=True)
@@ -243,11 +252,19 @@ def capture(conn: sqlite3.Connection | None = None) -> CatalogueSnapshot:
                     if slot not in guidelines.NON_TYPE_SLOTS
                 ),
                 slots.get(guidelines.AUDIENCE_SLOT),
+                maintenance(slots.get(guidelines.MAINTENANCE_SLOT)),
             )
             for name, slots in sorted(grouped.items())
         ),
         audiences.live(db),
     )
+
+
+def maintenance(slot: PromptRevision | str | None) -> Maintenance:
+    """The stored policy; an unknown text maintains by hand rather than
+    guessing at automation."""
+    text = (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
+    return cast(Maintenance, text) if text in get_args(Maintenance) else "manual"
 
 
 def _revision(rows: list[sqlite3.Row]) -> str:
@@ -301,6 +318,7 @@ def _profile(
         guidance=live.get("guidance", ""),
         exposure=live.get("exposure", ""),
         audience=chosen,
+        maintenance=maintenance(live.get(guidelines.MAINTENANCE_SLOT)),
         effective_audience=effective.id if effective else None,
         templates=tuple(templates),
         retired=bool(rows) and not live,
@@ -417,6 +435,10 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
         ):
             # The audience decides what a profile's documents may disclose.
             _authorize(principal, "admin")
+        # Going back to manual rewrites the slot rather than retiring it, so
+        # it needs no more than the writer who turned automation on.
+        if request.maintenance != "manual" or guidelines.MAINTENANCE_SLOT in live:
+            desired[guidelines.MAINTENANCE_SLOT] = request.maintenance
         if live.keys() - desired.keys():
             _authorize(principal, "admin")
             _protect_default(conn, name, desired)
@@ -475,7 +497,7 @@ def validate_key(type: str, name: str) -> tuple[str, str]:
         if not separator:
             raise ValueError(
                 "Guideline names must use profile/template, profile/guidance, "
-                "profile/exposure or profile/audience."
+                "profile/exposure, profile/audience or profile/maintenance."
             )
         _part(profile)
         _part(slot)
@@ -511,6 +533,14 @@ def save_text(
         _authorize(principal, "admin")
         if text.strip() not in {item.id for item in audiences.live()}:
             raise ValueError(f"Audience {text.strip()!r} is not live.")
+    if (
+        type == guidelines.TYPE
+        and name.partition("/")[2] == guidelines.MAINTENANCE_SLOT
+        and text.strip() not in get_args(Maintenance)
+    ):
+        raise ValueError(
+            "Maintenance must be one of: " + ", ".join(get_args(Maintenance)) + "."
+        )
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):
         history = prompt_store.history(conn, type, name)
