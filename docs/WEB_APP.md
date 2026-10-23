@@ -79,7 +79,7 @@ Each step links to the section that completes it:
 | Models for each AI action | Every action in use has a model ID |
 | Audiences reviewed and statements labelled | An audience has been edited and every statement has a label |
 | A writing profile with an audience | A profile names an audience explicitly |
-| GitHub connection and destination (optional) | A publishing destination exists |
+| GitHub connection and destination (optional) | A publishing destination exists, outside quarantine (which refuses GitHub delivery) |
 | Draft review mode | Review settings were saved, or review is on |
 | Monthly AI budget (optional) | A monthly limit is set |
 

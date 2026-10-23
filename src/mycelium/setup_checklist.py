@@ -155,8 +155,11 @@ def _github(prompts: sqlite3.Connection) -> tuple[Status, str]:
     destinations = product_settings.get(
         product_settings.DocumentationSettings, conn=prompts
     ).destinations
+    names = ", ".join(d.name for d in destinations)
+    if destinations and quarantine.active():
+        return "todo", f"Quarantine refuses GitHub delivery, so {names} gets nothing."
     if destinations:
-        return "done", f"Publishing to {', '.join(d.name for d in destinations)}."
+        return "done", f"Publishing to {names}."
     return (
         "todo",
         "Connect a GitHub repository and add a destination to publish documents "
