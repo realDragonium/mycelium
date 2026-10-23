@@ -115,6 +115,13 @@ def grants(label: Sequence[str] | None, sees: frozenset[str], internal: bool) ->
     return bool(sees & set(label))
 
 
+def label_visible(
+    row: sqlite3.Row | None, sees: frozenset[str], internal: bool
+) -> bool:
+    """`grants` for one statement's label row (None when unlabelled)."""
+    return grants(label_audiences(row) if row is not None else None, sees, internal)
+
+
 def visible_statement_ids(
     conn: sqlite3.Connection, sees: frozenset[str], internal: bool
 ) -> frozenset[str]:

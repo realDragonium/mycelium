@@ -139,7 +139,6 @@ def _statement_audiences(statement_id: str, request: Request) -> StatementAudien
     if store.get_statement(conn, statement_id) is None:
         raise ValueError(f"Statement {statement_id} does not exist.")
     row = store.audience_labels.get_label(conn, statement_id)
-    granted = set(store.audience_labels.label_audiences(row)) if row else set()
     pending = set(store.audience_labels.label_pending(row)) if row else set()
     return StatementAudiences(
         statement_id=statement_id,
@@ -150,7 +149,9 @@ def _statement_audiences(statement_id: str, request: Request) -> StatementAudien
                 id=item.id,
                 name=item.name,
                 scope=item.scope,
-                visible=bool(item.sees & granted) if row else item.internal,
+                visible=store.audience_labels.label_visible(
+                    row, item.sees, item.internal
+                ),
                 pending=item.id in pending,
             )
             for item in audiences.live()
