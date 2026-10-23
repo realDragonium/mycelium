@@ -100,6 +100,18 @@ def _client():
 # --- route helpers ---------------------------------------------------------
 
 
+def email_verified(claims: dict[str, Any]) -> bool:
+    """Whether the issuer vouches for the `email` claim.
+
+    Only an explicit "not verified" counts against it. Some issuers (Microsoft
+    Entra) never send the claim, and refusing them would lock every user out;
+    some send the boolean as a string."""
+    value = claims.get("email_verified")
+    if value is None:
+        return True
+    return value is True or (isinstance(value, str) and value.lower() == "true")
+
+
 def _safe_next(target: str | None) -> str:
     """Constrain a post-login `next` to a same-site path so it can't be
     abused as an open redirect.
@@ -202,6 +214,7 @@ async def callback(request: Request):
             issuer=issuer,
             subject=subject,
             email=email,
+            email_verified=email_verified(claims),
             name=name,
         )
     if user_id is None:

@@ -136,8 +136,6 @@ def _b64url_no_pad(data: bytes) -> str:
 
 
 def _pkce_verify(verifier: str, challenge: str, method: str) -> bool:
-    if method == "plain":
-        return verifier == challenge
     if method == "S256":
         return (
             _b64url_no_pad(hashlib.sha256(verifier.encode("ascii")).digest())
@@ -298,6 +296,23 @@ def authorization_server_metadata(request: Request) -> dict[str, Any]:
 
 # --- RFC 7591 Dynamic Client Registration ---------------------------------
 
+# Registration is anonymous and every accepted client is stored, so these
+# bound what one request can make us keep. Real clients register a name and
+# a redirect or two.
+MAX_REGISTRATION_BYTES = 64 * 1024
+MAX_CLIENT_NAME_CHARS = 200
+MAX_REDIRECT_URIS = 20
+MAX_REDIRECT_URI_CHARS = 2000
+
+
+async def _read_capped(request: Request, limit: int) -> bytes:
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > limit:
+            raise HTTPException(status_code=413, detail="invalid_request: too large")
+    return bytes(body)
+
 
 @router.post("/register", include_in_schema=False)
 async def register_client(request: Request) -> JSONResponse:
@@ -312,9 +327,10 @@ async def register_client(request: Request) -> JSONResponse:
     we don't recognise is silently ignored — RFC 7591 allows that.
     """
     _require_oauth_enabled()
+    raw = await _read_capped(request, MAX_REGISTRATION_BYTES)
     try:
-        body = await request.json()
-    except Exception:
+        body = json.loads(raw)
+    except ValueError:
         raise HTTPException(
             status_code=400, detail="invalid_request: body must be JSON"
         )
@@ -335,10 +351,20 @@ async def register_client(request: Request) -> JSONResponse:
         raise HTTPException(
             status_code=400, detail="invalid_redirect_uri: at least one URI required"
         )
+    if len(redirect_uris) > MAX_REDIRECT_URIS or any(
+        len(u) > MAX_REDIRECT_URI_CHARS for u in redirect_uris
+    ):
+        raise HTTPException(
+            status_code=400, detail="invalid_redirect_uri: too many or too long"
+        )
 
     client_name = body.get("client_name") or "Unnamed MCP client"
     if not isinstance(client_name, str):
         client_name = str(client_name)
+    if len(client_name) > MAX_CLIENT_NAME_CHARS:
+        raise HTTPException(
+            status_code=400, detail="invalid_client_metadata: client_name too long"
+        )
 
     # RFC 7591 §2 — "Authorization servers MAY ignore values they
     # don't support." Claude Desktop / Claude Code in particular asks
@@ -473,10 +499,10 @@ async def authorize(
         raise HTTPException(
             status_code=400, detail="invalid_request: code_challenge is required (PKCE)"
         )
-    if code_challenge_method not in ("S256", "plain"):
+    if code_challenge_method != "S256":
         raise HTTPException(
             status_code=400,
-            detail="invalid_request: code_challenge_method must be S256 or plain",
+            detail="invalid_request: code_challenge_method must be S256",
         )
 
     conn = _auth_conn(request)

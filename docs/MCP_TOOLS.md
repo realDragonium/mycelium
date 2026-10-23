@@ -2,8 +2,8 @@
 
 Every MCP client receives every advertised tool schema before it asks its first
 question. Mycelium therefore advertises 37 of its 83 registered tools over MCP. Every
-registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when the tool
-takes no arguments) and stays available to the in-process loops (Ask, Ingest,
+registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
+tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
 its MCP advertisement.
 

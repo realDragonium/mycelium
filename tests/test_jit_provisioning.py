@@ -8,7 +8,9 @@ invite-only default are the high-value cases.
 
 import sqlite3
 
-from mycelium import auth, auth_store
+import pytest
+
+from mycelium import auth, auth_store, oidc
 
 
 def _conn() -> sqlite3.Connection:
@@ -23,12 +25,13 @@ def _role_of(conn: sqlite3.Connection, user_id: str) -> str:
     ]
 
 
-def _find(conn, email="alice@example.com", subject="sub-1"):
+def _find(conn, email="alice@example.com", subject="sub-1", email_verified=True):
     return auth.find_or_create_user(
         conn,
         issuer="https://issuer",
         subject=subject,
         email=email,
+        email_verified=email_verified,
         name="Alice",
     )
 
@@ -123,3 +126,56 @@ def test_existing_user_unaffected_by_jit(monkeypatch):
     uid = _find(conn)
     assert uid == existing
     assert _role_of(conn, uid) == "admin"
+
+
+# An identity provider with open signup (Auth0's default database connection)
+# lets anyone register any address without proving they own it. Such an
+# unverified email must not reach anything keyed on email.
+
+
+def test_unverified_email_cannot_take_over_an_existing_account(monkeypatch):
+    conn = _conn()
+    victim = auth.create_user(
+        conn, name="Admin", role="admin", type="human", email="admin@example.com"
+    )
+    assert _find(conn, email="admin@example.com", subject="google|1") == victim
+
+    assert (
+        _find(conn, email="admin@example.com", subject="db|2", email_verified=False)
+        is None
+    )
+    bound = conn.execute(
+        "SELECT oidc_subject FROM users WHERE id = ?", (victim,)
+    ).fetchone()["oidc_subject"]
+    assert bound == "google|1"
+
+
+def test_unverified_email_cannot_claim_bootstrap_admin_or_invite(monkeypatch):
+    monkeypatch.setenv("MYCELIUM_BOOTSTRAP_ADMIN_EMAIL", "owner@example.com")
+    monkeypatch.setenv("MYCELIUM_JIT_DOMAINS", "example.com")
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO invites (id, email, role, token, created_at) "
+        "VALUES ('inv-1', 'alice@example.com', 'writer', 'tok-1', ?)",
+        (auth._now(),),
+    )
+    for email in ("owner@example.com", "alice@example.com", "bob@example.com"):
+        assert _find(conn, email=email, email_verified=False) is None
+    assert conn.execute("SELECT COUNT(*) AS n FROM users").fetchone()["n"] == 0
+
+
+def test_a_bound_subject_signs_in_without_a_verified_email(monkeypatch):
+    monkeypatch.setenv("MYCELIUM_JIT_DOMAINS", "example.com")
+    conn = _conn()
+    uid = _find(conn)
+    assert uid is not None
+    assert _find(conn, email_verified=False) == uid
+
+
+@pytest.mark.parametrize(
+    ("claim", "verified"),
+    [(None, True), (True, True), ("true", True), (False, False), ("false", False)],
+)
+def test_email_verified_claim(claim, verified):
+    claims = {} if claim is None else {"email_verified": claim}
+    assert oidc.email_verified(claims) is verified
