@@ -51,7 +51,7 @@ from .. import (
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from ..server import registry, runtime
-from . import history, substrate, tool_routes
+from . import gaps, history, substrate, tool_routes
 from .access import _enforce_curator, _enforce_role, _require_admin, _require_principal
 from .authentication import AuthMiddleware, _session_secret
 
@@ -141,6 +141,7 @@ app.include_router(github_connect.router)
 app.include_router(tool_routes.router)
 app.include_router(history.router)
 app.include_router(substrate.router)
+app.include_router(gaps.router)
 
 
 # MCP-over-HTTP is mounted at the bottom of this file so it doesn't
@@ -166,89 +167,6 @@ def _serialize_token_row(row) -> dict[str, Any]:
         "last_used_at": row["last_used_at"],
         "revoked_at": row["revoked_at"],
     }
-
-
-# --- knowledge gaps -------------------------------------------------------
-# Free-form reports flagged by callers (humans via the UI, agents via
-# the report_knowledge_gap MCP tool). The reads/lists are useful to
-# every authenticated user; marking resolved/dismissed too. Admins can
-# hard-delete via direct DB if needed; the UI doesn't expose it.
-
-
-def _serialize_gap(row) -> dict[str, Any]:
-    if row["resolved_at"]:
-        status = "resolved"
-    elif row["dismissed_at"]:
-        status = "dismissed"
-    else:
-        status = "open"
-    return {
-        "id": row["id"],
-        "text": row["text"],
-        "status": status,
-        "created_at": row["created_at"],
-        "created_by": row["created_by"],
-        "resolved_at": row["resolved_at"],
-        "resolved_by": row["resolved_by"],
-        "dismissed_at": row["dismissed_at"],
-        "dismissed_by": row["dismissed_by"],
-        "draft_id": row["draft_id"],
-        "statement_id": row["statement_id"],
-        "document_id": row["document_id"],
-    }
-
-
-@app.get("/api/knowledge-gaps")
-def list_knowledge_gaps(request: Request, status: str | None = None) -> dict[str, Any]:
-    """List gap reports.
-
-    `status` query param filters to `open` / `resolved` / `dismissed`
-    (or `all`, the default — returns everything ordered newest first).
-    The status column is virtual: derived from which terminal
-    timestamp is set.
-    """
-    _require_principal(request)
-    conn = store.substrate_connection()
-    status = status or "all"
-    if status not in ("all", "open", "resolved", "dismissed"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail="status must be one of: all, open, resolved, dismissed",
-        )
-    rows = store.list_knowledge_gaps(conn, status=status)
-    return {"gaps": [_serialize_gap(r) for r in rows]}
-
-
-class GapUpdateBody(BaseModel):
-    # One of:
-    #   {"action": "resolve"}    → set resolved_at + resolved_by
-    #   {"action": "dismiss"}    → set dismissed_at + dismissed_by
-    #   {"action": "reopen"}     → clear both terminal timestamps
-    action: str
-
-
-@app.patch("/api/knowledge-gaps/{gap_id}")
-def update_knowledge_gap(
-    gap_id: str, body: GapUpdateBody, request: Request
-) -> dict[str, Any]:
-    p = _require_principal(request)
-    conn = store.substrate_connection()
-    if store.get_knowledge_gap(conn, gap_id) is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="gap not found")
-    if body.action not in ("resolve", "dismiss", "reopen"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=400,
-            detail="action must be one of: resolve, dismiss, reopen",
-        )
-    with store.transaction(conn):
-        updated = store.set_knowledge_gap_status(conn, gap_id, body.action, p.id)
-    return {"gap": _serialize_gap(updated)}
 
 
 @app.get("/api/mention-candidates")
