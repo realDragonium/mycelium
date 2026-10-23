@@ -63,10 +63,11 @@ https://mycelium-staging.example.com/auth/callback
 **Allowed Logout URLs:**
 
 ```
-https://mycelium.example.com/ui/
+https://mycelium.example.com/auth/login
 ```
 
-(Where Auth0 sends the user after they log out.)
+(Logging out clears the Auth0 session too, then sends the user to a
+fresh Mycelium login.)
 
 **Allowed Web Origins:**
 
@@ -113,14 +114,20 @@ they all produce the same OIDC ID token shape.
 If you want to **restrict signups** (e.g. only people on your domain),
 either:
 
-- Turn off **Disable Sign Ups** on the database connection (forces
+- Turn on **Disable Sign Ups** on the database connection (forces
   every account to come from a social provider you've vetted), or
 - Add an Action that rejects logins where the email domain doesn't
   match (Auth0 → Actions → Library → Custom).
 
-But for the simplest case: Mycelium itself rejects logins from
-un-invited emails (see [USERS.md](USERS.md)), so even if Auth0 lets
-anyone sign in, Mycelium will only let invited users through.
+Mycelium itself rejects logins from un-invited emails (see
+[USERS.md](USERS.md)), so even if Auth0 lets anyone sign in, only invited
+users get through. That rests on the email being verified: anyone can
+sign up on the database connection with someone else's address, so
+Mycelium refuses to match an invite, an existing account, the bootstrap
+admin or a JIT domain when the ID token says `email_verified: false`.
+A password user has to confirm their address through Auth0's
+verification email before their first login. Once an account is bound,
+later logins match on the Auth0 subject and don't need the email.
 
 ---
 
@@ -173,6 +180,7 @@ including scheme.
 **`401` and a Mycelium 403 "this account is not authorized"** — Auth0
 let you in but Mycelium refused. Means:
 
+- Auth0 reports the email as unverified (`email_verified: false`), OR
 - The email doesn't match `MYCELIUM_BOOTSTRAP_ADMIN_EMAIL`, OR
 - An admin already exists (the bootstrap is one-shot), OR
 - There's no pending invite for this email.

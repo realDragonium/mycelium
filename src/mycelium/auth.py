@@ -634,6 +634,7 @@ def find_or_create_user(
     issuer: str,
     subject: str,
     email: str | None,
+    email_verified: bool,
     name: str | None,
 ) -> str | None:
     """Resolve an OIDC identity to a `users.id`. Returns the id, or
@@ -654,14 +655,13 @@ def find_or_create_user(
          pre-registered (MYCELIUM_JIT_DOMAINS) — creates a new row with
          the configured default role.
 
+    Steps 2-4 trust the email, so they need `email_verified`: with an open
+    signup connection anyone can register someone else's address, and an
+    unverified match would hand them that person's account, invite or the
+    bootstrap admin.
+
     Anything else: refuse.
     """
-    if not email:
-        # Authlib gave us an ID token with no email claim — we can't
-        # match invites or bootstrap, so we can't safely provision.
-        return None
-    email = email.lower().strip()
-
     row = conn.execute(
         "SELECT id FROM users WHERE oidc_issuer = ? AND oidc_subject = ?",
         (issuer, subject),
@@ -672,6 +672,10 @@ def find_or_create_user(
             (_now(), row["id"]),
         )
         return row["id"]
+
+    if not email or not email_verified:
+        return None
+    email = email.lower().strip()
 
     row = conn.execute(
         "SELECT id, oidc_issuer FROM users WHERE LOWER(email) = ?",
