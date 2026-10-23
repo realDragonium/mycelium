@@ -17,8 +17,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-import anyio.from_thread
-import anyio.to_thread
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -34,11 +32,9 @@ from .. import (
     connect_page,
     documentation_profiles,
     github_connect,
-    model_settings,
     names_workspace,
     oauth_server,
     oidc,
-    product_settings,
     server,
     store,
     tracing,
@@ -55,6 +51,7 @@ from . import (
     history,
     names,
     prompt_texts,
+    settings,
     substrate,
     tool_routes,
     traces,
@@ -161,6 +158,7 @@ app.include_router(traces.router)
 app.include_router(account.router)
 app.include_router(names.router)
 app.include_router(prompt_texts.router)
+app.include_router(settings.router)
 
 
 # MCP-over-HTTP is mounted at the bottom of this file so it doesn't
@@ -173,93 +171,6 @@ app.include_router(prompt_texts.router)
 # approve (replay ops against the substrate) or reject (drop without
 # applying). Status is derived from terminal timestamps + decision, same
 # pattern as knowledge_gaps.
-
-
-@app.get("/api/product-settings")
-def read_product_settings(request: Request) -> product_settings.SettingsView:
-    from fastapi import HTTPException
-
-    principal = _require_principal(request)
-    try:
-        return product_settings.view(principal)
-    except model_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-
-
-@app.patch("/api/product-settings")
-def save_product_settings(
-    body: product_settings.SaveSettings, request: Request
-) -> product_settings.Snapshot:
-    from fastapi import HTTPException
-
-    principal = _require_admin(request)
-    try:
-        saved = product_settings.save(body, principal)
-        if isinstance(body.settings, product_settings.ConcurrencySettings):
-            anyio.from_thread.run_sync(lambda: server.limiter_for("ask"))
-        return saved
-    except model_settings.Conflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    except model_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
-
-
-@app.get("/api/model-settings")
-def ai_model_settings(request: Request) -> model_settings.SettingsView:
-    from fastapi import HTTPException
-
-    principal = _require_principal(request)
-    try:
-        return model_settings.view(principal)
-    except model_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-
-
-@app.patch("/api/model-settings/{action}")
-def save_ai_model_settings(
-    action: model_settings.Action, body: model_settings.SaveSelection, request: Request
-) -> model_settings.ActionView:
-    from fastapi import HTTPException
-
-    principal = _require_admin(request)
-    try:
-        model_settings.save(action, body, principal)
-        return model_settings.action_view(action)
-    except model_settings.Conflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    except model_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
-
-
-@app.get("/api/draft-review/settings")
-def draft_review_settings(request: Request) -> review_settings.SettingsView:
-    from fastapi import HTTPException
-
-    principal = _require_principal(request)
-    try:
-        return review_settings.view(principal)
-    except review_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-
-
-@app.patch("/api/draft-review/settings")
-def save_draft_review_settings(
-    body: review_settings.SaveSettings, request: Request
-) -> review_settings.SettingsView:
-    from fastapi import HTTPException
-
-    principal = _require_admin(request)
-    try:
-        review_settings.save(body, principal)
-        return review_settings.view(principal)
-    except review_settings.Conflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
-    except review_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
 
 
 @app.get("/api/draft-review/backlog")
