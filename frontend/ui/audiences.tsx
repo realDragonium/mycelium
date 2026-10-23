@@ -72,7 +72,8 @@ function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: 
       try {
         const next = await getJSON<AudienceStatus>('/api/audiences/labelling', controller.signal);
         if (controller.signal.aborted) return;
-        setPolledStatus(next); setError(null);
+        // A drained queue reports no run; keep the one this page followed.
+        setPolledStatus(prev => ({ ...next, backfill: next.backfill ?? prev?.backfill ?? null })); setError(null);
         if (next.queued > 0) timer = setTimeout(poll, 3000);
         else onReload();
       } catch (cause) { if (!controller.signal.aborted) { setError(errorMessage(cause)); timer = setTimeout(poll, 3000); } }
@@ -89,10 +90,10 @@ function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: 
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   };
-  return <Card title="Statement labelling" actions={data.can_configure && <><button type="button" className="btn sm" disabled={busy || running} onClick={() => void start(false)}>Label unlabelled statements</button><button type="button" className="btn ghost sm" disabled={busy || running} onClick={() => void start(true)}>Relabel AI labels</button></>}>
+  return <Card title="Statement labelling" actions={data.can_configure && <><button type="button" className="btn sm" disabled={busy} onClick={() => void start(false)}>Label unlabelled statements</button><button type="button" className="btn ghost sm" disabled={busy} onClick={() => void start(true)}>Relabel AI labels</button></>}>
     <div className="audience-metrics"><div><b>{status.labelled_ai}</b><span>AI-labelled</span></div><div><b>{status.labelled_curator}</b><span>Curator</span></div><div><b>{status.unlabelled}</b><span>Unlabelled</span></div><div><b>{status.queued}</b><span>Queued</span></div><div><b>{status.failed}</b><span>Failed</span></div></div>
     <p className="hint">{status.statements} statements · {formatCost(status.cost_usd)} estimated total cost · {status.provider} / {status.model} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
-    {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements…` : `Backfill finished: ${status.backfill.labelled} statements labelled.`} Estimated cost since start: {formatCost(status.backfill.cost_usd)}.</Notice>}
+    {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements… Estimated cost since start: ${formatCost(status.backfill.cost_usd)}.` : 'Backfill finished.'}</Notice>}
     {status.last_error && <Notice tone="error">Last labelling error: {status.last_error}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
   </Card>;
