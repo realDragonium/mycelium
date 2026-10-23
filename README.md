@@ -126,6 +126,29 @@ Documentation is requested with `request_documentation`, followed with
 The MCP schema and `/docs` are the authoritative signature reference. Both are
 generated from the decorated functions in `src/mycelium/server/`.
 
+## Skills for agents
+
+`skills/` holds Claude Code skills for agents that work with a Mycelium server,
+packaged as the `mycelium` plugin. Install it in Claude Code:
+
+```text
+/plugin marketplace add realDragonium/mycelium
+/plugin install mycelium@mycelium
+```
+
+| Skill | Use it to |
+|---|---|
+| `mycelium-knowledge-source` | Answer from the knowledge base, cite statements and report gaps |
+| `mycelium-authoring` | Write descriptive knowledge: statements, kinds, links, concepts |
+| `mycelium-guide-authoring` | Write how-to and troubleshooting knowledge |
+| `mycelium-draft` | Research a domain in a codebase and propose it as a reviewed draft |
+| `mycelium-draft-review` | Work the draft queue alongside the internal reviewer |
+| `mycelium-documentation` | Have the server write, revise and plan documents |
+| `mycelium-curation` | Knowledge health, the connect pass, duplicates and gaps |
+
+See [skills/README.md](skills/README.md). A checkout of this repository loads
+the same skills through `.claude/skills`.
+
 ## Example
 
 Create an entity, write a typed statement, then retrieve it:

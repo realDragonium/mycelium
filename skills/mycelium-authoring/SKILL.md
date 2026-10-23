@@ -1,17 +1,17 @@
 ---
 name: mycelium-authoring
-description: How to write knowledge into the mycelium substrate. Covers the authoring workflow, the action-layer depth to document at, picking a statement `kind` (event/state/capability/rule/property), atomicity, per-kind phrasing, and linking statements as METHOD (direction discipline, triggers-vs-contains, conditions via `when`, when to ask) — link-type meanings are NOT listed here; they live in `list_link_types()` / `list_entity_link_types()`. Use this whenever calling ingest, upsert_statement, upsert_statements, upsert_entity, upsert_name, add_links, remove_links, add_entity_links, remove_entity_links, merge_statements, delete_statement, merge_entities, or move_name — even for a one-line change.
-
-This skill defers two things to live tools on purpose: link-type definitions and the exact `when` grammar come from `list_link_types()` / `list_entity_link_types()`, and phrasing word-lists come from the validator's rejection messages. Always call those tools at author time rather than relying on memory or on the few type names this skill happens to mention — the live vocabulary is larger and grows; the names here are illustrations of method, not the menu.
+description: How to write knowledge into a Mycelium knowledge base — the descriptive layer of what the product does and what holds. Covers documenting at the action layer, picking a statement kind (event, state, capability, rule, property), atomicity, routing phrasing rejections, linking as method (direction, triggers versus contains, conditions via when, chains over stars), discovery before writing, and batching with @N references. Use whenever you call ingest, upsert_statement, upsert_statements, patch_statement, upsert_entity, upsert_name, add_links, remove_links, add_entity_links, remove_entity_links, merge_statements, merge_entities or delete_statement, even for a one-line change. For how-to and troubleshooting content also load mycelium-guide-authoring; to propose changes through review use mycelium-draft.
 ---
 
 # Mycelium Authoring
 
-A **statement** is the substrate's unit of meaning — one atomic claim about the product. Every statement carries a `kind` declaring the *shape* of the claim. **The kinds and their definitions live in `upsert_statement`'s documentation — read them there; this skill does not duplicate them**, for the same reason it doesn't list link types: one source, no drift, current across every client. The starting vocabulary is `event`, `state`, `capability`, `rule`, and `property`; it is open — add a kind when none fits.
+A **statement** is the substrate's unit of meaning — one atomic claim about the product. Every statement carries a `kind` declaring the *shape* of the claim. **The kinds and their definitions come from `list_statement_kinds()` and `upsert_statement`'s documentation — read them there; this skill does not duplicate them**, for the same reason it doesn't list link types: one source, no drift, current across every client. The descriptive kinds are `event`, `state`, `capability`, `rule` and `property`; the prescriptive kinds `procedure`, `action`, `check` and `cause` belong to `mycelium-guide-authoring`. Propose a new kind to the operator only when none fits.
+
+This skill also defers link-type definitions and the exact `when` grammar to `list_link_types()` / `list_entity_link_types()`, and phrasing word-lists to the validator's rejection messages. Call those at author time rather than relying on the few names this skill mentions: the live vocabulary is larger and grows.
 
 This skill covers the part the tool's definitions can't — **how to choose the right kind and dodge the traps**: valid state vs. derived condition (§4a), valid property vs. state (§4c), cross-kind redundancy (§4b), phrasing routing (§5), and the rule/state distinction (`references/rule-kind.md`).
 
-Pick the kind first, write the text second — the kind selects the phrasing rules the validator enforces (§5). **Statement text carries no trailing punctuation.**
+Pick the kind first, write the text second — the kind selects the phrasing rules the validator enforces (§5). By convention statement text carries no trailing punctuation (the validator does not check it).
 
 **One statement = one atomic claim** (§4). The vocabulary is open and decisions have no undo — so two disciplines run through everything below: **tell the operator before you mutate**, and **the code is authoritative, the substrate is not**.
 
@@ -35,7 +35,7 @@ This inverts the instinct to summarise. When a method runs A then B then C and e
 
 ### 1b. What to keep shallow
 
-Collapse a step into its parent **only** when it is genuinely indivisible at the product level, or is invisible plumbing with no product-observable consequence: logging, metrics, cache invalidation, encryption, retry/Celery scheduling, ORM/DB write mechanics, framework idioms. These could be swapped wholesale without changing what the product does — skip them.
+Collapse a step into its parent **only** when it is genuinely indivisible at the product level, or is invisible plumbing with no product-observable consequence: logging, metrics, cache invalidation, encryption, background-job scheduling, ORM/DB write mechanics, framework idioms. These could be swapped wholesale without changing what the product does — skip them.
 
 ### 1c. The depth test
 
@@ -89,13 +89,13 @@ A statement records what the *product* does or is true of — not how code imple
 - **Externally-observable claims** — anything a user, API caller, or integration sees. Includes the integration surface: emitted/accepted webhooks, rejection of a bad webhook, OAuth callbacks, signed-URL redirects, IP allowlists. The test isn't *"is this fancy UX?"* — it's *"does an external observer see this happen, succeed, or fail?"*
 - **Product-internal claims** — named pieces of the product's own process or shape that exist regardless of implementation (*"the extraction agent runs"*, *"a user record holds a name and email"*).
 
-**The refactor test:** imagine the codebase rewritten in another language. *"Embeddings are generated"* survives → write it. *"The `OllamaEmbedder` is constructed"* vanishes → skip it. Strip `*Service`/`*Manager`/`*Handler`/`*Error`, function names, table/column names from text and `mentions`. **Preserve named domain entities verbatim** — roles (`admin`, `reader`), third-party services (`Auth0`, `Ollama`) — anything that appears in product docs, contracts, UI, or business rules.
+**The refactor test:** imagine the codebase rewritten in another language. *"Embeddings are generated"* survives → write it. *"The `OllamaEmbedder` is constructed"* vanishes → skip it. Strip `*Service`/`*Manager`/`*Handler`/`*Error`, function names, table/column names from text and concept names. **Preserve named domain entities verbatim** — roles (`Owner`, `Viewer`), plans (`Starter`), third-party services (an identity provider, a payment processor) — anything that appears in product docs, contracts, UI, or business rules.
 
 | Code mechanic (don't) | Product claim (do) |
 |---|---|
-| *"`validateInvite()` rejects emails missing `@`"* | *"An invite is rejected when the email is malformed"* (event) |
-| *"The `users` table has columns id, name, status"* | *"A user record holds a name, an email, and a status"* (state) |
-| *"`OIDCCallback` calls `verify_state()`"* | *"An OIDC callback is rejected when its state parameter doesn't match"* (event) |
+| *"`validateInvite()` rejects emails missing `@`"* | *"An invite is rejected"* (event), with `when` *"The invite email is malformed"* (state) on the edge that leads to it |
+| *"The `members` table has columns id, name, status"* | *"A member record holds a name, an email and a status"* (state) |
+| *"`SsoCallback` calls `verify_state()`"* | *"An SSO callback is rejected"* (event), with `when` *"The callback state parameter does not match the sign-in request"* (state) |
 
 ---
 
@@ -109,7 +109,7 @@ One statement records exactly one claim. Split when you see: `and`/`;`/`then` jo
 
 **Depth and order beat text purity.** Two cases are tolerated rather than fought:
 
-- **Single conceptual actions English phrases compoundly** — *"a user record is retrieved by matching contact details, or created when no match is found"* (get-or-create). One action, one node.
+- **Single conceptual actions English phrases compoundly** — *"A member record is retrieved by matching the email, or created when no match is found"* (get-or-create). One action, one node.
 - **Low-value inline guards** that would cost more to reify than they're worth.
 
 When decomposing one of these would burn time for little graph value, **write the fused text and pass `allow_phrasing_violations=True`**. Move on.
@@ -126,13 +126,13 @@ Changing a statement's `kind` does not create new information. Before writing, a
 
 ### 4c. Valid property
 
-A *value slot* where the meaningful question is *what value*, not *does this hold*. Valid: user-supplied config/inputs (*"Email"*, *"Server host"*), derived values (*"Similarity score"*, authored with `valued-by → rule` and no input source). **Not** properties: binary conditions (those are `state`), enum *cases* (one property; legal values come from a `rule` via `valued-by`), the computation itself (that's the `rule`). Anchor a property to its entity by listing the entity in `mentions` — there is no `belongs-to` link. The full inputs-as-properties pattern is in `references/patterns.md`.
+A *value slot* where the meaningful question is *what value*, not *does this hold*. Valid: user-supplied config/inputs (*"Email"*, *"Server host"*), derived values (*"Invoice total"*, authored with `valued-by → rule` and no input source). **Not** properties: binary conditions (those are `state`), enum *cases* (one property; legal values come from a `rule` via `valued-by`), the computation itself (that's the `rule`). Anchor a property to its entity by naming the entity in the property's text — mentions are derived from text, and there is no `belongs-to` link. The full inputs-as-properties pattern is in `references/patterns.md`.
 
 ---
 
 ## 5. Kinds & phrasing — route, don't memorise
 
-The validator checks text against the chosen `kind` and **rejects with a reason** (`compound`, `hidden_event_state`, `precondition_in_text`, `universal_claim`, `hedge`, rule-shaped, property-shaped, …). The validator is the source of truth for the exact word-lists — this skill does not reproduce them. When a statement is rejected, **route the fix**:
+The validator checks text against the chosen `kind` and **rejects with a reason** (`compound`, `hidden_event_state`, `precondition_in_text`, `universal_claim`, `hedge`, `rule_shaped`, `property_shaped`, `sequencing`, …). The validator is the source of truth for the exact word-lists — this skill does not reproduce them. When a statement is rejected, **route the fix**:
 
 - **Wrong kind for the wording** → change the `kind` (don't bypass). If you reached for `can`/`may`, it's a `capability`, not a `state`. If you wrote a bare number or *"is a …"* on an `event`, it's almost always a `state`.
 - **Condition in the text** (`when`/`if`/`before`/`after`/`unless`, sentence-initial *or* mid-sentence) → reify the condition as a `state` and attach it via `when` on the link (§6).
@@ -175,7 +175,7 @@ The cheap test: would the target still make sense as a standalone statement — 
 
 An edge holds unconditionally by default. When it only fires under a precondition, **reify the precondition as its own statement** (usually `state`) and attach it as a `when` expression on the link — **never bake a condition into statement text** (§5). The expression is a small AND/OR/NOT tree over statement-id leaves; **read the full grammar from `list_link_types()`** (it has gained operators — do not assume from memory what it supports).
 
-**Conjunctive conditions never collapse into one compound state.** *"The user's role is `reader`"* AND *"the requested tool performs a write"* are two separate states ANDed in the `when`, not one fused state — otherwise *"which tools are blocked for readers?"* becomes unanswerable. Model a shared condition once and reference it from every edge that needs it.
+**Conjunctive conditions never collapse into one compound state.** *"The member's role is Viewer"* AND *"The request edits an invoice"* are two separate states ANDed in the `when`, not one fused state — otherwise *"which requests are blocked for viewers?"* becomes unanswerable. Model a shared condition once and reference it from every edge that needs it.
 
 ### Which tool, and isolation
 
@@ -206,14 +206,16 @@ These are combinations of the rules above, not special primitives. Recognising t
 
 ## 8. Workflow
 
-- **Tell before doing.** Present exact texts, kinds, links, mentions, and rationale; wait for approval before any mutation. No undo, no audit log.
+- **Know where your writes land.** On a writer or admin connection, writes are live. On a drafter connection they go into your open draft, and nothing is live until the draft is reviewed and applied (`mycelium-draft`). `merge_statements`, `merge_entities` and `delete_statement` need an admin. A reader sees no write tools.
+- **Tell before doing.** Present exact texts, kinds, links, the concepts each text names, and rationale; wait for approval before any live mutation. Live writes have no undo: **Activity** records them, it does not reverse them.
 - **Verify against code.** The substrate may hold records authored from wrong assumptions. Read the implementation; if substrate and code disagree, the code wins and the substrate gets fixed.
 - **Mark uncertainty inline.** `> 💡 likely correct: [inference + source]` / `> ⚠️ needs verification: [what's unclear]`. Anything unmarked is a claim you can defend.
-- **Discover before writing — the substrate does not dedup.** Bulk: `discover_facts(texts=[…])` (`exists ≥0.85` → don't duplicate; `near 0.6–0.85` → link instead). Single: `search_statements(query, min_score=0.7)` for the claim *and* for each entity you'll mention; `grep_statements` for exact identifiers. **Pre-create entities** with a one-line description via `upsert_entity` before mentioning them — auto-create on first mention leaves an empty, undiscoverable description.
+- **Discover before writing — the substrate does not dedup.** Bulk: `discover_facts(texts=[…])` (`exists ≥0.85` → don't duplicate; `near 0.6–0.85` → link instead). Single: `search_statements(query, min_score=0.7)` for the claim *and* for each entity you'll mention; `grep_statements` for exact identifiers. **Create concepts before naming them.** A statement mentions a concept only when one of the concept's names or aliases appears in its text; nothing is created on first use. Create a missing concept with `upsert_entity(name, description)` (a one-line description), or add the wording you use as an alias with `upsert_name(text, entity_id)`, before writing the statements that name it.
 - **Audit links after each chunk.** Walk the new ids, inspect `links` and `incoming_links`, wire orphans in or reconsider them. Orphans cluster when the writer focused on text and forgot direction; catching them at chunk boundaries is far cheaper than ten chunks later. **Also walk the chain:** from the chunk's entry point, can you traverse through the new statements to a terminal, or did everything attach to one hub? A flat fan that passes the orphan check still fails §1d.
-- **Raw prose (`ingest`).** When what you hold is text rather than statements — a paragraph you were handed, a transcript, a ticket — pass it whole to `ingest` instead of pre-atomizing it. An LLM extracts atomic statements, reconciles each against existing knowledge, proposes links, and returns one open draft; nothing is written live. Read it with `get_draft`, strike anything you disagree with via `discard_draft_op(draft_id, seq)`, then `submit_draft(draft_id)`.
+- **Raw prose (`ingest`).** When what you hold is text rather than statements — a paragraph you were handed, a transcript, a ticket — pass it whole to `ingest` instead of pre-atomizing it. An LLM extracts atomic statements, reconciles each against existing knowledge, proposes links, and returns one open draft; nothing is written live. Read it with `get_draft`, strike anything you disagree with via `discard_draft_op(draft_id, seq, expected_revision)`, then `submit_draft(draft_id)`.
 - **Batch new content (`upsert_statements` + `submit_draft`).** When you have already written the statements, write them with `upsert_statements` into a draft — a drafter's writes land in their open session draft automatically; pass `draft_id` to target a specific open draft — and `submit_draft` when the chunk is done. Define dependencies (conditions, sub-statements) at **lower** indices than the parents that reference them via `@N`, so rejections cascade upward predictably; cascade rejection is automatic and transitive. On submit, the internal draft reviewer checks the draft against the graph for missing or misdirected links, duplicates, and contradictions. It judges what you wrote; it does not author relations the text never stated. Emergent behaviour, cross-feature interaction, the ordering you know from reading the code — those are still yours to author as `links`, under §6 like any other edge, and a statement that ends up with no link in or out is still yours to wire.
-- **Duplicates are claims, not scores.** Mirror pairs (`reader`/`writer`/`admin`, above/below) score ~0.99 against each other in similarity search — that's expected; do **not** merge them. Merge only exact-same-claim duplicates.
+- **Read `near_duplicates`.** Every upsert response lists existing statements at or above 0.85 similarity to what you wrote. Same claim → drop yours (`discard_draft_op` in a draft; live, tell the operator and merge it into the existing one). Related → link them. See `references/patterns.md`.
+- **Duplicates are claims, not scores.** Mirror pairs (`Owner`/`Admin`/`Viewer`, above/below) score ~0.99 against each other in similarity search — that's expected; do **not** merge them. Merge only exact-same-claim duplicates.
 
 ---
 
@@ -227,7 +229,7 @@ These are combinations of the rules above, not special primitives. Recognising t
 2. **Framed from outside?** Survives the refactor test; no class/function/table names; domain entities preserved (§3).
 3. **Atomic — or a justified carve-out?** One claim, or one get-or-create/inline-guard with `allow_phrasing_violations`; never two orderable actions fused (§4).
 4. **Inputs as properties, real states as states?** (§4a, §4c)
-5. **Right `kind`, phrasing routed not bypassed?** (§5)
+5. **Right `kind`, phrasing routed not bypassed?** Every concept the text names exists, so the mention is derived (§5, §8).
 6. **No redundant echo?** Passes the structural-necessity test (§4b).
 7. **No conditions in text?** Reified as `when` (§6).
 8. **Links: consulted `list_link_types()`, direction checked, `triggers`-vs-`contains` tested, chain-forming preferred over attachment where an intermediate exists, uncertain ones asked?** (§6)

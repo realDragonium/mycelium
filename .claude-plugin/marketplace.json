@@ -1,0 +1,14 @@
+{
+  "name": "mycelium",
+  "description": "Skills for agents connected to a Mycelium server.",
+  "owner": {
+    "name": "realDragonium"
+  },
+  "plugins": [
+    {
+      "name": "mycelium",
+      "source": "./skills",
+      "description": "Read, author, draft, review, document and curate Mycelium knowledge."
+    }
+  ]
+}
