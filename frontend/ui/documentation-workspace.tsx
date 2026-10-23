@@ -20,6 +20,12 @@ interface DocumentationRun {
   status: string; created_at: string; document_id: string | null; result_revision: number | null;
   target_document_id: string | null; target_revision: number | null;
   revision_base: string | null; error: string | null; draft_title?: string | null; draft_body?: string | null;
+  summary: RunSummary | null;
+}
+interface RunSummary {
+  activity: string | null; turns: number; duration_s: number;
+  tokens: { input: number; cache_read: number; cache_creation: number; output: number };
+  cost_usd: number | null; statements_retrieved: number; statements_cited: number; gaps_filed: number;
 }
 interface DeliveryCoordinates { host: string; owner: string; repo: string; base_branch: string }
 interface PullRequest { number: number; state: string; refreshed_at: string | null }
@@ -81,6 +87,32 @@ const docEntityByName = (text: string) => {
 };
 const docEntityName = (id: string) => substrate.data.entities.find(entity => entity.id === id)?.name || id;
 const docDate = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : 'Not recorded';
+const docTokens = (count: number) => count >= 1000 ? `${(count / 1000).toFixed(count >= 100_000 ? 0 : 1)}k` : String(count);
+const docDuration = (seconds: number) => seconds >= 60 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s` : `${Math.round(seconds)} s`;
+const docCost = (summary: RunSummary) => summary.cost_usd === null ? 'cost not estimated' : `about $${summary.cost_usd.toFixed(2)}`;
+const docRunLine = (summary: RunSummary) => `${summary.turns} turns · ${docDuration(summary.duration_s)} · ${docCost(summary)} · ${summary.statements_cited} of ${summary.statements_retrieved} retrieved statements cited`;
+
+function DocumentationSources({ ids }: { ids: string[] }) {
+  return <ol className="docw-sources">{ids.map(id => {
+    const statement = substrate.index.statements[id];
+    return <li key={id}>{statement
+      ? <Link to={{ view: 'statement', id }} className="prov-item"><span className="pv-body"><span className="pv-title">{statement.text}</span><span className="pv-role">{statement.kind} · {id}</span></span></Link>
+      : <span className="pv-role">{id} · no longer in the knowledge base</span>}</li>;
+  })}</ol>;
+}
+
+function DocumentationRunSummary({ summary }: { summary: RunSummary }) {
+  const { tokens } = summary;
+  return <dl className="docw-summary">
+    <div><dt>Turns</dt><dd>{summary.turns}</dd></div>
+    <div><dt>Duration</dt><dd>{docDuration(summary.duration_s)}</dd></div>
+    <div><dt>Estimated cost</dt><dd>{summary.cost_usd === null ? 'Not estimated for this model' : `$${summary.cost_usd.toFixed(2)}`}</dd></div>
+    <div><dt>Input tokens</dt><dd>{docTokens(tokens.input + tokens.cache_read + tokens.cache_creation)} ({docTokens(tokens.cache_read)} from cache)</dd></div>
+    <div><dt>Output tokens</dt><dd>{docTokens(tokens.output)}</dd></div>
+    <div><dt>Statements</dt><dd>{summary.statements_cited} cited of {summary.statements_retrieved} retrieved</dd></div>
+    <div><dt>Knowledge gaps filed</dt><dd>{summary.gaps_filed}</dd></div>
+  </dl>;
+}
 
 function DocumentationModel({ options, value, onChange, disabled }: {
   options: DocumentationOptions; value: string; onChange: (provider: string) => void; disabled?: boolean;
@@ -324,7 +356,7 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
       {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to edit or publish</button></p>}
       <div className="docw-actions"><button onClick={() => setSource(value => !value)}>{source ? 'Read document' : 'View Markdown'}</button><button onClick={download}>Download Markdown</button>{!historical && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`documents/${encodeURIComponent(id)}/edits`) ? 'Resume edit' : 'Edit Markdown'}</button>}</div>
       {source ? <pre className="docw-source">{selected.body}</pre> : <article className="docw-prose" dangerouslySetInnerHTML={{ __html: selected.body_html }} />}
-      <details><summary>Sources and review</summary><p>{selected.statement_ids?.length || 0} source statements</p><ul>{(selected.statement_ids || []).map(id => <li key={id}><a href={'#/s/' + encodeURIComponent(id)}>{id}</a></li>)}</ul><pre className="docw-source">{JSON.stringify(selected.review, null, 2)}</pre></details>
+      <details><summary>Sources and review</summary><p>{selected.statement_ids?.length || 0} source statements</p><DocumentationSources ids={selected.statement_ids || []} /><pre className="docw-source">{JSON.stringify(selected.review, null, 2)}</pre></details>
       {(selectedRunId || (!historical && current.last_run_id)) && <p><button onClick={() => docNavigate({ run: selectedRunId || current.last_run_id })}>View generation run</button></p>}
     </section>
     {!historical && current.stale.status === 'out_of_date' && <DocumentationStaleness key={current.current_revision} document={current} options={options} onStarted={onStarted} />}
@@ -360,7 +392,8 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
   return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run.status)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
     {run.target_document_id && <p>Revises <a href={'#/documentation?document=' + encodeURIComponent(run.target_document_id)}>an existing document</a>, starting from its revision {run.target_revision}.</p>}
     {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
-    {docActive(run) && <p role="status">You can leave this screen while generation and review finish.</p>}
+    {docActive(run) && <p role="status">{run.summary?.activity ? `${run.summary.activity} · turn ${run.summary.turns} so far. ` : ''}You can leave this screen while generation and review finish.</p>}
+    {run.summary && <DocumentationRunSummary summary={run.summary} />}
     {run.error && <p role="alert">{run.error}</p>}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}
     {run.document_id && !run.result_revision && <p>This older run has no retained revision snapshot. The link opens the current document.</p>}
@@ -415,7 +448,7 @@ function DocumentationWorkspace() {
         <label>Find a document<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Title, profile, or template" /></label>
         {!documents.length ? <p>No documents yet. Start with Generate, or configure a writing profile first.</p> : !filtered.length ? <p>No documents match this search.</p> : <div className="docw-list">{filtered.map(document => <button key={document.id} onClick={() => docNavigate({ document: document.id })}><strong>{document.title}</strong><span>{document.guideline_set} · {document.document_type} · revision {document.current_revision}</span><span>{docDeliveryStatus(document.delivery_status)} · updated {docDate(document.updated_at)}</span>{document.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</button>)}</div>}
       </section>)}
-      {route.tab === 'runs' && <>{route.run && <DocumentationRun key={route.run} id={route.run} onCompleted={update} options={options} onStarted={started} />}<section className="docw-panel"><div className="docw-actions"><h2>Recent generation runs</h2><button onClick={update}>Refresh</button></div>{!runs.length ? <p>No runs yet.</p> : <div className="docw-list">{runs.map(run => <button key={run.id} onClick={() => docNavigate({ run: run.id })}><strong>{run.prompt}</strong><span>{docStatus(run.status)} · {run.provider} · {docDate(run.created_at)}</span></button>)}</div>}</section></>}
+      {route.tab === 'runs' && <>{route.run && <DocumentationRun key={route.run} id={route.run} onCompleted={update} options={options} onStarted={started} />}<section className="docw-panel"><div className="docw-actions"><h2>Recent generation runs</h2><button onClick={update}>Refresh</button></div>{!runs.length ? <p>No runs yet.</p> : <div className="docw-list">{runs.map(run => <button key={run.id} onClick={() => docNavigate({ run: run.id })}><strong>{run.prompt}</strong><span>{docStatus(run.status)} · {run.provider} · {docDate(run.created_at)}</span>{run.summary && <span>{docActive(run) && run.summary.activity ? run.summary.activity + ' · ' : ''}{docRunLine(run.summary)}</span>}</button>)}</div>}</section></>}
     </>}
   </main>;
 }

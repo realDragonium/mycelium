@@ -26,7 +26,7 @@ focuses it.
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links |
 | | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities |
 | | Entity map | `#/entities?focus=<id>` | Entities and their links; add and remove entity links |
-| | Documents | `#/documentation` | Generate (optionally about a concept; the form says whether it revises an existing document), edit, review and publish documents; see each pull request's state; see which documents are out of date with their sources and revise them; revise from the published copy when both sides changed |
+| | Documents | `#/documentation` | Generate (optionally about a concept; the form says whether it revises an existing document), edit, review and publish documents; see each pull request's state; see which documents are out of date with their sources and revise them; revise from the published copy when both sides changed; read a document's sources as statement text linked to each statement; follow a run as it works and see what it spent (turns, duration, tokens, estimated cost, statements retrieved and cited, gaps filed) on the run and in the generation history |
 | Add knowledge | Ingest text | `#/ingest` | Paste prose; a loop extracts a draft |
 | Curate | Drafts | `#/drafts`, `#/drafts/<id>` | Review, edit, submit, approve, reject or withdraw drafts; answer the reviewer's questions. Approving is all-or-nothing: if any statement is refused (the phrasing linter), nothing is applied and each refusal is listed with its reasons. Applying a draft resolves the gaps reported about it |
 | | Knowledge gaps | `#/gaps` | Resolve, dismiss or reopen reported gaps; follow a gap to the statement, draft or document it names |
@@ -52,7 +52,7 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
 | | Draft review | `#/settings/review` | Automatic review mode, reviewer, model, whether reviews may apply; review the backlog |
 | | Limits | `#/settings/limits` | Token, time and operation budgets per action; concurrent runs |
-| Publishing | Documentation | `#/settings/documentation` | GitHub connection, publishing destinations, writing profiles and templates |
+| Publishing | Documentation | `#/settings/documentation` | GitHub connection (disconnecting asks first), publishing destinations, writing profiles and templates |
 
 What a person can change depends on their role; sections say so where it
 applies.

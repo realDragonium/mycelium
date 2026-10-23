@@ -1109,6 +1109,11 @@ main.page.home { padding-top: 56px; }
 .docw .docw-list button { display: grid; gap: 4px; text-align: left; padding: 14px 16px; background: var(--bg-2); border-color: var(--line); font-size: var(--fs-sm); }
 .docw .docw-list button:hover { border-color: var(--line-strong); }
 .docw-list strong { font-weight: 600; color: var(--ink); }
+.docw-sources { list-style: none; padding: 0; margin: 8px 0 16px; }
+.docw-sources .prov-item { grid-template-columns: 1fr; }
+.docw-summary { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin: 16px 0; }
+.docw-summary dt { color: var(--ink-4); font-size: var(--fs-2xs); font-family: var(--mono); }
+.docw-summary dd { margin: 2px 0 0; font-size: var(--fs-sm); color: var(--ink); }
 .docw-stale-badge { display: inline-block; margin-left: 10px; padding: 1px 8px; border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent); border-radius: 999px; color: var(--warn); font-family: var(--mono); font-size: var(--fs-xs); font-weight: 500; vertical-align: middle; }
 .docw-list .docw-stale-badge { justify-self: start; margin-left: 0; }
 .docw-stale { border-color: color-mix(in oklab, var(--warn) 45%, var(--line)); }
