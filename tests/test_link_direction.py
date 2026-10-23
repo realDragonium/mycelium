@@ -20,9 +20,9 @@ def _client(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
     runtime._ctx = None
-    from mycelium.http import app
+    from mycelium.http import create_app
 
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 def _stmt(client: TestClient, kind: str, text: str) -> str:

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from mycelium import server
-from mycelium.http import app
+from mycelium.http import create_app
 from mycelium.http.tool_routes import _path_for
 
 _MANIFEST = Path(__file__).resolve().parents[1] / "docs" / "MCP_TOOLS.md"
@@ -36,7 +36,7 @@ def test_mcp_advertises_exactly_the_allowlisted_tools():
 
 
 def test_every_tool_kept_off_mcp_still_has_an_http_route():
-    paths = {getattr(route, "path", None) for route in app.routes}
+    paths = {getattr(route, "path", None) for route in create_app().routes}
     off_mcp = _registered() - server.MCP_TOOLS
 
     assert off_mcp

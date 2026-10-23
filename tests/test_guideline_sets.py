@@ -101,14 +101,13 @@ def _reset_server() -> None:
 def _app(tmp_path, monkeypatch):
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
-    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
     _reset_server()
     from mycelium import embed
 
     monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
-    from mycelium.http import app
+    from mycelium.http import create_app
 
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 # --- what a fresh deployment boots with -------------------------------------

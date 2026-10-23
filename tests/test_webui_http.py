@@ -12,7 +12,7 @@ import re
 from fastapi.testclient import TestClient
 
 from mycelium import auth
-from mycelium.http import app
+from mycelium.http import create_app
 from mycelium.http.authentication import AuthMiddleware
 
 
@@ -21,7 +21,7 @@ def _reader(monkeypatch):
         return auth.Principal(id="fixture", name="Fixture", role="reader", type="human")
 
     monkeypatch.setattr(AuthMiddleware, "_resolve", resolve)
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 def test_the_app_page_and_its_bundles_are_served(monkeypatch):

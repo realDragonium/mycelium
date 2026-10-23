@@ -19,23 +19,18 @@ def _reset_server() -> None:
 
 
 def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
-    """Build a fresh TestClient with a fresh data dir and toggle state.
-
-    Reimports `http` so the module-level `app` is rebuilt against the
-    current env — necessary because `mycelium.http` reads MYCELIUM_DATA_DIR
-    inside its lifespan, but the AuthMiddleware is registered at import.
-    """
+    """Build a fresh TestClient with a fresh data dir and toggle state."""
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", auth_mode)
-    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
+    monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "auth-test-secret")
     _reset_server()
     # Stub the embedder so server.init doesn't reach for Ollama.
     from mycelium import embed
 
     monkeypatch.setattr(embed, "embed", lambda t: [0.0] * 768)
-    from mycelium.http import app
+    from mycelium.http import create_app
 
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 def test_auth_off_grants_local_admin(tmp_path, monkeypatch):
@@ -413,9 +408,7 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
     from mcp.types import ListToolsResult
 
     # The filter is driven by the principal in the contextvar, not by
-    # auth-mode; we manipulate it manually below. Run with auth off
-    # to keep the test from needing a session secret on a fresh
-    # `mycelium.http` import.
+    # auth-mode; we manipulate it manually below.
     client = _app(tmp_path, monkeypatch, auth_mode="off")
     with client:
         from mycelium import server

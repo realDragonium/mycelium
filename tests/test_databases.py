@@ -19,7 +19,7 @@ import pytest
 
 import instance_scenario
 from mycelium import databases, embed, phrasing, server, store
-from mycelium.http import app
+from mycelium.http import create_app
 from mycelium.server import runtime
 
 _FIXTURES = sorted((Path(__file__).parent / "migration_fixtures").iterdir())
@@ -59,7 +59,7 @@ def _load(fixture: Path, data_dir: Path) -> None:
 
 def _probe() -> list[str]:
     async def get() -> httpx.Response:
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=create_app())
         async with httpx.AsyncClient(transport=transport, base_url="http://p") as c:
             return await c.get("/api/server-info")
 

@@ -29,15 +29,14 @@ def _app(tmp_path, monkeypatch):
     """Build an isolated server with a fake embedding client."""
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
-    monkeypatch.setenv("MYCELIUM_DISABLE_MCP_HTTP", "1")
     store.reset_substrate()
     auth_store.reset()
     drafts_store.reset()
     runtime._ctx = None
     monkeypatch.setattr(embed, "embed", lambda text: [0.0] * 768)
-    from mycelium.http import app  # local import: avoid the server/http cycle
+    from mycelium.http import create_app  # local import: avoid the server/http cycle
 
-    return TestClient(app)
+    return TestClient(create_app())
 
 
 def test_migrate_seeds_once_without_resurrecting_deleted_alias(fresh_conn):
