@@ -8,21 +8,21 @@ export type AudienceScope = 'internal' | 'external';
 export interface AudienceRef { id: string; name: string; scope: AudienceScope }
 export interface AudienceLabel {
   audiences: string[]; source: 'ai' | 'curator'; reason: string; model: string | null;
-  labelled_at: string; labelled_by: string | null; text_changed_at: string | null;
+  labelled_at: string; labelled_by: string | null; text_changed_at: string | null; pending: string[];
 }
 export interface AudienceView extends AudienceRef {
   description: string; version: number; retired: boolean; default: boolean; profiles: string[];
-  visible_statements: number; unlabelled_statements: number;
+  visible_statements: number; unlabelled_statements: number; pending_statements: number;
 }
 export interface AudienceStatus {
   statements: number; labelled_ai: number; labelled_curator: number; unlabelled: number; queued: number; failed: number;
-  last_error: string | null; cost_usd: number; automatic: boolean; model: string; provider: string;
+  last_error: string | null; cost_usd: number; automatic: boolean; confirm_external_grants: boolean; model: string; provider: string;
   backfill: BackfillProgress | null;
 }
 interface Backfill { started_at: string; queued: number }
 interface BackfillProgress extends Backfill { labelled: number; cost_usd: number }
 export interface AudiencesResponse {
-  audiences: AudienceView[]; can_configure: boolean; statements: number; unlabelled: number; labelling: AudienceStatus;
+  audiences: AudienceView[]; can_configure: boolean; statements: number; unlabelled: number; pending: number; labelling: AudienceStatus;
 }
 
 interface AudienceStatement {
@@ -30,8 +30,8 @@ interface AudienceStatement {
 }
 interface AudienceStatementPage { statements: AudienceStatement[]; total: number; can_curate: boolean }
 type Visibility = '' | 'visible' | 'hidden';
-type LabelState = '' | 'unlabelled' | 'ai' | 'curator' | 'text_changed' | 'queued';
-const LABEL_STATES = ['unlabelled', 'ai', 'curator', 'text_changed', 'queued'] as const;
+type LabelState = '' | 'unlabelled' | 'ai' | 'curator' | 'text_changed' | 'pending' | 'queued';
+const LABEL_STATES = ['unlabelled', 'ai', 'curator', 'text_changed', 'pending', 'queued'] as const;
 const isLabelState = (value: string): value is Exclude<LabelState, ''> => (LABEL_STATES as readonly string[]).includes(value);
 interface StatementFilter { audience: string; visibility: Visibility; state: LabelState }
 interface AudienceDraft { id: string; name: string; scope: AudienceScope; description: string }
@@ -40,7 +40,7 @@ export const AudienceBadge = ({ scope }: { scope: AudienceScope }) => <span clas
 export const AudienceIdentity = ({ audience }: { audience: AudienceRef }) => <span className="audience-identity"><span>{audience.name}</span><AudienceBadge scope={audience.scope} /></span>;
 
 const formatCost = (value: number | null) => value === null ? '—' : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
-const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`;
+const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : `${label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`}${label.pending.length ? ' · waiting for confirmation' : ''}`;
 
 export function TextChangedActions({ statementId, onDone }: { statementId: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -56,6 +56,119 @@ export function TextChangedActions({ statementId, onDone }: { statementId: strin
     <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void act(deleteJSON(`/api/statements/${enc(statementId)}/audiences`))}>Hand back to AI</button>
     {error && <Notice tone="error">{error}</Notice>}
   </div>;
+}
+
+interface PendingConcept { id: string; name: string }
+interface PendingStatement { id: string; kind: string; text: string; reason: string; model: string | null; labelled_at: string; concepts: PendingConcept[] }
+interface PendingGroup { concept: PendingConcept | null; statements: PendingStatement[] }
+interface PendingGrants { audience_id: string; total: number; groups: PendingGroup[]; can_curate: boolean; sample_size: number; min_sample_precision_percent: number }
+interface Accepted { accepted: number; sample_size: number; precision: number; below_threshold: boolean }
+type Verdict = 'confirm' | 'reject';
+
+const decidePending = (audienceId: string, statementIds: string[], decision: Verdict) =>
+  postJSON<{ decided: number }>(`/api/audiences/${enc(audienceId)}/pending/decide`, { statement_ids: statementIds, decision });
+const percent = (value: number) => `${Math.round(value * 1000) / 10}%`;
+const groupName = (group: PendingGroup) => group.concept?.name || 'No concept';
+
+export function PendingGrantActions({ audienceId, statementIds, onDone, all = false }: { audienceId: string; statementIds: string[]; onDone: (verdict: Verdict) => void; all?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (verdict: Verdict) => {
+    if (all && !window.confirm(`${verdict === 'confirm' ? 'Confirm' : 'Reject'} all ${statementIds.length} grants in this group?`)) return;
+    setBusy(true); setError(null);
+    try { await decidePending(audienceId, statementIds, verdict); onDone(verdict); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  return <span className="row gap-sm wrap">
+    <button type="button" className="btn sm" disabled={busy} onClick={() => void act('confirm')}>{all ? 'Confirm all' : 'Confirm'}</button>
+    <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void act('reject')}>{all ? 'Reject all' : 'Reject'}</button>
+    {error && <Notice tone="error">{error}</Notice>}
+  </span>;
+}
+
+function PendingRow({ audienceId, statement, canCurate, verdict, onDone }: { audienceId: string; statement: PendingStatement; canCurate: boolean; verdict?: Verdict; onDone: (verdict: Verdict) => void }) {
+  return <div className="pending-grant">
+    <Link to={{ view: 'statement', id: statement.id }} className="pending-grant-text"><KindTag kind={statement.kind} /><span>{statement.text}</span></Link>
+    <p className="pending-grant-reason">{statement.reason}</p>
+    {statement.concepts.length > 0 && <div className="pending-grant-concepts">{statement.concepts.map(concept => <Link key={concept.id} to={{ view: 'entity', id: concept.id }} className="audience-badge">{concept.name}</Link>)}</div>}
+    <div className="pending-grant-actions">{verdict ? <span className={`status-badge ${verdict === 'confirm' ? 'ok' : 'bad'}`}>{verdict === 'confirm' ? 'Confirmed' : 'Rejected'}</span> : canCurate && <PendingGrantActions audienceId={audienceId} statementIds={[statement.id]} onDone={onDone} />}</div>
+  </div>;
+}
+
+function SampleReview({ audience, data, sample, verdicts, onVerdict, onAccepted, onClose }: {
+  audience: AudienceView; data: PendingGrants; sample: PendingGroup[]; verdicts: Record<string, Verdict>;
+  onVerdict: (id: string, verdict: Verdict) => void; onAccepted: (result: Accepted) => void; onClose: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ids = sample.flatMap(group => group.statements.map(statement => statement.id));
+  const confirmed = ids.filter(id => verdicts[id] === 'confirm').length;
+  const rejected = ids.filter(id => verdicts[id] === 'reject').length;
+  const decided = confirmed + rejected;
+  const precision = decided ? confirmed / decided : null;
+  const low = precision !== null && precision * 100 < data.min_sample_precision_percent;
+  const acceptRest = async () => {
+    const warning = low ? ` The sample's precision ${percent(precision)} is below ${data.min_sample_precision_percent}%.` : '';
+    if (!window.confirm(`Confirm all ${data.total} remaining grants to ${audience.name}?${warning}`)) return;
+    setBusy(true); setError(null);
+    try { onAccepted(await postJSON<Accepted>(`/api/audiences/${enc(audience.id)}/pending/accept-rest`, { sample: ids })); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  return <div className="pending-sample">
+    <div className="audience-metrics"><div><b>{ids.length}</b><span>In the sample</span></div><div><b>{decided}</b><span>Decided</span></div><div><b>{confirmed}</b><span>Confirmed</span></div><div><b>{rejected}</b><span>Rejected</span></div><div><b>{precision === null ? '—' : percent(precision)}</b><span>Precision (warn below {data.min_sample_precision_percent}%)</span></div></div>
+    {low && <Notice tone="warn"><span>The AI was right on {percent(precision)} of this sample, below {data.min_sample_precision_percent}%. Rather than accepting the rest, sharpen the audience descriptions or the audience labelling instructions under <Link to={{ view: 'settings', section: 'prompts' }}>Prompts</Link>, then click <b>Relabel AI labels</b>.</span></Notice>}
+    {error && <Notice tone="error">{error}</Notice>}
+    {data.can_curate && <div className="row gap-sm wrap"><button type="button" className={`btn sm${low ? ' ghost' : ' primary'}`} disabled={busy || !decided || !data.total} onClick={() => void acceptRest()}>Accept the rest ({data.total})</button><button type="button" className="btn ghost sm" disabled={busy} onClick={onClose}>Back to the list</button>{!decided && <span className="hint">Decide at least one sampled grant first.</span>}</div>}
+    {sample.map(group => <section key={group.concept?.id || 'none'} className="pending-group"><h4>{groupName(group)} <span className="count-pill">{group.statements.length}</span></h4>
+      {group.statements.map(statement => <PendingRow key={statement.id} audienceId={audience.id} statement={statement} canCurate={data.can_curate} verdict={verdicts[statement.id]} onDone={verdict => onVerdict(statement.id, verdict)} />)}
+    </section>)}
+  </div>;
+}
+
+function PendingAudience({ audience, onChanged }: { audience: AudienceView; onChanged: () => void }) {
+  const { state, reload } = useAsync(useCallback((signal: AbortSignal) => getJSON<PendingGrants>(`/api/audiences/${enc(audience.id)}/pending`, signal), [audience.id]));
+  const [sample, setSample] = useState<PendingGroup[] | null>(null);
+  const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
+  const [accepted, setAccepted] = useState<Accepted | null>(null);
+  const [drawing, setDrawing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const data = dataOf(state);
+  const changed = () => { reload(); onChanged(); };
+  const draw = async () => {
+    setDrawing(true); setError(null); setAccepted(null);
+    try { setSample((await getJSON<{ groups: PendingGroup[] }>(`/api/audiences/${enc(audience.id)}/pending/sample`)).groups); setVerdicts({}); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setDrawing(false); }
+  };
+  return <article className="pending-audience">
+    <div className="audience-item-head"><h3>{audience.name}</h3><AudienceBadge scope={audience.scope} /><span className="status-badge open">{data?.total ?? audience.pending_statements} waiting</span>
+      {data?.can_curate && !sample && !!data.total && <button type="button" className="btn sm" disabled={drawing} onClick={() => void draw()}>{drawing ? 'Drawing…' : `Review a sample of ${Math.min(data.sample_size, data.total)}`}</button>}</div>
+    {accepted && <Notice tone={accepted.below_threshold ? 'warn' : 'success'}>Accepted {accepted.accepted} grants after a sample of {accepted.sample_size} with {percent(accepted.precision)} precision.</Notice>}
+    {error && <Notice tone="error">{error}</Notice>}
+    {!data && state.status === 'loading' && <Loading what="waiting grants" />}
+    {!data && state.status === 'error' && <LoadError error={state.error} what="waiting grants" onRetry={reload} />}
+    {data && sample && <SampleReview audience={audience} data={data} sample={sample} verdicts={verdicts}
+      onVerdict={(id, verdict) => { setVerdicts(current => ({ ...current, [id]: verdict })); changed(); }}
+      onAccepted={result => { setAccepted(result); setSample(null); changed(); }} onClose={() => setSample(null)} />}
+    {data && !sample && !data.total && <p className="hint">No grants are waiting.</p>}
+    {data && !sample && data.groups.map(group => <details key={group.concept?.id || 'none'} className="pending-group">
+      <summary><span className="pending-group-name">{groupName(group)} <span className="count-pill">{group.statements.length}</span></span>{data.can_curate && <span onClick={event => event.preventDefault()}><PendingGrantActions all audienceId={audience.id} statementIds={group.statements.map(statement => statement.id)} onDone={changed} /></span>}</summary>
+      {group.statements.map(statement => <PendingRow key={statement.id} audienceId={audience.id} statement={statement} canCurate={data.can_curate} onDone={changed} />)}
+    </details>)}
+  </article>;
+}
+
+function PendingGrantsCard({ data, onReload }: { data: AudiencesResponse; onReload: () => void }) {
+  const waiting = data.audiences.filter(audience => !audience.retired && (audience.scope === 'external' || audience.pending_statements > 0));
+  return <Card title={<>Waiting for confirmation {data.pending > 0 && <span className="status-badge open">{data.pending}</span>}</>}>
+    <p className="muted">{data.labelling.confirm_external_grants
+      ? 'An AI grant that would newly show a statement to an external audience waits here; until a curator confirms it, that audience does not see the statement.'
+      : 'Confirm external grants is off: the AI\'s external grants apply at once.'} <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
+    {waiting.length === 0 && <p className="hint">No external audiences.</p>}
+    {waiting.map(audience => <PendingAudience key={audience.id} audience={audience} onChanged={onReload} />)}
+  </Card>;
 }
 
 function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: () => void }) {
@@ -169,7 +282,7 @@ function StatementFilterList({ audiences, filter, onFilter }: { audiences: Audie
     <div className="field-grid audience-filters">
       <label className="field"><span>Audience</span><select className="input" value={filter.audience} onChange={event => change({ audience: event.target.value })}><option value="">Any audience</option>{audiences.filter(audience => !audience.retired).map(audience => <option key={audience.id} value={audience.id}>{audience.name}</option>)}</select></label>
       {filter.audience && <label className="field"><span>Visibility</span><select className="input" value={filter.visibility} onChange={event => change({ visibility: event.target.value === 'visible' || event.target.value === 'hidden' ? event.target.value : '' })}><option value="">Any visibility</option><option value="visible">Visible</option><option value="hidden">Hidden</option></select></label>}
-      <label className="field"><span>Label state</span><select className="input" value={filter.state} onChange={event => change({ state: isLabelState(event.target.value) ? event.target.value : '' })}><option value="">Any state</option><option value="unlabelled">Unlabelled</option><option value="ai">AI</option><option value="curator">Curator</option><option value="text_changed">Text changed since decision</option><option value="queued">Queued</option></select></label>
+      <label className="field"><span>Label state</span><select className="input" value={filter.state} onChange={event => change({ state: isLabelState(event.target.value) ? event.target.value : '' })}><option value="">Any state</option><option value="unlabelled">Unlabelled</option><option value="ai">AI</option><option value="curator">Curator</option><option value="text_changed">Text changed since decision</option><option value="pending">Waiting for confirmation</option><option value="queued">Queued</option></select></label>
     </div>
     {state.status === 'loading' && !data && <Loading what="statements" />}
     {state.status === 'error' && !data && <LoadError error={state.error} what="statements" onRetry={reload} />}
@@ -187,5 +300,5 @@ export function AudiencesSettings() {
   if (!data && state.status === 'error') return <LoadError error={state.error} what="audiences" onRetry={reload} />;
   if (!data) return null;
   const prefilter = (next: StatementFilter) => { setFilter(next); requestAnimationFrame(() => document.querySelector('.audience-filters')?.scrollIntoView({ behavior: 'smooth', block: 'start' })); };
-  return <>{state.status === 'error' && <LoadError error={state.error} what="audiences" onRetry={reload} />}<LabellingCard data={data} onReload={reload} /><AudienceList data={data} onReload={reload} onFilter={prefilter} /><StatementFilterList key={`${filter.audience}:${filter.visibility}:${filter.state}`} audiences={data.audiences} filter={filter} onFilter={setFilter} /></>;
+  return <>{state.status === 'error' && <LoadError error={state.error} what="audiences" onRetry={reload} />}<LabellingCard data={data} onReload={reload} /><PendingGrantsCard data={data} onReload={reload} /><AudienceList data={data} onReload={reload} onFilter={prefilter} /><StatementFilterList key={`${filter.audience}:${filter.visibility}:${filter.state}`} audiences={data.audiences} filter={filter} onFilter={setFilter} /></>;
 }

@@ -307,6 +307,15 @@ def _automatic() -> bool:
         return False
 
 
+def _confirming() -> bool:
+    try:
+        return product_settings.get(
+            product_settings.AudienceLabellingSettings
+        ).confirm_external_grants
+    except Exception:  # noqa: BLE001 — unreadable settings label nothing
+        return True
+
+
 def start(data_dir: Path | str, *, poll_interval: float = POLL_INTERVAL_S) -> None:
     """Start the daemon worker on its own substrate connection (idempotent)."""
     global _thread
@@ -362,6 +371,7 @@ class Status(BaseModel):
     last_error: str | None
     cost_usd: float
     automatic: bool
+    confirm_external_grants: bool
     model: str
     provider: str
     backfill: BackfillProgress | None = None
@@ -389,6 +399,7 @@ def status(conn: sqlite3.Connection) -> Status:
         last_error=error,
         cost_usd=round(cost, 4),
         automatic=_automatic(),
+        confirm_external_grants=_confirming(),
         model=selected.model,
         provider=selected.provider,
         backfill=BackfillProgress(

@@ -47,6 +47,7 @@ export function SettingsScreen({ section }: { section: SettingsSection }) {
     ? getJSON<AudiencesResponse>('/api/audiences', signal).then(response => response.audiences.filter(audience => !audience.retired))
     : Promise.resolve([]), [me]);
   const audiences = useAsync(audienceLoad).state;
+  const waiting = audiences.status === 'ready' ? audiences.data.reduce((total, audience) => total + audience.pending_statements, 0) : 0;
   const def = SECTIONS.find(s => s.id === section) || SECTIONS[0];
   const groups = isScoped(me) ? GROUPS.slice(0, 1) : GROUPS;
   return (
@@ -57,7 +58,7 @@ export function SettingsScreen({ section }: { section: SettingsSection }) {
           {groups.map(g => (
             <div key={g.title} className="sn-group">
               <div className="sn-title">{g.title}</div>
-              {g.sections.map(s => <Link key={s.id} to={{ view: 'settings', section: s.id }} className={`sn-link${s.id === def.id ? ' on' : ''}`}>{s.label}</Link>)}
+              {g.sections.map(s => <Link key={s.id} to={{ view: 'settings', section: s.id }} className={`sn-link${s.id === def.id ? ' on' : ''}`}>{s.label}{s.id === 'audiences' && waiting > 0 && <span className="sn-count" aria-label={`${waiting} grants waiting for confirmation`}>{waiting}</span>}</Link>)}
             </div>
           ))}
         </nav>
