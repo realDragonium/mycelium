@@ -145,6 +145,11 @@ hours and forty minutes), such as those in a restored copy of another
 instance or from before a long outage: the sweep does not review, and possibly
 apply, them unasked.
 
+An attempt stopped by the monthly AI budget (see [AI models](AI_MODELS.md)) is
+`paused`, not failed: it uses no retry, is not rerun, and is not in the backlog.
+The sweep resumes it once the budget allows, after a budget change or when the
+month rolls over, with the attempt and retry counts it had.
+
 When the supplied knowledge cannot settle how the draft fits and a person's
 answer would, such as whether a new concept is the same as a live one, the
 reviewer answers `needs_context` with specific questions. With the application
@@ -183,7 +188,8 @@ result does not itself authorize application.
 `get_draft_review_run(run_id)` retrieves an attempt. `get_draft`, draft lists, and
 both browser interfaces expose the latest `review_assessment`, including:
 
-- Status (`running`, `completed`, `failed`), assessed revision, and staleness.
+- Status (`running`, `completed`, `failed`, `paused`), assessed revision, and
+  staleness.
 - Selected provider/model, reviewer ID, and control/model settings revisions. Historical attempts
   retain unknown metadata; a selected model does not imply a provider was called.
 - Label (`good`, `changes_suggested`, `reject`, `needs_context`), rationale,

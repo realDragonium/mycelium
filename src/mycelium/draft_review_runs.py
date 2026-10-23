@@ -18,6 +18,7 @@ from pydantic import JsonValue, TypeAdapter
 from . import (
     ai,
     ai_prompts,
+    ai_usage,
     auth,
     draft_review_model,
     draft_review_settings,
@@ -225,10 +226,8 @@ _stop_sweeper = threading.Event()
 
 
 def sweep(now: datetime | None = None) -> list[str]:
-    """Review again each submitted draft whose latest run failed without
-    recording a review, once its backoff has passed. Nothing else retries
-    a configuration failure, a provider failure after the automatic rerun,
-    or a run interrupted by a restart. Returns the draft ids started."""
+    """Resume budget-paused reviews and retry failed reviews after backoff.
+    Returns the draft ids started."""
     now = now or datetime.now(UTC)
     try:
         settings = _settings()
@@ -238,6 +237,9 @@ def sweep(now: datetime | None = None) -> list[str]:
         return []
     started = []
     conn = drafts_store.connection()
+    budget = product_settings.get(product_settings.AIBudgetSettings)
+    if ai_usage.paused_reason(conn, "draft_review", budget, now):
+        return []
     for row in drafts_store.list_drafts(conn, "submitted"):
         run = draft_review_store.latest(conn, row["id"])
         if run is None or not _retry_due(run, now):
@@ -246,9 +248,12 @@ def sweep(now: datetime | None = None) -> list[str]:
             start(
                 row["id"],
                 rerun=True,
-                retries=run.retries + 1,
-                previous_failure=run.detail,
-                admit=_still_due(run.run_id, now),
+                attempt=run.attempt if run.status == "paused" else 1,
+                retries=run.retries if run.status == "paused" else run.retries + 1,
+                previous_failure=run.previous_failure
+                if run.status == "paused"
+                else run.detail,
+                admit=_still_due(run, now),
             )
             started.append(row["id"])
         except NotAdmitted:
@@ -258,14 +263,21 @@ def sweep(now: datetime | None = None) -> list[str]:
     return started
 
 
-def _still_due(seen: str, now: datetime) -> Callable[[ReviewRun | None], bool]:
+def _still_due(seen: ReviewRun, now: datetime) -> Callable[[ReviewRun | None], bool]:
     def admit(latest: ReviewRun | None) -> bool:
-        return latest is not None and latest.run_id == seen and _retry_due(latest, now)
+        return (
+            latest is not None
+            and latest.run_id == seen.run_id
+            and latest.status == seen.status
+            and _retry_due(latest, now)
+        )
 
     return admit
 
 
 def _retry_due(run: ReviewRun, now: datetime) -> bool:
+    if run.status == "paused":
+        return True
     if (
         run.status != "failed"
         or run.review_id is not None
@@ -300,7 +312,7 @@ def backlog() -> list[str]:
 def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
     if run is None:
         return True
-    if run.status == "running":
+    if run.status in {"running", "paused"}:
         return False
     if run.application == "needs_human":
         return run.stale
@@ -545,6 +557,11 @@ def _execute(
         run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
         _finish(run, inspection, settings, reads)
         run.status = "completed"
+        run.finished_at = timestamps.now()
+        _save(run)
+    except ai.usage.Paused as exc:
+        run.status = "paused"
+        run.detail = str(exc)
         run.finished_at = timestamps.now()
         _save(run)
     except Exception as exc:

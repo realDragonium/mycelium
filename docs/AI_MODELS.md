@@ -154,8 +154,8 @@ Past the warning percentage, admins see a banner. With pausing on, at 100% the
 background actions (audience labelling, draft review and the connect pass,
 which attributes its calls as `connect`) are refused before a request is sent,
 until the month ends or the budget is raised. A refused labelling batch stays
-due; a refused review run fails with the reason and is retried by the review
-sweep like any failure. Ask, ingest, documentation, planning and alias
+due; a refused review run is paused with the reason and resumed by the review
+sweep once the budget allows, without using a retry. Ask, ingest, documentation, planning and alias
 discovery are never paused.
 
 ## Limits and repository integrations

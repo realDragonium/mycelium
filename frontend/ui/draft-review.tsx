@@ -16,7 +16,7 @@ interface Correction { action: string; operation_ref?: string | null; tool_name?
 interface Contradiction { statement_id: string; resolution: string }
 interface Answer { run_id: string; questions: string[]; answer: string; answered_by: string; answered_at: string }
 interface Assessment {
-  run_id: string; status: 'running' | 'completed' | 'failed'; label?: string | null; stale?: boolean;
+  run_id: string; status: 'running' | 'completed' | 'failed' | 'paused'; label?: string | null; stale?: boolean;
   provider?: string | null; model?: string | null; reasoning_effort?: string | null; mode?: string | null;
   application?: 'unapplied' | 'applied' | 'rejected' | 'needs_human' | null; draft_revision?: number;
   rationale?: string | null; detail?: string | null; questions: string[]; corrections: Correction[];
@@ -66,6 +66,7 @@ const LABELS: Record<string, string> = { good: 'Good', changes_suggested: 'Chang
 function assessmentResult(a: Assessment): string {
   if (asksPerson(a)) return 'Question for a curator';
   if (a.status === 'running') return 'Running';
+  if (a.status === 'paused') return 'Paused';
   if (a.status === 'failed') return 'Failed';
   return (a.label && LABELS[a.label]) || 'Completed';
 }
