@@ -297,7 +297,7 @@ def test_claude_signed_history_cache_and_forced_terminal() -> None:
     assert isinstance(original, list) and "cache_control" not in original[0]
 
 
-def test_claude_learns_that_a_model_refuses_a_forced_tool(monkeypatch) -> None:
+def test_claude_learns_that_a_model_refuses_a_forced_tool(monkeypatch, caplog) -> None:
     from mycelium.ai import claude
 
     monkeypatch.setattr(claude, "_refused_forcing", set())
@@ -325,6 +325,10 @@ def test_claude_learns_that_a_model_refuses_a_forced_tool(monkeypatch) -> None:
         ai.turn(_task(force="read"), config, client=client)
         ai.turn(_task(force="read"), config, client=client)
 
+    learnt = [r for r in caplog.records if r.name == "mycelium.ai.claude"]
+    assert [(r.levelname, r.args) for r in learnt] == [
+        ("WARNING", ("claude-newer-model",))
+    ]
     assert [request["tool_choice"] for request in sent] == [
         {"type": "tool", "name": "read", "disable_parallel_tool_use": True},
         {"type": "auto", "disable_parallel_tool_use": True},
