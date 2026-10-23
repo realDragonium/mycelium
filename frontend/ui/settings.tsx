@@ -27,8 +27,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
     { id: 'review', label: 'Draft review', blurb: 'Whether submitted drafts get an automatic AI review, and whether it may apply them.' },
     { id: 'limits', label: 'Limits', blurb: 'Token, time and concurrency budgets for each AI action.' },
   ] },
-  { title: 'Sources & publishing', sections: [
-    { id: 'research', label: 'Research sources', blurb: 'The repositories research runs may read.' },
+  { title: 'Publishing', sections: [
     { id: 'documentation', label: 'Documentation', blurb: 'Writing profiles and templates, and the GitHub repositories documents publish to.' },
   ] },
 ];
@@ -62,8 +61,7 @@ function Section({ id }: { id: SettingsSection }) {
     case 'models': return <ActionModels />;
     case 'prompts': return <AIInstructions />;
     case 'review': return <DraftReviewSettings />;
-    case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'research', 'docgen', 'draft_review', 'alias_discovery', 'concurrency']} />;
-    case 'research': return <ProductSettings kinds={['sources']} />;
+    case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'docgen', 'draft_review', 'alias_discovery', 'concurrency']} />;
     case 'documentation': return <><ProductSettings kinds={['documentation']} /><DocumentationProfiles /></>;
   }
 }

@@ -34,7 +34,6 @@ function GapCard({ gap, busy, onAction }: { gap: KnowledgeGap; busy: boolean; on
           {gap.status === 'open' ? <>
             <button className="btn sm" disabled={busy} onClick={() => onAction(gap.id, 'resolve')} title="The gap was addressed.">Resolve</button>
             <button className="btn sm" disabled={busy} onClick={() => onAction(gap.id, 'dismiss')} title="Not a gap, or not worth fixing.">Dismiss</button>
-            <Link to={{ view: 'research', topic: gap.text }} className="btn sm" title="Open Research with this report as the topic.">Research</Link>
           </> : <button className="btn sm" disabled={busy} onClick={() => onAction(gap.id, 'reopen')}>Reopen</button>}
         </div>
       </div>

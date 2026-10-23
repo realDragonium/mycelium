@@ -16,7 +16,6 @@ import { HomeScreen } from './home';
 import { IngestSurface } from './ingest';
 import { KnowledgeGapsScreen } from './knowledge-gaps';
 import { NamesWorkspace } from './names-workspace';
-import { ResearchSurface } from './research';
 import { SettingsScreen } from './settings';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
@@ -39,7 +38,6 @@ function useNavGroups(activeDrafts: number, openGaps: number): { title: string |
     ] },
     { title: 'Add knowledge', items: [
       { label: 'Ingest text', icon: 'ingest', to: { view: 'ingest' }, views: ['ingest'] },
-      { label: 'Research', icon: 'research', to: { view: 'research', topic: '' }, views: ['research'] },
     ] },
     { title: 'Curate', items: [
       { label: 'Drafts', icon: 'prov', to: { view: 'drafts' }, views: ['drafts', 'draft'], badge: activeDrafts },
@@ -114,7 +112,7 @@ function Sidebar({ me, open, onClose }: { me: Me | null; open: boolean; onClose:
 /* ---------------- Partial restore ---------------- */
 const LOST_WITH: Record<string, string> = {
   'mycelium-auth.db': 'users and tokens',
-  'mycelium-drafts.db': 'drafts and research runs',
+  'mycelium-drafts.db': 'drafts and generated documents',
   'mycelium-prompts.db': 'prompt texts and settings',
   'mycelium-history.db': 'audit history',
 };
@@ -151,7 +149,6 @@ function Screen({ route, ingestNonce, refresh }: { route: Route; ingestNonce: nu
     case 'entity': return <EntityDetail id={route.id} />;
     case 'documentation': return <DocumentationWorkspace />;
     case 'ingest': return <IngestSurface key={ingestNonce} />;
-    case 'research': return <ResearchSurface key={route.topic} topic={route.topic} />;
     case 'drafts': return <DraftsList />;
     case 'draft': return <DraftReview id={route.id} />;
     case 'gaps': return <KnowledgeGapsScreen />;
