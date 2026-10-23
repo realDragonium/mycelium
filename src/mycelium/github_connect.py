@@ -376,6 +376,10 @@ def connect_repository(body: SelectRepository, request: Request) -> Connected:
         repo=selected.repo,
     )
     github_connections.save(connection)
+    # A finished selection left in the session would keep offering the
+    # repository picker, then report setup as expired once its TTL ran out.
+    _flow(request, "select", consume=True)
+    request.session.pop("github_selection", None)
     return Connected(
         name=connection.name,
         owner=connection.owner,

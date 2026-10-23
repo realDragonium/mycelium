@@ -59,7 +59,7 @@ export function GitHubConnection({ canConfigure, onConnected, onConnections }: {
       setRefresh(n => n + 1);
     });
   };
-  const disconnect = (c: GitHubRepoConnection) => run(async () => {
+  const disconnect = (c: GitHubRepoConnection) => window.confirm(`Disconnect ${c.owner}/${c.repo}? Writers can no longer publish to it until an administrator reconnects it. Documents and existing pull requests are kept.`) && run(async () => {
     await github<unknown>('/disconnect', { name: c.name });
     setMessage(`${c.owner}/${c.repo} disconnected. Documents and existing pull requests are kept.`);
     setRefresh(n => n + 1);
