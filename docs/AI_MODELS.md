@@ -55,6 +55,14 @@ model that answers a forced tool choice with that refusal is retried once the
 same way and is not forced again until the server restarts. Increasing
 effort does not raise token, timeout, or whole-run limits automatically.
 
+An ingest or connect run's wall clock bounds the whole run, final emit
+included. Turns stream, so a turn still running at the deadline is stopped
+between events; reading stops two thirds of the way in to leave the final
+emit the rest. An emit cut off by the deadline or by `max_tokens` keeps the
+operations it had finished, and the draft is marked degraded. The ingest
+default is 300 seconds; an instance still at the old 120-second default is
+raised once on upgrade.
+
 Effort is captured when work starts and included in saved draft-review attempts
 and documentation runs. Existing settings and backups without effort use Model
 default; changing an environment variable does not configure effort.

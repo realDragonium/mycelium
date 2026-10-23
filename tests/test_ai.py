@@ -409,6 +409,18 @@ def test_claude_keeps_the_finished_part_of_a_tool_call_cut_off_at_max_tokens() -
     assert truncated.input == {"id": "record", "items": [{"n": 1}, {"n": 2}]}
 
 
+def test_claude_turn_stops_at_its_deadline() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _reply(request, _envelope("claude", [_claude_call("call-1")]))
+
+    task = replace(_task(), deadline=0.0)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ai.IncompleteTurn, match="deadline") as caught:
+            ai.turn(task, _config("claude"), client=client)
+
+    assert caught.value.usage.input_tokens == 8
+
+
 def test_claude_asks_for_a_required_tool_on_a_model_that_cannot_be_forced() -> None:
     sent: list[dict[str, JsonValue]] = []
     thinking: dict[str, JsonValue] = {

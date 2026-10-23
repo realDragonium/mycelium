@@ -55,6 +55,8 @@ class ToolTask:
     parallel_tools: bool = False
     on_tool_delta: Callable[[str, str, str], None] | None = None
     check_cancel: Callable[[], None] | None = None
+    #: `time.monotonic()` value at which a streamed turn stops where it is.
+    deadline: float | None = None
 
 
 @dataclass(frozen=True)

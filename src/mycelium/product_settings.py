@@ -77,7 +77,8 @@ class IngestSettings(LoopLimits):
     # Adaptive thinking plus a full emit_draft outgrew 8000 in most drafts.
     max_tokens: int = Field(default=32000, gt=0)
     op_cap: int = Field(default=50, gt=0)
-    wall_clock_s: float = Field(default=120.0, gt=0)
+    # Enforced on the whole run: 120 s left one or two reading turns.
+    wall_clock_s: float = Field(default=300.0, gt=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
     max_input_chars: int = Field(default=20000, gt=0)
 
@@ -566,32 +567,35 @@ def initialize(conn: sqlite3.Connection, *, import_environment: bool) -> None:
     )
 
 
-#: Saved `max_tokens` values that were once the shipped default and proved
-#: too small, per section, with the once-per-instance marker that lifts them.
-_OUTGROWN_OUTPUT_BUDGETS = (
-    ("ingest", 8000, "ingest-max-tokens-32000"),
-    ("docgen", 12000, "docgen-max-tokens-32000"),
+#: Saved values that were once the shipped default and proved too small, per
+#: section and field, with the once-per-instance marker that lifts them.
+_OUTGROWN_DEFAULTS = (
+    ("ingest", "max_tokens", 8000, "ingest-max-tokens-32000"),
+    ("docgen", "max_tokens", 12000, "docgen-max-tokens-32000"),
+    ("ingest", "wall_clock_s", 120.0, "ingest-wall-clock-300"),
 )
 
 
-def raise_output_budgets(conn: sqlite3.Connection) -> None:
-    """Once per instance, lift a saved `max_tokens` still at an old default:
-    most ingest drafts outgrew 8000, and a document-writing turn 12000."""
+def raise_outgrown_defaults(conn: sqlite3.Connection) -> None:
+    """Once per instance, lift a saved value still at an old default: most
+    ingest drafts outgrew 8000 output tokens and a document-writing turn
+    12000, and an ingest run needs more than 120 s once the wall clock is
+    enforced."""
     current = {
-        "ingest": IngestSettings().max_tokens,
-        "docgen": DocgenSettings().max_tokens,
+        "ingest": IngestSettings().model_dump(),
+        "docgen": DocgenSettings().model_dump(),
     }
-    for section, old, marker in _OUTGROWN_OUTPUT_BUDGETS:
+    for section, field, old, marker in _OUTGROWN_DEFAULTS:
         if conn.execute(
             "SELECT 1 FROM instance_settings_migrations WHERE name = ?", (marker,)
         ).fetchone():
             continue
         conn.execute(
             "UPDATE product_settings SET revision = revision + 1, "
-            "body_json = json_set(body_json, '$.max_tokens', ?) "
+            "body_json = json_set(body_json, '$.' || ?, ?) "
             "WHERE section = ? AND json_valid(body_json) "
-            "AND json_extract(body_json, '$.max_tokens') = ?",
-            (current[section], section, old),
+            "AND json_extract(body_json, '$.' || ?) = ?",
+            (field, current[section][field], section, field, old),
         )
         conn.execute("INSERT INTO instance_settings_migrations VALUES (?)", (marker,))
 

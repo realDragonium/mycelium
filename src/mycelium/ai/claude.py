@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import Protocol, TypedDict, runtime_checkable
@@ -137,6 +138,9 @@ def _block(block: object) -> dict[str, JsonValue]:
 
 
 _LOG = logging.getLogger(__name__)
+
+#: Stop reason of a streamed turn the caller's deadline ended.
+_DEADLINE = "deadline"
 
 #: Models that reject a forced `tool_choice` ("tool" or "any") with a 400 and
 #: tie thinking blocks to an unedited history. A required tool is asked for in
@@ -294,7 +298,7 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
     if response.stop_reason not in ("end_turn", "tool_use"):
         cut = [block for block in output if block.get("type") == "tool_use"]
         truncated = None
-        if cut and response.stop_reason == "max_tokens":
+        if cut and response.stop_reason in ("max_tokens", _DEADLINE):
             last = cut[-1]
             truncated = ToolUse(
                 id=str(last["id"]),
@@ -413,6 +417,23 @@ def _stream_turn(task: ToolTask, request: _Request, client: Anthropic) -> _Respo
         for event in stream:
             if task.check_cancel:
                 task.check_cancel()
+            if task.deadline is not None and time.monotonic() >= task.deadline:
+                # Leaving the stream closes the connection, which ends
+                # generation. Output usage arrives only with the last event,
+                # so count what was streamed, at about four characters a
+                # token: a floor, since hidden thinking streams no text.
+                snapshot = stream.current_message_snapshot
+                usage = Usage.model_validate(snapshot.usage)
+                streamed = sum(len(b.model_dump_json()) for b in snapshot.content)
+                return _Response(
+                    content=list(snapshot.content),
+                    usage=usage.model_copy(
+                        update={
+                            "output_tokens": max(usage.output_tokens, streamed // 4)
+                        }
+                    ),
+                    stop_reason=_DEADLINE,
+                )
             if event.type == "message_stop":
                 stopped = True
             if (
