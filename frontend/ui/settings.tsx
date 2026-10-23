@@ -193,7 +193,7 @@ function AppearanceCard() {
 }
 
 /* ---------------- members ---------------- */
-interface User { id: string; name: string; email: string | null; type: string; role: Role; status: string }
+interface User { id: string; name: string; email: string | null; type: string; role: Role; status: string; blocked_by_domain_policy: boolean }
 interface Invite { id: string; email: string; role: Role; created_at: string; link: string }
 
 function MembersSection() {
@@ -252,13 +252,16 @@ function MembersCard({ me }: { me: Me }) {
                 <td className="muted">{u.email || '—'}</td>
                 <td>{u.type}</td>
                 <td>{roleSelect(u.role, r => void act(() => patchJSON(`/api/admin/users/${enc(u.id)}`, { role: r })), `Role of ${u.name}`)}</td>
-                <td>{u.status}</td>
-                <td className="num row gap-sm end">
+                <td>
+                  {u.status}
+                  {u.blocked_by_domain_policy && <div><span className="tag warn" title="This email domain is not in MYCELIUM_ALLOWED_EMAIL_DOMAINS, so the user cannot sign in or use tokens.">blocked by domain policy</span></div>}
+                </td>
+                <td><div className="row gap-sm end">
                   {u.type === 'service' && <button className="btn ghost xs" onClick={() => mint(u.id)}>Mint token</button>}
                   <button className="btn ghost xs" onClick={() => void act(() => patchJSON(`/api/admin/users/${enc(u.id)}`, { status: u.status === 'active' ? 'suspended' : 'active' }))}>
                     {u.status === 'active' ? 'Suspend' : 'Activate'}
                   </button>
-                </td>
+                </div></td>
               </tr>
             ))}</tbody>
           </table>
