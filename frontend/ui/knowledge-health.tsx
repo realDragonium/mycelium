@@ -7,8 +7,8 @@ import { EmptyState, KindTag, LoadError, Loading, Notice, PageHeader, useMe } fr
 import { Link, type Route } from './router';
 import {
   errorMessage, getReviewMode, isStatementFilter, knowledgeHealth,
-  type ConnectLimits, type ConnectResult, type EntityFilter, type HealthCounts, type HealthEntity, type HealthList,
-  type HealthStatement, type StatementFilter,
+  type ConnectLimits, type ConnectResult, type CurationSummary, type EntityFilter, type HealthCounts, type HealthEntity,
+  type HealthList, type HealthStatement, type StatementFilter,
 } from './api';
 import { dataOf, useAsync } from './use-async';
 
@@ -134,6 +134,52 @@ function ConnectPanel({ limits, onDone }: { limits: ConnectLimits; onDone: () =>
   );
 }
 
+const WORK: Record<CurationSummary['kind'], string> = {
+  isolated: 'Isolated statements',
+  unnamed: 'Statements naming no concept',
+  rephrase: 'Requests to rephrase',
+  gap: 'Other open gaps',
+};
+const OUTCOMES = [['looked', 'looked at by the connect pass'], ['proposed', 'proposed'], ['no_link', 'no link'], ['skipped', 'skipped']] as const;
+
+// What agents working in the product's code have claimed and made of each
+// list; an admin frees the claims of an agent that stopped.
+function AgentWork({ work, isAdmin, onChange }: { work: CurationSummary[]; isAdmin: boolean; onChange: () => void }) {
+  const [error, setError] = useState('');
+  const free = async (kind: CurationSummary['kind'], who: string) => {
+    setError('');
+    try { await knowledgeHealth.freeClaims(kind, who); onChange(); } catch (e) { setError(errorMessage(e, 'Could not release the claims.')); }
+  };
+  return (
+    <section className="card health-agents" aria-labelledby="health-agents">
+      <h2 id="health-agents">Work for agents in your codebase</h2>
+      <p>Agents working in the product's code claim items over MCP, check them there and propose links or rephrasings with evidence in a draft.</p>
+      <table className="tbl">
+        <thead><tr><th>List</th><th>Claimed by</th><th>Looked at</th></tr></thead>
+        <tbody>
+          {work.map(w => (
+            <tr key={w.kind}>
+              <td>{WORK[w.kind]}</td>
+              <td>
+                {w.claims.length ? w.claims.map(h => (
+                  <div key={h.claimed_by} className="row gap-sm">
+                    <span title={`Held until ${h.expires_at}`}>{h.name || h.claimed_by}: {h.items}</span>
+                    {isAdmin && <button className="btn sm" onClick={() => { void free(w.kind, h.claimed_by); }}>Release</button>}
+                  </div>
+                )) : <span className="hint">nobody</span>}
+              </td>
+              <td>
+                {w.attempted ? <>{w.attempted}: {OUTCOMES.filter(([k]) => w.outcomes[k]).map(([k, label]) => `${w.outcomes[k]} ${label}`).join(', ')}</> : <span className="hint">none yet</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {error && <Notice tone="error">{error}</Notice>}
+    </section>
+  );
+}
+
 function StatementRows({ which, limits, canConnect, onDone }: { which: StatementFilter; limits: ConnectLimits | null; canConnect: boolean; onDone: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { state, reload, update } = useAsync(useCallback(() => knowledgeHealth.statements(which), [which]));
@@ -174,7 +220,7 @@ function StatementRows({ which, limits, canConnect, onDone }: { which: Statement
               <span>{s.mentions.length ? `names ${s.mentions.join(', ')}` : 'names no concept'}</span>
               {s.label_error && <span className="health-error">labelling failed: {s.label_error}</span>}
               {s.in_pending_draft && <span className="status-badge open">in a pending draft</span>}
-              {s.settled_at && <span title={`Looked at ${s.settled_at}; offered again once it or the statements around it change`}>already looked at by the AI</span>}
+              {s.settled_at && <span title={`Looked at ${s.settled_at}; offered again once it or the statements around it change`}>already looked at</span>}
               <span className="mono">{s.id}</span>
             </div>
           </div>
@@ -253,6 +299,7 @@ export function KnowledgeHealthScreen({ list }: { list: HealthList | null }) {
         {canConnect && (view.connect
           ? <ConnectPanel limits={view.connect} onDone={reload} />
           : <Notice tone="warn">Connecting statements is unavailable: {view.connect_error}</Notice>)}
+        <AgentWork work={view.curation} isAdmin={me?.role === 'admin'} onChange={reload} />
       </>}
     </main>
   );
