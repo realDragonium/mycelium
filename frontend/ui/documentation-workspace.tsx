@@ -28,7 +28,9 @@ interface RunSummary {
   activity: string | null; turns: number; duration_s: number;
   tokens: { input: number; cache_read: number; cache_creation: number; output: number };
   cost_usd: number | null; statements_retrieved: number; statements_cited: number; gaps_filed: number;
+  review_findings?: ReviewNote[];
 }
+interface ReviewNote { check: 'exposure' | 'conformance'; where: string; problem: string }
 interface DeliveryCoordinates { host: string; owner: string; repo: string; base_branch: string }
 interface PullRequest { number: number; state: string; refreshed_at: string | null }
 interface StatementChange {
@@ -418,12 +420,32 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
     {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
     {docActive(run) && <p role="status">{run.summary?.activity ? `${run.summary.activity}. ` : ''}You can leave this screen while generation and review finish.</p>}
     {run.summary && <DocumentationRunSummary summary={run.summary} />}
-    {run.error && <p role="alert">{run.error}</p>}
+    {run.summary?.review_findings?.length ? <DocumentationReviewNotes run={run} notes={run.summary.review_findings} canRevise={options.can_generate} onStarted={onStarted} /> : run.error && <p role="alert">{run.error}</p>}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}
     {run.document_id && !run.result_revision && <p>This older run has no retained revision snapshot. The link opens the current document.</p>}
     {run.draft_body && !docActive(run) && !run.document_id && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`runs/${encodeURIComponent(id)}/edits`) ? 'Resume draft edit' : 'Edit and review draft'}</button>}
     {run.draft_body && <details open><summary>Unsaved draft · {run.draft_title}</summary><pre className="docw-source">{run.draft_body}</pre></details>}
   </section>;
+}
+
+const REVIEW_CHECKS: Record<ReviewNote['check'], string> = { exposure: 'Not for this audience', conformance: 'Does not follow the template' };
+
+function DocumentationReviewNotes({ run, notes, canRevise, onStarted }: {
+  run: DocumentationRun; notes: ReviewNote[]; canRevise: boolean; onStarted: (run: DocumentationRun) => void;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const revise = async () => {
+    setBusy(true); setError(null);
+    try { onStarted(await docPost<DocumentationRun>(`runs/${encodeURIComponent(run.id)}/revise-with-notes`, {})); }
+    catch (error) { setError(errorMessage(error)); }
+    finally { setBusy(false); }
+  };
+  return <div role="alert"><p>The review refused this document:</p>
+    <ul>{notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul>
+    {canRevise && <button disabled={busy} onClick={revise}>Revise with these notes</button>}
+    {error && <p>{error}</p>}
+  </div>;
 }
 
 const PRIORITIES: Record<PlanItem['priority'], string> = { high: 'High priority', medium: 'Medium priority', low: 'Low priority' };
