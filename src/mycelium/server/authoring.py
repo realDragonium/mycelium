@@ -83,16 +83,15 @@ def upsert_statement(
     """Create a new statement or update an existing one.
 
     `kind` discriminates by the shape of claim the text makes. Required
-    on every call. Starting vocabulary (open — grow as needed, same
-    posture as link types):
-      - `event`      — something happening (present-tense action verbs).
-      - `state`      — a condition holding (verbs like "is", "has",
-                       "remains").
-      - `capability` — a modal claim ("can", "may", "is able to").
-    The substrate does not lock the vocabulary and does not enforce
-    kind-edge compatibility (e.g., that `triggers` only joins events) —
-    trust the writer. Phrasing rules dispatch by kind for the starting
-    vocabulary above; other kinds run the generic catalog.
+    on every call. The seeded kinds are `event`, `state`, `capability`,
+    `rule`, `property`, `procedure`, `action`, `check` and `cause`;
+    `list_statement_kinds` describes each. The vocabulary is open: an
+    unlisted kind is accepted. Phrasing rules dispatch by kind: `event`,
+    `state`, `capability` and `rule` have catalogs of their own, and every
+    other kind runs the `event` catalog. Links are checked only where a
+    link type fixes the kinds at its ends (`list_link_types` shows each
+    direction rule); otherwise kind-edge compatibility is trusted to the
+    writer.
 
     Without `id`: always creates a brand-new statement with a fresh
     statement_id. There is NO text-based dedup — calling twice with the

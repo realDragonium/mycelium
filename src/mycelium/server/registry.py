@@ -18,6 +18,7 @@ from typing import Any
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
 
+from .. import auth as _auth
 from .. import link_authoring
 from .admission import _MODEL_LOOP_TOOLS, _offloaded, _run_tool
 from .draft_queue import (
@@ -83,8 +84,6 @@ def _satisfies(principal: Any, required: str, real_role: bool) -> bool:
     advertising one. Two callers, one rule: a tool that appears in
     `tools/list` is one the gate will let through.
     """
-    from .. import auth as _auth
-
     check = _auth.principal_has_real_role if real_role else _auth.principal_satisfies
     return check(principal, required)
 
@@ -122,8 +121,6 @@ class _RoleFilteredTools:
         result = await call_next(ctx)
         if ctx.method != "tools/list" or not isinstance(result, dict):
             return result
-
-        from .. import auth as _auth
 
         principal = _auth.current_principal.get()
         if principal is None:
@@ -238,9 +235,6 @@ def tool(
     the same declaration, so a tool can't be advertised to a caller the
     gate will then reject.
     """
-    from .. import auth as _auth  # local import: auth is loaded lazily so
-    # mycelium.server stays importable in environments that don't have the auth
-    # tables yet (notably some test fixtures).
 
     def _register(func: Callable[..., Any]) -> Callable[..., Any]:
         required = role or _auth.required_role_for(func.__name__)
