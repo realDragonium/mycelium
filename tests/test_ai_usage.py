@@ -125,6 +125,23 @@ def test_installed_metering_records_each_call_in_the_drafts_db(
     assert row["cost_usd"] == pytest.approx(0.10 + 0.0005)
 
 
+def test_mean_run_cost_averages_whole_priced_runs(conn: sqlite3.Connection) -> None:
+    since = "2026-10-01T00:00:00.000Z"
+    assert ai_usage.mean_run_cost(conn, "draft_review", since) is None
+    for run_id, cost in [("drv_1", 0.25), ("drv_1", 0.25), ("drv_2", 0.1)]:
+        ai_usage.record(
+            conn, _call("draft_review", run_id=run_id, cost=cost), at="2026-10-02"
+        )
+    ai_usage.record(
+        conn, _call("draft_review", run_id="drv_3", cost=None), at="2026-10-02"
+    )
+    ai_usage.record(
+        conn, _call("draft_review", run_id="drv_0", cost=9.0), at="2026-09-30"
+    )
+
+    assert ai_usage.mean_run_cost(conn, "draft_review", since) == pytest.approx(0.3)
+
+
 def test_budget_counts_only_this_utc_month(conn: sqlite3.Connection) -> None:
     ai_usage.record(conn, _call(cost=50.0), at="2026-09-30T23:00:00.000Z")
     ai_usage.record(conn, _call(cost=8.5), at="2026-10-01T00:00:00.000Z")

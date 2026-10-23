@@ -11,8 +11,8 @@ decisions and is not sent to the reviewer.
 Enabling the feature does not sweep the existing backlog. An administrator can
 list it with `GET /api/draft-review/backlog` and review it once with
 `POST /api/draft-review/backlog`; see [Inspecting and rerunning](#inspecting-and-rerunning).
-In the web app, **Settings → Draft review** offers **Review N waiting drafts**
-whenever review is on and the backlog is not empty.
+In the web app, **Settings → Draft review** offers **Review N waiting drafts**,
+with the estimated cost, whenever review is on and the backlog is not empty.
 A curator can explicitly review an existing submitted draft.
 
 ## Configuration
@@ -215,8 +215,10 @@ of the draft, where the reviewer receives it as `answers_from_curators`, apart
 from the creator-supplied evidence. It returns `{review: ...}` for the new
 attempt.
 
-Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...]}`: submitted
-drafts the current configuration has not reached. That is a draft with no
+Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...],
+estimated_cost_usd}`: submitted drafts the current configuration has not
+reached, and what reviewing them is likely to cost, from the average cost of a
+review run over the last 30 days (`null` without a priced one). That is a draft with no
 attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question whose draft has

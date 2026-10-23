@@ -249,6 +249,18 @@ def spent_since(conn: sqlite3.Connection, since: str) -> float:
     return float(row[0])
 
 
+def mean_run_cost(conn: sqlite3.Connection, action: str, since: str) -> float | None:
+    """What one run of `action` has cost on average since `since`, or None
+    when no fully priced run is on record."""
+    row = conn.execute(
+        "SELECT AVG(cost) FROM (SELECT SUM(cost_usd) AS cost FROM ai_usage "
+        "WHERE action = ? AND at >= ? AND run_id IS NOT NULL "
+        "GROUP BY run_id HAVING COUNT(cost_usd) = COUNT(*))",
+        (action, since),
+    ).fetchone()
+    return None if row[0] is None else float(row[0])
+
+
 def budget(
     conn: sqlite3.Connection,
     settings: product_settings.AIBudgetSettings,
