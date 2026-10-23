@@ -131,6 +131,7 @@ module = [
     "mycelium.http.substrate",
     "mycelium.http.tool_routes",
     "mycelium.http.traces",
+    "mycelium.http.webui",
     "mycelium.ingest",
     "mycelium.ingest.config",
     "mycelium.ingest.prompts",

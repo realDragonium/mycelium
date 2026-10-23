@@ -15,19 +15,17 @@ no edits needed in this file.
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
 
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from .. import (
     alias_suggestions,
     auth,
-    connect_page,
     documentation_profiles,
     github_connect,
     names_workspace,
@@ -52,6 +50,7 @@ from . import (
     substrate,
     tool_routes,
     traces,
+    webui,
 )
 from .authentication import AuthMiddleware, _session_secret
 
@@ -161,55 +160,14 @@ app.include_router(draft_review.router)
 app.include_router(documentation.router)
 app.include_router(drafts.router)
 app.include_router(admin.router)
+app.include_router(webui.router)
 
 
 # MCP-over-HTTP is mounted at the bottom of this file so it doesn't
 # shadow more-specific routes; search for "MCP transport mount" below.
 
 
-@app.get("/connect", include_in_schema=False)
-def _connect_page() -> Any:
-    """Standalone setup-guide page. Reachable without loading the main
-    UI bundle so users coming straight to this URL (from docs, a chat
-    handoff, an admin's email) don't pay for the graph viz they're
-    not about to use."""
-    from fastapi.responses import HTMLResponse
-
-    return HTMLResponse(content=connect_page.CONNECT_HTML)
-
-
-@app.get("/", include_in_schema=False)
-def _root_redirect() -> RedirectResponse:
-    # The substrate viewer at /ui/ is intentionally not the landing
-    # page — it's only useful once you're logged in. Visitors land on
-    # the connect / setup page instead, which is public and tells them
-    # how to authenticate and get a token.
-    return RedirectResponse(url="/connect")
-
-
-# The browser app is built from `frontend/` into `webui/`, which is committed so
-# the server runs without Node.
-_WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
-_UI_DIR = _WEBUI_DIR / "ui"
-app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
-
-
-# Serve the app at the bare /ui path too. Starlette would normally redirect
-# /ui -> /ui/ via redirect_slashes, but the catch-all MCP sub-app mounted at "/"
-# below matches /ui first, so that automatic redirect never fires. Register it
-# here, ahead of the "/" mount.
-@app.get("/ui", include_in_schema=False)
-def _ui_redirect() -> RedirectResponse:
-    return RedirectResponse(url="/ui/")
-
-
-# /cockpit was a second app, merged into /ui. Old links redirect permanently;
-# the browser keeps the #fragment across a redirect, and /ui resolves the
-# cockpit's old hash routes.
-@app.get("/cockpit", include_in_schema=False)
-@app.get("/cockpit/{rest:path}", include_in_schema=False)
-def _cockpit_redirect(rest: str = "") -> RedirectResponse:
-    return RedirectResponse(url="/ui/", status_code=301)
+app.mount("/ui", StaticFiles(directory=str(webui._UI_DIR), html=True), name="ui")
 
 
 # --- MCP transport mount --------------------------------------------------
