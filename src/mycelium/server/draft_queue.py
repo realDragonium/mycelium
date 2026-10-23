@@ -61,6 +61,8 @@ class DraftReceipt(TypedDict):
 
     draft_id: str
     seq: int
+    #: The queued op's stable reference, for `set_operation_evidence`.
+    operation_ref: str
     queued: str
     revision: int
 
@@ -186,9 +188,18 @@ def _queue_draft_op(
             created_by=actor,
         )
         revision = drafts_store.current_revision(_drafts_db(), draft_id)
+        operation_ref = (
+            _drafts_db()
+            .execute(
+                "SELECT id FROM draft_ops WHERE draft_id = ? AND seq = ?",
+                (draft_id, seq),
+            )
+            .fetchone()[0]
+        )
     return {
         "draft_id": draft_id,
         "seq": seq,
+        "operation_ref": str(operation_ref),
         "queued": kind,
         "revision": revision,
     }

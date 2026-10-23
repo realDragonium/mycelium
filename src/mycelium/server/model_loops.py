@@ -182,7 +182,7 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
         gaps = [
             store.create_knowledge_gap(
                 _db(),
-                f"Rephrase this statement before it is connected: {item.rephrase}",
+                knowledge_health.REPHRASE_GAP_PREFIX + item.rephrase,
                 statement_id=item.statement_id,
             )
             for item in looked

@@ -29,7 +29,7 @@ _UNLINKED = (
     "AND NOT EXISTS (SELECT 1 FROM statement_links l WHERE l.to_statement_id = s.id) "
     "AND NOT EXISTS (SELECT 1 FROM when_nodes w WHERE w.statement_id = s.id)"
 )
-_STATEMENT_WHERE: dict[StatementFilter, str] = {
+STATEMENT_WHERE: dict[StatementFilter, str] = {
     "isolated": _UNLINKED,
     "unmentioned": (
         "NOT EXISTS (SELECT 1 FROM statement_mentions m WHERE m.statement_id = s.id)"
@@ -71,7 +71,7 @@ def counts(
 ) -> Counts:
     statement_counts = ", ".join(
         f"(SELECT COUNT(*) FROM statements s WHERE {where}) AS {name}"
-        for name, where in _STATEMENT_WHERE.items()
+        for name, where in STATEMENT_WHERE.items()
     )
     entity_counts = ", ".join(
         f"(SELECT COUNT(*) FROM entities e WHERE {where}) AS {name}"
@@ -154,12 +154,12 @@ def pending_statement_ids(drafts: sqlite3.Connection) -> set[str]:
     return {str(v) for row in rows for v in row if isinstance(v, str)}
 
 
-#: A connect attempt still holds for `s`: its text is unchanged, no statement
-#: the attempt weighed has changed or gone, and no statement naming one of
-#: the same concepts has been written since.
-_SETTLED = (
-    "EXISTS (SELECT 1 FROM connect_attempts c WHERE c.statement_id = s.id "
-    "AND c.text = s.text "
+#: An attempt still holds for `s`: it was not skipped, its text is
+#: unchanged, no statement the attempt weighed has changed or gone, and no
+#: statement naming one of the same concepts has been written since.
+SETTLED = (
+    "EXISTS (SELECT 1 FROM curation_attempts c WHERE c.item_id = s.id "
+    "AND c.outcome <> 'skipped' AND c.text = s.text "
     "AND NOT EXISTS (SELECT 1 FROM json_each(c.neighbours) j "
     "LEFT JOIN statements n ON n.id = j.value "
     "WHERE n.id IS NULL OR COALESCE(n.updated_at, n.created_at, '') > c.attempted_at) "
@@ -170,6 +170,12 @@ _SETTLED = (
     "JOIN statements o ON o.id = om.statement_id "
     "WHERE m.statement_id = s.id AND o.id <> s.id "
     "AND COALESCE(o.updated_at, o.created_at, '') > c.attempted_at))"
+)
+
+#: An outside agent holds `s` (see `curation`); bound to the current time.
+CLAIMED = (
+    "EXISTS (SELECT 1 FROM curation_claims k WHERE k.item_id = s.id "
+    "AND k.expires_at > :now)"
 )
 
 
@@ -184,17 +190,19 @@ def statements(
 ) -> StatementPage:
     """A page of statements matching `which`, in id order. `to_connect`
     leaves out what the connect pass should not be offered again: statements
-    an undecided draft covers and settled attempts."""
+    an undecided draft covers, settled attempts and items an agent holds."""
     pending = pending_statement_ids(drafts)
-    where = _STATEMENT_WHERE[which] + (f" AND NOT {_SETTLED}" if to_connect else "")
+    where = STATEMENT_WHERE[which] + (
+        f" AND NOT {SETTLED} AND NOT {CLAIMED}" if to_connect else ""
+    )
     chosen: list[sqlite3.Row] = []
     cursor = after or ""
     next_after: str | None = None
     while next_after is None:
         rows = conn.execute(
             f"SELECT s.id, s.kind, s.text FROM statements s "
-            f"WHERE s.id > ? AND {where} ORDER BY s.id LIMIT ?",
-            (cursor, limit),
+            f"WHERE s.id > :after AND {where} ORDER BY s.id LIMIT :limit",
+            {"after": cursor, "limit": limit, "now": kernel._now()},
         ).fetchall()
         for row in rows:
             if len(chosen) == limit:
@@ -248,9 +256,9 @@ def _statement_items(
     settled = {
         str(row[0]): str(row[1])
         for row in conn.execute(
-            f"SELECT s.id, (SELECT attempted_at FROM connect_attempts "
-            f"WHERE statement_id = s.id) FROM statements s "
-            f"WHERE s.id IN ({marks}) AND {_SETTLED}",
+            f"SELECT s.id, (SELECT attempted_at FROM curation_attempts "
+            f"WHERE item_id = s.id) FROM statements s "
+            f"WHERE s.id IN ({marks}) AND {SETTLED}",
             ids,
         )
     }
@@ -336,14 +344,19 @@ def record_attempts(
     with the statements it weighed for it."""
     now = kernel._now()
     conn.executemany(
-        "INSERT OR REPLACE INTO connect_attempts "
-        "(statement_id, text, neighbours, attempted_at) "
-        "SELECT id, text, ?, ? FROM statements WHERE id = ?",
+        "INSERT OR REPLACE INTO curation_attempts "
+        "(item_id, text, neighbours, attempted_at, outcome) "
+        "SELECT id, text, ?, ?, 'looked' FROM statements WHERE id = ?",
         [
             (json.dumps(sorted(set(neighbours))), now, statement_id)
             for statement_id, neighbours in attempts.items()
         ],
     )
+
+
+#: How the connect pass opens the knowledge gap asking for a statement to be
+#: rephrased; the curation queue's `rephrase` kind finds those gaps by it.
+REPHRASE_GAP_PREFIX = "Rephrase this statement before it is connected: "
 
 
 def has_open_gap(conn: sqlite3.Connection, statement_id: str) -> bool:

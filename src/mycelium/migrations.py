@@ -1061,6 +1061,43 @@ def _migration_v23_connect_attempts(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v24_curation_attempts(conn: sqlite3.Connection) -> None:
+    """Widen the connect pass's attempt memory to every curation item,
+    statements and knowledge gaps, with who looked and what came of it; and
+    hold the claims outside agents take on items."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS curation_attempts ("
+        "item_id TEXT PRIMARY KEY, "
+        "text TEXT NOT NULL, "
+        "neighbours TEXT NOT NULL, "
+        "attempted_at TEXT NOT NULL, "
+        "attempted_by TEXT, "
+        "outcome TEXT NOT NULL "
+        "CHECK (outcome IN ('looked', 'proposed', 'no_link', 'skipped')), "
+        "reason TEXT, "
+        "draft_id TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS curation_claims ("
+        "item_id TEXT PRIMARY KEY, "
+        "kind TEXT NOT NULL, "
+        "neighbours TEXT NOT NULL, "
+        "claimed_by TEXT NOT NULL, "
+        "claimed_at TEXT NOT NULL, "
+        "expires_at TEXT NOT NULL)"
+    )
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'connect_attempts'"
+    ).fetchone():
+        conn.execute(
+            "INSERT OR IGNORE INTO curation_attempts "
+            "(item_id, text, neighbours, attempted_at, outcome) "
+            "SELECT statement_id, text, neighbours, attempted_at, 'looked' "
+            "FROM connect_attempts"
+        )
+        conn.execute("DROP TABLE connect_attempts")
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1088,6 +1125,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (21, _migration_v21_audience_labels),
     (22, _migration_v22_label_text_changed),
     (23, _migration_v23_connect_attempts),
+    (24, _migration_v24_curation_attempts),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

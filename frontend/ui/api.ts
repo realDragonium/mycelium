@@ -390,7 +390,15 @@ export interface HealthCounts {
 // `priced` is false when the model has no known price: then neither the
 // cost nor the spending cap applies.
 export interface ConnectLimits { batch_size: number; max_cost_usd: number; provider: string; model: string; priced: boolean }
-export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null }
+export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap';
+// `name` is null once the holder is no longer a known user. Outcome `looked`
+// is the server's connect pass; the rest come from outside agents.
+export interface CurationHolder { claimed_by: string; name: string | null; items: number; expires_at: string }
+export interface CurationSummary {
+  kind: CurationKind; claims: CurationHolder[]; attempted: number;
+  outcomes: Partial<Record<'looked' | 'proposed' | 'no_link' | 'skipped', number>>;
+}
+export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[] }
 export interface HealthStatement {
   id: string; kind: string; text: string; links: number; mentions: string[];
   label_error: string | null; in_pending_draft: boolean; settled_at: string | null;
@@ -410,4 +418,6 @@ export const knowledgeHealth = {
   entities: (which: EntityFilter, after?: string | null) =>
     getJSON<Page<HealthEntity>>(`/api/knowledge-health/entities/${which}?${new URLSearchParams(after ? { after } : {})}`),
   connect: (statementIds: string[]) => postJSON<ConnectResult>('/connect-statements', { statement_ids: statementIds }),
+  freeClaims: (kind: CurationKind, claimedBy: string) =>
+    postJSON<{ freed: number }>('/api/knowledge-health/claims/free', { kind, claimed_by: claimedBy }),
 };

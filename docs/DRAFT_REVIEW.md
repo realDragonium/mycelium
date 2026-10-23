@@ -80,9 +80,25 @@ set_draft_review_evidence(draft_id, evidence, expected_revision)
 
 Supply source excerpts, a concrete change description, or facts supporting the
 proposal, up to 30,000 characters. Evidence changes increment the draft revision.
+To back a single operation, the creator calls:
+
+```text
+set_operation_evidence(draft_id, operation_ref, evidence, expected_revision)
+```
+
+`operation_ref` is in the receipt of the queued write and in `get_draft`.
+Each of up to five items has a `kind` (`code`, `ui`, `doc` or `other`), a
+location (a repository-relative `path` with optional `lines` such as `40-52`
+and `commit`, or a `url`), an `excerpt` of at most 1,500 characters and a
+one-line `claim` of at most 200 saying what it shows. An empty list removes
+the operation's evidence. The reviewer sees it on the operation. A link whose
+type and direction a concrete code excerpt supports can be accepted on that
+basis; a link without evidence is kept only when the statement texts plainly
+support it. The Drafts screen shows each operation's evidence.
+
 PR source metadata remains available through `attach_draft_source`, but a PR URL,
 commit hash, or workflow run ID does not supply the source contents. Attaching
-metadata or evidence after a review starts makes that assessment stale; request
+metadata or either kind of evidence after a review starts makes that assessment stale; request
 an explicit rerun after the draft is ready.
 
 The reviewer trusts the producer on what the product does and judges how the

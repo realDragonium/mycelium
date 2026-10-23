@@ -30,7 +30,12 @@ export interface DraftSummary {
   submitted_at: string | null; decided_at: string | null; op_count?: number; review_assessment: Assessment | null;
 }
 type Payload = Record<string, unknown>;
-interface DraftOp { seq: number; kind: string; payload: Payload; provenance: { source?: string } | null }
+// What the draft's creator checked in the product to support one operation.
+interface Evidence {
+  kind: 'code' | 'ui' | 'doc' | 'other'; path?: string; lines?: string; commit?: string; url?: string;
+  excerpt: string; claim: string;
+}
+interface DraftOp { seq: number; kind: string; payload: Payload; provenance: { source?: string } | null; evidence: Evidence[] }
 interface Draft extends DraftSummary { ops: DraftOp[] }
 // Statements the server refused while applying a draft by hand; nothing was applied.
 interface RejectedStatement { seq: number; kind: string; text: string | null; reasons: string[] }
@@ -212,6 +217,26 @@ function OpBody({ op }: { op: DraftOp }) {
   }
 }
 
+function EvidenceList({ items }: { items: Evidence[] }) {
+  return (
+    <div className="op-evidence">
+      <div className="mono small muted">evidence</div>
+      {items.map((e, i) => {
+        const where = e.path ? `${e.path}${e.lines ? `:${e.lines}` : ''}${e.commit ? ` @ ${e.commit.slice(0, 10)}` : ''}` : null;
+        return (
+          <div key={i} className="op-evidence-item">
+            <div className="row gap-sm"><span className="tag">{e.kind}</span><span>{e.claim}</span></div>
+            <div className="mono small muted">
+              {where}{where && e.url ? ' · ' : ''}{e.url && <a href={e.url} target="_blank" rel="noreferrer noopener">{e.url}</a>}
+            </div>
+            {e.excerpt && <pre className="op-evidence-excerpt">{e.excerpt}</pre>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function OpCard({ op, editable, busy, onDiscard, onSave }: {
   op: DraftOp; editable: boolean; busy: boolean; onDiscard: (seq: number) => void; onSave: (seq: number, payload: Payload) => Promise<boolean>;
 }) {
@@ -237,7 +262,7 @@ function OpCard({ op, editable, busy, onDiscard, onSave }: {
         </>}
       </div>
       <div className="op-body">
-        {json == null ? <OpBody op={op} /> : (
+        {json == null ? <><OpBody op={op} />{op.evidence.length > 0 && <EvidenceList items={op.evidence} />}</> : (
           <div className="stack-sm">
             <textarea className="code-input" value={json} spellCheck={false} rows={10} aria-label={`Payload of operation ${op.seq}`}
               onChange={e => { setJson(e.target.value); setParseErr(null); }} />

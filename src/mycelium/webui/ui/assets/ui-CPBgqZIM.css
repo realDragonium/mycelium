@@ -796,6 +796,9 @@ a.list-row:hover .lr-title { color: var(--bio); }
 .op-discard { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 5px; color: var(--ink-4); border: 1px solid transparent; }
 .op-discard:hover { color: var(--danger); border-color: var(--danger); background: color-mix(in oklab, var(--danger) 8%, transparent); }
 .op-body { padding: 13px 15px; }
+.op-evidence { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line-soft); display: grid; gap: 8px; }
+.op-evidence-item { display: grid; gap: 4px; font-size: var(--fs-sm); }
+.op-evidence-excerpt { margin: 0; padding: 8px 10px; background: var(--bg-2); border-radius: 5px; font-family: var(--mono); font-size: var(--fs-2xs); white-space: pre-wrap; max-height: 16em; overflow: auto; }
 
 .op-stmt-text { font-family: var(--mono); font-size: var(--fs-sm); line-height: 1.55; color: var(--ink); margin-bottom: 10px; }
 .op-mentions { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -1193,7 +1196,8 @@ main.page.home { padding-top: 56px; }
 
 /* Knowledge health */
 .health-grid { margin-bottom: 20px; }
-.health-connect h2 { margin: 0 0 6px; font-size: var(--fs-md); }
+.health-connect h2, .health-agents h2 { margin: 0 0 6px; font-size: var(--fs-md); }
+.health-agents { margin-top: 16px; }
 .health-connect-run { align-items: center; margin: 10px 0 4px; flex-wrap: wrap; }
 .health-count { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--ink-3); }
 .health-count input { width: 64px; }

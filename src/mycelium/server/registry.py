@@ -195,7 +195,11 @@ MCP_TOOLS = frozenset(
         "list_my_drafts",
         "list_drafts",
         "set_draft_review_evidence",
+        "set_operation_evidence",
         "report_knowledge_gap",
+        # Curation queue
+        "claim_curation_work",
+        "release_curation_work",
         # Documentation
         "request_documentation",
         "get_documentation_run",

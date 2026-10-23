@@ -67,6 +67,9 @@ REWRITES: dict[tuple[str, str], str] = {
     ("mycelium.db", "kind_link_matrix"): (
         "v18 drops the matrix; nothing has read it since the connect pipeline"
     ),
+    ("mycelium.db", "connect_attempts"): (
+        "v24 moves its rows into curation_attempts as the connect pass's looks"
+    ),
     ("mycelium-drafts.db", "research_runs"): (
         "the drafts store drops the removed research feature's run history"
     ),

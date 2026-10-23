@@ -24,6 +24,12 @@ live statements and the link type glossary:
 - Links: each link type must exist and fit its glossary meaning and direction;
   every linked id and `when` leaf must resolve. Append add_links to a supplied
   live statement the new knowledge plainly belongs next to but is not linked to.
+- Evidence: an operation's `evidence` is what the producer checked in the
+  product (code, UI or docs): where, an excerpt, and the claim it shows. A link
+  whose type and direction a concrete code excerpt supports can be accepted on
+  that basis, even when the statement texts alone would not settle it. Judge a
+  link without evidence more strictly: keep it only when the statement texts
+  plainly support its type and direction, otherwise strike it.
 - Entities: no case or spelling variant of a live entity, and no description
   overwritten with a worse one.
 - operation_findings are problems the server will refuse to apply, such as a

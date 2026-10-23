@@ -26,7 +26,9 @@ import sqlite3
 import uuid as _uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict
+from typing import TYPE_CHECKING, Literal, Self, TypedDict
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from . import timestamps
 from .connections import ConnectionProvider
@@ -70,6 +72,7 @@ CREATE TABLE IF NOT EXISTS draft_ops (
     kind         TEXT NOT NULL,
     payload_json TEXT NOT NULL,
     provenance_json TEXT,
+    evidence_json TEXT,
     created_at   TEXT NOT NULL,
     created_by   TEXT,
     UNIQUE (draft_id, seq)
@@ -141,6 +144,40 @@ class DraftSource(TypedDict):
     merged_commit: str
     workflow_run_id: int
     workflow_run_attempt: int
+
+
+class Evidence(BaseModel):
+    """What the draft's creator saw in the product that supports one
+    operation: where, a short excerpt, and what it shows."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["code", "ui", "doc", "other"]
+    #: Repository-relative file path.
+    path: str | None = Field(default=None, max_length=300)
+    #: A line or line range in `path`, such as `12` or `12-30`.
+    lines: str | None = Field(default=None, pattern=r"^[0-9]+(-[0-9]+)?$")
+    commit: str | None = Field(default=None, pattern=r"^[0-9a-f]{7,40}$")
+    url: str | None = Field(default=None, max_length=500, pattern=r"^https?://\S+$")
+    excerpt: str = Field(default="", max_length=1500)
+    #: One line saying what the excerpt shows.
+    claim: str = Field(min_length=1, max_length=200, pattern=r"^[^\n]+$")
+
+    @model_validator(mode="after")
+    def _located(self) -> Self:
+        if self.path is None and self.url is None:
+            raise ValueError("evidence needs a path or a url")
+        if self.path is not None and (
+            self.path.startswith("/") or ".." in self.path.split("/")
+        ):
+            raise ValueError("path must be relative to the repository root")
+        if self.lines is not None and self.path is None:
+            raise ValueError("lines need a path")
+        return self
+
+
+#: Most evidence items one operation may carry.
+MAX_EVIDENCE = 5
 
 
 class StaleDraftRevisionError(ValueError):
@@ -222,6 +259,8 @@ def migrate(conn: sqlite3.Connection) -> None:
     }
     if "provenance_json" not in columns:
         conn.execute("ALTER TABLE draft_ops ADD COLUMN provenance_json TEXT")
+    if "evidence_json" not in columns:
+        conn.execute("ALTER TABLE draft_ops ADD COLUMN evidence_json TEXT")
     from . import ai_usage, draft_review_store
 
     draft_review_store.migrate(conn)
@@ -621,6 +660,37 @@ def update_op_payload_by_ref(
     return current_revision(conn, draft_id)
 
 
+def set_op_evidence(
+    conn: sqlite3.Connection,
+    draft_id: str,
+    operation_ref: str,
+    evidence: Sequence[Evidence],
+    *,
+    expected_revision: int,
+) -> int:
+    """Replace one operation's evidence and return the draft's new revision,
+    which makes any earlier assessment stale."""
+    row = get_draft(conn, draft_id)
+    if row is None:
+        raise ValueError(f"draft '{draft_id}' not found")
+    _check_revision(row, expected_revision)
+    if len(evidence) > MAX_EVIDENCE:
+        raise ValueError(f"at most {MAX_EVIDENCE} evidence items per operation")
+    stored = (
+        _json.dumps([e.model_dump(exclude_none=True) for e in evidence])
+        if evidence
+        else None
+    )
+    changed = conn.execute(
+        "UPDATE draft_ops SET evidence_json = ? WHERE draft_id = ? AND id = ?",
+        (stored, draft_id, operation_ref),
+    ).rowcount
+    if not changed:
+        raise ValueError(f"operation '{operation_ref}' not found in draft '{draft_id}'")
+    conn.execute("UPDATE drafts SET revision = revision + 1 WHERE id = ?", (draft_id,))
+    return current_revision(conn, draft_id)
+
+
 def set_submitted(conn: sqlite3.Connection, draft_id: str) -> None:
     conn.execute(
         "UPDATE drafts SET submitted_at = ? WHERE id = ? AND submitted_at IS NULL",
@@ -855,6 +925,11 @@ def serialize_op(row: sqlite3.Row) -> dict:
             _json.loads(row["provenance_json"])
             if row["provenance_json"] is not None
             else None
+        ),
+        "evidence": (
+            _json.loads(row["evidence_json"])
+            if row["evidence_json"] is not None
+            else []
         ),
         "created_at": row["created_at"],
         "created_by": row["created_by"],

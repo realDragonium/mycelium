@@ -115,7 +115,7 @@ _DATA_TABLES: tuple[str, ...] = (
     "statements",
     "statement_audience_labels",
     "audience_label_queue",
-    "connect_attempts",
+    "curation_attempts",
     "statement_mentions",
     "pending_mentions",
     "mention_recompute_queue",
@@ -163,7 +163,7 @@ _TABLE_TO_KIND: dict[str, str] = {
     "statements": "statement",
     "statement_audience_labels": "statement_audience_label",
     "audience_label_queue": "audience_label_job",
-    "connect_attempts": "connect_attempt",
+    "curation_attempts": "curation_attempt",
     "statement_mentions": "statement_mention",
     "pending_mentions": "legacy_mention_decision",
     "mention_recompute_queue": "mention_recompute",
@@ -258,6 +258,12 @@ UNARCHIVED_TABLES: dict[str, dict[str, str]] = {
         "instance_settings_migrations": (
             "marks one-time environment imports; restore re-marks them so the "
             "target environment is never imported"
+        ),
+    },
+    "mycelium.db": {
+        "curation_claims": (
+            "half-hour leases outside agents hold on curation work; an agent "
+            "re-claims after a restore"
         ),
     },
     "mycelium-ops.db": {
@@ -1033,6 +1039,11 @@ def _load_data_jsonl(
             if kind in _LEGACY_KINDS:
                 legacy_skipped += 1
                 continue
+            if kind == "connect_attempt":
+                # Archives from v23 remember only the connect pass's looks.
+                kind = "curation_attempt"
+                row["item_id"] = row.pop("statement_id")
+                row["outcome"] = "looked"
             if kind == "when_node":
                 legacy_kind = row.pop("link_kind", "statement")
                 if legacy_kind != "statement":

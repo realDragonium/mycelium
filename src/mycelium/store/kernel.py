@@ -477,14 +477,32 @@ CREATE TABLE IF NOT EXISTS audience_label_queue (
     last_error      TEXT
 );
 
--- The last time the connect pass looked at a statement and what it saw:
--- its text, and the statements it weighed (a JSON array of ids). Until
--- one of those changes, "connect next" does not offer the statement again.
-CREATE TABLE IF NOT EXISTS connect_attempts (
-    statement_id TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
+-- The last time a statement or knowledge gap was looked at, by the connect
+-- pass (`attempted_by` NULL, outcome `looked`) or an outside agent, and what
+-- it saw: the item's text, and the statements weighed for it (a JSON array of
+-- ids). Until one of those changes the item is not offered again, unless the
+-- outcome was `skipped`. Not foreign-keyed: an item is a statement or a gap.
+CREATE TABLE IF NOT EXISTS curation_attempts (
+    item_id      TEXT PRIMARY KEY,
     text         TEXT NOT NULL,
     neighbours   TEXT NOT NULL,
-    attempted_at TEXT NOT NULL
+    attempted_at TEXT NOT NULL,
+    attempted_by TEXT,
+    outcome      TEXT NOT NULL
+        CHECK (outcome IN ('looked', 'proposed', 'no_link', 'skipped')),
+    reason       TEXT,
+    draft_id     TEXT
+);
+
+-- Curation items an outside agent holds until `expires_at`, with the
+-- statements it was offered as neighbours. An expired row is free again.
+CREATE TABLE IF NOT EXISTS curation_claims (
+    item_id    TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    neighbours TEXT NOT NULL,
+    claimed_by TEXT NOT NULL,
+    claimed_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
 );
 
 -- Durable dirty-queue for asynchronous mention recompute. Statement

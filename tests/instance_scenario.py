@@ -132,7 +132,14 @@ def _substrate(server) -> dict[str, str]:
                 "'2026-08-02T00:00:00Z' WHERE statement_id = ?",
                 (ids["expiry"],),
             )
-    if _has_table(db, "connect_attempts"):
+    if _has_table(db, "curation_attempts"):
+        db.execute(
+            "INSERT INTO curation_attempts SELECT id, text, ?, "
+            "'2026-08-01T00:00:00Z', 'scenario-agent', 'no_link', "
+            "'Nothing in the code relates it.', NULL FROM statements WHERE id = ?",
+            (f'["{ids["expiry"]}"]', ids["submit"]),
+        )
+    elif _has_table(db, "connect_attempts"):
         db.execute(
             "INSERT INTO connect_attempts SELECT id, text, ?, '2026-08-01T00:00:00Z' "
             "FROM statements WHERE id = ?",
