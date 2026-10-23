@@ -259,8 +259,8 @@ _ENTITY_LINK_TYPE_SEED: dict[str, str] = {
     ),
     "sub-type": (
         "Source is a specialization of target. Reads 'source is a "
-        "sub-type of target' (e.g. Ubeeo is a sub-type of ATS, "
-        "hard_skill_german_language is a sub-type of Hard Skill). "
+        "sub-type of target' (e.g. SAML SSO is a sub-type of "
+        "Authentication method, Admin is a sub-type of User role). "
         "Parent / general category at the target end."
     ),
     "has": (

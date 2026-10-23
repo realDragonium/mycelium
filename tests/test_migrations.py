@@ -8,10 +8,12 @@ a future-version DB (downgrade safety).
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 
 import pytest
 
 from mycelium import migrations, store
+from mycelium.store import glossary
 
 
 def _user_version(conn):
@@ -710,3 +712,35 @@ def test_v17_rewrites_only_an_untouched_rule_definition():
 
     assert rule(seeded).startswith("An obligation or permission")
     assert rule(curated) == "Our own wording."
+
+
+def test_v19_rewrites_only_an_untouched_sub_type_definition():
+    # The v18 fixture holds the old seed, whose text stays out of the source.
+    v18 = Path(__file__).parent / "migration_fixtures/v18-c9b30c9/mycelium.sql"
+
+    def at_v18(description: str | None) -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(v18.read_text())
+        if description is not None:
+            conn.execute(
+                "UPDATE entity_link_type_glossary SET description = ? "
+                "WHERE link_type = 'sub-type'",
+                (description,),
+            )
+        conn.commit()
+        return conn
+
+    def sub_type(conn: sqlite3.Connection) -> str:
+        return conn.execute(
+            "SELECT description FROM entity_link_type_glossary "
+            "WHERE link_type = 'sub-type'"
+        ).fetchone()[0]
+
+    seeded = at_v18(None)
+    curated = at_v18("Our own wording.")
+
+    migrations.apply_migrations(seeded)
+    migrations.apply_migrations(curated)
+
+    assert sub_type(seeded) == glossary._ENTITY_LINK_TYPE_SEED["sub-type"]
+    assert sub_type(curated) == "Our own wording."

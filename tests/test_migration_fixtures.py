@@ -61,6 +61,9 @@ REWRITES: dict[tuple[str, str], str] = {
     ("mycelium.db", "statement_kind_glossary"): (
         "v17 rewrites the untouched seeded `rule` definition"
     ),
+    ("mycelium.db", "entity_link_type_glossary"): (
+        "v19 rewrites the untouched seeded `sub-type` definition"
+    ),
     ("mycelium.db", "kind_link_matrix"): (
         "v18 drops the matrix; nothing has read it since the connect pipeline"
     ),

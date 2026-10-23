@@ -34,6 +34,7 @@ upgrade themselves without a version number, so step 4 applies to them too.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC
@@ -967,6 +968,33 @@ def _migration_v18_drop_kind_link_matrix(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS kind_link_matrix")
 
 
+# SHA-256 of the seeded `sub-type` definition this replaces; the old text
+# is kept out of the source because it named one deployment's domain.
+_V18_SUB_TYPE_SHA256 = (
+    "da4ab126eb7fca417d81b2d8834ce737dc0dfde0093ccd39390f954fabc6addb"
+)
+
+
+def _migration_v19_sub_type_definition(conn: sqlite3.Connection) -> None:
+    """Replace the seeded `sub-type` examples with generic ones.
+
+    The old examples named one deployment's domain. Only the untouched seed is
+    rewritten; a curator's own definition stays."""
+    if not _has_table(conn, "entity_link_type_glossary"):
+        return
+    from mycelium.store.glossary import _ENTITY_LINK_TYPE_SEED
+
+    row = conn.execute(
+        "SELECT description FROM entity_link_type_glossary WHERE link_type = 'sub-type'"
+    ).fetchone()
+    if row and hashlib.sha256(row[0].encode()).hexdigest() == _V18_SUB_TYPE_SHA256:
+        conn.execute(
+            "UPDATE entity_link_type_glossary SET description = ? "
+            "WHERE link_type = 'sub-type'",
+            (_ENTITY_LINK_TYPE_SEED["sub-type"],),
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -989,6 +1017,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (16, _migration_v16_gap_references),
     (17, _migration_v17_rule_definition),
     (18, _migration_v18_drop_kind_link_matrix),
+    (19, _migration_v19_sub_type_definition),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]
