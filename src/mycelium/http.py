@@ -800,6 +800,9 @@ def _serialize_gap(row) -> dict[str, Any]:
         "resolved_by": row["resolved_by"],
         "dismissed_at": row["dismissed_at"],
         "dismissed_by": row["dismissed_by"],
+        "draft_id": row["draft_id"],
+        "statement_id": row["statement_id"],
+        "document_id": row["document_id"],
     }
 
 

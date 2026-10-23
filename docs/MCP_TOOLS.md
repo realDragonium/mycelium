@@ -58,7 +58,7 @@ decision, and the rest runs in-process.
 | `list_my_drafts` | Lists the caller's own drafts. |
 | `list_drafts` | Lists the review queue across creators. An AI curator lists and investigates drafts, and a person approves or rejects them in the UI. This tool is the agent's side of that split, and only real writers and admins see it. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
-| `report_knowledge_gap` | Lets an agent report knowledge it could not find. |
+| `report_knowledge_gap` | Lets an agent report knowledge it could not find, optionally naming the statement, draft or generated document it is about. A report about a draft is resolved when that draft is applied. |
 | `request_documentation` | Starts a documentation run. |
 | `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. |
 | `get_generated_document` | Reads the written document and the revision that `revise_document` needs. |

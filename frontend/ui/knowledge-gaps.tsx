@@ -23,6 +23,9 @@ function GapCard({ gap, busy, onAction }: { gap: KnowledgeGap; busy: boolean; on
           <span>Reported <time dateTime={gap.created_at}>{formatDate(gap.created_at)}</time>{gap.created_by ? ` by ${gap.created_by.slice(0, 8)}` : ''}</span>
           {changedAt && <span>{gap.status} <time dateTime={changedAt}>{formatDate(changedAt)}</time></span>}
           <span className="mono">{gap.id}</span>
+          {gap.statement_id && <Link to={{ view: 'statement', id: gap.statement_id }}>Statement {gap.statement_id.slice(0, 12)}</Link>}
+          {gap.draft_id && <Link to={{ view: 'draft', id: gap.draft_id }}>Draft {gap.draft_id.slice(0, 12)}</Link>}
+          {gap.document_id && <Link to={{ view: 'documentation' }} title={gap.document_id}>Document {gap.document_id.slice(0, 12)}</Link>}
         </div>
       </div>
       <div className="gap-controls">

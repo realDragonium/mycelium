@@ -30,7 +30,7 @@ focuses it.
 | Add knowledge | Ingest text | `#/ingest` | Paste prose; a loop extracts a draft |
 | | Research | `#/research?topic=…` | Point a run at a configured repository |
 | Curate | Drafts | `#/drafts`, `#/drafts/<id>` | Review, edit, submit, approve, reject or withdraw drafts; answer the reviewer's questions. Approving is all-or-nothing: if any statement is refused (the phrasing linter), nothing is applied and each refusal is listed with its reasons. Applying a draft resolves the gaps reported about it |
-| | Knowledge gaps | `#/gaps` | Resolve, dismiss or reopen reported gaps; open Research with a gap as the topic |
+| | Knowledge gaps | `#/gaps` | Resolve, dismiss or reopen reported gaps; follow a gap to the statement, draft or document it names; open Research with a gap as the topic |
 | | Names & aliases | `#/names` | Curate a concept's names; decide AI alias suggestions |
 | | Glossary | `#/glossary` | Statement kinds and link types |
 | | Activity | `#/activity` | The audit log of every change |

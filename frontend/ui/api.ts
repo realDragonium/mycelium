@@ -168,6 +168,8 @@ export interface KnowledgeGap {
   id: string; text: string; status: GapStatus;
   created_at: string; created_by: string | null;
   resolved_at: string | null; dismissed_at: string | null;
+  // What the report came from, when the reporter named it.
+  draft_id: string | null; statement_id: string | null; document_id: string | null;
 }
 export const knowledgeGaps = {
   list: () => getJSON<{ gaps: KnowledgeGap[] }>('/api/knowledge-gaps').then(r => r.gaps),
