@@ -251,6 +251,16 @@ def set_curator_label(
         )
 
 
+def confirm_curator_label(statement_id: str, *, curator: str | None) -> None:
+    """Keep the curator label after the statement's text changed."""
+    conn = store.substrate_connection()
+    with store.transaction(conn):
+        if not store.audience_labels.confirm_label(
+            conn, statement_id, labelled_by=curator
+        ):
+            raise ValueError(f"Statement {statement_id} has no curator label.")
+
+
 def clear_curator_label(statement_id: str) -> None:
     """Hand the statement back to the AI labeller."""
     conn = store.substrate_connection()

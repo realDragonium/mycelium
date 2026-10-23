@@ -87,8 +87,10 @@ preferences") is not listed. The list shows 50 pairs at a time with the total;
 
 Admins can open either merge direction straight into the merge preview above;
 the destination's preferred name and description are preselected. Writers can
-mark a pair **Not a duplicate** so it stops appearing. Dismissals are kept in
-substrate backups and disappear when either concept is merged away or deleted.
+mark a pair **Not a duplicate** so it stops appearing. **Dismissed** lists those
+pairs, newest first, and **Restore** lets a pair be proposed again. Dismissals
+are kept in substrate backups and disappear when either concept is merged away
+or deleted.
 
 ## API
 
@@ -102,6 +104,10 @@ substrate backups and disappear when either concept is merged away or deleted.
 - `POST /find-entity-duplicates`: `{ "limit": 50, "offset": 0 }` returns `{ "candidates": [...], "total": N }`, as listed above.
 - `POST /api/names-workspace/duplicates/dismiss`:
   `{ "a_entity_id": "...", "b_entity_id": "..." }`. Requires a real writer.
+- `GET /api/names-workspace/duplicates/dismissed`: `{ "dismissed": [...] }`, each
+  with both ids, `dismissed_at` and `dismissed_by`.
+- `POST /api/names-workspace/duplicates/restore`: the same body as dismiss;
+  forgets the dismissal. Requires a real writer.
 - `GET /api/mention-candidates?entity_id=...&after=...&limit=...`: bounded
   read-only discovery, including ambiguous matches. Follow `next_after` while
   `has_more` is true, even if a page contains no matches.

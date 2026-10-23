@@ -18,7 +18,10 @@ Usage:
     ingest_eval.py prepare [--seed FILE | --backup DIR]
                           # write the seed (default) or copy a backup into
                           # $MYCELIUM_DATA_DIR, migrate, embed
-    ingest_eval.py run LABEL [--cases-dir DIR] [--cases a,b] [--model M] [--jobs N]
+    ingest_eval.py run LABEL [--cases-dir DIR] [--cases a,b] [--model M]
+                          [--effort E] [--jobs N]
+                          # --effort: Claude reasoning effort; omitted, the
+                          # model's default, as ingest runs unless configured
     ingest_eval.py score LABEL            # re-score a finished run
 
 Results go to ~/mycelium-eval/ingest-results/LABEL/ (override with
@@ -44,11 +47,13 @@ import time
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, get_args
 
 import ingest_eval_scoring as scoring
 from pydantic import BaseModel, ConfigDict, JsonValue
 from typing_extensions import TypeIs
+
+from mycelium.ai.types import CLAUDE_EFFORT, ClaudeEffort
 
 if TYPE_CHECKING:
     from mycelium.server.draft_queue import DraftReceipt
@@ -206,7 +211,9 @@ def _draft_ops(draft_id: str | None) -> list[dict[str, JsonValue]]:
     ]
 
 
-def run_one(case_id: str, run_dir: Path, model: str) -> None:
+def run_one(
+    case_id: str, run_dir: Path, model: str, effort: ClaudeEffort | None
+) -> None:
     case = RunSpec.load(run_dir).cases()[case_id]
     out = run_dir / f"{case_id}.raw.json"
     base = Path(os.environ["MYCELIUM_DATA_DIR"])
@@ -218,7 +225,7 @@ def run_one(case_id: str, run_dir: Path, model: str) -> None:
             IngestConfig.from_env(),
             provider="claude",
             model=model,
-            reasoning_effort=None,
+            reasoning_effort=effort,
             trace_log_path=None,
             trace_dir="",
         )
@@ -229,6 +236,7 @@ def run_one(case_id: str, run_dir: Path, model: str) -> None:
         record = {
             "case": case_id,
             "model": model,
+            "reasoning_effort": effort,
             "outcome": result.outcome,
             "elapsed_s": round(elapsed, 1),
             "draft_ops": _draft_ops(data.get("draft_id")),
@@ -518,7 +526,12 @@ def _summary(results: RunResults) -> str:
 
 
 def _run(
-    label: str, cases_dir: Path, case_ids: list[str], model: str, jobs: int
+    label: str,
+    cases_dir: Path,
+    case_ids: list[str],
+    model: str,
+    effort: ClaudeEffort | None,
+    jobs: int,
 ) -> None:
     run_dir = RESULTS / label
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -535,7 +548,15 @@ def _run(
         log = run_dir / f"{case_id}.log"
         with log.open("w") as handle:
             done = subprocess.run(
-                [sys.executable, __file__, "_one", case_id, str(run_dir), model],
+                [
+                    sys.executable,
+                    __file__,
+                    "_one",
+                    case_id,
+                    str(run_dir),
+                    model,
+                    *([effort] if effort else []),
+                ],
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 check=False,
@@ -561,6 +582,7 @@ def main() -> None:
     r.add_argument("--cases-dir", type=Path, default=CASES_DIR)
     r.add_argument("--cases", default="")
     r.add_argument("--model", default=DEFAULT_MODEL)
+    r.add_argument("--effort", choices=get_args(ClaudeEffort))
     r.add_argument("--jobs", type=int, default=4)
     s = sub.add_parser("score")
     s.add_argument("label")
@@ -568,6 +590,7 @@ def main() -> None:
     o.add_argument("case")
     o.add_argument("run_dir", type=Path)
     o.add_argument("model")
+    o.add_argument("effort", nargs="?")
     args = parser.parse_args()
 
     if args.command == "prepare":
@@ -578,11 +601,13 @@ def main() -> None:
             prepare_seed(args.seed, base)
     elif args.command == "run":
         ids = [c for c in args.cases.split(",") if c]
-        _run(args.label, args.cases_dir, ids, args.model, args.jobs)
+        effort = CLAUDE_EFFORT.validate_python(args.effort) if args.effort else None
+        _run(args.label, args.cases_dir, ids, args.model, effort, args.jobs)
     elif args.command == "score":
         print(json.dumps(score_run(args.label).metrics, indent=1))
     else:
-        run_one(args.case, args.run_dir, args.model)
+        effort = CLAUDE_EFFORT.validate_python(args.effort) if args.effort else None
+        run_one(args.case, args.run_dir, args.model, effort)
 
 
 if __name__ == "__main__":

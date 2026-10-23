@@ -78,7 +78,7 @@ def set_label(
         "audiences = excluded.audiences, source = excluded.source, "
         "reason = excluded.reason, model = excluded.model, "
         "cost_usd = excluded.cost_usd, labelled_at = excluded.labelled_at, "
-        "labelled_by = excluded.labelled_by",
+        "labelled_by = excluded.labelled_by, text_changed_at = NULL",
         (
             statement_id,
             json.dumps(sorted(set(audiences))),
@@ -132,11 +132,30 @@ def clear_label(conn: sqlite3.Connection, statement_id: str) -> None:
     enqueue(conn, [statement_id])
 
 
+def confirm_label(
+    conn: sqlite3.Connection, statement_id: str, *, labelled_by: str | None
+) -> bool:
+    """A curator re-decides their label unchanged after a text change. False
+    when the statement has no curator label."""
+    cursor = conn.execute(
+        "UPDATE statement_audience_labels SET text_changed_at = NULL, "
+        "labelled_at = ?, labelled_by = ? WHERE statement_id = ? AND source = 'curator'",
+        (_now(), labelled_by, statement_id),
+    )
+    return cursor.rowcount > 0
+
+
 def text_changed(conn: sqlite3.Connection, statement_id: str) -> None:
-    """A statement's text changed: its AI label no longer describes it."""
+    """A statement's text changed: its AI label no longer describes it, and
+    a curator label is kept but marked for the curator to look at again."""
     conn.execute(
         "DELETE FROM statement_audience_labels WHERE statement_id = ? AND source = 'ai'",
         (statement_id,),
+    )
+    conn.execute(
+        "UPDATE statement_audience_labels SET text_changed_at = ? "
+        "WHERE statement_id = ? AND text_changed_at IS NULL",
+        (_now(), statement_id),
     )
     if get_label(conn, statement_id) is None:
         enqueue(conn, [statement_id])

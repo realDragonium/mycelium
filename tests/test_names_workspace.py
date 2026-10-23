@@ -266,11 +266,22 @@ def test_http_dismisses_duplicate_pairs_between_existing_concepts(
         assert client.post(dismiss, json=missing).status_code == 400
         pair = {"a_entity_id": b, "b_entity_id": a}
         assert client.post(dismiss, json=pair).status_code == 204
-        assert client.post(dismiss, json=pair).status_code == 204
         assert client.post("/find-entity-duplicates", json={}).json() == {
             "candidates": [],
             "total": 0,
         }
+
+        dismissed = client.get("/api/names-workspace/duplicates/dismissed").json()
+        assert [
+            (item["a_entity_id"], item["b_entity_id"])
+            for item in dismissed["dismissed"]
+        ] == [tuple(sorted((a, b)))]
+        restore = "/api/names-workspace/duplicates/restore"
+        assert client.post(restore, json=pair).status_code == 204
+        assert client.get("/api/names-workspace/duplicates/dismissed").json() == {
+            "dismissed": []
+        }
+        assert client.post("/find-entity-duplicates", json={}).json()["total"] == 1
 
 
 def test_http_applies_only_previewed_revision_and_validates_action(

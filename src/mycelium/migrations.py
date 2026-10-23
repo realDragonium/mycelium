@@ -1033,6 +1033,18 @@ def _migration_v21_audience_labels(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v22_label_text_changed(conn: sqlite3.Connection) -> None:
+    """Mark a curator label whose statement's text changed after the
+    decision, so a curator can confirm it or hand it back to the AI."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(statement_audience_labels)")
+    }
+    if "text_changed_at" not in columns:
+        conn.execute(
+            "ALTER TABLE statement_audience_labels ADD COLUMN text_changed_at TEXT"
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1058,6 +1070,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (19, _migration_v19_sub_type_definition),
     (20, _migration_v20_entity_duplicate_dismissals),
     (21, _migration_v21_audience_labels),
+    (22, _migration_v22_label_text_changed),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

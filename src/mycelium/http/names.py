@@ -71,6 +71,22 @@ def names_dismiss_duplicate_http(
     names_workspace.dismiss_duplicate(server._db(), body)
 
 
+@router.get("/api/names-workspace/duplicates/dismissed")
+def names_dismissed_duplicates_http(
+    request: Request,
+) -> names_workspace.DismissedDuplicates:
+    _require_principal(request)
+    return names_workspace.dismissed_duplicates(server._db())
+
+
+@router.post("/api/names-workspace/duplicates/restore", status_code=204)
+def names_restore_duplicate_http(
+    body: names_workspace.DismissDuplicate, request: Request
+) -> None:
+    _enforce_curator(request, "restoring dismissed duplicates")
+    names_workspace.restore_duplicate(server._db(), body)
+
+
 @router.get("/api/names-workspace/{entity_id}")
 def names_detail_http(entity_id: str, request: Request) -> names_workspace.Detail:
     _require_principal(request)

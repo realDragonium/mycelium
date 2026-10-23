@@ -1288,9 +1288,9 @@ def test_a_refused_run_is_retried_with_its_notes_kept_out_of_the_request(_stores
     try:
         refused = server.request_documentation("document the options")["id"]
         doc_runs.wait_all()
-        assert server.get_documentation_run(refused)["summary"]["review_findings"] == [
-            finding
-        ]
+        detail = server.get_documentation_run(refused)
+        assert detail["summary"]["review_findings"] == [finding]
+        assert detail["retryable"] is True
 
         retry = server.retry_documentation_run(refused, with_review_notes=True)
         plain = server.retry_documentation_run(refused)
@@ -1311,6 +1311,7 @@ def test_only_a_run_that_wrote_nothing_is_retried(_stores):
     try:
         written = server.request_documentation("document X")["id"]
         doc_runs.wait_all()
+        assert server.get_documentation_run(written)["retryable"] is False
         with pytest.raises(ValueError, match="wrote nothing"):
             server.retry_documentation_run(written)
     finally:

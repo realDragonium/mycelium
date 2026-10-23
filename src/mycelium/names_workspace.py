@@ -172,6 +172,15 @@ class DismissDuplicate(Model):
     b_entity_id: str
 
 
+class DismissedDuplicate(DismissDuplicate):
+    dismissed_at: str
+    dismissed_by: str | None
+
+
+class DismissedDuplicates(Model):
+    dismissed: list[DismissedDuplicate]
+
+
 class Conflict(ValueError):
     pass
 
@@ -529,3 +538,17 @@ def dismiss_duplicate(conn: sqlite3.Connection, body: DismissDuplicate) -> None:
             if store.get_entity_by_id(conn, entity_id) is None:
                 raise ValueError("The concept no longer exists")
         store.dismiss_entity_duplicate(conn, body.a_entity_id, body.b_entity_id)
+
+
+def dismissed_duplicates(conn: sqlite3.Connection) -> DismissedDuplicates:
+    return DismissedDuplicates(
+        dismissed=[
+            DismissedDuplicate.model_validate(dict(row))
+            for row in store.list_entity_duplicate_dismissals(conn)
+        ]
+    )
+
+
+def restore_duplicate(conn: sqlite3.Connection, body: DismissDuplicate) -> None:
+    with store.transaction(conn):
+        store.restore_entity_duplicate(conn, body.a_entity_id, body.b_entity_id)

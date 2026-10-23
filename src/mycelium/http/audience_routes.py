@@ -86,6 +86,7 @@ class Label(BaseModel):
     model: str | None
     labelled_at: str
     labelled_by: str | None
+    text_changed_at: str | None
 
 
 class AudienceVisibility(BaseModel):
@@ -113,6 +114,7 @@ def _label(row: sqlite3.Row | None) -> Label | None:
         model=row["model"],
         labelled_at=row["labelled_at"],
         labelled_by=row["labelled_by"],
+        text_changed_at=row["text_changed_at"],
     )
 
 
@@ -171,6 +173,17 @@ def set_statement_audiences_http(
     return _statement_audiences(statement_id, request)
 
 
+@router.post("/api/statements/{statement_id}/audiences/confirm")
+def confirm_statement_audiences_http(
+    statement_id: str, request: Request
+) -> StatementAudiences:
+    _enforce_role(request, "writer", real_role=True)
+    audience_labelling.confirm_curator_label(
+        statement_id, curator=_require_principal(request).id
+    )
+    return _statement_audiences(statement_id, request)
+
+
 @router.delete("/api/statements/{statement_id}/audiences")
 def clear_statement_audiences_http(
     statement_id: str, request: Request
@@ -194,6 +207,7 @@ class LabelledStatement(BaseModel):
 class LabelledStatements(BaseModel):
     statements: list[LabelledStatement]
     total: int
+    can_curate: bool
 
 
 @router.get("/api/audiences/statements")
@@ -201,12 +215,15 @@ def labelled_statements_http(
     request: Request,
     audience: str | None = None,
     visibility: Literal["visible", "hidden"] | None = None,
-    state: Literal["unlabelled", "ai", "curator", "queued"] | None = None,
+    state: Literal["unlabelled", "ai", "curator", "text_changed", "queued"]
+    | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> LabelledStatements:
     """Statements by what an audience sees and by label state."""
-    _require_principal(request)
+    from .. import auth
+
+    principal = _require_principal(request)
     conditions: list[str] = []
     params: list[str | int] = []
     if visibility is not None:
@@ -223,6 +240,8 @@ def labelled_statements_http(
     elif state in ("ai", "curator"):
         conditions.append("l.source = ?")
         params.append(state)
+    elif state == "text_changed":
+        conditions.append("l.text_changed_at IS NOT NULL")
     elif state == "queued":
         conditions.append("q.statement_id IS NOT NULL")
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
@@ -250,4 +269,5 @@ def labelled_statements_http(
             for row in rows
         ],
         total=total,
+        can_curate=auth.principal_has_real_role(principal, "writer"),
     )

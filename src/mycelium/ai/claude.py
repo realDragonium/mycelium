@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import Protocol, TypedDict, runtime_checkable
@@ -134,6 +135,8 @@ def _block(block: object) -> dict[str, JsonValue]:
     raise ModelError("Unsupported Claude conversation block")
 
 
+_LOG = logging.getLogger(__name__)
+
 #: Models that reject a forced `tool_choice` ("tool" or "any") with a 400 and
 #: tie thinking blocks to an unedited history. A required tool is asked for in
 #: the prompt instead, and `validate_calls` still insists on that one call.
@@ -262,6 +265,10 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         if not (_forced(task, config) and _refuses_forcing(error)):
             raise
         _refused_forcing.add(config.model)
+        _LOG.warning(
+            "Model %s refuses a forced tool_choice; add it to _UNFORCEABLE.",
+            config.model,
+        )
         response = _send(task, config, client, system, tools)
     if response.stop_reason not in ("end_turn", "tool_use"):
         raise IncompleteTurn(

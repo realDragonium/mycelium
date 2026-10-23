@@ -199,6 +199,16 @@ def revise_document(
     )
 
 
+def _retry_refusal(row: sqlite3.Row) -> str | None:
+    from .. import document_edits
+
+    if row["outcome"] not in ("nothing_written", "failed"):
+        return "Only a run that wrote nothing can be retried."
+    if row["prompt"] == document_edits.MANUAL_EDIT_PROMPT:
+        return "Edit the document again to retry a manual edit."
+    return None
+
+
 def retry_documentation_run(
     run_id: str, *, with_review_notes: bool = False
 ) -> dict[str, object]:
@@ -206,15 +216,14 @@ def retry_documentation_run(
     and concept, or a revision of the same document. `with_review_notes`
     briefs the writer with what the refusing review found; the request text
     the next review reads stays as it was."""
-    from .. import auth, doc_runs, docs_store, document_edits
+    from .. import auth, doc_runs, docs_store
 
     row = docs_store.get_run(_drafts_db(), run_id)
     if row is None:
         raise LookupError(f"documentation run not found: {run_id}")
-    if row["outcome"] not in ("nothing_written", "failed"):
-        raise ValueError("Only a run that wrote nothing can be retried.")
-    if row["prompt"] == document_edits.MANUAL_EDIT_PROMPT:
-        raise ValueError("Edit the document again to retry a manual edit.")
+    refusal = _retry_refusal(row)
+    if refusal is not None:
+        raise ValueError(refusal)
     summary = _json.loads(row["summary"]) if row["summary"] else {}
     notes = summary.get("review_findings") or [] if with_review_notes else []
     if with_review_notes and not notes:
@@ -332,13 +341,18 @@ def get_documentation_run(run_id: str) -> dict[str, Any]:
     `draft_title` and `draft_body`, so the findings can be read against the
     text they quote. Both are null when no document was written.
 
+    `retryable` says whether the run can be started again as it was.
+
     Returns the serialized run row. Raises for an unknown run_id."""
     from .. import docs_store
 
     row = docs_store.get_run(_drafts_db(), run_id)
     if row is None:
         raise ValueError(f"documentation run not found: {run_id}")
-    return docs_store.serialize_run_detail(row)
+    return {
+        **docs_store.serialize_run_detail(row),
+        "retryable": _retry_refusal(row) is None,
+    }
 
 
 @tool
