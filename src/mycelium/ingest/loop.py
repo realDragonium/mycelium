@@ -796,7 +796,9 @@ def _queue_ops(
                 )
             continue
         try:
-            payload = _renumber_references(p.payload, seqs)
+            payload = _renumber_references(
+                p.payload, seqs, own=i + 1 if p.op == "upsert_statements" else None
+            )
         except ValueError as exc:
             flagged.append(f"op[{i}] ({p.op}) dropped: {exc}")
             continue
@@ -810,13 +812,19 @@ def _queue_ops(
     return queued
 
 
-def _renumber_references(value: Any, seqs: dict[int, int]) -> Any:
+def _renumber_references(
+    value: Any, seqs: dict[int, int], *, own: int | None = None
+) -> Any:
+    """`own` is the batch's own operation number: models sometimes name a
+    sibling in the same batch with the later-operation form, which means `@N`."""
     if isinstance(value, dict):
-        return {k: _renumber_references(v, seqs) for k, v in value.items()}
+        return {k: _renumber_references(v, seqs, own=own) for k, v in value.items()}
     if isinstance(value, list):
-        return [_renumber_references(v, seqs) for v in value]
+        return [_renumber_references(v, seqs, own=own) for v in value]
     if isinstance(value, str) and (match := _DRAFT_REFERENCE.fullmatch(value)):
         producer, index = int(match[1]), match[2]
+        if producer == own:
+            return f"@{index}"
         if producer not in seqs:
             raise ValueError(
                 f"reference {value} names operation {producer}, which is not "

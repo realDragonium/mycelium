@@ -68,6 +68,26 @@ def visible_among(
     return frozenset(visible)
 
 
+def awaiting_label(
+    conn: sqlite3.Connection, statement_ids: Sequence[str]
+) -> frozenset[str]:
+    """Which of `statement_ids` are queued with attempts left, so a label is
+    still coming."""
+    awaiting: set[str] = set()
+    for offset in range(0, len(statement_ids), 500):
+        chunk = list(statement_ids[offset : offset + 500])
+        placeholders = ", ".join("?" for _ in chunk)
+        awaiting.update(
+            str(row["statement_id"])
+            for row in conn.execute(
+                "SELECT statement_id FROM audience_label_queue "
+                f"WHERE statement_id IN ({placeholders}) AND attempts < ?",
+                (*chunk, MAX_ATTEMPTS),
+            )
+        )
+    return frozenset(awaiting)
+
+
 def get_label(conn: sqlite3.Connection, statement_id: str) -> sqlite3.Row | None:
     row: sqlite3.Row | None = conn.execute(
         "SELECT * FROM statement_audience_labels WHERE statement_id = ?",

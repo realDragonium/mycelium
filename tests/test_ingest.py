@@ -545,6 +545,33 @@ def test_invalid_statement_link_references_do_not_poison_other_ingest_ops(edge):
     assert any("(add_links) dropped" in finding for finding in result.flagged)
 
 
+def test_batch_naming_its_own_sibling_by_operation_number_is_kept():
+    statements = {
+        "statements": [
+            {"kind": "event", "text": "an export is requested", "links": []},
+            {
+                "kind": "event",
+                "text": "an export file is emailed",
+                "links": [],
+                "incoming_links": [{"from_id": "@1:0", "link_type": "triggers"}],
+            },
+        ]
+    }
+    emit = _emit_input(
+        ops=[_op("upsert_statements", statements)],
+        ledger=[
+            _ledger_row(text, "new", matched=["stm_1"], considered=["stm_1"])
+            for text in ("an export is requested", "an export file is emailed")
+        ],
+    )
+    responses = _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])]
+    result, _client, _sub, emitter = _run(responses)
+    assert isinstance(result, DraftCreated)
+    [(_draft, kind, payload)] = emitter.queued
+    assert kind == "upsert_statements"
+    assert payload["statements"][1]["incoming_links"][0]["from_id"] == "@0"
+
+
 def test_ingest_preserves_statement_and_draft_result_references_in_conditions():
     edge = {
         "from_id": "stm_source",

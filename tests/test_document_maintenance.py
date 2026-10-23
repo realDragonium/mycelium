@@ -344,3 +344,31 @@ def test_a_cited_statement_hidden_from_the_audience_makes_it_out_of_date(client)
             document
         ].changes
     )
+
+
+def test_an_edit_waits_for_its_new_label_instead_of_reading_as_hidden(client):
+    from mycelium import server
+
+    _profile("propose", "external-technical")
+    _document_id, statement = _document()
+    with store.transaction(server._db()):
+        store.audience_labels.set_label(
+            server._db(), statement, ["external-technical"], source="ai", reason="ai"
+        )
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+
+    _sweep(T0)
+    assert client.get("/api/documentation/plans/public").json()["items"] == []
+
+    with store.transaction(server._db()):
+        store.audience_labels.apply_ai_label(
+            server._db(),
+            statement,
+            ["external-technical"],
+            reason="ai",
+            model="fixture",
+            cost_usd=None,
+        )
+    _sweep(T0 + timedelta(minutes=1))
+    (item,) = client.get("/api/documentation/plans/public").json()["items"]
+    assert "Now: 'Admins can export invoices as CSV or PDF.'" in item["rationale"]
