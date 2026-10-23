@@ -14,12 +14,12 @@ from typing import Any, TypedDict
 from .. import docs_store, embed, store
 from .indexes import _persisted_index_write
 from .names import _create_name_with_plural, _drop_name_from_index
-from .registry import tool
+from .registry import draft_listing_tool, draftable_tool, tool
 from .runtime import _baker, _db, _drafts_db, _name_idx
 from .specs import EntityEdgeSpec, ResultLimit, _check_limit
 
 
-@tool
+@draftable_tool
 def upsert_entity(name: str, description: str) -> dict[str, str]:
     """Create or update an entity by name.
 
@@ -54,7 +54,7 @@ class EntityDeletion(TypedDict):
     documents_unanchored: int
 
 
-@tool
+@draftable_tool
 def merge_entities(from_entity_id: str, into_entity_id: str) -> EntityMerge:
     """Move every name from `from_entity_id` to `into_entity_id` and delete
     the source entity. Statements that mentioned the moved names continue
@@ -106,7 +106,7 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> EntityMerge:
     }
 
 
-@tool
+@draftable_tool
 def delete_entity(id: str) -> EntityDeletion:
     """Permanently delete an entity along with all its names.
 
@@ -209,7 +209,7 @@ def get_entity(id: str) -> dict[str, Any]:
     }
 
 
-@tool
+@draft_listing_tool
 def list_entities(
     prefix: str = "",
     limit: ResultLimit = 50,
@@ -303,7 +303,7 @@ def search_entities(
     return {"entities": entities}
 
 
-@tool
+@draftable_tool
 def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     """Bulk-insert directed entity→entity edges.
 
@@ -350,7 +350,7 @@ def add_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     return {"inserted": inserted}
 
 
-@tool
+@draftable_tool
 def remove_entity_links(links: list[EntityEdgeSpec]) -> dict[str, int]:
     """Bulk-delete directed entity→entity edges.
 

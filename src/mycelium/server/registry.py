@@ -13,7 +13,7 @@ import functools
 import inspect
 import os
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, ParamSpec, TypeVar, overload
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
@@ -24,10 +24,15 @@ from .admission import _MODEL_LOOP_TOOLS, _offloaded, _run_tool
 from .draft_queue import (
     _LIST_TOOL_KINDS,
     _MUTATION_PREFIXES,
+    DraftReceipt,
+    QueuedOp,
     _list_from_draft,
     _queue_draft_op,
     _resolve_draft_target,
 )
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 # `MYCELIUM_INSTRUCTIONS` lets each deployment tell Claude Desktop / other
 # MCP clients *when* to reach for this server — naming the product, the
@@ -205,12 +210,75 @@ MCP_TOOLS = frozenset(
 )
 
 
+def _check_role(name: str, required: str, real_role: bool) -> _auth.Principal | None:
+    """Raise unless the current caller clears the tool's role gate; return them."""
+    principal = _auth.current_principal.get()
+    if principal is not None and not _satisfies(principal, required, real_role):
+        raise _auth.RoleRequired(
+            f"tool '{name}' requires the "
+            f"{'real ' if real_role else ''}{required} role; "
+            f"caller has {principal.role}"
+        )
+    return principal
+
+
+def _register(
+    func: Callable[..., object],
+    wrapper: Callable[..., object],
+    *,
+    required: str,
+    real_role: bool,
+    draftable: bool,
+) -> None:
+    """Record `wrapper` in `TOOLS`, with the gate its other surfaces read.
+
+    `draftable` is what the decorator declared, and the name rule in
+    `draft_queue` is what the wrapper acts on; refusing a mismatch keeps the
+    declared result type honest.
+    """
+    name = func.__name__
+    if name.startswith(_MUTATION_PREFIXES) or name in _LIST_TOOL_KINDS:
+        if not draftable:
+            raise TypeError(
+                f"'{name}' can be routed onto a draft; register it with "
+                "@draftable_tool or @draft_listing_tool"
+            )
+        _add_draft_id_to_signature(func, wrapper)
+    elif draftable:
+        raise TypeError(f"'{name}' cannot be routed onto a draft; use @tool")
+    # Exposed on the wrapper so other layers (e.g. http/tool_routes.py's
+    # role-classifier loop and the tools/list filter in this module) can read
+    # it without re-deriving.
+    wrapper.__dict__.update(
+        _mycelium_required_role=required, _mycelium_real_role=real_role
+    )
+    TOOLS.append(wrapper)
+
+
+def _pop_draft_id(kwargs: dict[str, object]) -> str | None:
+    """Take the `draft_id` the published signature added out of a call's kwargs."""
+    draft_id = kwargs.pop("draft_id", None)
+    if draft_id is not None and not isinstance(draft_id, str):
+        raise TypeError(f"draft_id must be a string, not {type(draft_id).__name__}")
+    return draft_id
+
+
+@overload
+def tool(func: Callable[P, R], /) -> Callable[P, R]: ...
+
+
+@overload
 def tool(
-    func: Callable[..., Any] | None = None,
+    *, role: str | None = None, real_role: bool = False
+) -> Callable[[Callable[P, R]], Callable[P, R]]: ...
+
+
+def tool(
+    func: Callable[P, R] | None = None,
     *,
     role: str | None = None,
     real_role: bool = False,
-) -> Callable[..., Any]:
+) -> Callable[P, R] | Callable[[Callable[P, R]], Callable[P, R]]:
     """Register `func` as an HTTP endpoint, and as an MCP tool when its name
     is in `MCP_TOOLS`.
 
@@ -235,80 +303,84 @@ def tool(
     the body is what keeps `tools/list` honest — the listing filter reads
     the same declaration, so a tool can't be advertised to a caller the
     gate will then reject.
+
+    A tool a draft can stand in for is registered with `draftable_tool` or
+    `draft_listing_tool` instead, whose results say so.
     """
 
-    def _register(func: Callable[..., Any]) -> Callable[..., Any]:
-        required = role or _auth.required_role_for(func.__name__)
-        # Tools whose name matches one of these prefixes are substrate
-        # writes — they can be queued onto a draft instead of executing
-        # against the live store. We extend their public signature with
-        # an optional `draft_id` arg and intercept the call below.
-        is_mutation = func.__name__.startswith(_MUTATION_PREFIXES)
-        # List tools with a registered "show draft contents" mapping
-        # also accept `draft_id`, but route to a read against the draft
-        # ops table instead of redirecting a write.
-        is_draftable_read = func.__name__ in _LIST_TOOL_KINDS
-        has_draft_id = is_mutation or is_draftable_read
-        # Claimed around the call itself, not around the whole wrapper: a
-        # drafter whose call is redirected onto a draft never runs the model
-        # loop, so it must not hold a slot the real work is waiting for.
-        is_model_loop = func.__name__ in _MODEL_LOOP_TOOLS
+    def _decorate(func: Callable[P, R]) -> Callable[P, R]:
+        name = func.__name__
+        required = role or _auth.required_role_for(name)
+        budgeted = name in _MODEL_LOOP_TOOLS
 
         @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            principal = _auth.current_principal.get()
-            if principal is not None and not _satisfies(principal, required, real_role):
-                raise _auth.RoleRequired(
-                    f"tool '{func.__name__}' requires the "
-                    f"{'real ' if real_role else ''}{required} role; "
-                    f"caller has {principal.role}"
-                )
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            _check_role(name, required, real_role)
+            return _run_tool(lambda: func(*args, **kwargs), budgeted=budgeted)
 
-            if has_draft_id:
-                draft_id = kwargs.pop("draft_id", None)
-            else:
-                draft_id = None
-
-            if func.__name__ == "add_links":
-                bound = _ORIG_SIGNATURES[func.__name__].bind_partial(*args, **kwargs)
-                link_authoring.reject_entity_statement_additions(
-                    bound.arguments.get("links")
-                )
-
-            if is_mutation:
-                redirect = _resolve_draft_target(principal, draft_id)
-                if redirect is not None:
-                    # Bind the remaining kwargs against func's original
-                    # signature so positional args become named — keeps
-                    # the stored payload uniform regardless of how the
-                    # caller invoked the tool.
-                    bound = _ORIG_SIGNATURES[func.__name__].bind_partial(
-                        *args, **kwargs
-                    )
-                    payload = dict(bound.arguments)
-                    return _queue_draft_op(redirect, func.__name__, payload, principal)
-
-            if is_draftable_read and draft_id is not None:
-                return _list_from_draft(draft_id, _LIST_TOOL_KINDS[func.__name__])
-
-            return _run_tool(func, args, kwargs, budgeted=is_model_loop)
-
-        # Expose the required role on the wrapper so other layers
-        # (e.g. http/tool_routes.py's role-classifier loop and the tools/list
-        # filter in this module) can read it without re-deriving.
-        wrapper._mycelium_required_role = required  # type: ignore[attr-defined]
-        wrapper._mycelium_real_role = real_role  # type: ignore[attr-defined]
-
-        if has_draft_id:
-            _add_draft_id_to_signature(func, wrapper)
-
-        TOOLS.append(wrapper)
+        _register(
+            func, wrapper, required=required, real_role=real_role, draftable=False
+        )
         return wrapper
 
     # Allow both `@tool` and `@tool(role="reader")` forms.
     if func is not None:
-        return _register(func)
-    return _register
+        return _decorate(func)
+    return _decorate
+
+
+def draftable_tool(func: Callable[P, R]) -> Callable[P, R | DraftReceipt]:
+    """Register a substrate write, which a draft can take in its place.
+
+    A drafter's call, or any call naming a `draft_id`, is queued onto that
+    draft and answers with its `DraftReceipt` rather than the tool's result.
+    The published signature gains the optional `draft_id`.
+    """
+    name = func.__name__
+    required = _auth.required_role_for(name)
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R | DraftReceipt:
+        principal = _check_role(name, required, False)
+        draft_id = _pop_draft_id(kwargs)
+        if name == "add_links":
+            bound = _ORIG_SIGNATURES[name].bind_partial(*args, **kwargs)
+            link_authoring.reject_entity_statement_additions(
+                bound.arguments.get("links")
+            )
+        redirect = _resolve_draft_target(principal, draft_id)
+        if redirect is not None:
+            # Bind the remaining kwargs against func's original signature so
+            # positional args become named — keeps the stored payload uniform
+            # regardless of how the caller invoked the tool.
+            bound = _ORIG_SIGNATURES[name].bind_partial(*args, **kwargs)
+            return _queue_draft_op(redirect, name, dict(bound.arguments), principal)
+        return _run_tool(lambda: func(*args, **kwargs), budgeted=False)
+
+    _register(func, wrapper, required=required, real_role=False, draftable=True)
+    return wrapper
+
+
+def draft_listing_tool(func: Callable[P, R]) -> Callable[P, R | list[QueuedOp]]:
+    """Register a list read that can show a draft's queued ops instead.
+
+    Called with a `draft_id`, it answers with that draft's ops of the kinds
+    `_LIST_TOOL_KINDS` maps it to rather than reading the substrate. The
+    published signature gains the optional `draft_id`.
+    """
+    name = func.__name__
+    required = _auth.required_role_for(name)
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R | list[QueuedOp]:
+        _check_role(name, required, False)
+        draft_id = _pop_draft_id(kwargs)
+        if draft_id is not None:
+            return _list_from_draft(draft_id, _LIST_TOOL_KINDS[name])
+        return _run_tool(lambda: func(*args, **kwargs), budgeted=False)
+
+    _register(func, wrapper, required=required, real_role=False, draftable=True)
+    return wrapper
 
 
 #: Cached unmodified signatures of mutation tools, so the wrapper can
@@ -318,7 +390,7 @@ _ORIG_SIGNATURES: dict[str, inspect.Signature] = {}
 
 
 def _add_draft_id_to_signature(
-    func: Callable[..., Any], wrapper: Callable[..., Any]
+    func: Callable[..., object], wrapper: Callable[..., object]
 ) -> None:
     """Splice an optional `draft_id: str | None = None` onto the wrapper's
     public signature. The MCP server's tool-schema introspection and tool_routes.py's
@@ -352,13 +424,12 @@ def _add_draft_id_to_signature(
     )
     # The published return type is too narrow once draft_id is in play:
     # a mutation tool whose substrate result is `dict[str, str]` may
-    # instead return a queue receipt `{draft_id, seq: int, queued}`,
-    # and a list tool whose substrate result is `dict[str, Any]` may
-    # instead return `list[dict[...]]` of queued ops. The MCP server validates
+    # instead return a `DraftReceipt`, and a list tool whose substrate
+    # result is `dict[str, Any]` may instead return `list[QueuedOp]`. The MCP server validates
     # outputs against the schema, so use `Any` to subsume every branch.
     return_ann: Any = Any
     new_sig = sig.replace(parameters=params, return_annotation=return_ann)
-    wrapper.__signature__ = new_sig  # type: ignore[attr-defined]
+    wrapper.__dict__["__signature__"] = new_sig
     wrapper.__annotations__ = {**resolved, "draft_id": str | None, "return": return_ann}
 
 

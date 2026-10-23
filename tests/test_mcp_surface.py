@@ -68,3 +68,16 @@ def test_bounded_reads_refuse_an_oversized_limit_in_process(name):
     query = {"query": "x"} if name == "search_statements" else {}
     with pytest.raises(ValueError, match="limit must be between 1 and 100"):
         getattr(server, name)(limit=101, **query)
+
+
+def test_draft_redirection_is_declared_by_the_decorator() -> None:
+    def upsert_widget() -> None: ...
+
+    def list_widgets() -> None: ...
+
+    with pytest.raises(TypeError, match="draftable_tool"):
+        server.tool(upsert_widget)
+    with pytest.raises(TypeError, match="@tool"):
+        server.registry.draftable_tool(list_widgets)
+    assert "upsert_widget" not in _registered()
+    assert "list_widgets" not in _registered()

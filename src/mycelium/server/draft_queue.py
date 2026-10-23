@@ -2,14 +2,17 @@
 
 A tool is draftable by name: a mutation prefix makes its writes queueable, and
 an entry in `_LIST_TOOL_KINDS` lets a list read show what a draft has queued.
-The `@tool` wrapper consults this module before running the tool body, so a
-drafter's writes land on their draft whichever transport they arrive on.
+Such a tool is registered with `draftable_tool` or `draft_listing_tool`, whose
+wrapper consults this module before running the tool body, so a drafter's
+writes land on their draft whichever transport they arrive on.
 """
 
 from __future__ import annotations
 
 import json as _json
-from typing import Any
+from typing import Any, TypedDict
+
+from pydantic import JsonValue
 
 from .. import store
 from ..auth import Principal as AuthPrincipal
@@ -50,6 +53,20 @@ _LIST_TOOL_KINDS: dict[str, tuple[str, ...]] = {
     "list_entity_link_types": ("upsert_entity_link_type",),
     "list_statement_kinds": ("upsert_statement_kind",),
 }
+
+
+class DraftReceipt(TypedDict):
+    """What a write redirected onto a draft returns in place of its result."""
+
+    draft_id: str
+    seq: int
+    queued: str
+    revision: int
+
+
+#: A queued op as a draft-listing read returns it: the op payload plus the
+#: `_seq` / `_kind` markers that name the op it came from.
+QueuedOp = dict[str, JsonValue]
 
 
 def _resolve_draft_target(
@@ -108,7 +125,7 @@ def _resolve_draft_target(
     return None
 
 
-def _list_from_draft(draft_id: str, kinds: tuple[str, ...]) -> list[dict[str, Any]]:
+def _list_from_draft(draft_id: str, kinds: tuple[str, ...]) -> list[QueuedOp]:
     """Return queued ops in a draft whose kind is in `kinds`, each shaped
     as the op payload plus `_seq`/`_kind` markers so the caller can map
     items back to specific ops. Raises if the draft id doesn't resolve."""
@@ -118,11 +135,11 @@ def _list_from_draft(draft_id: str, kinds: tuple[str, ...]) -> list[dict[str, An
     if row is None:
         raise ValueError(f"draft_id '{draft_id}' not found")
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
-    out: list[dict[str, Any]] = []
+    out: list[QueuedOp] = []
     for op in ops:
         if op["kind"] not in kinds:
             continue
-        item = {"_seq": op["seq"], "_kind": op["kind"]}
+        item: QueuedOp = {"_seq": op["seq"], "_kind": op["kind"]}
         item.update(_json.loads(op["payload_json"]))
         out.append(item)
     return out
@@ -130,7 +147,7 @@ def _list_from_draft(draft_id: str, kinds: tuple[str, ...]) -> list[dict[str, An
 
 def _queue_draft_op(
     draft_id: str, kind: str, payload: dict[str, Any], principal: AuthPrincipal | None
-) -> dict[str, Any]:
+) -> DraftReceipt:
     """Append a queued op to the draft and return a JSON-friendly
     receipt. Used as the return value of the redirected tool call so the
     agent sees what happened instead of a normal substrate response."""

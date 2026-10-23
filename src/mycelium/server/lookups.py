@@ -16,7 +16,7 @@ from pydantic import Field, JsonValue
 from .. import store
 from .entities import get_entity, list_entities, search_entities
 from .hydration import _hydrate_statement_full
-from .registry import tool
+from .registry import draft_listing_tool, tool
 from .runtime import _db
 from .search import search_statements
 from .specs import ResultLimit, _check_limit
@@ -134,7 +134,7 @@ def retrieve_context(
     )
 
 
-@tool
+@draft_listing_tool
 def list_statements(
     limit: ResultLimit = 50,
     offset: int = 0,
