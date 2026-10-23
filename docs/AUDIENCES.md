@@ -59,7 +59,57 @@ statement. Audience ids it invents grant nothing.
 
 **Settings → Audiences** shows, per audience, how many statements it can see
 and how many statements are unlabelled, and lists statements by audience,
-visibility and label state.
+visibility and label state (including **Waiting for confirmation**).
+
+## Confirming external grants
+
+Most AI grants to external audiences are right; the costly error is the rest,
+an internal detail shown to customers. So while **Confirm external grants**
+is on (**Settings → Limits → Audience labelling**, on by default), an AI
+grant that would make a statement visible to an external audience that could
+not see it before waits for a curator. That covers new statements, changed
+text (whose AI label is dropped) and relabelling. Grants to internal
+audiences, and external grants the statement already had, apply at once; an
+external audience the AI no longer grants is withdrawn at once.
+
+A waiting grant grants nothing: documentation runs, planning, scoped Ask and
+MCP, and every visibility count treat the statement as hidden from that
+audience until a curator confirms. The label stores it beside the granted
+audiences, with the AI's reason.
+
+**Settings → Audiences → Waiting for confirmation** lists, per external
+audience, the waiting grants grouped by the concept each statement names (the
+one with most waiting statements), with the statement, the AI's reason and its
+concepts. The count shows on the card and on the Audiences link. A curator,
+who needs a real writer role like any label override, can:
+
+- **Confirm** a grant: the statement becomes visible to the audience, and the
+  label records who confirmed it and when. The label stays an AI label, so a
+  later text change withdraws the grant until it is confirmed again.
+- **Reject** a grant: the label becomes a curator label without that audience,
+  so the AI does not grant it again. **Hand back to AI** undoes that.
+- **Confirm all** or **Reject all** for a concept group.
+- **Review a sample**: draw a random sample of the audience's waiting grants
+  (50 by default), stratified by concept group in proportion to its size.
+  Deciding each sampled grant shows the sample's precision, the share
+  confirmed. **Accept the rest** confirms every grant still waiting, and
+  records on each that it was accepted after a sample of that size and
+  precision. Rejections in the sample stay rejected. Below the warning
+  threshold (90% by default) the card warns and suggests improving the
+  audience description or labelling instructions and relabelling instead.
+
+The statement page shows a waiting grant as **Waiting for confirmation**, with
+Confirm and Reject. The label-state filter finds every statement with a
+waiting grant.
+
+Changing a statement's text withdraws its waiting grants. Deleting or merging
+a statement removes its label, waiting grants included, and backups carry
+them. A confirmation counts as newly visible for documentation planning; a
+document citing a statement whose grant was withdrawn is out of date until the
+grant is confirmed again or the document is revised.
+
+Turning the switch off applies the AI's external grants at once again. Grants
+already waiting stay waiting until a curator decides them.
 
 ## Media
 

@@ -22,7 +22,7 @@ focuses it.
 | | Ask | `#/ask?q=…` | A reasoned answer with confidence, gaps, provenance and a trace; report a gap from it |
 | | Find | `#/find?q=…&mode=semantic\|grep\|survey` | Raw scored statements, plus entities whose names match |
 | Explore | Browse | `#/browse` | Every statement, entity and name as a table |
-| | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage, audiences with their label's source and reason (curators override; a curator label whose text changed since the decision is flagged to confirm or hand back to AI), media (writers upload, edit, label and detach; readers see what their audience allows) |
+| | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage, audiences with their label's source and reason (curators override; a curator label whose text changed since the decision is flagged to confirm or hand back to AI; a curator confirms or rejects an external grant waiting for confirmation), media (writers upload, edit, label and detach; readers see what their audience allows) |
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links, media |
 | | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities around a picked concept or statement; `?all=1` shows everything |
 | | Entity map | `#/entities?focus=<id>` | Entities and their links, framed on a picked concept; `?all=1` without one; add and remove entity links |
@@ -57,7 +57,7 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | | Limits | `#/settings/limits` | Token, time and operation budgets per action; concurrent runs; the quiet period and daily cap for automatic document revisions |
 | | AI usage | `#/settings/usage` | Admins: estimated spend for the last 7, 30 or 90 days per day, action and model, with totals and the costliest runs linked to their run, plan or draft; the optional monthly budget. See [AI usage and budget](AI_MODELS.md#ai-usage-and-budget) |
 | Publishing | Documentation | `#/settings/documentation` | GitHub connection (disconnecting asks first), publishing destinations, writing profiles, their audience, maintenance policy and templates |
-| | Audiences | `#/settings/audiences` | Who documents are written for; per audience, visible and unlabelled statements; labelling status, backfill progress and cost; statements by audience and label state, including curator labels whose text changed since the decision. See [Audiences](AUDIENCES.md) |
+| | Audiences | `#/settings/audiences` | Who documents are written for; per audience, visible and unlabelled statements; labelling status, backfill progress and cost; statements by audience and label state, including curator labels whose text changed since the decision; external grants waiting for confirmation, grouped by concept, confirmed or rejected one by one, per concept, or by reviewing a random sample and accepting the rest (counted on the Audiences link). See [Audiences](AUDIENCES.md) |
 
 What a person can change depends on their role; sections say so where it
 applies. A save in any settings section reloads the other settings shown on
