@@ -21,7 +21,10 @@ creating another (`anchor_entity_id` over MCP).
 Merging concepts moves the identity to the surviving concept. If that concept
 already has a document for the same profile and template, it keeps that
 identity, and the merged-away concept's document stays as an ordinary document
-without one.
+without one. Deleting a concept leaves its documents as ordinary documents.
+Both report how many documents lost their identity (`documents_unanchored`).
+A generation still running when its concept is merged or deleted writes under
+the identity the concept's document would have by then.
 
 Publishing opens or updates a GitHub pull request, and the document shows
 whether it is open, merged or closed. Mycelium asks GitHub when the document is

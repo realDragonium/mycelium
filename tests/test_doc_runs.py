@@ -227,6 +227,35 @@ def test_an_anchored_request_creates_once_then_revises_the_same_document(
     assert (document["slug"], document["title"]) == ("how-to-x", "Doing X, retitled")
 
 
+@pytest.mark.parametrize(
+    ("change", "written_anchor"),
+    [
+        (lambda conn: docs_store.move_anchors(conn, "ent_x", "ent_y"), "ent_y"),
+        (lambda conn: docs_store.clear_anchors(conn, "ent_x"), None),
+    ],
+    ids=["merged", "deleted"],
+)
+def test_a_run_in_flight_writes_under_the_anchor_its_entity_has_now(
+    tmp_path, change, written_anchor
+):
+    conn = _conn(tmp_path)
+    release = threading.Event()
+
+    def runner(prompt, *, guideline_set, document_type):
+        release.wait()
+        return _document()
+
+    run_id = _anchored(conn, tmp_path, runner)
+    with conn:
+        change(conn)
+    release.set()
+    doc_runs.wait_all()
+
+    document_id = docs_store.get_run(conn, run_id)["document_id"]
+    document = docs_store.get_document(conn, document_id)
+    assert document["anchor_entity_id"] == written_anchor
+
+
 def test_an_anchored_document_keeps_the_identity_the_request_named(tmp_path):
     conn = _conn(tmp_path)
     run_id = _anchored(

@@ -9,7 +9,7 @@ rebaked whenever they change.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 from .. import docs_store, embed, store
 from .indexes import _persisted_index_write
@@ -39,16 +39,37 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     return {"entity_id": entity_id}
 
 
+class EntityMerge(TypedDict):
+    into_entity_id: str
+    names_moved: int
+    documents_unanchored: int
+
+
+class EntityDeletion(TypedDict):
+    deleted: bool
+    names_removed: int
+    mentions_removed: int
+    outgoing_entity_links_removed: int
+    incoming_entity_links_removed: int
+    documents_unanchored: int
+
+
 @tool
-def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
+def merge_entities(from_entity_id: str, into_entity_id: str) -> EntityMerge:
     """Move every name from `from_entity_id` to `into_entity_id` and delete
     the source entity. Statements that mentioned the moved names continue
     to point at the same names (now under the new entity). Generated
     documents anchored to the source become anchored to the target; where
     the target already anchors a document of the same guideline set and
-    type, the source's document keeps its body but loses its anchor."""
+    type, the source's document keeps its body but loses its anchor;
+    `documents_unanchored` counts those. A documentation run still in flight
+    for the source writes under the anchor its document would now have."""
     if from_entity_id == into_entity_id:
-        return {"into_entity_id": into_entity_id, "names_moved": 0}
+        return {
+            "into_entity_id": into_entity_id,
+            "names_moved": 0,
+            "documents_unanchored": 0,
+        }
     if store.get_entity_by_id(_db(), from_entity_id) is None:
         raise ValueError(f"entity {from_entity_id!r} does not exist")
     if store.get_entity_by_id(_db(), into_entity_id) is None:
@@ -75,15 +96,18 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
         # substrate commit then leaves anchors on the surviving target, never
         # on a deleted source.
         with store.transaction(_drafts_db()):
-            docs_store.move_anchors(_drafts_db(), from_entity_id, into_entity_id)
+            unanchored = docs_store.move_anchors(
+                _drafts_db(), from_entity_id, into_entity_id
+            )
     return {
         "into_entity_id": into_entity_id,
         "names_moved": moved,
+        "documents_unanchored": unanchored,
     }
 
 
 @tool
-def delete_entity(id: str) -> dict[str, Any]:
+def delete_entity(id: str) -> EntityDeletion:
     """Permanently delete an entity along with all its names.
 
     Use case: the entity no longer exists in the product (component
@@ -95,6 +119,9 @@ def delete_entity(id: str) -> dict[str, Any]:
     - Every `name` attached to this entity is deleted.
     - `statement_mentions` referencing any of those names are removed.
     - `entity_links` from or to this entity are removed.
+    - Generated documents anchored to it lose the anchor but keep their
+      body and history; a documentation run still in flight for it writes
+      unanchored.
     - The entity record is dropped.
 
     Returns counts of cascaded rows so the caller can sanity-check the
@@ -122,6 +149,11 @@ def delete_entity(id: str) -> dict[str, Any]:
         )
         store.delete_entity(_db(), id)
         store.enqueue_recompute_statements(_db(), affected)
+        # Committed before the substrate, as in merge_entities: a failed
+        # substrate commit leaves a live entity without anchors, never a
+        # deleted one still holding them.
+        with store.transaction(_drafts_db()):
+            unanchored = docs_store.clear_anchors(_drafts_db(), id)
     _baker().schedule_rebake()
     return {
         "deleted": True,
@@ -129,6 +161,7 @@ def delete_entity(id: str) -> dict[str, Any]:
         "mentions_removed": mentions_removed,
         "outgoing_entity_links_removed": outgoing_entity_links_removed,
         "incoming_entity_links_removed": incoming_entity_links_removed,
+        "documents_unanchored": unanchored,
     }
 
 
