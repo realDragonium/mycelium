@@ -37,14 +37,13 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
             status_code=400,
             detail="status must be one of: all, open, submitted, approved, rejected, withdrawn",
         )
-    rows = drafts_store.list_drafts(conn, status=status)
     counts = drafts_store.count_ops_by_draft(conn)
-    out = []
-    for r in rows:
-        d = drafts_store.serialize_draft(r)
-        d["op_count"] = counts.get(r["id"], 0)
-        out.append(d)
-    return {"drafts": out}
+    return {
+        "drafts": [
+            {**draft, "op_count": counts.get(draft["id"], 0)}
+            for draft in drafts_store.list_draft_summaries(conn, status=status)
+        ]
+    }
 
 
 @router.get("/api/drafts/{draft_id}")

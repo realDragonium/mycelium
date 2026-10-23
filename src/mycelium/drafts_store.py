@@ -353,6 +353,45 @@ def list_drafts(conn: sqlite3.Connection, status: str = "all") -> list[sqlite3.R
     ).fetchall()
 
 
+#: What a list view shows of a draft's review assessment. A whole assessment
+#: runs to tens of kilobytes, so listing every draft with it reads, parses and
+#: sends megabytes.
+_ASSESSMENT_SUMMARY = ("run_id", "status", "label", "application", "draft_revision")
+
+
+def list_draft_summaries(conn: sqlite3.Connection, status: str = "all") -> list[dict]:
+    """`list_drafts`, serialized as `serialize_draft` would but without review
+    evidence and with only a summary of each review assessment."""
+    paths = ", ".join(f"'$.{key}'" for key in _ASSESSMENT_SUMMARY)
+    rows = conn.execute(
+        f"""
+        SELECT id, title, created_at, created_by, session_id, revision,
+               source_repository, source_pull_request, source_merged_commit,
+               source_workflow_run_id, source_workflow_run_attempt,
+               submitted_at, decided_at, decided_by, decision,
+               json_extract(review_assessment_json, {paths}) AS assessment
+        FROM drafts {_DRAFT_STATUS_FILTERS[status]}
+        ORDER BY created_at DESC
+        """
+    ).fetchall()
+    summaries = []
+    for row in rows:
+        assessment = None
+        if row["assessment"] is not None:
+            run_id, run_status, label, application, revision = _json.loads(
+                row["assessment"]
+            )
+            assessment = {
+                "run_id": run_id,
+                "status": run_status,
+                "label": label,
+                "application": application,
+                "stale": revision != row["revision"],
+            }
+        summaries.append({**_draft_fields(row), "review_assessment": assessment})
+    return summaries
+
+
 def count_ops_by_draft(conn: sqlite3.Connection) -> dict[str, int]:
     """Op counts keyed by draft id, for list views that show totals without
     a per-draft roundtrip."""
@@ -891,6 +930,15 @@ def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -
         "review_assessment": draft_review_store.serialized_assessment(
             row["review_assessment_json"], row["revision"]
         ),
+        **_draft_fields(row),
+    }
+    if ops is not None:
+        out["ops"] = [serialize_op(o) for o in ops]
+    return out
+
+
+def _draft_fields(row: sqlite3.Row) -> dict:
+    return {
         "id": row["id"],
         "title": row["title"],
         "status": status_for(row),
@@ -914,9 +962,6 @@ def serialize_draft(row: sqlite3.Row, *, ops: list[sqlite3.Row] | None = None) -
         "decided_by": row["decided_by"],
         "decision": row["decision"],
     }
-    if ops is not None:
-        out["ops"] = [serialize_op(o) for o in ops]
-    return out
 
 
 def serialize_op(row: sqlite3.Row) -> dict:

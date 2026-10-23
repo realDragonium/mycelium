@@ -24,10 +24,12 @@ interface Assessment {
 }
 // The reviewer stopped to ask a person rather than reject: the draft waits
 // until a curator answers, then the reviewer runs again with the answer.
-export const asksPerson = (a: Assessment | null | undefined) => !!a && a.status === 'completed' && a.application === 'needs_human';
+// What the drafts list carries of an assessment.
+type AssessmentSummary = Pick<Assessment, 'run_id' | 'status' | 'label' | 'stale' | 'application'>;
+export const asksPerson = (a: AssessmentSummary | null | undefined) => !!a && a.status === 'completed' && a.application === 'needs_human';
 export interface DraftSummary {
   id: string; title: string | null; status: DraftStatus; created_at: string; created_by: string | null;
-  submitted_at: string | null; decided_at: string | null; op_count?: number; review_assessment: Assessment | null;
+  submitted_at: string | null; decided_at: string | null; op_count?: number; review_assessment: AssessmentSummary | null;
 }
 type Payload = Record<string, unknown>;
 // What the draft's creator checked in the product to support one operation.
@@ -36,7 +38,7 @@ interface Evidence {
   excerpt: string; claim: string;
 }
 interface DraftOp { seq: number; kind: string; payload: Payload; provenance: { source?: string } | null; evidence: Evidence[] }
-interface Draft extends DraftSummary { ops: DraftOp[] }
+type Draft = Omit<DraftSummary, 'review_assessment'> & { ops: DraftOp[]; review_assessment: Assessment | null };
 // Statements the server refused while applying a draft by hand; nothing was applied.
 interface RejectedStatement { seq: number; kind: string; text: string | null; reasons: string[] }
 const rejectionsOf = (e: unknown): RejectedStatement[] => {
@@ -63,7 +65,7 @@ const arr = (v: unknown): Payload[] => Array.isArray(v) ? v.filter((x): x is Pay
 /* ============================ AI review ============================ */
 const LABELS: Record<string, string> = { good: 'Good', changes_suggested: 'Changes suggested', reject: 'Reject suggested', needs_context: 'Needs context' };
 
-function assessmentResult(a: Assessment): string {
+function assessmentResult(a: AssessmentSummary): string {
   if (asksPerson(a)) return 'Question for a curator';
   if (a.status === 'running') return 'Running';
   if (a.status === 'paused') return 'Paused';
@@ -71,7 +73,7 @@ function assessmentResult(a: Assessment): string {
   return (a.label && LABELS[a.label]) || 'Completed';
 }
 
-function AssessmentBadge({ assessment }: { assessment: Assessment }) {
+function AssessmentBadge({ assessment }: { assessment: AssessmentSummary }) {
   return <span className={`review-badge${asksPerson(assessment) ? ' asks' : ''}`}>AI review: {assessmentResult(assessment)}{assessment.stale ? ' · stale' : ''}</span>;
 }
 

@@ -152,9 +152,16 @@ def test_both_submission_paths_trigger_and_off_is_default(running_app, monkeypat
     _set_review_controls(mode="review-only")
     response = client.post(f"/api/drafts/{next_id}/submit")
     assert response.status_code == 200
-    assert _result(next_id)["label"] == "good"
-    listed = client.get("/api/drafts?status=all").json()
-    assert "review_assessment" in json.dumps(listed)
+    result = _result(next_id)
+    assert result["label"] == "good"
+    listed = client.get("/api/drafts?status=all").json()["drafts"]
+    assert next(d for d in listed if d["id"] == next_id)["review_assessment"] == {
+        "run_id": result["run_id"],
+        "status": "completed",
+        "label": "good",
+        "application": result["application"],
+        "stale": False,
+    }
 
 
 def test_rerun_concurrency_and_evidence_staleness(running_app, monkeypatch):
@@ -185,6 +192,8 @@ def test_rerun_concurrency_and_evidence_staleness(running_app, monkeypatch):
     release.set()
     result = _result(draft_id)
     assert result["stale"] is True
+    listed = drafts_store.list_draft_summaries(server._drafts_db())
+    assert next(d for d in listed if d["id"] == draft_id)["review_assessment"]["stale"]
     assert result["status"] == "failed"
     assert "changed" in result["detail"]
     assert _request(draft_id)["run_id"] == first["run_id"]
