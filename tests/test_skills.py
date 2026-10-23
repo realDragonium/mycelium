@@ -74,6 +74,7 @@ def _expand(path: str) -> list[str]:
 def test_every_skill_is_found():
     assert {p.name for p in _SKILL_DIRS} >= {
         "mycelium-authoring",
+        "mycelium-code-curation",
         "mycelium-curation",
         "mycelium-documentation",
         "mycelium-draft",
