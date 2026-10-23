@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import os
 import secrets
+from urllib.parse import urlsplit
 
 import anyio.to_thread
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from .. import auth, store
 from ..server import runtime
@@ -79,6 +81,39 @@ def _session_secret() -> str:
     if auth.is_enabled():
         raise RuntimeError("MYCELIUM_SESSION_SECRET must be set when MYCELIUM_AUTH=on")
     return secrets.token_urlsafe(32)
+
+
+def session_cookie_secure() -> bool:
+    """Whether the session cookie gets the `Secure` flag.
+
+    Deployments terminate TLS at a proxy, so the request scheme says nothing;
+    the configured public address does. Without the flag the browser also
+    sends the cookie on a plain-http request, such as the one that precedes
+    the proxy's redirect to https, where anyone on the network can read it."""
+    public = os.environ.get("MYCELIUM_PUBLIC_URL") or os.environ.get(
+        "MYCELIUM_OIDC_REDIRECT_URI"
+    )
+    return (public or "").strip().lower().startswith("https://")
+
+
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _is_cross_origin(request: Request) -> bool:
+    """Whether a browser sent this request on behalf of another origin.
+
+    `Sec-Fetch-Site` is set by every current browser and cannot be forged by
+    a page. `same-site` counts as foreign: a sibling host shares the
+    `SameSite=Lax` cookie but not our trust. Older browsers send only
+    `Origin`, compared by host since TLS ends at the proxy. Requests carrying
+    neither header are not from a browser page."""
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site not in ("same-origin", "none")
+    origin = request.headers.get("origin")
+    if origin is None:
+        return False
+    return urlsplit(origin).netloc != request.headers.get("host", "")
 
 
 def _is_exempt(path: str) -> bool:
@@ -161,6 +196,22 @@ class AuthMiddleware:
                 status_code=401,
                 content={"detail": "authentication required"},
                 headers=headers,
+            )
+            await rejection(scope, receive, send)
+            return
+        # A browser attaches the session cookie by itself, and with auth off
+        # there is no credential at all, so neither proves the page that sent
+        # the request is ours. A bearer token does: a page on another origin
+        # cannot add an Authorization header without a CORS grant.
+        if (
+            request.method not in _SAFE_METHODS
+            and raw_token is None
+            and (principal is not None or not auth.is_enabled())
+            and _is_cross_origin(request)
+        ):
+            rejection = JSONResponse(
+                status_code=403,
+                content={"detail": "cross-origin request refused"},
             )
             await rejection(scope, receive, send)
             return
@@ -249,3 +300,32 @@ class AuthMiddleware:
         if raw is None and not user_id:
             return None
         return await anyio.to_thread.run_sync(cls._lookup, raw, user_id)
+
+
+# Nothing Mycelium serves is meant to be embedded. Framed by another page, the
+# OAuth consent screen or a curation button can be overlaid with a decoy and
+# clicked through. A same-site page gets the session cookie even in a frame.
+_SECURITY_HEADERS = (
+    ("x-frame-options", "DENY"),
+    ("content-security-policy", "frame-ancestors 'none'"),
+    ("x-content-type-options", "nosniff"),
+)
+
+
+class SecurityHeadersMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in _SECURITY_HEADERS:
+                    headers.setdefault(name, value)
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)

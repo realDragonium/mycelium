@@ -5,6 +5,7 @@ Phase 3 adds OIDC callback tests; the substrate-level pieces tested here
 underpin both.
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, store
@@ -601,3 +602,57 @@ def test_asker_reaches_ask_and_its_own_account_but_no_substrate_reads(
             assert client.get(path, headers=h).status_code == 403, path
         assert client.get("/api/me", headers=h).status_code == 200
         assert client.get("/api/me/tokens", headers=h).status_code == 200
+
+
+def test_every_response_refuses_to_be_framed(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        r = client.get("/connect")
+        assert r.headers["x-frame-options"] == "DENY"
+        assert r.headers["content-security-policy"] == "frame-ancestors 'none'"
+        assert r.headers["x-content-type-options"] == "nosniff"
+
+
+def test_cross_origin_requests_cannot_ride_ambient_credentials(tmp_path, monkeypatch):
+    """With auth off every request is the local admin, and with auth on a
+    browser attaches the session cookie to same-site requests. Either way a
+    page on another origin could otherwise POST to a bodiless route, such as
+    approving a draft, as the person whose browser it runs in."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        url = "/api/drafts/drf_missing/approve"
+        forged = (
+            {"Sec-Fetch-Site": "cross-site"},
+            {"Sec-Fetch-Site": "same-site"},
+            {"Origin": "https://evil.example"},
+        )
+        for headers in forged:
+            assert client.post(url, headers=headers).status_code == 403, headers
+
+        allowed = (
+            {},
+            {"Sec-Fetch-Site": "same-origin"},
+            {"Origin": "http://testserver"},
+        )
+        for headers in allowed:
+            assert client.post(url, headers=headers).status_code != 403, headers
+        assert client.get("/api/drafts", headers=forged[0]).status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("env", "secure"),
+    [
+        ({}, False),
+        ({"MYCELIUM_PUBLIC_URL": "http://localhost:8765"}, False),
+        ({"MYCELIUM_PUBLIC_URL": "https://kb.example.com"}, True),
+        ({"MYCELIUM_OIDC_REDIRECT_URI": "https://kb.example.com/auth/callback"}, True),
+    ],
+)
+def test_session_cookie_is_secure_when_served_over_https(monkeypatch, env, secure):
+    from mycelium.http import authentication
+
+    for name in ("MYCELIUM_PUBLIC_URL", "MYCELIUM_OIDC_REDIRECT_URI"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    assert authentication.session_cookie_secure() is secure

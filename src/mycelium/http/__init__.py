@@ -51,7 +51,12 @@ from . import (
     traces,
     webui,
 )
-from .authentication import AuthMiddleware, _session_secret
+from .authentication import (
+    AuthMiddleware,
+    SecurityHeadersMiddleware,
+    _session_secret,
+    session_cookie_secure,
+)
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -137,8 +142,10 @@ app.add_middleware(
     secret_key=_session_secret(),
     session_cookie="myc_session",
     same_site="lax",
-    https_only=False,  # local dev runs on http
+    https_only=session_cookie_secure(),
 )
+# Outermost, so error responses from the layers inside get the headers too.
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(oidc.router)
 app.include_router(oauth_server.router)

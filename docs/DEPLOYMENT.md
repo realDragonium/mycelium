@@ -298,6 +298,10 @@ MYCELIUM_PUBLIC_URL=https://mycelium.example.com
 
 Scheme included, no trailing slash.
 
+An `https://` value also marks the browser session cookie `Secure`, so it
+is never sent over plain HTTP; without `MYCELIUM_PUBLIC_URL`, an `https://`
+`MYCELIUM_OIDC_REDIRECT_URI` does the same.
+
 ### Outbound requests from the OAuth endpoints
 
 A client may identify itself with a Client ID Metadata Document — an HTTPS
