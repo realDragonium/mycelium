@@ -1,6 +1,6 @@
 ---
 name: mycelium-draft
-description: Research a product domain against its codebase and propose the mycelium substrate changes that document it — statements, links, entities — as a submitted substrate draft, which the server's internal draft reviewer then assesses. Writes only through a drafter-scoped MCP connection, so nothing lands live without review. Use this skill whenever the operator wants a domain documented in the substrate through review rather than written directly.
+description: Research a product domain against its codebase and propose the Mycelium statements, links and entities that document it as a submitted substrate draft, which the server's internal draft reviewer then assesses and, in review-and-apply mode, applies. Writes only through a drafter-scoped connection (upsert_statements and friends, set_draft_review_evidence, submit_draft), so nothing lands live without review. Use this whenever the operator wants a domain documented through review rather than written directly. Content rules come from mycelium-authoring (and mycelium-guide-authoring for how-to and troubleshooting content).
 ---
 
 # Mycelium Draft Authoring
@@ -18,7 +18,7 @@ A draft is only guaranteed when the MCP connection is **drafter**-scoped: the se
 Read your tool list:
 
 - `upsert_statements` present and `list_drafts` **absent** → drafter. Proceed.
-- `list_drafts` present → writer or admin (including a local server with authentication off). **Stop.** Writes would land live. Ask the operator for a drafter token (Settings → MCP tokens, scope `drafter`; see `docs/USERS.md`).
+- `list_drafts` present → writer or admin (including a local server with authentication off). **Stop.** Writes would land live. Ask the operator for a drafter token (**Settings → Account & tokens**, scope `drafter`; see `docs/USERS.md`).
 - No `upsert_statements` → reader or asker. Stop and say so.
 
 Then call `list_my_drafts()`. A drafter has **one open draft per account** (per MCP session when the client keeps one), and every write joins it. If an open draft already holds unrelated operations, stop and ask the operator whether to submit it first. For the same reason, parallel runs on different domains need separate drafter accounts.
@@ -33,13 +33,13 @@ Then call `list_my_drafts()`. A drafter has **one open draft per account** (per 
 
 ## Content rules come from `mycelium-authoring`
 
-**Load and follow the `mycelium-authoring` skill in full** for every content decision — kind selection, depth/decomposition, atomicity, link method, structural patterns, and topology. This skill adds only the research protocol, the no-write constraint, the output format, and the topology diagram. It does **not** restate authoring rules, and where this file ever appears to differ, authoring wins.
+**Load and follow the `mycelium-authoring` skill in full** for every content decision — kind selection, depth/decomposition, atomicity, link method, structural patterns, and topology — and `mycelium-guide-authoring` as well when the domain includes how-to or troubleshooting content. This skill adds only the research protocol, the no-write constraint, the output format, and the topology diagram. It does **not** restate authoring rules, and where this file ever appears to differ, authoring wins.
 
-Three things follow from the authoring rewrite and govern everything below:
+Three things govern everything below:
 
 - **Depth policy lives in authoring §1**, not here: every distinct product action is its own statement, wired in execution order — *including* linear sequences — and every computation decomposes into stages, wired in derivation order (authoring §1e). This skill's research protocol is the *how* (reading code to find those actions and stages); it does not set the depth bar.
 - **Link and kind vocabulary lives in the live tools**, not in any skill. Always call `list_link_types()` / `list_entity_link_types()` this session and treat what they return as the full menu. Any type names appearing in either skill are illustrations, not the available set. (This depends on those tool descriptions being complete — if a returned type has an empty description, flag it; you can't model a link whose meaning you can't read.)
-- **Phrasing is checked when the draft is reviewed and applied, not when an operation is queued** — see the checklist note. A queued `upsert_statements` returns a receipt, not a phrasing verdict. The reviewer sees phrasing findings and its automatic application refuses a violation, but a curator's manual **Approve** silently leaves out a violating statement, and every statement that references it, while the rest lands. Treat clean per-kind shapes (authoring §5) as your job, not the gate's.
+- **Phrasing is checked when the draft is applied, not when an operation is queued.** A queued `upsert_statements` returns a receipt, not a phrasing verdict. When the draft is applied — by a curator's **Approve** or by the reviewer — a statement the phrasing check refuses stops the whole application: nothing lands, and the draft waits for someone to fix or remove that operation. Treat clean per-kind shapes (authoring §5) as your job, and set `allow_phrasing_violations: true` only on a batch item you deliberately left compound.
 
 ---
 
@@ -107,13 +107,13 @@ Depth policy is authoring §1: every distinct product action is its own statemen
 
 - **Properties — `requires` vs `accepts`.** Check whether a field can be absent or `None`: `.get("field")` vs `["field"]`, type annotations like `str | None`, and whether there is a distinct handling path when the value is absent. A field that is "always read" is not "always required" — the code may read it and proceed when it's `None`. Asserting `requires` when the code says `accepts` is wrong.
 - **Condition states — split whenever the code branches on the same check.** If a dedup check, validation, or error handler has two or more code paths with different outcomes, each path is a separate state. Read the full branch logic: `if/else`, early returns, fallbacks producing different results. Do not collapse them into one vague state.
-- **Events with idempotency or error branches.** If a method can return early without completing its main work (`INTEGRATION_ALREADY_SET_UP`, `ORDER_NOT_EXISTS`, retry exhaustion), the sub-steps that only fire on the non-early path are conditional. **Check the current `when` grammar via `list_link_types()` before assuming a condition is inexpressible** — the grammar has gained operators. If it genuinely can't be expressed, note the limitation in Uncertainties rather than inventing an unexpressible condition.
+- **Events with idempotency or error branches.** If a method can return early without completing its main work (an export already running, an invoice that no longer exists, retry exhaustion), the sub-steps that only fire on the non-early path are conditional. **Check the current `when` grammar via `list_link_types()` before assuming a condition is inexpressible** — the grammar has gained operators. If it genuinely can't be expressed, note the limitation in Uncertainties rather than inventing an unexpressible condition.
 - **Shared events serving multiple flows.** Before linking an existing event as a parent for new statements, `get_statements` on it and inspect its current outgoing links. A `proceeds`/`triggers` edge already going somewhere may conflict with the new path. Two outgoing edges to different targets are valid only as genuinely parallel branches — confirm before proposing.
 - **Computation stages — split whenever the code derives an intermediate.** If a scoring method computes a sub-total, applies a weight, maps a value to a level, or subtracts a penalty before producing the final value, each is a stage rule the master rule `composes`. A config field almost always parameterises *one* of these stages — attach it there, not to the capability.
 
 **Stay shallow only here:**
 
-- **Internal platform mechanics** — Celery retry scheduling, Fernet encryption, OAuth token caching, DB write patterns. Swappable without changing product behaviour; not statements.
+- **Internal platform mechanics** — background job retry scheduling, encryption at rest, token caching, DB write patterns. Swappable without changing product behaviour; not statements.
 - **Standard infrastructure side-effects** — logging, cache invalidation, metric emission. Skip unless they have a product-visible consequence (a log that fires a customer-visible alert is product-visible; a debug log is not).
 
 ### 4. Sketch the topology — spine first
@@ -160,7 +160,7 @@ Code read: [key file paths, comma-separated]
 |-----|------|------|----------|
 
 Ref values are short labels (S1, S2, …) used for cross-referencing within this plan; in the batch they become `@N` positions.
-Mentions lists the entity names whose context the statement belongs to.
+Mentions lists the entity names the text contains. Mentions are derived from the text: a statement mentions an entity only when one of the entity's names or aliases appears in it, so a concept the statement belongs to must be named in its words.
 
 ### Outgoing links from new statements
 
@@ -169,7 +169,7 @@ Edges FROM a new statement TO another statement (new or existing).
 | From | Link type | To |
 |------|-----------|-----|
 | S3 | requires | S1 |
-| S3 | requires | stm_abc123 · "An invite is created" |
+| S3 | proceeds | stm_4196… · "An export file is generated" |
 
 [Omit section if no outgoing links from new statements.]
 
@@ -179,7 +179,7 @@ Edges FROM an existing statement TO a new statement (queued as the new statement
 
 | From ID | From text (truncated to ~60 chars) | Link type | To (ref) |
 |---------|------------------------------------|-----------|----------|
-| stm_cc52… | "An OIDC callback state is verified…" | requires | S4 |
+| stm_cc52… | "An invoice is finalized…" | triggers | S4 |
 
 [Omit section if none.]
 
@@ -228,9 +228,9 @@ Summary of `discover_facts` findings — shows the reviewer what was checked and
 
 | Proposed text | Status | Action taken |
 |--------------|--------|--------------|
-| "Partner client ID" | new | Added as S1 |
-| "An invite is created" | exists (stm_4196…) | Referenced as existing — not duplicated |
-| "Partner client secret" | new | Added as S2 |
+| "Export date range" | new | Added as S1 |
+| "An export file is generated" | exists (stm_4196…) | Referenced as existing — not duplicated |
+| "Export file format" | new | Added as S2 |
 ```
 
 ---
@@ -261,10 +261,10 @@ flowchart TD
     classDef entity fill:#f1f5f9,stroke:#475569,color:#1e293b;
     classDef existing stroke-dasharray:5 3,opacity:0.6;
 
-    S1["S1 · event<br/>An invite is submitted"]:::event
-    S8["S8 · state<br/>Invalid phone, valid email"]:::state
-    S10["S10 · event<br/>Invalid phone dropped from invite"]:::event
-    E1["stm_4196 · event<br/>An invite is created"]
+    S1["S1 · event<br/>An invoice export is requested"]:::event
+    S8["S8 · state<br/>Export exceeds the row limit"]:::state
+    S10["S10 · event<br/>The export is split into several files"]:::event
+    E1["stm_4196 · event<br/>An export file is generated"]
     class E1 event,existing
 
     S1 -->|"contains (when S8)"| S10
@@ -289,22 +289,22 @@ Run through this checklist mentally. If any item fails, fix the draft content fi
 
 Then run the checklist:
 
-0. **Flow contamination check.** For every proposed link between two statements, ask: can both endpoints be reached from the same entry point in the same execution path? If statement A is in the magic-link flow and statement B is in the service-account token flow, a link between them is contamination unless they share a genuine common sub-step (confirmed in code). Flag any link whose endpoints live in mutually exclusive code branches. A contaminated link is worse than a missing link — it misstates causal reality.
+0. **Flow contamination check.** For every proposed link between two statements, ask: can both endpoints be reached from the same entry point in the same execution path? If statement A is in the SSO sign-in flow and statement B is in the API key flow, a link between them is contamination unless they share a genuine common sub-step (confirmed in code). Flag any link whose endpoints live in mutually exclusive code branches. A contaminated link is worse than a missing link — it misstates causal reality.
 
 0a. **Capability-hub gate (blocking).** No `configures` or `governed-by` edge may terminate on a `capability` node — see authoring §6 for the rule and its two honest exits (name the stage it targets, or scope the mechanism out explicitly). This fails the draft; it is the hard enforcement of the "Stars / opaque hubs" smell above. Walk every `configures`/`governed-by` edge in the diagram and confirm each lands on a rule/stage, not a *"X can be …"* hub.
 
-1. **Each statement text follows its kind's phrasing routing** (authoring §5). Queuing does not check phrasing, and a manual approval drops a violating statement without failing. Where you deliberately leave text compound (e.g. a get-or-create), set `allow_phrasing_violations: true` on that batch item and say why in the evidence.
+1. **Each statement text follows its kind's phrasing routing** (authoring §5). Queuing does not check phrasing, and one refused statement stops the whole application. Where you deliberately leave text compound (e.g. a get-or-create), set `allow_phrasing_violations: true` on that batch item and say why in the evidence.
 2. **Connected and walkable, not just orphan-free.** Every new statement has a link (incoming or outgoing) — condition-state `when`-leaf exceptions flagged explicitly — *and* the draft has a spine: the central object walks as a chain through real intermediates, not a flat star of spokes on a hub (authoring §1d, §1e; structural smells above).
 3. **All `stm_...` IDs are real IDs** confirmed via `get_statements` — never guessed or invented.
 4. **`discover_facts` has been run** on every statement text. All `exists` and `near` hits are addressed in the discover results table.
-5. **Every entity in the Mentions column exists** in the substrate (confirmed via `list_entities` or `get_entity`). New entities appear in the New entities section first.
+5. **Every entity in the Mentions column exists** in the substrate (confirmed via `list_entities` or `get_entity`) or is in the New entities section, and its name or an alias appears in the statement's text.
 6. **Link types are from `list_link_types()` / `list_entity_link_types()`** fetched this session — no invented types; the live set is the menu, not any subset named in the skills.
 7. **The Topology diagram matches the tables exactly** — every statement and every proposed link appears, nothing extra; node kinds and new/existing styling agree with the New statements table and the ID columns.
 8. **Uncertainties are honest** — if a causal claim was inferred rather than read from code, it's flagged.
 
 ---
 
-## After writing the file — adversarial verification
+## Adversarial verification
 
 Once the plan is settled, and before queuing anything, divide it into 3–5 logical subsections and spawn one sub-agent per subsection to adversarially verify it. Each agent works **co-equal fronts**: (1) find evidence that the stated claims are **wrong or inaccurate**, (2) find behaviour in its territory the draft **failed to model at all** — code paths, branches, failure/rejection paths, fallbacks, and async handlers that no statement covers (authoring §1d), and (3) find places the draft **flattened structure onto a hub** that the code shows as a multi-stage chain (authoring §1e). Under-documentation is as much a defect as a wrong claim; a draft can be 100% accurate and still dangerously incomplete, and a draft can be both accurate and complete and still a star. Front (1) is unchanged — all the existing disprove-the-claim strategies still apply; the others are added beside it, not in place of it.
 
@@ -330,9 +330,9 @@ JOB 1 — Disprove. Find evidence that the claims below are WRONG or inaccurate.
 
 JOB 2 — Find what's missing. Independent of the claims, walk the code in this territory and report every behaviour the draft does NOT mention: alternative branches, guard clauses, early returns, validation/rejection paths, fallbacks/silent drops, and async handlers (webhook callbacks, delivery-failure handlers, retry exhaustion). For each, give the file path, line number, and a one-line description of the unmodelled path.
 
-JOB 3 — Entity scope precision. For every statement that mentions a specific actor entity (User, Service Account, etc.), verify in the code whether that entity type is accurate:
-- Does the code at this point operate on a User record specifically (user_repo.get / user.uid), or on a Service Account authenticated by a bearer token (service_account.token)?
-- Could this code path be reached by a different actor than the statement implies? (e.g., a service account calling /mcp with a bearer token vs. an interactive user authenticated via OIDC, or a user whose role is not yet resolved.)
+JOB 3 — Entity scope precision. For every statement that mentions a specific actor entity (Member, Guest, API key, etc.), verify in the code whether that entity type is accurate:
+- Does the code at this point operate on a member record specifically, or on an API key authenticated by a bearer token?
+- Could this code path be reached by a different actor than the statement implies? (e.g., an API key calling the export endpoint vs. a member signed in through SSO, or a member whose workspace role is not yet resolved.)
 - Is the entity in the `Mentions` column the actual database-level record the code operates on, or is it a higher/lower level of abstraction?
 Report any mismatch between the stated entity type and what the code actually handles, with file path and line number. If the entity is correct, say so explicitly for each.
 
@@ -400,12 +400,46 @@ Queue the operations in dependency order. Each call returns a receipt (`draft_id
 
 ## After submitting
 
-If draft review is on, the reviewer starts at once. Follow it with `get_draft(draft_id)` and read `review_assessment` (`status`, `label`, `rationale`, `questions`, `corrections`, `contradictions`, `application`). Poll sparingly; a review takes a minute or two.
+`submit_draft` hands the draft to the server's internal reviewer
+(`docs/DRAFT_REVIEW.md`). What happens next depends on the review mode an
+admin chose under **Settings → Draft review**:
+
+| Mode | The reviewer | The draft then |
+|---|---|---|
+| `off` | does not run | waits, submitted, for a curator to approve or reject it in the UI |
+| `review-only` | records an advisory assessment; it never edits, applies or rejects | waits for a curator, who sees the assessment |
+| `review-and-apply` | assesses, makes up to eight small corrections, then applies the draft, rejects it, or asks a person a question; it acts only while the separate **Allow applying accepted reviews** gate is on, and its assessment is advice otherwise | lands, is rejected, or waits for the answer |
+
+The reviewer trusts you on what the product does and judges only how the
+draft fits the existing knowledge: duplicates, contradictions, link type and
+direction, missing links to live neighbours, entity variants. A new statement
+that contradicts a live one wins: the reviewer corrects the live statement and
+lists the contradiction. It never sees the code; your evidence is all it has
+on that.
+
+Follow it with `get_draft(draft_id)` and read `review_assessment`: `status`
+(`running`, `completed`, `failed`), `stale`, `label` (`good`,
+`changes_suggested`, `reject`, `needs_context`), `rationale`, `questions`,
+`corrections`, `contradictions`, `application` and `detail`. A review takes a
+minute or two; poll sparingly.
 
 - `application: applied` — it landed. Spot-check with `get_statements`.
-- `application: needs_human` — the reviewer asked a question. Only a curator can answer it, in the UI; give the operator the questions and, if the code answers them, the answer with evidence.
-- `application: rejected`, or a `reject` label — read the rationale. Fix the plan and author a new draft; an author cannot add or change operations on a submitted draft.
-- `review-only` mode or an unapplied assessment — the draft waits for a curator; report the assessment.
-- No assessment — review is off, or on without a model configured; the draft waits for a curator. Tell the operator which, if you can tell.
+- `application: needs_human` — the reviewer asked a question and filed it as a
+  knowledge gap naming the draft. Only a curator can answer, in the draft's
+  detail view; give the operator the questions and, if the code answers them,
+  the answer with `file:line` evidence. The draft is reviewed again with the
+  answer.
+- `application: rejected`, or a `reject` label — read the rationale. Fix the
+  plan and author a new draft; you cannot add or change operations on a
+  submitted draft.
+- `review-only`, or `unapplied` under `review-and-apply` (the application gate
+  is off) — the draft waits for a curator; report the assessment.
+- `status: failed` — failed attempts are retried by a sweep for about two and
+  a half hours; a curator can start one at once with **Run again**.
+- No assessment — review is off, or on without a model or reviewer account
+  configured. The draft waits for a curator; tell the operator which, if you
+  can tell.
 
-Report to the operator: the draft id, the topology diagram, the operation counts (new statements, reused existing ones, links), the remaining Uncertainties, and the review status.
+Report to the operator: the draft id, the topology diagram, the operation
+counts (new statements, reused existing ones, links), the remaining
+Uncertainties, and the review status.
