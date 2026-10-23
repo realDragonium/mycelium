@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel
 from pydantic import Field as PydField
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -39,14 +39,12 @@ from .. import (
     store,
     tracing,
 )
-from .. import (
-    draft_review_settings as review_settings,
-)
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from ..server import registry, runtime
 from . import (
     account,
+    draft_review,
     gaps,
     history,
     names,
@@ -159,6 +157,7 @@ app.include_router(account.router)
 app.include_router(names.router)
 app.include_router(prompt_texts.router)
 app.include_router(settings.router)
+app.include_router(draft_review.router)
 
 
 # MCP-over-HTTP is mounted at the bottom of this file so it doesn't
@@ -171,65 +170,6 @@ app.include_router(settings.router)
 # approve (replay ops against the substrate) or reject (drop without
 # applying). Status is derived from terminal timestamps + decision, same
 # pattern as knowledge_gaps.
-
-
-@app.get("/api/draft-review/backlog")
-def draft_review_backlog(request: Request) -> dict[str, list[str]]:
-    """Submitted drafts the current review configuration has not reached, to
-    offer reviewing them once when review is switched on."""
-    from fastapi import HTTPException
-
-    from .. import draft_review_runs
-
-    _require_admin(request)
-    try:
-        return {"draft_ids": draft_review_runs.backlog()}
-    except review_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-
-
-@app.post("/api/draft-review/backlog")
-def review_draft_backlog(request: Request) -> dict[str, list[str]]:
-    """Start reviewing every draft in the backlog; returns their ids."""
-    from fastapi import HTTPException
-
-    from .. import draft_review_runs
-
-    _require_admin(request)
-    try:
-        return {"draft_ids": draft_review_runs.review_backlog()}
-    except review_settings.Unavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from None
-
-
-@app.post("/api/drafts/{draft_id}/review")
-def run_draft_review_http(
-    draft_id: str, request: Request
-) -> dict[str, dict[str, JsonValue]]:
-    _enforce_curator(request, action="running an internal draft review")
-    return {"review": server.request_draft_review(draft_id, rerun=True)}
-
-
-class DraftReviewAnswerBody(BaseModel):
-    run_id: str
-    answer: str
-
-
-@app.post("/api/drafts/{draft_id}/review/answer")
-def answer_draft_review_http(
-    draft_id: str, body: DraftReviewAnswerBody, request: Request
-) -> dict[str, dict[str, JsonValue]]:
-    """Answer the internal reviewer's questions; the draft is reviewed again."""
-    from pydantic import ValidationError
-
-    from .. import draft_review_runs
-
-    principal = _enforce_curator(request, action="answering the internal reviewer")
-    try:
-        run = draft_review_runs.answer(draft_id, body.run_id, body.answer, principal)
-    except ValidationError as exc:
-        raise ValueError("answer must be 1 to 6000 characters") from exc
-    return {"review": run.model_dump(mode="json")}
 
 
 def _serialize_draft(row, *, ops=None) -> dict[str, Any]:
