@@ -18,16 +18,22 @@ interface DocumentationOptions {
 interface DocumentationRun {
   id: string; prompt: string; provider: string; model: string | null; reasoning_effort: string | null;
   status: string; created_at: string; document_id: string | null; result_revision: number | null;
+  target_document_id: string | null; target_revision: number | null;
   revision_base: string | null; error: string | null; draft_title?: string | null; draft_body?: string | null;
 }
 interface DeliveryCoordinates { host: string; owner: string; repo: string; base_branch: string }
 interface PullRequest { number: number; state: string; refreshed_at: string | null }
+interface StatementChange {
+  statement_id: string; change: 'edited' | 'deleted' | 'merged'; old_text: string; new_text: string | null; merged_into: string | null;
+}
+interface Staleness { status: 'unknown' | 'current' | 'out_of_date'; changes: StatementChange[] }
 interface DocumentationSummary {
   id: string; slug: string; title: string; guideline_set: string; document_type: string;
   current_revision: number; published_revision: number | null; delivery_status: string;
   updated_at: string; anchor_entity_id: string | null;
   delivery_destination: string | null; delivery_path: string | null; delivery_reference: string | null;
   delivery_coordinates: DeliveryCoordinates | null; pull_request: PullRequest | null; last_run_id?: string | null;
+  stale: Staleness;
 }
 interface DocumentationDocument extends DocumentationSummary {
   body: string; body_html: string; statement_ids: string[]; review: unknown; last_run_id: string | null;
@@ -84,8 +90,8 @@ function DocumentationModel({ options, value, onChange, disabled }: {
   </select></label>;
 }
 
-function DocumentationGenerator({ options, document, onStarted }: {
-  options: DocumentationOptions; document?: DocumentationDocument; onStarted: (run: DocumentationRun) => void;
+function DocumentationGenerator({ options, document, documents = [], onStarted }: {
+  options: DocumentationOptions; document?: DocumentationDocument; documents?: DocumentationSummary[]; onStarted: (run: DocumentationRun) => void;
 }) {
   const [prompt, setPrompt] = React.useState('');
   const [provider, setProvider] = React.useState(options.default_provider);
@@ -101,6 +107,7 @@ function DocumentationGenerator({ options, document, onStarted }: {
   const selected = options.models.find(model => model.provider === provider);
   const allowed = options.can_generate && selected?.available;
   const anchorEntity = anchor.trim() ? docEntityByName(anchor) : null;
+  const anchored = anchorEntity ? documents.find(item => item.guideline_set === profile && item.document_type === type && item.anchor_entity_id === anchorEntity.id) : undefined;
   const submit = async (event: { preventDefault: () => void }, startFromDestination = false) => {
     event.preventDefault();
     if (submitting.current || !allowed || !prompt.trim()) return;
@@ -125,9 +132,13 @@ function DocumentationGenerator({ options, document, onStarted }: {
         <label className="docw-wide">About concept (optional)<input type="text" list="docw-anchor-entities" value={anchor} disabled={!type} onChange={event => setAnchor(event.target.value)} placeholder={type ? 'Concept name or alias' : 'Choose a profile and template first'} spellCheck={false} /></label>
         <datalist id="docw-anchor-entities">{substrate.data.entities.map(entity => <option key={entity.id} value={entity.name} />)}</datalist>
       </div>}
-      {!document && type && <p className="docw-meta">{anchorEntity ? `Requesting a ${type} about “${anchorEntity.name}” again revises the same document instead of creating a new one.` : 'Naming a concept gives the document a stable identity: a later request for the same concept, profile and template revises it.'}</p>}
+      {!document && <p className="docw-meta" role="status">{anchored
+        ? <>This revises <a href={'#/documentation?document=' + encodeURIComponent(anchored.id)}>“{anchored.title}”</a> (revision {anchored.current_revision}), the {type} about “{anchorEntity?.name}”. Its earlier revisions stay in history.</>
+        : anchorEntity ? `This creates a new ${type} about “${anchorEntity.name}”. Requesting it again later revises that document.`
+        : type ? 'This creates a new document. Naming a concept gives it a stable identity: a later request for the same concept, profile and template revises it.'
+        : 'This creates a new document.'}</p>}
       <label>{document ? 'What should change?' : 'What should be documented?'}<textarea required maxLength={options.max_prompt_chars} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={document ? 'Explain what to improve, add, or remove.' : 'For example: Explain invitation reminders for administrators, including setup and examples.'} /></label>
-      <button type="submit" disabled={!allowed || !prompt.trim()}>{busy ? 'Starting…' : document ? 'Generate next revision' : 'Generate document'}</button>
+      <button type="submit" disabled={!allowed || !prompt.trim()}>{busy ? 'Starting…' : document || anchored ? 'Generate next revision' : 'Generate document'}</button>
     </fieldset>
     {!options.can_generate && <p>Writer or admin access is required to generate and publish documents.</p>}
     {!selected?.available && <p>The selected provider needs server credentials before it can run.</p>}
@@ -238,6 +249,40 @@ function DocumentationDelivery({ document, canWrite, onUpdated, onConfigure }: {
   </section>;
 }
 
+const STATEMENT_CHANGES: Record<StatementChange['change'], string> = { edited: 'Edited', deleted: 'Deleted', merged: 'Merged into another statement' };
+
+function DocumentationStaleness({ document, options, onStarted }: {
+  document: DocumentationDocument; options: DocumentationOptions; onStarted: (run: DocumentationRun) => void;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const submitting = React.useRef(false);
+  const { changes } = document.stale;
+  const allowed = options.can_generate && options.models.some(model => model.provider === options.default_provider && model.available);
+  const revise = async () => {
+    if (submitting.current) return;
+    submitting.current = true; setBusy(true); setError(null);
+    try {
+      onStarted(await docPost<DocumentationRun>(`documents/${encodeURIComponent(document.id)}/revisions`, { expected_revision: document.current_revision, provider: options.default_provider, update_sources: true }));
+    } catch (error) { setError(errorMessage(error)); }
+    finally { submitting.current = false; setBusy(false); }
+  };
+  return <section className="docw-panel docw-stale" aria-label="Out of date">
+    <h2>Out of date</h2>
+    <p>{changes.length === 1 ? 'A statement' : `${changes.length} statements`} this revision cites changed after it was reviewed. Revising starts a new revision focused on {changes.length === 1 ? 'that change' : 'these changes'}; it is saved internally for review before you publish.</p>
+    <ul>{changes.map(change => {
+      const target = change.change === 'merged' ? change.merged_into : change.change === 'edited' ? change.statement_id : null;
+      return <li key={change.statement_id}>
+        <span className="docw-meta">{STATEMENT_CHANGES[change.change]} · {target ? <a href={'#/s/' + encodeURIComponent(target)}>{target}</a> : change.statement_id}</span>
+        <p>Was: {change.old_text}</p>
+        {change.new_text !== null && <p>Now: {change.new_text}</p>}
+      </li>;
+    })}</ul>
+    {options.can_generate && <div className="docw-actions"><button type="button" onClick={revise} disabled={busy || !allowed}>{busy ? 'Starting…' : 'Revise'}</button></div>}
+    {error && <p role="alert">{error}</p>}
+  </section>;
+}
+
 function DocumentationDocument({ id, revision, options, onStarted, refresh, onUpdated }: {
   id: string; revision: string | null; options: DocumentationOptions;
   onStarted: (run: DocumentationRun) => void; refresh: number; onUpdated: () => void;
@@ -274,7 +319,7 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
   return <>
     <section className="docw-panel">
       <div className="docw-actions"><button onClick={() => docNavigate({ tab: 'library' })}>← All documents</button><button onClick={onUpdated}>Refresh</button></div>
-      <h2>{selected.title}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type} · revision {revision || current.current_revision}{current.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: current.anchor_entity_id }}>{docEntityName(current.anchor_entity_id)}</Link></>}</p>
+      <h2>{selected.title}{!historical && current.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type} · revision {revision || current.current_revision}{current.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: current.anchor_entity_id }}>{docEntityName(current.anchor_entity_id)}</Link></>}</p>
       <label>Revision history<select value={revision || current.current_revision} onChange={event => docNavigate({ document: id, revision: event.target.value })}>{history.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}{item.revision === current.current_revision ? ' (current)' : ''} · {docDate(item.created_at)}</option>)}</select></label>
       {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to edit or publish</button></p>}
       <div className="docw-actions"><button onClick={() => setSource(value => !value)}>{source ? 'Read document' : 'View Markdown'}</button><button onClick={download}>Download Markdown</button>{!historical && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`documents/${encodeURIComponent(id)}/edits`) ? 'Resume edit' : 'Edit Markdown'}</button>}</div>
@@ -282,6 +327,7 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
       <details><summary>Sources and review</summary><p>{selected.statement_ids?.length || 0} source statements</p><ul>{(selected.statement_ids || []).map(id => <li key={id}><a href={'#/s/' + encodeURIComponent(id)}>{id}</a></li>)}</ul><pre className="docw-source">{JSON.stringify(selected.review, null, 2)}</pre></details>
       {(selectedRunId || (!historical && current.last_run_id)) && <p><button onClick={() => docNavigate({ run: selectedRunId || current.last_run_id })}>View generation run</button></p>}
     </section>
+    {!historical && current.stale.status === 'out_of_date' && <DocumentationStaleness key={current.current_revision} document={current} options={options} onStarted={onStarted} />}
     {!historical && <><DocumentationDelivery key={current.current_revision} document={current} canWrite={options.can_generate} onUpdated={onUpdated} onConfigure={() => { window.location.hash = '#/settings/documentation'; }} /><DocumentationGenerator key={current.id + ':' + current.current_revision} options={options} document={current} onStarted={onStarted} /></>}
   </>;
 }
@@ -312,6 +358,7 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
   if (!run) return <p role="status">Loading run…</p>;
   if (editing) return <DocumentationEditor title={run.draft_title} body={run.draft_body || ''} path={`runs/${encodeURIComponent(id)}/edits`} options={options} onStarted={onStarted} onCancel={() => setEditing(false)} />;
   return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run.status)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
+    {run.target_document_id && <p>Revises <a href={'#/documentation?document=' + encodeURIComponent(run.target_document_id)}>an existing document</a>, starting from its revision {run.target_revision}.</p>}
     {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
     {docActive(run) && <p role="status">You can leave this screen while generation and review finish.</p>}
     {run.error && <p role="alert">{run.error}</p>}
@@ -361,12 +408,12 @@ function DocumentationWorkspace() {
     <nav className="tabs" aria-label="Documentation sections">{[['library', 'Documents'], ['generate', 'Generate'], ['runs', 'Generation history']].map(([tab, label]) => <button key={tab} className={route.tab === tab ? 'on' : ''} aria-current={route.tab === tab ? 'page' : undefined} onClick={() => docNavigate({ tab })}>{label}</button>)}</nav>
     {error && <p role="alert">{error} <button onClick={update}>Reload documentation</button></p>}
     {!options ? !error && <p role="status">Loading documentation…</p> : <>
-      {route.tab === 'generate' && <DocumentationGenerator options={options} onStarted={started} />}
+      {route.tab === 'generate' && <DocumentationGenerator options={options} documents={documents} onStarted={started} />}
       {route.tab === 'library' && (route.document ? <DocumentationDocument key={route.document} id={route.document} revision={route.revision} options={options} refresh={refresh} onUpdated={update} onStarted={started} /> : <section className="docw-panel">
         <div className="docw-actions"><h2>Saved documents</h2><button onClick={() => docNavigate({ tab: 'generate' })}>Generate document</button><button onClick={update}>Refresh</button></div>
         <p>Documents and their revisions are stored in Mycelium and included in instance backups.</p>
         <label>Find a document<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Title, profile, or template" /></label>
-        {!documents.length ? <p>No documents yet. Start with Generate, or configure a writing profile first.</p> : !filtered.length ? <p>No documents match this search.</p> : <div className="docw-list">{filtered.map(document => <button key={document.id} onClick={() => docNavigate({ document: document.id })}><strong>{document.title}</strong><span>{document.guideline_set} · {document.document_type} · revision {document.current_revision}</span><span>{docDeliveryStatus(document.delivery_status)} · updated {docDate(document.updated_at)}</span></button>)}</div>}
+        {!documents.length ? <p>No documents yet. Start with Generate, or configure a writing profile first.</p> : !filtered.length ? <p>No documents match this search.</p> : <div className="docw-list">{filtered.map(document => <button key={document.id} onClick={() => docNavigate({ document: document.id })}><strong>{document.title}</strong><span>{document.guideline_set} · {document.document_type} · revision {document.current_revision}</span><span>{docDeliveryStatus(document.delivery_status)} · updated {docDate(document.updated_at)}</span>{document.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</button>)}</div>}
       </section>)}
       {route.tab === 'runs' && <>{route.run && <DocumentationRun key={route.run} id={route.run} onCompleted={update} options={options} onStarted={started} />}<section className="docw-panel"><div className="docw-actions"><h2>Recent generation runs</h2><button onClick={update}>Refresh</button></div>{!runs.length ? <p>No runs yet.</p> : <div className="docw-list">{runs.map(run => <button key={run.id} onClick={() => docNavigate({ run: run.id })}><strong>{run.prompt}</strong><span>{docStatus(run.status)} · {run.provider} · {docDate(run.created_at)}</span></button>)}</div>}</section></>}
     </>}
