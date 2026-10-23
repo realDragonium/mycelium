@@ -519,8 +519,10 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
           }
         }
       }
-      // Cache the per-edge weight 1/sqrt(deg(src) * deg(tgt)) to avoid
-      // recomputing each frame. Floor at 1 to avoid div-by-zero.
+      // Degree-weighted springs: without them a hub node with 100+ edges
+      // accumulates 100× the inward pull of a leaf and is yanked into the
+      // center. Cache the per-edge weight 1/sqrt(deg(src) * deg(tgt)) to
+      // avoid recomputing each frame. Floor at 1 to avoid div-by-zero.
       for (const e of ep) {
         e.weight = 1 / Math.sqrt(Math.max(1, e.src.degree) * Math.max(1, e.tgt.degree));
       }
@@ -746,14 +748,6 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     // avoid the cumulative tug crushing the layout into a blob.
     const LINK_K_DEFAULT = 0.03;
     const LINK_K_MENTIONS = 0.01;
-    // Degree-weighted springs: each spring's strength is divided by
-    // sqrt(deg(src) * deg(tgt)). This is the load-bearing fix for
-    // dense substrates — without it, a hub node with 100+ edges
-    // accumulates 100× the inward pull of a leaf node and dominates
-    // the layout. With it, hubs feel each spring proportionally
-    // less hard, so they sit naturally in their cluster instead of
-    // being yanked into the center under cumulative load.
-    const DEGREE_WEIGHTING = true;
     // Per-entity "force field": each entity carves out a territory
     // proportional to the number of *other entities* it's directly
     // linked to. Nodes inside the field that aren't direct entity
@@ -890,7 +884,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         const dy = e.tgt.y - e.src.y;
         const d = Math.hypot(dx, dy) + 0.01;
         const k = e.link_type === 'mentions' ? LINK_K_MENTIONS : LINK_K_DEFAULT;
-        const w = (DEGREE_WEIGHTING && e.kind !== 'entity') ? e.weight : 1;
+        const w = e.kind !== 'entity' ? e.weight : 1;
         const f = (d - LINK_DIST) * k * w;
         const fx = (dx / d) * f;
         const fy = (dy / d) * f;
