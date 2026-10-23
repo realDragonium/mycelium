@@ -145,6 +145,13 @@ statement and entity detail, both graphs, the draft graph, activity's context
 panel, Find's grep entity strip, Ask's provenance titles and the Documents
 concept picker.
 
+The build's bundles under `/ui/assets/` are named after their content, so
+they are served without a session and cached for a year
+(`public, immutable`). Every other file under `/ui/` is revalidated on each
+load (`no-cache, private`), so a deploy shows at once and a shared cache such
+as a CDN never keeps a gated page. Of those, only the fonts under
+`/ui/fonts/` are served without a session, for the public `/connect` page.
+
 ## Design system
 
 One token set in `frontend/ui/styles/tokens.css`, dark first with a light

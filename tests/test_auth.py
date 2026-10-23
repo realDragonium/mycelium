@@ -62,6 +62,29 @@ def test_auth_on_exempts_ui_routes(tmp_path, monkeypatch):
         assert r.status_code in (200, 307)
 
 
+def test_the_ui_build_is_public_and_cached_but_its_page_is_not(tmp_path, monkeypatch):
+    from mycelium.http import webui
+    from mycelium.http.authentication import _is_exempt
+
+    bundle = next(webui._ASSETS_DIR.glob("*.js")).name
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        asset = client.get(f"/ui/assets/{bundle}")
+        assert asset.status_code == 200
+        assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
+        assert client.get("/ui/fonts/fonts.css").status_code == 200
+        assert client.get("/ui/").status_code == 401
+        assert not _is_exempt("/ui/assets/../index.html")
+
+        conn = runtime._auth_db()
+        user_id = auth.create_user(conn, name="Reader", role="reader", type="service")
+        raw, _ = auth.issue_token(conn, user_id=user_id, name="t", scope="reader")
+        conn.commit()
+        page = client.get("/ui/", headers={"Authorization": f"Bearer {raw}"})
+        assert page.status_code == 200
+        assert page.headers["cache-control"] == "no-cache, private"
+
+
 def test_auth_on_accepts_valid_bearer(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:

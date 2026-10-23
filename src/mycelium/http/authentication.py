@@ -36,6 +36,11 @@ from ..server import runtime
 _AUTH_EXEMPT_PREFIXES = (
     "/auth/",  # login / callback / logout
     "/static/",
+    # The UI's build output and fonts carry no data, and serving them
+    # without a session is what lets a shared cache keep them. The public
+    # /connect page uses the fonts too.
+    "/ui/assets/",
+    "/ui/fonts/",
     "/favicon",
     "/docs",  # FastAPI swagger
     "/openapi.json",
@@ -119,7 +124,11 @@ def _is_cross_origin(request: Request) -> bool:
 def _is_exempt(path: str) -> bool:
     if path in _AUTH_EXEMPT_PATHS:
         return True
-    return any(path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES)
+    # `/ui/assets/../index.html` would otherwise reach a gated file through
+    # an exempt prefix.
+    return ".." not in path and any(
+        path.startswith(prefix) for prefix in _AUTH_EXEMPT_PREFIXES
+    )
 
 
 def _is_browser_navigation(request: Request) -> bool:
