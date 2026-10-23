@@ -14,10 +14,14 @@ the route hands it back with `text/html`.
 
 from __future__ import annotations
 
+from pathlib import Path
+from urllib.parse import quote
+
 CONNECT_HTML = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,__FAVICON__" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Connect a client · Mycelium</title>
 <link rel="stylesheet" href="/ui/fonts/fonts.css" />
@@ -425,3 +429,13 @@ CONNECT_HTML = """<!doctype html>
 </body>
 </html>
 """
+# Inlined because /ui/ needs a session when auth is on, and visitors reach
+# this page signed out.
+CONNECT_HTML = CONNECT_HTML.replace(
+    "__FAVICON__",
+    quote(
+        (Path(__file__).parent / "webui" / "ui" / "favicon.svg").read_text(
+            encoding="utf-8"
+        )
+    ),
+)
