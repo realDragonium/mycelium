@@ -163,6 +163,11 @@ def destination_text(row: sqlite3.Row) -> CurrentDocument | None:
         ) from None
 
 
+class BothSidesEdited(ValueError):
+    """A revision refused because the published copy and the internal head
+    both changed since publication; `start_from_destination` is the way past."""
+
+
 @dataclass(frozen=True)
 class RevisionStart:
     current: CurrentDocument
@@ -204,7 +209,7 @@ def revision_start(
         )
     if row["published_revision"] == row["current_revision"]:
         return from_destination
-    raise ValueError(_both_edited(row))
+    raise BothSidesEdited(_both_edited(row))
 
 
 def _both_edited(row: sqlite3.Row) -> str:
