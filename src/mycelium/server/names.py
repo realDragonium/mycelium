@@ -55,6 +55,19 @@ def _drop_name_from_index(name_id: str) -> None:
         store.delete_name_vector_mapping(_db(), name_id)
 
 
+def _embed_name_ahead(text: str) -> None:
+    """Embed a name and its plural before the write lock is taken, so that
+    indexing them under it finds both in `embed`'s cache. A provider failure
+    is left to the write, which defers the vector."""
+    plural = plurals.regular_plural(text)
+    try:
+        embed.embed(text)
+        if plural is not None:
+            embed.embed(plural)
+    except embed.EmbeddingError:
+        pass
+
+
 def _create_name_with_plural(text: str, entity_id: str) -> str:
     """Create a name, vector-index it, enqueue a recompute scan so existing
     statements containing it pick up the mention, and — per the auto-plural
@@ -161,6 +174,7 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
             f"name {text!r} already belongs to entity {existing['entity_id']!r}; "
             "use move_name or merge_entities"
         )
+    _embed_name_ahead(text)
     with _persisted_index_write(names=True):
         name_id = _create_name_with_plural(text, entity_id)
     return {"name_id": name_id}
@@ -228,6 +242,7 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     # still contains the OLD label, which is no longer a name) — recompute
     # them. Regenerate the name's plural from the new text. Scan for the new
     # text so statements containing it pick up the mention.
+    _embed_name_ahead(new_text)
     with _persisted_index_write(names=True):
         affected = list(store.statements_mentioning_name(_db(), name_id))
         old = store.get_name_by_id(_db(), name_id)

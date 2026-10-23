@@ -41,6 +41,7 @@ from .draft_application import (
     apply_draft,
     apply_reviewed_draft,
     approve_draft,
+    embed_draft_ahead,
 )
 from .draft_review import (
     DraftCorrectionReceipt,
@@ -238,6 +239,7 @@ __all__ = [
     "RejectedStatement",
     "apply_draft",
     "approve_draft",
+    "embed_draft_ahead",
     # Read off this module object by the in-process draft emitter
     # (`ingest.draft.InProcessDraftEmitter`, injectable for tests), which
     # accepts every parameter when `_ORIG_SIGNATURES` is missing. Exported so

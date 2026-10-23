@@ -14,7 +14,11 @@ from typing import Any, TypedDict
 
 from .. import docs_store, embed, store
 from .indexes import _persisted_index_write
-from .names import _create_name_with_plural, _drop_name_from_index
+from .names import (
+    _create_name_with_plural,
+    _drop_name_from_index,
+    _embed_name_ahead,
+)
 from .registry import draft_listing_tool, draftable_tool, tool
 from .runtime import _baker, _db, _drafts_db, _name_idx
 from .specs import EntityEdgeSpec, ResultLimit, _check_limit
@@ -32,6 +36,8 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
     new entity AND a name pointing at it.
     """
     existing = store.get_name_by_text(_db(), name)
+    if existing is None:
+        _embed_name_ahead(name)
     with _persisted_index_write(names=existing is None):
         if existing is not None:
             store.update_entity_description(_db(), existing["entity_id"], description)

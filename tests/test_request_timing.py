@@ -1,11 +1,14 @@
 import inspect
 import threading
+import time
 
+import httpx
+import ollama
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
-from mycelium import auth, auth_store, request_timing, store
+from mycelium import auth, auth_store, embed, request_timing, store
 from mycelium.request_timing import Phase, Recorder, Sample, Spread, TimedLock
 from mycelium.server import runtime
 
@@ -57,6 +60,45 @@ def test_lock_charges_a_contended_wait_and_only_the_outermost_hold():
 
     assert timing.phases["lock_wait"] >= 0.04
     assert timing.phases["lock_held"] < 0.04
+
+
+@pytest.mark.parametrize("provider", ["ollama", "openai"])
+def test_a_provider_embedding_is_timed_and_a_cached_one_is_not(provider, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_EMBED_PROVIDER", provider)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("MYCELIUM_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    embed.reset()
+
+    class Ollama:
+        def embeddings(self, *, model: str, prompt: str) -> ollama.EmbeddingsResponse:
+            time.sleep(0.02)
+            return ollama.EmbeddingsResponse(embedding=[1.0] * 768)
+
+    def openai(request: httpx.Request) -> httpx.Response:
+        time.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"index": 0, "embedding": [1.0] * 768}],
+                "usage": {"prompt_tokens": 1},
+            },
+        )
+
+    monkeypatch.setattr(embed, "_get_client", Ollama)
+    monkeypatch.setattr(
+        embed, "_openai_client", httpx.Client(transport=httpx.MockTransport(openai))
+    )
+    try:
+        with request_timing.track("first") as first:
+            embed.embed("workspace invites")
+        with request_timing.track("again") as again:
+            embed.embed("workspace invites")
+    finally:
+        embed.reset()
+
+    assert first.phases["embed"] >= 0.02
+    assert "embed" not in again.phases
 
 
 @pytest.fixture
