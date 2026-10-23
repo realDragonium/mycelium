@@ -21,7 +21,8 @@ import httpx
 import pytest
 
 from mycelium import auth
-from mycelium.http import app, get_server_info
+from mycelium.http import app
+from mycelium.http.account import get_server_info
 from mycelium.http.authentication import AuthMiddleware
 
 
