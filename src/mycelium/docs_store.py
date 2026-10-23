@@ -1069,6 +1069,29 @@ def find_by_anchor(
     ).fetchone()
 
 
+def move_anchors(
+    conn: sqlite3.Connection, from_entity_id: str, into_entity_id: str
+) -> None:
+    """Re-anchor documents on `from_entity_id` to `into_entity_id`.
+
+    Where the target already anchors a document of the same guideline set and
+    type, the target's document keeps the identity and the source's document
+    loses its anchor: it stays a slug-identified document, so no body is lost.
+    """
+    conn.execute(
+        "UPDATE generated_documents SET anchor_entity_id = NULL "
+        "WHERE anchor_entity_id = ? AND EXISTS (SELECT 1 FROM generated_documents AS held "
+        "WHERE held.anchor_entity_id = ? "
+        "AND held.guideline_set = generated_documents.guideline_set "
+        "AND held.document_type = generated_documents.document_type)",
+        (from_entity_id, into_entity_id),
+    )
+    conn.execute(
+        "UPDATE generated_documents SET anchor_entity_id = ? WHERE anchor_entity_id = ?",
+        (into_entity_id, from_entity_id),
+    )
+
+
 def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM generated_documents WHERE id = ?", (document_id,)

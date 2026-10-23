@@ -1171,3 +1171,34 @@ def test_an_anchor_must_name_an_entity_and_becomes_the_request_identity(_stores)
     finally:
         store.reset_substrate()
         substrate.close()
+
+
+def test_merging_an_anchor_entity_moves_its_document_to_the_target(_stores):
+    from mycelium import store
+
+    drafts_conn, prompts_conn = _stores
+    _save_set(prompts_conn, "kb-authoring", ["guidance", "how-to"])
+    substrate = store.connect(":memory:")
+    store.migrate(substrate)
+    store.use_substrate_connection(substrate)
+    try:
+        source = store.create_entity(substrate, "SSO")
+        target = store.create_entity(substrate, "Single sign-on")
+        substrate.commit()
+        doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: _document()
+        run = server.request_documentation(
+            "p",
+            anchor_entity_id=source,
+            guideline_set="kb-authoring",
+            document_type="how-to",
+        )
+        doc_runs.wait_all()
+        document_id = docs_store.get_run(drafts_conn, run["id"])["document_id"]
+
+        server.merge_entities(from_entity_id=source, into_entity_id=target)
+
+        document = docs_store.get_document(drafts_conn, document_id)
+        assert document["anchor_entity_id"] == target
+    finally:
+        store.reset_substrate()
+        substrate.close()

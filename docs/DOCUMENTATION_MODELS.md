@@ -18,6 +18,10 @@ A new UI generation creates a document. Naming the concept it is about, with a
 writing profile and template, gives it a stable identity: a later request for
 the same concept, profile and template revises that document instead of
 creating another (`anchor_entity_id` over MCP).
+Merging concepts moves the identity to the surviving concept. If that concept
+already has a document for the same profile and template, it keeps that
+identity, and the merged-away concept's document stays as an ordinary document
+without one.
 
 Publishing opens or updates a GitHub pull request, and the document shows
 whether it is open, merged or closed. Mycelium asks GitHub when the document is
