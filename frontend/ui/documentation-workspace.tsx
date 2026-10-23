@@ -28,6 +28,7 @@ interface RunSummary {
   activity: string | null; turns: number; duration_s: number;
   tokens: { input: number; cache_read: number; cache_creation: number; output: number };
   cost_usd: number | null; statements_retrieved: number; statements_cited: number; gaps_filed: number;
+  cited_statement_ids?: string[];
   review_findings?: ReviewNote[];
 }
 interface ReviewNote { check: 'exposure' | 'conformance'; where: string; problem: string }
@@ -125,8 +126,8 @@ function DocumentationSources({ ids }: { ids: string[] }) {
   return <ol className="docw-sources">{ids.map(id => {
     const statement = substrate.index.statements[id];
     return <li key={id}>{statement
-      ? <Link to={{ view: 'statement', id }} className="prov-item"><span className="pv-body"><span className="pv-title">{statement.text}</span><span className="pv-role">{statement.kind} · {id}</span></span></Link>
-      : <span className="pv-role">{id} · no longer in the knowledge base</span>}</li>;
+      ? <Link to={{ view: 'statement', id }} className="prov-item" title={id}><span className="pv-body"><span className="pv-title">{statement.text}</span><span className="pv-role">{statement.kind}</span></span></Link>
+      : <span className="pv-role" title={id}>A statement no longer in the knowledge base</span>}</li>;
   })}</ol>;
 }
 
@@ -429,6 +430,7 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
     {run.review_notes.length > 0 && <details><summary>Writer briefed with notes from an earlier review</summary><ul>{run.review_notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul></details>}
     {docActive(run) && <p role="status">{run.summary?.activity ? `${run.summary.activity}. ` : ''}You can leave this screen while generation and review finish.</p>}
     {run.summary && <DocumentationRunSummary summary={run.summary} />}
+    {run.summary?.cited_statement_ids?.length ? <details><summary>Cited statements</summary><DocumentationSources ids={run.summary.cited_statement_ids} /></details> : null}
     {run.summary?.review_findings?.length ? <DocumentationReviewNotes notes={run.summary.review_findings} /> : run.error && <p role="alert">{run.error}</p>}
     {run.retryable && options.can_generate && <DocumentationRetry run={run} onStarted={onStarted} />}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}
