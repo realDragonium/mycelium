@@ -249,7 +249,7 @@ pre.code.tall { max-height: 360px; overflow: auto; }
 .tbl tbody tr { cursor: pointer; }
 .tbl.compact tbody tr { cursor: default; }
 
-/* ---------- lists of rows (drafts, research runs) ---------- */
+/* ---------- lists of rows (drafts) ---------- */
 .row-list { display: flex; flex-direction: column; gap: 9px; margin-top: 4px; }
 .list-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto auto; gap: 16px; align-items: center; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-1); transition: border-color 0.12s, background 0.12s; }
 a.list-row:hover { border-color: var(--line-strong); background: var(--bg-2); }

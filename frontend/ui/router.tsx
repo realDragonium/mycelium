@@ -5,7 +5,7 @@ import { createContext, useContext, useEffect, useState, type CSSProperties, typ
 import { isFindMode, type FindMode } from './api';
 
 export const SETTINGS_SECTIONS = [
-  'account', 'appearance', 'members', 'models', 'prompts', 'review', 'limits', 'research', 'documentation',
+  'account', 'appearance', 'members', 'models', 'prompts', 'review', 'limits', 'documentation',
 ] as const;
 export type SettingsSection = typeof SETTINGS_SECTIONS[number];
 const isSettingsSection = (value: string): value is SettingsSection => (SETTINGS_SECTIONS as readonly string[]).includes(value);
@@ -23,7 +23,6 @@ export type Route =
   | { view: 'entity'; id: string }
   | { view: 'documentation' }
   | { view: 'ingest' }
-  | { view: 'research'; topic: string }
   | { view: 'drafts' }
   | { view: 'draft'; id: string }
   | { view: 'gaps' }
@@ -62,7 +61,6 @@ export function parseHash(hash: string): Route {
       return tab === 'settings' || tab === 'profiles' ? { view: 'settings', section: 'documentation' } : { view: 'documentation' };
     }
     case 'ingest': return { view: 'ingest' };
-    case 'research': return { view: 'research', topic: param('topic') };
     case 'drafts': case 'draft': return arg ? { view: 'draft', id: arg } : { view: 'drafts' };
     case 'gaps': case 'coverage': return { view: 'gaps' };
     case 'names': case 'mentions': case 'pending': return { view: 'names' };
@@ -97,7 +95,6 @@ export function routeToHash(route: Route): string {
     case 'entity': return `#/e/${e(route.id)}`;
     case 'documentation': return '#/documentation';
     case 'ingest': return '#/ingest';
-    case 'research': return `#/research${query({ topic: route.topic })}`;
     case 'drafts': return '#/drafts';
     case 'draft': return `#/drafts/${e(route.id)}`;
     case 'gaps': return '#/gaps';

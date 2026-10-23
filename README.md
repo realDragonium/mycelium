@@ -42,7 +42,7 @@ uv run mycelium-http
 
 The HTTP server listens on `127.0.0.1:8765` by default. Interactive API docs
 are available at `/docs` and the web app at `/ui/`: Ask and Find from any
-screen, browse and graph the knowledge base, ingest and research, curate
+screen, browse and graph the knowledge base, ingest text, curate
 drafts, gaps, names and the glossary, and configure everything under Settings.
 [docs/WEB_APP.md](docs/WEB_APP.md) maps its screens and addresses. The former
 `/cockpit` app is part of it now; old `/cockpit` links redirect.

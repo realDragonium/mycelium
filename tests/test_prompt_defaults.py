@@ -102,12 +102,12 @@ def test_upgrade_updates_untouched_doctrines_and_reports_edited_ones(
     monkeypatch.setenv("MYCELIUM_AUTH", "off")
     with closing(prompt_store.connect(tmp_path / "mycelium-prompts.db")) as conn:
         prompt_store.migrate(conn)
-        for name in ("ingest", "research"):
+        for name in ("ingest", "docgen"):
             prompt_store.save(
                 conn, type="doctrine", name=name, text="Old.", created_by="seed"
             )
         prompt_store.save(
-            conn, type="doctrine", name="research", text="Mine.", created_by="ada"
+            conn, type="doctrine", name="docgen", text="Mine.", created_by="ada"
         )
         conn.execute("DROP TABLE shipped_prompt_texts")
 
@@ -118,12 +118,12 @@ def test_upgrade_updates_untouched_doctrines_and_reports_edited_ones(
     shipped = ai_prompts.shipped_text("ingest")
     assert _versions(tmp_path, "ingest") == [(shipped, "seed"), ("Old.", "seed")]
     assert ai_prompts.resolve("ingest").text == shipped
-    assert _versions(tmp_path, "research") == [("Mine.", "ada"), ("Old.", "seed")]
-    assert "saved research instructions predate" in caplog.text
-    assert ai_prompts.editor("research").newer_default_since is not None
+    assert _versions(tmp_path, "docgen") == [("Mine.", "ada"), ("Old.", "seed")]
+    assert "saved docgen instructions predate" in caplog.text
+    assert ai_prompts.editor("docgen").newer_default_since is not None
     assert ai_prompts.editor("ingest").newer_default_since is None
     listed = {item.name: item for item in ai_prompts.summaries()}
-    assert listed["research"].edited and listed["research"].newer_default_since
+    assert listed["docgen"].edited and listed["docgen"].newer_default_since
     assert listed["ingest"].edited and listed["ingest"].newer_default_since is None
 
     runtime._ctx = None

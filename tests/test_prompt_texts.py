@@ -99,10 +99,10 @@ def test_names_are_independent():
     conn = _conn()
     prompt_store.save(conn, type="doctrine", name="ingest", text="i1")
     prompt_store.save(conn, type="doctrine", name="ingest", text="i2")
-    prompt_store.save(conn, type="doctrine", name="research", text="r1")
+    prompt_store.save(conn, type="doctrine", name="docgen", text="d1")
     prompt_store.save(conn, type="guidelines", name="ingest", text="g1")
 
-    assert prompt_store.latest(conn, "doctrine", "research")["version"] == 1
+    assert prompt_store.latest(conn, "doctrine", "docgen")["version"] == 1
     assert prompt_store.latest_text(conn, "guidelines", "ingest") == "g1"
     assert prompt_store.latest_text(conn, "doctrine", "ingest") == "i2"
 
@@ -136,20 +136,20 @@ def test_delete_unknown_name_is_false():
 def test_list_current_filters_by_type():
     conn = _conn()
     prompt_store.save(conn, type="doctrine", name="ingest", text="i")
-    prompt_store.save(conn, type="doctrine", name="research", text="r")
+    prompt_store.save(conn, type="doctrine", name="docgen", text="d")
     prompt_store.save(conn, type="guidelines", name="tutorial", text="t")
     prompt_store.save(conn, type="doctrine", name="ingest", text="i2")
 
     everything = [(r["type"], r["name"]) for r in prompt_store.list_current(conn)]
     assert everything == [
+        ("doctrine", "docgen"),
         ("doctrine", "ingest"),
-        ("doctrine", "research"),
         ("guidelines", "tutorial"),
     ]
 
     doctrines = prompt_store.list_current(conn, "doctrine")
-    assert [r["name"] for r in doctrines] == ["ingest", "research"]
-    assert [r["version"] for r in doctrines] == [2, 1]
+    assert [r["name"] for r in doctrines] == ["docgen", "ingest"]
+    assert [r["version"] for r in doctrines] == [1, 2]
     assert prompt_store.list_current(conn, "unknown-type") == []
 
 
@@ -359,22 +359,17 @@ def test_rest_rejects_drafter_with_403(tmp_path, monkeypatch):
 #
 # Startup puts every packaged loop doctrine in the store so they are editable
 # from the first run. The files stay the seed and the fallback; the store is
-# what the loops read (tests/test_ingest.py, test_research.py, test_docgen.py).
+# what the loops read (tests/test_ingest.py, test_docgen.py).
 
 #: Every doctrine startup seeds, in the order `list_prompt_texts` returns them.
-DOCTRINES = ("docgen", "ingest", "research")
+DOCTRINES = ("docgen", "ingest")
 
 
 def _doctrine_file(name: str) -> str:
     from mycelium.docgen.config import _DEFAULT_DOCTRINE_PATH as DOCGEN_PATH
     from mycelium.ingest.config import _DEFAULT_DOCTRINE_PATH as INGEST_PATH
-    from mycelium.research.config import _DEFAULT_DOCTRINE_PATH as RESEARCH_PATH
 
-    path = {
-        "docgen": DOCGEN_PATH,
-        "ingest": INGEST_PATH,
-        "research": RESEARCH_PATH,
-    }[name]
+    path = {"docgen": DOCGEN_PATH, "ingest": INGEST_PATH}[name]
     return pathlib.Path(path).read_text(encoding="utf-8")
 
 
@@ -405,8 +400,8 @@ def test_seeding_leaves_an_edit_alone_and_adds_no_versions(tmp_path, monkeypatch
         assert (
             len(server.list_prompt_text_versions("doctrine", "ingest")["versions"]) == 2
         )
-        research = server.list_prompt_text_versions("doctrine", "research")["versions"]
-        assert len(research) == 1  # untouched by the second startup
+        docgen = server.list_prompt_text_versions("doctrine", "docgen")["versions"]
+        assert len(docgen) == 1  # untouched by the second startup
 
 
 def test_an_unreadable_doctrine_file_does_not_block_startup(tmp_path, monkeypatch):
@@ -430,7 +425,7 @@ def test_retiring_a_seeded_doctrine_is_refused(tmp_path, monkeypatch):
     REST mirror turns the same refusal into a 400 carrying the reason."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        for name in ("ingest", "research"):
+        for name in DOCTRINES:
             with pytest.raises(ValueError, match="seeded at startup"):
                 server.retire_prompt_text("doctrine", name)
             assert server.get_prompt_text("doctrine", name)["text"] == _doctrine_file(
@@ -528,10 +523,10 @@ def test_a_restore_brings_back_the_edits_instead_of_re_seeding(tmp_path, monkeyp
         assert [v["version"] for v in versions] == [2, 1]
         assert [v["created_by"] for v in versions] == [None, "seed"]
 
-        # The packaged research doctrine came back too, unduplicated.
-        research = server.list_prompt_text_versions("doctrine", "research")["versions"]
-        assert [v["version"] for v in research] == [1]
-        assert research[0]["text"] == _doctrine_file("research")
+        # The packaged docgen doctrine came back too, unduplicated.
+        docgen = server.list_prompt_text_versions("doctrine", "docgen")["versions"]
+        assert [v["version"] for v in docgen] == [1]
+        assert docgen[0]["text"] == _doctrine_file("docgen")
 
         with pytest.raises(ValueError):
             server.get_prompt_text("preamble", "ask")

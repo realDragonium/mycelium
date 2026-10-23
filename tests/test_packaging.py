@@ -34,7 +34,6 @@ import pytest
 from mycelium import guidelines
 from mycelium.docgen.config import DocgenConfig
 from mycelium.ingest.config import IngestConfig
-from mycelium.research.config import ResearchConfig
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -102,7 +101,6 @@ def test_doctrines_ship_inside_the_wheel(wheel):
     doctrine_paths = [
         DocgenConfig().doctrine_path,
         IngestConfig().doctrine_path,
-        ResearchConfig().doctrine_path,
     ]
 
     with zipfile.ZipFile(wheel) as zf:

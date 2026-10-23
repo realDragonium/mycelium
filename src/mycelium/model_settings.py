@@ -13,13 +13,10 @@ from .ai import Provider, ReasoningEffort
 from .ai.types import ClaudeEffort
 from .model_credentials import claude_configuration_error
 
-Action = Literal[
-    "ask", "ingest", "research", "docgen", "draft_review", "alias_discovery"
-]
+Action = Literal["ask", "ingest", "docgen", "draft_review", "alias_discovery"]
 ACTIONS: tuple[Action, ...] = (
     "ask",
     "ingest",
-    "research",
     "docgen",
     "draft_review",
     "alias_discovery",

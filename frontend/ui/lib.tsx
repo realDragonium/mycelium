@@ -83,7 +83,6 @@ export const I = {
   graph: (p: IconProps) => <svg {...svg(p)}><circle cx="6" cy="7" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="12" cy="17" r="2.2"/><path d="M8 8l3 7M16.5 7.5 13 15M8.2 7h7.6" opacity="0.7"/></svg>,
   hub: (p: IconProps) => <svg {...svg(p)}><path d="M12 4l7 4v8l-7 4-7-4V8z" strokeLinejoin="round"/><circle cx="12" cy="12" r="2.2"/></svg>,
   doc: (p: IconProps) => <svg {...svg(p)}><path d="M7 3h7l5 5v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z" strokeLinejoin="round"/><path d="M14 3v5h5M9 13h6M9 17h6" strokeLinecap="round"/></svg>,
-  research: (p: IconProps) => <svg {...svg(p)}><path d="M9 4h6M10 4v5l-5 9a1.5 1.5 0 0 0 1.3 2.2h11.4A1.5 1.5 0 0 0 19 18l-5-9V4" strokeLinejoin="round"/><path d="M7.5 14h9" opacity="0.6"/></svg>,
   tag: (p: IconProps) => <svg {...svg(p)}><path d="M4 12V5a1 1 0 0 1 1-1h7l8 8-8 8z" strokeLinejoin="round"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/></svg>,
   book: (p: IconProps) => <svg {...svg(p)}><path d="M5 4h10a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3z" strokeLinejoin="round"/><path d="M5 17a3 3 0 0 1 3-3h10" /></svg>,
   clock: (p: IconProps) => <svg {...svg(p)}><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2" strokeLinecap="round"/></svg>,

@@ -178,7 +178,7 @@
 .ask-error .ae-actions { display: flex; gap: 10px; justify-content: center; }
 
 
-/* ---------- Ingest and Research ---------- */
+/* ---------- Ingest ---------- */
 .ingest-stage { max-width: 860px; margin: 0 auto; }
 
 .src-type-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -307,7 +307,7 @@ main.page.home { padding-top: 56px; }
 .entity-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin: 16px 0 0; padding: 10px 14px; border: 1px dashed var(--cyan-line); border-radius: var(--r-md); }
 .res .r-id a:hover { color: var(--ink-2); }
 
-/* ---------- Ingest / Research ---------- */
+/* ---------- Ingest ---------- */
 .ingest-stage { max-width: 860px; margin: 0 auto; }
 .src-type-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
 .ingest-stage .page-head h1 em.write { font-style: italic; }

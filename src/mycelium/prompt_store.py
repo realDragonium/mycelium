@@ -1,6 +1,6 @@
 """Editable prompt texts — instance configuration, not substrate truth.
 
-Steering texts (ingest/research doctrines, ask preambles, server
+Steering texts (ingest/docgen doctrines, ask preambles, server
 instructions, guideline sets) are rows here instead of files baked into the
 deploy artifact, so editing one is an ordinary tool call and the change
 applies to the next run without a restart.
@@ -120,6 +120,29 @@ def migrate(conn: sqlite3.Connection) -> None:
         + CONNECTION_SCHEMA
     )
     conn.commit()
+    with _writing(conn):
+        _drop_research_settings(conn)
+
+
+def _drop_research_settings(conn: sqlite3.Connection) -> None:
+    """Remove what the deleted research feature left behind: its doctrine,
+    model selection, budgets, sources and concurrency limit. Strict settings
+    models would otherwise refuse the leftover rows."""
+    conn.execute(
+        "DELETE FROM prompt_texts WHERE type = 'doctrine' AND name = 'research'"
+    )
+    conn.execute(
+        "DELETE FROM shipped_prompt_texts WHERE type = 'doctrine' AND name = 'research'"
+    )
+    conn.execute("DELETE FROM model_settings WHERE action = 'research'")
+    conn.execute(
+        "DELETE FROM product_settings WHERE section IN ('research', 'sources')"
+    )
+    conn.execute(
+        "UPDATE product_settings SET body_json = json_remove(body_json, '$.research_runs') "
+        "WHERE section = 'concurrency' AND CASE WHEN json_valid(body_json) "
+        "THEN json_type(body_json, '$.research_runs') IS NOT NULL ELSE 0 END"
+    )
 
 
 def prepare_settings(conn: sqlite3.Connection, *, import_environment: bool) -> None:

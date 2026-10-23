@@ -34,7 +34,7 @@ export function HomeScreen() {
         <div className="eyebrow">Mycelium · knowledge base</div>
         <h1 className="home-title">Interrogate a substrate<br />built to be <em>read by machines</em>.</h1>
         <p className="home-blurb">
-          Knowledge enters by <b>ingest</b> and <b>research</b>, and waits as a draft until someone approves it.
+          Knowledge enters through <b>ingest</b> or connected agents, and waits as a draft until someone approves it.
           Read it back two ways: <b>Ask</b> for a reasoned answer with its gaps and provenance, or <b>Find</b> for raw, scored matches you judge.
         </p>
       </div>

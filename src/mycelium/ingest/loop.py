@@ -27,7 +27,7 @@ import re
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
 
@@ -63,10 +63,6 @@ from .schema import (
 )
 from .tools import EMIT_TOOL, build_tools, parse_emit_input
 from .trace import TraceBuilder
-
-if TYPE_CHECKING:
-    from ..research.config import ResearchConfig
-
 
 #: Reconcile reads — at least one must have happened before emit is accepted.
 #: Each takes the candidate's text; `find_duplicates` audits the whole corpus
@@ -156,7 +152,7 @@ def run_ingest(
 @dataclass
 class _RunContext:
     """Per-run harness state, so the finalizers/handlers below don't each need
-    ten-plus positional parameters (mirrors research/loop.py)."""
+    ten-plus positional parameters."""
 
     text: str
     system_prompt: str
@@ -1099,7 +1095,7 @@ def _normalize_ledger_row(row: dict) -> dict:
 
 def _model_turn(
     client: ai.ClaudeClient | httpx.Client | None,
-    config: IngestConfig | ResearchConfig,
+    config: IngestConfig,
     system_prompt: str,
     messages: Sequence[Mapping[str, object]],
     tools: Sequence[Mapping[str, object]],

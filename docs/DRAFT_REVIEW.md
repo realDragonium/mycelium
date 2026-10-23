@@ -3,8 +3,8 @@
 Mycelium can review submitted drafts with Claude or an OpenAI GPT model.
 Review starts on submission from MCP or the web app. It works for
 all drafts; PR provenance is optional. While review is on, `ingest` (over MCP,
-HTTP, and the web app) and finished research runs submit their drafts
-themselves; with review off those drafts stay open for curation. Alias
+HTTP, and the web app) submits its drafts itself; with review off those drafts
+stay open for curation. Alias
 suggestions from ingestion go to a separate draft that awaits individual human
 decisions and is not sent to the reviewer.
 
@@ -19,7 +19,7 @@ A curator can explicitly review an existing submitted draft.
 
 Administrators configure review in **Settings → Draft review**, also linked
 from Drafts. It configures this action independently of
-Ask, Ingest, Research, and Documentation. Choose the mode, provider, model ID, and independent reviewer
+Ask, Ingest, and Documentation. Choose the mode, provider, model ID, and independent reviewer
 account, then save. Changes take effect for new submissions and explicit reruns
 without restarting the server. The form can create a stored writer service
 account if none exists. Saving settings does not start any reviews.

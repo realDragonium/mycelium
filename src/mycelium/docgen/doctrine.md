@@ -143,8 +143,7 @@ Two consequences worth holding:
 
 - **You cannot fix the substrate from here.** If a statement is wrong, the
   document must not silently correct it — file a gap saying so. Correcting
-  knowledge is `ingest`'s and `research`'s job, through a draft a human
-  approves.
+  knowledge is `ingest`'s job, through a draft a human approves.
 - **The document will go stale.** Write what the substrate says now, and let
   the provenance carry the burden of checking it later. Do not hedge everything
   into uselessness to future-proof it.

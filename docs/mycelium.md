@@ -108,7 +108,7 @@ All state lives in `MYCELIUM_DATA_DIR` (default `./.mycelium/`):
 | --- | --- |
 | `mycelium.db` | Entities, names, statements, mentions, links, glossaries |
 | `mycelium-history.db` | The audit log of substrate changes |
-| `mycelium-drafts.db` | Drafts, reviews, research runs, generated documents and their revisions |
+| `mycelium-drafts.db` | Drafts, reviews, documentation runs, generated documents and their revisions |
 | `mycelium-auth.db` | Users, tokens, invites and OAuth clients |
 | `mycelium-prompts.db` | Editable prompts, guideline sets, AI and product settings |
 | `mycelium.vec`, `mycelium-names.vec` | hnswlib indexes of statement and name embeddings |

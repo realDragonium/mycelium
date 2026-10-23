@@ -156,8 +156,8 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     # WAL + a busy timeout so the drafts DB tolerates a background writer: a
-    # research run finalizes its row and queues its draft ops from a worker
-    # thread while HTTP threads read/write the same file. Mirrors store.py,
+    # documentation or review run finalizes its row from a worker thread
+    # while HTTP threads read/write the same file. Mirrors store.py,
     # which set this for the mention-recompute worker. (No-op on :memory:.)
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
@@ -166,7 +166,7 @@ def connect(db_path: Path | str) -> sqlite3.Connection:
 
 # --- per-thread connection provider -----------------------------------------
 #
-# Each thread (a request thread, or a background research-run worker) holds its
+# Each thread (a request thread, or a background run worker) holds its
 # OWN drafts connection, opened lazily against the configured path (see
 # `ConnectionProvider`). WAL gives every reader a committed snapshot, so the
 # worker finalizing a run and an HTTP thread reading drafts never contend on
@@ -198,6 +198,8 @@ def reset() -> None:
 
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(DRAFTS_SCHEMA)
+    # Run history of the removed research feature; its drafts are ordinary drafts.
+    conn.execute("DROP TABLE IF EXISTS research_runs")
     draft_columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(drafts)").fetchall()
     }

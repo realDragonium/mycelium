@@ -1,17 +1,15 @@
-// Product settings: per-action limits, concurrency, research repositories and
-// documentation delivery. One server document with a section per kind; each
+// Product settings: per-action limits, concurrency and documentation delivery. One server document with a section per kind; each
 // section saves on its own, guarded by the document revision.
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { GitHubConnection, listGitHubConnections, type GitHubRepoConnection } from './github-connection';
+import { useCallback, useState, type FormEvent } from 'react';
+import { GitHubConnection, type GitHubRepoConnection } from './github-connection';
 import { Card, LoadError, Loading, Notice } from './lib';
-import { Link } from './router';
 import { HttpError, errorMessage, getJSON, patchJSON } from './api';
 import { useAsync } from './use-async';
 
 const TITLES: Record<string, string> = {
-  ask: 'Questions (Ask)', ingest: 'Ingestion', research: 'Research', docgen: 'Document generation',
+  ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation',
   draft_review: 'Draft review', alias_discovery: 'Alias discovery', concurrency: 'Concurrent runs',
-  documentation: 'Documentation delivery', sources: 'Research repositories',
+  documentation: 'Documentation delivery',
 };
 
 // [label, min, step]; booleans have no bounds.
@@ -20,82 +18,68 @@ const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   request_timeout_s: ['Request timeout (seconds)', 0.1, 'any'], op_cap: ['Maximum tool operations', 1, 1],
   wall_clock_s: ['Run time budget (seconds)', 0.1, 'any'], thinking: ['Claude extended thinking'],
   cache: ['Claude prompt caching'], recon_k: ['Context search results', 1, 1],
-  max_input_chars: ['Maximum input characters', 1, 1], max_topic_chars: ['Maximum topic characters', 1, 1],
+  max_input_chars: ['Maximum input characters', 1, 1],
   max_prompt_chars: ['Maximum prompt characters', 1, 1], model_loops: ['Shared AI runs', 1, 1],
-  documentation_runs: ['Document generation runs', 1, 1], research_runs: ['Research runs', 1, 1],
+  documentation_runs: ['Document generation runs', 1, 1],
 };
 
 export interface Binding { name: string; host: string; available: boolean; label?: string; owner?: string; repo?: string }
 interface Destination { name: string; owner: string; repo: string; base_branch: string; path_template: string; binding: string }
-interface Source { name: string; owner: string; repo: string; ref: string | null; binding: string | null; host: string }
-type Repo = Destination | Source;
-type Settings = { kind: string; guideline_set?: string; destinations?: Destination[]; sources?: Source[] } & Record<string, unknown>;
+type Settings = { kind: string; guideline_set?: string; destinations?: Destination[] } & Record<string, unknown>;
 interface Section { settings: Settings; revision: number | string; configuration_error?: string | null }
 interface ProductSettingsData { can_configure: boolean; sections: Section[]; github_bindings: Binding[]; guideline_sets: string[]; github_configuration_error?: string | null }
 
 const isDestination = (kind: string) => kind === 'documentation';
 
-function fieldOf(item: Repo, key: string): string {
-  for (const [k, v] of Object.entries(item)) if (k === key) return typeof v === 'string' ? v : '';
-  return '';
-}
+const TEXT_FIELDS: [keyof Destination, string][] = [
+  ['name', 'Name'], ['owner', 'Repository owner'], ['repo', 'Repository name'], ['base_branch', 'Base branch'], ['path_template', 'File path template'],
+];
 
-function RepositoryFields({ kind, items, bindings, onChange }: { kind: string; items: Repo[]; bindings: Binding[]; onChange: (items: Repo[]) => void }) {
-  const destination = isDestination(kind);
-  const noun = destination ? 'destination' : 'source';
-  const change = (index: number, key: string, value: string | null) => onChange(items.map((item, i) => {
+function DestinationFields({ items, bindings, onChange }: { items: Destination[]; bindings: Binding[]; onChange: (items: Destination[]) => void }) {
+  const change = (index: number, key: keyof Destination, value: string) => onChange(items.map((item, i) => {
     if (i !== index) return item;
-    const next: Repo = { ...item, [key]: value };
+    const next: Destination = { ...item, [key]: value };
     if (key === 'binding' && value) {
       const picked = bindings.find(b => b.name === value);
-      if (!destination && 'host' in next) next.host = picked?.host || next.host;
       if (picked?.owner) { next.owner = picked.owner; next.repo = picked.repo || ''; }
     }
     return next;
   }));
-  const add = () => onChange([...items, destination
-    ? { name: '', owner: bindings[0]?.owner || '', repo: bindings[0]?.repo || '', base_branch: 'main', path_template: 'docs/{slug}.md', binding: bindings[0]?.name || '' }
-    : { name: '', owner: '', repo: '', ref: null, binding: null, host: 'github.com' }]);
-  const textFields: [string, string][] = destination
-    ? [['name', 'Name'], ['owner', 'Repository owner'], ['repo', 'Repository name'], ['base_branch', 'Base branch'], ['path_template', 'File path template']]
-    : [['name', 'Name'], ['owner', 'Repository owner'], ['repo', 'Repository name'], ['ref', 'Branch or tag (optional)']];
+  const add = () => onChange([...items, { name: '', owner: bindings[0]?.owner || '', repo: bindings[0]?.repo || '', base_branch: 'main', path_template: 'docs/{slug}.md', binding: bindings[0]?.name || '' }]);
   return <>
-    {items.length === 0 && <p className="muted">No {noun}s configured.</p>}
+    {items.length === 0 && <p className="muted">No destinations configured.</p>}
     {items.map((item, index) => {
       const binding = item.binding ? bindings.find(b => b.name === item.binding) : undefined;
       const appBound = !!item.binding?.startsWith('github-app:');
       return (
         <fieldset key={index} className="subcard">
-          <legend>{destination ? 'Destination' : 'Source'} {index + 1}</legend>
+          <legend>Destination {index + 1}</legend>
           <div className="field-grid">
-            {textFields.map(([key, label]) => (
+            {TEXT_FIELDS.map(([key, label]) => (
               <label key={key} className="field"><span>{label}</span>
-                <input className="input" value={fieldOf(item, key)} readOnly={appBound && (key === 'owner' || key === 'repo')} required={key !== 'ref'}
-                  maxLength={key === 'path_template' ? 1000 : 200} onChange={e => change(index, key, key === 'ref' ? e.target.value || null : e.target.value)} />
+                <input className="input" value={item[key]} readOnly={appBound && (key === 'owner' || key === 'repo')} required
+                  maxLength={key === 'path_template' ? 1000 : 200} onChange={e => change(index, key, e.target.value)} />
               </label>
             ))}
             <label className="field"><span>GitHub connection</span>
-              <select className="input" value={item.binding || ''} required={destination} onChange={e => change(index, 'binding', e.target.value || null)}>
-                <option value="">{destination ? 'Select credentials' : 'Public repository (no credentials)'}</option>
+              <select className="input" value={item.binding || ''} required onChange={e => change(index, 'binding', e.target.value)}>
+                <option value="">Select credentials</option>
                 {item.binding && !binding && <option value={item.binding}>{item.binding} (unavailable)</option>}
                 {bindings.map(b => <option key={b.name} value={b.name}>{b.label || b.name} · {b.host}{b.available ? '' : b.name.startsWith('github-app:') ? ' (disconnected)' : ' (credentials unavailable)'}</option>)}
               </select>
             </label>
-            {!destination && !item.binding && 'host' in item && (
-              <label className="field"><span>GitHub host</span><input className="input" value={item.host} required maxLength={200} onChange={e => change(index, 'host', e.target.value)} /></label>
-            )}
           </div>
           {binding && <p className="hint">Host: {binding.host}. {!binding.available && (binding.name.startsWith('github-app:')
-            ? (destination ? 'Reconnect this repository above before publishing.' : 'Reconnect this repository under Documentation delivery before a run can read it.')
+            ? 'Reconnect this repository above before publishing.'
             : 'The server administrator must configure these credentials before a run can use them.')}</p>}
           {item.binding && !binding && <Notice tone="warn">This credential binding is unavailable. Select a configured one.</Notice>}
-          <button type="button" className="btn ghost sm" onClick={() => onChange(items.filter((_, i) => i !== index))}>Remove {noun} {index + 1}</button>
+          <button type="button" className="btn ghost sm" onClick={() => onChange(items.filter((_, i) => i !== index))}>Remove destination {index + 1}</button>
         </fieldset>
       );
     })}
-    <button type="button" className="btn sm" onClick={add} disabled={destination && bindings.length === 0}>Add {noun}</button>
-    {destination && bindings.length === 0 && <p className="hint">Connect a GitHub repository above to start publishing.</p>}
-    <p className="hint">{destination ? 'Use {slug} in the file path template, for example docs/{slug}.md. Publishing opens a pull request for review.' : <>An empty ref uses the repository’s default branch. A private repository can use a GitHub connection made under <Link to={{ view: 'settings', section: 'documentation' }}>Documentation delivery</Link>; runs only read it.</>} Changes apply to new runs. Repository connections are shared by everyone on this instance.</p>
+    <button type="button" className="btn sm" onClick={add} disabled={bindings.length === 0}>Add destination</button>
+    {bindings.length === 0 && <p className="hint">Connect a GitHub repository above to start publishing.</p>}
+    <p className="hint">Use {'{slug}'} in the file path template, for example docs/{'{slug}'}.md. Publishing opens a pull request for review. Changes apply to new runs. Repository connections are shared by everyone on this instance.</p>
   </>;
 }
 
@@ -107,7 +91,6 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
   const [saved, setSaved] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [connections, setConnections] = useState<GitHubRepoConnection[]>([]);
-  const [connectionsError, setConnectionsError] = useState<string | null>(null);
   const kind = snapshot.settings.kind;
   const title = TITLES[kind] || kind;
   const canConfigure = data.can_configure;
@@ -116,14 +99,6 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
     ...connections.map(c => ({ name: c.name, owner: c.owner, repo: c.repo, label: `${c.owner}/${c.repo}`, host: 'github.com', available: c.enabled })),
   ];
   // Destinations get their connections from the GitHubConnection panel.
-  useEffect(() => {
-    if (kind !== 'sources') return;
-    let cancelled = false;
-    listGitHubConnections()
-      .then(list => { if (!cancelled) setConnections(list); })
-      .catch((e: unknown) => { if (!cancelled) setConnectionsError(errorMessage(e)); });
-    return () => { cancelled = true; };
-  }, [kind]);
 
   const change = (patch: Partial<Settings>) => { setForm(f => ({ ...f, ...patch })); setSaved(false); };
   const accept = (value: Section) => { setCurrent(value); setForm(value.settings); };
@@ -166,7 +141,6 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
       actions={<button type="button" className="btn ghost sm" onClick={() => void reload()} disabled={busy}>Reload</button>}>
       {current.configuration_error && <Notice tone="error">{current.configuration_error}</Notice>}
       {error && <Notice tone="error">{error}</Notice>}
-      {connectionsError && <Notice tone="warn">GitHub connections could not be loaded: {connectionsError}</Notice>}
       {isDestination(kind) && <GitHubConnection canConfigure={canConfigure} onConnected={connected} onConnections={setConnections} />}
       <form onSubmit={save}>
         <fieldset disabled={busy || conflict || !canConfigure}>
@@ -178,10 +152,8 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
                 {data.guideline_sets.map(n => <option key={n} value={n}>{n}</option>)}
               </select>
             </label>
-            <RepositoryFields kind={kind} items={form.destinations || []} bindings={bindings} onChange={items => change({ destinations: items as Destination[] })} />
-          </> : kind === 'sources' ? (
-            <RepositoryFields kind={kind} items={form.sources || []} bindings={bindings} onChange={items => change({ sources: items as Source[] })} />
-          ) : <>
+            <DestinationFields items={form.destinations || []} bindings={bindings} onChange={items => change({ destinations: items })} />
+          </> : <>
             <div className="field-grid">
               {numericKeys.map(key => {
                 const [label, min, step] = FIELDS[key];
@@ -194,7 +166,7 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
             </div>
             <p className="hint">
               {kind === 'ask' && 'Quick questions keep their smaller built-in limits. Thinking and caching apply when Claude is selected. '}
-              {['ingest', 'research', 'docgen'].includes(kind) && 'Extended thinking applies when Claude is selected; reasoning effort is set with each action’s model. '}
+              {['ingest', 'docgen'].includes(kind) && 'Extended thinking applies when Claude is selected; reasoning effort is set with each action’s model. '}
               {kind === 'concurrency' ? 'Lower limits let running work finish and hold new runs until capacity frees up.' : 'Saved limits apply to new runs.'}
             </p>
           </>}

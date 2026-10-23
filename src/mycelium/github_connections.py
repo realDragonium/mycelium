@@ -83,7 +83,7 @@ def disconnect(name: str) -> None:
         )
 
 
-def access_token(name: str, owner: str, repo: str, *, publish: bool = True) -> str:
+def access_token(name: str, owner: str, repo: str) -> str:
     connection = resolve(name)
     connection.require_target(owner, repo)
     if not connection.enabled:
@@ -98,7 +98,7 @@ def access_token(name: str, owner: str, repo: str, *, publish: bool = True) -> s
     with github_app.client() as transport:
         api = github_app.GitHubClient(transport, config)
         token = api.installation_token(
-            connection.installation_id, connection.repository_id, publish=publish
+            connection.installation_id, connection.repository_id
         )
         api.verify_repository(token, connection.repository_id, owner, repo)
         return token

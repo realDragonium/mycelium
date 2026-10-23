@@ -570,7 +570,7 @@ export function DraftsList() {
   return (
     <main className="page narrow">
       <PageHeader eyebrow="Curate" title="Drafts"
-        blurb="Every change from ingest, research, agents and drafters waits here. Open drafts are still with their authors; submitted drafts wait for a curator to approve or reject them."
+        blurb="Every change from ingest, agents and drafters waits here. Open drafts are still with their authors; submitted drafts wait for a curator to approve or reject them."
         actions={<button className="ingest-btn" onClick={goIngest}><I.ingest width="15" height="15" />New from ingest</button>} />
       <div className="summary-cells">{summary.map(([n, l]) => <div key={l} className="sum-cell"><div className="sum-n">{n}</div><div className="sum-l">{l}</div></div>)}</div>
       <div className="filter-row" role="group" aria-label="Filter drafts">
@@ -585,7 +585,7 @@ export function DraftsList() {
       {state.status === 'error' && <LoadError error={state.error} what="drafts" onRetry={reload} />}
       {!list && state.status === 'loading' && <Loading what="drafts" />}
       {list && (sorted.length === 0
-        ? <EmptyState title="No drafts yet" blurb="Ingest raw text or start research: every change stages here as a draft before it reaches the knowledge base." />
+        ? <EmptyState title="No drafts yet" blurb="Ingest raw text or connect an agent: every change stages here as a draft before it reaches the knowledge base." />
         : shown.length === 0
           ? <EmptyState title={`No ${filter} drafts`} blurb={filter === 'active' ? 'Nothing is open or waiting. Choose Completed or All to see closed drafts.' : 'Approved, rejected and withdrawn drafts appear here.'} />
           : <div className="row-list">{shown.map(d => <DraftRow key={d.id} d={d} />)}</div>)}

@@ -167,7 +167,7 @@ def test_an_unreadable_starter_leaves_no_partial_profile(tmp_path, monkeypatch):
         assert names == []
         assert [
             p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
-        ] == ["docgen", "ingest", "research"]
+        ] == ["docgen", "ingest"]
 
 
 def test_retiring_starter_template_survives_restart(tmp_path, monkeypatch):

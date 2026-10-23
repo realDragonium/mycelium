@@ -194,9 +194,9 @@ def test_rest_offload_applies_the_same_bound(monkeypatch):
     assert peak == 2
 
 
-def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
-    """Research runs on its own daemon thread with no event loop, so it cannot
-    wait on the anyio limiter. If it kept a private cap the two would add up and
+def test_background_runs_draw_on_the_same_budget_as_ask_and_ingest(monkeypatch):
+    """A background run lives on its own daemon thread with no event loop, so it
+    cannot wait on the anyio limiter. If it kept a private cap the two would add up and
     the box would hold more model contexts than either cap intended."""
     set_product(product_settings.ConcurrencySettings(model_loops=2))
     admission._model_loop_budget.cache_clear()
@@ -216,7 +216,7 @@ def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
                 live -= 1
 
     # Mixed starters: some on worker threads (ask/ingest), some standing in for
-    # a research run's own daemon thread. One budget covers both.
+    # a background run's own daemon thread. One budget covers both.
     threads = [threading.Thread(target=model_loop) for _ in range(6)]
     try:
         for t in threads:
@@ -227,39 +227,6 @@ def test_research_draws_on_the_same_budget_as_ask_and_ingest(monkeypatch):
         admission._model_loop_budget.cache_clear()
 
     assert peak == 2
-
-
-def test_research_run_holds_a_budget_slot(monkeypatch, tmp_path):
-    """The wiring: the runner must execute inside the slot, not beside it."""
-    set_product(product_settings.ConcurrencySettings(model_loops=1))
-    admission._model_loop_budget.cache_clear()
-
-    from mycelium import research_runs, research_store
-
-    db_path = tmp_path / "mycelium-drafts.db"
-    conn = research_store.connect(db_path)
-    research_store.migrate(conn)
-    run_id = research_store.create_run(conn, topic="t", source="src", created_by=None)
-    research_store.mark_started(conn, run_id)
-
-    observed = {}
-
-    def runner(topic, *, source=None):
-        # With the budget at 1 and the run holding it, this must find none free.
-        observed["another_slot_available"] = admission._model_loop_budget().acquire(
-            blocking=False
-        )
-        return {"outcome": "nothing_found", "reason": "test"}
-
-    try:
-        research_runs._execute_run(
-            run_id, "t", "src", str(db_path), str(tmp_path), runner
-        )
-    finally:
-        admission._model_loop_budget.cache_clear()
-
-    assert observed["another_slot_available"] is False
-    assert research_store.get_run(conn, run_id)["outcome"] == "nothing_found"
 
 
 def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):

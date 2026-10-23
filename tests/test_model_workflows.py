@@ -8,20 +8,13 @@ from pydantic import JsonValue, TypeAdapter
 
 import test_ask as ask_fixtures
 import test_ingest as ingest_fixtures
-import test_research as research_fixtures
-from mycelium import ai, ai_prompts, prompt_store, research, research_runs
+from mycelium import ai
 from mycelium.ask import run_ask
 from mycelium.ask.config import AskConfig
 from mycelium.ask.schema import Answered
 from mycelium.ingest import run_ingest
 from mycelium.ingest.config import IngestConfig
-from mycelium.ingest.draft import DraftEmitter
 from mycelium.ingest.schema import DraftCreated
-from mycelium.research import run_research
-from mycelium.research.config import ResearchConfig
-from mycelium.research.schema import NothingFound, ResearchDraftCreated
-from mycelium.research.sources import Source
-from settings_helpers import save_model
 
 
 def _transport(
@@ -136,77 +129,3 @@ def test_openai_ingest_reconciles_and_only_emits_a_draft(monkeypatch):
     assert result.trace["provider"] == "openai"
     assert all(request["model"] == "ingestion-model" for request in requests)
     assert all(request["parallel_tool_calls"] is False for request in requests)
-
-
-def test_openai_research_explores_and_reconciles_before_emitting(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
-    requests: list[dict[str, JsonValue]] = []
-    emitter = research_fixtures.FakeEmitter()
-    with httpx.Client(
-        transport=_transport(research_fixtures._full_run_turns(), requests)
-    ) as client:
-        result = run_research(
-            "how invites work",
-            Source(name="acme", owner="acme", repo="api"),
-            client=client,
-            substrate=research_fixtures.FakeSubstrate(),
-            workspace=research_fixtures.FakeWorkspace(),
-            emitter=emitter,
-            config=ResearchConfig(
-                provider="openai", model="research-model", trace_dir=""
-            ),
-        )
-    assert isinstance(result, ResearchDraftCreated)
-    assert [kind for _, kind, _ in emitter.queued] == ["upsert_statement"]
-    assert result.trace["floor"]["explored"] is True
-    assert result.trace["floor"]["reconciled"] is True
-    assert result.trace["provider"] == "openai"
-    assert all(request["model"] == "research-model" for request in requests)
-
-
-def test_research_worker_keeps_model_selected_at_admission(monkeypatch, tmp_path):
-    save_model("research", provider="openai", openai_model="admitted-model")
-    observed: list[ResearchConfig] = []
-
-    def run(
-        topic: str,
-        source: str | None,
-        *,
-        config: ResearchConfig,
-        emitter: DraftEmitter,
-        instructions: ai_prompts.Snapshot,
-    ) -> NothingFound:
-        observed.append(config)
-        assert instructions.text == "admitted research instructions"
-        return NothingFound(reason="fixture", topic=topic)
-
-    monkeypatch.setattr(research, "run_research", run)
-    from mycelium import product_settings
-    from product_settings_helpers import set_product
-
-    set_product(
-        product_settings.SourcesSettings(
-            sources=(
-                product_settings.SourceSettings(
-                    name="fixture", owner="acme", repo="api"
-                ),
-            )
-        )
-    )
-    prompt_store.save(
-        prompt_store.connection(),
-        type="doctrine",
-        name="research",
-        text="admitted research instructions",
-    )
-    runner = research_runs._default_runner(str(tmp_path), "fixture")
-    prompt_store.save(
-        prompt_store.connection(),
-        type="doctrine",
-        name="research",
-        text="later instructions",
-    )
-    save_model("research", openai_model="changed-model")
-    runner("topic", source="fixture")
-    assert observed[0].provider == "openai"
-    assert observed[0].model == "admitted-model"

@@ -20,8 +20,8 @@ a template is shown as incomplete. Templates keep stable names; duplicating a
 profile creates a new identity. Audience/disclosure guidance does not change
 access permissions on generated documents.
 
-**Advanced AI instructions** in settings edits the existing ingestion, research
-and documentation loop doctrines with the same version history and conflict
+**Advanced AI instructions** in settings edits the existing ingestion and
+documentation loop doctrines with the same version history and conflict
 checks. These doctrines retain their existing protection against retirement.
 
 ## The convention

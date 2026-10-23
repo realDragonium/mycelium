@@ -76,14 +76,7 @@ from .entities import (
 from .gaps import report_knowledge_gap
 from .links import add_links, remove_links
 from .lookups import get_statements, grep_statements, list_statements, retrieve_context
-from .model_loops import (
-    ask,
-    get_research_run,
-    ingest,
-    list_research_runs,
-    list_research_sources,
-    start_research,
-)
+from .model_loops import ask, ingest
 from .names import (
     delete_name,
     find_entity_duplicates,
@@ -149,9 +142,6 @@ __all__ = [
     "survey_statements",
     "ask",
     "ingest",
-    "start_research",
-    "list_research_runs",
-    "get_research_run",
     "request_documentation",
     "revise_document",
     "list_document_revisions",
@@ -163,7 +153,6 @@ __all__ = [
     "get_generated_document",
     "deliver_document",
     "list_documentation_destinations",
-    "list_research_sources",
     "upsert_entity",
     "upsert_statement",
     "upsert_statements",

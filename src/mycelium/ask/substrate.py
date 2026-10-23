@@ -60,9 +60,6 @@ _NON_READ_READER_TOOLS = frozenset(
         "list_document_revisions",  # generated document history
         "get_document_revision",  # generated document history
         "list_documentation_destinations",  # deployment configuration
-        "list_research_runs",  # research run history
-        "get_research_run",  # research run state
-        "list_research_sources",  # deployment configuration
         "list_prompt_texts",  # prompt configuration
         "get_prompt_text",  # prompt configuration
         "list_prompt_text_versions",  # prompt configuration history

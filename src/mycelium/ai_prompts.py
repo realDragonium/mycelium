@@ -16,7 +16,6 @@ from . import prompt_defaults, prompt_store
 Action = Literal[
     "ask",
     "ingest",
-    "research",
     "docgen",
     "document_review",
     "draft_review",
@@ -25,7 +24,6 @@ Action = Literal[
 ACTIONS: tuple[Action, ...] = (
     "ask",
     "ingest",
-    "research",
     "docgen",
     "document_review",
     "draft_review",
@@ -34,7 +32,6 @@ ACTIONS: tuple[Action, ...] = (
 TITLES: dict[Action, str] = {
     "ask": "Questions",
     "ingest": "Ingestion",
-    "research": "Research",
     "docgen": "Document generation",
     "document_review": "Document review",
     "draft_review": "Draft review",
@@ -59,7 +56,7 @@ class Snapshot(Reference):
 
 
 def default_text(action: Action) -> str:
-    if action in ("ingest", "research", "docgen"):
+    if action in ("ingest", "docgen"):
         return (Path(__file__).parent / action / "doctrine.md").read_text(
             encoding="utf-8"
         )
@@ -76,7 +73,7 @@ def default_text(action: Action) -> str:
 
 def shipped_text(action: Action) -> str:
     """The default this build serves when nothing is saved: the configured
-    doctrine file for the three loop doctrines, else the packaged text."""
+    doctrine file for the loop doctrines, else the packaged text."""
     path = _default_path(action)
     if path is None:
         return default_text(action)
@@ -88,10 +85,6 @@ def _default_path(action: Action) -> str | None:
         from .ingest.config import IngestConfig
 
         return IngestConfig.from_env().doctrine_path
-    if action == "research":
-        from .research.config import ResearchConfig
-
-        return ResearchConfig.from_env().doctrine_path
     if action == "docgen":
         from .docgen.config import DocgenConfig
 
@@ -201,8 +194,6 @@ def preview(action: Action, text: str) -> str:
         from .ask.prompts import build_system_prompt
     elif action == "ingest":
         from .ingest.prompts import build_system_prompt
-    elif action == "research":
-        from .research.prompts import build_system_prompt
     elif action == "draft_review":
         from .draft_review_model import build_system_prompt
     elif action == "alias_discovery":

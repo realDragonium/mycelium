@@ -578,23 +578,20 @@ def test_actions_persist_independent_models_and_remember_alternate(
     from mycelium.ask.config import AskConfig
     from mycelium.docgen.config import DocgenConfig
     from mycelium.ingest.config import IngestConfig
-    from mycelium.research.config import ResearchConfig
 
-    for index, config_type in enumerate(
-        (AskConfig, IngestConfig, ResearchConfig, DocgenConfig)
-    ):
+    for index, config_type in enumerate((AskConfig, IngestConfig, DocgenConfig)):
         configured = config_type.from_env()
         assert configured.provider == "openai"
         assert configured.model == f"gpt-{index}"
         assert configured.reasoning_effort == "high"
-    assert DocgenConfig.from_env(provider="claude").model == "claude-3"
+    assert DocgenConfig.from_env(provider="claude").model == "claude-2"
     assert DocgenConfig.from_env(provider="claude").reasoning_effort == "low"
     assert settings.load().reasoning_effort == "high"
-    assert settings.load().model == "gpt-4"
+    assert settings.load().model == "gpt-3"
     review = client.get("/api/draft-review/settings").json()
-    assert review["model"] == "gpt-4"
+    assert review["model"] == "gpt-3"
     assert review["model_revision"] == 3
-    assert review["claude_model"] == "claude-4"
+    assert review["claude_model"] == "claude-3"
 
 
 def test_review_controls_and_model_save_are_atomic_with_cas(configured_app):

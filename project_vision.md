@@ -15,12 +15,12 @@ evidence for its own claims.
 ## Consumers
 
 - Coding assistants using MCP or HTTP retrieval tools.
-- Research and documentation agents running on the server.
+- Documentation agents running on the server.
 - Aurora's persistent memory integration, with its own knowledge directory.
 - Future support and product reasoning workflows using the same primitives.
 
-The server's model-driven actions (ask, ingest, research, documentation, draft
-review and alias discovery) go through one provider boundary, `mycelium.ai`, and
+The server's model-driven actions (ask, ingest, documentation, draft review
+and alias discovery) go through one provider boundary, `mycelium.ai`, and
 an administrator chooses Claude or OpenAI GPT for each action. The substrate and
 tool contracts work independently of the model provider.
 
@@ -38,11 +38,10 @@ sentences, or lightly structured text and receive connected knowledge.
    together in a draft.
 5. Review the proposed changes before applying them to accepted knowledge.
 
-Current entry points serve different inputs: `ingest` and research runs use an
-LLM to propose draft operations from prose; statements an agent has already
-extracted go in through `upsert_statements` and `submit_draft`. The internal
-draft reviewer then judges links, duplicates, and contradictions against the
-graph.
+Current entry points serve different inputs: `ingest` uses an LLM to propose
+draft operations from prose; statements an agent has already extracted go in
+through `upsert_statements` and `submit_draft`. The internal draft reviewer then
+judges links, duplicates, and contradictions against the graph.
 
 Evaluation must start with source prose and expected statements, relationships,
 and matches to existing knowledge. Measuring whether already-extracted
@@ -83,11 +82,10 @@ submitted draft against the graph: duplicates, contradictions, link type and
 direction, and missing links to live neighbours. It trusts the producer on what
 the product does; it judges how the draft fits what is already known. In
 `review-and-apply` mode it can make small corrections and then apply or reject
-the draft without a person, and ingest and research submit their drafts to it
-themselves. When the available knowledge cannot settle a question a person
-could answer, the reviewer asks that question instead of rejecting: the draft
-waits, a knowledge gap records the question, and a curator's answer starts a
-fresh review. Rejections and resolved contradictions are filed as knowledge
+the draft without a person, and ingest submits its own drafts to it. When the
+available knowledge cannot settle a question a person could answer, the
+reviewer asks that question instead of rejecting: the draft waits, a knowledge
+gap records the question, and a curator's answer starts a fresh review. Rejections and resolved contradictions are filed as knowledge
 gaps, and reviews that failed are retried. The reviewer has no tools of its own
 to investigate sources; giving it that is the remaining step toward an AI
 curator that resolves the whole draft. See `docs/DRAFT_REVIEW.md`.

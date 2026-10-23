@@ -167,23 +167,11 @@ export type IngestResult =
   | { outcome: 'nothing_to_ingest'; reason?: string };
 
 /* ---------------------------- review mode ----------------------------- */
-// Whether drafts from ingest and research go straight to the AI reviewer, and
+// Whether drafts from ingest go straight to the AI reviewer, and
 // whether an accepted review applies without a person.
 export type ReviewMode = 'off' | 'review-only' | 'review-and-apply';
 export const getReviewMode = () => getJSON<{ mode: ReviewMode }>('/api/draft-review/settings').then(r => r.mode);
 export const ingest = (text: string) => postJSON<IngestResult>('/ingest', { text });
-
-/* ------------------------------ research ------------------------------ */
-export interface ResearchRun {
-  id: string; topic: string | null; source: string | null; status: string;
-  created_at: string; finished_at: string | null; draft_id: string | null; error: string | null;
-}
-export interface ResearchSource { name: string }
-export const research = {
-  start: (topic: string, source: string) => postJSON<unknown>('/start-research', { topic, source }),
-  list: () => getJSON<{ runs?: ResearchRun[] }>('/list-research-runs').then(r => r.runs || []),
-  sources: () => getJSON<{ sources?: ResearchSource[] }>('/list-research-sources').then(r => r.sources || []),
-};
 
 /* ---------------------------- knowledge gaps --------------------------- */
 export type GapStatus = 'open' | 'resolved' | 'dismissed';

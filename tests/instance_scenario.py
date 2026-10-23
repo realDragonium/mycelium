@@ -9,7 +9,7 @@ table or API checks that it exists first rather than assuming today's code.
 Substrate writes go through the server's tools so derived rows (mentions,
 plurals, vector ids, history, condition trees) appear the way production
 writes them. Rows only reachable through model-driven flows (reviews,
-applications, research and documentation runs) are written through their
+applications, documentation runs) are written through their
 stores directly.
 """
 
@@ -177,7 +177,6 @@ def _drafts(data_dir: Path, ids: dict[str, str]) -> None:
             )
         _review_run(conn, draft)
         conn.commit()
-    _research_run(data_dir, draft)
 
 
 def _review_run(conn: sqlite3.Connection, draft: str) -> None:
@@ -190,18 +189,6 @@ def _review_run(conn: sqlite3.Connection, draft: str) -> None:
     run.label = "good"
     run.rationale = "Fits the graph."
     draft_review_store.save(conn, run)
-
-
-def _research_run(data_dir: Path, draft: str) -> None:
-    try:
-        from mycelium import research_store
-    except ImportError:
-        return
-    with closing(research_store.connect(data_dir / "mycelium-drafts.db")) as conn:
-        run = research_store.create_run(
-            conn, topic="Lockout", source="docs", created_by="local-admin"
-        )
-        research_store.finish_run(conn, run, outcome="draft_created", draft_id=draft)
 
 
 def _documentation(data_dir: Path) -> None:

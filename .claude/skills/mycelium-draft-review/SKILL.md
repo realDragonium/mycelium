@@ -5,7 +5,7 @@ description: Work through the Mycelium draft queue (submitted drf_ records) alon
 
 # Mycelium draft review
 
-Drafts are queued substrate changes: from `ingest`, research runs, drafter
+Drafts are queued substrate changes: from `ingest`, drafter
 accounts (CI pipelines, the `mycelium-draft` skill) and alias suggestions. When
 a draft is submitted, the server's **internal reviewer** assesses it if review
 is switched on in AI settings (see `docs/DRAFT_REVIEW.md`). This skill works

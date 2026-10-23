@@ -27,7 +27,7 @@ def test_upgrade_import_is_once_and_missing_rows_do_not_revive_environment(
     monkeypatch.setenv("MYCELIUM_REVIEWED_APPLY", "on")
     prompt_store.initialize_settings(settings_db)
     assert model_settings.get("ask", conn=settings_db).model == "legacy-gpt"
-    assert model_settings.get("research", conn=settings_db).model == "legacy-claude"
+    assert model_settings.get("docgen", conn=settings_db).model == "legacy-claude"
     controls = draft_review_settings.load_controls(settings_db)
     assert controls.mode == "review-and-apply"
     assert controls.reviewer_id == "legacy-reviewer"

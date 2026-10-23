@@ -17,7 +17,7 @@ import pytest
 def _isolate_prompt_store():
     """Start every test with no prompt store wired up.
 
-    The store is a process-global provider and the ingest/research doctrines
+    The store is a process-global provider and the ingest/docgen doctrines
     read it at run start, so a `server.init()` in one test would otherwise
     decide what the next test's loop reads. Tests that want a store pin one
     (`prompt_store.use_connection`) or build a server.
