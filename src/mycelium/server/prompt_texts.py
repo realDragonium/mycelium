@@ -116,13 +116,6 @@ def _seed_prompt_texts() -> None:
 # drafter-equivalence in `auth.principal_satisfies` can't stand in for one.
 
 
-def _actor_id() -> str | None:
-    from .. import auth as _auth
-
-    principal = _auth.current_principal.get()
-    return principal.id if principal is not None else None
-
-
 @tool(role="writer", real_role=True)
 def save_prompt_text(
     type: str, name: str, text: str, expected_version: int | None = None

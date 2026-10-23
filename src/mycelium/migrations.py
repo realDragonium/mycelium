@@ -930,6 +930,38 @@ def _migration_v16_gap_references(conn: sqlite3.Connection) -> None:
         _ensure_column(conn, "knowledge_gaps", column, "TEXT")
 
 
+_V16_RULE_DEFINITION = (
+    "A deterministic, non-contingent claim — formula, default, "
+    "enumeration, or bound that holds the same way across all "
+    "instances and moments.",
+    "Definitional or computational claims ('statement kind is one "
+    "of: event, state, capability, rule, property'; 'rank score "
+    "equals similarity contribution plus recency boost minus "
+    "staleness penalty'). Apply the contingency test: if the same "
+    "claim could be otherwise for a specific entity or at a "
+    "specific time, it is a `state`, not a `rule`.",
+)
+
+
+def _migration_v17_rule_definition(conn: sqlite3.Connection) -> None:
+    """Describe `rule` as an obligation or permission in an installed glossary.
+
+    The old seeded text called a rule only a definition or formula, which
+    sends an agent that the phrasing check refused "must" under `event` away
+    from the kind it was told to use. Only the untouched seed is rewritten;
+    a curator's own definition stays."""
+    if not _has_table(conn, "statement_kind_glossary"):
+        return
+    from mycelium.store.glossary import _STATEMENT_KIND_SEED
+
+    description, when_to_use = _STATEMENT_KIND_SEED["rule"]
+    conn.execute(
+        "UPDATE statement_kind_glossary SET description = ?, when_to_use = ? "
+        "WHERE kind = 'rule' AND description = ? AND when_to_use = ?",
+        (description, when_to_use, *_V16_RULE_DEFINITION),
+    )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -950,6 +982,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (14, _migration_v14_statement_link_conditions),
     (15, _migration_v15_drop_alias_embeddings),
     (16, _migration_v16_gap_references),
+    (17, _migration_v17_rule_definition),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

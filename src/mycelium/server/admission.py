@@ -27,7 +27,6 @@ from ..model_capacity import Capacity
 #: model loops like any other and draw on the same budget; see
 #: `model_loop_slot`.
 _MODEL_LOOP_TOOLS = frozenset({"ask", "ingest"})
-_MODEL_LOOP_MAX_CONCURRENT_ENV = "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT"
 
 
 def _model_loop_max_concurrent() -> int:

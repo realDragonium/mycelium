@@ -6,6 +6,7 @@ the terminal state. Also confirms a reader can call the report tool
 (per the role= override on @tool).
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, auth_store, server, store
@@ -44,6 +45,25 @@ def test_report_knowledge_gap_creates_open_row(tmp_path, monkeypatch):
         assert len(gaps) == 1
         assert gaps[0]["status"] == "open"
         assert gaps[0]["text"] == "Missing coverage for invoicing flow."
+
+
+def test_report_names_what_it_is_about(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch, auth_mode="off")
+    with client:
+        statement_id = server.upsert_statement(
+            kind="state", text="The invoice is paid.", links=[]
+        )["statement_id"]
+
+        server.report_knowledge_gap("Who pays it?", statement_id=statement_id)
+        with pytest.raises(ValueError, match="statement 'stm_missing' not found"):
+            server.report_knowledge_gap("Lost.", statement_id="stm_missing")
+        with pytest.raises(ValueError, match="draft 'drf_missing' not found"):
+            server.report_knowledge_gap("Lost.", draft_id="drf_missing")
+
+        [gap] = client.get("/api/knowledge-gaps").json()["gaps"]
+        assert gap["statement_id"] == statement_id
+        assert gap["draft_id"] is None
+        assert gap["document_id"] is None
 
 
 def test_reader_can_report_gap_over_mcp(tmp_path, monkeypatch):

@@ -688,3 +688,31 @@ def test_v15_failed_rebuild_rolls_back():
     assert list(conn.iterdump()) == before
     assert _user_version(conn) == 14
     conn.close()
+
+
+def test_v17_rewrites_only_an_untouched_rule_definition():
+    def at_v16(description: str, when_to_use: str) -> sqlite3.Connection:
+        conn = store.connect(":memory:")
+        store.migrate(conn)
+        conn.execute(
+            "UPDATE statement_kind_glossary SET description = ?, when_to_use = ? "
+            "WHERE kind = 'rule'",
+            (description, when_to_use),
+        )
+        conn.execute("PRAGMA user_version = 16")
+        conn.commit()
+        return conn
+
+    def rule(conn: sqlite3.Connection) -> str:
+        return conn.execute(
+            "SELECT description FROM statement_kind_glossary WHERE kind = 'rule'"
+        ).fetchone()[0]
+
+    seeded = at_v16(*migrations._V16_RULE_DEFINITION)
+    curated = at_v16("Our own wording.", "Whenever.")
+
+    store.migrate(seeded)
+    store.migrate(curated)
+
+    assert rule(seeded).startswith("An obligation or permission")
+    assert rule(curated) == "Our own wording."

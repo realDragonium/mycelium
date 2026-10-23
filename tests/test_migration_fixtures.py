@@ -57,6 +57,9 @@ REWRITES: dict[tuple[str, str], str] = {
     ("mycelium.db", "link_type_alias_embed_queue"): (
         "v15 drops the queue; nothing has drained it since the connect pipeline"
     ),
+    ("mycelium.db", "statement_kind_glossary"): (
+        "v17 rewrites the untouched seeded `rule` definition"
+    ),
 }
 
 # Columns a migration deliberately removes, with the reason. Any other

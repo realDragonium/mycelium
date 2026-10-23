@@ -43,15 +43,18 @@ _STATEMENT_KIND_SEED: dict[str, tuple[str, str]] = {
         "modal anchors. Otherwise prefer `event`.",
     ),
     "rule": (
-        "A deterministic, non-contingent claim — formula, default, "
-        "enumeration, or bound that holds the same way across all "
-        "instances and moments.",
-        "Definitional or computational claims ('statement kind is one "
-        "of: event, state, capability, rule, property'; 'rank score "
-        "equals similarity contribution plus recency boost minus "
-        "staleness penalty'). Apply the contingency test: if the same "
-        "claim could be otherwise for a specific entity or at a "
-        "specific time, it is a `state`, not a `rule`.",
+        "An obligation or permission — what must, must not, or may "
+        "happen — or a definition, formula, default, or bound that "
+        "holds the same way across all instances and moments.",
+        "Obligations and permissions ('a draft must be approved by a "
+        "curator'; 'an admin may revoke any token'), and definitional "
+        "or computational claims ('statement kind is one of: event, "
+        "state, capability, rule, property'). Modals such as must, may "
+        "and is required to belong here, not in an `event` or `state`; "
+        "the statement a rule governs links to it with `governed-by`. "
+        "Apply the contingency test: if the same claim could be "
+        "otherwise for a specific entity or at a specific time, it is a "
+        "`state`, not a `rule`.",
     ),
     "property": (
         "A slot on an entity that holds a value — short noun-phrase "

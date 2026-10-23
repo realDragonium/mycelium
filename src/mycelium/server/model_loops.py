@@ -153,7 +153,8 @@ def start_research(topic: str, source: str | None = None) -> dict[str, Any]:
     Returns immediately with the serialized run row (its `status` will be
     "running"); poll `get_research_run(run_id)` for the outcome. `source` may
     be omitted when exactly one source is configured. Raises when the
-    active-run cap is reached (MYCELIUM_RESEARCH_MAX_ACTIVE, default 2), when
+    active-run cap is reached (the research runs concurrency limit, default
+    2), when
     `source` is unknown, or when it is omitted with several sources
     configured. Returns {run row: id, topic, source, created_at, created_by,
     started_at, finished_at, outcome, draft_id, error, trace_ref, status}."""

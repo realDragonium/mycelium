@@ -21,7 +21,7 @@ from typing import Any, NotRequired, TypedDict
 
 from pydantic import JsonValue
 
-from .. import link_authoring, store, timestamps
+from .. import auth, link_authoring, store, timestamps
 from .draft_review import _draft_operation_findings, _review_knowledge_preconditions
 from .drafts import _identified_principal
 from .indexes import _persisted_index_write, _restore_index_snapshots
@@ -60,17 +60,77 @@ class ReviewedApplicationReceipt(TypedDict):
     recovered: NotRequired[bool]
 
 
-def _rejections(result: JsonValue) -> list[JsonValue]:
+class RejectedStatement(TypedDict):
+    """One statement a replayed operation refused, with the reasons why."""
+
+    seq: int
+    kind: str
+    text: str | None
+    reasons: list[str]
+
+
+class DraftOpsRejectedError(RuntimeError):
+    """Replay refused part of the draft, so none of it was applied."""
+
+    def __init__(self, rejections: list[RejectedStatement]) -> None:
+        self.rejections = rejections
+        super().__init__(
+            "; ".join(
+                f"op seq={r['seq']} ({r['kind']}) was rejected during replay: "
+                + ", ".join(r["reasons"])
+                for r in rejections
+            )
+        )
+
+
+def _rejection_reasons(item: dict[str, Any]) -> list[str]:
+    violations = item.get("violations")
+    if isinstance(violations, list) and violations:
+        return [str(v.get("rule", v)) for v in violations if isinstance(v, dict)]
+    errors = item.get("errors")
+    if isinstance(errors, list) and errors:
+        return [str(error) for error in errors]
+    if item.get("reason") == "depends_on_rejected":
+        return [
+            "depends on rejected statement(s) at position "
+            + ", ".join(str(i) for i in item.get("depends_on", []))
+            + " of the same operation"
+        ]
+    return [str(item.get("reason", "rejected"))]
+
+
+def _rejected_statements(
+    seq: int, kind: str, payload: dict[str, Any], result: Any
+) -> list[RejectedStatement]:
     if not isinstance(result, dict):
         return []
     if result.get("rejected") is True:
-        return [result.get("violations")]
+        text = payload.get("text")
+        return [
+            {
+                "seq": seq,
+                "kind": kind,
+                "text": text if isinstance(text, str) else None,
+                "reasons": _rejection_reasons(result),
+            }
+        ]
     items = result.get("results")
-    return [
-        {"index": index, "violations": item.get("violations")}
-        for index, item in enumerate(items if isinstance(items, list) else [])
-        if isinstance(item, dict) and item.get("rejected") is True
-    ]
+    specs = payload.get("statements")
+    rejected: list[RejectedStatement] = []
+    for index, item in enumerate(items if isinstance(items, list) else []):
+        if not (isinstance(item, dict) and item.get("rejected") is True):
+            continue
+        spec = specs[index] if isinstance(specs, list) and index < len(specs) else None
+        text = spec.get("text") if isinstance(spec, dict) else None
+        rejected.append(
+            {
+                "seq": seq,
+                "kind": kind,
+                "text": text if isinstance(text, str) else None,
+                "reasons": _rejection_reasons(item),
+            }
+        )
+    return rejected
 
 
 _DRAFT_RESULT_REF = re.compile(r"^@(\d+):(\d+)$")
@@ -116,22 +176,21 @@ def _replay_draft_op(
     op: sqlite3.Row,
     tools_by_name: dict[str, Callable[..., Any]],
     results_by_seq: dict[int, Any],
-    *,
-    strict: bool = False,
-) -> dict[str, Any]:
-    """Resolve and replay one draft operation with contextual errors."""
+) -> tuple[dict[str, Any], list[RejectedStatement]]:
+    """Resolve and replay one draft operation with contextual errors, and say
+    which of its statements the tool refused."""
     from .. import drafts_store
 
     kind = op["kind"]
     seq = op["seq"]
     if kind in drafts_store.NON_REPLAYING_OP_KINDS:
-        return {"seq": seq, "kind": kind, "skipped": kind}
+        return {"seq": seq, "kind": kind, "skipped": kind}, []
     wrapper = tools_by_name.get(kind)
     if wrapper is None:
         # The tool was removed since this op was queued — notably
         # `add_mentions` / `remove_mentions`, now that mentions are derived.
         # Such an op is obsolete; skip it rather than fail the whole draft.
-        return {"seq": seq, "kind": kind, "skipped": "obsolete_tool"}
+        return {"seq": seq, "kind": kind, "skipped": "obsolete_tool"}, []
 
     payload = _json.loads(op["payload_json"])
     try:
@@ -158,19 +217,34 @@ def _replay_draft_op(
         result = wrapper(**payload)
     except Exception as ex:
         raise RuntimeError(f"op seq={seq} ({kind}) failed during replay: {ex}") from ex
-    rejected = isinstance(result, dict) and result.get("rejected") is True
-    items = result.get("results") if isinstance(result, dict) else None
-    if isinstance(items, list):
-        rejected = rejected or any(
-            isinstance(item, dict) and item.get("rejected") is True for item in items
-        )
-    if strict and rejected:
-        raise RuntimeError(
-            f"op seq={seq} ({kind}) was rejected during replay: "
-            + _json.dumps(_rejections(result), default=str)
-        )
     results_by_seq[seq] = result
-    return {"seq": seq, "kind": kind, "result": result}
+    return (
+        {"seq": seq, "kind": kind, "result": result},
+        _rejected_statements(seq, kind, payload, result),
+    )
+
+
+def _replay_draft_ops(ops: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    """Replay every op in order, raising `DraftOpsRejectedError` if any
+    statement was refused."""
+    tools_by_name = {w.__name__: w for w in TOOLS}
+    results: list[dict[str, Any]] = []
+    results_by_seq: dict[int, Any] = {}
+    rejections: list[RejectedStatement] = []
+    for op in ops:
+        try:
+            item, refused = _replay_draft_op(op, tools_by_name, results_by_seq)
+        except RuntimeError:
+            # Usually a reference to a statement refused above; the refusal
+            # is the reason worth reporting.
+            if rejections:
+                break
+            raise
+        results.append(item)
+        rejections.extend(refused)
+    if rejections:
+        raise DraftOpsRejectedError(rejections)
+    return results
 
 
 def apply_draft(
@@ -187,8 +261,13 @@ def apply_draft(
     in seq order; each op invokes its matching MCP tool wrapper with the
     curator's principal already in the contextvar (so the role gate
     passes naturally). All-or-nothing: a single op raising halts replay
-    and surfaces the error. The caller records approval after a successful replay.
-    A non-replaying op kind such as `flag` is skipped with its own marker.
+    and surfaces the error, and any statement a tool refuses (the phrasing
+    linter, say) fails the whole replay with `DraftOpsRejectedError` listing
+    every refusal. The same transaction resolves the knowledge gaps filed
+    about the draft, so they close exactly when its knowledge lands. The
+    caller records approval after a successful replay. A non-replaying op
+    kind such as `flag` is skipped with its own marker. `strict` also
+    refuses a draft with unresolved operation findings.
 
     Returns `{applied: int, skipped: int, results: [...]}`. On failure,
     raises with the seq/kind that exploded.
@@ -223,9 +302,7 @@ def apply_draft(
     findings = _draft_operation_findings(ops)
     if strict and findings:
         raise ValueError("draft has unresolved operation findings")
-    tools_by_name = {w.__name__: w for w in TOOLS}
     results: list[dict[str, Any]] = []
-    results_by_seq: dict[int, Any] = {}
 
     snapshot_id = uuid.uuid4().hex
     index_snapshot_path = _idx_path().with_name(
@@ -262,12 +339,11 @@ def apply_draft(
                 raise
             snapshots_taken = True
             try:
-                for op in ops:
-                    results.append(
-                        _replay_draft_op(
-                            op, tools_by_name, results_by_seq, strict=strict
-                        )
-                    )
+                results = _replay_draft_ops(ops)
+                approver = auth.current_principal.get()
+                store.resolve_draft_gaps(
+                    _db(), draft_id, approver.id if approver is not None else None
+                )
                 if application_id is not None:
                     replay_result: DraftReplay = {
                         "applied": sum("result" in item for item in results),

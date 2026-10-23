@@ -32,7 +32,9 @@ from .documentation import (
     revise_document,
 )
 from .draft_application import (
+    DraftOpsRejectedError,
     DraftReplay,
+    RejectedStatement,
     ReviewedApplicationReceipt,
     apply_draft,
     apply_reviewed_draft,
@@ -252,6 +254,8 @@ __all__ = [
     "DraftCorrectionReceipt",
     "ReviewedApplicationReceipt",
     "DraftReplay",
+    "DraftOpsRejectedError",
+    "RejectedStatement",
     "apply_draft",
     # Read off this module object by the in-process draft emitter
     # (`ingest.draft.InProcessDraftEmitter`, injectable for tests), which

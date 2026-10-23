@@ -662,8 +662,6 @@ def _finish(
         run.detail = (
             f"Applied through reviewed application {receipt['application_id']}."
         )
-        with store.transaction(server._db()):
-            store.resolve_draft_gaps(server._db(), run.draft_id, settings.reviewer_id)
         for contradiction in run.contradictions:
             _report_gap(
                 run.draft_id,
