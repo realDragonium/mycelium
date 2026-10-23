@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import threading
 import time
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -27,6 +29,7 @@ from typing import Any
 from . import prompt_store
 
 logger = logging.getLogger(__name__)
+_TRACE_WRITE_LOCK = threading.Lock()
 
 #: Cap on a serialized tool_result fed back to the model.
 _TOOL_RESULT_MAX_CHARS = 20000
@@ -303,13 +306,30 @@ def cost_usd(
     )
 
 
-def write_record(path: str | Path, record: dict) -> None:
-    """Append one trace record as a single JSONL line. Best-effort: a logging
-    failure must never mask the result."""
+def write_record(path: str | Path, record: Mapping[str, object]) -> None:
+    """Append a JSONL record, rotating at 10 MB with one older generation.
+
+    MYCELIUM_TRACE_LOG_MAX_BYTES overrides the limit; 0 disables rotation.
+    Best-effort: a logging failure must never mask the result.
+    """
     try:
+        try:
+            limit = int(os.environ.get("MYCELIUM_TRACE_LOG_MAX_BYTES", "10000000"))
+        except ValueError:
+            limit = 10_000_000
+        if limit < 0:
+            limit = 10_000_000
+        line = (json.dumps(record, ensure_ascii=False, default=str) + "\n").encode(
+            "utf-8"
+        )
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        with _TRACE_WRITE_LOCK:
+            if limit and p.exists():
+                size = p.stat().st_size
+                if size and size + len(line) > limit:
+                    p.replace(p.with_name(p.name + ".1"))
+            with p.open("ab") as fh:
+                fh.write(line)
     except Exception:  # noqa: BLE001
         pass

@@ -215,7 +215,7 @@ def trace_span(name: str) -> Iterator[None]:
 
 def default_trace_dir() -> Path:
     """Where flamegraph files are written / served from. Under the data dir so
-    on Fargate it lands on the writable volume. Empty string disables writing."""
+    on Fargate it lands on the writable volume."""
     raw = os.environ.get("MYCELIUM_TRACE_DIR")
     if raw is None:
         raw = str(Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")) / "traces")
@@ -259,12 +259,59 @@ TRACE_SUFFIX = ".html"
 META_SUFFIX = ".meta.json"
 
 
+def prune_traces(directory: Path) -> None:
+    """Keep the newest 200 traces by mtime, pairing flamegraphs with sidecars.
+
+    MYCELIUM_TRACE_KEEP overrides the count; 0 disables pruning. Filesystem
+    failures must never interfere with the operation being traced.
+    """
+    try:
+        keep = int(os.environ.get("MYCELIUM_TRACE_KEEP", "200"))
+    except ValueError:
+        keep = 200
+    if keep < 0:
+        keep = 200
+    if keep == 0:
+        return
+    traces: dict[str, tuple[float, list[Path]]] = {}
+    try:
+        paths = list(directory.iterdir())
+    except OSError:
+        return
+    for path in paths:
+        try:
+            if not path.is_file():
+                continue
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        key = (
+            path.name[: -len(META_SUFFIX)] + TRACE_SUFFIX
+            if path.name.endswith(META_SUFFIX)
+            else path.name
+        )
+        if key in traces:
+            previous_mtime, files = traces[key]
+            files.append(path)
+            traces[key] = (max(previous_mtime, mtime), files)
+        else:
+            traces[key] = (mtime, [path])
+    newest = sorted(traces.values(), key=lambda trace: trace[0], reverse=True)
+    for _, files in newest[keep:]:
+        for path in files:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
 @contextmanager
 def profile_to_html(kind: str, label: str) -> Iterator[None]:
     """When tracing is on, profile the wrapped op with pyinstrument and write a
     self-contained HTML flamegraph (+ a small `.meta.json` sidecar) to the trace
-    dir, served as the rendered page by `/api/traces/{id}`. No-op and zero
-    overhead when tracing is disabled — which is the default."""
+    dir, retaining the newest traces via `prune_traces`. Served as the rendered
+    page by `/api/traces/{id}`. No-op and zero overhead when tracing is disabled
+    — which is the default."""
     if not tracing_enabled() or _profiling.get():
         yield
         return
@@ -289,21 +336,24 @@ def profile_to_html(kind: str, label: str) -> Iterator[None]:
                 stamp = int(time.time() * 1000)
                 slug = f"{abs(hash(str(label))) % 0x100000:05x}"
                 base = f"{stamp}_{kind}_{slug}"
-                (out_dir / f"{base}{TRACE_SUFFIX}").write_text(
-                    profiler.output_html(), encoding="utf-8"
-                )
-                (out_dir / f"{base}{META_SUFFIX}").write_text(
-                    json.dumps(
-                        {
-                            "kind": kind,
-                            "label": str(label),
-                            "latency_ms": round(
-                                (time.monotonic() - started) * 1000.0, 2
-                            ),
-                        }
-                    ),
-                    encoding="utf-8",
-                )
+                try:
+                    (out_dir / f"{base}{TRACE_SUFFIX}").write_text(
+                        profiler.output_html(), encoding="utf-8"
+                    )
+                    (out_dir / f"{base}{META_SUFFIX}").write_text(
+                        json.dumps(
+                            {
+                                "kind": kind,
+                                "label": str(label),
+                                "latency_ms": round(
+                                    (time.monotonic() - started) * 1000.0, 2
+                                ),
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                finally:
+                    prune_traces(out_dir)
         except Exception:  # noqa: BLE001
             pass
         finally:

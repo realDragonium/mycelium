@@ -145,10 +145,11 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
 | `EMBED_TIMEOUT_S` | `30` | Seconds before one Ollama embedding request fails instead of hanging. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
-| `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling traces and loop traces are written. |
-| `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_DIR` | `MYCELIUM_TRACE_DIR` | Per-action override of the trace directory. |
+| `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling flamegraphs and metadata sidecars are written. |
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
-| `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude model ran from a built-in list-price table, including cache reads and writes; other providers get no estimate. |
+| `MYCELIUM_TRACE_LOG_MAX_BYTES` | `10000000` (10 MB) | Rotate JSONL trace logs before exceeding this size; keep one older generation. `0` disables rotation. |
+| `MYCELIUM_TRACE_KEEP` | `200` | Keep this many newest traces per directory by mtime; a flamegraph and sidecar count as one. `0` disables pruning. |
+| `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude or OpenAI model ran from a built-in list-price table, including cache reads and writes; a model missing from the table gets no estimate. |
 | `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
 | `MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token issued through the OAuth flow. See [OAuth token lifetime](#oauth-token-lifetime). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
