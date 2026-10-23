@@ -13,7 +13,7 @@ import {
 import { dataOf, useAsync } from './use-async';
 
 const LISTS: Record<HealthList, { title: string; blurb: string; empty: string }> = {
-  isolated: { title: 'Isolated statements', blurb: 'No link leads to or from these statements, so Ask, documentation and the planner only reach them by search.', empty: 'Every statement has a link.' },
+  isolated: { title: 'Isolated statements', blurb: 'No link leads to or from these statements or holds only when they do, so Ask, documentation and the planner only reach them by search.', empty: 'Every statement has a link.' },
   unmentioned: { title: 'Statements naming no concept', blurb: 'No concept name or alias appears in these statements, so nothing about a concept leads to them.', empty: 'Every statement names a concept.' },
   unlabelled: { title: 'Statements without an audience label', blurb: 'Only internal audiences see these statements until they are labelled. A failed labelling attempt shows its error.', empty: 'Every statement has an audience label.' },
   undescribed: { title: 'Concepts without a description', blurb: 'Readers and the AI see only the name of these concepts.', empty: 'Every concept has a description.' },
@@ -26,7 +26,7 @@ function tiles(c: HealthCounts): Tile[] {
   const list = (l: HealthList): Route => ({ view: 'health', list: l });
   const of = (n: number, total: number) => total ? `${Math.round(n / total * 100)}% of ${total}` : 'none yet';
   return [
-    { n: c.isolated, label: 'isolated statements', sub: `${of(c.isolated, c.statements)}, no links`, to: list('isolated'), tone: 'warn' },
+    { n: c.isolated, label: 'isolated statements', sub: `${of(c.isolated, c.statements)}, no links or conditions`, to: list('isolated'), tone: 'warn' },
     { n: c.unmentioned, label: 'statements naming no concept', sub: of(c.unmentioned, c.statements), to: list('unmentioned'), tone: 'warn' },
     { n: c.undescribed, label: 'concepts without a description', sub: of(c.undescribed, c.entities), to: list('undescribed') },
     { n: c.unused, label: 'concepts no statement mentions', sub: of(c.unused, c.entities), to: list('unused') },

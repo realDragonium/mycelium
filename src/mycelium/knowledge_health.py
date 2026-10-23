@@ -24,7 +24,8 @@ ENTITY_FILTERS: tuple[EntityFilter, ...] = get_args(EntityFilter)
 
 _UNLINKED = (
     "NOT EXISTS (SELECT 1 FROM statement_links l WHERE l.from_statement_id = s.id) "
-    "AND NOT EXISTS (SELECT 1 FROM statement_links l WHERE l.to_statement_id = s.id)"
+    "AND NOT EXISTS (SELECT 1 FROM statement_links l WHERE l.to_statement_id = s.id) "
+    "AND NOT EXISTS (SELECT 1 FROM when_nodes w WHERE w.statement_id = s.id)"
 )
 _STATEMENT_WHERE: dict[StatementFilter, str] = {
     "isolated": _UNLINKED,

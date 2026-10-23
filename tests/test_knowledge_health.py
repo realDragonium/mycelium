@@ -18,6 +18,7 @@ def conn():
         "stm_b": ("state", "the export is queued"),
         "stm_c": ("rule", "an export must finish within an hour"),
         "stm_d": ("capability", "an admin can enable single sign-on"),
+        "stm_e": ("state", "the workspace is on a paid plan"),
     }
     for sid, (kind, text) in rows.items():
         conn.execute(
@@ -27,6 +28,14 @@ def conn():
     conn.execute(
         "INSERT INTO statement_links (from_statement_id, to_statement_id, "
         "link_type, when_hash) VALUES ('stm_a', 'stm_b', 'next', 'NONE')"
+    )
+    conn.execute(
+        "INSERT INTO statement_links (from_statement_id, to_statement_id, "
+        "link_type, when_hash) VALUES ('stm_a', 'stm_b', 'next', 'paid')"
+    )
+    conn.execute(
+        "INSERT INTO when_nodes (link_id, statement_id, child_index) "
+        "SELECT link_id, 'stm_e', 0 FROM statement_links WHERE when_hash = 'paid'"
     )
     conn.execute(
         "INSERT INTO entities (id, description) VALUES "
@@ -84,19 +93,20 @@ def _draft(drafts, draft_id, *, decided=False, ops=()):
 
 
 def test_counts_each_kind_of_attention(conn, drafts):
+    # stm_e has no link of its own but is the condition of one: not isolated.
     _draft(drafts, "drf_open")
     _draft(drafts, "drf_done", decided=True)
 
     counts = knowledge_health.counts(conn, drafts, lambda: conn)
 
     assert counts.model_dump() == {
-        "statements": 4,
+        "statements": 5,
         "entities": 3,
         "isolated": 2,
-        "unmentioned": 2,
+        "unmentioned": 3,
         "undescribed": 2,
         "unused": 1,
-        "unlabelled": 3,
+        "unlabelled": 4,
         "labelling_failed": 1,
         "open_gaps": 1,
         "pending_drafts": 1,
@@ -108,9 +118,10 @@ def test_lists_statements_with_what_they_lack(conn, drafts):
     page = knowledge_health.statements(conn, drafts, "unlabelled")
 
     assert [(i.id, i.links, i.mentions, i.label_error) for i in page.items] == [
-        ("stm_b", 1, [], None),
+        ("stm_b", 2, [], None),
         ("stm_c", 0, [], "model timed out"),
         ("stm_d", 0, ["single sign-on"], None),
+        ("stm_e", 0, [], None),
     ]
     assert page.next_after is None
 
@@ -122,7 +133,7 @@ def test_pages_statements_in_id_order(conn, drafts):
     )
 
     assert [i.id for i in first.items] == ["stm_b", "stm_c"]
-    assert [i.id for i in rest.items] == ["stm_d"]
+    assert [i.id for i in rest.items] == ["stm_d", "stm_e"]
     assert rest.next_after is None
 
 

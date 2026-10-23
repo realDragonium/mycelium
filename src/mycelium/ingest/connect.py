@@ -17,7 +17,14 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
-from .. import ai_prompts, mentions, model_settings, product_settings, tracing
+from .. import (
+    ai_prompts,
+    mentions,
+    model_settings,
+    product_settings,
+    tracing,
+    when_expression,
+)
 from ..ai.pricing import price
 from ..ask.substrate import SubstrateReader
 from . import prompts
@@ -75,8 +82,9 @@ For each statement:
 
 OPERATIONS YOU MAY EMIT
 - add_links: {"links": [{"from_id", "to_id", "link_type", "when"?}]}. Both ends
-  are existing `stm_` ids and every edge touches a statement in the batch. A
-  `when` is {"statement_id": ID} or {"op": "and"|"or"|"not", "of": [...]}.
+  are existing `stm_` ids and every edge touches a statement in the batch, as an
+  end or as its `when` condition. A `when` never names an end of its own edge; it
+  is {"statement_id": ID} or {"op": "and"|"or"|"not", "of": [...]}.
   Pick `link_type` from the live vocabulary; never invent one.
 - alias_suggestion: {"entity_id", "alias", "quote", "reason", "ambiguity",
   "statement_id"}. `statement_id` is the batch statement whose text uses the
@@ -214,9 +222,15 @@ def _links(
             kept.append(edge)
             continue
         ends = (edge.get("from_id"), edge.get("to_id"))
+        conditions = _conditions(edge.get("when"))
         if ends[0] == ends[1]:
             dropped.append(f"(add_links) edge dropped: {ends[0]} links to itself")
-        elif not any(end in texts for end in ends):
+        elif conditions & set(ends):
+            dropped.append(
+                f"(add_links) edge dropped: {ends[0]} -> {ends[1]} holds only when "
+                "one of its own ends does"
+            )
+        elif not any(s in texts for s in (*ends, *conditions)):
             dropped.append(
                 f"(add_links) edge dropped: {ends[0]} -> {ends[1]} touches no "
                 "statement in the batch"
@@ -226,6 +240,17 @@ def _links(
     if not kept:
         return None, dropped
     return {**op, "payload": {**payload, "links": kept}}, dropped
+
+
+def _conditions(when: object) -> set[str]:
+    """The statements a `when` names; a malformed one is left to validation."""
+    if not isinstance(when, dict):
+        return set()
+    try:
+        when_expression.validate(when)
+    except ValueError:
+        return set()
+    return when_expression.leaves(when)
 
 
 def config_from_settings() -> IngestConfig:

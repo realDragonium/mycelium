@@ -5,7 +5,7 @@ count opens the list behind it:
 
 | Count | Means | Opens |
 |---|---|---|
-| Isolated statements | No link leads to or from the statement | `#/health/isolated` |
+| Isolated statements | No link leads to or from the statement, and no link holds only when it does | `#/health/isolated` |
 | Statements naming no concept | No concept name or alias appears in its text | `#/health/unmentioned` |
 | Concepts without a description | The description is empty | `#/health/undescribed` |
 | Concepts no statement mentions | No statement uses any of its names | `#/health/unused` |
@@ -34,7 +34,8 @@ statement with the same read tools and must meet the same reconcile and
 adjacency floor. Its draft may only:
 
 - add links between existing statements, each touching a statement in the
-  batch, with a link type from the live vocabulary and an optional `when`;
+  batch as an end or as its `when` condition, with a link type from the live
+  vocabulary;
 - suggest an alias for an existing concept, quoting the batch statement that
   uses it;
 - create a concept whose name appears word for word in a batch statement and
@@ -42,7 +43,7 @@ adjacency floor. Its draft may only:
 
 Anything else is dropped and listed in the draft's flags: statement creation,
 rewrites, merges and deletions, edges that touch no batch statement,
-self-links, a "new" concept whose name already exists (that would rewrite its
+self-links, an edge conditioned on one of its own ends, a "new" concept whose name already exists (that would rewrite its
 description), and a name or alias the batch text does not contain. Edges whose
 statement kinds show they point the wrong way are dropped as in ingest.
 

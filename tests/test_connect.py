@@ -120,6 +120,32 @@ def test_drops_edges_away_from_the_batch_and_self_links():
     assert sum("edge dropped" in line for line in result.flagged) == 2
 
 
+def test_a_batch_statement_may_be_the_condition_but_not_of_its_own_edge():
+    result, emitter, _ = _connect(
+        [
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        {
+                            **_edge("stm_invoice", "stm_other"),
+                            "when": {"statement_id": "stm_queued"},
+                        },
+                        {
+                            **_edge("stm_invoice", "stm_queued"),
+                            "when": {"statement_id": "stm_queued"},
+                        },
+                    ]
+                },
+            )
+        ]
+    )
+
+    assert [e["to_id"] for e in emitter.queued[0][2]["links"]] == ["stm_other"]
+    assert isinstance(result, DraftCreated)
+    assert any("one of its own ends" in line for line in result.flagged)
+
+
 def test_drops_a_wrong_way_edge_like_ingest():
     # `establishes` runs event -> state, so state -> event is flipped.
     result, emitter, _ = _connect(
