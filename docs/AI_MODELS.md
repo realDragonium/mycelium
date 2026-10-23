@@ -120,7 +120,9 @@ operations, 25 seconds per run, and 20 seconds per request, and disables its
 retrieval floor. Smaller saved limits remain effective. Ingest allows 32,000
 output tokens per request, thinking included, because a full draft outgrew the
 earlier 8,000; an instance whose saved Ingest limit was still 8,000 is raised
-once on upgrade.
+once on upgrade. Documentation allows 32,000 for the same reason: a document
+body with adaptive thinking outgrew 12,000 and fell back to the forced final
+attempt, so a saved 12,000 is raised once too.
 
 Shared model concurrency and the documentation active-run limit are
 editable. Lowering shared concurrency lets current work finish and holds new
