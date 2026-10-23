@@ -27,8 +27,20 @@ def _isolate_prompt_store():
     ai_usage.uninstall()
 
 
+# Credentials a model provider SDK would pick up. Removed for the whole run so a
+# test that forgets its stub fails instead of making a paid call; a test that
+# needs a key sets a fake one itself.
+_PROVIDER_CREDENTIALS = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "OPENAI_API_KEY",
+)
+
+
 def pytest_configure(config):
     _require_spacy_model()
+    for name in _PROVIDER_CREDENTIALS:
+        os.environ.pop(name, None)
     # A test that starts the app without its own data dir would otherwise
     # share ./.mycelium (or an exported instance) with every other test,
     # worker and local server. Unusable on purpose: it fails at mkdir.
