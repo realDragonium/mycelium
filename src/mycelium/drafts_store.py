@@ -739,8 +739,10 @@ def create_review(
     preconditions: Sequence[Mapping[str, object]],
     unresolved_questions: list[str],
     reviewed_by: str,
+    review_id: str | None = None,
 ) -> str:
-    review_id = "rev_" + _uuid.uuid4().hex[:12]
+    if review_id is None:
+        review_id = "rev_" + _uuid.uuid4().hex[:12]
     conn.execute(
         "INSERT INTO draft_reviews (id, draft_id, outcome, rationale, "
         "draft_revision, preconditions_json, unresolved_json, reviewed_at, "

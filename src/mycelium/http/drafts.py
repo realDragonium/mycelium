@@ -165,12 +165,8 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _enforce_curator(request)
     from .. import drafts_store
 
-    conn = server._drafts_db()
     try:
-        with store.write_lock():
-            result = server.apply_draft(draft_id)
-            with store.transaction(conn):
-                drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
+        result = server.approve_draft(draft_id, decided_by=p.id)
     except drafts_store.ActiveApplicationError as ex:
         raise HTTPException(status_code=409, detail=str(ex)) from ex
     except server.DraftOpsRejectedError as ex:

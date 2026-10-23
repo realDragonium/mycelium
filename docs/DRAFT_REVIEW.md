@@ -259,6 +259,13 @@ When a reviewed application still needs finalization, inspect its durable receip
 and use the existing `apply_reviewed_draft(draft_id, review_id)` recovery path.
 No startup recovery launches model work or replays an uncommitted application.
 
+A curator's **Approve** uses the same receipt. It records an `accepted` review
+by that curator ("Approved by hand.") and claims the application in one drafts
+transaction, then applies the draft. Unlike a reviewed application, it accepts an
+open draft and does not require reviewed application to be enabled. If the
+process dies after the substrate commits, approving again finalizes the recorded
+result instead of applying the draft twice.
+
 OpenAI uses the [Responses structured-output contract](https://developers.openai.com/api/docs/guides/structured-outputs)
 with `store=false`. Claude uses the Anthropic SDK's
 [structured-output parser](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).

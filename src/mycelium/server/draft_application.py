@@ -2,7 +2,7 @@
 
 Replay is all-or-nothing. One transaction owns every replayed write, and both
 vector indexes are snapshotted first, so a failing operation rolls back the
-substrate and restores the indexes. A reviewed application also records a
+substrate and restores the indexes. An approval also records a
 receipt inside that same transaction. If the process dies after the substrate
 commits but before the draft is marked approved, the receipt lets the next
 attempt recover the result instead of replaying it twice.
@@ -37,12 +37,13 @@ from .runtime import (
 )
 
 logger = logging.getLogger(__name__)
+_MANUAL_REVIEW_PREFIX = "rev_manual_"
 
 
 class DraftReplay(TypedDict):
     """What replaying a draft did: one entry per operation, applied or skipped.
 
-    Stored as the reviewed application's receipt, which is where `recovered`
+    Stored as the application's receipt, which is where `recovered`
     comes from: an application recovered from an earlier attempt says so.
     """
 
@@ -410,6 +411,66 @@ def _substrate_application_result(
     return replay
 
 
+def approve_draft(draft_id: str, *, decided_by: str) -> DraftReplay:
+    """Record a curator's acceptance and apply it with durable replay recovery.
+
+    The caller enforces the real curator role. Manual acceptance permits open
+    drafts and operation findings, independently of automated review settings.
+    """
+    from .. import drafts_store
+
+    conn = _drafts_db()
+    with store.write_lock():
+        with store.transaction(conn):
+            draft = drafts_store.get_draft(conn, draft_id)
+            if draft is None:
+                raise ValueError(f"draft '{draft_id}' not found")
+            status = drafts_store.status_for(draft)
+            if status not in ("open", "submitted"):
+                raise ValueError(
+                    f"draft '{draft_id}' is {status}; only open or submitted "
+                    "drafts can be approved"
+                )
+            active = drafts_store.active_application(conn, draft_id)
+            if active is not None:
+                review_id = str(active["review_id"])
+                if not review_id.startswith(_MANUAL_REVIEW_PREFIX):
+                    raise drafts_store.ActiveApplicationError(
+                        f"draft '{draft_id}' has an active reviewed application"
+                    )
+                application_id = str(active["id"])
+            else:
+                review_id = drafts_store.create_review(
+                    conn,
+                    draft_id=draft_id,
+                    outcome="accepted",
+                    rationale="Approved by hand.",
+                    draft_revision=int(draft["revision"]),
+                    preconditions=[],
+                    unresolved_questions=[],
+                    reviewed_by=decided_by,
+                    review_id=_MANUAL_REVIEW_PREFIX + uuid.uuid4().hex[:12],
+                )
+                application_id = drafts_store.claim_application(
+                    conn,
+                    draft_id=draft_id,
+                    review_id=review_id,
+                    claimed_by=decided_by,
+                )
+        result = _apply_claimed_draft(
+            draft_id,
+            application_id,
+            review_id,
+            decided_by=decided_by,
+            strict=False,
+        )
+    return {
+        "applied": result["applied"],
+        "skipped": result["skipped"],
+        "results": result["results"],
+    }
+
+
 @tool(role="writer", real_role=True)
 def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationReceipt:
     """Apply an accepted exact-version review with durable replay recovery."""
@@ -463,53 +524,76 @@ def apply_reviewed_draft(draft_id: str, review_id: str) -> ReviewedApplicationRe
                 )
             raise ValueError(failure)
 
-        if result is None:
-            try:
-                result = apply_draft(
-                    draft_id,
-                    application_id=application_id,
-                    review_id=review_id,
-                    strict=True,
-                )
-            except BaseException as exc:
-                committed = _substrate_application_result(application_id)
-                if committed is None:
-                    with store.transaction(conn):
-                        drafts_store.finish_application(
-                            conn, application_id, status="failed", failure=str(exc)
-                        )
-                    raise
-                with store.transaction(conn):
-                    drafts_store.note_application_failure(
-                        conn,
-                        application_id,
-                        f"replay returned after substrate commit: {exc}",
-                    )
-                result = {**committed, "recovered": True}
-        else:
-            result = {**result, "recovered": True}
+        result = _apply_claimed_draft(
+            draft_id,
+            application_id,
+            review_id,
+            decided_by=principal.id,
+            strict=True,
+        )
+    return {"application_id": application_id, **result}
 
+
+def _apply_claimed_draft(
+    draft_id: str,
+    application_id: str,
+    review_id: str,
+    *,
+    decided_by: str,
+    strict: bool,
+) -> DraftReplay:
+    """Replay or recover a durable claim while the caller holds the write lock."""
+    from .. import drafts_store
+
+    conn = _drafts_db()
+    result = _substrate_application_result(application_id)
+    if result is None:
         try:
-            with store.transaction(conn):
-                drafts_store.finish_application(
-                    conn, application_id, status="committed", result=result
-                )
-                drafts_store.set_decision(
-                    conn,
-                    draft_id,
-                    decision="approved",
-                    by=principal.id,
-                    application_id=application_id,
-                )
+            result = apply_draft(
+                draft_id,
+                application_id=application_id,
+                review_id=review_id,
+                strict=strict,
+            )
         except BaseException as exc:
+            committed = _substrate_application_result(application_id)
+            if committed is None:
+                with store.transaction(conn):
+                    drafts_store.finish_application(
+                        conn, application_id, status="failed", failure=str(exc)
+                    )
+                raise
             with store.transaction(conn):
                 drafts_store.note_application_failure(
-                    conn, application_id, f"draft finalization failed: {exc}"
+                    conn,
+                    application_id,
+                    f"replay returned after substrate commit: {exc}",
                 )
-            logger.warning(
-                "reviewed draft application %s for %s awaits recovery",
-                application_id,
-                draft_id,
+            result = {**committed, "recovered": True}
+    else:
+        result = {**result, "recovered": True}
+
+    try:
+        with store.transaction(conn):
+            drafts_store.finish_application(
+                conn, application_id, status="committed", result=result
             )
-            raise
-    return {"application_id": application_id, **result}
+            drafts_store.set_decision(
+                conn,
+                draft_id,
+                decision="approved",
+                by=decided_by,
+                application_id=application_id,
+            )
+    except BaseException as exc:
+        with store.transaction(conn):
+            drafts_store.note_application_failure(
+                conn, application_id, f"draft finalization failed: {exc}"
+            )
+        logger.warning(
+            "draft application %s for %s awaits recovery",
+            application_id,
+            draft_id,
+        )
+        raise
+    return result
