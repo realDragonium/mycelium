@@ -165,15 +165,12 @@ def run_case(
     return {"run": run, "document": document}
 
 
-def trace_for(out: Path, prompt: str, seen: int) -> tuple[dict[str, object], int]:
-    """The run's trace: the trace carries no run id, and cases run one at a
-    time, so it is the first new record with the case's prompt."""
-    lines = (out / "trace.jsonl").read_text().splitlines()
-    for index in range(seen, len(lines)):
-        record: dict[str, object] = json.loads(lines[index])
-        if record.get("prompt") == prompt:
-            return record, index + 1
-    raise SystemExit(f"no trace record for prompt {prompt[:60]!r}")
+def trace_for(out: Path, run_id: str) -> dict[str, object]:
+    for line in (out / "trace.jsonl").read_text().splitlines():
+        record: dict[str, object] = json.loads(line)
+        if record.get("run_id") == run_id:
+            return record
+    raise SystemExit(f"no trace record for run {run_id}")
 
 
 def summary_row(name: str, result: dict[str, object]) -> list[str]:
@@ -226,14 +223,13 @@ def main() -> None:
             if args.model:
                 select_model(client, args.model)
             entities = entity_ids(client)
-            seen = 0
             for case in cases:
                 print(f"{case['name']}: running", flush=True)
                 result = run_case(client, case, entities)
-                result["trace"], seen = trace_for(out, case["prompt"], seen)
                 run = result["run"]
                 document = result["document"]
                 assert isinstance(run, dict)
+                result["trace"] = trace_for(out, str(run["id"]))
                 body = (
                     document["body"]
                     if isinstance(document, dict)
