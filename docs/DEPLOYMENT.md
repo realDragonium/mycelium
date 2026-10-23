@@ -329,6 +329,50 @@ snapshotted the data. A start also brings untouched seeded AI instructions
 up to the new build's defaults — see
 [Startup changes that are not migrations](#startup-changes-that-are-not-migrations).
 
+### Upgrading an instance at schema v14
+
+An instance last deployed at substrate schema v14 runs seven migrations on
+the first start of a current build:
+
+| Version | Change |
+| --- | --- |
+| v15 | Drops the unused alias embeddings and their queue. |
+| v16 | Adds source references to knowledge gaps. |
+| v17 | Rewrites the seeded `rule` kind definition, only if nobody edited it. |
+| v18 | Drops the unused `kind_link_matrix` table. |
+| v19 | Replaces the seeded `sub-type` examples, only if nobody edited them. |
+| v20 | Adds the table of entity pairs dismissed as not duplicates. |
+| v21 | Adds statement audience labels and their queue. |
+
+The drafts and prompts databases upgrade themselves on the same start. The
+research feature's data is deleted, as are its settings (see
+[Startup changes that are not migrations](#startup-changes-that-are-not-migrations)).
+Documentation runs gain summaries, review notes and plans. Saved ingest and
+documentation output limits that are still at the old defaults are raised.
+
+**Before:** take a snapshot or `mycelium export`. The previous build refuses
+to start on migrated data, so the way back is a restore, as described in
+[Rolling back a deploy](#rolling-back-a-deploy).
+
+**Start time:** if the vector indexes are not restored with the data, the
+first start rebuilds them from the database before HTTP is available. On
+CPU that took about a minute for 4,000 statements.
+
+**After the start**, as an administrator:
+
+1. **Settings → Audiences:** check the four seeded audiences and their
+   descriptions, then click **Label unlabelled statements**. Until labelling has run, every
+   statement is visible to internal audiences only, so external documents and
+   plans have nothing to draw on. With a small model, labelling took about 11
+   minutes and $0.10 per 1,000 statements.
+2. **Settings → Documentation:** choose an audience for each writing profile.
+   Profiles without one write for the internal technical audience.
+3. **Settings → Models:** choose models for the new actions (audience
+   labelling, documentation planning). Check that each provider's model field
+   holds a model of that provider.
+4. **Documents:** revisions written before this upgrade record no citations,
+   so they show as "unknown" rather than out of date until they are revised.
+
 ---
 
 ## Data and backups
