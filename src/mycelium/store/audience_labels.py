@@ -98,10 +98,10 @@ def visible_among(
 
 
 def awaiting_label(
-    conn: sqlite3.Connection, statement_ids: Sequence[str]
+    conn: sqlite3.Connection, statement_ids: Sequence[str], audience_id: str
 ) -> frozenset[str]:
     """Which of `statement_ids` are queued with attempts left, so a label is
-    still coming."""
+    still coming, or wait for a curator to confirm a grant to the audience."""
     awaiting: set[str] = set()
     for offset in range(0, len(statement_ids), 500):
         chunk = list(statement_ids[offset : offset + 500])
@@ -110,8 +110,11 @@ def awaiting_label(
             str(row["statement_id"])
             for row in conn.execute(
                 "SELECT statement_id FROM audience_label_queue "
-                f"WHERE statement_id IN ({placeholders}) AND attempts < ?",
-                (*chunk, MAX_ATTEMPTS),
+                f"WHERE statement_id IN ({placeholders}) AND attempts < ? "
+                "UNION SELECT statement_id FROM statement_audience_labels l "
+                f"WHERE statement_id IN ({placeholders}) AND EXISTS "
+                "(SELECT 1 FROM json_each(l.pending) WHERE value = ?)",
+                (*chunk, MAX_ATTEMPTS, *chunk, audience_id),
             )
         )
     return frozenset(awaiting)

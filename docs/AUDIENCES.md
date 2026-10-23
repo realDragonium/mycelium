@@ -104,9 +104,11 @@ waiting grant.
 
 Changing a statement's text withdraws its waiting grants. Deleting or merging
 a statement removes its label, waiting grants included, and backups carry
-them. A confirmation counts as newly visible for documentation planning; a
-document citing a statement whose grant was withdrawn is out of date until the
-grant is confirmed again or the document is revised.
+them. A confirmation counts as newly visible for documentation planning. A
+document citing a statement whose grant was withdrawn is out of date, but
+automatic maintenance leaves it while the grant waits for a curator, so an
+edit to a confirmed statement is not read as the statement being hidden; a
+rejection lets maintenance act.
 
 Turning the switch off applies the AI's external grants at once again. Grants
 already waiting stay waiting until a curator decides them.

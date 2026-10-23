@@ -112,8 +112,10 @@ Automatic revisions wait until the document's changed statements have been
 quiet for a while, so a burst of edits causes one revision, and each profile
 starts at most so many per day. Both are under **Settings → Limits →
 Documentation maintenance** (30 minutes and 5 by default). Neither policy acts
-while an edited statement waits for its new audience label: until then the
-edit would read as the statement being hidden from the audience. A background sweep
+while an edited statement waits for its new audience label, or for a curator
+to [confirm](AUDIENCES.md#confirming-external-grants) its grant to the
+document's audience: until then the edit would read as the statement being
+hidden from the audience. A background sweep
 checks every minute and keeps its decisions in `mycelium-drafts.db`, so a
 restart neither repeats nor forgets them: each out-of-date revision is acted
 on once. A revision the review refused, a run that failed, or one cut off by a

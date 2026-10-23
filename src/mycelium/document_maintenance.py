@@ -122,7 +122,7 @@ def sweep(now: datetime | None = None) -> list[str]:
             if (
                 document.freshness.status != "out_of_date"
                 or stale_key(document) in dismissed
-                or _awaiting_labels(document)
+                or _awaiting_labels(document, audience.id)
             ):
                 continue
             row = _observe(drafts, profile.name, document, now)
@@ -146,8 +146,9 @@ def sweep(now: datetime | None = None) -> list[str]:
     return started
 
 
-def _awaiting_labels(document: ExistingDocument) -> bool:
-    """An edit drops a statement's AI label until it is labelled again, so
+def _awaiting_labels(document: ExistingDocument, audience_id: str) -> bool:
+    """An edit drops a statement's AI label until it is labelled again, and
+    the new label's grant to an external audience may wait for a curator, so
     until then the edit looks like the statement was hidden from the
     audience. Acting on that would remove the fact instead of updating it."""
 
@@ -157,7 +158,9 @@ def _awaiting_labels(document: ExistingDocument) -> bool:
         if change.change == "no_longer_visible"
     ]
     return bool(hidden) and bool(
-        store.audience_labels.awaiting_label(store.substrate_connection(), hidden)
+        store.audience_labels.awaiting_label(
+            store.substrate_connection(), hidden, audience_id
+        )
     )
 
 
