@@ -44,6 +44,14 @@ Two lists need no model and are always current: **Out-of-date documents**
 **Concepts without a document**, concepts with many visible statements and no
 document of the profile about them.
 
+A profile whose maintenance policy is `propose` (see
+[Keeping documents up to date](DOCUMENTATION_MODELS.md#keeping-documents-up-to-date))
+gets an update item among the proposed documents instead, for each document
+that goes out of date, with the changed statements as its rationale. It can be
+approved with others; approving briefs the revision with what changed by then.
+These items stay with the profile across re-plans until the document's next
+revision.
+
 ## Reviewing
 
 **Approve** starts the same run as **Generate** (`request_documentation` with

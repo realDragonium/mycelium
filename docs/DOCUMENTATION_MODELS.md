@@ -48,7 +48,7 @@ the identity the concept's document would have by then.
 
 Each revision remembers the text of the statements it cites as they were when
 it was reviewed. When one of them is later edited, deleted or merged into
-another, the document is marked **Out of date** in the library, and the
+another, or relabelled so the document's audience may no longer see it, the document is marked **Out of date** in the library, and the
 document shows what changed, old wording beside new. **Revise** starts a
 revision briefed with exactly those changes; once it is saved, the document is
 current again. Revisions saved before this was recorded show no status.
@@ -84,6 +84,37 @@ Generation records the model and a consistent snapshot of the available writing
 profiles at admission. The selected guidance, exposure rules, template, and their
 versions are retained with the run. Changing settings while a run is queued does
 not change that run's instructions.
+
+### Keeping documents up to date
+
+Each writing profile has a maintenance policy, set in its editor under
+**Settings → Documentation**:
+
+- `manual` (the default): an out-of-date document waits for someone to revise it.
+- `propose`: the document gets an update item in the profile's plan, briefed
+  with the changed statements ([Documentation planning](DOCUMENTATION_PLANNING.md)).
+- `auto-revise`: Mycelium starts the revision itself. It goes through the
+  same review as any run. A document that was published is then published
+  again to the same destination: that updates its open pull request, or opens a
+  new one, and a person still merges it on GitHub. A document never published
+  stays internal.
+
+Automatic revisions wait until the document's changed statements have been
+quiet for a while, so a burst of edits causes one revision, and each profile
+starts at most so many per day. Both are under **Settings → Limits →
+Documentation maintenance** (30 minutes and 5 by default). A background sweep
+checks every minute and keeps its decisions in `mycelium-drafts.db`, so a
+restart neither repeats nor forgets them: each out-of-date revision is acted
+on once. A revision the review refused, a run that failed, or one cut off by a
+restart is reported rather than retried; the document stays out of date for
+someone to revise. Dismissing the document in the plan also stops automatic
+revision until its next revision.
+
+**Documents → Updates** lists what this did: documents revised automatically,
+with what changed and the new revision's diff against the one it replaced, and
+those waiting on someone (a proposal to approve, a pull request to merge, a
+document still out of date). The Documents badge counts entries new since you
+last opened Updates in this browser, plus those waiting.
 
 ### GitHub publication
 
