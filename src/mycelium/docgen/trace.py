@@ -14,11 +14,35 @@ core testable with plain data.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 
 from .. import agentloop
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
+from ..ai import Provider, Usage
+from ..ai.pricing import Price
 from ..tracing import SpanRecorder
+
+
+class TurnUsage(TypedDict):
+    phase: str
+    input: int
+    cache_read: int
+    cache_creation: int
+    output: int
+
+
+class RunSummary(TypedDict):
+    """What a run spent and gathered, persisted on its row. While the run is
+    going, `activity` says what it is doing and `statements_cited` is 0."""
+
+    activity: str | None
+    turns: int
+    duration_s: float
+    tokens: dict[str, int]
+    cost_usd: float | None
+    statements_retrieved: int
+    statements_cited: int
+    gaps_filed: int
 
 
 @dataclass
@@ -26,8 +50,10 @@ class TraceBuilder:
     model: str
     op_cap: int
     wall_clock_s: float
+    provider: Provider = "claude"
+    #: the documentation run this trace belongs to, when one is recorded.
+    run_id: str | None = None
     #: the request the run was asked to document.
-    provider: str = "claude"
     prompt: str = ""
     #: what the request named, before the run resolved anything.
     requested_set: str | None = None
@@ -47,6 +73,9 @@ class TraceBuilder:
             "cache_creation": 0,
         }
     )
+    #: Token usage per model turn, in order, so a cost can be attributed to
+    #: the turn that spent it.
+    turn_usage: list[TurnUsage] = field(default_factory=list)
     #: knowledge gaps filed during the run, each "gap_id :: text".
     reported_gaps: list[str] = field(default_factory=list)
     #: the gaps the emitted document declared for itself.
@@ -81,15 +110,50 @@ class TraceBuilder:
             self, name, arguments, result, ok=ok, counts_as_op=counts_as_op, error=error
         )
 
-    def add_usage(self, usage: Any) -> None:
+    def add_usage(self, usage: Usage, phase: str) -> None:
+        self.model_turns += 1
         agentloop.add_usage(self, usage)
+        self.turn_usage.append(
+            {
+                "phase": phase,
+                "input": usage.input_tokens,
+                "cache_read": usage.cache_read_input_tokens,
+                "cache_creation": usage.cache_creation_input_tokens,
+                "output": usage.output_tokens,
+            }
+        )
 
-    def cost_usd(
-        self, input_per_mtok: float | None, output_per_mtok: float | None
-    ) -> float | None:
-        if input_per_mtok is None or output_per_mtok is None:
+    def cost_usd(self, price: Price | None) -> float | None:
+        if price is None:
             return None
-        return agentloop.cost_usd(self.tokens, input_per_mtok, output_per_mtok)
+        return price.cost_usd(
+            Usage(
+                input_tokens=self.tokens["input"],
+                output_tokens=self.tokens["output"],
+                cache_read_input_tokens=self.tokens["cache_read"],
+                cache_creation_input_tokens=self.tokens["cache_creation"],
+            )
+        )
+
+    def progress(
+        self,
+        activity: str | None,
+        *,
+        elapsed_s: float,
+        retrieved: int,
+        price: Price | None,
+        cited: int = 0,
+    ) -> RunSummary:
+        return {
+            "activity": activity,
+            "turns": self.model_turns,
+            "duration_s": round(elapsed_s, 1),
+            "tokens": dict(self.tokens),
+            "cost_usd": self.cost_usd(price),
+            "statements_retrieved": retrieved,
+            "statements_cited": cited,
+            "gaps_filed": len(self.reported_gaps),
+        }
 
     def build(
         self,
@@ -97,14 +161,14 @@ class TraceBuilder:
         outcome: str,
         latency_ms: float,
         grounding: dict,
-        input_per_mtok: float | None,
-        output_per_mtok: float | None,
+        price: Price | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
         per_span = self.spans.per_span_ms()
         phase_ms = {name: round(sum(spans), 1) for name, spans in per_span.items()}
         return {
+            "run_id": self.run_id,
             "prompt": self.prompt,
             "model": self.model,
             "provider": self.provider,
@@ -127,7 +191,15 @@ class TraceBuilder:
             "refused_emits": self.refused_emits,
             "reviews": self.reviews,
             "tokens": tokens,
-            "cost_usd": self.cost_usd(input_per_mtok, output_per_mtok),
+            "turn_usage": self.turn_usage,
+            "cost_usd": self.cost_usd(price),
+            "summary": self.progress(
+                None,
+                elapsed_s=latency_ms / 1000.0,
+                retrieved=grounding["retrieved_ids"],
+                cited=grounding["cited_ids"],
+                price=price,
+            ),
             "forced_finalize": self.forced_finalize,
             "degraded": self.degraded,
             "notes": self.notes,

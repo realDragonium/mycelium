@@ -42,6 +42,7 @@ from .docgen.schema import (
     ManualDocument,
     RevisionTarget,
 )
+from .docgen.trace import RunSummary
 
 if TYPE_CHECKING:
     from .documentation_profiles import CatalogueSnapshot
@@ -108,6 +109,10 @@ def start_run(
     if target is not None:
         guideline_set = target.document.guideline_set
         document_type = target.document.document_type
+    # A revision of an anchored document is still about its concept.
+    writer_anchor = anchor_entity_id or (
+        _document_anchor(conn, target.document.id) if target is not None else None
+    )
 
     with _spawn_lock:
         if docs_store.count_active(conn) >= max_active:
@@ -168,6 +173,7 @@ def start_run(
                     review_instructions,
                     manual_document,
                     anchor_entity_id,
+                    writer_anchor,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -227,6 +233,11 @@ def _target(
         manual=manual,
         start_from_destination=start_from_destination,
     )
+
+
+def _document_anchor(conn: sqlite3.Connection, document_id: str) -> str | None:
+    row = docs_store.get_document(conn, document_id)
+    return None if row is None else row["anchor_entity_id"]
 
 
 def _anchored_document(
@@ -352,6 +363,9 @@ def _default_runner(
     profiles: CatalogueSnapshot | None = None,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
+    anchor_entity_id: str | None = None,
+    run_id: str | None = None,
+    on_progress: Callable[[RunSummary], None] | None = None,
 ) -> Any:
     """The real generation loop.
 
@@ -372,6 +386,9 @@ def _default_runner(
         profiles=profiles,
         instructions=instructions,
         review_instructions=review_instructions,
+        anchor_entity_id=anchor_entity_id,
+        run_id=run_id,
+        on_progress=on_progress,
     )
 
 
@@ -389,6 +406,7 @@ def _execute_run(
     review_instructions: ai_prompts.Snapshot | None = None,
     manual_document: ManualDocument | None = None,
     anchor_entity_id: str | None = None,
+    writer_anchor: str | None = None,
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -399,6 +417,7 @@ def _execute_run(
     draft_title = manual_document.title if manual_document else None
     draft_body = manual_document.body if manual_document else None
     matched_document_id = None
+    summary = None
 
     try:
         # Inside the try: a failed connect must still reach the finally-side
@@ -415,6 +434,10 @@ def _execute_run(
         # the run has been accepted and nothing else needs to happen to it.
         from . import server
 
+        def progress(update: RunSummary) -> None:
+            assert conn is not None
+            docs_store.record_progress(conn, run_id, update)
+
         with server.model_loop_slot():
             if runner is _default_runner:
                 result = runner(
@@ -427,12 +450,17 @@ def _execute_run(
                     profiles=profiles,
                     instructions=instructions,
                     review_instructions=review_instructions,
+                    anchor_entity_id=writer_anchor,
+                    run_id=run_id,
+                    on_progress=progress,
                 )
             else:
                 result = runner(
                     prompt, guideline_set=guideline_set, document_type=document_type
                 )
         payload = result.model_dump() if hasattr(result, "model_dump") else dict(result)
+        trace = payload.get("trace")
+        summary = trace.get("summary") if isinstance(trace, dict) else None
         # The request may have named neither, in which case the run chose. Put
         # the choice on the row before the outcome is decided, so a run that
         # settled on a set and then found nothing to say still shows what it
@@ -551,6 +579,7 @@ def _execute_run(
                 draft_title=draft_title,
                 draft_body=draft_body,
                 matched_document_id=matched_document_id,
+                summary=summary,
             )
         except Exception:  # noqa: BLE001
             logger.exception("could not finalize documentation run %s", run_id)
