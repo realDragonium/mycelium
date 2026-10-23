@@ -240,6 +240,37 @@ def test_writer_authorization_enforced_for_preview_and_apply(
             ).status_code
             == 403
         )
+        assert (
+            client.post(
+                "/api/names-workspace/duplicates/dismiss",
+                json={"a_entity_id": "ent_a", "b_entity_id": "ent_b"},
+                headers=headers,
+            ).status_code
+            == 403
+        )
+
+
+def test_http_dismisses_duplicate_pairs_between_existing_concepts(
+    tmp_path, monkeypatch
+):
+    with _app(tmp_path, monkeypatch) as client:
+        a, b = (
+            client.post(
+                "/upsert-entity", json={"name": label, "description": ""}
+            ).json()["entity_id"]
+            for label in ("Answer-Type", "answer type")
+        )
+        assert client.post("/find-entity-duplicates", json={}).json()["total"] == 1
+        dismiss = "/api/names-workspace/duplicates/dismiss"
+        missing = {"a_entity_id": a, "b_entity_id": "ent_missing"}
+        assert client.post(dismiss, json=missing).status_code == 400
+        pair = {"a_entity_id": b, "b_entity_id": a}
+        assert client.post(dismiss, json=pair).status_code == 204
+        assert client.post(dismiss, json=pair).status_code == 204
+        assert client.post("/find-entity-duplicates", json={}).json() == {
+            "candidates": [],
+            "total": 0,
+        }
 
 
 def test_http_applies_only_previewed_revision_and_validates_action(

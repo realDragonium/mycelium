@@ -121,3 +121,26 @@ def ensure_preferred_name(
         before=_row_dict(entity),
         after=_row_dict(get_entity_by_id(conn, entity_id)),
     )
+
+
+# --- duplicate dismissals ------------------------------------------------------
+
+
+def dismiss_entity_duplicate(conn: sqlite3.Connection, a: str, b: str) -> None:
+    """Remember that entities `a` and `b` are not duplicates. Idempotent."""
+    first, second = sorted((a, b))
+    conn.execute(
+        "INSERT OR IGNORE INTO entity_duplicate_dismissals "
+        "(a_entity_id, b_entity_id, dismissed_at, dismissed_by) VALUES (?, ?, ?, ?)",
+        (first, second, _now(), kernel.get_actor()),
+    )
+
+
+def dismissed_entity_duplicates(conn: sqlite3.Connection) -> set[tuple[str, str]]:
+    """Every dismissed pair, ids sorted."""
+    return {
+        (row["a_entity_id"], row["b_entity_id"])
+        for row in conn.execute(
+            "SELECT a_entity_id, b_entity_id FROM entity_duplicate_dismissals"
+        )
+    }

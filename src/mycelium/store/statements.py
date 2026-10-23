@@ -246,4 +246,8 @@ def delete_name_vector_mapping(conn: sqlite3.Connection, name_id: str) -> None:
 
 
 def list_all_names(conn: sqlite3.Connection) -> list[sqlite3.Row]:
-    return list(conn.execute("SELECT id, text, entity_id FROM names").fetchall())
+    return list(
+        conn.execute(
+            "SELECT id, text, entity_id, generated_from_name_id FROM names"
+        ).fetchall()
+    )

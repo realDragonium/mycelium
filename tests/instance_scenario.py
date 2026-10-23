@@ -109,6 +109,11 @@ def _substrate(server) -> dict[str, str]:
             "INSERT INTO mention_recompute_queue (scan_text, enqueued_at) "
             "VALUES ('sign-in', '2026-08-01T00:00:00Z')"
         )
+    if _has_table(db, "entity_duplicate_dismissals"):
+        db.execute(
+            "INSERT INTO entity_duplicate_dismissals VALUES (?, ?, '2026-08-01', NULL)",
+            sorted((login, session)),
+        )
     if _has_table(db, "reviewed_draft_applications"):
         db.execute(
             "INSERT INTO reviewed_draft_applications VALUES "

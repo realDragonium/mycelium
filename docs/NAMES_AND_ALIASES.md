@@ -54,6 +54,42 @@ without a preference restore using the same case-insensitive ordering. The
 reference is a deferred foreign key so an archive can restore entities before their names in one
 transaction.
 
+## Possible duplicates
+
+**Possible duplicates** lists pairs of concepts whose names suggest they are the
+same concept, with every name pair that matched and why. Names are compared as
+words, split on spaces, punctuation, `_`, `-` and camelCase:
+
+- the same words once case and punctuation are ignored ("answer type" and
+  "Answer-Type");
+- the same words in another order or spelling style ("Admin Only Exports" and
+  `only_admin_exports`);
+- one name spells the initials of the other ("SSO" and "Single sign-on");
+- similar meaning, from name embeddings at 75% similarity or more ("Login page"
+  and "Sign-in page").
+
+Word matches come first, then similar-meaning matches by similarity. Names
+whose wording marks them as different concepts are left out even when they
+embed close together, as families of identifiers do:
+
+- one name extends the other ("Login" and "Login page");
+- one word takes another's place, as the only difference or right after a word
+  both share ("invoice_template_v1" and "invoice_template_v2", "Sign-in page" and
+  "Sign-up").
+  A word that abbreviates the other ("admin" and "administrator") still
+  matches;
+- each adds its own words to a shared stem of two or more words, or to words so
+  common they mark a family (used in 3% of names, and at least ten).
+
+So a synonym swapped for a single word ("Workspace settings" and "Workspace
+preferences") is not listed. The list shows 50 pairs at a time with the total;
+**Show more** loads the next 50.
+
+Admins can open either merge direction straight into the merge preview above;
+the destination's preferred name and description are preselected. Writers can
+mark a pair **Not a duplicate** so it stops appearing. Dismissals are kept in
+substrate backups and disappear when either concept is merged away or deleted.
+
 ## API
 
 - `GET /api/names-workspace?q=...`: searchable vocabulary and writer capability.
@@ -63,6 +99,9 @@ transaction.
   `expected_revision`. A stale revision returns HTTP 409. A merge reports
   `documents_unanchored`, and the workspace tells the curator when documents
   lost their concept anchor.
+- `POST /find-entity-duplicates`: `{ "limit": 50, "offset": 0 }` returns `{ "candidates": [...], "total": N }`, as listed above.
+- `POST /api/names-workspace/duplicates/dismiss`:
+  `{ "a_entity_id": "...", "b_entity_id": "..." }`. Requires a real writer.
 - `GET /api/mention-candidates?entity_id=...&after=...&limit=...`: bounded
   read-only discovery, including ambiguous matches. Follow `next_after` while
   `has_more` is true, even if a page contains no matches.

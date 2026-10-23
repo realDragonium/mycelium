@@ -2,12 +2,13 @@ import React from 'react';
 import { AliasSuggestions } from './alias-suggestions';
 import {
   errorMessage, namesWorkspace,
-  type MentionCandidate, type MentionCandidatePage, type NameAction, type NameActionKind,
+  type DuplicateCandidate, type DuplicateMatch, type MentionCandidate, type MentionCandidatePage, type NameAction, type NameActionKind,
   type NamesCatalogue, type NamesDetail, type NamesExample, type NamesPreview,
   type NamesRelationship, type WorkspaceConcept,
 } from './api';
 import { PageHeader } from './lib';
 import { Link } from './router';
+import { dataOf, useAsync } from './use-async';
 
 const isAbortError = (error: unknown) => error instanceof Error && error.name === 'AbortError';
 const isNameActionKind = (value: string): value is NameActionKind =>
@@ -28,17 +29,20 @@ interface NamesEditorProps {
   entities: WorkspaceConcept[];
   allowedActions: NameActionKind[];
   onChanged: (id?: string, documentsUnanchored?: number) => void;
+  initialPreview?: NamesPreview;
 }
 
-function NamesEditor({entity, entities, allowedActions, onChanged}: NamesEditorProps) {
-  const [kind, setKind] = React.useState<NameActionKind>('add');
+function NamesEditor({entity, entities, allowedActions, onChanged, initialPreview}: NamesEditorProps) {
+  const merge = initialPreview?.action.kind === 'merge' ? initialPreview.action : null;
+  const [kind, setKind] = React.useState<NameActionKind>(merge ? 'merge' : 'add');
   const [nameId, setNameId] = React.useState('');
   const [text, setText] = React.useState('');
-  const [target, setTarget] = React.useState('');
+  const [target, setTarget] = React.useState(merge?.target_entity_id ?? '');
   const [selected, setSelected] = React.useState<string[]>([]);
-  const [preferred, setPreferred] = React.useState('');
-  const [description, setDescription] = React.useState('');
-  const [preview, setPreview] = React.useState<NamesPreview | null>(null);
+  const [preferred, setPreferred] = React.useState(merge?.preferred_name_id ?? '');
+  const [description, setDescription] = React.useState(merge?.description ?? '');
+  const [preview, setPreview] = React.useState<NamesPreview | null>(initialPreview ?? null);
+  const revealInitial = React.useCallback((node: HTMLDivElement | null) => { if (node && initialPreview) node.scrollIntoView({block: 'nearest'}); }, [initialPreview]);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const inFlight = React.useRef(false);
@@ -86,7 +90,7 @@ function NamesEditor({entity, entities, allowedActions, onChanged}: NamesEditorP
       <button type="submit">{busy ? 'Working…' : 'Preview change'}</button>
     </fieldset></form>
     {error && <p role="alert">{error}</p>}
-    {preview && <div className="names-preview"><h3>Review change</h3><p>{preview.summary}</p>
+    {preview && <div className="names-preview" ref={revealInitial}><h3>Review change</h3><p>{preview.summary}</p>
       <p>Names: {preview.names.map(name => name.text).join(', ') || 'None'}</p>
       {(preview.action.kind === 'merge' || preview.action.kind === 'split') && <p>Description: {preview.action.description || 'Empty description'}</p>}
       {preview.warnings.map(warning => <p key={warning}>{warning}</p>)}
@@ -123,7 +127,7 @@ function NamesDiscovery({entityId}: { entityId: string }) {
 
 interface NamesConceptProps extends Omit<NamesEditorProps, 'entity'> { id: string; canWrite: boolean; refresh: number }
 
-function NamesConcept({id, entities, canWrite, allowedActions, refresh, onChanged}: NamesConceptProps) {
+function NamesConcept({id, entities, canWrite, allowedActions, refresh, onChanged, initialPreview}: NamesConceptProps) {
   const [detail, setDetail] = React.useState<NamesDetail | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   React.useEffect(() => {
@@ -139,15 +143,82 @@ function NamesConcept({id, entities, canWrite, allowedActions, refresh, onChange
     <h3>Example statements</h3><NamesDiscovery key={id + ":" + refresh} entityId={id}/>
     <details><summary>Concept relationships ({detail.relationships.length})</summary><NamesRelationships items={detail.relationships} entities={entities}/></details>
   </section>
-  {canWrite && <NamesEditor key={id + ':' + detail.revision} entity={entity} entities={entities} allowedActions={allowedActions} onChanged={onChanged}/>}
+  {canWrite && <NamesEditor key={id + ':' + detail.revision} entity={entity} entities={entities} allowedActions={allowedActions} onChanged={onChanged} initialPreview={initialPreview}/>}
   <section className="names-panel"><h3>Change history</h3>{!detail.history_available ? <p>No history archive is attached.</p> : !detail.history.length ? <p>No recorded changes.</p> : <ul>{detail.history.map((item, index) => <li key={index}><details><summary>{new Date(item.at).toLocaleString()} · {item.op} · {item.actor || 'Actor not recorded'}</summary>{item.context_json && <pre>{item.context_json}</pre>}<p>Before</p><pre>{item.before_json || 'Not recorded'}</pre><p>After</p><pre>{item.after_json || 'Not recorded'}</pre></details></li>)}</ul>}</section></div>;
+}
+
+const matchReason = (match: DuplicateMatch) => ({
+  fold: 'same words once case and punctuation are ignored',
+  same_words: 'same words in another order or spelling style',
+  initials: 'one spells the initials of the other',
+  embedding: `similar meaning (${Math.round(match.score * 100)}%)`,
+})[match.via];
+
+const DUPLICATES_PAGE = 50;
+
+interface NamesDuplicatesProps {
+  entities: WorkspaceConcept[];
+  canWrite: boolean;
+  canMerge: boolean;
+  onReview: (preview: NamesPreview) => void;
+}
+
+function NamesDuplicates({entities, canWrite, canMerge, onReview}: NamesDuplicatesProps) {
+  const [limit, setLimit] = React.useState(DUPLICATES_PAGE);
+  const {state, reload, update} = useAsync(React.useCallback((signal: AbortSignal) => namesWorkspace.duplicates(limit, signal), [limit]));
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const page = dataOf(state);
+  const candidates = page?.candidates;
+  const byId = new Map(entities.map(entity => [entity.id, entity]));
+  const label = (id: string) => byId.get(id)?.label || id;
+  const act = async (work: () => Promise<void>) => {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try { await work(); } catch (error) { setError(errorMessage(error)); } finally { setBusy(false); }
+  };
+  const merge = (sourceId: string, targetId: string) => act(async () => {
+    const source = byId.get(sourceId), target = byId.get(targetId);
+    if (!source || !target) throw new Error('A concept changed since this list loaded. Reload the page.');
+    const authored = [target, source].flatMap(entity => entity.names.filter(name => !name.generated_from_name_id));
+    const preferred = authored.find(name => name.id === target.preferred_name_id) || authored[0];
+    if (!preferred) throw new Error('Neither concept has an authored name to keep.');
+    onReview(await namesWorkspace.preview({
+      kind: 'merge', entity_id: source.id, target_entity_id: target.id,
+      preferred_name_id: preferred.id, description: target.description || source.description,
+    }));
+  });
+  const dismiss = (candidate: DuplicateCandidate) => act(async () => {
+    await namesWorkspace.dismissDuplicate(candidate.a_entity_id, candidate.b_entity_id);
+    update(current => ({candidates: current.candidates.filter(item => item !== candidate), total: current.total - 1}));
+  });
+  return <section className="names-panel"><p>Concepts whose names look alike. Review a merge, or mark a pair as not a duplicate so it stops appearing here.</p>
+    {!canMerge && canWrite && <p>Admin access is required to merge concepts.</p>}
+    {error && <p role="alert">{error}</p>}
+    {state.status === 'error' && <p role="alert">{errorMessage(state.error)} <button onClick={reload}>Retry</button></p>}
+    {!candidates ? state.status === 'loading' && <p>Finding possible duplicates…</p> : !candidates.length ? <p>No possible duplicates found.</p> :
+      <ul className="names-duplicates">{candidates.map(candidate => {
+        const [a, b] = [candidate.a_entity_id, candidate.b_entity_id];
+        return <li key={a + ':' + b}>
+          <p><b>{label(a)}</b> and <b>{label(b)}</b></p>
+          <ul>{candidate.matches.map((match, index) => <li key={index}>“{match.a_name}” and “{match.b_name}”: {matchReason(match)}</li>)}</ul>
+          {[a, b].map(id => byId.get(id)?.description && <small key={id}>{label(id)}: {byId.get(id)?.description}</small>)}
+          <div className="names-duplicate-actions">
+            {canMerge && <><button disabled={busy} onClick={() => merge(a, b)}>Merge {label(a)} into {label(b)}</button><button disabled={busy} onClick={() => merge(b, a)}>Merge {label(b)} into {label(a)}</button></>}
+            {canWrite && <button disabled={busy} onClick={() => dismiss(candidate)}>Not a duplicate</button>}
+          </div>
+        </li>;
+      })}</ul>}
+    {page && candidates && candidates.length < page.total && <p>Showing {candidates.length} of {page.total} possible duplicates. <button disabled={state.status === 'loading'} onClick={() => setLimit(candidates.length + DUPLICATES_PAGE)}>Show more</button></p>}
+  </section>;
 }
 
 function NamesWorkspace({onDataChanged}: { onDataChanged?: () => Promise<void> }) {
   const [catalogue, setCatalogue] = React.useState<NamesCatalogue | null>(null);
   const [selected, setSelected] = React.useState<string | null>(null);
   const [query, setQuery] = React.useState('');
-  const [tab, setTab] = React.useState<'names' | 'suggestions'>('names');
+  const [tab, setTab] = React.useState<'names' | 'duplicates' | 'suggestions'>('names');
+  const [pendingMerge, setPendingMerge] = React.useState<NamesPreview | null>(null);
   const [refresh, setRefresh] = React.useState(0);
   const [error, setError] = React.useState<string | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
@@ -157,17 +228,18 @@ function NamesWorkspace({onDataChanged}: { onDataChanged?: () => Promise<void> }
     return () => controller.abort();
   }, [refresh]);
   const [unanchored, setUnanchored] = React.useState(0);
-  const changed = (id?: string, documentsUnanchored = 0) => {if (id) setSelected(id); setRefresh(value => value + 1); setUnanchored(documentsUnanchored); setNotice('Change saved. Discovery is being recomputed.'); if (onDataChanged) onDataChanged().catch(() => setNotice('Change saved. Reload the page to refresh other views.'));};
+  const changed = (id?: string, documentsUnanchored = 0) => {setPendingMerge(null); if (id) setSelected(id); setRefresh(value => value + 1); setUnanchored(documentsUnanchored); setNotice('Change saved. Discovery is being recomputed.'); if (onDataChanged) onDataChanged().catch(() => setNotice('Change saved. Reload the page to refresh other views.'));};
   const filtered = (catalogue?.entities || []).filter(entity => (entity.label + ' ' + entity.description + ' ' + entity.names.map(name => name.text).join(' ')).toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   return <main className="page names-workspace"><PageHeader eyebrow="Curate" title="Names & aliases" blurb="Keep every name for a concept together: add, correct, move or merge aliases, and decide AI alias suggestions. Statements keep their original wording; mentions follow the names." />
-    <nav className="tabs" aria-label="Names workspace"><button className={tab === 'names' ? 'on' : ''} aria-pressed={tab === 'names'} onClick={() => setTab('names')}>Names</button><button className={tab === 'suggestions' ? 'on' : ''} aria-pressed={tab === 'suggestions'} onClick={() => setTab('suggestions')}>AI suggestions</button></nav>
+    <nav className="tabs" aria-label="Names workspace"><button className={tab === 'names' ? 'on' : ''} aria-pressed={tab === 'names'} onClick={() => setTab('names')}>Names</button><button className={tab === 'duplicates' ? 'on' : ''} aria-pressed={tab === 'duplicates'} onClick={() => setTab('duplicates')}>Possible duplicates</button><button className={tab === 'suggestions' ? 'on' : ''} aria-pressed={tab === 'suggestions'} onClick={() => setTab('suggestions')}>AI suggestions</button></nav>
     {error && <p role="alert">{error} <button onClick={() => setRefresh(value => value + 1)}>Retry</button></p>}
     {notice && <p role="status">{notice}</p>}
     {unanchored > 0 && <p role="status">{unanchored === 1 ? '1 document' : `${unanchored} documents`} lost {unanchored === 1 ? 'its' : 'their'} concept anchor. <Link to={{ view: 'documentation' }}>Review in Documents</Link></p>}
-    {!catalogue ? <p>Loading names…</p> : tab === 'suggestions' ? <AliasSuggestions canWrite={catalogue.can_write} onChanged={() => changed()}/> : <>
+    {!catalogue ? <p>Loading names…</p> : tab === 'suggestions' ? <AliasSuggestions canWrite={catalogue.can_write} onChanged={() => changed()}/>
+      : tab === 'duplicates' ? <NamesDuplicates entities={catalogue.entities} canWrite={catalogue.can_write} canMerge={catalogue.allowed_actions.includes('merge')} onReview={preview => {setPendingMerge(preview); setSelected(preview.action.entity_id); setNotice(null); setUnanchored(0); setTab('names');}}/> : <>
       {!catalogue.can_write && <p>Writer or admin access is required to edit names.</p>}
-      <div className="names-layout"><aside><label>Find a name or alias<input type="search" value={query} onChange={event => setQuery(event.target.value)}/></label><p>{filtered.length} concepts</p><ul className="names-catalogue">{filtered.map(entity => <li key={entity.id}><button aria-current={selected === entity.id ? 'true' : undefined} onClick={() => {setSelected(entity.id); setNotice(null); setUnanchored(0);}}><b>{entity.label}</b><small>{entity.names.filter(name => !name.generated_from_name_id && name.text !== entity.label).map(name => name.text).join(', ') || 'No other authored names'}</small></button></li>)}</ul></aside>
-      {selected ? <NamesConcept id={selected} entities={catalogue.entities} canWrite={catalogue.can_write} allowedActions={catalogue.allowed_actions} refresh={refresh} onChanged={changed}/> : <p>Select a concept to inspect its names and examples.</p>}
+      <div className="names-layout"><aside><label>Find a name or alias<input type="search" value={query} onChange={event => setQuery(event.target.value)}/></label><p>{filtered.length} concepts</p><ul className="names-catalogue">{filtered.map(entity => <li key={entity.id}><button aria-current={selected === entity.id ? 'true' : undefined} onClick={() => {setSelected(entity.id); setPendingMerge(null); setNotice(null); setUnanchored(0);}}><b>{entity.label}</b><small>{entity.names.filter(name => !name.generated_from_name_id && name.text !== entity.label).map(name => name.text).join(', ') || 'No other authored names'}</small></button></li>)}</ul></aside>
+      {selected ? <NamesConcept id={selected} entities={catalogue.entities} canWrite={catalogue.can_write} allowedActions={catalogue.allowed_actions} refresh={refresh} onChanged={changed} initialPreview={pendingMerge?.action.entity_id === selected ? pendingMerge : undefined}/> : <p>Select a concept to inspect its names and examples.</p>}
       </div>
     </>}
   </main>;

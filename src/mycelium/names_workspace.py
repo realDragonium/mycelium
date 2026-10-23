@@ -167,6 +167,11 @@ class Applied(Model):
     documents_unanchored: int = 0
 
 
+class DismissDuplicate(Model):
+    a_entity_id: str
+    b_entity_id: str
+
+
 class Conflict(ValueError):
     pass
 
@@ -514,3 +519,13 @@ def apply(body: ApplyRequest) -> Applied:
             revision=revision(conn),
             documents_unanchored=unanchored,
         )
+
+
+def dismiss_duplicate(conn: sqlite3.Connection, body: DismissDuplicate) -> None:
+    if body.a_entity_id == body.b_entity_id:
+        raise ValueError("Choose two different concepts")
+    with store.transaction(conn):
+        for entity_id in (body.a_entity_id, body.b_entity_id):
+            if store.get_entity_by_id(conn, entity_id) is None:
+                raise ValueError("The concept no longer exists")
+        store.dismiss_entity_duplicate(conn, body.a_entity_id, body.b_entity_id)

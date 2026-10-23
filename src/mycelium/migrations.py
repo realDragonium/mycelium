@@ -995,6 +995,19 @@ def _migration_v19_sub_type_definition(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v20_entity_duplicate_dismissals(conn: sqlite3.Connection) -> None:
+    """Record entity pairs a curator judged not to be duplicates."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals ("
+        "a_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, "
+        "b_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, "
+        "dismissed_at TEXT NOT NULL, "
+        "dismissed_by TEXT, "
+        "PRIMARY KEY (a_entity_id, b_entity_id), "
+        "CHECK (a_entity_id < b_entity_id))"
+    )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1018,6 +1031,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (17, _migration_v17_rule_definition),
     (18, _migration_v18_drop_kind_link_matrix),
     (19, _migration_v19_sub_type_definition),
+    (20, _migration_v20_entity_duplicate_dismissals),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

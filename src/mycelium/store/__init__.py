@@ -17,6 +17,8 @@ from .. import mentions
 from .entities import (
     create_entity,
     delete_entity,
+    dismiss_entity_duplicate,
+    dismissed_entity_duplicates,
     ensure_preferred_name,
     get_entity_by_id,
     set_preferred_name,
@@ -196,6 +198,8 @@ __all__ = [
     "create_name",
     "create_statement",
     "delete_entity",
+    "dismiss_entity_duplicate",
+    "dismissed_entity_duplicates",
     "delete_entity_link_type_glossary",
     "delete_entity_links",
     "delete_entity_links_touching",

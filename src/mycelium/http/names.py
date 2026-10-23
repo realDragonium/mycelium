@@ -63,6 +63,14 @@ def names_apply_http(
     return names_workspace.apply(body)
 
 
+@router.post("/api/names-workspace/duplicates/dismiss", status_code=204)
+def names_dismiss_duplicate_http(
+    body: names_workspace.DismissDuplicate, request: Request
+) -> None:
+    _enforce_curator(request, "dismissing possible duplicates")
+    names_workspace.dismiss_duplicate(server._db(), body)
+
+
 @router.get("/api/names-workspace/{entity_id}")
 def names_detail_http(entity_id: str, request: Request) -> names_workspace.Detail:
     _require_principal(request)

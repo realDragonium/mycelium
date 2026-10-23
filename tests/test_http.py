@@ -1018,19 +1018,27 @@ def test_find_entity_duplicates_fold_and_embedding(tmp_path, monkeypatch):
         # An alias on the SAME entity must never be reported.
         client.post("/upsert-name", json={"text": "check-list", "entity_id": c})
 
-        pairs = client.post("/find-entity-duplicates", json={"threshold": 0.9}).json()
-        entity_pairs = {
-            (p["via"], frozenset((p["a_entity_id"], p["b_entity_id"]))) for p in pairs
+        candidates = client.post(
+            "/find-entity-duplicates", json={"threshold": 0.9}
+        ).json()["candidates"]
+        matches = {
+            (m["via"], frozenset((pair["a_entity_id"], pair["b_entity_id"])))
+            for pair in candidates
+            for m in pair["matches"]
         }
         # "Answer-Type" / "answer type" collapse under the matcher fold
         # (dash → space); their auto-plurals collide the same way.
-        assert ("fold", frozenset((a, b))) in entity_pairs
+        assert ("fold", frozenset((a, b))) in matches
         # The vector twins pair via the embedding pass.
-        assert ("embedding", frozenset((c, d))) in entity_pairs
+        assert ("embedding", frozenset((c, d))) in matches
         # Same-entity alias pairs are excluded.
-        assert all(len(fs) == 2 for _, fs in entity_pairs)
-        fold_pair = next(p for p in pairs if p["via"] == "fold")
-        assert fold_pair["score"] == 1.0
+        assert all(len(fs) == 2 for _, fs in matches)
+        fold = next(
+            pair
+            for pair in candidates
+            if {a, b} == {pair["a_entity_id"], pair["b_entity_id"]}
+        )
+        assert fold["score"] == 1.0
 
 
 def test_list_statements_pagination(tmp_path, monkeypatch):

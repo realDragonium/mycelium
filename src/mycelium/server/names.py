@@ -8,9 +8,13 @@ index once the operation's transaction commits.
 
 from __future__ import annotations
 
+import re
 import sqlite3
-from collections.abc import Iterator
-from typing import Any
+import unicodedata
+from collections import Counter
+from collections.abc import Iterable, Iterator
+from itertools import pairwise
+from typing import Any, Literal, TypedDict
 
 from pydantic import JsonValue
 
@@ -286,71 +290,230 @@ def delete_name(name_id: str) -> dict[str, Any]:
     }
 
 
+Via = Literal["fold", "same_words", "initials", "embedding"]
+_LEXICAL_SCORES: dict[Via, float] = {"fold": 1.0, "same_words": 0.95, "initials": 0.9}
+
+
+class DuplicateMatch(TypedDict):
+    a_name: str
+    b_name: str
+    via: Via
+    score: float
+
+
+class DuplicateCandidate(TypedDict):
+    a_entity_id: str
+    b_entity_id: str
+    score: float
+    matches: list[DuplicateMatch]
+
+
+class DuplicatePage(TypedDict):
+    candidates: list[DuplicateCandidate]
+    total: int
+
+
 @tool
 def find_entity_duplicates(
-    threshold: float = 0.9,
+    threshold: float = 0.75,
     limit: int = 50,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> DuplicatePage:
     """Audit entity names for likely duplicate entities.
 
-    Two passes over every name in the substrate, both reporting only
-    pairs whose names point at DIFFERENT entities (multiple aliases on
-    one entity are fine):
+    Compares names that point at DIFFERENT entities (multiple aliases on
+    one entity are fine). Names are split into words on spaces,
+    punctuation, `_`, `-` and camelCase, so `only_admin_exports` and
+    "Only Admin Exports" have the same words. Four passes:
 
     - `"fold"`: the names collapse to the same token sequence under the
       mention matcher's normalization (casefold + NFKC + dash/quote
-      folding) — e.g. "answer type" vs "Answer-Type". Near-certain
-      duplicates, reported with score 1.0.
+      folding) — e.g. "answer type" vs "Answer-Type". Score 1.0.
+    - `"same_words"`: the same words in another order or spelling style —
+      e.g. "Only Admin Exports" vs "Admin Only Exports". Score 0.95.
+    - `"initials"`: a one-word name spells the initials of a longer one —
+      e.g. "SSO" vs "Single sign-on". Score 0.9.
     - `"embedding"`: the names' vectors on the name index have cosine
-      similarity at or above `threshold` — catches variants the fold
-      can't, like "Checklist" vs "Check List Item" or conceptual twins.
+      similarity at or above `threshold`, unless the words show the names
+      are related but distinct: one name's words contain the other's
+      ("Login" vs "Login page"); one word takes another's place, as the
+      only difference or right after a shared word ("invoice_template_v1"
+      vs "invoice_template_v2", "Sign-in page" vs "Sign-up"); or each adds
+      its own words to a shared stem of two or more words, or of words common to
+      3% of names. A word that abbreviates the other ("admin" vs
+      "administrator") does not count as a swap.
 
-    The statement-level counterpart is `find_duplicates`; this covers
-    the entity layer it skips.
+    Generated plurals take part only in the fold pass. The statement-level
+    counterpart is `find_duplicates`; this covers the entity layer it skips.
 
-    Each pair: `{a_entity_id, a_name, b_entity_id, b_name, score, via}`,
-    sorted by score descending, capped at `limit`. Resolve with
-    `merge_entities` (same concept) or `move_name` / `delete_name` (an
-    alias sits on the wrong entity).
+    Returns `{candidates, total}`: one candidate per entity pair,
+    `{a_entity_id, b_entity_id, score, matches}`, where `matches` lists each
+    name pair that matched (`{a_name, b_name, via, score}`) and `score` is
+    the strongest. Candidates with a word match rank above embedding-only
+    ones, then by score. `total` counts every candidate; page with `offset`
+    and `limit`. Pairs a curator dismissed as not duplicates in Names &
+    aliases are left out. Resolve with `merge_entities` (same concept) or
+    `move_name` / `delete_name` (an alias sits on the wrong entity).
     """
     names = store.list_all_names(_db())
     by_id = {r["id"]: r for r in names}
-    seen_pairs: set[tuple[str, str]] = set()
-    pairs: list[dict[str, Any]] = []
-
-    def _add(a_name_id: str, b_name_id: str, score: float, via: str) -> None:
+    seen_name_pairs: set[frozenset[str]] = set()
+    candidates: dict[tuple[str, str], DuplicateCandidate] = {}
+    for a_name_id, b_name_id, via, score in _name_matches(names, threshold):
         a, b = by_id[a_name_id], by_id[b_name_id]
-        if a["entity_id"] == b["entity_id"]:
-            return
-        key = (
-            (a_name_id, b_name_id) if a_name_id < b_name_id else (b_name_id, a_name_id)
-        )
-        if key in seen_pairs:
-            return
-        seen_pairs.add(key)
-        pairs.append(
+        name_pair = frozenset((a_name_id, b_name_id))
+        if a["entity_id"] == b["entity_id"] or name_pair in seen_name_pairs:
+            continue
+        seen_name_pairs.add(name_pair)
+        if a["entity_id"] > b["entity_id"]:
+            a, b = b, a
+        candidate = candidates.setdefault(
+            (a["entity_id"], b["entity_id"]),
             {
                 "a_entity_id": a["entity_id"],
-                "a_name": a["text"],
                 "b_entity_id": b["entity_id"],
-                "b_name": b["text"],
                 "score": score,
-                "via": via,
-            }
+                "matches": [],
+            },
+        )
+        candidate["score"] = max(candidate["score"], score)
+        candidate["matches"].append(
+            {"a_name": a["text"], "b_name": b["text"], "via": via, "score": score}
         )
 
-    for group in _fold_collision_groups(names):
-        for i, a_name_id in enumerate(group):
-            for b_name_id in group[i + 1 :]:
-                _add(a_name_id, b_name_id, 1.0, "fold")
+    dismissed = store.dismissed_entity_duplicates(_db())
+    ranked = sorted(
+        (c for key, c in candidates.items() if key not in dismissed),
+        key=lambda c: (
+            any(m["via"] != "embedding" for m in c["matches"]),
+            c["score"],
+        ),
+        reverse=True,
+    )
+    return {"candidates": ranked[offset : offset + limit], "total": len(ranked)}
 
-    for row in names:
-        for other_name_id, score in _name_embedding_neighbours(row["id"], threshold):
-            if other_name_id in by_id:
-                _add(row["id"], other_name_id, score, "embedding")
 
-    pairs.sort(key=lambda p: p["score"], reverse=True)
-    return pairs[:limit]
+def _name_matches(
+    names: list[sqlite3.Row], threshold: float
+) -> Iterator[tuple[str, str, Via, float]]:
+    """Every name pair any pass matches, strongest pass first."""
+    by_id = {r["id"]: r for r in names}
+    readings = {r["id"]: _readings(r["text"]) for r in names}
+    words = {name_id: split for name_id, (split, _) in readings.items()}
+    authored = [r["id"] for r in names if r["generated_from_name_id"] is None]
+
+    for a_name_id, b_name_id in _pairs_within(_fold_collision_groups(names)):
+        yield a_name_id, b_name_id, "fold", _LEXICAL_SCORES["fold"]
+
+    by_words: dict[frozenset[str], list[str]] = {}
+    for name_id in authored:
+        for key in {frozenset(reading) for reading in readings[name_id]}:
+            by_words.setdefault(key, []).append(name_id)
+    for a_name_id, b_name_id in _pairs_within(by_words.values()):
+        yield a_name_id, b_name_id, "same_words", _LEXICAL_SCORES["same_words"]
+
+    by_initials: dict[str, list[str]] = {}
+    for name_id in authored:
+        if len(words[name_id]) > 1:
+            initials = "".join(w[0] for w in words[name_id])
+            by_initials.setdefault(initials, []).append(name_id)
+    for name_id in authored:
+        if len(words[name_id]) == 1:
+            for other_name_id in by_initials.get(words[name_id][0], []):
+                yield name_id, other_name_id, "initials", _LEXICAL_SCORES["initials"]
+
+    family = _family_words([readings[name_id] for name_id in authored])
+    for name_id in authored:
+        for other_name_id, score in _name_embedding_neighbours(name_id, threshold):
+            other = by_id.get(other_name_id)
+            if other is None or other["generated_from_name_id"] is not None:
+                continue
+            if not any(
+                _related_but_distinct(a, b, family)
+                for a, b in zip(readings[name_id], readings[other_name_id], strict=True)
+            ):
+                yield name_id, other_name_id, "embedding", score
+
+
+def _pairs_within(groups: Iterable[list[str]]) -> Iterator[tuple[str, str]]:
+    for group in groups:
+        for i, first in enumerate(group):
+            for second in group[i + 1 :]:
+                yield first, second
+
+
+def _readings(text: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The words of a name with camelCase split, and with it kept whole:
+    "GitHub_exports" reads as `("git", "hub", "export")` and
+    `("github", "export")`, so it compares with both `gitHubExport` and
+    `github_export`."""
+    return _words(_CAMEL_BOUNDARY.sub(" ", text)), _words(text)
+
+
+def _words(text: str) -> tuple[str, ...]:
+    """Lower-case singular words, split on spaces, punctuation and `_`."""
+    found = _WORD.findall(unicodedata.normalize("NFKC", text).casefold())
+    return tuple(
+        w[:-1] if len(w) > 3 and w.endswith("s") and not w.endswith("ss") else w
+        for w in found
+    )
+
+
+def _family_words(
+    names: list[tuple[tuple[str, ...], tuple[str, ...]]],
+) -> frozenset[str]:
+    """Words so common they mark a family of names, not a concept: the
+    `notify_` of a hundred notification identifiers."""
+    counts = Counter(word for split, whole in names for word in {*split, *whole})
+    floor = max(10, 0.03 * len(names))
+    return frozenset(word for word, count in counts.items() if count >= floor)
+
+
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+_WORD = re.compile(r"[^\W_]+")
+
+
+def _related_but_distinct(
+    a: tuple[str, ...], b: tuple[str, ...], family: frozenset[str]
+) -> bool:
+    """Whether the words mark two similar-looking names as different concepts.
+
+    Names in one family embed closer to each other than many true
+    duplicates do ("Sign-in page" vs "Sign-up" at 0.80, "Login page" vs
+    "Sign-in page" at 0.83), so the embedding pass cannot tell them apart.
+    A name extending the other is a narrower concept. Names are siblings
+    when one distinguishing word takes the place of another: as their only
+    difference ("Monthly plan" vs "Annual plan"), or right after a word
+    they share ("Sign-in page" vs "Sign-up", "export_batch_i_size" vs
+    "export_batch_ii_size"), unless one word abbreviates the other
+    ("admin" vs "administrator"). So are names that each add their own words to a stem
+    of two or more words ("login_rate_window_report" vs
+    "login_rate_burst_cap_report") or of family words only
+    ("notify_invoice_paid" vs "notify_export_ready")."""
+    shared = set(a) & set(b)
+    only_a, only_b = set(a) - shared, set(b) - shared
+    if not only_a or not only_b:
+        return bool(only_a or only_b)
+    if len(only_a) == 1 and len(only_b) == 1:
+        return not _abbreviates(*only_a, *only_b)
+    after_a = {
+        (word, next_word) for word, next_word in pairwise(a) if next_word in only_a
+    }
+    after_b = {
+        (word, next_word) for word, next_word in pairwise(b) if next_word in only_b
+    }
+    if any(
+        word_a == word_b and not _abbreviates(next_a, next_b)
+        for word_a, next_a in after_a
+        for word_b, next_b in after_b
+    ):
+        return True
+    return len(shared) >= 2 or (bool(shared) and shared <= family)
+
+
+def _abbreviates(word_a: str, word_b: str) -> bool:
+    short, long = sorted((word_a, word_b), key=len)
+    return len(short) >= 3 and long.startswith(short)
 
 
 def _fold_collision_groups(names: list[sqlite3.Row]) -> list[list[str]]:
@@ -377,9 +540,9 @@ def _name_embedding_neighbours(
         # Slot is stranded — SQLite mapping points at an id the
         # hnsw file doesn't have. Skip rather than crash the audit.
         return
-    # Same k tradeoff as find_duplicates: wide enough to cover any
-    # realistic cluster of variants at MVP scale.
-    for other_vid, distance in _name_idx().search(vec, k=10):
+    # Families of sibling identifiers ("invoice_template_v1", "_v2", ...)
+    # fill the nearest slots and are dropped later; look past them.
+    for other_vid, distance in _name_idx().search(vec, k=30):
         if other_vid == vid:
             continue
         score = 1.0 - distance

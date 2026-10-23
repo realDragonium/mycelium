@@ -514,6 +514,11 @@ main.page.home { padding-top: 56px; }
 .names-examples { padding-left: 20px; }
 .names-examples li { margin-bottom: 12px; }
 .names-examples small { color: var(--ink-4); }
+.names-duplicates { list-style: none; padding: 0; display: grid; gap: 10px; }
+.names-duplicates > li { border: 1px solid var(--line); border-radius: var(--r-md); padding: 10px 14px; }
+.names-duplicates ul { margin: 6px 0; padding-left: 20px; color: var(--ink-3); }
+.names-duplicates small { display: block; color: var(--ink-4); }
+.names-duplicate-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .names-preview { border-top: 2px solid var(--bio-line); margin-top: 18px; padding-top: 12px; }
 .names-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--fs-2xs); max-height: 300px; overflow: auto; background: var(--bg-inset); padding: 8px 10px; border-radius: var(--r-sm); }
 .names-workspace [role="alert"] { color: var(--danger); }

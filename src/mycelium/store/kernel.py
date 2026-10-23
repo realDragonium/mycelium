@@ -433,6 +433,18 @@ CREATE TABLE IF NOT EXISTS knowledge_gaps (
     CHECK (resolved_at IS NULL OR dismissed_at IS NULL)
 );
 
+-- Entity pairs a curator judged "not a duplicate", so the duplicate audit
+-- stops proposing them. One row per unordered pair: the CHECK keeps the ids
+-- sorted. Merging or deleting either entity drops the judgement with it.
+CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals (
+    a_entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    b_entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    dismissed_at TEXT NOT NULL,
+    dismissed_by TEXT,
+    PRIMARY KEY (a_entity_id, b_entity_id),
+    CHECK (a_entity_id < b_entity_id)
+);
+
 -- Durable dirty-queue for asynchronous mention recompute. Statement
 -- upsert derives mentions synchronously (hot path stays consistent); a
 -- name/alias/entity change instead enqueues work here, drained by the

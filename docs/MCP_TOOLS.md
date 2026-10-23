@@ -76,7 +76,7 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `survey_statements` | Its own docstring says it is interchangeable with `search_statements`. This is the one duplicate in the read path. An MCP client can split its own question, and `ask` handles broad questions. Ask and Documentation recon use it in-process. |
 | `retrieve_context` | Combines name lookup, entity reads, search, and fetch for the Ask loop's turn budget. It is a distinct primitive, but MCP clients can run the same reads. |
 | `find_duplicates` | Audits the whole substrate in near-quadratic time and takes no candidate text. This is curation, not retrieval, so it does not satisfy the Ingest reconcile floor. |
-| `find_entity_duplicates` | Audits entity names. This is curation, and nothing calls it except its HTTP route. |
+| `find_entity_duplicates` | Audits entity names. This is curation; the Names & aliases workspace lists its results. |
 | `get_mention_candidates` | Discovery view for the names workspace (`GET /api/mention-candidates`). |
 | `replace_text` | `patch_statement(id, text=...)` covers it. The UI and draft replay use it. |
 | `move_name` | Alias curation in the names workspace. |

@@ -233,6 +233,10 @@ export interface MentionCandidatePage {
   matches: MentionCandidate[]; next_after: number; has_more: boolean; scanned: number;
 }
 
+export interface DuplicateMatch { a_name: string; b_name: string; via: 'fold' | 'same_words' | 'initials' | 'embedding'; score: number }
+export interface DuplicateCandidate { a_entity_id: string; b_entity_id: string; score: number; matches: DuplicateMatch[] }
+export interface DuplicatePage { candidates: DuplicateCandidate[]; total: number }
+
 export const namesWorkspace = {
   catalogue: (signal?: AbortSignal) => getJSON<NamesCatalogue>('/api/names-workspace', signal),
   detail: (id: string, signal?: AbortSignal) => getJSON<NamesDetail>(`/api/names-workspace/${enc(id)}`, signal),
@@ -240,6 +244,8 @@ export const namesWorkspace = {
   apply: (action: NameAction, expectedRevision: string) => postJSON<NamesApplied>('/api/names-workspace/apply', { action, expected_revision: expectedRevision }),
   mentionCandidates: (entityId: string, after: number, signal?: AbortSignal) =>
     getJSON<MentionCandidatePage>(`/api/mention-candidates?${new URLSearchParams({ entity_id: entityId, after: String(after), limit: '30' })}`, signal),
+  duplicates: (limit: number, signal?: AbortSignal) => postJSON<DuplicatePage>('/find-entity-duplicates', { limit }, signal),
+  dismissDuplicate: (a: string, b: string) => postJSON<null>('/api/names-workspace/duplicates/dismiss', { a_entity_id: a, b_entity_id: b }),
 };
 
 /* ----------------------------- activity ------------------------------ */
