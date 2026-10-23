@@ -134,7 +134,7 @@ def test_model_loop_tools_are_bounded_more_tightly_than_the_general_pool(monkeyp
 
     assert bound == 3
     assert bound < general_pool
-    assert admission._MODEL_LOOP_TOOLS == {"ask", "ingest"}
+    assert admission._MODEL_LOOP_TOOLS == {"ask", "ingest", "connect_statements"}
 
 
 def test_limiter_is_selected_by_name_not_by_transport():

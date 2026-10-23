@@ -42,6 +42,7 @@ from . import (
     draft_review,
     drafts,
     gaps,
+    health,
     history,
     names,
     prompt_texts,
@@ -154,6 +155,7 @@ app.include_router(tool_routes.router)
 app.include_router(history.router)
 app.include_router(substrate.router)
 app.include_router(gaps.router)
+app.include_router(health.router)
 app.include_router(traces.router)
 app.include_router(account.router)
 app.include_router(names.router)

@@ -147,6 +147,17 @@ class DocumentationMaintenanceSettings(SettingsModel):
     revisions_per_day: int = Field(default=5, ge=0)
 
 
+class ConnectSettings(LoopLimits):
+    kind: Literal["connect"] = "connect"
+    #: Most statements one connect run takes; each run is one draft.
+    batch_size: int = Field(default=10, gt=0, le=25)
+    max_cost_usd: float = Field(default=0.75, gt=0)
+    max_tokens: int = Field(default=32000, gt=0)
+    op_cap: int = Field(default=60, gt=0)
+    wall_clock_s: float = Field(default=300.0, gt=0)
+    request_timeout_s: float = Field(default=120.0, gt=0)
+
+
 class ConcurrencySettings(SettingsModel):
     kind: Literal["concurrency"] = "concurrency"
     model_loops: int = Field(default=2, gt=0)
@@ -239,6 +250,7 @@ Section = Literal[
     "audience_labelling",
     "documentation_planning",
     "documentation_maintenance",
+    "connect",
     "concurrency",
     "documentation",
     "ai_budget",
@@ -252,6 +264,7 @@ Body = Annotated[
     | AudienceLabellingSettings
     | DocumentationPlanningSettings
     | DocumentationMaintenanceSettings
+    | ConnectSettings
     | ConcurrencySettings
     | DocumentationSettings
     | AIBudgetSettings,
@@ -267,6 +280,7 @@ DEFAULTS: tuple[Body, ...] = (
     AudienceLabellingSettings(),
     DocumentationPlanningSettings(),
     DocumentationMaintenanceSettings(),
+    ConnectSettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
     AIBudgetSettings(),
@@ -318,6 +332,7 @@ T = TypeVar(
     | AudienceLabellingSettings
     | DocumentationPlanningSettings
     | DocumentationMaintenanceSettings
+    | ConnectSettings
     | ConcurrencySettings
     | DocumentationSettings
     | AIBudgetSettings,
@@ -443,7 +458,8 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         | AudienceLabellingSettings
         | DocumentationPlanningSettings
         | AIBudgetSettings
-        | DocumentationMaintenanceSettings,
+        | DocumentationMaintenanceSettings
+        | ConnectSettings,
     ):
         return default
     if isinstance(default, DocumentationSettings):

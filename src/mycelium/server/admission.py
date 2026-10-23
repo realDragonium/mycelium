@@ -27,7 +27,7 @@ R = TypeVar("R")
 #: box. `request_documentation` is not here because the TOOL is fast — it
 #: returns a run id immediately. Its background runs are model loops like any
 #: other and draw on the same budget; see `model_loop_slot`.
-_MODEL_LOOP_TOOLS = frozenset({"ask", "ingest"})
+_MODEL_LOOP_TOOLS = frozenset({"ask", "ingest", "connect_statements"})
 
 
 def _model_loop_max_concurrent() -> int:

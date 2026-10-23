@@ -77,7 +77,7 @@ from .entities import (
 from .gaps import report_knowledge_gap
 from .links import add_links, remove_links
 from .lookups import get_statements, grep_statements, list_statements, retrieve_context
-from .model_loops import ask, ingest
+from .model_loops import ask, connect_statements, ingest
 from .names import (
     delete_name,
     find_entity_duplicates,
@@ -143,6 +143,7 @@ __all__ = [
     "survey_statements",
     "ask",
     "ingest",
+    "connect_statements",
     "request_documentation",
     "retry_documentation_run",
     "revise_document",

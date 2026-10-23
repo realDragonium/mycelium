@@ -1,7 +1,7 @@
-"""Tool entry points into the model loops: Ask and Ingest.
+"""Tool entry points into the model loops: Ask, Ingest and Connect.
 
-Both run their loop inside the call, under the shared model-loop budget (see
-`admission`). Neither writes the substrate directly: Ingest produces drafts.
+Each runs their loop inside the call, under the shared model-loop budget (see
+`admission`). None writes the substrate directly: Ingest and Connect produce drafts.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from .drafts import _auto_submit
 from .registry import tool
-from .runtime import _context
+from .runtime import _context, _db
 
 
 @tool(role="asker")
@@ -111,6 +111,52 @@ def ingest(text: str) -> dict[str, Any]:
         )
     result = run_ingest(text, config=config)
     response = result.model_dump()
+    if result.outcome == "draft_created":
+        response["submitted_for_review"] = _auto_submit(result.draft_id)
+    return response
+
+
+@tool
+def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
+    """Propose links and concept mentions for existing statements that have
+    none, as a reviewable DRAFT. Never writes to the substrate live.
+
+    Runs the ingest loop over the given statements instead of free text: it
+    searches around each one and proposes `add_links` edges that touch a
+    given statement, aliases a given statement uses for an existing concept,
+    and new concepts a given statement names. It never creates, rewrites,
+    merges or deletes a statement; any such proposal is dropped and flagged,
+    and so is an edge that points the wrong way.
+
+    The connect action's saved settings choose the model and bound the run:
+    at most `batch_size` statements per call, an operation cap, a wall clock
+    and a spending cap. The draft goes to review exactly as an ingest draft
+    does. Returns the same shapes as `ingest`, with `cost_usd` (null when the
+    model has no known price).
+    """
+    from .. import knowledge_health, product_settings, store
+    from ..ingest.connect import config_from_settings, run_connect
+
+    limits = product_settings.get(product_settings.ConnectSettings)
+    ids = list(dict.fromkeys(statement_ids))
+    if not ids:
+        raise ValueError("statement_ids must name at least one statement")
+    if len(ids) > limits.batch_size:
+        raise ValueError(
+            f"at most {limits.batch_size} statements per run; got {len(ids)}"
+        )
+    targets = knowledge_health.targets(_db(), ids)
+    config = replace(
+        config_from_settings(),
+        trace_log_path=str(_context().data_dir / "connect_trace.jsonl"),
+    )
+    result = run_connect(
+        targets,
+        known_name=lambda name: store.get_name_by_text(_db(), name) is not None,
+        config=config,
+    )
+    response = result.model_dump()
+    response["cost_usd"] = result.trace.get("cost_usd")
     if result.outcome == "draft_created":
         response["submitted_for_review"] = _auto_submit(result.draft_id)
     return response
