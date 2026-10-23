@@ -15,6 +15,7 @@ import { GraphView } from './graph';
 import { HomeScreen } from './home';
 import { IngestSurface } from './ingest';
 import { KnowledgeGapsScreen } from './knowledge-gaps';
+import { KnowledgeHealthScreen } from './knowledge-health';
 import { NamesWorkspace } from './names-workspace';
 import { SettingsScreen } from './settings';
 import { usd, type Budget } from './ai-usage';
@@ -42,6 +43,7 @@ function useNavGroups(activeDrafts: number, openGaps: number, documentUpdates: n
     ] },
     { title: 'Curate', items: [
       { label: 'Drafts', icon: 'prov', to: { view: 'drafts' }, views: ['drafts', 'draft'], badge: activeDrafts },
+      { label: 'Knowledge health', icon: 'check', to: { view: 'health', list: null }, views: ['health'] },
       { label: 'Knowledge gaps', icon: 'gap', to: { view: 'gaps' }, views: ['gaps'], badge: openGaps, badgeTone: 'warn' },
       { label: 'Names & aliases', icon: 'tag', to: { view: 'names' }, views: ['names'] },
       { label: 'Glossary', icon: 'book', to: { view: 'glossary' }, views: ['glossary'] },
@@ -174,6 +176,7 @@ function Screen({ route, ingestNonce, refresh }: { route: Route; ingestNonce: nu
     case 'ingest': return <IngestSurface key={ingestNonce} />;
     case 'drafts': return <DraftsList />;
     case 'draft': return <DraftReview id={route.id} />;
+    case 'health': return <KnowledgeHealthScreen list={route.list} />;
     case 'gaps': return <KnowledgeGapsScreen />;
     case 'names': return <NamesWorkspace onDataChanged={refresh} />;
     case 'glossary': return <GlossaryScreen />;

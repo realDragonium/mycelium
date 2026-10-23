@@ -10,7 +10,7 @@ const TITLES: Record<string, string> = {
   ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation',
   draft_review: 'Draft review', alias_discovery: 'Alias discovery', concurrency: 'Concurrent runs',
   documentation: 'Documentation delivery', audience_labelling: 'Audience labelling',
-  documentation_planning: 'Documentation planning', ai_budget: 'Monthly budget', documentation_maintenance: 'Documentation maintenance',
+  documentation_planning: 'Documentation planning', ai_budget: 'Monthly budget', documentation_maintenance: 'Documentation maintenance', connect: 'Connecting statements',
 };
 
 // [label, min, step]; booleans have no bounds.
@@ -29,6 +29,7 @@ const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   monthly_limit_usd: ['Monthly budget in USD (0 for none)', 0, 'any'], warn_percent: ['Warn admins at percent of budget', 1, 1],
   pause_background: ['Pause background actions at 100%'],
   quiet_minutes: ['Quiet minutes before an automatic revision', 0, 1], revisions_per_day: ['Automatic revisions per profile per day', 0, 1],
+  max_cost_usd: ['Spending cap per run (USD)', 0.01, 'any'],
 };
 
 export interface Binding { name: string; host: string; available: boolean; label?: string; owner?: string; repo?: string }

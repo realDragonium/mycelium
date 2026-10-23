@@ -25,13 +25,13 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
-from .. import ai, ai_prompts, tracing, when_expression
+from .. import ai, ai_prompts, link_rules, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -122,18 +122,48 @@ def run_ingest(
     substrate, the in-process draft emitter, and effective saved configuration.
     """
     config = config or IngestConfig.from_env()
+    instructions = ai_prompts.resolve(DOCTRINE_NAME, default_path=config.doctrine_path)
+    text, input_note = _guard_input(text, config)
+    guarded = text
+    task = Task(
+        text=text,
+        system_prompt=prompts.build_system_prompt(instructions.text),
+        first_message=lambda vocab: prompts.initial_user_message(guarded, vocab),
+        title=_draft_title(text),
+        notes=tuple(n for n in (instructions.note, input_note) if n),
+    )
+    return run(
+        task,
+        instructions,
+        client=client,
+        substrate=substrate,
+        emitter=emitter,
+        config=config,
+        label="ingest",
+    )
+
+
+def run(
+    task: Task,
+    instructions: ai_prompts.Snapshot,
+    *,
+    client: Any | None,
+    substrate: SubstrateReader | None,
+    emitter: DraftEmitter | None,
+    config: IngestConfig,
+    label: str,
+) -> IngestResult:
+    """Run the loop for `task`, recording which `instructions` it ran under."""
     if substrate is None:
         substrate = InProcessSubstrate()
     if emitter is None:
         emitter = InProcessDraftEmitter()
 
-    instructions = ai_prompts.resolve(DOCTRINE_NAME, default_path=config.doctrine_path)
-    doctrine_text, doctrine_note = instructions.text, instructions.note
-
-    with tracing.profile_to_html("ingest", f"{len(text)} chars"):
-        result = _execute(
-            text, client, substrate, emitter, config, doctrine_text, doctrine_note
-        )
+    with (
+        tracing.profile_to_html(label, f"{len(task.text)} chars"),
+        ai.usage.attributed(label),
+    ):
+        result = _execute(task, client, substrate, emitter, config)
 
     result.trace["prompts"] = [instructions.reference().model_dump(mode="json")]
 
@@ -142,6 +172,28 @@ def run_ingest(
 
         write_record(config.trace_log_path, result.trace)
     return result
+
+
+@dataclass(frozen=True)
+class Task:
+    """What one run of the loop is asked to do: ingest free text, or connect
+    existing statements (see `connect.py`)."""
+
+    #: The text the run works from; alias evidence without a statement quotes it.
+    text: str
+    system_prompt: str
+    #: The opening message, given the live vocabulary.
+    first_message: Callable[[dict[str, Any]], str]
+    title: str
+    notes: tuple[str, ...] = ()
+    #: Narrows one op to what this task may propose: the op, possibly with
+    #: fewer edges, or None to drop it, plus a line per thing dropped.
+    screen: Callable[[dict], tuple[dict | None, list[str]]] | None = None
+    #: Which statement edges to drop by their kinds, given (link type, source
+    #: kind, target kind). Ingest drops only edges applying would reject.
+    edge_check: directions.EdgeCheck = link_rules.flip_error
+    #: Statements alias evidence may quote instead of `text`, by id.
+    quotable: Mapping[str, str] = field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -154,8 +206,7 @@ class _RunContext:
     """Per-run harness state, so the finalizers/handlers below don't each need
     ten-plus positional parameters."""
 
-    text: str
-    system_prompt: str
+    task: Task
     client: Any
     substrate: SubstrateReader
     config: IngestConfig
@@ -171,47 +222,37 @@ class _RunContext:
 
 
 def _execute(
-    text: str,
+    task: Task,
     client: Any,
     substrate: SubstrateReader,
     emitter: DraftEmitter,
     config: IngestConfig,
-    doctrine_text: str,
-    doctrine_note: str | None,
 ) -> IngestResult:
     start = time.monotonic()
-
-    # ---- Step 1: input guard — head-truncate, never silently blow the cap ----
-    text, input_note = _guard_input(text, config)
 
     trace = TraceBuilder(
         model=config.model,
         provider=config.provider,
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
-        input_chars=len(text),
+        input_chars=len(task.text),
     )
-    if doctrine_note:
-        trace.notes.append(doctrine_note)
-    if input_note:
-        trace.notes.append(input_note)
+    trace.notes.extend(task.notes)
 
-    system_prompt = prompts.build_system_prompt(doctrine_text)
     tools = build_tools(substrate.tool_specs())
 
-    # ---- Step 2: vocab fetch (deterministic; each counts toward the op cap) ----
+    # ---- Vocab fetch (deterministic; each counts toward the op cap) ----
     vocab = _fetch_vocab(substrate, trace)
 
     messages: list[dict[str, Any]] = [
-        {"role": "user", "content": prompts.initial_user_message(text, vocab)}
+        {"role": "user", "content": task.first_message(vocab)}
     ]
 
     reads_after_vocab: list[str] = []  # successful read names, for the floor
     max_turns = config.op_cap + _TURN_HEADROOM
 
     ctx = _RunContext(
-        text=text,
-        system_prompt=system_prompt,
+        task=task,
         client=client,
         substrate=substrate,
         config=config,
@@ -228,15 +269,19 @@ def _execute(
 
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
-        reason = check_budget(trace, config, start, max_turns)
+        reason = check_budget(trace, config, start, max_turns) or _cost_reached(
+            trace, config
+        )
         if reason:
             return _forced_finalize(reason, ctx)
 
         try:
             with trace.span("model_turn"):
                 resp = _model_turn(
-                    client, config, system_prompt, messages, tools, force=False
+                    client, config, task.system_prompt, messages, tools, force=False
                 )
+        except ai.usage.Paused:
+            raise  # nothing was sent, and a forced finalize would be refused too
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             if isinstance(exc, ai.IncompleteTurn):
                 trace.add_usage(exc.usage)
@@ -291,6 +336,15 @@ def _execute(
         result = _handle_emit(emits[0], ctx)
         if result is not None:
             return result
+
+
+def _cost_reached(trace: TraceBuilder, config: IngestConfig) -> str | None:
+    """The spending cap, checked before each turn: the turn under way when it
+    is crossed still finishes, and so does the forced emit after it."""
+    if config.max_cost_usd is None:
+        return None
+    spent = trace.cost_usd(config.input_per_mtok, config.output_per_mtok)
+    return "cost_cap" if spent is not None and spent >= config.max_cost_usd else None
 
 
 def _handle_emit(tool_use: Any, ctx: _RunContext) -> IngestResult | None:
@@ -458,7 +512,7 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
             resp = _model_turn(
                 ctx.client,
                 ctx.config,
-                ctx.system_prompt,
+                ctx.task.system_prompt,
                 ctx.messages,
                 ctx.tools,
                 force=True,
@@ -529,25 +583,13 @@ def _assemble_draft(
         return _nothing(reason, ctx)
 
     existing = _existing_statements(directions.existing_ids(ops), ctx)
-    ops, flipped = directions.without_flipped(ops, existing)
-    flagged.extend(f"edge dropped, it points the wrong way: {f}" for f in flipped)
+    ops, flipped = directions.without_flipped(ops, existing, ctx.task.edge_check)
+    flagged.extend(f"edge dropped: {f}" for f in flipped)
 
     valid_kinds = _safe_valid_kinds(emitter)
     indexed: list[tuple[int, ProposedOp]] = []
     for idx, op in enumerate(ops):
-        if op.get("op") == "alias_suggestion":
-            from ..alias_suggestions import Proposal
-
-            try:
-                proposal = Proposal.model_validate(op.get("payload"))
-                if proposal.statement_id is not None or proposal.quote not in ctx.text:
-                    raise ValueError(
-                        "Ingest alias evidence must quote the input text; omit statement_id."
-                    )
-            except ValueError as exc:
-                flagged.append(f"op[{idx}] alias suggestion dropped: {exc}")
-                continue
-        kept = _validate_op(op, idx, valid_kinds, flagged, emitter)
+        kept = _screen_and_validate(op, idx, valid_kinds, flagged, ctx)
         if kept is not None:
             indexed.append((idx, kept))
     validated = [p for _, p in indexed]
@@ -586,7 +628,7 @@ def _assemble_draft(
     # back.
     knowledge = [(i, p) for i, p in indexed if p.op != "alias_suggestion"]
     suggestions = [(i, p) for i, p in indexed if p.op == "alias_suggestion"]
-    title = _draft_title(ctx.text)
+    title = ctx.task.title
     try:
         draft_id = (
             emitter.create(title=title)
@@ -630,6 +672,40 @@ def _assemble_draft(
     )
 
 
+def _screen_and_validate(
+    op: dict, idx: int, valid_kinds: set[str], flagged: list[str], ctx: _RunContext
+) -> ProposedOp | None:
+    if ctx.task.screen is not None:
+        screened, dropped = ctx.task.screen(op)
+        flagged.extend(f"op[{idx}] {line}" for line in dropped)
+        if screened is None:
+            return None
+        op = screened
+    if op.get("op") == "alias_suggestion":
+        from ..alias_suggestions import Proposal
+
+        try:
+            proposal = Proposal.model_validate(op.get("payload"))
+            source = (
+                ctx.task.text
+                if proposal.statement_id is None
+                else ctx.task.quotable.get(proposal.statement_id)
+            )
+            if source is None or proposal.quote not in source:
+                raise ValueError(
+                    "Alias evidence must quote the input text"
+                    + (
+                        " or a statement being connected."
+                        if ctx.task.quotable
+                        else "; omit statement_id."
+                    )
+                )
+        except ValueError as exc:
+            flagged.append(f"op[{idx}] alias suggestion dropped: {exc}")
+            return None
+    return _validate_op(op, idx, valid_kinds, flagged, ctx.emitter)
+
+
 _DRAFT_REFERENCE = re.compile(r"@(\d+):(\d+)")
 
 
@@ -657,7 +733,7 @@ def _queue_ops(
     for i, p in ops:
         if p.op == "alias_suggestion":
             try:
-                ctx.emitter.add_op(draft_id, p.op, p.payload, source_text=ctx.text)
+                ctx.emitter.add_op(draft_id, p.op, p.payload, source_text=ctx.task.text)
                 queued.append(p)
             except Exception as exc:  # noqa: BLE001 — never throw; flag and continue
                 flagged.append(
@@ -1161,28 +1237,27 @@ def _model_turn(
     # Stream when no client is injected: an emit_draft turn can outlast
     # request_timeout_s as one blocking read, but not between streamed chunks.
     owned = client is None
-    with ai.usage.attributed("ingest"):
-        return ai.turn(
-            ai.ToolTask(
-                system=system_prompt,
-                messages=messages,
-                tools=tools,
-                force_tool=EMIT_TOOL if force else None,
-                parallel_tools=not force,
-                on_tool_delta=_discard_tool_delta if owned else None,
-            ),
-            ai.ModelConfig(
-                provider=config.provider,
-                model=config.model,
-                max_tokens=config.max_tokens,
-                request_timeout_s=config.request_timeout_s,
-                max_retries=config.max_retries,
-                thinking=config.thinking,
-                reasoning_effort=config.reasoning_effort,
-                cache=True,
-            ),
-            client=client,
-        )
+    return ai.turn(
+        ai.ToolTask(
+            system=system_prompt,
+            messages=messages,
+            tools=tools,
+            force_tool=EMIT_TOOL if force else None,
+            parallel_tools=not force,
+            on_tool_delta=_discard_tool_delta if owned else None,
+        ),
+        ai.ModelConfig(
+            provider=config.provider,
+            model=config.model,
+            max_tokens=config.max_tokens,
+            request_timeout_s=config.request_timeout_s,
+            max_retries=config.max_retries,
+            thinking=config.thinking,
+            reasoning_effort=config.reasoning_effort,
+            cache=True,
+        ),
+        client=client,
+    )
 
 
 def _discard_tool_delta(_id: str, _name: str, _delta: str) -> None:

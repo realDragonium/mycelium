@@ -11,6 +11,7 @@ model:
 - Alias discovery: propose alternative names from selected existing statements.
 - Audience labelling: decide which documentation audiences may see each statement ([Audiences](AUDIENCES.md)).
 - Documentation planning: propose which documents a writing profile's audience needs ([Documentation planning](DOCUMENTATION_PLANNING.md)).
+- Connecting statements: propose links and concept mentions for statements nothing reaches ([Knowledge health](KNOWLEDGE_HEALTH.md)).
 
 Choose Claude or OpenAI GPT independently for each action. Each action remembers
 one model ID and reasoning effort per provider, so switching providers preserves the other provider’s settings.

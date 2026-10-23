@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -102,10 +102,14 @@ def existing_ids(ops: list[dict[str, Any]]) -> list[str]:
     return sorted({end for end in ends if end.startswith("stm_")})
 
 
+EdgeCheck = Callable[[str, str, str], str | None]
+
+
 def _flipped(
     statements: Mapping[str, Statement],
     edges: list[Edge],
     existing: Mapping[str, Statement],
+    check: EdgeCheck,
 ) -> list[tuple[Edge, str]]:
     known = {**existing, **statements}
     found: list[tuple[Edge, str]] = []
@@ -113,7 +117,7 @@ def _flipped(
         source, target = known.get(edge.source), known.get(edge.target)
         if source is None or target is None:
             continue
-        error = link_rules.flip_error(edge.link_type, source.kind, target.kind)
+        error = check(edge.link_type, source.kind, target.kind)
         if error is not None:
             found.append(
                 (edge, f'"{source.text}" -{edge.link_type}-> "{target.text}": {error}')
@@ -122,14 +126,16 @@ def _flipped(
 
 
 def without_flipped(
-    ops: list[dict[str, Any]], existing: Mapping[str, Statement]
+    ops: list[dict[str, Any]],
+    existing: Mapping[str, Statement],
+    check: EdgeCheck = link_rules.flip_error,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """`ops` minus the edges applying the draft would reject as flipped, and
-    a line per dropped edge. Ops themselves stay, so references keep their
-    positions."""
+    """`ops` minus the edges applying the draft would reject as flipped (or
+    that `check` otherwise rejects), and a line per dropped edge. Ops
+    themselves stay, so references keep their positions."""
     kept = copy.deepcopy(ops)
     statements, edges = read(kept)
-    dropped = _flipped(statements, edges, existing)
+    dropped = _flipped(statements, edges, existing, check)
     for edge, _ in dropped:
         edge.holder[:] = [e for e in edge.holder if e is not edge.raw]
     return kept, [message for _, message in dropped]

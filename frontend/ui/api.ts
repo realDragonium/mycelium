@@ -354,3 +354,43 @@ export async function ask(question: string, signal: AbortSignal, onEvent: (event
     ? readAskStream(res, onEvent, signal)
     : completedAsk(await res.json());
 }
+
+/* --------------------------- knowledge health -------------------------- */
+export type StatementFilter = 'isolated' | 'unmentioned' | 'unlabelled';
+export type EntityFilter = 'undescribed' | 'unused';
+export type HealthList = StatementFilter | EntityFilter;
+export const STATEMENT_FILTERS: readonly StatementFilter[] = ['isolated', 'unmentioned', 'unlabelled'];
+export const HEALTH_LISTS: readonly HealthList[] = [...STATEMENT_FILTERS, 'undescribed', 'unused'];
+export const isHealthList = (value: string): value is HealthList => (HEALTH_LISTS as readonly string[]).includes(value);
+export const isStatementFilter = (value: HealthList): value is StatementFilter => (STATEMENT_FILTERS as readonly string[]).includes(value);
+
+export interface HealthCounts {
+  statements: number; entities: number;
+  isolated: number; unmentioned: number; undescribed: number; unused: number;
+  unlabelled: number; labelling_failed: number;
+  open_gaps: number; pending_drafts: number; out_of_date_documents: number;
+}
+// `priced` is false when the model has no known price: then neither the
+// cost nor the spending cap applies.
+export interface ConnectLimits { batch_size: number; max_cost_usd: number; provider: string; model: string; priced: boolean }
+export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null }
+export interface HealthStatement {
+  id: string; kind: string; text: string; links: number; mentions: string[];
+  label_error: string | null; in_pending_draft: boolean;
+}
+export interface HealthEntity { id: string; name: string | null; description: string | null }
+export interface Page<T> { items: T[]; next_after: string | null }
+export type ConnectResult = IngestResult & { cost_usd: number | null; flagged?: string[] };
+
+export const knowledgeHealth = {
+  view: () => getJSON<HealthView>('/api/knowledge-health'),
+  statements: (which: StatementFilter, params: { after?: string | null; limit?: number; skipPending?: boolean } = {}) => {
+    const qs = new URLSearchParams({ limit: String(params.limit ?? 50) });
+    if (params.after) qs.set('after', params.after);
+    if (params.skipPending) qs.set('skip_pending', 'true');
+    return getJSON<Page<HealthStatement>>(`/api/knowledge-health/statements/${which}?${qs}`);
+  },
+  entities: (which: EntityFilter, after?: string | null) =>
+    getJSON<Page<HealthEntity>>(`/api/knowledge-health/entities/${which}?${new URLSearchParams(after ? { after } : {})}`),
+  connect: (statementIds: string[]) => postJSON<ConnectResult>('/connect-statements', { statement_ids: statementIds }),
+};

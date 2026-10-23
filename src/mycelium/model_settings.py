@@ -21,6 +21,7 @@ Action = Literal[
     "alias_discovery",
     "audience_labelling",
     "documentation_planning",
+    "connect",
 ]
 ACTIONS: tuple[Action, ...] = (
     "ask",
@@ -30,6 +31,7 @@ ACTIONS: tuple[Action, ...] = (
     "alias_discovery",
     "audience_labelling",
     "documentation_planning",
+    "connect",
 )
 #: Labelling reads every statement, so it defaults to a small model.
 AUDIENCE_LABELLING_MODEL = "claude-haiku-5-5"
@@ -119,7 +121,12 @@ def defaults(action: Action) -> Selection:
 def legacy_selection(action: Action) -> dict[str, str]:
     """Capture legacy values without hiding invalid configuration during migration."""
     default = defaults(action)
-    if action in ("alias_discovery", "audience_labelling", "documentation_planning"):
+    if action in (
+        "alias_discovery",
+        "audience_labelling",
+        "documentation_planning",
+        "connect",
+    ):
         return {
             "provider": default.provider,
             "claude_model": default.claude_model,
