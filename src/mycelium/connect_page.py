@@ -180,7 +180,7 @@ CONNECT_HTML = """<!doctype html>
   <div class="card">
     <p>Mycelium supports two ways to connect, depending on who's behind the client:</p>
     <ul style="margin-top: 10px;">
-      <li><strong>Sign in with browser (recommended for humans)</strong> — paste the URL into Claude Desktop or Claude Code and it'll open your browser to sign in via Google Workspace. No tokens to manage; the client gets one automatically.</li>
+      <li><strong>Sign in with browser (recommended for humans)</strong> — paste the URL into Claude Desktop or Claude Code and it'll open your browser to sign in via Google Workspace. No tokens to manage; the client gets one automatically and renews it on its own.</li>
       <li><strong>Personal access token (for service accounts, CI, scripts)</strong> — mint a long-lived token in Settings and paste it into the client's config. Useful when there's no human at a browser to complete the sign-in flow.</li>
     </ul>
     <p style="font-size: 12.5px; color: var(--ink-3); margin-top: 12px;">

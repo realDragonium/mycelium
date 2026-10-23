@@ -197,16 +197,17 @@ def is_enabled() -> bool:
 # --- token helpers --------------------------------------------------------
 
 
-def generate_token() -> tuple[str, str, str]:
+def generate_token(prefix: str | None = None) -> tuple[str, str, str]:
     """Mint a new MCP token. Returns `(raw_token, prefix, hash)`.
 
     Format: `myc_<6char-prefix>_<43char-secret>` (≈256 bits of entropy
     in the secret). The prefix is also random so users can recognize
     one token among many in the UI without ever re-seeing the secret.
     Only `prefix` and `hash` are persisted; `raw_token` is returned to
-    the caller once and never reconstructable afterward.
+    the caller once and never reconstructable afterward. A refreshed OAuth
+    grant passes its existing prefix so the user still recognizes it.
     """
-    prefix = secrets.token_hex(3)  # 6 hex chars
+    prefix = prefix or secrets.token_hex(3)  # 6 hex chars
     secret = secrets.token_urlsafe(32)
     raw = f"{TOKEN_PREFIX}_{prefix}_{secret}"
     return raw, prefix, hash_token(raw)
@@ -249,12 +250,12 @@ def _clamp_scope(scope: str, role: str) -> Role:
 
 def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
     """Look up a bearer token and return the authenticated principal.
-    Returns None when the token is unknown, revoked, or its owner is
-    suspended/missing. Bumps `last_used_at` on a hit.
+    Returns None when the token is unknown, revoked, expired, or its owner
+    is suspended/missing. Bumps `last_used_at` on a hit.
     """
     row = conn.execute(
         """
-        SELECT t.id AS token_id, t.scope, t.revoked_at,
+        SELECT t.id AS token_id, t.scope, t.revoked_at, t.expires_at,
                u.id AS user_id, u.name, u.role, u.type, u.status
         FROM mcp_tokens t
         JOIN users u ON u.id = t.user_id
@@ -266,11 +267,17 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
         return None
     if row["revoked_at"] is not None:
         return None
+    now = datetime.now(UTC)
+    if (
+        row["expires_at"] is not None
+        and datetime.fromisoformat(row["expires_at"]) <= now
+    ):
+        return None
     if row["status"] != "active":
         return None
     conn.execute(
         "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
-        (datetime.now(UTC).isoformat(), row["token_id"]),
+        (now.isoformat(), row["token_id"]),
     )
     return Principal(
         id=row["user_id"],

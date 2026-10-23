@@ -119,11 +119,11 @@ if [[ ! -f "$ENV_FILE" ]]; then
 #   systemctl restart mycelium
 
 # --- public hostnames -----------------------------------------------
-# Comma-separated host[:port] values that the MCP transport should
-# accept on its Host header. Required because the transport defaults to
-# localhost-only DNS-rebinding protection. Add every domain a real
-# client might use (apex + ports as needed).
-#   MYCELIUM_ALLOWED_HOSTS=mycelium.example.com,mycelium.example.com:443
+# Comma-separated hostnames the server answers on its Host header, in
+# addition to loopback and the host of MYCELIUM_PUBLIC_URL. Requests for
+# any other host get 421 (DNS-rebinding protection). Add every domain a
+# real client might use.
+#   MYCELIUM_ALLOWED_HOSTS=mycelium.example.com
 MYCELIUM_ALLOWED_HOSTS=
 
 # --- canonical public URL -------------------------------------------

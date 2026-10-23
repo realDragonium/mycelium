@@ -20,6 +20,7 @@ same `user_version` + migration-runner pattern that `store.py` uses.
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .connections import ConnectionProvider
@@ -64,8 +65,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
 -- in a list without ever seeing the secret again.
 --
 -- OAuth-issued tokens record which registered client minted them and
--- (optionally) when they expire. Manually-minted tokens leave both
--- NULL — they're long-lived and tied only to the user.
+-- when they expire. Manually-minted tokens leave both NULL — they're
+-- long-lived and tied only to the user.
 CREATE TABLE IF NOT EXISTS mcp_tokens (
     id           TEXT PRIMARY KEY,
     user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -82,6 +83,19 @@ CREATE TABLE IF NOT EXISTS mcp_tokens (
 CREATE INDEX IF NOT EXISTS mcp_tokens_user   ON mcp_tokens (user_id);
 CREATE INDEX IF NOT EXISTS mcp_tokens_hash   ON mcp_tokens (hash);
 CREATE INDEX IF NOT EXISTS mcp_tokens_client ON mcp_tokens (client_id);
+
+-- Refresh tokens of OAuth grants. A grant is one `mcp_tokens` row whose
+-- secret is replaced on each refresh. A refresh token is spent on use
+-- (used_at) and replaced; presenting a spent one again revokes the grant.
+-- Only the sha256 hash is stored, as for access tokens.
+CREATE TABLE IF NOT EXISTS oauth_refresh_tokens (
+    hash       TEXT PRIMARY KEY,
+    token_id   TEXT NOT NULL REFERENCES mcp_tokens(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS oauth_refresh_tokens_token ON oauth_refresh_tokens (token_id);
 
 -- Admin-generated invites that bind an email to a role. First OIDC
 -- login from the bound email consumes the invite (accepted_at
@@ -206,6 +220,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         # re-running the schema script restores them (all CREATE INDEX
         # statements are IF NOT EXISTS, so this is a no-op for fresh DBs).
         conn.executescript(AUTH_SCHEMA)
+    _expire_legacy_oauth_tokens(conn)
     conn.commit()
 
 
@@ -223,6 +238,24 @@ def _add_oauth_code_resource(conn: sqlite3.Connection) -> None:
     columns = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_codes)")}
     if "resource" not in columns:
         conn.execute("ALTER TABLE oauth_codes ADD COLUMN resource TEXT")
+
+
+# Long enough that a client in daily use is not cut off by the upgrade itself.
+LEGACY_OAUTH_TOKEN_GRACE = timedelta(days=30)
+
+
+def _expire_legacy_oauth_tokens(conn: sqlite3.Connection) -> None:
+    """Give OAuth tokens issued before access tokens expired a deadline.
+
+    They never expired and carry no refresh token. Measured from the
+    upgrade, the deadline keeps their clients working for a while; then the
+    client authorizes again and gets a refresh token. Every OAuth token
+    issued since has an expiry, so this touches each legacy row once."""
+    conn.execute(
+        "UPDATE mcp_tokens SET expires_at = ? "
+        "WHERE client_id IS NOT NULL AND expires_at IS NULL",
+        ((datetime.now(UTC) + LEGACY_OAUTH_TOKEN_GRACE).isoformat(),),
+    )
 
 
 def _drop_role_check(conn: sqlite3.Connection) -> bool:

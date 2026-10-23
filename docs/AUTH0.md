@@ -2,8 +2,10 @@
 
 Mycelium uses Auth0 (or any OIDC issuer) only for **human logins** to
 the web UI. MCP tokens work entirely server-side and don't touch
-Auth0 — you mint them after logging in, and Claude clients send them
-as bearer headers without any OIDC round-trip.
+Auth0 — you mint them after logging in, or a Claude client obtains one
+through Mycelium's own OAuth flow, and clients send them as bearer
+headers without any OIDC round-trip. Renewing an OAuth-issued token
+needs no Auth0 login either.
 
 This guide assumes you've already signed up for Auth0
 (`https://auth0.com`, free tier). Total time: ~10 minutes.

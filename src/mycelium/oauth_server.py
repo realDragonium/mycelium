@@ -28,10 +28,14 @@ the user pasting a token. The flow:
   8. Client exchanges the code at POST /token. We verify PKCE
      (SHA256(code_verifier) == code_challenge), mark the code used,
      mint a new `mcp_tokens` row tied to the user + client, and
-     return the raw token as `access_token`.
+     return the raw token as `access_token`, with an expiry and a
+     `refresh_token`.
   9. Client uses `Authorization: Bearer myc_…` for all subsequent
      /mcp requests. AuthMiddleware doesn't care that the token came
      from the OAuth flow vs. a manual mint — they're the same row.
+ 10. Once the access token expires, the client posts the refresh token
+     to /token. The grant's row gets a new secret and expiry, and the
+     refresh token is spent and replaced.
 
 Identity is still delegated to Auth0/Google. We are *not* an OIDC
 provider — we're an OAuth Authorization Server that uses our own
@@ -87,11 +91,19 @@ CODE_TTL_SECONDS = 60
 # a standing invitation to approve something later.
 CONSENT_TTL_SECONDS = 600
 
-# Bearer tokens issued via OAuth flow. Mycelium's manual tokens never
-# expire (revocation is the only off-switch); for OAuth-issued tokens
-# we mirror that for simplicity — `expires_at` is left NULL. The MCP
-# spec allows long-lived tokens with revocation; refresh tokens are
-# optional and we don't implement them yet.
+# Manually minted tokens never expire; revocation is their only off-switch.
+# An OAuth client refreshes on its own, so its access token can be short-lived
+# and a leaked one is useful only briefly. Each refresh extends the refresh
+# token's life, so a client in use never has to authorize again.
+DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600
+REFRESH_TOKEN_TTL = timedelta(days=30)
+REFRESH_TOKEN_PREFIX = "mycr"
+_GRANT_TYPES = ("authorization_code", "refresh_token")
+
+
+def _access_token_ttl() -> timedelta:
+    raw = (os.environ.get("MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS") or "").strip()
+    return timedelta(seconds=int(raw) if raw else DEFAULT_ACCESS_TOKEN_TTL_SECONDS)
 
 
 # --- helpers --------------------------------------------------------------
@@ -278,7 +290,7 @@ def authorization_server_metadata(request: Request) -> dict[str, Any]:
         "registration_endpoint": f"{base}/register",
         "scopes_supported": ["mcp"],
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
+        "grant_types_supported": list(_GRANT_TYPES),
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         # RFC 9207 §2.3. A client that records our issuer at discovery
@@ -367,14 +379,8 @@ async def register_client(request: Request) -> JSONResponse:
         )
 
     # RFC 7591 §2 — "Authorization servers MAY ignore values they
-    # don't support." Claude Desktop / Claude Code in particular asks
-    # for `refresh_token` in grant_types; we don't issue refresh
-    # tokens but rejecting the whole registration over that would be
-    # spec-non-compliant and a bad UX. Instead we accept the request
-    # and advertise back the subset we actually support in the
-    # response body — the client uses the advertised subset.
+    # don't support." We answer with the grants every client gets.
     requested_grants = set(body.get("grant_types") or ["authorization_code"])
-    supported_grants = ["authorization_code"]
     if "authorization_code" not in requested_grants:
         raise HTTPException(
             status_code=400,
@@ -411,7 +417,7 @@ async def register_client(request: Request) -> JSONResponse:
             "client_id": client_id,
             "client_name": client_name,
             "redirect_uris": redirect_uris,
-            "grant_types": supported_grants,
+            "grant_types": list(_GRANT_TYPES),
             "response_types": ["code"],
             "token_endpoint_auth_method": "none",
         },
@@ -827,26 +833,24 @@ def _resource_matches(value: str, base: str) -> bool:
 async def token_endpoint(
     request: Request,
     grant_type: str = Form(...),
-    code: str = Form(...),
-    redirect_uri: str = Form(...),
-    client_id: str = Form(...),
-    code_verifier: str = Form(...),
+    code: str = Form(""),
+    redirect_uri: str = Form(""),
+    client_id: str = Form(""),
+    code_verifier: str = Form(""),
+    refresh_token: str = Form(""),
     resource: str = Form(""),
 ) -> JSONResponse:
-    """Exchange an authorization code for an access token. Per OAuth 2.1
-    + PKCE: the verifier must hash to the challenge captured at /authorize,
-    the code must not be expired or already used, and every echoed field
-    (client_id, redirect_uri) must match what /authorize stored.
+    """Exchange an authorization code or a refresh token for an access token.
 
-    Issues a row in `mcp_tokens` and returns its raw value as
-    `access_token`. The token is interchangeable with manually-minted
-    tokens — same table, same lookup path, same revocation UI."""
+    A code exchange follows OAuth 2.1 + PKCE: the verifier must hash to the
+    challenge captured at /authorize, the code must not be expired or
+    already used, and every echoed field (client_id, redirect_uri) must
+    match what /authorize stored. It creates a row in `mcp_tokens`, the
+    grant, and returns its raw value as `access_token`. The token is
+    interchangeable with manually-minted tokens — same table, same lookup
+    path, same revocation UI — except that it expires and comes with a
+    refresh token."""
     _require_oauth_enabled()
-    if grant_type != "authorization_code":
-        return _oauth_error(
-            "unsupported_grant_type", "only authorization_code is supported"
-        )
-
     # RFC 8707 §2: a token is minted for one resource. We serve exactly
     # one, so a request naming a different one is asking us to issue a
     # credential for somewhere else — the confused-deputy shape resource
@@ -856,8 +860,19 @@ async def token_endpoint(
         return _oauth_error(
             "invalid_target", "resource does not identify this MCP server"
         )
-
     conn = _auth_conn(request)
+    if grant_type == "refresh_token":
+        return _refresh(conn, refresh_token, client_id)
+    if grant_type != "authorization_code":
+        return _oauth_error(
+            "unsupported_grant_type",
+            "only authorization_code and refresh_token are supported",
+        )
+    if not (code and redirect_uri and client_id and code_verifier):
+        return _oauth_error(
+            "invalid_request",
+            "code, redirect_uri, client_id and code_verifier are required",
+        )
     row = conn.execute(
         "SELECT client_id, user_id, redirect_uri, code_challenge, "
         "       code_challenge_method, scope, resource, expires_at, used_at "
@@ -867,8 +882,6 @@ async def token_endpoint(
     if row is None:
         return _oauth_error("invalid_grant", "code not found")
     if row["used_at"] is not None:
-        # Replay attempt — invalidate any token previously issued for
-        # this code as a safety measure.
         return _oauth_error("invalid_grant", "code already used")
     if datetime.fromisoformat(row["expires_at"]) < _now():
         return _oauth_error("invalid_grant", "code expired")
@@ -925,12 +938,14 @@ async def token_endpoint(
             if client_row and client_row["client_name"]
             else "OAuth client"
         )
+        token_id = str(uuid.uuid4())
         conn.execute(
             "INSERT INTO mcp_tokens "
-            "(id, user_id, name, prefix, hash, scope, created_at, client_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, user_id, name, prefix, hash, scope, created_at, client_id, "
+            " expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                str(uuid.uuid4()),
+                token_id,
                 user_row["id"],
                 token_name,
                 prefix,
@@ -938,19 +953,97 @@ async def token_endpoint(
                 scope_to_grant,
                 _now().isoformat(),
                 client_id,
+                (_now() + _access_token_ttl()).isoformat(),
             ),
         )
         conn.execute(
             "UPDATE oauth_clients SET last_used_at = ? WHERE client_id = ?",
             (_now().isoformat(), client_id),
         )
+        refresh = _new_refresh_token(conn, token_id)
 
+    return _token_response(raw, refresh, scope_to_grant)
+
+
+def _refresh(
+    conn: sqlite3.Connection, refresh_token: str, client_id: str
+) -> JSONResponse:
+    """Rotate a grant: a new access-token secret and expiry on the same
+    `mcp_tokens` row, and a new refresh token in place of the spent one.
+
+    The scope stays what the grant was given (RFC 6749 §6 forbids widening
+    it); `resolve_token` still caps it at the user's current role."""
+    if not (refresh_token and client_id):
+        return _oauth_error(
+            "invalid_request", "refresh_token and client_id are required"
+        )
+    with store.transaction(conn):
+        row = conn.execute(
+            "SELECT r.token_id, r.expires_at, r.used_at, t.client_id, t.prefix, "
+            "       t.scope, t.revoked_at, u.status "
+            "FROM oauth_refresh_tokens r "
+            "JOIN mcp_tokens t ON t.id = r.token_id "
+            "JOIN users u ON u.id = t.user_id "
+            "WHERE r.hash = ?",
+            (auth.hash_token(refresh_token),),
+        ).fetchone()
+        if row is None:
+            return _oauth_error("invalid_grant", "refresh token not found")
+        if row["client_id"] != client_id:
+            return _oauth_error("invalid_grant", "client_id mismatch")
+        if row["used_at"] is not None:
+            # Two parties hold this token and nothing says which one is the
+            # client, so the grant ends for both (OAuth 2.1 §4.3.1).
+            auth.revoke_token(conn, row["token_id"])
+            return _oauth_error(
+                "invalid_grant", "refresh token already used; the grant is revoked"
+            )
+        if row["revoked_at"] is not None:
+            return _oauth_error("invalid_grant", "grant revoked")
+        if datetime.fromisoformat(row["expires_at"]) <= _now():
+            return _oauth_error("invalid_grant", "refresh token expired")
+        if row["status"] != "active":
+            return _oauth_error("invalid_grant", "user no longer active")
+
+        conn.execute(
+            "UPDATE oauth_refresh_tokens SET used_at = ? WHERE hash = ?",
+            (_now().isoformat(), auth.hash_token(refresh_token)),
+        )
+        raw, _, h = auth.generate_token(prefix=row["prefix"])
+        conn.execute(
+            "UPDATE mcp_tokens SET hash = ?, expires_at = ? WHERE id = ?",
+            (h, (_now() + _access_token_ttl()).isoformat(), row["token_id"]),
+        )
+        refresh = _new_refresh_token(conn, row["token_id"])
+    return _token_response(raw, refresh, row["scope"])
+
+
+def _new_refresh_token(conn: sqlite3.Connection, token_id: str) -> str:
+    raw = f"{REFRESH_TOKEN_PREFIX}_{secrets.token_urlsafe(32)}"
+    conn.execute(
+        "INSERT INTO oauth_refresh_tokens (hash, token_id, created_at, expires_at) "
+        "VALUES (?, ?, ?, ?)",
+        (
+            auth.hash_token(raw),
+            token_id,
+            _now().isoformat(),
+            (_now() + REFRESH_TOKEN_TTL).isoformat(),
+        ),
+    )
+    return raw
+
+
+def _token_response(access_token: str, refresh_token: str, scope: str) -> JSONResponse:
     return JSONResponse(
         content={
-            "access_token": raw,
+            "access_token": access_token,
             "token_type": "Bearer",
-            "scope": scope_to_grant,
-        }
+            "expires_in": int(_access_token_ttl().total_seconds()),
+            "refresh_token": refresh_token,
+            "scope": scope,
+        },
+        # RFC 6749 §5.1: a response carrying credentials must not be cached.
+        headers={"Cache-Control": "no-store"},
     )
 
 

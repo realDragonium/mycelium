@@ -156,3 +156,52 @@ def test_empty_text_rejected(tmp_path, monkeypatch):
 
         with pytest.raises(ValueError):
             server.report_knowledge_gap("   ")
+
+
+def test_only_a_real_writer_changes_a_gaps_status(tmp_path, monkeypatch):
+    """Reporting stays open to readers; deciding a report is addressed is
+    curation. A drafter passes the writer gate for tools, so it must be
+    excluded explicitly."""
+    monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "gap-test-secret")
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        bearers = {}
+        with store.transaction(conn):
+            for role in ("reader", "drafter", "writer"):
+                uid = auth.create_user(
+                    conn,
+                    name=role,
+                    role=role,
+                    type="human",
+                    email=f"{role}@example.com",
+                )
+                raw, _ = auth.issue_token(conn, user_id=uid, name="t", scope=role)
+                bearers[role] = {"Authorization": f"Bearer {raw}"}
+
+        r = client.post(
+            "/report-knowledge-gap",
+            json={"text": "Exports?"},
+            headers=bearers["reader"],
+        )
+        assert r.status_code == 200
+        gap_id = r.json()["gap_id"]
+
+        for role in ("reader", "drafter"):
+            listed = client.get("/api/knowledge-gaps", headers=bearers[role]).json()
+            assert listed["can_write"] is False
+            r = client.patch(
+                f"/api/knowledge-gaps/{gap_id}",
+                json={"action": "resolve"},
+                headers=bearers[role],
+            )
+            assert r.status_code == 403, role
+
+        listed = client.get("/api/knowledge-gaps", headers=bearers["writer"]).json()
+        assert listed["can_write"] is True
+        r = client.patch(
+            f"/api/knowledge-gaps/{gap_id}",
+            json={"action": "resolve"},
+            headers=bearers["writer"],
+        )
+        assert r.status_code == 200

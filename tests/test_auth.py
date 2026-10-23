@@ -668,3 +668,72 @@ def test_only_read_tools_answer_get(tmp_path, monkeypatch):
         assert client.get("/submit-draft").status_code in (404, 405)
         assert client.post("/submit-draft", json={}).status_code == 400
         assert client.get("/list-my-drafts").status_code == 200
+
+
+def test_rebound_hostname_cannot_reach_a_local_server(tmp_path, monkeypatch):
+    """DNS rebinding: an attacker's domain re-pointed at 127.0.0.1 makes its
+    pages same-origin with a local server, and with auth off every request
+    they send is the local admin. Only the Host header gives them away."""
+    monkeypatch.delenv("MYCELIUM_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("MYCELIUM_PUBLIC_URL", raising=False)
+    client = _app(tmp_path, monkeypatch)
+    with client:
+
+        def status(host: str, path: str = "/api/drafts") -> int:
+            return client.get(path, headers={"Host": host}).status_code
+
+        assert status("rebound.example") == 421
+        assert status("rebound.example:8765") == 421
+        for host in ("localhost:8765", "127.0.0.1", "[::1]:8765"):
+            assert status(host) == 200, host
+        # A load balancer's health probe names the instance address.
+        assert status("10.0.0.7:8765", "/api/server-info") == 200
+
+        monkeypatch.setenv("MYCELIUM_ALLOWED_HOSTS", "kb.example.com, alt.example.com")
+        assert status("kb.example.com") == 200
+        assert status("ALT.example.com:443") == 200
+        monkeypatch.setenv("MYCELIUM_PUBLIC_URL", "https://public.example.com")
+        assert status("public.example.com") == 200
+        assert status("rebound.example") == 421
+
+
+def test_auth_on_checks_the_host_once_hostnames_are_configured(tmp_path, monkeypatch):
+    """With auth on a rebound page holds no credential, and an existing
+    deployment that never listed its hostname must keep answering."""
+    monkeypatch.delenv("MYCELIUM_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("MYCELIUM_PUBLIC_URL", raising=False)
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        assert (
+            client.get("/api/me", headers={"Host": "kb.example.com"}).status_code == 401
+        )
+        monkeypatch.setenv("MYCELIUM_PUBLIC_URL", "https://kb.example.com")
+        assert (
+            client.get("/api/me", headers={"Host": "kb.example.com"}).status_code == 401
+        )
+        assert (
+            client.get("/api/me", headers={"Host": "other.example"}).status_code == 421
+        )
+
+
+def test_oversized_request_body_is_refused(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        big = b"x" * (4 * 1024 * 1024 + 1)
+        r = client.post(
+            "/report-knowledge-gap",
+            content=big,
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 413
+
+        def chunks():
+            yield big[: len(big) // 2]
+            yield big[len(big) // 2 :]
+
+        r = client.post(
+            "/report-knowledge-gap",
+            content=chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert r.status_code == 413

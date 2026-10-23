@@ -149,14 +149,40 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
 | `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude model ran from a built-in list-price table, including cache reads and writes; other providers get no estimate. |
 | `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
+| `MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token issued through the OAuth flow. See [OAuth token lifetime](#oauth-token-lifetime). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
 | `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |
 | `MYCELIUM_DISABLE_REVIEW_SWEEP` | unset | `1` stops the sweep that retries failed draft reviews. Meant for tests. |
 
-> **Want to try it without Auth0 first?** Leave `MYCELIUM_AUTH=off`,
-> leave the OIDC fields blank, skip step 6, and just expose the UI over
-> HTTPS. Every caller will be `local-admin`. Useful for a single-user
-> setup or a sanity check.
+> **Leave `MYCELIUM_AUTH=on` on anything reachable from a network.** With
+> auth off every caller is `local-admin`, so it is for a single user on their
+> own machine, bound to `127.0.0.1`. The server then answers only requests
+> addressed to a loopback name (`localhost`, `127.0.0.1`, `[::1]`), so a web
+> page cannot reach it by pointing its own domain at your machine (DNS
+> rebinding).
+
+### Hostnames the server answers
+
+Every route refuses a request whose `Host` header names a host it was not
+told about, with `421`. It always accepts the loopback names, plus:
+
+- each entry in `MYCELIUM_ALLOWED_HOSTS`, comma-separated, such as
+  `mycelium.example.com,kb.example.com`. A port in an entry is ignored;
+  only the hostname is compared.
+- the host of `MYCELIUM_PUBLIC_URL`, when it is set.
+
+With `MYCELIUM_AUTH=off` the check always applies. With auth on it applies
+once either variable is set, so a deployment that never listed its
+hostname keeps working; set them anyway. `/api/server-info` is exempt,
+because load balancers probe it by the instance's address.
+
+### Request size
+
+Request bodies over 4 MiB get `413` before the server reads the rest.
+`MYCELIUM_MAX_BODY_BYTES` changes the cap, for `/mcp` as well as every
+other route. nginx's own `client_max_body_size` default of 1 MiB is
+tighter still and bites first; raise it in the site template if large
+`ingest` payloads get a 413 from nginx.
 
 ---
 
@@ -276,9 +302,7 @@ template needs no change — but a proxy that filters request headers must
 pass all three through, or modern clients land on the legacy path and fail
 for want of a session id.
 
-Request bodies are capped at 4 MiB by the MCP transport. nginx's own
-`client_max_body_size` default of 1 MiB is the tighter limit and bites
-first; raise it in the site template if large `ingest` payloads get a 413.
+Request bodies are capped as described under [Request size](#request-size).
 
 ### Set `MYCELIUM_PUBLIC_URL` if OAuth is in use
 
@@ -316,6 +340,22 @@ a 1-minute to 1-hour bound.
 
 Registration (`/register`) still works for clients that predate the
 mechanism; it is deprecated upstream, not removed.
+
+### OAuth token lifetime
+
+An access token issued through the OAuth flow expires after an hour
+(`MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS`), and comes with a refresh token
+the client uses to get the next one. Each refresh replaces the refresh token
+and gives it 30 more days, so a client in regular use never has to sign in
+again; one left unused for 30 days does. A refresh token presented a second
+time means someone else holds a copy, so the whole grant is revoked and the
+client must authorize again. Refresh tokens are stored hashed, like access
+tokens.
+
+OAuth tokens issued before expiry existed carry no refresh token. Starting
+this version gives each a deadline 30 days from that first startup; after
+it their clients authorize again. Personal tokens minted in Settings never
+expire.
 
 ---
 
