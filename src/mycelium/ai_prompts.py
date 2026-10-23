@@ -157,12 +157,32 @@ def editor(action: Action) -> EditorView:
     return EditorView(
         current=current,
         default_text=default_text(action),
-        newer_default_since=_newer_default_since(action),
+        newer_default_since=newer_default_since(action),
         preview=preview(action, current.text),
     )
 
 
-def _newer_default_since(action: Action) -> str | None:
+class Summary(BaseModel):
+    name: Action
+    title: str
+    edited: bool
+    newer_default_since: str | None
+
+
+def summaries() -> list[Summary]:
+    """What the prompt list shows per action, without building each preview."""
+    return [
+        Summary(
+            name=action,
+            title=TITLES[action],
+            edited=resolve(action, strict=True).source == "saved",
+            newer_default_since=newer_default_since(action),
+        )
+        for action in ACTIONS
+    ]
+
+
+def newer_default_since(action: Action) -> str | None:
     # An unreadable configured doctrine leaves saved text editable and
     # running; it only means there is no default to compare against.
     try:
