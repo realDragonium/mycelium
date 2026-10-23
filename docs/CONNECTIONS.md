@@ -18,7 +18,8 @@ reasoning tools.
 Each endpoint accepts a statement ID starting with `stm_` or search text. Mixing
 an ID and text is supported. IDs are exact lookups and never call the embedding
 service. Text reuses `search_statements`' semantic ranking and alias boost, with
-a score floor of 0.5. The tool reports up to three candidates per endpoint. It
+a score floor supplied by the configured embedding model (0.5 for
+nomic-embed-text). The tool reports up to three candidates per endpoint. It
 selects the best only when its score leads the runner-up by at least 0.05;
 otherwise it returns `needs_resolution` without walking the graph. These scores
 are ranking values, not probabilities. Inspect the candidates and retry using

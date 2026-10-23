@@ -150,7 +150,7 @@ export async function findStatements(mode: FindMode, query: string, signal?: Abo
 }
 
 export async function searchEntities(query: string, signal?: AbortSignal): Promise<EntityHit[]> {
-  const res = await postJSON<{ entities?: EntityHit[] }>('/search-entities', { query, k: 6, min_score: 0.5 }, signal);
+  const res = await postJSON<{ entities?: EntityHit[] }>('/search-entities', { query, k: 6 }, signal);
   return res.entities || [];
 }
 

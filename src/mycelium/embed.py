@@ -7,6 +7,7 @@ provider.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -24,6 +25,9 @@ from .ai import usage
 from .ai.types import ModelConfig, Usage
 
 Provider = Literal["ollama", "openai"]
+
+
+_LOG = logging.getLogger(__name__)
 
 
 class _Closable(Protocol):
@@ -58,6 +62,53 @@ class Settings:
     timeout_s: float
 
 
+@dataclass(frozen=True)
+class Thresholds:
+    near_duplicate: float
+    statement_duplicate: float
+    fact_exists: float
+    fact_near: float
+    name_match: float
+    endpoint_match: float
+    entity_search: float
+    entity_duplicate: float
+    subquery_dedup: float
+
+
+_DEFAULT_MODELS: dict[Provider, str] = {
+    "ollama": "nomic-embed-text",
+    "openai": "text-embedding-3-small",
+}
+_THRESHOLDS: dict[tuple[Provider, str], Thresholds] = {
+    ("ollama", "nomic-embed-text"): Thresholds(
+        near_duplicate=0.85,
+        statement_duplicate=0.92,
+        fact_exists=0.85,
+        fact_near=0.6,
+        name_match=0.5,
+        endpoint_match=0.5,
+        entity_search=0.3,
+        entity_duplicate=0.75,
+        subquery_dedup=0.95,
+    ),
+    # Measured against nomic on a production copy: floors keep the same share
+    # of hits and statement duplicate thresholds flag a similar number of
+    # pairs. Names separate less well, so entity_duplicate trades a longer
+    # review list for catching most known aliases.
+    ("openai", "text-embedding-3-small"): Thresholds(
+        near_duplicate=0.79,
+        statement_duplicate=0.88,
+        fact_exists=0.79,
+        fact_near=0.45,
+        name_match=0.35,
+        endpoint_match=0.35,
+        entity_search=0.20,
+        entity_duplicate=0.66,
+        subquery_dedup=0.93,
+    ),
+}
+
+
 class _OpenAIEmbedding(BaseModel):
     model_config = ConfigDict(extra="ignore")
     index: int
@@ -79,6 +130,7 @@ _client_lock = threading.Lock()
 _client: ollama.Client | None = None
 _openai_client: httpx.Client | None = None
 _sleep = time.sleep
+_warned_threshold_models: set[tuple[Provider, str]] = set()
 
 
 @lru_cache(maxsize=1)
@@ -105,6 +157,24 @@ def settings() -> Settings:
 def identity() -> str:
     configured = settings()
     return f"{configured.provider}/{configured.model}/{vector.DIM}"
+
+
+def thresholds() -> Thresholds:
+    configured = settings()
+    key = (configured.provider, configured.model)
+    selected = _THRESHOLDS.get(key)
+    if selected is not None:
+        return selected
+    with _client_lock:
+        if key not in _warned_threshold_models:
+            _LOG.warning(
+                "No tuned embedding thresholds for %s model %s; using %s defaults",
+                configured.provider,
+                configured.model,
+                _DEFAULT_MODELS[configured.provider],
+            )
+            _warned_threshold_models.add(key)
+    return _THRESHOLDS[(configured.provider, _DEFAULT_MODELS[configured.provider])]
 
 
 def _get_client() -> ollama.Client:
@@ -136,6 +206,7 @@ def reset() -> None:
             _openai_client.close()
         _client = None
         _openai_client = None
+        _warned_threshold_models.clear()
     settings.cache_clear()
     _cached_embed.cache_clear()
 

@@ -97,7 +97,6 @@ from .prompt_texts import (
 from .registry import _ORIG_SIGNATURES, MCP_TOOLS, TOOLS, mcp, publish, tool
 from .runtime import _db, _drafts_db
 from .search import (
-    NEAR_DUPLICATE_THRESHOLD,
     SNIPPET_CHARS,
     discover_facts,
     find_duplicates,
@@ -226,7 +225,6 @@ __all__ = [
     "IncomingLinkSpec",
     "LinkSpec",
     "ResultLimit",
-    "NEAR_DUPLICATE_THRESHOLD",
     "SNIPPET_CHARS",
     "ALIAS_PROVENANCE",
     "KnowledgePrecondition",

@@ -48,6 +48,31 @@ def test_openai_has_its_own_default_model(monkeypatch: pytest.MonkeyPatch) -> No
     assert embed_module.identity() == "openai/text-embedding-3-small/768"
 
 
+def test_thresholds_follow_the_configured_embedder(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("MYCELIUM_EMBED_PROVIDER", raising=False)
+    monkeypatch.delenv("MYCELIUM_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    embed_module.reset()
+    nomic = embed_module.thresholds()
+    assert nomic.near_duplicate == 0.85
+
+    monkeypatch.setenv("MYCELIUM_EMBED_PROVIDER", "openai")
+    embed_module.reset()
+    assert embed_module.thresholds().near_duplicate < nomic.near_duplicate
+
+    monkeypatch.setenv("MYCELIUM_EMBED_PROVIDER", "ollama")
+    monkeypatch.setenv("MYCELIUM_EMBED_MODEL", "other-embedder")
+    embed_module.reset()
+    caplog.clear()
+    assert embed_module.thresholds() == nomic
+    assert embed_module.thresholds() == nomic
+    warnings = [record for record in caplog.records if record.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "other-embedder" in warnings[0].message
+
+
 def test_ollama_honours_legacy_model_variable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -315,7 +315,7 @@ class DuplicatePage(TypedDict):
 
 @tool
 def find_entity_duplicates(
-    threshold: float = 0.75,
+    threshold: float | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> DuplicatePage:
@@ -345,6 +345,8 @@ def find_entity_duplicates(
 
     Generated plurals take part only in the fold pass. The statement-level
     counterpart is `find_duplicates`; this covers the entity layer it skips.
+    The configured embedding model supplies the threshold default (0.75 for
+    nomic-embed-text).
 
     Returns `{candidates, total}`: one candidate per entity pair,
     `{a_entity_id, b_entity_id, score, matches}`, where `matches` lists each
@@ -355,6 +357,7 @@ def find_entity_duplicates(
     aliases are left out. Resolve with `merge_entities` (same concept) or
     `move_name` / `delete_name` (an alias sits on the wrong entity).
     """
+    threshold = embed.thresholds().entity_duplicate if threshold is None else threshold
     names = store.list_all_names(_db())
     by_id = {r["id"]: r for r in names}
     seen_name_pairs: set[frozenset[str]] = set()

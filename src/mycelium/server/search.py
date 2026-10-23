@@ -33,12 +33,6 @@ def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
     return entity_ids
 
 
-#: Cosine threshold for the write-time near-duplicate warning. Anything
-#: at or above this is surfaced in `near_duplicates` on the upsert
-#: response — soft signal, never blocks the write.
-NEAR_DUPLICATE_THRESHOLD = 0.85
-
-
 #: Truncation cap for `text` snippets returned in `near_duplicates` and
 #: `discover_facts.matches`. Long enough to recognise the fact, short
 #: enough to keep batch responses lean. Callers wanting the full text
@@ -54,7 +48,7 @@ def _near_duplicates(
     vec: list[float],
     *,
     exclude_id: str | None = None,
-    threshold: float = NEAR_DUPLICATE_THRESHOLD,
+    threshold: float | None = None,
     k: int = 5,
 ) -> list[dict[str, Any]]:
     """Return existing statements whose vector is at or above `threshold`
@@ -62,6 +56,7 @@ def _near_duplicates(
     dropped (used to skip the upsert's own freshly-inserted vector).
     `text` is truncated to a snippet to keep batch responses lean.
     """
+    threshold = embed.thresholds().near_duplicate if threshold is None else threshold
     # +1 to allow excluding the self-hit without dropping under k results.
     hits = _idx().search(vec, k=k + (1 if exclude_id else 0))
     out: list[dict[str, Any]] = []
@@ -158,9 +153,12 @@ def _search_statement_candidates(
     kind: str | None = None,
     name_boost: float = 0.3,
     name_top_k: int = 5,
-    name_min_score: float = 0.5,
+    name_min_score: float | None = None,
 ) -> list[tuple[str, float, float]]:
     """Rank semantic hits without hydrating their graph neighborhoods."""
+    resolved_name_min_score = (
+        embed.thresholds().name_match if name_min_score is None else name_min_score
+    )
     required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
     with trace_span("embed"):
         vec = embed.embed(query)
@@ -172,7 +170,7 @@ def _search_statement_candidates(
         kind,
         name_boost,
         name_top_k,
-        name_min_score,
+        resolved_name_min_score,
     )
 
 
@@ -221,7 +219,7 @@ def _decomposed_candidates(
         for part in survey.decompose(query):
             if survey.usable(part):
                 parts.append((part, embed.embed(part)))
-    parts = survey.dedup_subqueries(parts)
+    parts = survey.dedup_subqueries(parts, threshold=embed.thresholds().subquery_dedup)
     if not parts:
         with trace_span("embed"):
             parts = [(query, embed.embed(query))]
@@ -253,13 +251,14 @@ def search_statements(
     kind: str | None = None,
     name_boost: float = 0.3,
     name_top_k: int = 5,
-    name_min_score: float = 0.5,
+    name_min_score: float | None = None,
     decompose: bool = False,
 ) -> list[dict[str, Any]]:
     """Vector-search statements by semantic similarity to `query`.
 
     Returns up to `limit` (at most 100) direct hits with score >= `min_score`,
-    sorted by score descending. Practical floors are usually 0.5–0.8.
+    sorted by score descending. Useful floors depend on the embedding model;
+    0.5–0.8 is typical for nomic-embed-text.
 
     Scoring is cosine similarity + an alias-aware boost: the query is
     also searched against the entity-name index, and statements that
@@ -320,7 +319,8 @@ def search_statements(
       `name_top_k`     — how many top names to consider from the name index.
       `name_min_score` — drop name matches below this cosine. Keeps
                          canonical queries unaffected when no name is
-                         clearly relevant.
+                         clearly relevant. The configured model supplies the
+                         default (0.5 for nomic-embed-text).
     """
     _check_limit(limit)
     if decompose:
@@ -332,7 +332,7 @@ def search_statements(
             kind,
             name_boost,
             name_top_k,
-            name_min_score,
+            embed.thresholds().name_match if name_min_score is None else name_min_score,
         )
     else:
         ranked = [
@@ -385,10 +385,11 @@ def find_statement_connections(
     Without requirements, return several alternative source-to-target routes.
 
     Each endpoint is a `stm_...` ID or search text. Text uses alias-aware
-    semantic search with a score floor of 0.5. The best match is selected
-    only if it leads the runner-up by at least 0.05. Otherwise status is
-    `needs_resolution`: inspect the endpoint candidates and retry with IDs.
-    Scores are ranking values, not probabilities. IDs never need embeddings.
+    semantic search with a floor supplied by the configured embedding model
+    (0.5 for nomic-embed-text). The best match is selected only if it leads
+    the runner-up by at least 0.05. Otherwise status is `needs_resolution`:
+    inspect the endpoint candidates and retry with IDs. Scores are ranking
+    values, not probabilities. IDs never need embeddings.
 
     Returns matched endpoints, routes, and their merged statements and edges.
     Routes retain ordered steps; each step references an edge by `edge_id`.
@@ -438,7 +439,9 @@ def find_statement_connections(
 
     def candidates(query: str) -> list[statement_connections.Candidate]:
         matches: list[statement_connections.Candidate] = []
-        for sid, score, _cosine in _search_statement_candidates(query, 3, 0.5):
+        for sid, score, _cosine in _search_statement_candidates(
+            query, 3, embed.thresholds().endpoint_match
+        ):
             statement = graph.statement(sid)
             if statement is not None:
                 matches.append(
@@ -491,7 +494,7 @@ def find_statement_connections(
 
 @tool
 def find_duplicates(
-    threshold: float = 0.92,
+    threshold: float | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Audit the whole substrate for near-duplicate statement pairs.
@@ -501,18 +504,19 @@ def find_duplicates(
     `threshold`. Sorted by score descending, capped at `limit`. Pairs
     are reported once (not as both `(A,B)` and `(B,A)`).
 
-    The default `0.92` is the high-confidence band — paired statements
-    are almost certainly the same fact in different wording. Drop to
-    `0.85` to also surface "related, possibly worth linking instead of
-    keeping separate" pairs at the cost of more noise. The write-time
-    `near_duplicates` field on `upsert_statement` uses 0.85 as a soft
-    write-time signal; this tool is the periodic backfill audit.
+    The configured embedding model supplies the default (0.92 for
+    nomic-embed-text), tuned for high-confidence duplicate matches. Its
+    write-time near-duplicate default is 0.85; this tool is the periodic
+    backfill audit.
 
     Each pair: `{a_id, a_text, b_id, b_text, score}`. Use
     `merge_statements(from, into)` to consolidate, or `replace_text` /
     `add_links` if the duplication is structural rather than textual.
     """
 
+    threshold = (
+        embed.thresholds().statement_duplicate if threshold is None else threshold
+    )
     seen_pairs: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
 
@@ -563,8 +567,8 @@ def find_duplicates(
 @tool
 def discover_facts(
     texts: list[str],
-    exists_threshold: float = 0.85,
-    near_threshold: float = 0.6,
+    exists_threshold: float | None = None,
+    near_threshold: float | None = None,
     matches_per_text: int = 5,
 ) -> list[dict[str, Any]]:
     """Bulk discovery for many candidate facts at once.
@@ -581,7 +585,7 @@ def discover_facts(
     For each input text, embeds it, queries the vector index, and
     classifies the closest existing statement into one of three buckets:
 
-    - `"exists"`: top match score >= `exists_threshold` (default 0.85).
+    - `"exists"`: top match score >= `exists_threshold`.
       The substrate already has this fact under different wording. Don't
       write a new statement; either link to it, refine it via
       `upsert_statement(id=…)`, or merge afterwards if you wrote
@@ -591,6 +595,9 @@ def discover_facts(
       likely distinct but probably should `link` to one or more of the
       matches instead of standing alone.
     - `"new"`: nothing within `near_threshold`. Safe to write fresh.
+
+    Threshold defaults come from the configured embedding model (0.85 exists
+    and 0.6 near for nomic-embed-text).
 
     Replaces the per-fact loop of sequential `search_statements` calls
     that the discovery phase otherwise prescribes. Pass every text you
@@ -608,6 +615,10 @@ def discover_facts(
     writes.
     """
 
+    if exists_threshold is None:
+        exists_threshold = embed.thresholds().fact_exists
+    if near_threshold is None:
+        near_threshold = embed.thresholds().fact_near
     if exists_threshold < near_threshold:
         raise ValueError(
             "exists_threshold must be >= near_threshold "

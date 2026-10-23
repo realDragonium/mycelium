@@ -100,14 +100,16 @@ def test_dedup_subqueries_keeps_first_and_is_order_preserving():
     v0 = [1.0, 0.0, 0.0]
     v0_dup = [1.0, 0.0, 0.0]  # cosine 1.0 with v0 → dropped
     v1 = [0.0, 1.0, 0.0]
-    kept = survey.dedup_subqueries([("rank", v0), ("ranking", v0_dup), ("filter", v1)])
+    kept = survey.dedup_subqueries(
+        [("rank", v0), ("ranking", v0_dup), ("filter", v1)], threshold=0.95
+    )
     assert kept == [("rank", v0), ("filter", v1)]
 
 
 def test_dedup_subqueries_keeps_distinct_angles():
     v0 = [1.0, 0.0]
     v1 = [0.0, 1.0]
-    kept = survey.dedup_subqueries([("a", v0), ("b", v1)])
+    kept = survey.dedup_subqueries([("a", v0), ("b", v1)], threshold=0.95)
     assert [s for s, _ in kept] == ["a", "b"]
 
 
@@ -245,5 +247,5 @@ def test_dedup_subqueries_threshold_value_and_direction():
         return [math.cos(theta), math.sin(theta)]
 
     base = [1.0, 0.0]
-    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.96))])) == 1
-    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.94))])) == 2
+    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.96))], 0.95)) == 1
+    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.94))], 0.95)) == 2

@@ -248,7 +248,7 @@ def list_entities(
 def search_entities(
     query: str,
     k: int = 10,
-    min_score: float = 0.3,
+    min_score: float | None = None,
 ) -> dict[str, Any]:
     """Semantic search over entity names and aliases.
 
@@ -263,10 +263,12 @@ def search_entities(
     description}]}` sorted by score descending, capped at `k`. `name`
     is the entity's preferred name, with an alphabetical fallback (as in
     `list_entities`); `matched_name` is the alias that actually
-    matched. Follow up with `get_entity(id)` for all aliases.
+    matched. The configured embedding model supplies the default score
+    (0.3 for nomic-embed-text). Follow up with `get_entity(id)` for all aliases.
     """
     if not query:
         raise ValueError("query must be a non-empty string")
+    min_score = embed.thresholds().entity_search if min_score is None else min_score
     vec = embed.embed(query)
     # Over-fetch: several aliases of one entity can occupy top slots,
     # and dedup-to-entity may otherwise leave fewer than k results.
