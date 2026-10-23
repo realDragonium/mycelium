@@ -41,6 +41,9 @@ def pytest_configure(config):
     # with an explicit clock instead.
     os.environ.setdefault("MYCELIUM_DISABLE_REVIEW_SWEEP", "1")
     os.environ.setdefault("MYCELIUM_DISABLE_AUDIENCE_WORKER", "1")
+    # Each server.init() otherwise spawns a layout-bake subprocess, and every
+    # entity write arms a timer that spawns another one mid-suite.
+    os.environ.setdefault("MYCELIUM_DISABLE_LAYOUT_BAKE", "1")
 
 
 def _require_spacy_model():
