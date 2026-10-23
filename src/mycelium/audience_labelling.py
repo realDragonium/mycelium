@@ -317,10 +317,11 @@ def start(data_dir: Path | str, *, poll_interval: float = POLL_INTERVAL_S) -> No
         conn = store.connect(db_path, history_path=history_path)
         while not _stop.is_set():
             forced = _forced.is_set()
-            _forced.clear()
             if forced or _automatic():
                 try:
                     drain(conn)
+                    if forced and store.audience_labels.queue_counts(conn)[0] == 0:
+                        _forced.clear()
                 except Exception:  # never let the thread die on one bad drain
                     logger.exception("audience labelling drain failed")
             _wake.wait(poll_interval)

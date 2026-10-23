@@ -4,6 +4,9 @@ the hard read boundary a documentation run sees."""
 from __future__ import annotations
 
 import json
+import threading
+from datetime import UTC, datetime
+from functools import partial
 
 import pytest
 
@@ -12,11 +15,13 @@ from mycelium import (
     audience_labelling,
     audiences,
     auth,
+    product_settings,
     prompt_store,
     store,
 )
 from mycelium.audiences import Audience
 from product_settings_helpers import connection as product_connection
+from product_settings_helpers import set_product
 
 ADMIN = auth.Principal(id="a", name="admin", role="admin", type="human")
 WRITER = auth.Principal(id="w", name="writer", role="writer", type="human")
@@ -243,6 +248,105 @@ def test_without_credentials_the_worker_leaves_the_queue_untouched(
     assert audience_labelling.drain(db, call=call) == 0
     assert calls == []
     assert store.audience_labels.queue_counts(db) == (1, 0, None)
+
+
+@pytest.mark.parametrize(
+    "interruption", ["failure", "exhausted", "paused", "credentials"]
+)
+def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
+    db, prompts, tmp_path, monkeypatch, interruption
+):
+    at = datetime(2026, 10, 23, tzinfo=UTC)
+    monkeypatch.setattr(
+        store.audience_labels,
+        "due_batch",
+        partial(store.audience_labels.due_batch, now=at),
+    )
+    monkeypatch.setattr(
+        store.audience_labels,
+        "record_failure",
+        partial(store.audience_labels.record_failure, now=at),
+    )
+    set_product(
+        product_settings.AudienceLabellingSettings(automatic=False, batch_size=1)
+    )
+    first = store.create_statement(db, "state", "Workspaces have owners.")
+    second = store.create_statement(db, "state", "Invoices can be exported.")
+    blocked = True
+    calls = []
+
+    def call(task, config):
+        sid = json.loads(task.prompt)["statements"][0]["statement_id"]
+        calls.append(sid)
+        if blocked:
+            if interruption == "paused":
+                raise ai.usage.Paused("Paused: monthly AI budget reached.")
+            raise ai.ModelError("Provider unavailable.")
+        answer, _ = _answer((sid, [EXTERNAL.id]))
+        return answer(task, config)
+
+    drain = audience_labelling.drain
+    monkeypatch.setattr(
+        audience_labelling, "drain", lambda conn: drain(conn, call=call)
+    )
+    monkeypatch.setattr(
+        audience_labelling.model_settings,
+        "credentials_error",
+        lambda action: (
+            "Missing credentials" if blocked and interruption == "credentials" else None
+        ),
+    )
+    monkeypatch.setattr(audience_labelling, "_thread", None)
+    for name in ("_stop", "_wake", "_forced"):
+        monkeypatch.setattr(audience_labelling, name, threading.Event())
+    monkeypatch.setattr(audience_labelling, "_last_backfill", None)
+    monkeypatch.setattr(audience_labelling.store, "connect", lambda *args, **kwargs: db)
+    monkeypatch.setattr(threading.Thread, "start", lambda thread: thread.run())
+    assert audience_labelling.backfill(relabel_ai=False).queued == 2
+    if interruption == "exhausted":
+        db.execute(
+            "UPDATE audience_label_queue SET attempts = ?",
+            (store.audience_labels.MAX_ATTEMPTS - 1,),
+        )
+    polls = []
+
+    def poll(interval):
+        nonlocal blocked
+        polls.append(interval)
+        if len(polls) == 1:
+            assert audience_labelling._forced.is_set()
+            assert store.audience_labels.due_batch(db, 1)
+            if interruption in {"paused", "credentials"}:
+                assert store.audience_labels.queue_counts(db) == (2, 0, None)
+            else:
+                assert len(calls) == 1
+            blocked = False
+        elif len(polls) == 2:
+            # A statement waiting out its backoff keeps the backfill going.
+            assert audience_labelling._forced.is_set() == (interruption == "failure")
+            assert not store.audience_labels.due_batch(db, 1)
+            assert store.audience_labels.get_label(
+                db, second if calls[0] == first else first
+            )
+            if interruption in {"paused", "credentials"}:
+                assert _queued(db) == set()
+            else:
+                assert _queued(db) == {calls[0]}
+                assert store.audience_labels.queue_counts(db)[:2] == (
+                    (0, 1) if interruption == "exhausted" else (1, 0)
+                )
+            store.create_statement(db, "state", "Login supports SSO.")
+        else:
+            assert len(polls) == 3
+            # Only a backfill still in progress labels the new statement.
+            assert bool(store.audience_labels.due_batch(db, 1)) == (
+                interruption != "failure"
+            )
+            audience_labelling._stop.set()
+
+    monkeypatch.setattr(audience_labelling._wake, "wait", poll)
+    audience_labelling.start(tmp_path)
+    assert len(polls) == 3
 
 
 # --- HTTP ----------------------------------------------------------------------
