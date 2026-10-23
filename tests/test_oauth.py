@@ -743,6 +743,7 @@ def test_issuer_is_pinned_by_configuration_not_the_host_header(tmp_path, monkeyp
     the same deployment breaks a legitimate flow, and lets the caller choose
     what audience a token claims."""
     monkeypatch.setenv("MYCELIUM_PUBLIC_URL", "https://mycelium.example")
+    monkeypatch.setenv("MYCELIUM_ALLOWED_HOSTS", "testserver,some-alias.internal")
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         meta = client.get(

@@ -67,6 +67,8 @@ The scaffolder creates a `.mcp.json` and an ignored `data/` directory.
 | `MYCELIUM_HTTP_PORT` | `8765` | HTTP bind port |
 | `MYCELIUM_AUTH` | `off` | Require authenticated HTTP and remote MCP requests when `on` |
 | `MYCELIUM_SESSION_SECRET` | unset | Cookie-signing secret; required when authentication is on |
+| `MYCELIUM_ALLOWED_HOSTS` | unset | Hostnames answered besides loopback; see [Deployment](docs/DEPLOYMENT.md#hostnames-the-server-answers) |
+| `MYCELIUM_MAX_BODY_BYTES` | `4194304` | Largest request body accepted |
 | `MYCELIUM_INSTRUCTIONS` | unset | Deployment-specific MCP guidance |
 
 Keep the default loopback bind for unauthenticated use. Before binding HTTP to a

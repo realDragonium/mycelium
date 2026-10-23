@@ -14,10 +14,10 @@ from urllib.parse import urlsplit
 import anyio.to_thread
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .. import auth, store
+from .. import auth, hosts, store
 from ..server import runtime
 
 # Resolves a `Principal` for every request and stashes it on
@@ -329,3 +329,27 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
+
+
+# Load balancers probe by instance address, which no allowlist names, and the
+# probe needs no credential, so a rebound page gains nothing here either.
+_HOST_CHECK_EXEMPT = frozenset({"/api/server-info"})
+
+
+class HostAllowlistMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] == "http"
+            and scope["path"] not in _HOST_CHECK_EXEMPT
+            and hosts.enforced()
+            and not hosts.is_allowed(Headers(scope=scope).get("host"))
+        ):
+            rejection = JSONResponse(
+                status_code=421, content={"detail": "invalid host header"}
+            )
+            await rejection(scope, receive, send)
+            return
+        await self.app(scope, receive, send)

@@ -38,6 +38,8 @@ def pytest_configure(config):
     # worker and local server. Unusable on purpose: it fails at mkdir.
     os.environ["MYCELIUM_DATA_DIR"] = os.path.join(os.devnull, "mycelium")
     os.environ.setdefault("MYCELIUM_DISABLE_MCP_HTTP", "1")
+    # TestClient's default host; the server refuses hosts it was not told of.
+    os.environ.setdefault("MYCELIUM_ALLOWED_HOSTS", "testserver")
     # The async mention-recompute worker spawns a daemon thread per
     # server.init(); across many TestClient lifecycles that races the
     # assertions and leaks threads. Tests that exercise recompute call

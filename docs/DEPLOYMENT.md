@@ -153,10 +153,35 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |
 | `MYCELIUM_DISABLE_REVIEW_SWEEP` | unset | `1` stops the sweep that retries failed draft reviews. Meant for tests. |
 
-> **Want to try it without Auth0 first?** Leave `MYCELIUM_AUTH=off`,
-> leave the OIDC fields blank, skip step 6, and just expose the UI over
-> HTTPS. Every caller will be `local-admin`. Useful for a single-user
-> setup or a sanity check.
+> **Leave `MYCELIUM_AUTH=on` on anything reachable from a network.** With
+> auth off every caller is `local-admin`, so it is for a single user on their
+> own machine, bound to `127.0.0.1`. The server then answers only requests
+> addressed to a loopback name (`localhost`, `127.0.0.1`, `[::1]`), so a web
+> page cannot reach it by pointing its own domain at your machine (DNS
+> rebinding).
+
+### Hostnames the server answers
+
+Every route refuses a request whose `Host` header names a host it was not
+told about, with `421`. It always accepts the loopback names, plus:
+
+- each entry in `MYCELIUM_ALLOWED_HOSTS`, comma-separated, such as
+  `mycelium.example.com,kb.example.com`. A port in an entry is ignored;
+  only the hostname is compared.
+- the host of `MYCELIUM_PUBLIC_URL`, when it is set.
+
+With `MYCELIUM_AUTH=off` the check always applies. With auth on it applies
+once either variable is set, so a deployment that never listed its
+hostname keeps working; set them anyway. `/api/server-info` is exempt,
+because load balancers probe it by the instance's address.
+
+### Request size
+
+Request bodies over 4 MiB get `413` before the server reads the rest.
+`MYCELIUM_MAX_BODY_BYTES` changes the cap, for `/mcp` as well as every
+other route. nginx's own `client_max_body_size` default of 1 MiB is
+tighter still and bites first; raise it in the site template if large
+`ingest` payloads get a 413 from nginx.
 
 ---
 
@@ -276,9 +301,7 @@ template needs no change — but a proxy that filters request headers must
 pass all three through, or modern clients land on the legacy path and fail
 for want of a session id.
 
-Request bodies are capped at 4 MiB by the MCP transport. nginx's own
-`client_max_body_size` default of 1 MiB is the tighter limit and bites
-first; raise it in the site template if large `ingest` payloads get a 413.
+Request bodies are capped as described under [Request size](#request-size).
 
 ### Set `MYCELIUM_PUBLIC_URL` if OAuth is in use
 

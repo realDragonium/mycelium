@@ -17,8 +17,10 @@ from typing import Any, ParamSpec, TypeVar, overload
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 
 from .. import auth as _auth
+from .. import hosts as _hosts
 from .. import link_authoring
 from .admission import _MODEL_LOOP_TOOLS, _offloaded, _run_tool
 from .draft_queue import (
@@ -42,36 +44,24 @@ R = TypeVar("R")
 _INSTRUCTIONS = (os.environ.get("MYCELIUM_INSTRUCTIONS") or "").strip() or None
 
 
-# When Mycelium is fronted by a reverse proxy (nginx, Cloudflare),
-# requests reach the MCP transport with the public Host header — not
-# 127.0.0.1. Its DNS-rebinding protection rejects unrecognised hosts with
-# 421 unless we tell it which to trust. MYCELIUM_ALLOWED_HOSTS is a
-# comma-separated list of `host[:port]` patterns (e.g.
-# `mycelium.example.com,mycelium.example.com:443`). When unset, the
-# default localhost protection stays in place — fine for local dev.
+# The MCP transport checks `Host` and `Origin` itself and answers 421 to a
+# host it does not know. Left unconfigured it trusts only loopback, which is
+# right for local development. Once hostnames are configured it is given the
+# same list `HostAllowlistMiddleware` uses, so both checks agree.
 #
 # This is transport configuration, so it is passed to `streamable_http_app()`
 # where the ASGI app is built (`mycelium.http`), not to `MCPServer` itself.
-def _build_transport_security() -> Any:
-    raw = (os.environ.get("MYCELIUM_ALLOWED_HOSTS") or "").strip()
-    if not raw:
+def _build_transport_security() -> TransportSecuritySettings | None:
+    configured = _hosts.configured()
+    if not configured:
         return None
-    from mcp.server.transport_security import TransportSecuritySettings
-
-    hosts = [h.strip() for h in raw.split(",") if h.strip()]
-    # Allow https origins for each host. Wildcard ports keep dev-tool
-    # quirks from rejecting traffic.
+    hosts: list[str] = []
     origins: list[str] = []
-    for h in hosts:
-        bare = h.split(":", 1)[0]
-        origins.extend(
-            [
-                f"https://{bare}",
-                f"https://{bare}:*",
-                f"http://{bare}",
-                f"http://{bare}:*",
-            ]
-        )
+    for name in sorted(_hosts.LOOPBACK | configured):
+        bare = f"[{name}]" if ":" in name else name
+        hosts.extend([bare, f"{bare}:*"])
+        for scheme in ("https", "http"):
+            origins.extend([f"{scheme}://{bare}", f"{scheme}://{bare}:*"])
     return TransportSecuritySettings(allowed_hosts=hosts, allowed_origins=origins)
 
 

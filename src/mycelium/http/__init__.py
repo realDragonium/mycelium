@@ -18,6 +18,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from mcp.server.transport_security import RequestBodyLimitMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from .. import (
@@ -53,10 +54,19 @@ from . import (
 )
 from .authentication import (
     AuthMiddleware,
+    HostAllowlistMiddleware,
     SecurityHeadersMiddleware,
     _session_secret,
     session_cookie_secure,
 )
+
+
+def _max_body_bytes() -> int:
+    """Deployments without a proxy in front have nothing else bounding what a
+    caller can make the server hold in memory."""
+    raw = (os.environ.get("MYCELIUM_MAX_BODY_BYTES") or "").strip()
+    return int(raw) if raw else 4 * 1024 * 1024
+
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -66,6 +76,7 @@ from .authentication import (
 # self-describing requests — with nothing to configure.
 _MCP_SUBAPP = server.mcp.streamable_http_app(
     transport_security=registry._build_transport_security(),
+    max_request_body_size=_max_body_bytes(),
 )
 
 
@@ -144,6 +155,8 @@ app.add_middleware(
     same_site="lax",
     https_only=session_cookie_secure(),
 )
+app.add_middleware(RequestBodyLimitMiddleware, max_body_size=_max_body_bytes())
+app.add_middleware(HostAllowlistMiddleware)
 # Outermost, so error responses from the layers inside get the headers too.
 app.add_middleware(SecurityHeadersMiddleware)
 
