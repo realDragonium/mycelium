@@ -74,6 +74,8 @@ class AskSettings(LoopLimits):
 
 class IngestSettings(LoopLimits):
     kind: Literal["ingest"] = "ingest"
+    # Adaptive thinking plus a full emit_draft outgrew 8000 in most drafts.
+    max_tokens: int = Field(default=32000, gt=0)
     op_cap: int = Field(default=50, gt=0)
     wall_clock_s: float = Field(default=120.0, gt=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
@@ -455,6 +457,24 @@ def initialize(conn: sqlite3.Connection, *, import_environment: bool) -> None:
     conn.execute(
         "INSERT INTO instance_settings_migrations(name) VALUES (?)", (MIGRATION,)
     )
+
+
+def raise_ingest_output_budget(conn: sqlite3.Connection) -> None:
+    """Once per instance, lift a saved ingest `max_tokens` still at the old
+    8000 default, which most drafts outgrew."""
+    marker = "ingest-max-tokens-32000"
+    if conn.execute(
+        "SELECT 1 FROM instance_settings_migrations WHERE name = ?", (marker,)
+    ).fetchone():
+        return
+    conn.execute(
+        "UPDATE product_settings SET revision = revision + 1, "
+        "body_json = json_set(body_json, '$.max_tokens', ?) "
+        "WHERE section = 'ingest' AND json_valid(body_json) "
+        "AND json_extract(body_json, '$.max_tokens') = 8000",
+        (IngestSettings().max_tokens,),
+    )
+    conn.execute("INSERT INTO instance_settings_migrations VALUES (?)", (marker,))
 
 
 class ArchivedSection(SettingsModel):
