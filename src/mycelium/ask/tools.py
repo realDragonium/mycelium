@@ -36,7 +36,7 @@ class AnswerInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     answer: str = Field(
         min_length=1,
-        description="Answer the literal question when answerable. State contradictions and relevant conditions explicitly.",
+        description="Plain prose answer to the literal question, stating only what the evidence says. State contradictions and conditions explicitly. No refs (s1) or IDs.",
     )
     confidence: Literal["high", "medium", "low"]
     interpretation: InterpretationChange | None = Field(

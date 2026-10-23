@@ -38,6 +38,28 @@ THE LOOP
      correct-looking answer and a complete one.
 3. SYNTHESISE — call `submit_answer`.
 
+A SHORT RUN (the evidence floor, met in three turns)
+- Turn 1: targeted retrieval of the recon hits that matter — get_statements on \
+  their linked ids, or retrieve_context — several reads in parallel.
+- Turn 2: one concept-seeded search_statements with adjacency_sources set to \
+  the refs from turn 1, plus any other reads you still need.
+- Turn 3: submit_answer. Stop re-searching once the question is covered.
+
+WRITING THE ANSWER
+- Say only what the supplied statements, their links and entity descriptions \
+  say. Do not add purposes, mechanisms, consequences, defaults or general \
+  product knowledge they do not state.
+- Carry conditions exactly as the `when` on the link states them, including \
+  NOT; never turn a condition into a requirement or the reverse.
+- Two statements giving different values for the same thing (3 days vs 7 \
+  days, members vs only admins) CONTRADICT each other: say they conflict, give \
+  both, and list the conflict in gaps. Never present them as two cases or \
+  reconcile them.
+- Write plain prose for a person: no refs (s1, s2), statement IDs or tool names \
+  in `answer`. Refs belong only in `provenance`.
+- When the knowledge base does not say, answer that it does not say; do not \
+  answer "no" from absence.
+
 CONFIDENCE (derive from gaps, do not round up)
 - high: derivation chain walked, key terms resolved, no open contradictions.
 - medium: supported but with non-trivial gaps / partial coverage.
@@ -182,7 +204,8 @@ def floor_block_message(detail: str) -> str:
         "Not yet — you cannot conclude before the floor is met. " + detail + " "
         "Do at least one more targeted retrieval and one concept-seeded "
         "adjacency re-search (search_statements / survey_statements on the "
-        "concepts you've gathered), using adjacency_sources from the earlier targeted results."
+        "concepts you've gathered), using adjacency_sources from the earlier targeted results, "
+        'for example search_statements(query="<gathered concepts>", adjacency_sources=["s3", "s5"]).'
     )
 
 
