@@ -96,9 +96,9 @@ Do not change them: you may not create, rewrite, merge or delete statements, and
 an operation that would is dropped.
 
 For each statement:
-1. Search for related statements (`search_statements`, `survey_statements`,
-   `discover_facts`; `grep_statements` for exact identifiers), and look up the
-   concepts its words name (`search_entities`, `list_entities`, `get_entity`).
+1. Search for related statements (`search_statements`, `discover_facts`;
+   `grep_statements` for exact identifiers), and look up the concepts its words
+   name (`search_entities`, `list_entities`, `get_entity`).
    Call independent reads together in one turn.
 2. Read the candidates you would link to (`get_statements`) before you decide.
 3. Decide the links and concept mentions, or decide to leave it.

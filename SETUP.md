@@ -113,7 +113,8 @@ Use `search_statements` for semantic retrieval and `get_statements` to hydrate
 known IDs. Use `list_link_types` and `list_statement_kinds` to inspect the
 active vocabularies before authoring unfamiliar edges or kinds.
 
-Ingest, ask, draft review and documentation call a model. Start the server
+Ask, ingest, documentation, draft review and the other AI actions call a
+model. Start the server
 with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in its environment, then choose
 each feature's provider and model under **Settings → Models**. Documentation
 needs no further setup: the `kb-authoring` writing profile is seeded, and a

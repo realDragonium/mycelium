@@ -147,8 +147,7 @@ def _resolve_draft_refs(payload: Any, results_by_seq: dict[int, Any]) -> Any:
     allowlist would have to track every tool's parameter names and would fail
     open — silently skipping resolution — the moment one grows a new endpoint
     argument. The cost is that a free-form value equal in its entirety to
-    `@<int>:<int>` (never prose, and never produced by `connect.draft`) would
-    be substituted too.
+    `@<int>:<int>` (never prose) would be substituted too.
     """
     if isinstance(payload, dict):
         return {

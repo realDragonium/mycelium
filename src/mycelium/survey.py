@@ -1,10 +1,10 @@
-"""Pure logic for `survey_statements` — query decomposition, sub-query
-hygiene, and union ranking.
+"""Pure logic for `search_statements(decompose=True)` — query decomposition,
+sub-query hygiene, and union ranking.
 
 Everything here is a pure function of plain data: no embedding, no index,
 no I/O. The side-effecting parts (embedding sub-queries, searching the
-index, hydrating statements) live in `server.survey_statements`, which
-wires these functions onto the substrate. Keeping the logic here means it
+index, hydrating statements) live in `server.search`, which wires these
+functions onto the substrate. Keeping the logic here means it
 is testable with plain lists and dicts — no server, no Ollama, no hnswlib.
 
 Decomposition is the one empirically-tuned knob (see `Decomposer`). The v1
@@ -143,7 +143,7 @@ class Decomposer(Protocol):
     default. A richer linguistic decomposer (e.g. spaCy noun-chunking via
     the `en_core_web_sm` model already loaded for phrasing validation in
     `phrasing.get_nlp`) can be swapped in later if traces show the cheap
-    clause split misses parts — without touching `survey_statements`.
+    clause split misses parts — without touching `server.search`.
     """
 
     def __call__(self, query: str) -> list[str]: ...
@@ -205,14 +205,14 @@ def rank_statements(
 ) -> list[tuple[str, float]]:
     """Order the union of per-sub-query hits.
 
-    `union` maps statement_id -> (count, best_cosine) where `count` is how
-    many distinct sub-queries surfaced the statement and `best_cosine` is
+    `union` maps statement_id -> (count, best_score) where `count` is how
+    many distinct sub-queries surfaced the statement and `best_score` is
     its closest match across them. Sorts by count desc (a statement central
-    to a multi-part query is surfaced by several parts), then best_cosine
+    to a multi-part query is surfaced by several parts), then best_score
     desc, then statement_id asc as a stable final tiebreak so identical
     input always yields identical output.
 
-    Returns `(statement_id, best_cosine)` pairs — the cosine becomes each
+    Returns `(statement_id, best_score)` pairs — the score becomes each
     hit's `score`. This count-driven ordering is the *only* trace of the
     multi-piece decomposition; it lives in ranking, never in the output
     shape.

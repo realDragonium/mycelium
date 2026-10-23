@@ -13,7 +13,7 @@ import types
 import pytest
 
 from mycelium.agentloop import ids_present_in, serialize
-from mycelium.ask import Answered, AskConfig, NeedsClarification, run_ask
+from mycelium.ask import Answered, AskConfig, NeedsClarification, prompts, run_ask
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 
 # --------------------------------------------------------------------------- #
@@ -71,7 +71,7 @@ class FakeSubstrate:
         self.calls: list[tuple[str, dict]] = []
         self._specs = [
             ToolSpec("search_statements", "search", _MIN_SCHEMA),
-            ToolSpec("survey_statements", "survey", _MIN_SCHEMA),
+            ToolSpec("search_statements", "survey", _MIN_SCHEMA),
             ToolSpec("get_statements", "get", _MIN_SCHEMA),
         ]
 
@@ -83,7 +83,8 @@ class FakeSubstrate:
 
     def call(self, name, arguments):
         self.calls.append((name, dict(arguments)))
-        value = self._results.get(name, [])
+        key = "recon" if arguments.get("decompose") else name
+        value = self._results.get(key, [])
         if isinstance(value, Exception):
             raise SubstrateError(str(value))
         if callable(value):
@@ -124,7 +125,7 @@ def _run(responses, results=None, *, question="why does it retry?", **config_ove
     substrate = FakeSubstrate(
         results
         or {
-            "survey_statements": [{"id": "stm_1", "text": "retry"}],
+            "recon": [{"id": "stm_1", "text": "retry"}],
             "search_statements": [{"id": "stm_1", "text": "retry"}],
         }
     )
@@ -145,7 +146,7 @@ def test_well_formed_question_returns_answered_with_provenance_and_confidence():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "embed retry", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -174,7 +175,7 @@ def test_misframed_but_resolvable_returns_reframed_answer():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "cache invalidate", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -220,7 +221,7 @@ def test_clarification_with_too_few_candidates_is_reprompted():
         _message(
             [
                 _tool_use(
-                    "survey_statements", {"query": "x adj", "adjacency_sources": ["s1"]}
+                    "search_statements", {"query": "x adj", "adjacency_sources": ["s1"]}
                 )
             ]
         ),
@@ -233,7 +234,7 @@ def test_clarification_with_too_few_candidates_is_reprompted():
 
 def test_absent_subject_returns_low_confidence_with_absence_gap_no_fabrication():
     """#4 — absent-from-substrate -> low confidence, absence in gaps, no fabrication."""
-    results = {"survey_statements": [], "search_statements": []}
+    results = {"recon": [], "search_statements": []}
     submit = _submit_input(
         confidence="low",
         provenance=[],
@@ -241,7 +242,7 @@ def test_absent_subject_returns_low_confidence_with_absence_gap_no_fabrication()
     )
     responses = [
         _message([_tool_use("search_statements", {"query": "kafka"})]),
-        _message([_tool_use("survey_statements", {"query": "kafka queue"})]),
+        _message([_tool_use("search_statements", {"query": "kafka queue"})]),
         _message([_tool_use("submit_answer", submit)]),
     ]
     result, _client, _sub = _run(responses, results=results, op_cap=3)
@@ -260,7 +261,7 @@ def test_floor_prevents_premature_conclusion():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -272,7 +273,7 @@ def test_floor_prevents_premature_conclusion():
     assert isinstance(result, Answered)
     # the premature submit did NOT terminate — the model was driven to retrieve
     assert ("search_statements", {"query": "retry"}) in substrate.calls
-    assert ("survey_statements", {"query": "retry adj"}) in substrate.calls
+    assert ("search_statements", {"query": "retry adj"}) in substrate.calls
     assert len(client.calls) == 4
     assert result.trace["floor"]["satisfied"] is True
 
@@ -441,7 +442,7 @@ def test_fallback_provenance_excludes_read_ids_cut_by_serialization():
     assert cut_id not in sent
 
     responses = [_message([_tool_use("search_statements", {"query": "retry"})])]
-    results = {"survey_statements": [], "search_statements": search_result}
+    results = {"recon": [], "search_statements": search_result}
     result, _client, _sub = _run(responses, results=results, op_cap=2)
 
     assert isinstance(result, Answered)
@@ -469,7 +470,7 @@ def test_fallback_provenance_rejects_cut_id_sharing_surviving_prefix():
     assert ids_present_in(sent, {cut_id}) == set()  # ... but never reached the model
 
     responses = [_message([_tool_use("search_statements", {"query": "retry"})])]
-    results = {"survey_statements": [], "search_statements": search_result}
+    results = {"recon": [], "search_statements": search_result}
     result, _client, _sub = _run(responses, results=results, op_cap=2)
 
     assert isinstance(result, Answered)
@@ -480,7 +481,7 @@ def test_fallback_provenance_rejects_cut_id_sharing_surviving_prefix():
 def test_fallback_provenance_excludes_recon_ids_not_rendered_to_model():
     """Recon ids omitted by format_recon cannot become fallback provenance."""
     hidden_id = "stm_hidden_by_recon_shape"
-    results = {"survey_statements": {"id": hidden_id, "text": "not rendered"}}
+    results = {"recon": {"id": hidden_id, "text": "not rendered"}}
 
     result, _client, _sub = _run([], results=results, op_cap=1)
 
@@ -491,7 +492,7 @@ def test_fallback_provenance_excludes_recon_ids_not_rendered_to_model():
 def test_fallback_provenance_excludes_an_unrendered_recon_id_named_in_the_question():
     """Question text cannot vouch for a structurally collected recon id."""
     hidden_id = "stm_ghost_in_question"
-    results = {"survey_statements": {"id": hidden_id, "text": "not rendered"}}
+    results = {"recon": {"id": hidden_id, "text": "not rendered"}}
 
     result, _client, _sub = _run(
         [],
@@ -509,7 +510,7 @@ def test_fallback_provenance_excludes_a_recon_link_target_that_was_not_read():
     read_id = "stm_recon_hit"
     linked_id = "stm_link_target"
     results = {
-        "survey_statements": [
+        "recon": [
             {
                 "id": read_id,
                 "text": "The visible recon statement",
@@ -532,7 +533,7 @@ def test_trace_record_is_complete():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -562,9 +563,10 @@ def test_trace_record_is_complete():
     ):
         assert key in trace, f"trace missing {key}"
     # recon is the first recorded tool call and counts as an op
-    assert trace["tool_calls"][0]["name"] == "survey_statements"
+    assert trace["tool_calls"][0]["name"] == "search_statements"
+    assert trace["tool_calls"][0]["arguments"]["decompose"] is True
     assert trace["tool_calls"][0]["counts_as_op"] is True
-    assert trace["op_count"] >= 3  # recon + search + survey
+    assert trace["op_count"] >= 3  # recon + two searches
     assert trace["tokens"]["total"] > 0
     assert (
         trace["sub_question_ledger"] == []
@@ -580,7 +582,7 @@ def test_trace_prices_any_listed_claude_model_per_turn():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -603,7 +605,7 @@ def test_trace_written_to_jsonl_file(tmp_path):
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -611,7 +613,7 @@ def test_trace_written_to_jsonl_file(tmp_path):
         _message([_tool_use("submit_answer", _submit_input())]),
     ]
     client = FakeAnthropic(responses)
-    substrate = FakeSubstrate({"survey_statements": [{"id": "stm_1", "text": "x"}]})
+    substrate = FakeSubstrate({"recon": [{"id": "stm_1", "text": "x"}]})
     cfg = AskConfig(trace_log_path=str(log))
     run_ask("why?", client=client, substrate=substrate, config=cfg)
 
@@ -629,7 +631,7 @@ def test_malformed_submit_is_reprompted_then_degrades():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -668,7 +670,7 @@ def test_interleaved_text_turn_does_not_prematurely_degrade():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -700,7 +702,7 @@ def test_persistent_underspecified_clarification_degrades_not_broken():
 def test_substrate_read_failure_is_surfaced_not_fabricated():
     """A read that fails twice is recorded as an error op, loop still concludes."""
     results = {
-        "survey_statements": [{"id": "stm_1", "text": "x"}],
+        "recon": [{"id": "stm_1", "text": "x"}],
         "search_statements": SubstrateError("index timeout"),
     }
     responses = [
@@ -708,7 +710,7 @@ def test_substrate_read_failure_is_surfaced_not_fabricated():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -716,7 +718,7 @@ def test_substrate_read_failure_is_surfaced_not_fabricated():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "more adj", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -725,9 +727,7 @@ def test_substrate_read_failure_is_surfaced_not_fabricated():
     ]
     result, _client, _sub = _run(responses, results=results)
     assert isinstance(result, Answered)
-    failed = [
-        tc for tc in result.trace["tool_calls"] if tc["name"] == "search_statements"
-    ]
+    failed = [tc for tc in result.trace["tool_calls"] if not tc["ok"]]
     assert failed and failed[0]["ok"] is False and failed[0]["error"]
 
 
@@ -850,7 +850,7 @@ def test_existing_read_primitives_and_writes_untouched():
 
     names = {getattr(t, "__name__", "") for t in server.TOOLS}
     assert "ask" in names
-    assert {"search_statements", "survey_statements", "get_statements"} <= names
+    assert {"search_statements", "get_statements"} <= names
     # ask is reader-role and not offered back to the inner model
     sub = InProcessSubstrate(server)
     inner = {s.name for s in sub.tool_specs()}
@@ -896,7 +896,6 @@ def test_the_inner_loop_is_offered_exactly_the_domain_readers():
         "list_statements",
         "search_entities",
         "search_statements",
-        "survey_statements",
     }
 
 
@@ -921,7 +920,7 @@ def test_caching_marks_static_and_rolling_breakpoints():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "embed retry", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -945,10 +944,7 @@ def test_caching_off_sends_plain_system_and_no_breakpoints():
     _result, client, _sub = _run(responses, cache=False)
 
     call = client.calls[0]
-    assert (
-        call["system"]
-        == __import__("mycelium.ask.prompts", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT
-    )
+    assert call["system"] == prompts.build_system_prompt(prompts.DEFAULT_INSTRUCTIONS)
     last = _last_block(call["messages"][-1])
     if isinstance(last, dict):
         assert "cache_control" not in last
@@ -963,7 +959,7 @@ def test_trace_records_per_phase_and_per_turn_timings():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "embed retry", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -988,7 +984,7 @@ def test_adaptive_turns_allow_parallel_tool_use():
         _message(
             [
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "embed retry", "adjacency_sources": ["s1"]},
                 )
             ]
@@ -1005,7 +1001,7 @@ def test_parallel_reads_in_one_turn_all_get_results():
     """A single turn carrying several read tool_use blocks executes all of them
     and answers each — collapsing serial round trips."""
     results = {
-        "survey_statements": [{"id": "stm_1", "text": "x"}],
+        "recon": [{"id": "stm_1", "text": "x"}],
         "search_statements": [{"id": "stm_2", "text": "y"}],
         "get_statements": {"statements": [{"id": "stm_3", "text": "z"}]},
     }
@@ -1016,7 +1012,7 @@ def test_parallel_reads_in_one_turn_all_get_results():
                 _tool_use("search_statements", {"query": "retry"}, id="a"),
                 _tool_use("get_statements", {"ids": ["stm_3"]}, id="b"),
                 _tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "embed retry", "adjacency_sources": ["s1"]},
                     id="c",
                 ),
@@ -1028,7 +1024,7 @@ def test_parallel_reads_in_one_turn_all_get_results():
 
     assert isinstance(result, Answered)
     # all three reads ran in the single turn
-    names = [n for n, _ in substrate.calls]
+    names = [n for n, args in substrate.calls if not args.get("decompose")]
     assert names.count("search_statements") == 1
     assert names.count("get_statements") == 1
     # the turn's three tool_results are batched into ONE user message (the API

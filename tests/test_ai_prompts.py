@@ -129,7 +129,7 @@ def test_ask_keeps_one_snapshot_across_turns_and_next_run_uses_edit(db, monkeypa
         ask_fixtures._message(
             [
                 ask_fixtures._tool_use(
-                    "survey_statements", {"query": "retry", "adjacency_sources": ["s1"]}
+                    "search_statements", {"query": "retry", "adjacency_sources": ["s1"]}
                 )
             ]
         ),

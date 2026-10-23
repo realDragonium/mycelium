@@ -135,7 +135,7 @@ def _make_streaming_post_handler(
 # seam, don't each spawn a duplicate find trace (the loop already times them).
 # The `trace_span("embed")`/`("vector_search")` markers inside the functions then
 # light up only for these top-level calls, via the ambient recorder set below.
-_TRACED_TOOLS = {"search_statements", "survey_statements", "grep_statements"}
+_TRACED_TOOLS = {"search_statements", "grep_statements"}
 
 
 def _make_traced_post_handler(

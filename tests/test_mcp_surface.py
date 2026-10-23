@@ -11,11 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from mycelium import server
+from mycelium import auth, server
 from mycelium.http import create_app
 from mycelium.http.tool_routes import _path_for
+from mycelium.server.registry import _satisfies
 
-_MANIFEST = Path(__file__).resolve().parents[1] / "docs" / "MCP_TOOLS.md"
+_ROOT = Path(__file__).resolve().parents[1]
+_MANIFEST = _ROOT / "docs" / "MCP_TOOLS.md"
 
 
 def _registered() -> set[str]:
@@ -49,6 +51,34 @@ def test_manifest_documents_each_tool_on_the_side_it_is_on():
 
     assert on_mcp == server.MCP_TOOLS
     assert off_mcp == _registered() - server.MCP_TOOLS
+
+
+def _visible_to(role: auth.Role) -> int:
+    principal = auth.Principal(id="u", name="u", role=role, type="human")
+    tools = {tool.__name__: tool for tool in server.TOOLS}
+    return sum(
+        _satisfies(
+            principal,
+            tools[name]._mycelium_required_role,
+            tools[name]._mycelium_real_role,
+        )
+        for name in server.MCP_TOOLS
+    )
+
+
+def test_manifest_and_readme_state_the_current_tool_counts():
+    manifest = " ".join(_MANIFEST.read_text().split())
+    readme = " ".join((_ROOT / "README.md").read_text().split())
+    advertised = len(server.MCP_TOOLS)
+
+    assert f"advertises {advertised} of its {len(_registered())} registered" in (
+        manifest
+    )
+    assert f"a reader sees {_visible_to('reader')} tools" in manifest
+    assert f"A drafter sees {_visible_to('drafter')}" in manifest
+    assert f"A writer sees {_visible_to('writer')}" in manifest
+    assert f"An admin sees all {_visible_to('admin')}" in manifest
+    assert f"MCP advertises {advertised} tools" in readme
 
 
 _BOUNDED_READS = ("search_statements", "list_statements", "list_entities")

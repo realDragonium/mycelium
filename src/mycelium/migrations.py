@@ -8,7 +8,7 @@ last successful version rather than leaving the DB torn.
 
 Versioning strategy
 -------------------
-- `SCHEMA` in store.py reflects the **latest** column set. A fresh DB
+- `SCHEMA` in store/kernel.py reflects the **latest** column set. A fresh DB
   reaches the current state via CREATE TABLE IF NOT EXISTS; the runner
   detects "fresh" and fast-forwards `user_version` to the latest with
   no migration functions actually executed.
@@ -19,7 +19,7 @@ Versioning strategy
 A future schema change adds:
 1. A new migration function below.
 2. A new tuple in `MIGRATIONS`.
-3. Updates to `SCHEMA` in store.py so fresh DBs pick it up directly.
+3. Updates to `SCHEMA` in store/kernel.py so fresh DBs pick it up directly.
 4. A fixture of the new shape, captured once the tests pass:
    `uv run python scripts/capture_migration_fixture.py`.
 
@@ -50,7 +50,7 @@ def _migration_v1_audit_columns(conn: sqlite3.Connection) -> None:
     """Add `created_at` / `updated_at` / `created_by` / `updated_by` to
     every authored-record table; add `created_at` / `created_by` to the
     insert-only link and join tables. Mirrors the columns the latest
-    `SCHEMA` in store.py declares.
+    `SCHEMA` in store/kernel.py declares.
 
     All columns are nullable TEXT — legacy rows stay NULL, matching the
     honest 'we don't know when this was created' answer."""
@@ -253,7 +253,7 @@ def _migration_v3_entity_statement_links(conn: sqlite3.Connection) -> None:
 def _migration_v4_auth_tables(conn: sqlite3.Connection) -> None:
     """Create the `users`, `mcp_tokens`, `invites` tables.
 
-    The CREATE TABLE statements live in `SCHEMA` (store.py) and have
+    The CREATE TABLE statements live in `SCHEMA` (store/kernel.py) and have
     already run by the time this migration fires — `store.migrate()`
     executes SCHEMA first, then the runner. So this function is a pure
     version bump on legacy DBs (the tables exist via SCHEMA's CREATE
@@ -1141,7 +1141,7 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
     Detects three cases:
     1. **Fresh DB.** `user_version=0` AND the latest schema columns are
        already present (added by `CREATE TABLE IF NOT EXISTS` in
-       store.py's SCHEMA). Fast-forward `user_version` without running
+       store/kernel.py's SCHEMA). Fast-forward `user_version` without running
        any migration function.
     2. **Legacy DB.** `user_version=0` AND columns are missing. Apply
        every migration from v1 upward.

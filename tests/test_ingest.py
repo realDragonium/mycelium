@@ -78,7 +78,7 @@ _READ_NAMES = (
     "list_link_types",
     "list_entity_link_types",
     "search_statements",
-    "survey_statements",
+    "search_statements",
     "grep_statements",
     "discover_facts",
     "find_duplicates",
@@ -821,24 +821,30 @@ def test_trace_written_to_jsonl_file(tmp_path):
     assert record["outcome"] == "draft_created"
 
 
+def _fails_for_query(query):
+    def search(arguments):
+        if arguments["query"] == query:
+            raise SubstrateError("index timeout")
+        return [{"id": "stm_1", "text": "y"}]
+
+    return search
+
+
 def test_substrate_read_failure_is_surfaced_not_fabricated():
     results = {
         "discover_facts": [{"text": "x", "status": "new", "matches": []}],
-        "search_statements": SubstrateError("index timeout"),
-        "survey_statements": [{"id": "stm_1", "text": "y"}],
+        "search_statements": _fails_for_query("x"),
     }
     responses = [
         _message([_tool_use("discover_facts", {"texts": ["x"]})]),
         _message([_tool_use("search_statements", {"query": "x"})]),  # fails twice
-        _message([_tool_use("survey_statements", {"query": "x adj"})]),  # adjacency ok
+        _message([_tool_use("search_statements", {"query": "x adj"})]),  # adjacency ok
         _message([_tool_use(EMIT_TOOL, _good_new_op_emit())]),
     ]
     result, _client, _sub, _e = _run(responses, results=results)
     assert isinstance(result, DraftCreated)
-    failed = [
-        tc for tc in result.trace["tool_calls"] if tc["name"] == "search_statements"
-    ]
-    assert failed and failed[0]["ok"] is False and failed[0]["error"]
+    failed = [tc for tc in result.trace["tool_calls"] if not tc["ok"]]
+    assert failed and failed[0]["error"]
 
 
 def test_unprocessed_ledger_rows_become_gaps():
@@ -1076,7 +1082,7 @@ def test_e_real_server_inner_tool_set_excludes_writes_and_report_knowledge_gap()
 
     sub = InProcessSubstrate(server)
     inner = {s.name for s in sub.tool_specs()}
-    assert {"search_statements", "survey_statements", "discover_facts"} <= inner
+    assert {"search_statements", "discover_facts"} <= inner
     assert "upsert_statement" not in inner
     assert "add_links" not in inner
     assert "report_knowledge_gap" not in inner

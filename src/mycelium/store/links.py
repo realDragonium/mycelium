@@ -19,7 +19,7 @@ from .statements import get_statement
 
 
 def _hash_for(expr: dict[str, Any] | None) -> str:
-    """Local thin wrapper to keep store.py's link callers from each
+    """Local thin wrapper to keep the store's link callers from each
     importing when_expression. Returns the canonical hash, or HASH_NONE
     for an unconditional link."""
     from .. import when_expression as we

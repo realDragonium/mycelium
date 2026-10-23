@@ -17,7 +17,7 @@ UNCERTAINTY. The caller is itself an AI consuming your structured output, so \
 precision and explicit gaps matter more than fluency.
 
 THE LOOP
-0. RECON has already run: a wide `survey_statements` map of the question is in \
+0. RECON has already run: a wide decomposed `search_statements` map of the question is in \
    the first message. Treat it as a starting map, not an answer.
 1. ORIENT — grounded in recon, pick exactly one path:
    - clean map -> proceed to retrieve.
@@ -32,7 +32,7 @@ THE LOOP
      ids to walk the derivation chain.
    - SEMANTIC ADJACENCY: the most relevant statement may have NO edge pointing \
      at it (reachable only via a shared mention/entity or embedding proximity). \
-     So you MUST also RE-SEARCH — search_statements / survey_statements seeded by \
+     So you MUST also RE-SEARCH — search_statements seeded by \
      the CONCEPTS YOU HAVE GATHERED SO FAR, not by the original wording — to find \
      what *should* connect but isn't linked. This is the difference between a \
      correct-looking answer and a complete one.
@@ -92,7 +92,7 @@ unfamiliar, look it up with `list_link_types` / `list_entity_link_types` / \
 
 YOUR TOOLS
 You are given the substrate's read primitives as tools (search_statements, \
-survey_statements, get_statements, get_entity, grep_statements, the list_* and \
+get_statements, get_entity, grep_statements, the list_* and \
 glossary tools, and more). Use them freely. You finish by calling exactly ONE \
 terminal tool: `submit_answer` or `request_clarification`.
 
@@ -103,7 +103,7 @@ ANTI-PREMATURE-CLOSURE (the failure this tool exists to prevent)
 - Prefer retrieve_context(query, names) to resolve aliases, fetch entities,
   relevant statements and one linked frontier together. Respect explicit limits,
   missing targets and truncation. Fetch only omitted context relevant to the answer.
-- For concept-seeded search_statements/survey_statements, pass adjacency_sources:
+- For concept-seeded search_statements, pass adjacency_sources:
   short statement refs already supplied by a PREVIOUS targeted retrieval turn.
   Seed the query with those statements' concepts, not the original question.
   Same-turn reads and bundled link traversal do not satisfy adjacency research.
@@ -123,9 +123,6 @@ ANTI-PREMATURE-CLOSURE (the failure this tool exists to prevent)
 
 def build_system_prompt(instructions: str) -> str:
     return _FIXED_PROTOCOL + "\n\n=== BEHAVIORAL INSTRUCTIONS ===\n" + instructions
-
-
-SYSTEM_PROMPT = build_system_prompt(DEFAULT_INSTRUCTIONS)
 
 
 def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:
@@ -192,7 +189,7 @@ STANDARD_CLOSING = (
 def initial_user_message(question: str, recon: Any, *, quick: bool = False) -> str:
     return (
         f"QUESTION: {question}\n\n"
-        f"RECON (survey_statements of the question — a wide starting map, not an answer):\n"
+        f"RECON (decomposed search_statements of the question — a wide starting map, not an answer):\n"
         f"{recon if isinstance(recon, str) else format_recon(recon)}\n\n"
         f"{QUICK_CLOSING if quick else STANDARD_CLOSING}"
     )
@@ -203,7 +200,7 @@ def floor_block_message(detail: str) -> str:
     return (
         "Not yet — you cannot conclude before the floor is met. " + detail + " "
         "Do at least one more targeted retrieval and one concept-seeded "
-        "adjacency re-search (search_statements / survey_statements on the "
+        "adjacency re-search (search_statements on the "
         "concepts you've gathered), using adjacency_sources from the earlier targeted results, "
         'for example search_statements(query="<gathered concepts>", adjacency_sources=["s3", "s5"]).'
     )

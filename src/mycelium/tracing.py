@@ -36,9 +36,8 @@ from typing import Any
 # (kind, frame name, milliseconds-since-recorder-start); kind is "O" | "C".
 SpanEvent = tuple[str, str, float]
 
-#: One structured line per traced op to stderr (mirrors the `mycelium.profile`
-#: logger idiom). The speedscope file holds the detail; this is the at-a-glance
-#: "where did the time go" line for a log tail.
+#: One structured line per traced op to stderr. The speedscope file holds the
+#: detail; this is the at-a-glance "where did the time go" line for a log tail.
 _TRACE_LOG = logging.getLogger("mycelium.trace")
 if not _TRACE_LOG.handlers:
     _TRACE_LOG.addHandler(logging.StreamHandler(sys.stderr))
@@ -191,10 +190,6 @@ class SpanRecorder:
                 opened_name, opened_at = stack.pop()
                 out.setdefault(opened_name, []).append(at - opened_at)
         return out
-
-
-def current_recorder() -> SpanRecorder | None:
-    return _active.get()
 
 
 @contextmanager

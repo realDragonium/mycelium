@@ -72,7 +72,7 @@ def get_statements(ids: list[str]) -> dict[str, Any]:
     missing = [i for i in ids if store.get_statement(_db(), i) is None]
     ids = [i for i in ids if i not in set(missing)]
     # Uncapped reverse edges: get_statements is an explicit, targeted fetch, so
-    # it returns the complete neighborhood (search/survey cap it — see
+    # it returns the complete neighborhood (search caps it — see
     # `_hydrate_statement_full`).
     statements = [_hydrate_statement_full(sid, score=None) for sid in ids]
     return {"statements": statements, "missing": missing}

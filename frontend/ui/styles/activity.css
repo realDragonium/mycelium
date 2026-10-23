@@ -76,22 +76,6 @@ main.page.activity-page { max-width: none; }
 }
 .ctx-meta .lbl { display: inline-block; min-width: 56px; color: var(--ink-4); }
 
-.ctx-diff { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 14px; }
-.ctx-diff-col { border: 1px solid var(--line); border-radius: 6px; padding: 8px; background: var(--bg-inset); }
-.ctx-diff-lbl {
-  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.06em;
-  color: var(--ink-4); text-transform: uppercase; margin-bottom: 4px;
-}
-.ctx-diff pre {
-  font-family: var(--mono);
-  font-size: 11px;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--ink-2);
-  max-height: 180px;
-  overflow: auto;
-}
 
 .ctx-section-title {
   font-family: var(--mono);
@@ -102,38 +86,6 @@ main.page.activity-page { max-width: none; }
   margin: 6px 0 8px;
 }
 
-.ctx-neighbors { display: flex; flex-direction: column; gap: 10px; }
-
-.ctx-card {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 12px;
-  background: var(--bg-inset);
-}
-.ctx-card-head {
-  display: flex; align-items: center; gap: 8px;
-  margin-bottom: 6px;
-  font-family: var(--mono); font-size: 11px;
-}
-.ctx-card-text {
-  color: var(--ink-2);
-  font-size: var(--fs-sm);
-  line-height: 1.45;
-  margin-bottom: 8px;
-}
-.ctx-sub { margin-top: 8px; }
-.ctx-sub-lbl {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
-  color: var(--ink-4); text-transform: uppercase; margin-bottom: 3px;
-}
-.ctx-sub ul { list-style: none; padding: 0; margin: 0; }
-.ctx-sub li {
-  padding: 2px 0;
-  font-size: var(--fs-sm);
-  line-height: 1.4;
-}
-.ctx-sub li a { color: var(--ink); text-decoration: none; }
-.ctx-sub li a:hover { color: var(--bio); }
 
 /* ---------- Activity mini-graph ---------- */
 

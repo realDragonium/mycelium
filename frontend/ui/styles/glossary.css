@@ -1,26 +1,4 @@
 /* ─── Glossary screen ─────────────────────────────────────────── */
-.glossary-tabs {
-  display: flex;
-  gap: 2px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 22px;
-}
-.glossary-tabs button {
-  padding: 9px 16px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink-3);
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: color 120ms ease, border-color 120ms ease;
-}
-.glossary-tabs button:hover {
-  color: var(--ink-2);
-}
-.glossary-tabs button.is-active {
-  color: var(--ink);
-  border-bottom-color: var(--bio);
-}
 
 .glossary-table {
   width: 100%;

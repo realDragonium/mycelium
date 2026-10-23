@@ -280,17 +280,16 @@ def test_combined_retrieval_reduces_model_round_trips_for_the_same_evidence():
             return [
                 ToolSpec(name, name, {"type": "object"})
                 for name in (
-                    "survey_statements",
+                    "search_statements",
                     "list_entities",
                     "get_entity",
-                    "search_statements",
                     "get_statements",
                     "retrieve_context",
                 )
             ]
 
         def call(self, name, arguments):
-            if name == "survey_statements":
+            if arguments.get("decompose"):
                 return [ROOT]
             if name == "retrieve_context":
                 return retrieve_context(self.reads, **arguments)
@@ -325,7 +324,7 @@ def test_combined_retrieval_reduces_model_round_trips_for_the_same_evidence():
             _message(
                 [
                     _tool_use(
-                        "survey_statements",
+                        "search_statements",
                         {"query": "retry conditions", "adjacency_sources": ["s1"]},
                     )
                 ]
@@ -341,7 +340,7 @@ def test_combined_retrieval_reduces_model_round_trips_for_the_same_evidence():
         )
         outcomes.append(result)
         assert result.trace["floor"]["satisfied"]
-        assert len(substrate.reads.calls) == 4
+        assert len(substrate.reads.calls) == 5
     old, new = outcomes
     assert new.model_dump(exclude={"trace"}) == old.model_dump(exclude={"trace"})
     assert set(new.trace["evidence_refs"].values()) == set(

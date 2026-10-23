@@ -9,7 +9,6 @@ author check candidate texts before writing them.
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Literal
 
 from pydantic import JsonValue
@@ -165,6 +164,28 @@ def _search_statement_candidates(
     required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
     with trace_span("embed"):
         vec = embed.embed(query)
+    return _vector_candidates(
+        vec,
+        limit,
+        min_score,
+        required_entity_ids,
+        kind,
+        name_boost,
+        name_top_k,
+        name_min_score,
+    )
+
+
+def _vector_candidates(
+    vec: list[float],
+    limit: int,
+    min_score: float,
+    required_entity_ids: set[str],
+    kind: str | None,
+    name_boost: float,
+    name_top_k: int,
+    name_min_score: float,
+) -> list[tuple[str, float, float]]:
     entity_boost = _alias_entity_boost(vec, name_boost, name_top_k, name_min_score)
     # Filtering and alias boosts need a wider pool before ranking.
     fetch_k = (
@@ -182,6 +203,45 @@ def _search_statement_candidates(
     )[:limit]
 
 
+def _decomposed_candidates(
+    query: str,
+    limit: int,
+    min_score: float,
+    mentions: list[str],
+    kind: str | None,
+    name_boost: float,
+    name_top_k: int,
+    name_min_score: float,
+) -> list[tuple[str, float]]:
+    """Search each clause of `query` separately and rank the union: first by
+    how many clauses surfaced a statement, then by its best score."""
+    required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
+    parts: list[tuple[str, list[float]]] = []
+    with trace_span("embed"):
+        for part in survey.decompose(query):
+            if survey.usable(part):
+                parts.append((part, embed.embed(part)))
+    parts = survey.dedup_subqueries(parts)
+    if not parts:
+        with trace_span("embed"):
+            parts = [(query, embed.embed(query))]
+    union: dict[str, tuple[int, float]] = {}
+    for _part, vec in parts:
+        for sid, final, _cosine in _vector_candidates(
+            vec,
+            limit,
+            min_score,
+            required_entity_ids,
+            kind,
+            name_boost,
+            name_top_k,
+            name_min_score,
+        ):
+            count, best = union.get(sid, (0, float("-inf")))
+            union[sid] = (count + 1, max(best, final))
+    return survey.rank_statements(union)
+
+
 @tool
 def search_statements(
     query: str,
@@ -194,6 +254,7 @@ def search_statements(
     name_boost: float = 0.3,
     name_top_k: int = 5,
     name_min_score: float = 0.5,
+    decompose: bool = False,
 ) -> list[dict[str, Any]]:
     """Vector-search statements by semantic similarity to `query`.
 
@@ -247,6 +308,12 @@ def search_statements(
     Optional `kind` ("event" / "state" / "capability") restricts direct
     hits to that kind.
 
+    `decompose=True` is for a question that covers several distinct things.
+    The query is split on conjunctions and strong punctuation, each part is
+    searched as above (up to `limit` hits each, same filters and boost), and
+    the union comes back deduped: statements surfaced by more parts first,
+    then by best score. The result can therefore hold more than `limit` hits.
+
     Boost tunables (defaults usually fine):
       `name_boost`     — weight applied to the best matching entity-name
                          score. 0 disables alias-aware retrieval.
@@ -256,25 +323,37 @@ def search_statements(
                          clearly relevant.
     """
     _check_limit(limit)
-    scored = _search_statement_candidates(
-        query,
-        limit,
-        min_score,
-        mentions,
-        kind,
-        name_boost,
-        name_top_k,
-        name_min_score,
-    )
-
-    direct: list[dict[str, Any]] = []
-    for statement_id, final, _cos in scored:
-        direct.append(
-            _hydrate_statement_full(
-                statement_id, score=final, reverse_cap=_REVERSE_EDGE_CAP
-            )
+    if decompose:
+        ranked = _decomposed_candidates(
+            query,
+            limit,
+            min_score,
+            mentions,
+            kind,
+            name_boost,
+            name_top_k,
+            name_min_score,
         )
-    seen = {item[0] for item in scored}
+    else:
+        ranked = [
+            (sid, final)
+            for sid, final, _cos in _search_statement_candidates(
+                query,
+                limit,
+                min_score,
+                mentions,
+                kind,
+                name_boost,
+                name_top_k,
+                name_min_score,
+            )
+        ]
+
+    direct = [
+        _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
+        for sid, score in ranked
+    ]
+    seen = {sid for sid, _score in ranked}
 
     if depth <= 0:
         return direct
@@ -408,129 +487,6 @@ def find_statement_connections(
         )
     finally:
         conn.execute("RELEASE SAVEPOINT find_statement_connections")
-
-
-_SURVEY_LOG = logging.getLogger("mycelium.survey")
-
-
-def _embed_with_retry(text: str) -> list[float]:
-    """Embed `text`, retrying once on a transient Ollama failure. Raises if
-    both attempts fail — the caller decides whether that is fatal."""
-    with trace_span("embed"):
-        try:
-            return embed.embed(text)
-        except Exception:  # noqa: BLE001 — transient Ollama failure; retry once
-            return embed.embed(text)
-
-
-def _search_index_with_retry(vec: list[float], k: int) -> list[tuple[int, float]]:
-    """Search the statement index, retrying once on a transient failure.
-    Returns an empty list if both attempts fail — an empty result for one
-    sub-query is valid (it contributes nothing), not an error."""
-    with trace_span("vector_search"):
-        try:
-            return _idx().search(vec, k)
-        except Exception:  # noqa: BLE001 — transient index failure; retry once
-            try:
-                return _idx().search(vec, k)
-            except Exception:  # noqa: BLE001
-                return []
-
-
-@tool(role="reader")
-def survey_statements(query: str, k: int = 5) -> list[dict[str, Any]]:
-    """Decomposes a multi-part query and searches each part, returning the
-    combined nearest statements. Prefer over `search_statements` when the
-    question covers several distinct things and you want broad coverage
-    before narrowing.
-
-    A multi-part question embedded as one whole-question vector blurs its
-    parts together; searching each part separately gives broader, sharper
-    coverage. This splits `query` into sub-queries, runs an independent
-    semantic search per part (top-`k` each), then unions and ranks the
-    results into one flat, deduped list.
-
-    Returns the same per-hit shape as `search_statements` — each hit is
-    FULLY HYDRATED (`{id, kind, text, mentions, links, incoming_links,
-    when_references}` plus a `score`, reverse edges capped per hit), so a
-    hit needs no follow-up `get_statements` to see what points at it. The
-    two tools are interchangeable to a consumer — the internal
-    decomposition is invisible.
-    A statement surfaced by several sub-queries ranks above one surfaced by
-    a single sub-query, and appears once.
-
-    `score` is pure cosine similarity (1 − distance). Unlike
-    `search_statements` it carries no alias name-boost, so scores are not
-    directly comparable across the two tools.
-
-    This is a wide net, not a filter: there is no score floor, so every
-    sub-query contributes its top-`k` even when its nearest match is weak.
-    Relevance and sufficiency judgements belong to the consumer. Output is
-    deterministic given a fixed index and embedder.
-    """
-
-    if not query.strip():
-        return []
-
-    raw_subqueries = survey.decompose(query)
-    candidates = [s for s in raw_subqueries if survey.usable(s)]
-    dropped = len(raw_subqueries) - len(candidates)
-
-    # Embed once per candidate; the vector is reused for both dedup and the
-    # search below, so each sub-query is embedded exactly once. A persistent
-    # embed failure for one candidate drops it (it contributes nothing).
-    embedded: list[tuple[str, list[float]]] = []
-    for sub in candidates:
-        try:
-            embedded.append((sub, _embed_with_retry(sub)))
-        except Exception as exc:  # noqa: BLE001
-            _SURVEY_LOG.warning(
-                "survey: dropping sub-query %r (embed failed: %s)", sub, exc
-            )
-
-    embedded = survey.dedup_subqueries(embedded)
-
-    fallback = not embedded
-    if fallback:
-        # Decomposition yielded nothing usable (all stopword/single-char, all
-        # failed to embed, or all collapsed by dedup). Never return empty-
-        # handed for that reason — search the whole query as one. A persistent
-        # embed failure HERE is a real outage, not dry decomposition, so let
-        # it raise rather than masquerade as "no matches".
-        embedded = [(query, _embed_with_retry(query))]
-
-    # Union by statement_id: (count of distinct sub-queries that surfaced it,
-    # best cosine across them).
-    union: dict[str, tuple[int, float]] = {}
-    for sub, vec in embedded:
-        surfaced: set[str] = set()
-        for vector_id, distance in _search_index_with_retry(vec, k):
-            statement_id = store.get_statement_id_by_vector_id(_db(), vector_id)
-            # Skip vid→sid drift, and count each statement at most once per
-            # sub-query so duplicate vectors can't inflate the count-rank.
-            if statement_id is None or statement_id in surfaced:
-                continue
-            surfaced.add(statement_id)
-            cosine = 1.0 - distance
-            count, best = union.get(statement_id, (0, float("-inf")))
-            union[statement_id] = (count + 1, max(best, cosine))
-        _SURVEY_LOG.debug(
-            "survey: sub-query %r surfaced %d statements", sub, len(surfaced)
-        )
-
-    ranked = survey.rank_statements(union)
-    _SURVEY_LOG.info(
-        "survey: produced=%d hygiene_dropped=%d searched=%d fallback=%s results=%d",
-        len(raw_subqueries),
-        dropped,
-        len(embedded),
-        fallback,
-        len(ranked),
-    )
-    return [
-        _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
-        for sid, score in ranked
-    ]
 
 
 @tool

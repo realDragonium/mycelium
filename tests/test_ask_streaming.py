@@ -130,7 +130,7 @@ def test_real_provider_stream_delivers_answer_before_completion(provider, monkey
             "Why?",
             client=client,
             substrate=FakeSubstrate(
-                {"survey_statements": [{"id": "stm_1", "text": "The worker retries."}]}
+                {"recon": [{"id": "stm_1", "text": "The worker retries."}]}
             ),
             config=AskConfig(provider=provider, enforce_floor=False, trace_dir=""),
             stream=AskStream(emit=events.append),
@@ -223,7 +223,7 @@ def execute(monkeypatch, turns, *, standard=False, sink=None):
         "Why retry?",
         substrate=FakeSubstrate(
             {
-                "survey_statements": [{"id": "stm_1", "text": "The retry worker."}],
+                "recon": [{"id": "stm_1", "text": "The retry worker."}],
                 "get_statements": {
                     "statements": [
                         {"id": "stm_2", "text": "Transient failures trigger retries."}
@@ -246,7 +246,7 @@ def test_stream_is_gated_and_same_turn_search_cannot_satisfy_adjacency(monkeypat
             [
                 call("get_statements", {"ids": ["stm_2"]}, "get"),
                 call(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "worker failures", "adjacency_sources": ["s1"]},
                     "search",
                 ),
@@ -254,7 +254,7 @@ def test_stream_is_gated_and_same_turn_search_cannot_satisfy_adjacency(monkeypat
             [answer],
             [
                 call(
-                    "survey_statements",
+                    "search_statements",
                     {
                         "query": "transient retry conditions",
                         "adjacency_sources": ["s2"],
@@ -354,9 +354,7 @@ def test_cancel_after_answer_delta_never_forces_another_model_call(monkeypatch):
     with pytest.raises(AskCancelled):
         run_ask(
             "Why?",
-            substrate=FakeSubstrate(
-                {"survey_statements": [{"id": "stm_1", "text": "retry"}]}
-            ),
+            substrate=FakeSubstrate({"recon": [{"id": "stm_1", "text": "retry"}]}),
             config=AskConfig(enforce_floor=False, trace_dir=""),
             stream=stream,
         )
@@ -426,7 +424,7 @@ def test_recon_only_reference_cannot_satisfy_adjacency(monkeypatch):
         [call("get_statements", {"ids": ["stm_missing"]})],
         [
             call(
-                "survey_statements",
+                "search_statements",
                 {"query": "related conditions", "adjacency_sources": ["s1"]},
             )
         ],
@@ -437,7 +435,7 @@ def test_recon_only_reference_cannot_satisfy_adjacency(monkeypatch):
         "Why?",
         substrate=FakeSubstrate(
             {
-                "survey_statements": [{"id": "stm_1", "text": "recon only"}],
+                "recon": [{"id": "stm_1", "text": "recon only"}],
                 "get_statements": {"statements": [], "missing": ["stm_missing"]},
             }
         ),
@@ -456,7 +454,7 @@ def test_rejected_adjacency_sources_name_the_refs_that_qualify(monkeypatch):
         [call("get_statements", {"ids": ["stm_2"]})],
         [
             call(
-                "survey_statements",
+                "search_statements",
                 {"query": "related conditions", "adjacency_sources": ["s1"]},
             )
         ],
@@ -467,7 +465,7 @@ def test_rejected_adjacency_sources_name_the_refs_that_qualify(monkeypatch):
         "Why?",
         substrate=FakeSubstrate(
             {
-                "survey_statements": [{"id": "stm_1", "text": "recon only"}],
+                "recon": [{"id": "stm_1", "text": "recon only"}],
                 "get_statements": {
                     "statements": [{"id": "stm_2", "text": "retrieved"}],
                     "missing": [],
@@ -485,9 +483,7 @@ def test_forced_finalize_keeps_deterministic_coverage_gaps(monkeypatch):
     scripted_turns(monkeypatch, [[call("submit_answer", _submit_input(provenance=[]))]])
     result = run_ask(
         "Why?",
-        substrate=FakeSubstrate(
-            {"survey_statements": [{"id": "stm_1", "text": "x" * 25_000}]}
-        ),
+        substrate=FakeSubstrate({"recon": [{"id": "stm_1", "text": "x" * 25_000}]}),
         config=AskConfig(op_cap=1, trace_dir=""),
     )
     assert result.confidence == "low"
@@ -506,9 +502,7 @@ def test_cancelled_trace_has_first_text_but_no_completion(monkeypatch, tmp_path)
     with pytest.raises(AskCancelled):
         run_ask(
             "Why?",
-            substrate=FakeSubstrate(
-                {"survey_statements": [{"id": "stm_1", "text": "retry"}]}
-            ),
+            substrate=FakeSubstrate({"recon": [{"id": "stm_1", "text": "retry"}]}),
             config=AskConfig(
                 enforce_floor=False, trace_dir="", trace_log_path=str(path)
             ),
@@ -547,7 +541,7 @@ def test_cancellation_during_recon_records_incomplete_trace(tmp_path):
     with pytest.raises(AskCancelled):
         run_ask(
             "Why?",
-            substrate=FakeSubstrate({"survey_statements": recon}),
+            substrate=FakeSubstrate({"recon": recon}),
             config=AskConfig(trace_dir="", trace_log_path=str(path)),
             stream=stream,
         )

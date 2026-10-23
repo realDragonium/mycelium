@@ -18,7 +18,7 @@ THE NO-LIVE-WRITE GUARANTEE: the model is handed READ tools plus one terminal
 `emit_draft` tool and never sees a write tool. The only write path in the whole
 package is `drafts_store.create_draft`/`add_op`, reached exclusively through the
 injected `DraftEmitter` in `_assemble_draft`. This module imports no substrate
-write tool and never touches `server._conn`.
+write tool and never touches `server._db()`.
 """
 
 from __future__ import annotations
@@ -68,13 +68,9 @@ from .trace import TraceBuilder
 #: Reconcile reads — at least one must have happened before emit is accepted.
 #: Each takes the candidate's text; `find_duplicates` audits the whole corpus
 #: instead, so calling it checks nothing about the candidates.
-_RECONCILE_TOOLS = frozenset(
-    {"discover_facts", "search_statements", "survey_statements"}
-)
+_RECONCILE_TOOLS = frozenset({"discover_facts", "search_statements"})
 #: Adjacency searches — at least one must have happened before emit is accepted.
-_ADJACENCY_TOOLS = frozenset(
-    {"search_statements", "survey_statements", "grep_statements"}
-)
+_ADJACENCY_TOOLS = frozenset({"search_statements", "grep_statements"})
 
 #: The deterministic vocab fetch (each counts toward the op cap).
 _VOCAB_CALLS = (
@@ -1143,7 +1139,7 @@ def _floor_state(reads_after_vocab: list[str]) -> dict:
     """The structural anti-premature-closure floor.
 
     Mirrors ask/loop.py:_floor_state. `_RECONCILE_TOOLS` and `_ADJACENCY_TOOLS`
-    overlap on search_statements/survey_statements, so a single search would
+    overlap on search_statements, so a single search would
     otherwise satisfy both halves at once. As ask does, the adjacency read must
     be a DISTINCT, non-first post-vocab move: at least one reconcile-class read
     AND at least one adjacency-class read counted only from index >= 1 (i.e. the

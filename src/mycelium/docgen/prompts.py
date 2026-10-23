@@ -81,7 +81,7 @@ prior knowledge of how systems like this usually work is not evidence and \
 never reaches the page.
 
 YOUR TOOLS
-The substrate's read primitives (search_statements, survey_statements, \
+The substrate's read primitives (search_statements, \
 get_statements, get_entity, list_statements, grep_statements, discover_facts, \
 and the vocabulary lookups above) — use them freely. Plus `report_knowledge_gap`, for \
 filing what the substrate could not supply. You have NO write tool: nothing \
@@ -89,7 +89,7 @@ you do can change the substrate, and the document does not become substrate \
 truth. You finish by calling exactly ONE terminal tool: `emit_document`.
 
 THE FLOW YOU DRIVE (one context)
-1. MAP the topic. A wide `survey_statements` of the request has already run \
+1. MAP the topic. A wide decomposed `search_statements` of the request has already run \
    and is in the first message — treat it as a starting map, not as material. \
    When the request names the concept the document is about, the first \
    message also carries that concept and every statement that mentions it: \
@@ -457,7 +457,7 @@ def initial_user_message(
         f"against the `{guideline_set}` guideline set, whose guidance, exposure "
         "rules, and template are in your system prompt.\n\n"
         + (format_anchor(anchor) + "\n\n" if anchor is not None else "")
-        + "RECON (survey_statements of the request — a wide starting map, not "
+        + "RECON (decomposed search_statements of the request — a wide starting map, not "
         "material to write from):\n"
         f"{format_recon(recon)}\n\n"
         "Gather from here: follow the links out of what looks relevant, "

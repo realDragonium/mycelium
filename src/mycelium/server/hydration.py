@@ -64,7 +64,7 @@ def _hydrate_statement(statement_id: str, score: float | None) -> dict[str, Any]
 
 
 #: Per-hit cap on reverse-graph edges (incoming_links + when_references) when a
-#: statement is hydrated by the *wide* surfaces (search / survey). Bounds the
+#: statement is hydrated by a wide surface such as search. Bounds the
 #: convergence-hub blowup `search_statements` warns about: a hub with hundreds
 #: of incoming `configures` / `governed-by` edges would otherwise dominate the
 #: result. When capped, a `*_truncated` count tells the caller to
@@ -79,11 +79,11 @@ def _hydrate_statement_full(
     """`_hydrate_statement` plus the reverse-graph edges (`incoming_links` and
     `when_references`) — the full shape `get_statements` returns.
 
-    The single hydration path shared by `get_statements`, `search_statements`,
-    and `survey_statements`, so a search/survey hit arrives fully hydrated and
-    no longer needs a follow-up `get_statements` on the same id just to learn
-    what points at it. `reverse_cap` bounds each reverse-edge list (the wide
-    search/survey surfaces pass it; `get_statements` passes None)."""
+    The single hydration path shared by `get_statements` and
+    `search_statements`, so a search hit arrives fully hydrated and needs no
+    follow-up `get_statements` on the same id just to learn what points at it.
+    `reverse_cap` bounds each reverse-edge list (search passes it;
+    `get_statements` passes None)."""
     out = _hydrate_statement(statement_id, score=score)
 
     incoming = [

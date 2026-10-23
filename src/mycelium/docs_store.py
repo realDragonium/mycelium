@@ -1340,35 +1340,6 @@ def record_pull_request_state(
     conn.commit()
 
 
-def get_document_by_slug(
-    conn: sqlite3.Connection,
-    slug: str,
-    *,
-    guideline_set: str | None = None,
-    document_type: str | None = None,
-) -> sqlite3.Row | None:
-    """Find a slug, optionally narrowed by either part of its full identity.
-
-    Slugs are no longer unique. The unfiltered fallback is explicitly the
-    most recently updated match so older callers get a stable, useful answer
-    instead of whichever row SQLite happens to visit first.
-    """
-    clauses = ["slug = ?"]
-    parameters = [slug]
-    if guideline_set is not None:
-        clauses.append("guideline_set = ?")
-        parameters.append(guideline_set)
-    if document_type is not None:
-        clauses.append("document_type = ?")
-        parameters.append(document_type)
-    return conn.execute(
-        "SELECT * FROM generated_documents WHERE "
-        + " AND ".join(clauses)
-        + " ORDER BY updated_at DESC, id DESC LIMIT 1",
-        parameters,
-    ).fetchone()
-
-
 def list_documents(
     conn: sqlite3.Connection, limit: int | None = 100
 ) -> list[sqlite3.Row]:

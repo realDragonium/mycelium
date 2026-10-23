@@ -181,7 +181,7 @@ class FakeAnthropic:
 _MIN_SCHEMA = {"type": "object", "properties": {"query": {"type": "string"}}}
 
 _READ_NAMES = (
-    "survey_statements",
+    "search_statements",
     "search_statements",
     "grep_statements",
     "get_statements",
@@ -207,7 +207,8 @@ class FakeSubstrate:
 
     def call(self, name, arguments):
         self.calls.append((name, dict(arguments)))
-        value = self._results.get(name, [])
+        key = "recon" if arguments.get("decompose") else name
+        value = self._results.get(key, [])
         if isinstance(value, Exception):
             raise SubstrateError(str(value))
         if callable(value):
@@ -232,7 +233,7 @@ _STATEMENT = {"id": "stm_1", "kind": "capability", "text": "a tenant can enable 
 
 
 def _substrate(**overrides):
-    results = {"survey_statements": [_STATEMENT], "get_statements": [_STATEMENT]}
+    results = {"recon": [_STATEMENT], "get_statements": [_STATEMENT]}
     results.update(overrides)
     return FakeSubstrate(results)
 
@@ -804,8 +805,9 @@ def test_recon_runs_on_the_request_and_its_ids_count_as_retrieved(kb_set):
         document_type="how-to",
     )
 
-    assert substrate.calls[0][0] == "survey_statements"
+    assert substrate.calls[0][0] == "search_statements"
     assert substrate.calls[0][1]["query"] == "how do I configure single sign-on"
+    assert substrate.calls[0][1]["decompose"] is True
     # stm_1 came back from recon, so citing it is allowed with no further read.
     assert isinstance(result, DocumentWritten)
     assert result.trace["grounding"]["retrieved_ids"] == 1
@@ -813,7 +815,7 @@ def test_recon_runs_on_the_request_and_its_ids_count_as_retrieved(kb_set):
 
 def _anchored_substrate():
     substrate = _substrate(
-        survey_statements=[],
+        recon=[],
         get_entity={
             "id": "ent_sso",
             "names": [{"text": "single sign-on"}, {"text": "SSO"}],
@@ -892,9 +894,7 @@ def test_progress_and_the_summary_describe_the_run(kb_set):
 
 
 def test_a_failing_read_is_reported_not_fabricated(kb_set):
-    substrate = _substrate(
-        survey_statements=[], get_statements=Exception("index timeout")
-    )
+    substrate = _substrate(recon=[], get_statements=Exception("index timeout"))
     client = FakeAnthropic(
         [
             _message([_tool_use("get_statements", {"ids": ["stm_9"]})]),
@@ -984,7 +984,7 @@ def test_a_link_target_is_not_a_retrieved_statement(kb_set):
 
     result = _run(
         client,
-        substrate=_substrate(survey_statements=[linked]),
+        substrate=_substrate(recon=[linked]),
         guideline_set="kb-authoring",
         document_type="how-to",
     )
@@ -1010,7 +1010,7 @@ def test_an_id_truncated_out_of_the_tool_result_is_not_retrieved(kb_set):
 
     result = _run(
         client,
-        substrate=_substrate(survey_statements=[], search_statements=bulk),
+        substrate=_substrate(recon=[], search_statements=bulk),
         guideline_set="kb-authoring",
         document_type="how-to",
     )
@@ -1042,7 +1042,7 @@ def test_an_id_cut_by_the_cap_is_not_rescued_by_a_longer_id_sharing_its_prefix(k
 
     result = _run(
         client,
-        substrate=_substrate(survey_statements=[], search_statements=bulk),
+        substrate=_substrate(recon=[], search_statements=bulk),
         guideline_set="kb-authoring",
         document_type="how-to",
     )
@@ -1350,9 +1350,7 @@ def test_the_reviewer_sees_the_statements_the_document_cited(kb_set):
         found = [item for item in (cited, uncited) if item["id"] in arguments["ids"]]
         return {"statements": found, "missing": []}
 
-    substrate = _substrate(
-        survey_statements=[cited, uncited], get_statements=get_statements
-    )
+    substrate = _substrate(recon=[cited, uncited], get_statements=get_statements)
     client = FakeAnthropic([_emit(statement_ids=["stm_1"]), _review_ok()])
 
     result = _run(

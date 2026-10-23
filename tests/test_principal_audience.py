@@ -198,7 +198,11 @@ def test_an_external_token_never_sees_an_internal_statement(client):
     external = _bearer("admin", "external-technical")
     reads = [
         ("POST", "/search-statements", {"query": "workspace export", "depth": 2}),
-        ("POST", "/survey-statements", {"query": "workspace export"}),
+        (
+            "POST",
+            "/search-statements",
+            {"query": "workspace export", "decompose": True},
+        ),
         ("POST", "/grep-statements", {"query": "ZZQUILL"}),
         ("POST", "/grep-statements", {"query": "workspace"}),
         ("POST", "/list-statements", {}),

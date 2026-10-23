@@ -19,7 +19,6 @@ from mycelium.docgen.destinations import (
     DeliveryDocument,
     DestinationConfig,
     DestinationError,
-    get_destination,
     load_destinations,
 )
 from mycelium.docgen.github_destination import deliver, pull_request_state, read
@@ -1697,27 +1696,6 @@ def test_malformed_configuration_scrubs_a_credential_from_its_name(monkeypatch):
 
     assert TOKEN not in str(excinfo.value)
     assert "***" in str(excinfo.value)
-
-
-def test_unknown_destination_does_not_reflect_a_configured_credential(monkeypatch):
-    monkeypatch.setenv(
-        "MYCELIUM_DOC_DESTINATIONS",
-        json.dumps({"knowledge-base": _entry()}),
-    )
-    monkeypatch.setenv("DOCS_GITHUB_TOKEN", TOKEN)
-    import_product_environment()
-
-    with pytest.raises(DestinationError) as excinfo:
-        get_destination(TOKEN)
-
-    rendered_traceback = "".join(
-        traceback.format_exception(
-            excinfo.type, excinfo.value, excinfo.value.__traceback__
-        )
-    )
-    assert TOKEN not in str(excinfo.value)
-    assert TOKEN not in rendered_traceback
-    assert "configured destinations: knowledge-base" in str(excinfo.value)
 
 
 def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(

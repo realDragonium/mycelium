@@ -675,23 +675,23 @@ def _recon(ctx: _RunContext) -> Any:
     """The opening wide map of the request. Counts toward the op cap, and its
     ids count as retrieved — the map is how a run finds what to hydrate."""
     trace: TraceBuilder = ctx.trace
-    args = {"query": ctx.prompt, "k": ctx.config.recon_k}
+    args = {"query": ctx.prompt, "limit": ctx.config.recon_k, "decompose": True}
     _progress(ctx, "Surveying the knowledge base")
-    if not _substrate_has(ctx.substrate, "survey_statements"):
-        trace.notes.append("recon skipped: survey_statements not available")
+    if not _substrate_has(ctx.substrate, "search_statements"):
+        trace.notes.append("recon skipped: search_statements not available")
         return []
     try:
         with trace.span("recon"):
-            recon = ctx.substrate.call("survey_statements", args)
+            recon = ctx.substrate.call("search_statements", args)
         trace.record_tool_call(
-            "survey_statements", args, recon, ok=True, counts_as_op=True
+            "search_statements", args, recon, ok=True, counts_as_op=True
         )
         ctx.successful_reads += 1
         _note_retrieved(ctx, recon, prompts.format_recon(recon))
         return recon
     except SubstrateError as exc:
         trace.record_tool_call(
-            "survey_statements", args, None, ok=False, counts_as_op=True, error=str(exc)
+            "search_statements", args, None, ok=False, counts_as_op=True, error=str(exc)
         )
         trace.notes.append(f"recon failed: {exc}")
         return []

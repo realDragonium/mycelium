@@ -35,7 +35,7 @@ and never guess a link type's meaning; read its description.
 
 YOUR TOOLS
 You are given the substrate's READ primitives as tools (search_statements, \
-survey_statements, grep_statements, get_statements, get_entity, list_entities, \
+grep_statements, get_statements, get_entity, list_entities, \
 list_statements, find_duplicates, discover_facts, and the list_* vocabulary \
 tools). Use them freely, and call independent reads together in one turn. You have NO write tool. You finish by calling exactly \
 ONE terminal tool: `emit_draft`. The harness — not you — queues your ops into a \
@@ -47,7 +47,7 @@ THE FLOW YOU DRIVE (one context)
 2. RECONCILE each extracted candidate against existing knowledge BEFORE you \
    classify it. `discover_facts` is the per-candidate primitive: pass the \
    candidate texts and it returns, per text, a status of exists / near / new \
-   plus the matching statements. Use `search_statements`, `survey_statements`, \
+   plus the matching statements. Use `search_statements`, \
    `grep_statements` (lexical, for exact identifiers) too.
 3. CLASSIFY each candidate: NEW / DUPLICATE / REFINEMENT / CONTRADICTION.
 4. LINK the new facts — to each other AND to the existing statements they belong \
@@ -241,9 +241,8 @@ def floor_block_message(detail: str) -> str:
     """Appended when the floor blocks a premature emit_draft."""
     return (
         "Not yet — you cannot emit before the reconcile floor is met. " + detail + " "
-        "Do at least one reconcile read (discover_facts / search_statements / "
-        "survey_statements) AND at least one adjacency search "
-        "(search_statements / survey_statements / grep_statements), and make sure "
+        "Do at least one reconcile read (discover_facts / search_statements) "
+        "AND at least one adjacency search (search_statements / grep_statements), and make sure "
         "every NEW/REFINEMENT ledger entry has a non-empty matched_against and "
         "either link_candidates_considered or an explicit 'no adjacent statements "
         "found' note. Then call emit_draft again."
