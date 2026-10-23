@@ -127,8 +127,11 @@ from .names import (
     set_name_entity,
 )
 from .read_models import (
+    ConceptDegree,
     SubstrateCounts,
     activity_feed,
+    concept_degrees,
+    dump_neighbourhood,
     history_feed,
     substrate_counts,
     substrate_dump,
@@ -190,6 +193,8 @@ __all__ = [
     "build_name_index",
     "claim_recompute_batch",
     "clear_derived_for_statement",
+    "concept_degrees",
+    "ConceptDegree",
     "configure_substrate",
     "connect",
     "count_entities",
@@ -299,6 +304,7 @@ __all__ = [
     "seed_link_type_aliases",
     "DIRECTIONS",
     "Direction",
+    "dump_neighbourhood",
     "set_actor",
     "resolve_draft_gaps",
     "set_knowledge_gap_status",

@@ -123,6 +123,80 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def dump_neighbourhood(dump: dict[str, Any], focus: str) -> dict[str, Any] | None:
+    """The part of a `substrate_dump` around one record, in the same shape,
+    or None when `focus` is in neither its entities nor its statements.
+
+    Around an entity: the statements that mention it, the entities linked to
+    it and the entities those statements mention. Around a statement: the
+    statements it links to or from and the entities they mention. Links are
+    kept when both their ends are.
+    """
+    statements = {s["id"]: s for s in dump["statements"]}
+    if any(e["id"] == focus for e in dump["entities"]):
+        kept = {s["id"] for s in dump["statements"] if focus in s["mentions"]}
+        entity_ids = {focus}
+        for link in dump["entity_links"]:
+            if focus in (link["from"], link["to"]):
+                entity_ids.update((link["from"], link["to"]))
+    elif focus in statements:
+        kept = {focus}
+        for link in dump["links"]:
+            if focus in (link["from"], link["to"]):
+                kept.update((link["from"], link["to"]))
+        entity_ids = set()
+    else:
+        return None
+    for statement_id in kept:
+        entity_ids.update(statements[statement_id]["mentions"])
+    return {
+        "entities": [e for e in dump["entities"] if e["id"] in entity_ids],
+        "names": [n for n in dump["names"] if n["entity"] in entity_ids],
+        "statements": [s for s in dump["statements"] if s["id"] in kept],
+        "links": [
+            link
+            for link in dump["links"]
+            if link["from"] in kept and link["to"] in kept
+        ],
+        "entity_links": [
+            link
+            for link in dump["entity_links"]
+            if link["from"] in entity_ids and link["to"] in entity_ids
+        ],
+    }
+
+
+class ConceptDegree(TypedDict):
+    id: str
+    name: str
+    statements: int
+    links: int
+
+
+def concept_degrees(dump: dict[str, Any]) -> list[ConceptDegree]:
+    """Each entity of a `substrate_dump` with how many statements mention it
+    and how many entity links it has, most mentioned first."""
+    statements: dict[str, int] = {}
+    for statement in dump["statements"]:
+        for entity_id in statement["mentions"]:
+            statements[entity_id] = statements.get(entity_id, 0) + 1
+    links: dict[str, int] = {}
+    for link in dump["entity_links"]:
+        for entity_id in (link["from"], link["to"]):
+            links[entity_id] = links.get(entity_id, 0) + 1
+    degrees = [
+        ConceptDegree(
+            id=e["id"],
+            name=e["name"],
+            statements=statements.get(e["id"], 0),
+            links=links.get(e["id"], 0),
+        )
+        for e in dump["entities"]
+    ]
+    degrees.sort(key=lambda d: (-d["statements"], -d["links"], d["name"].lower()))
+    return degrees
+
+
 class SubstrateCounts(TypedDict):
     statements: int
     entities: int
