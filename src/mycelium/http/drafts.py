@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import server, store
@@ -31,8 +31,6 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
     conn = server._drafts_db()
     status = status or "all"
     if status not in ("all", "open", "submitted", "approved", "rejected", "withdrawn"):
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=400,
             detail="status must be one of: all, open, submitted, approved, rejected, withdrawn",
@@ -55,8 +53,6 @@ def get_draft_detail(draft_id: str, request: Request) -> dict[str, Any]:
     conn = server._drafts_db()
     row, ops = drafts_store.get_draft_snapshot(conn, draft_id)
     if row is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="draft not found")
     return {"draft": drafts_store.serialize_draft(row, ops=ops)}
 
@@ -77,19 +73,13 @@ def edit_draft_op(
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="draft not found")
     with store.transaction(conn):
         row = drafts_store.get_draft(conn, draft_id)
         if row is None:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=404, detail="draft not found")
         status = drafts_store.status_for(row)
         if status not in ("open", "submitted"):
-            from fastapi import HTTPException
-
             raise HTTPException(
                 status_code=400,
                 detail=f"cannot edit ops on a {status} draft",
@@ -106,12 +96,8 @@ def edit_draft_op(
             drafts_store.StaleDraftRevisionError,
             drafts_store.ActiveApplicationError,
         ) as ex:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=409, detail=str(ex)) from ex
     if revision is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="op seq not found")
     return {"ok": True, "revision": revision}
 
@@ -129,19 +115,13 @@ def remove_draft_op_http(
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="draft not found")
     with store.transaction(conn):
         row = drafts_store.get_draft(conn, draft_id)
         if row is None:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=404, detail="draft not found")
         status = drafts_store.status_for(row)
         if status not in ("open", "submitted"):
-            from fastapi import HTTPException
-
             raise HTTPException(
                 status_code=400,
                 detail=f"cannot remove ops from a {status} draft",
@@ -154,12 +134,8 @@ def remove_draft_op_http(
             drafts_store.StaleDraftRevisionError,
             drafts_store.ActiveApplicationError,
         ) as ex:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=409, detail=str(ex)) from ex
     if revision is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="op seq not found")
     return {"ok": True, "revision": revision}
 
@@ -172,12 +148,8 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="draft not found")
     if drafts_store.status_for(row) != "open":
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=400,
             detail="only open drafts can be submitted",
@@ -210,12 +182,8 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
             with store.transaction(conn):
                 drafts_store.set_decision(conn, draft_id, decision="approved", by=p.id)
     except drafts_store.ActiveApplicationError as ex:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=409, detail=str(ex)) from ex
     except server.DraftOpsRejectedError as ex:
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=422,
             detail={
@@ -225,8 +193,6 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
             },
         ) from ex
     except (ValueError, RuntimeError) as ex:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=400, detail=str(ex))
     return {"ok": True, **result}
 
@@ -240,12 +206,8 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
     with store.transaction(conn):
         row = drafts_store.get_draft(conn, draft_id)
         if row is None:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=404, detail="draft not found")
         if drafts_store.status_for(row) not in ("open", "submitted"):
-            from fastapi import HTTPException
-
             raise HTTPException(
                 status_code=400,
                 detail="only open or submitted drafts can be rejected",
@@ -253,8 +215,6 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
         try:
             drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
         except drafts_store.ActiveApplicationError as ex:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=409, detail=str(ex)) from ex
     return {"ok": True}
 
@@ -267,12 +227,8 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="draft not found")
     if drafts_store.status_for(row) not in ("open", "submitted"):
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=400,
             detail="only open or submitted drafts can be withdrawn",
@@ -281,7 +237,5 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
         try:
             drafts_store.set_decision(conn, draft_id, decision="withdrawn", by=p.id)
         except drafts_store.ActiveApplicationError as ex:
-            from fastapi import HTTPException
-
             raise HTTPException(status_code=409, detail=str(ex)) from ex
     return {"ok": True}

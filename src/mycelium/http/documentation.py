@@ -64,8 +64,6 @@ def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
     try:
         return server.get_documentation_run(run_id)
     except ValueError as exc:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -168,8 +166,6 @@ def generated_document_http(document_id: str, request: Request) -> dict[str, obj
     try:
         return _document_preview(server.get_generated_document(document_id))
     except ValueError as exc:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -187,8 +183,6 @@ def document_revision_http(
     try:
         return _document_preview(server.get_document_revision(document_id, revision))
     except ValueError as exc:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -206,8 +200,6 @@ async def _both_sides_edited_handler(
 def revise_document_http(
     document_id: str, body: DocumentRevisionBody, request: Request
 ) -> dict[str, object]:
-    from fastapi import HTTPException
-
     from ..docs_store import RevisionConflict
 
     _enforce_role(request, "writer", real_role=True)
@@ -221,8 +213,6 @@ def revise_document_http(
 def deliver_document_http(
     document_id: str, body: DocumentDeliveryBody, request: Request
 ) -> dict[str, object]:
-    from fastapi import HTTPException
-
     from ..docs_store import RevisionConflict
 
     _enforce_role(request, "writer", real_role=True)

@@ -7,7 +7,7 @@ answers 409, and unavailable settings 503.
 from __future__ import annotations
 
 import anyio.from_thread
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from .. import draft_review_settings as review_settings
 from .. import model_settings, product_settings, server
@@ -18,8 +18,6 @@ router = APIRouter()
 
 @router.get("/api/product-settings")
 def read_product_settings(request: Request) -> product_settings.SettingsView:
-    from fastapi import HTTPException
-
     principal = _require_principal(request)
     try:
         return product_settings.view(principal)
@@ -31,8 +29,6 @@ def read_product_settings(request: Request) -> product_settings.SettingsView:
 def save_product_settings(
     body: product_settings.SaveSettings, request: Request
 ) -> product_settings.Snapshot:
-    from fastapi import HTTPException
-
     principal = _require_admin(request)
     try:
         saved = product_settings.save(body, principal)
@@ -49,8 +45,6 @@ def save_product_settings(
 
 @router.get("/api/model-settings")
 def ai_model_settings(request: Request) -> model_settings.SettingsView:
-    from fastapi import HTTPException
-
     principal = _require_principal(request)
     try:
         return model_settings.view(principal)
@@ -62,8 +56,6 @@ def ai_model_settings(request: Request) -> model_settings.SettingsView:
 def save_ai_model_settings(
     action: model_settings.Action, body: model_settings.SaveSelection, request: Request
 ) -> model_settings.ActionView:
-    from fastapi import HTTPException
-
     principal = _require_admin(request)
     try:
         model_settings.save(action, body, principal)
@@ -78,8 +70,6 @@ def save_ai_model_settings(
 
 @router.get("/api/draft-review/settings")
 def draft_review_settings(request: Request) -> review_settings.SettingsView:
-    from fastapi import HTTPException
-
     principal = _require_principal(request)
     try:
         return review_settings.view(principal)
@@ -91,8 +81,6 @@ def draft_review_settings(request: Request) -> review_settings.SettingsView:
 def save_draft_review_settings(
     body: review_settings.SaveSettings, request: Request
 ) -> review_settings.SettingsView:
-    from fastapi import HTTPException
-
     principal = _require_admin(request)
     try:
         review_settings.save(body, principal)

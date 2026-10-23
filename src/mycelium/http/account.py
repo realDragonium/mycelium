@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
@@ -127,7 +127,5 @@ def revoke_my_token(token_id: str, request: Request) -> dict[str, Any]:
                 conn, token_id=token_id, owner_id=auth.owner_id_for(p)
             )
     except LookupError as ex:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(ex))
     return {"ok": True}

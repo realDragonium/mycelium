@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import store
@@ -55,8 +55,6 @@ def list_knowledge_gaps(request: Request, status: str | None = None) -> dict[str
     conn = store.substrate_connection()
     status = status or "all"
     if status not in ("all", "open", "resolved", "dismissed"):
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=400,
             detail="status must be one of: all, open, resolved, dismissed",
@@ -80,12 +78,8 @@ def update_knowledge_gap(
     p = _require_principal(request)
     conn = store.substrate_connection()
     if store.get_knowledge_gap(conn, gap_id) is None:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail="gap not found")
     if body.action not in ("resolve", "dismiss", "reopen"):
-        from fastapi import HTTPException
-
         raise HTTPException(
             status_code=400,
             detail="action must be one of: resolve, dismiss, reopen",
