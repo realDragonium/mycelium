@@ -180,7 +180,7 @@ def test_offers_a_looked_at_statement_again_once_it_or_its_neighbourhood_changes
         return [i.id for i in page.items]
 
     knowledge_health.record_attempts(conn, {"stm_c": ["stm_a"], "stm_d": []})
-    conn.execute("UPDATE connect_attempts SET attempted_at = '2026-01-01'")
+    conn.execute("UPDATE curation_attempts SET attempted_at = '2026-01-01'")
     listed = knowledge_health.statements(conn, drafts, "isolated")
 
     assert to_connect() == []

@@ -744,3 +744,30 @@ def test_v19_rewrites_only_an_untouched_sub_type_definition():
 
     assert sub_type(seeded) == glossary._ENTITY_LINK_TYPE_SEED["sub-type"]
     assert sub_type(curated) == "Our own wording."
+
+
+def test_v24_keeps_the_connect_pass_looks_as_curation_attempts():
+    conn = store.connect(":memory:")
+    store.migrate(conn)
+    sid = store.create_statement(conn, "event", "An invoice is exported.")
+    conn.execute("DROP TABLE curation_attempts")
+    conn.execute("DROP TABLE curation_claims")
+    migrations._migration_v23_connect_attempts(conn)
+    conn.execute(
+        "INSERT INTO connect_attempts VALUES (?, 'An invoice is exported.', '[]', "
+        "'2026-08-01T00:00:00Z')",
+        (sid,),
+    )
+    conn.execute("PRAGMA user_version = 23")
+    conn.commit()
+
+    migrations.apply_migrations(conn)
+
+    row = conn.execute("SELECT * FROM curation_attempts").fetchone()
+    assert (row["item_id"], row["outcome"], row["attempted_by"]) == (
+        sid,
+        "looked",
+        None,
+    )
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+    assert "connect_attempts" not in tables
