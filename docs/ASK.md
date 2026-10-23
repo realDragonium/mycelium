@@ -151,3 +151,25 @@ primitive reads and evidence with six model turns before consolidation versus
 three after it. Its compact-output fixture is over 25% smaller than the former
 generated payload while retaining uncertainty and interpretation changes. These
 are controlled payload/turn comparisons, not production latency claims.
+
+## Evaluation
+
+`scripts/ask_eval.py` runs Ask over a question set and scores the answers. It
+is not part of the test suite: it calls a live model and needs a prepared data
+directory (`MYCELIUM_DATA_DIR`) and `ANTHROPIC_API_KEY`.
+
+```sh
+uv run python scripts/ask_eval.py prepare            # write tests/ask_eval/seed.toml
+uv run python scripts/ask_eval.py run LABEL          # answer and score every case
+uv run python scripts/ask_eval.py run LABEL --cases-dir DIR   # other cases
+```
+
+The committed questions in `tests/ask_eval/cases.toml` cover direct lookups,
+multi-hop answers through links, `when` conditions, aliases, contradictions,
+answers spread over several entities and questions the knowledge base cannot
+answer. Each names the statements the answer must state, claims it must not
+make and whether it is answerable. A fixed judge model grades each answer
+against the statements and entity descriptions the run retrieved; the run
+reports fact recall, unsupported claims, citation recall and precision, correct
+refusals, flagged contradictions, evidence refs leaked into the answer, cost
+and latency. Results go to `~/mycelium-eval/ask-results/LABEL/`.
