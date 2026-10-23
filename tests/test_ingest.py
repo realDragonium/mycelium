@@ -650,8 +650,8 @@ def test_phrasing_violation_sets_allow_flag_not_dropped(monkeypatch):
 
 
 def test_op_cap_forces_finalize_with_forced_tool_choice():
-    """Hitting the op cap forces a final emit_draft with forced tool_choice and
-    thinking dropped."""
+    """Hitting the op cap forces a final emit_draft with forced tool_choice,
+    still thinking so the turn keeps the cached prefix."""
     # op_cap=3: 3 vocab calls hit the cap; the next iteration forces finalize.
     responses = [_message([_tool_use(EMIT_TOOL, _good_new_op_emit())])]
     result, client, _sub, _e = _run(responses, op_cap=3)
@@ -661,7 +661,7 @@ def test_op_cap_forces_finalize_with_forced_tool_choice():
     forced_call = client.calls[-1]
     assert forced_call["tool_choice"]["type"] == "tool"
     assert forced_call["tool_choice"]["name"] == EMIT_TOOL
-    assert "thinking" not in forced_call
+    assert forced_call["thinking"] == {"type": "adaptive"}
 
 
 def test_op_cap_with_unresponsive_model_returns_nothing_never_raises():
@@ -1387,7 +1387,7 @@ def test_i_tiny_op_cap_degrades_records_gap_and_still_emits_draft():
         "name": EMIT_TOOL,
         "disable_parallel_tool_use": True,
     }
-    assert "thinking" not in forced_call
+    assert forced_call["thinking"] == {"type": "adaptive"}
 
 
 # --------------------------------------------------------------------------- #

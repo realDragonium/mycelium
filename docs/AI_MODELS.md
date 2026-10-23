@@ -43,8 +43,11 @@ model accepts every level. Check the selected model’s
 An unsupported combination fails explicitly without changing models or effort.
 
 Claude’s existing extended-thinking toggle remains separate: effort controls
-response work even without thinking blocks. Forced final tool calls retain the
-existing thinking policy and still receive the configured effort. Claude Fable
+response work even without thinking blocks. Forced final tool calls keep
+thinking on when it is configured, so they read the cached system prompt and
+tools, and still receive the configured effort. A model that refuses thinking
+with a forced tool choice is retried once without it and is forced without
+thinking until the server restarts. Claude Fable
 5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 refuse a forced tool choice, so on
 those models a turn that needs a tool asks for it in the prompt instead, keeps
 thinking, and still fails unless the reply is exactly that one call. Any other

@@ -407,11 +407,11 @@ def test_op_cap_exhaustion_degrades_to_partial_low_confidence_never_raises():
     assert isinstance(result, Answered)
     assert result.trace["forced_finalize"] == "op_cap"
     assert result.trace["degraded"] is True
-    # the forced turn used a forced tool_choice and dropped thinking
+    # the forced turn used a forced tool_choice and kept thinking
     forced_call = client.calls[-1]
     assert forced_call["tool_choice"]["type"] == "tool"
     assert forced_call["tool_choice"]["name"] == "submit_answer"
-    assert "thinking" not in forced_call
+    assert forced_call["thinking"] == {"type": "adaptive"}
 
 
 def test_op_cap_with_unresponsive_model_still_returns_answer():

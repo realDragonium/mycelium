@@ -269,13 +269,15 @@ def test_claude_signed_history_cache_and_forced_terminal() -> None:
         "name": "read",
         "disable_parallel_tool_use": True,
     }
-    assert "thinking" not in sent[2]
+    # Forcing keeps thinking and the signed history, so the forced turn reads
+    # the same cached prefix as the turns before it.
+    assert sent[2]["thinking"] == {"type": "adaptive"}
     regular = sent[1]["messages"]
     forced = sent[2]["messages"]
     assert isinstance(regular, list) and isinstance(regular[1], dict)
     assert isinstance(forced, list) and isinstance(forced[1], dict)
     assert regular[1]["content"] == output
-    assert forced[1]["content"] == [_claude_call("call-1")]
+    assert forced[1]["content"] == output
     assert sent[0]["system"] == [
         {
             "type": "text",
@@ -334,6 +336,55 @@ def test_claude_learns_that_a_model_refuses_a_forced_tool(monkeypatch, caplog) -
         {"type": "auto", "disable_parallel_tool_use": True},
         {"type": "auto", "disable_parallel_tool_use": True},
     ]
+
+
+def test_claude_learns_that_a_model_refuses_thinking_with_a_forced_tool(
+    monkeypatch, caplog
+) -> None:
+    from mycelium.ai import claude
+
+    monkeypatch.setattr(claude, "_refused_thinking_when_forced", set())
+    sent: list[dict[str, JsonValue]] = []
+    output = [
+        {"type": "thinking", "thinking": "private", "signature": "signed"},
+        _claude_call("call-1"),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _OBJECT.validate_json(request.content)
+        sent.append(body)
+        if "thinking" in body:
+            message = "Thinking may not be enabled when tool_choice forces tool use."
+            return httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": message},
+                },
+            )
+        return _reply(request, _envelope("claude", [_claude_call("call-2")]))
+
+    messages: list[dict[str, object]] = [
+        {"role": "user", "content": "Question"},
+        {"role": "assistant", "content": output},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call-1", "content": "x"}
+            ],
+        },
+    ]
+    config = replace(_config("claude"), model="claude-older-model", thinking=True)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        ai.turn(_task(messages, force="read"), config, client=client)
+        ai.turn(_task(messages, force="read"), config, client=client)
+
+    assert ["thinking" in request for request in sent] == [True, False, False]
+    history = sent[-1]["messages"]
+    assert isinstance(history, list) and isinstance(history[1], dict)
+    assert history[1]["content"] == [_claude_call("call-1")]
+    learnt = [r for r in caplog.records if r.name == "mycelium.ai.claude"]
+    assert [r.args for r in learnt] == [("claude-older-model",)]
 
 
 def test_claude_asks_for_a_required_tool_on_a_model_that_cannot_be_forced() -> None:

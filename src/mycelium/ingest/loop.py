@@ -370,9 +370,9 @@ def _note_turn(
 
 def _reserve(ctx: _RunContext, config: IngestConfig) -> float:
     """What the run may still spend after this check: one more reading turn
-    like the dearest so far, then the forced emit. Forcing the emit turns
-    thinking off and so invalidates the cached history: that turn writes the
-    whole history to the cache again."""
+    like the dearest so far, then the forced emit. Forcing the tool choice
+    invalidates the cached history: that turn writes the whole history to the
+    cache again."""
     if config.input_per_mtok is None or config.output_per_mtok is None:
         return 0.0
     emit = {
@@ -548,7 +548,7 @@ def _dispatch_read(
 
 
 def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
-    """Last resort: force one emit_draft turn (floor bypassed, thinking off),
+    """Last resort: force one emit_draft turn (floor bypassed),
     else give up gracefully with NothingToIngest. Never throws, never partial
     live-write."""
     trace: TraceBuilder = ctx.trace

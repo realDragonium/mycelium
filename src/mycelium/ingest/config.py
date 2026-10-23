@@ -54,8 +54,8 @@ class IngestConfig:
     #: Per-model-call timeout, seconds. Kept under the wall clock so a
     #: single hung call can't blow the whole budget.
     request_timeout_s: float = 90.0
-    #: Adaptive thinking in the loop (disabled only on the forced emit call,
-    #: where a forced tool_choice is incompatible with it).
+    #: Adaptive thinking in the loop, kept on the forced emit where the model
+    #: accepts it with a forced tool_choice.
     thinking: bool = True
     #: Cap on input text. Longer input is head-truncated and a gap recorded —
     #: never silently blown past.
