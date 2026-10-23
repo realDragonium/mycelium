@@ -578,3 +578,26 @@ def test_scope_capped_at_creation(tmp_path, monkeypatch):
         ).json()["tokens"]
         names = {t["name"]: t["scope"] for t in tokens}
         assert names["tried-to-escalate"] == "reader"
+
+
+def test_asker_reaches_ask_and_its_own_account_but_no_substrate_reads(
+    tmp_path, monkeypatch
+):
+    """`asker` is the role for callers that may only ask. The hand-written
+    UI routes read the substrate without going through a tool's role gate,
+    so they must not answer an asker either."""
+    monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "test-secret")
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        with store.transaction(conn):
+            uid = auth.create_user(
+                conn, name="A", role="asker", type="service", email=None
+            )
+            raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="asker")
+        h = {"Authorization": f"Bearer {raw}"}
+
+        for path in ("/api/data", "/api/history", "/api/drafts", "/api/audiences"):
+            assert client.get(path, headers=h).status_code == 403, path
+        assert client.get("/api/me", headers=h).status_code == 200
+        assert client.get("/api/me/tokens", headers=h).status_code == 200

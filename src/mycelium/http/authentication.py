@@ -55,6 +55,18 @@ _AUTH_EXEMPT_PATHS = {
 }
 
 
+def _asker_may_reach(path: str) -> bool:
+    """An asker may call `ask` and nothing else that reads the substrate.
+
+    Tool routes enforce that through their role gate, but the `/api/*` routes
+    behind the web UI mostly check only that someone is signed in. So askers
+    are kept off `/api/*` here, except for their own account and tokens, and
+    a route added later is closed to them until someone decides otherwise."""
+    if not path.startswith("/api/") or _is_exempt(path):
+        return True
+    return path == "/api/me" or path.startswith("/api/me/")
+
+
 def _session_secret() -> str:
     """Pull the session cookie signing key. With auth disabled we
     generate an ephemeral per-process key — sessions don't survive a
@@ -152,6 +164,14 @@ class AuthMiddleware:
             )
             await rejection(scope, receive, send)
             return
+        if principal is not None and principal.role == "asker":
+            if not _asker_may_reach(request.url.path):
+                rejection = JSONResponse(
+                    status_code=403,
+                    content={"detail": "the asker role can only call ask"},
+                )
+                await rejection(scope, receive, send)
+                return
         # Fall back to the synthetic admin only when auth is disabled —
         # never when auth is on but the path is exempt, so exempt paths
         # don't accidentally see a fake admin and grant write power.
