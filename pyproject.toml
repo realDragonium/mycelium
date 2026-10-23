@@ -118,6 +118,7 @@ module = [
     "mycelium.guidelines",
     "mycelium.http.access",
     "mycelium.http.authentication",
+    "mycelium.http.tool_routes",
     "mycelium.ingest",
     "mycelium.ingest.config",
     "mycelium.ingest.prompts",
