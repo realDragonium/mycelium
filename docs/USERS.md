@@ -170,6 +170,29 @@ remove someone for good.
 
 ---
 
+## Scoping to an audience
+
+An admin can scope a person, a service account or a single token to an
+[audience](AUDIENCES.md). A scoped principal reads only what that audience may
+see, and only through the read tools and routes listed in
+[Scoped users and tokens](AUDIENCES.md#scoped-users-and-tokens). Its role is
+clamped to reader, so it never writes, drafts or administers.
+
+- **A user:** the **Audience** column in the members table. A user's audience
+  applies to every token they own, whatever the token says.
+- **A token:** pick the audience when you mint it under **MCP tokens**, or
+  change it afterwards in the same list. Tokens a scoped user mints carry
+  their audience.
+- **An OAuth connection:** an admin approving a client in the browser picks
+  the audience on the consent screen.
+
+Full access is the default. Mycelium refuses to scope the last active
+unscoped admin. Scoping is read on every request, so it takes effect
+immediately. If the audience is retired, the scoped principal is refused
+until you pick another one.
+
+---
+
 ## Managing your own tokens
 
 Every authenticated user has **Settings → MCP tokens** — list, create,
