@@ -1,5 +1,7 @@
 // Every HTTP call the app makes goes through `request`, which throws an
-// HttpError carrying the server's `detail` on any non-2xx response.
+// HttpError carrying the server's `detail` on any non-2xx response, or a
+// human message for the status when the server sent none. A network failure
+// is an HttpError with status 0.
 //
 // The generic parameter on the helpers is the caller's statement of what the
 // endpoint returns; nothing checks it at runtime, so keep each one next to the
@@ -32,22 +34,42 @@ function detailOf(body: unknown): string | null {
   const { detail } = body;
   if (typeof detail === 'string') return detail;
   if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') return detail.message;
-  return detail == null ? null : JSON.stringify(detail);
+  return null;
+}
+
+function statusMessage(status: number): string {
+  if (status === 0) return 'Could not reach the server. Check your connection and try again.';
+  if (status === 401) return 'You are signed out. Sign in and try again.';
+  if (status === 403) return 'You do not have permission to do this.';
+  if (status === 404) return 'Not found. It may have been moved or deleted.';
+  if (status === 405) return 'This action is not allowed here.';
+  if (status === 409) return 'This changed in the meantime. Reload and try again.';
+  if (status === 413) return 'That is too large to send.';
+  if (status === 400 || status === 422) return 'The server did not accept the request. Check the values and try again.';
+  if (status === 429) return 'Too many requests. Wait a moment and try again.';
+  if (status >= 500) return 'The server ran into a problem. Try again shortly.';
+  return `The request failed (status ${status}). Try again.`;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
   if (body !== undefined) headers['content-type'] = 'application/json';
-  const res = await fetch(path, {
-    method, headers, signal, credentials: 'same-origin',
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(path, {
+      method, headers, signal, credentials: 'same-origin',
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new HttpError(statusMessage(0), 0, path);
+  }
   const text = await res.text();
   let parsed: unknown = null;
   if (text) {
     try { parsed = JSON.parse(text); } catch { parsed = text; }
   }
-  if (!res.ok) throw new HttpError(detailOf(parsed) || `${res.status} ${res.statusText}`.trim(), res.status, path, parsed && typeof parsed === 'object' && 'detail' in parsed ? parsed.detail : null, parsed);
+  if (!res.ok) throw new HttpError(detailOf(parsed) || statusMessage(res.status), res.status, path, parsed && typeof parsed === 'object' && 'detail' in parsed ? parsed.detail : null, parsed);
   return parsed as T;
 }
 
@@ -326,7 +348,7 @@ export async function ask(question: string, signal: AbortSignal, onEvent: (event
     body: JSON.stringify({ question, verbose: true }),
   });
   if (!res.ok) {
-    let detail = `${res.status} ${res.statusText}`;
+    let detail = statusMessage(res.status);
     try { detail = detailOf(await res.json()) || detail; } catch { /* non-JSON body */ }
     throw new HttpError(detail, res.status, '/ask');
   }
