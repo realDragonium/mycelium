@@ -1,3 +1,5 @@
+import pytest
+
 from mycelium.ai import Usage, pricing
 
 
@@ -27,3 +29,19 @@ def test_openai_models_are_estimated_without_cache_writes():
         cache_read_input_tokens=1_000_000,
     )
     assert price.cost_usd(usage) == 2.50 + 15.0 + 0.25
+
+
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("claude-opus-5-5", "claude"),
+        ("claude-new-model", "claude"),
+        ("us.anthropic.claude-sonnet-5-5", "claude"),
+        ("gpt-5.4", "openai"),
+        ("o3", "openai"),
+        ("ft:gpt-4.1:acme::abc", "openai"),
+        ("llama-4", None),
+    ],
+)
+def test_a_model_id_names_its_provider(model, provider):
+    assert pricing.provider_of(model) == provider

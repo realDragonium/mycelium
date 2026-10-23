@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from . import auth, prompt_store, store
 from .ai import Provider, ReasoningEffort
+from .ai.pricing import price, provider_of
 from .ai.types import ClaudeEffort
 from .model_credentials import claude_configuration_error
 
@@ -85,6 +86,8 @@ class ProviderAvailability(BaseModel):
 
 class ActionView(ModelSnapshot):
     configuration_error: str | None = None
+    #: Set when the selected model id is not one this build knows.
+    model_warning: str | None = None
     providers: list[ProviderAvailability]
 
 
@@ -193,6 +196,46 @@ def provider_availability(provider: Provider) -> ProviderAvailability:
     )
 
 
+_PROVIDER_NAMES: dict[Provider, str] = {"claude": "Claude", "openai": "OpenAI"}
+
+
+def check_model_id(provider: Provider, model: str) -> str | None:
+    """Refuse an id that belongs to the other provider. An id neither the
+    price table nor the providers' naming recognises is allowed, so a new
+    model works before this build knows it; the returned warning says so."""
+    if not model:
+        return None
+    owner = provider_of(model)
+    if owner is not None and owner != provider:
+        raise ValueError(
+            f"'{model}' is a model ID for {_PROVIDER_NAMES[owner]}, "
+            f"not {_PROVIDER_NAMES[provider]}."
+        )
+    if price(provider, model) is None:
+        return (
+            f"'{model}' is not a {_PROVIDER_NAMES[provider]} model this version "
+            "knows. Check the ID; its cost cannot be estimated."
+        )
+    return None
+
+
+def model_warning(provider: Provider, model: str) -> str | None:
+    try:
+        return check_model_id(provider, model)
+    except ValueError as exc:
+        return str(exc)
+
+
+def credentials_error(action: Action) -> str | None:
+    """Why `action` cannot reach its provider, or None when it can. Checks
+    presence only, so it costs no request."""
+    try:
+        selected = get(action)
+    except Unavailable as exc:
+        return str(exc)
+    return provider_availability(selected.provider).reason
+
+
 def editable(
     action: Action, *, conn: sqlite3.Connection | None = None
 ) -> tuple[ModelSnapshot, str | None]:
@@ -222,6 +265,7 @@ def action_view(action: Action) -> ActionView:
     return ActionView(
         **selected.model_dump(),
         configuration_error=error,
+        model_warning=model_warning(selected.provider, selected.model),
         providers=[provider_availability("claude"), provider_availability("openai")],
     )
 
@@ -268,6 +312,8 @@ def save(
     )
     if not selected_model:
         raise ValueError("Choose a model ID for the selected provider.")
+    check_model_id("claude", request.claude_model)
+    check_model_id("openai", request.openai_model)
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):
         return save_in_transaction(conn, action, request)
