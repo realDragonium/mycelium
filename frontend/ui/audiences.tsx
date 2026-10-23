@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState, type FormEvent } from 'react';
 import { deleteJSON, enc, errorMessage, getJSON, postJSON, putJSON } from './api';
-import { Card, KindTag, LoadError, Loading, Notice } from './lib';
+import { Card, KindTag, LoadError, Loading, Notice, formatDate } from './lib';
 import { Link } from './router';
 import { dataOf, useAsync } from './use-async';
 
@@ -9,8 +9,9 @@ export interface AudienceRef { id: string; name: string; scope: AudienceScope }
 export interface AudienceLabel {
   audiences: string[]; source: 'ai' | 'curator'; reason: string; model: string | null;
   labelled_at: string; labelled_by: string | null; text_changed_at: string | null; pending: string[];
-  narrowed: Narrowed | null;
+  narrowed: Narrowed | null; spot_check: KeptOnEdit | null;
 }
+interface KeptOnEdit { audiences: string[]; old_text: string; at: string }
 export interface Narrowed { previous: string[]; lost: string[]; reason: string }
 export interface AudienceView extends AudienceRef {
   description: string; includes: string[]; version: number; retired: boolean; default: boolean; profiles: string[];
@@ -42,7 +43,7 @@ export const AudienceBadge = ({ scope }: { scope: AudienceScope }) => <span clas
 export const AudienceIdentity = ({ audience }: { audience: AudienceRef }) => <span className="audience-identity"><span>{audience.name}</span><AudienceBadge scope={audience.scope} /></span>;
 
 const formatCost = (value: number | null) => value === null ? '—' : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
-const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : `${label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`}${label.pending.length ? ' · waiting for confirmation' : ''}${label.narrowed ? ` · narrowed after an edit: ${label.narrowed.reason}` : ''}`;
+const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : `${label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`}${label.pending.length ? ' · waiting for confirmation' : ''}${label.narrowed ? ` · narrowed after an edit: ${label.narrowed.reason}` : ''}${label.spot_check ? ' · edited, external grant kept for a spot check' : ''}`;
 
 export function TextChangedActions({ statementId, onDone }: { statementId: string; onDone: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -160,6 +161,43 @@ function PendingAudience({ audience, onChanged }: { audience: AudienceView; onCh
       {group.statements.map(statement => <PendingRow key={statement.id} audienceId={audience.id} statement={statement} canCurate={data.can_curate} onDone={changed} />)}
     </details>)}
   </article>;
+}
+
+interface SpotCheck extends KeptOnEdit { id: string; kind: string; text: string }
+interface SpotChecks { statements: SpotCheck[]; can_curate: boolean }
+
+function SpotCheckRow({ statement, names, canCurate, onDone }: { statement: SpotCheck; names: (id: string) => string; canCurate: boolean; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (decision: 'confirm' | 'narrow') => {
+    setBusy(true); setError(null);
+    try { await postJSON<{ decided: number }>(`/api/statements/${enc(statement.id)}/audiences/spot-check`, { decision }); onDone(); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  return <div className="pending-grant">
+    <Link to={{ view: 'statement', id: statement.id }} className="pending-grant-text"><KindTag kind={statement.kind} /><span>{statement.text}</span></Link>
+    <p className="pending-grant-reason">Was: {statement.old_text}</p>
+    <p className="hint">Still visible to {statement.audiences.map(names).join(', ')} · edited {formatDate(statement.at)}</p>
+    {canCurate && <div className="pending-grant-actions"><span className="row gap-sm wrap">
+      <button type="button" className="btn sm" disabled={busy} onClick={() => void act('confirm')}>Confirm</button>
+      <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void act('narrow')}>Narrow</button>
+      {error && <Notice tone="error">{error}</Notice>}
+    </span></div>}
+  </div>;
+}
+
+function SpotCheckCard({ data }: { data: AudiencesResponse }) {
+  const { state, reload } = useAsync(useCallback((signal: AbortSignal) => getJSON<SpotChecks>('/api/audiences/spot-checks', signal), []));
+  const checks = dataOf(state);
+  const names = (id: string) => data.audiences.find(audience => audience.id === id)?.name || id;
+  return <Card title={<>Recently edited external statements {!!checks?.statements.length && <span className="status-badge open">{checks.statements.length}</span>}</>}>
+    <p className="muted">An edit kept these statements' confirmed external grants in force. Check the new text: <b>Confirm</b> keeps the grant, <b>Narrow</b> withdraws it; internal audiences keep seeing the statement.</p>
+    {!checks && state.status === 'loading' && <Loading what="recently edited statements" />}
+    {!checks && state.status === 'error' && <LoadError error={state.error} what="recently edited statements" onRetry={reload} />}
+    {checks && !checks.statements.length && <p className="hint">Nothing to check.</p>}
+    {checks?.statements.map(statement => <SpotCheckRow key={statement.id} statement={statement} names={names} canCurate={checks.can_curate} onDone={reload} />)}
+  </Card>;
 }
 
 function PendingGrantsCard({ data, onReload }: { data: AudiencesResponse; onReload: () => void }) {
@@ -310,5 +348,5 @@ export function AudiencesSettings() {
   if (!data && state.status === 'error') return <LoadError error={state.error} what="audiences" onRetry={reload} />;
   if (!data) return null;
   const prefilter = (next: StatementFilter) => { setFilter(next); requestAnimationFrame(() => document.querySelector('.audience-filters')?.scrollIntoView({ behavior: 'smooth', block: 'start' })); };
-  return <>{state.status === 'error' && <LoadError error={state.error} what="audiences" onRetry={reload} />}<LabellingCard data={data} onReload={reload} /><PendingGrantsCard data={data} onReload={reload} /><AudienceList data={data} onReload={reload} onFilter={prefilter} /><StatementFilterList key={`${filter.audience}:${filter.visibility}:${filter.state}`} audiences={data.audiences} filter={filter} onFilter={setFilter} /></>;
+  return <>{state.status === 'error' && <LoadError error={state.error} what="audiences" onRetry={reload} />}<LabellingCard data={data} onReload={reload} /><PendingGrantsCard data={data} onReload={reload} /><SpotCheckCard data={data} /><AudienceList data={data} onReload={reload} onFilter={prefilter} /><StatementFilterList key={`${filter.audience}:${filter.visibility}:${filter.state}`} audiences={data.audiences} filter={filter} onFilter={setFilter} /></>;
 }
