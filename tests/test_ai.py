@@ -557,7 +557,7 @@ def test_native_effort_reaches_both_transports(
 def test_a_truncated_claude_turn_names_its_stop_reason() -> None:
     envelope = _envelope("claude", [], stop="max_tokens")
     with httpx.Client(
-        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=envelope))
+        transport=httpx.MockTransport(lambda request: _reply(request, envelope))
     ) as client:
         with pytest.raises(ai.ModelError, match="stop_reason=max_tokens"):
             ai.turn(_task(), _config("claude"), client=client)
