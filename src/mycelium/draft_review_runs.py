@@ -214,6 +214,11 @@ def on_submitted(draft_id: str) -> None:
 # MAX_RETRIES times: about two and a half hours of a provider outage.
 MAX_RETRIES = 5
 RETRY_BACKOFF = timedelta(minutes=5)
+# A failure older than the whole schedule did not happen under this process's
+# watch: a restored copy of another instance, or a long outage of this one.
+# Retrying it would review, and possibly apply, old drafts unasked, so it is
+# left for the backlog review.
+RETRY_WINDOW = RETRY_BACKOFF * (1 << MAX_RETRIES)
 SWEEP_INTERVAL_S = 60.0
 _sweeper: threading.Thread | None = None
 _stop_sweeper = threading.Event()
@@ -270,7 +275,9 @@ def _retry_due(run: ReviewRun, now: datetime) -> bool:
     ):
         return False
     finished = datetime.fromisoformat(run.finished_at)
-    return now >= finished + RETRY_BACKOFF * (1 << run.retries)
+    return (
+        finished + RETRY_BACKOFF * (1 << run.retries) <= now < finished + RETRY_WINDOW
+    )
 
 
 def backlog() -> list[str]:

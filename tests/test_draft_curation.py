@@ -305,6 +305,10 @@ def _finished(run):
     return datetime.fromisoformat(run.finished_at)
 
 
+def _due(run):
+    return _finished(run) + draft_review_runs.RETRY_BACKOFF * (1 << run.retries)
+
+
 def test_sweep_retries_a_provider_failure_after_backoff(curated_app, monkeypatch):
     _automatic()
     _failing_provider(monkeypatch)
@@ -324,15 +328,28 @@ def test_sweep_retries_a_provider_failure_after_backoff(curated_app, monkeypatch
     assert server.get_draft(draft_id)["status"] == "approved"
 
 
+def test_sweep_leaves_a_failure_older_than_the_retry_window_to_the_backlog(
+    curated_app, monkeypatch
+):
+    client, _ = curated_app
+    _automatic()
+    _failing_provider(monkeypatch)
+    draft_id = _draft()
+    failed = _latest(draft_id)
+
+    assert draft_review_runs.sweep(_finished(failed) + timedelta(days=1)) == []
+    assert _latest(draft_id).run_id == failed.run_id
+    assert client.get("/api/draft-review/backlog").json() == {"draft_ids": [draft_id]}
+
+
 def test_sweep_waits_for_credentials_without_recording_runs(curated_app, monkeypatch):
     _automatic()
     _failing_provider(monkeypatch)
     draft_id = _draft()
     failed = _latest(draft_id)
     monkeypatch.delenv("OPENAI_API_KEY")
-    later = _finished(failed) + timedelta(days=1)
 
-    assert draft_review_runs.sweep(later) == []
+    assert draft_review_runs.sweep(_due(failed)) == []
     assert _latest(draft_id).run_id == failed.run_id
 
 
@@ -341,9 +358,7 @@ def test_sweep_stops_after_the_last_attempt(curated_app, monkeypatch):
     _failing_provider(monkeypatch)
     draft_id = _draft()
     for _ in range(draft_review_runs.MAX_RETRIES):
-        run = _latest(draft_id)
-        later = _finished(run) + timedelta(days=1)
-        assert draft_review_runs.sweep(later) == [draft_id]
+        assert draft_review_runs.sweep(_due(_latest(draft_id))) == [draft_id]
     exhausted = _latest(draft_id)
     assert exhausted.retries == draft_review_runs.MAX_RETRIES
     assert exhausted.attempt == 2
@@ -493,8 +508,7 @@ def test_sweep_does_not_supersede_a_run_that_finished_after_selection(
 
     monkeypatch.setattr(draft_review_runs, "_retry_due", selection_then_manual_rerun)
 
-    later = _finished(selected) + timedelta(days=1)
-    assert draft_review_runs.sweep(later) == []
+    assert draft_review_runs.sweep(_due(selected)) == []
 
     assert interleaved == [selected.run_id]
     latest = _latest(draft_id)

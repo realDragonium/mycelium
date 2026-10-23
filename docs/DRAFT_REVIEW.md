@@ -140,7 +140,10 @@ retry 5 minutes after the failure, doubling the wait each time, at most 5
 retries per draft (about two and a half hours). Each retry is a fresh attempt
 with the usual single rerun. A curator's **Run again** or a backlog review
 starts the count over. Drafts with no attempt at all are left for the backlog
-review.
+review, and so are failures older than the whole retry schedule (about two
+hours and forty minutes), such as those in a restored copy of another
+instance or from before a long outage: the sweep does not review, and possibly
+apply, them unasked.
 
 When the supplied knowledge cannot settle how the draft fits and a person's
 answer would, such as whether a new concept is the same as a live one, the
