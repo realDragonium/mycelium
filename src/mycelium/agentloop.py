@@ -291,8 +291,13 @@ def add_usage(trace: Any, usage: Any) -> None:
 def cost_usd(
     tokens: dict[str, int], input_per_mtok: float, output_per_mtok: float
 ) -> float:
+    # Claude's input count excludes cached tokens; it bills cache writes at
+    # 1.25x and cache reads at 0.1x the input rate.
+    billed_input = (
+        tokens["input"] + 1.25 * tokens["cache_creation"] + 0.1 * tokens["cache_read"]
+    )
     return round(
-        tokens["input"] / 1_000_000 * input_per_mtok
+        billed_input / 1_000_000 * input_per_mtok
         + tokens["output"] / 1_000_000 * output_per_mtok,
         6,
     )

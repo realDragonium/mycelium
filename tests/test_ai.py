@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import httpx
@@ -98,6 +99,38 @@ def _envelope(
         "stop_sequence": None,
         "usage": {"input_tokens": 8, "output_tokens": 5, "cache_read_input_tokens": 3},
     }
+
+
+def _reply(request: httpx.Request, body: dict[str, JsonValue]) -> httpx.Response:
+    """Answer as the API does: a Claude turn streams, so it gets events."""
+    if body.get("type") != "message" or not _OBJECT.validate_json(request.content).get(
+        "stream"
+    ):
+        return httpx.Response(200, json=body)
+    content = body["content"]
+    assert isinstance(content, list)
+    events: list[dict[str, JsonValue]] = [
+        {
+            "type": "message_start",
+            "message": {**body, "content": [], "stop_reason": None},
+        },
+        *(
+            {"type": "content_block_start", "index": index, "content_block": block}
+            for index, block in enumerate(content)
+        ),
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": body["stop_reason"], "stop_sequence": None},
+            "usage": {"output_tokens": 5},
+        },
+        {"type": "message_stop"},
+    ]
+    stream = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events
+    )
+    return httpx.Response(
+        200, text=stream, headers={"content-type": "text/event-stream"}
+    )
 
 
 def _structured_envelope(provider: ai.Provider) -> dict[str, JsonValue]:
@@ -202,7 +235,7 @@ def test_claude_signed_history_cache_and_forced_terminal() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(_OBJECT.validate_json(request.content))
-        return httpx.Response(200, json=_envelope("claude", output))
+        return _reply(request, _envelope("claude", output))
 
     config = replace(_config("claude"), thinking=True, cache=True)
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -225,6 +258,7 @@ def test_claude_signed_history_cache_and_forced_terminal() -> None:
         ai.turn(_task(messages), config, client=client)
         ai.turn(_task(messages, force="read"), config, client=client)
         assert not client.is_closed
+    assert all(body["stream"] is True for body in sent)
     assert sent[0]["thinking"] == {"type": "adaptive"}
     assert sent[0]["tool_choice"] == {
         "type": "auto",
@@ -291,8 +325,8 @@ def test_serial_task_rejects_parallel_output(provider: ai.Provider) -> None:
     call = _claude_call if provider == "claude" else _openai_call
     with httpx.Client(
         transport=httpx.MockTransport(
-            lambda _: httpx.Response(
-                200, json=_envelope(provider, [call("one"), call("two")])
+            lambda request: _reply(
+                request, _envelope(provider, [call("one"), call("two")])
             )
         )
     ) as client:
@@ -304,9 +338,9 @@ def test_serial_task_rejects_parallel_output(provider: ai.Provider) -> None:
 def test_forced_task_rejects_missing_call(provider: ai.Provider) -> None:
     with httpx.Client(
         transport=httpx.MockTransport(
-            lambda _: httpx.Response(
-                200,
-                json=_envelope(
+            lambda request: _reply(
+                request,
+                _envelope(
                     provider,
                     [],
                     stop="end_turn" if provider == "claude" else "completed",
@@ -412,9 +446,9 @@ def test_existing_terminal_schemas_cross_the_shared_boundary(
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(_OBJECT.validate_json(request.content))
-        return httpx.Response(
-            200,
-            json=_envelope(
+        return _reply(
+            request,
+            _envelope(
                 provider, [], stop="end_turn" if provider == "claude" else "completed"
             ),
         )
@@ -493,9 +527,9 @@ def test_native_effort_reaches_both_transports(
 
     def handler(request: httpx.Request) -> httpx.Response:
         sent.append(_OBJECT.validate_json(request.content))
-        return httpx.Response(
-            200,
-            json=_structured_envelope(provider)
+        return _reply(
+            request,
+            _structured_envelope(provider)
             if structured
             else _envelope(provider, [call("one")]),
         )

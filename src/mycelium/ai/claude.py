@@ -238,10 +238,14 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
     configured = client.with_options(
         timeout=config.request_timeout_s, max_retries=config.max_retries
     )
-    if task.on_tool_delta is not None:
-        if not isinstance(configured, Anthropic):
-            raise ModelError("Streaming Claude turns require an Anthropic transport")
+    if isinstance(configured, Anthropic):
+        # Streamed so the request timeout bounds a silent connection rather
+        # than the whole turn. Writing a long document takes longer than any
+        # sensible total timeout, and each timed-out attempt is generated,
+        # billed and retried from scratch.
         response = _stream_turn(task, request, configured)
+    elif task.on_tool_delta is not None:
+        raise ModelError("Streaming Claude turns require an Anthropic transport")
     else:
         response = _Response.model_validate(configured.messages.create(**request))
     if response.stop_reason not in ("end_turn", "tool_use"):

@@ -376,6 +376,17 @@ def test_a_revision_of_the_published_copy_tells_the_writer_to_keep_its_edits(kb_
     assert "Keep their edits" in first_message
 
 
+def test_the_writer_is_told_todays_date_for_the_frontmatter(kb_set, monkeypatch):
+    from mycelium import timestamps
+
+    monkeypatch.setattr(timestamps, "now", lambda: "2031-02-03T04:05:06.007Z")
+    client = FakeAnthropic([_emit(), _review_ok()])
+
+    _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert "Today is 2031-02-03." in client.calls[0]["messages"][0]["content"]
+
+
 # --------------------------------------------------------------------------- #
 # The tool surface: what the model can and cannot reach
 # --------------------------------------------------------------------------- #

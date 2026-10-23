@@ -9,10 +9,15 @@ the instance and do not require editing files or redeploying.
 
 Each generation form can choose Claude or GPT independently of the saved default.
 The configured model handles retrieval, writing, and a separate review conversation.
-Credentials stay on the server: Anthropic uses its existing SDK credentials;
-OpenAI uses `OPENAI_API_KEY`. Model IDs and provider defaults are saved through
-the settings UI. The provider list reports local configuration, not a live check
+Credentials stay on the server process's environment: `ANTHROPIC_API_KEY` (or
+another Anthropic SDK credential) for Claude, `OPENAI_API_KEY` for GPT. Model
+IDs and provider defaults are saved through the settings UI. The provider list reports local configuration, not a live check
 of model access, quota, or compatibility. Failures never silently switch providers.
+
+A document takes several minutes and many model turns. Set
+`MYCELIUM_DOCGEN_TRACE_LOG` to a file path to append one JSON line per run with
+its turns, tool calls, token usage and, for the default Claude model, an
+estimated cost; nothing is recorded otherwise.
 
 A new generation creates a document. Naming the concept it is about, with a
 writing profile and template, gives it a stable identity: a later request for
@@ -40,8 +45,8 @@ whether it is open, merged or closed. Mycelium asks GitHub when the document is
 opened, at most once a minute, and keeps the last known state when GitHub
 cannot be reached.
 
- To improve an existing one, open it from
-**Documents** and describe the change under **Create revision**. This targets the
+To improve an existing document, open it from **Documents** and describe the
+change under **Create revision**. This targets the
 exact internal version on screen, preserving its identity and earlier revisions.
 If another run changes the document first, reload its current revision before
 retrying. Old revisions remain readable and downloadable as Markdown.

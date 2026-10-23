@@ -30,6 +30,7 @@ import json
 import re
 from typing import Any
 
+from .. import timestamps
 from ..ask.prompts import format_recon
 from .schema import ReviewFinding
 
@@ -343,6 +344,7 @@ def initial_user_message(
     )
     return (
         f"DOCUMENTATION REQUEST:\n-----\n{prompt}\n-----\n\n"
+        f"Today is {timestamps.now()[:10]}.\n"
         f"You are writing a `{document_type}` against the `{guideline_set}` "
         "guideline set, whose guidance, exposure rules, and template are in "
         "your system prompt.\n\n"

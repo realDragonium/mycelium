@@ -113,6 +113,15 @@ Use `search_statements` for semantic retrieval and `get_statements` to hydrate
 known IDs. Use `list_link_types` and `list_statement_kinds` to inspect the
 active vocabularies before authoring unfamiliar edges or kinds.
 
+Ingest, ask, draft review and documentation call a model. Start the server
+with `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in its environment, then choose
+each feature's provider and model under **Settings → Models**. Documentation
+needs no further setup: the `kb-authoring` writing profile is seeded, and a
+GitHub destination is only needed to publish. See
+[docs/DOCUMENTATION_MODELS.md](docs/DOCUMENTATION_MODELS.md). A data directory
+restored from another instance keeps its model and draft-review settings; turn
+**Settings → Draft review** off if this server has no key for its provider.
+
 ## 6. Change the browser UI
 
 The browser app at `/ui/` is built from `frontend/ui/` with Vite, React and

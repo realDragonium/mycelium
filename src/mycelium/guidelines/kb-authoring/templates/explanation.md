@@ -50,7 +50,9 @@ Help the reader build a mental model.
 
 ## Common misconceptions
 
-<!-- Optional but high-value. Skip if you genuinely don't know any. -->
+<!-- Optional. Include a misconception only when the correction rests on
+statements you retrieved; a correction you reasoned out yourself is an
+invented claim. Delete this section if there are none. -->
 
 - **{Misconception}** — {what's actually true and why}.
 - **{Misconception}** — {correction}.
