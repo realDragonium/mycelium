@@ -22,7 +22,7 @@ interface DocumentationRun {
   status: string; created_at: string; document_id: string | null; result_revision: number | null;
   target_document_id: string | null; target_revision: number | null;
   revision_base: string | null; error: string | null; draft_title?: string | null; draft_body?: string | null;
-  summary: RunSummary | null; review_notes: ReviewNote[];
+  summary: RunSummary | null; review_notes: ReviewNote[]; retryable?: boolean;
 }
 interface RunSummary {
   activity: string | null; turns: number; duration_s: number;
@@ -421,7 +421,8 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
     {run.review_notes.length > 0 && <details><summary>Writer briefed with notes from an earlier review</summary><ul>{run.review_notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul></details>}
     {docActive(run) && <p role="status">{run.summary?.activity ? `${run.summary.activity}. ` : ''}You can leave this screen while generation and review finish.</p>}
     {run.summary && <DocumentationRunSummary summary={run.summary} />}
-    {run.summary?.review_findings?.length ? <DocumentationReviewNotes run={run} notes={run.summary.review_findings} canRevise={options.can_generate} onStarted={onStarted} /> : run.error && <p role="alert">{run.error}</p>}
+    {run.summary?.review_findings?.length ? <DocumentationReviewNotes notes={run.summary.review_findings} /> : run.error && <p role="alert">{run.error}</p>}
+    {run.retryable && options.can_generate && <DocumentationRetry run={run} onStarted={onStarted} />}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}
     {run.document_id && !run.result_revision && <p>This older run has no retained revision snapshot. The link opens the current document.</p>}
     {run.draft_body && !docActive(run) && !run.document_id && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`runs/${encodeURIComponent(id)}/edits`) ? 'Resume draft edit' : 'Edit and review draft'}</button>}
@@ -431,21 +432,25 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
 
 const REVIEW_CHECKS: Record<ReviewNote['check'], string> = { exposure: 'Not for this audience', conformance: 'Does not follow the template' };
 
-function DocumentationReviewNotes({ run, notes, canRevise, onStarted }: {
-  run: DocumentationRun; notes: ReviewNote[]; canRevise: boolean; onStarted: (run: DocumentationRun) => void;
-}) {
+function DocumentationReviewNotes({ notes }: { notes: ReviewNote[] }) {
+  return <div role="alert"><p>The review refused this document:</p>
+    <ul>{notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul>
+  </div>;
+}
+
+function DocumentationRetry({ run, onStarted }: { run: DocumentationRun; onStarted: (run: DocumentationRun) => void }) {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const revise = async () => {
+  const retry = async (withReviewNotes: boolean) => {
     setBusy(true); setError(null);
-    try { onStarted(await docPost<DocumentationRun>(`runs/${encodeURIComponent(run.id)}/retry`, { with_review_notes: true })); }
+    try { onStarted(await docPost<DocumentationRun>(`runs/${encodeURIComponent(run.id)}/retry`, withReviewNotes ? { with_review_notes: true } : {})); }
     catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   };
-  return <div role="alert"><p>The review refused this document:</p>
-    <ul>{notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul>
-    {canRevise && <button disabled={busy} onClick={revise}>Retry with these notes</button>}
-    {error && <p>{error}</p>}
+  return <div className="docw-actions">
+    {run.summary?.review_findings?.length ? <button disabled={busy} onClick={() => retry(true)}>Retry with these notes</button> : null}
+    <button disabled={busy} onClick={() => retry(false)}>Retry</button>
+    {error && <p role="alert">{error}</p>}
   </div>;
 }
 
