@@ -12,14 +12,16 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, TypedDict
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from .. import auth as _auth
-from .. import store
+from .. import drafts_store, store
 from ..auth import Principal as AuthPrincipal
 from .draft_queue import _require_draft_owner
 from .registry import tool
 from .runtime import _drafts_db
+
+_evidence_list = TypeAdapter(list[drafts_store.Evidence])
 
 # --- draft management tools -----------------------------------------------
 # These manipulate the draft queue itself rather than the substrate.
@@ -154,6 +156,46 @@ def set_draft_review_evidence(
             )
     draft: dict[str, JsonValue] = get_draft(draft_id)
     return draft
+
+
+@tool(role="drafter")
+def set_operation_evidence(
+    draft_id: str,
+    operation_ref: str,
+    evidence: list[drafts_store.Evidence],
+    expected_revision: int,
+) -> DraftMutationReceipt:
+    """Replace the evidence behind one operation of your draft, which the
+    reviewer weighs; an empty list removes it.
+
+    Use it for what you checked in the product itself: each item has a
+    `kind` (code, ui, doc or other), where it is (`path` relative to the
+    repository root with optional `lines` such as "40-52" and `commit`, or a
+    `url`), a short `excerpt` (at most 1500 characters) and a one-line
+    `claim` saying what it shows. At most five items per operation. A link
+    backed by a concrete code excerpt can be accepted on that basis; a link
+    without evidence is judged more strictly. `operation_ref` is in the
+    receipt of the queued write and in `get_draft`. Only the draft's creator
+    may set it, and a change makes an earlier review stale.
+    """
+    principal = _identified_principal()
+    # In-process callers pass plain dicts; MCP and HTTP have validated already.
+    items = _evidence_list.validate_python(evidence)
+    conn = _drafts_db()
+    with store.transaction(conn):
+        row = _require_mutable_draft(draft_id)
+        if row["created_by"] != principal.id:
+            raise _auth.RoleRequired(
+                "only the draft creator can supply operation evidence"
+            )
+        revision = drafts_store.set_op_evidence(
+            conn,
+            draft_id,
+            operation_ref,
+            items,
+            expected_revision=expected_revision,
+        )
+    return {"draft_id": draft_id, "operation_ref": operation_ref, "revision": revision}
 
 
 @tool

@@ -18,6 +18,7 @@ from .authoring import (
     upsert_statement,
     upsert_statements,
 )
+from .curation import claim_curation_work, release_curation_work
 from .documentation import (
     deliver_document,
     get_document_revision,
@@ -61,6 +62,7 @@ from .drafts import (
     request_draft_review,
     revise_draft_operation,
     set_draft_review_evidence,
+    set_operation_evidence,
     strike_draft_operation,
     submit_draft,
 )
@@ -144,6 +146,8 @@ __all__ = [
     "ask",
     "ingest",
     "connect_statements",
+    "claim_curation_work",
+    "release_curation_work",
     "request_documentation",
     "retry_documentation_run",
     "revise_document",
@@ -210,6 +214,7 @@ __all__ = [
     "request_draft_review",
     "get_draft_review_run",
     "set_draft_review_evidence",
+    "set_operation_evidence",
     "list_my_drafts",
     "list_drafts",
     "get_draft",
