@@ -5,6 +5,11 @@ endpoint here, including the tools `server.MCP_TOOLS` keeps off the MCP
 surface. The path is the kebab-case tool name; the method is GET when the tool
 takes no args, POST otherwise, and the request body's Pydantic schema is
 derived from the function signature.
+
+Add a tool to a module in `mycelium/server/` with `@tool`, list it in
+`mycelium.server.__all__` (its position there is its place in every listing),
+and you'll find it here too at `/<kebab-case-name>` after a server restart —
+no edits needed in this file.
 """
 
 from __future__ import annotations

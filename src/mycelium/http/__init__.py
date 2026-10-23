@@ -1,18 +1,15 @@
-"""FastAPI HTTP transport — auto-generated mirror of every registered tool.
+"""The HTTP app: the REST mirror of every tool, the browser UI's API and the
+MCP transport, served by one FastAPI application.
 
-Every function in `server.TOOLS` (i.e., everything decorated with `@tool`)
-is exposed as an endpoint here, including the tools `server.MCP_TOOLS`
-keeps off the MCP surface. Path is the kebab-case tool name; method
-is GET when the tool takes no args, POST otherwise. The request body's
-Pydantic schema is derived from the function signature.
-
-Add a tool to a module in `mycelium/server/` with `@tool`, list it in
-`mycelium.server.__all__` (its position there is its place in every listing),
-and you'll find it here too at `/<kebab-case-name>` after a server restart —
-no edits needed in this file.
+This module only assembles. Each seam owns its routes on an `APIRouter` in a
+module beside this one (`tool_routes` generates the mirror of every `@tool`);
+here they get the middleware, the app-wide error handlers, the static UI
+mount and, last, the MCP sub-app at `/`, which matches every path and so
+would shadow any route registered after it.
 """
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -66,7 +63,7 @@ _MCP_SUBAPP = server.mcp.streamable_http_app(
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
     server.init(data_dir)
     # Start the MCP session manager under our lifespan. A mounted sub-app's
@@ -122,11 +119,7 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
 
 
 app.exception_handler(BothSidesEdited)(documentation._both_sides_edited_handler)
-
-
 app.exception_handler(documentation_profiles.Conflict)(prompt_texts._profile_conflict)
-
-
 app.exception_handler(names_workspace.Conflict)(names._names_conflict)
 app.exception_handler(alias_suggestions.Conflict)(names.alias_suggestion_conflict)
 
@@ -161,11 +154,6 @@ app.include_router(documentation.router)
 app.include_router(drafts.router)
 app.include_router(admin.router)
 app.include_router(webui.router)
-
-
-# MCP-over-HTTP is mounted at the bottom of this file so it doesn't
-# shadow more-specific routes; search for "MCP transport mount" below.
-
 
 app.mount("/ui", StaticFiles(directory=str(webui._UI_DIR), html=True), name="ui")
 
