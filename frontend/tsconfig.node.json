@@ -14,5 +14,5 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "files": ["vite.config.ts", "strict-ratchet.ts"]
+  "files": ["vite.config.ts"]
 }

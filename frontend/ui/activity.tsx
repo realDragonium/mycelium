@@ -2,9 +2,10 @@
 // with a context panel that shows the affected target plus 1–2 hops of
 // neighbors so the reviewer can judge whether the change reads correctly.
 import { useState as useStateAct, useEffect as useEffectAct, useMemo as useMemoAct } from 'react';
+import { errorMessage, getActivity, getJSON, type ActivityEvent } from './api';
 import { I, PageHeader } from './lib';
-import { useRouter } from './router';
-import { substrate } from './data';
+import { useRouter, type Router } from './router';
+import { substrate, type IndexedRecord, type SubstrateData, type SubstrateIndex } from './data';
 
 const PAGE_SIZE = 50;
 
@@ -14,11 +15,23 @@ const KIND_OPTIONS = [
   'statement_link', 'entity_link', 'entity_statement_link',
 ];
 
+interface ActivityState { loading: boolean; error: string | null; events: ActivityEvent[]; total: number }
+interface ActivityFilters { ops?: string; kinds?: string; q?: string }
+type GraphKind = 'entity' | 'statement';
+type NeighborDirection = 'out' | 'in' | 'mention';
+interface ContextAnchor { kind: GraphKind; id: string; node: IndexedRecord | undefined }
+interface ContextNeighbor { dir: NeighborDirection; id: string; kind: GraphKind; linkType: string }
+interface ContextGraph {
+  anchors: ContextAnchor[];
+  neighborsByAnchor: Record<string, ContextNeighbor[]>;
+  anchorEdge: { linkType: string } | null;
+}
+
 function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '' }: {
   page?: number; selected?: string | null; ops?: string; kinds?: string; q?: string;
 }) {
   const router = useRouter();
-  const [state, setState] = useStateAct({ loading: true, error: null, events: [], total: 0 });
+  const [state, setState] = useStateAct<ActivityState>({ loading: true, error: null, events: [], total: 0 });
   const [qDraft, setQDraft] = useStateAct(q);
 
   // Keep the input synced when the URL changes from elsewhere (e.g. clicking a chip)
@@ -32,10 +45,9 @@ function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '
     if (ops) qs.set('op', ops);
     if (kinds) qs.set('target_kind', kinds);
     if (q) qs.set('q', q);
-    fetch(`/api/history?${qs.toString()}`, { headers: { accept: 'application/json' } })
-      .then(r => r.ok ? r.json() : Promise.reject(new Error('GET /api/history → ' + r.status)))
+    getActivity(qs)
       .then(d => { if (alive) setState({ loading: false, error: null, events: d.events || [], total: d.total || 0 }); })
-      .catch(err => { if (alive) setState({ loading: false, error: err.message || String(err), events: [], total: 0 }); });
+      .catch(err => { if (alive) setState({ loading: false, error: errorMessage(err), events: [], total: 0 }); });
     return () => { alive = false; };
   }, [page, ops, kinds, q]);
 
@@ -49,7 +61,7 @@ function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '
   const kindSet = useMemoAct(() => new Set(kinds ? kinds.split(',') : []), [kinds]);
   const hasFilters = opSet.size || kindSet.size || !!q;
 
-  const updateFilters = (next) => router.go({
+  const updateFilters = (next: ActivityFilters) => router.go({
     view: 'activity',
     page: 1,
     selected: null,
@@ -58,13 +70,13 @@ function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '
     q: next.q !== undefined ? next.q : q,
   });
 
-  const toggleSet = (set, value) => {
+  const toggleSet = (set: Set<string>, value: string) => {
     const next = new Set(set);
     next.has(value) ? next.delete(value) : next.add(value);
     return [...next].join(',');
   };
 
-  const submitQ = (e) => { e?.preventDefault(); if (qDraft !== q) updateFilters({ q: qDraft }); };
+  const submitQ = (e?: { preventDefault: () => void }) => { e?.preventDefault(); if (qDraft !== q) updateFilters({ q: qDraft }); };
 
   return (
     <main className="page activity-page">
@@ -146,7 +158,9 @@ function ActivityScreen({ page = 1, selected = null, ops = '', kinds = '', q = '
   );
 }
 
-function FilterChipGroup({ label, options, selected, onToggle }) {
+function FilterChipGroup({ label, options, selected, onToggle }: {
+  label: string; options: string[]; selected: Set<string>; onToggle: (value: string) => void;
+}) {
   return (
     <div className="activity-filter-group">
       <span className="activity-filter-label">{label}</span>
@@ -166,7 +180,9 @@ function FilterChipGroup({ label, options, selected, onToggle }) {
   );
 }
 
-function ActivityTable({ events, selectedId, onPick, offset }) {
+function ActivityTable({ events, selectedId, onPick, offset }: {
+  events: ActivityEvent[]; selectedId: string | null; onPick: (event: ActivityEvent) => void; offset: number;
+}) {
   return (
     <table className="tbl">
       <thead>
@@ -198,15 +214,16 @@ function ActivityTable({ events, selectedId, onPick, offset }) {
   );
 }
 
-function OpTag({ op }) {
-  const cls = {
+function OpTag({ op }: { op: string }) {
+  const classes: Record<string, string> = {
     create: 'op-create', update: 'op-update', delete: 'op-delete',
     link: 'op-link', unlink: 'op-unlink', attach: 'op-attach', detach: 'op-detach',
-  }[op] || 'op-other';
+  };
+  const cls = classes[op] || 'op-other';
   return <span className={`tag ${cls}`} style={{fontFamily:'var(--mono)', fontSize:10.5}}>{op}</span>;
 }
 
-function describeTarget(ev) {
+function describeTarget(ev: ActivityEvent) {
   const idx = substrate.index;
   const data = substrate.data;
   const { target_kind: k, target_id: id } = ev;
@@ -224,7 +241,7 @@ function describeTarget(ev) {
     return <><span className="row-id">{id}</span> {cur?.text ? <span style={{marginLeft:8, fontFamily:'var(--mono)'}}>“{cur.text}”</span> : null}</>;
   }
   if (k === 'statement_link' || k === 'entity_link') {
-    const [from, to, type] = id.split('|');
+    const [from = '', to = '', type = ''] = id.split('|');
     return (
       <span style={{fontFamily:'var(--mono)', fontSize:11}}>
         <span className="row-id">{from}</span>
@@ -234,7 +251,7 @@ function describeTarget(ev) {
     );
   }
   if (k === 'entity_statement_link') {
-    const [eid, bid, dir, type] = id.split('|');
+    const [eid = '', bid = '', dir = '', type = ''] = id.split('|');
     const [left, right] = dir === 'es' ? [eid, bid] : [bid, eid];
     return (
       <span style={{fontFamily:'var(--mono)', fontSize:11}}>
@@ -247,7 +264,7 @@ function describeTarget(ev) {
   return <span className="row-id">{id}</span>;
 }
 
-function ActivityContextPanel({ event, onClose }) {
+function ActivityContextPanel({ event, onClose }: { event: ActivityEvent; onClose: () => void }) {
   return (
     <div className="ctx-panel">
       <div className="ctx-head">
@@ -270,7 +287,7 @@ function ActivityContextPanel({ event, onClose }) {
 
 // Build a small graph of nodes (1 anchor or 2 anchors for link events) +
 // their 1-hop neighbors, so the reviewer can see the change in context.
-function ContextNeighbors({ event }) {
+function ContextNeighbors({ event }: { event: ActivityEvent }) {
   const router = useRouter();
   const idx = substrate.index;
   const data = substrate.data;
@@ -285,29 +302,29 @@ function ContextNeighbors({ event }) {
 }
 
 // Returns { anchors: [{kind,id,node}], neighborsByAnchor: { anchorId: [{dir,id,kind,linkType}] }, anchorEdge: {linkType} | null }
-function buildContextGraph(event, idx, data) {
+function buildContextGraph(event: ActivityEvent, idx: SubstrateIndex, data: SubstrateData): ContextGraph {
   const { target_kind: k, target_id: id } = event;
   const MAX_PER_SIDE = 4;
 
-  const resolveAnchor = (kind, anchorId) => {
+  const resolveAnchor = (kind: GraphKind, anchorId: string): ContextAnchor => {
     const node = idx?.byId?.[anchorId];
     return { kind, id: anchorId, node };
   };
 
-  const neighborsForStatement = (sid) => {
-    const out = (idx.outgoing[sid] || []).slice(0, MAX_PER_SIDE).map(l => ({ dir: 'out', id: l.to, kind: 'statement', linkType: l.link_type }));
-    const inc = (idx.incoming[sid] || []).slice(0, MAX_PER_SIDE).map(l => ({ dir: 'in',  id: l.from, kind: 'statement', linkType: l.link_type }));
+  const neighborsForStatement = (sid: string): ContextNeighbor[] => {
+    const out = (idx.outgoing[sid] || []).slice(0, MAX_PER_SIDE).map((l): ContextNeighbor => ({ dir: 'out', id: l.to, kind: 'statement', linkType: l.link_type }));
+    const inc = (idx.incoming[sid] || []).slice(0, MAX_PER_SIDE).map((l): ContextNeighbor => ({ dir: 'in',  id: l.from, kind: 'statement', linkType: l.link_type }));
     return [...out, ...inc];
   };
-  const neighborsForEntity = (eid) => {
-    const out = (idx.entityOutgoing?.[eid] || []).slice(0, MAX_PER_SIDE).map(l => ({ dir: 'out', id: l.to, kind: 'entity', linkType: l.link_type }));
-    const inc = (idx.entityIncoming?.[eid] || []).slice(0, MAX_PER_SIDE).map(l => ({ dir: 'in',  id: l.from, kind: 'entity', linkType: l.link_type }));
-    const ments = (idx.mentionsByEntity?.[eid] || []).slice(0, MAX_PER_SIDE).map(b => ({ dir: 'mention', id: b.id, kind: 'statement', linkType: 'mentions' }));
+  const neighborsForEntity = (eid: string): ContextNeighbor[] => {
+    const out = (idx.entityOutgoing[eid] || []).slice(0, MAX_PER_SIDE).map((l): ContextNeighbor => ({ dir: 'out', id: l.to, kind: 'entity', linkType: l.link_type }));
+    const inc = (idx.entityIncoming[eid] || []).slice(0, MAX_PER_SIDE).map((l): ContextNeighbor => ({ dir: 'in',  id: l.from, kind: 'entity', linkType: l.link_type }));
+    const ments = (idx.mentionsByEntity[eid] || []).slice(0, MAX_PER_SIDE).map((b): ContextNeighbor => ({ dir: 'mention', id: b.id, kind: 'statement', linkType: 'mentions' }));
     return [...out, ...inc, ...ments];
   };
 
-  let anchors = [];
-  let anchorEdge = null;
+  let anchors: ContextAnchor[] = [];
+  let anchorEdge: ContextGraph['anchorEdge'] = null;
 
   if (k === 'statement') anchors = [resolveAnchor(k, id)];
   else if (k === 'entity') anchors = [resolveAnchor('entity', id)];
@@ -315,22 +332,22 @@ function buildContextGraph(event, idx, data) {
     const n = (data?.names || []).find(x => x.id === id);
     if (n?.entity) anchors = [resolveAnchor('entity', n.entity)];
   } else if (k === 'statement_link') {
-    const [from, to, type] = id.split('|');
+    const [from = '', to = '', type = ''] = id.split('|');
     anchors = [resolveAnchor('statement', from), resolveAnchor('statement', to)];
     anchorEdge = { linkType: type };
   } else if (k === 'entity_link') {
-    const [from, to, type] = id.split('|');
+    const [from = '', to = '', type = ''] = id.split('|');
     anchors = [resolveAnchor('entity', from), resolveAnchor('entity', to)];
     anchorEdge = { linkType: type };
   } else if (k === 'entity_statement_link') {
-    const [eid, bid, dir, type] = id.split('|');
+    const [eid = '', bid = '', dir = '', type = ''] = id.split('|');
     const a = resolveAnchor('entity', eid);
     const b = resolveAnchor('statement', bid);
     anchors = dir === 'es' ? [a, b] : [b, a];
     anchorEdge = { linkType: type };
   }
 
-  const neighborsByAnchor = {};
+  const neighborsByAnchor: Record<string, ContextNeighbor[]> = {};
   for (const a of anchors) {
     if (a.kind === 'statement') neighborsByAnchor[a.id] = neighborsForStatement(a.id);
     else if (a.kind === 'entity') neighborsByAnchor[a.id] = neighborsForEntity(a.id);
@@ -340,7 +357,7 @@ function buildContextGraph(event, idx, data) {
   return { anchors, neighborsByAnchor, anchorEdge };
 }
 
-function labelFor(kind, id, idx, data) {
+function labelFor(kind: string, id: string, idx: SubstrateIndex, data: SubstrateData): string {
   if (kind === 'statement') {
     const n = idx?.byId?.[id];
     return n?.text || id;
@@ -356,12 +373,12 @@ function labelFor(kind, id, idx, data) {
   return id;
 }
 
-function shapeFor(kind) {
+function shapeFor(kind: string) {
   if (kind === 'entity') return 'circle';
   return 'rect';
 }
 
-function MiniGraph({ model, router }) {
+function MiniGraph({ model, router }: { model: ContextGraph; router: Router }) {
   const data = substrate.data;
   const idx = substrate.index;
   const W = 720;
@@ -373,7 +390,7 @@ function MiniGraph({ model, router }) {
   const COL_OUT_X = W - NEIGHBOR_W / 2 - 8;
   const COL_IN_X = NEIGHBOR_W / 2 + 8;
 
-  const [tip, setTip] = useStateAct(null); // { x, y, linkType, fromKind, toKind } | null
+  const [tip, setTip] = useStateAct<EdgeTip | null>(null);
   const linkTypeDescs = useLinkTypeDescriptions();
 
   // Stack two anchors vertically; everything is laid out per-anchor.
@@ -417,7 +434,7 @@ function MiniGraph({ model, router }) {
 
   const totalH = cursorY + 8;
 
-  const nav = (kind, id) => {
+  const nav = (kind: GraphKind, id: string) => {
     const view = kind === 'entity' ? 'entity'
       : kind === 'statement' ? 'statement'
       : null;
@@ -525,17 +542,17 @@ function MiniGraph({ model, router }) {
 
 // Cache link-type descriptions across renders. Fetches from the substrate
 // glossary (statement_link / entity_link / entity_statement_link types).
-let linkTypeDescriptions = null;
+let linkTypeDescriptions: Record<string, string> | null = null;
 
-function useLinkTypeDescriptions() {
+function useLinkTypeDescriptions(): Record<string, string> {
   const [map, setMap] = useStateAct(() => linkTypeDescriptions || {});
   useEffectAct(() => {
     if (linkTypeDescriptions) return;
     Promise.all([
-      fetch('/list-link-types').then(r => r.ok ? r.json() : []).catch(() => []),
-      fetch('/list-entity-link-types').then(r => r.ok ? r.json() : []).catch(() => []),
+      getJSON<{ link_type: string; description?: string | null }[]>('/list-link-types').catch(() => []),
+      getJSON<{ link_type: string; description?: string | null }[]>('/list-entity-link-types').catch(() => []),
     ]).then(([sl, el]) => {
-      const m = {};
+      const m: Record<string, string> = {};
       (sl || []).forEach(t => { if (t.link_type) m[t.link_type] = t.description || ''; });
       (el || []).forEach(t => { if (t.link_type) m[t.link_type] = t.description || ''; });
       linkTypeDescriptions = m;
@@ -545,7 +562,10 @@ function useLinkTypeDescriptions() {
   return map;
 }
 
-function EdgeTooltip({ x, y, svgW, linkType, description, fromKind, toKind }) {
+function EdgeTooltip({ x, y, svgW, linkType, description, fromKind, toKind }: {
+  x: number; y: number; svgW: number; linkType: string; description?: string;
+  fromKind: string; toKind: string;
+}) {
   // Clamp horizontally so the tooltip stays in the panel.
   const W = 240;
   const H = description ? 64 : 32;
@@ -581,7 +601,7 @@ function EdgeLine({ from, fromHalfW, to, toHalfW, label, dashed, fromKind, toKin
   const mx = (x1 + x2) / 2;
   const my = (from.y + to.y) / 2 - 6;
   const pillW = label ? Math.max(38, label.length * 7 + 12) : 0;
-  const enter = () => onHover && onHover({ x: mx, y: my, linkType: label, fromKind, toKind });
+  const enter = () => onHover && onHover({ x: mx, y: my, linkType: label || '', fromKind, toKind });
   const leave = () => onHover && onHover(null);
   return (
     <g className="ctx-edge" onMouseEnter={enter} onMouseLeave={leave}>
@@ -602,7 +622,10 @@ function EdgeLine({ from, fromHalfW, to, toHalfW, label, dashed, fromKind, toKin
   );
 }
 
-function ChangeEdge({ from, to, halfH, label, fromKind, toKind, onHover }) {
+function ChangeEdge({ from, to, halfH, label, fromKind, toKind, onHover }: {
+  from: Point; to: Point; halfH: number; label: string; fromKind: string; toKind: string;
+  onHover?: (tip: EdgeTip | null) => void;
+}) {
   // The change edge is between two stacked anchors — vertical.
   const x = from.x;
   const y1 = from.y + halfH;
@@ -642,12 +665,12 @@ function GraphNode({ x, y, w, h, kind, id, label, anchor, onClick }: {
   );
 }
 
-function truncate(s, n) {
+function truncate(s: string, n: number) {
   if (!s) return '';
   return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
-function formatAgo(iso) {
+function formatAgo(iso: string) {
   if (!iso) return '';
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return iso;

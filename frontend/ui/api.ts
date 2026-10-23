@@ -10,11 +10,13 @@ export class HttpError extends Error {
   readonly path: string;
   // The server's `detail` as sent, for endpoints that return more than a message.
   readonly detail: unknown;
-  constructor(message: string, status: number, path: string, detail: unknown = null) {
+  readonly body: unknown;
+  constructor(message: string, status: number, path: string, detail: unknown = null, body: unknown = null) {
     super(message);
     this.status = status;
     this.path = path;
     this.detail = detail;
+    this.body = body;
   }
 }
 
@@ -45,7 +47,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   if (text) {
     try { parsed = JSON.parse(text); } catch { parsed = text; }
   }
-  if (!res.ok) throw new HttpError(detailOf(parsed) || `${res.status} ${res.statusText}`.trim(), res.status, path, parsed && typeof parsed === 'object' && 'detail' in parsed ? parsed.detail : null);
+  if (!res.ok) throw new HttpError(detailOf(parsed) || `${res.status} ${res.statusText}`.trim(), res.status, path, parsed && typeof parsed === 'object' && 'detail' in parsed ? parsed.detail : null, parsed);
   return parsed as T;
 }
 
@@ -176,6 +178,71 @@ export const knowledgeGaps = {
   update: (id: string, action: GapAction) => patchJSON<{ gap: KnowledgeGap }>(`/api/knowledge-gaps/${enc(id)}`, { action }).then(r => r.gap),
   report: (text: string) => postJSON<unknown>('/report-knowledge-gap', { text }),
 };
+
+/* -------------------------- names workspace -------------------------- */
+export type NameActionKind = 'add' | 'correct' | 'prefer' | 'move' | 'split' | 'merge' | 'remove';
+export type NameAction =
+  | { kind: 'add'; entity_id: string; text: string }
+  | { kind: 'correct'; entity_id: string; name_id: string; text: string }
+  | { kind: 'prefer'; entity_id: string; name_id: string }
+  | { kind: 'move'; entity_id: string; name_id: string; target_entity_id: string }
+  | { kind: 'split'; entity_id: string; name_ids: string[]; preferred_name_id: string; description: string }
+  | { kind: 'merge'; entity_id: string; target_entity_id: string; preferred_name_id: string; description: string }
+  | { kind: 'remove'; entity_id: string; name_id: string };
+
+export interface WorkspaceName { id: string; text: string; generated_from_name_id: string | null }
+export interface WorkspaceConcept {
+  id: string; description: string; preferred_name_id: string | null;
+  label: string; names: WorkspaceName[];
+}
+export interface NamesCatalogue {
+  revision: string; entities: WorkspaceConcept[]; can_write: boolean; allowed_actions: NameActionKind[];
+}
+export interface NamesExample { id: string; kind: string; text: string }
+export interface NamesRelationship { source: string; target: string; link_type: string }
+export interface NamesHistory {
+  at: string; actor: string | null; op: string; target_id: string;
+  before_json: string | null; after_json: string | null; context_json: string | null;
+}
+export interface NamesDetail {
+  revision: string; entity: WorkspaceConcept; examples: NamesExample[]; example_count: number;
+  relationships: NamesRelationship[]; history: NamesHistory[]; history_available: boolean;
+}
+export interface NamesPreview {
+  revision: string; action: NameAction; summary: string; names: WorkspaceName[];
+  examples: NamesExample[]; example_count: number;
+  relationships_before: NamesRelationship[]; relationships_after: NamesRelationship[]; warnings: string[];
+}
+export interface NamesApplied { entity_id: string; revision: string }
+export interface MentionCandidate {
+  statement_id: string; text: string; kind: string;
+  names: { name_id: string; text: string }[];
+  match: 'derived' | 'approved' | 'possible';
+}
+export interface MentionCandidatePage {
+  matches: MentionCandidate[]; next_after: number; has_more: boolean; scanned: number;
+}
+
+export const namesWorkspace = {
+  catalogue: (signal?: AbortSignal) => getJSON<NamesCatalogue>('/api/names-workspace', signal),
+  detail: (id: string, signal?: AbortSignal) => getJSON<NamesDetail>(`/api/names-workspace/${enc(id)}`, signal),
+  preview: (action: NameAction) => postJSON<NamesPreview>('/api/names-workspace/preview', { action }),
+  apply: (action: NameAction, expectedRevision: string) => postJSON<NamesApplied>('/api/names-workspace/apply', { action, expected_revision: expectedRevision }),
+  mentionCandidates: (entityId: string, after: number, signal?: AbortSignal) =>
+    getJSON<MentionCandidatePage>(`/api/mention-candidates?${new URLSearchParams({ entity_id: entityId, after: String(after), limit: '30' })}`, signal),
+};
+
+/* ----------------------------- activity ------------------------------ */
+export interface ActivityEvent {
+  event_id: string | number;
+  at: string;
+  actor: string | null;
+  op: string;
+  target_kind: string;
+  target_id: string;
+}
+export interface ActivityResponse { events: ActivityEvent[]; total: number; limit: number; offset: number }
+export const getActivity = (query: URLSearchParams) => getJSON<ActivityResponse>(`/api/history?${query.toString()}`);
 
 /* -------------------------------- Ask --------------------------------- */
 export type Confidence = 'high' | 'medium' | 'low';

@@ -8,10 +8,29 @@
 import React from 'react';
 import { useState as useStateE, useEffect as useEffectE, useRef as useRefE, useMemo as useMemoE } from 'react';
 import { RecordTag, useDataCtx } from './lib';
-import { postJSON } from './api';
-import { usePrefs } from './prefs';
+import { errorMessage, getJSON, postJSON } from './api';
+import { usePrefs, type Prefs } from './prefs';
 import { useRouter } from './router';
-import { substrate } from './data';
+import { substrate, type Entity } from './data';
+
+interface EntityNode { id: string; label: string; mentions: number }
+interface SimNode extends EntityNode { x: number; y: number; missing: boolean }
+interface EntityEdge { source: string; target: string; link_type: string }
+interface SimEdge extends EntityEdge { src: SimNode; tgt: SimNode }
+interface Point { x: number; y: number }
+interface Panning { startX: number; startY: number; panX: number; panY: number }
+interface EntitySimulation {
+  nodes: SimNode[]; edges: SimEdge[]; idMap: Record<string, SimNode>;
+  dragging: SimNode | null; dragStart?: Point | null; pan: Point; zoom: number;
+  panning: Panning | null; running: boolean; wakeUntil: number;
+}
+interface EntityGraphState {
+  selectedId: string | null; hoverId: string | null; neighborhood: Set<string> | null;
+  activeTypes: Set<string>; matchSet: Set<string> | null; theme: Prefs['theme'];
+}
+interface EntityPositions { nodes: { id: string; x: number; y: number }[]; centroid_id: string | null }
+interface PositionMap { map: Record<string, Point>; centroidId: string | null }
+interface SelectedNeighbor { dir: 'out' | 'in'; link_type: string; target: Entity }
 
 // Stable palette: type-name → palette index via a small djb2-style
 // hash. Open vocabulary in, deterministic-but-distinct colors out.
@@ -23,7 +42,7 @@ const ENTITY_LINK_PALETTE_DARK = [
   '#c9a8e0', '#e8a385', '#93c19d', '#d99183', '#98abd1',
   '#d4ba6e', '#9bb89f', '#c9bca0', '#7fc7c7', '#cfa787',
 ];
-function entityLinkColor(type, theme) {
+function entityLinkColor(type: string, theme: Prefs['theme']) {
   const palette = theme === 'dark' ? ENTITY_LINK_PALETTE_DARK : ENTITY_LINK_PALETTE_LIGHT;
   if (!type) return palette[0];
   let h = 0;
@@ -37,14 +56,16 @@ function entityLinkColor(type, theme) {
 // autocomplete, but a free-typed name that doesn't match any entity
 // is rejected on submit (we never auto-create entities here; that's a
 // statement-authoring concern handled elsewhere).
-function EntityLinkAddForm({ self, entities, knownTypes, onCreated, onCancel }) {
+function EntityLinkAddForm({ self, entities, knownTypes, onCreated, onCancel }: {
+  self: Entity; entities: Entity[]; knownTypes: string[]; onCreated: () => Promise<void>; onCancel: () => void;
+}) {
   const [direction, setDirection] = useStateE('out');
   const [targetText, setTargetText] = useStateE('');
   const [linkType, setLinkType] = useStateE('');
   const [busy, setBusy] = useStateE(false);
-  const [err, setErr] = useStateE(null);
+  const [err, setErr] = useStateE<string | null>(null);
 
-  const submit = async (e) => {
+  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setErr(null);
     const t = targetText.trim();
@@ -58,12 +79,12 @@ function EntityLinkAddForm({ self, entities, knownTypes, onCreated, onCancel }) 
     const to_entity_id = direction === 'out' ? target.id : self.id;
     setBusy(true);
     try {
-      await postJSON('/add-entity-links', {
+      await postJSON<unknown>('/add-entity-links', {
         links: [{ from_entity_id, to_entity_id, link_type: lt }],
       });
       await onCreated();
     } catch (e) {
-      setErr(e.message || String(e));
+      setErr(errorMessage(e));
       setBusy(false);
       return;
     }
@@ -137,10 +158,10 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   const [editMode, setEditMode] = React.useState(false);
   const [searchQuery, setSearchQuery] = useStateE('');
 
-  const canvasRef = useRefE(null);
-  const containerRef = useRefE(null);
-  const [hoverId, setHoverId] = useStateE(null);
-  const [selectedId, setSelectedId] = useStateE(focusId || null);
+  const canvasRef = useRefE<HTMLCanvasElement | null>(null);
+  const containerRef = useRefE<HTMLDivElement | null>(null);
+  const [hoverId, setHoverId] = useStateE<string | null>(null);
+  const [selectedId, setSelectedId] = useStateE<string | null>(focusId || null);
   const [focusMode, setFocusMode] = useStateE(false);
   // Islands mode — when on, the highlight/jump system focuses on
   // entities that are NOT part of the biggest connected component.
@@ -151,7 +172,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   const [showIslands, setShowIslands] = useStateE(false);
 
   const { allEntityLinkTypes, entityLinkTypeCounts } = useMemoE(() => {
-    const counts = {};
+    const counts: Record<string, number> = {};
     (data.entity_links || []).forEach(l => {
       counts[l.link_type] = (counts[l.link_type] || 0) + 1;
     });
@@ -161,7 +182,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     };
   }, [data, version]);
 
-  const [activeTypes, setActiveTypes] = useStateE(() => new Set(allEntityLinkTypes));
+  const [activeTypes, setActiveTypes] = useStateE(() => new Set<string>(allEntityLinkTypes));
 
   // Islands set — entity ids that are NOT in the biggest connected
   // component of the entity↔entity graph. A solo entity, a pair, or
@@ -169,32 +190,32 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   // qualify; only the entities in the largest cluster don't. Computed
   // once per data refresh so flipping the toggle is instant.
   const islandIds = useMemoE(() => {
-    const adj = {};
-    for (const e of data.entities) adj[e.id] = new Set();
+    const adj: Record<string, Set<string>> = {};
+    for (const e of data.entities) adj[e.id] = new Set<string>();
     for (const l of data.entity_links || []) {
       if (adj[l.from] && adj[l.to]) {
         adj[l.from].add(l.to);
         adj[l.to].add(l.from);
       }
     }
-    const visited = new Set();
-    const components = [];
+    const visited = new Set<string>();
+    const components: string[][] = [];
     for (const e of data.entities) {
       if (visited.has(e.id)) continue;
-      const comp = [];
+      const comp: string[] = [];
       const stack = [e.id];
       while (stack.length) {
         const id = stack.pop();
-        if (visited.has(id)) continue;
+        if (id === undefined || visited.has(id)) continue;
         visited.add(id);
         comp.push(id);
-        for (const nb of adj[id]) if (!visited.has(nb)) stack.push(nb);
+        for (const nb of adj[id] || []) if (!visited.has(nb)) stack.push(nb);
       }
       components.push(comp);
     }
     components.sort((a, b) => b.length - a.length);
-    const mainComponent = new Set(components[0] || []);
-    const out = new Set();
+    const mainComponent = new Set<string>(components[0] || []);
+    const out = new Set<string>();
     for (const e of data.entities) {
       if (!mainComponent.has(e.id)) out.add(e.id);
     }
@@ -211,7 +232,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     if (showIslands) return islandIds.size > 0 ? islandIds : null;
     const q = searchQuery.trim().toLowerCase();
     if (!q) return null;
-    const out = new Set();
+    const out = new Set<string>();
     for (const e of data.entities) {
       if (e.name.toLowerCase().includes(q)) { out.add(e.id); continue; }
       const aliases = idx.namesByEntity[e.id] || [];
@@ -254,9 +275,9 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     return set;
   }, [focusMode, selectedId, edges]);
 
-  const simRef = useRefE(null);
+  const simRef = useRefE<EntitySimulation | null>(null);
   const drawRef = useRefE<{
-    state?: { selectedId; hoverId; neighborhood; activeTypes; matchSet; theme };
+    state?: EntityGraphState;
     draw?: () => void;
     focusNode?: (nodeId: string, zoom?: number) => void;
     requestStep?: () => void;
@@ -266,16 +287,15 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   // scripts/build_entity_layout.py writes this file from the substrate
   // DB; the UI just renders it. `positionsTick` bumps when the fetch
   // completes so the main effect can re-run and pick up the data.
-  const positionsRef = useRefE(null);
+  const positionsRef = useRefE<PositionMap | null>(null);
   const [positionsTick, setPositionsTick] = useStateE(0);
   useEffectE(() => {
     let cancelled = false;
-    fetch('/api/entity-positions')
-      .then(r => r.ok ? r.json() : null)
+    getJSON<EntityPositions>('/api/entity-positions')
       .then(d => {
-        if (cancelled || !d) return;
-        const map = {};
-        for (const n of (d.nodes || [])) {
+        if (cancelled) return;
+        const map: Record<string, Point> = {};
+        for (const n of d.nodes || []) {
           map[n.id] = { x: n.x, y: n.y };
         }
         positionsRef.current = { map, centroidId: d.centroid_id };
@@ -290,7 +310,9 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
-    const ctx = canvas.getContext('2d');
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const ctx: CanvasRenderingContext2D = context;
     const dpr = window.devicePixelRatio || 1;
 
     let width = container.clientWidth;
@@ -331,11 +353,13 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
           missing: !p,  // true when the entity didn't exist at bake time
         };
       });
-      const idMap = {};
+      const idMap: Record<string, SimNode> = {};
       np.forEach(n => idMap[n.id] = n);
-      const ep = edges
-        .map(e => ({ ...e, src: idMap[e.source], tgt: idMap[e.target] }))
-        .filter(e => e.src && e.tgt);
+      const ep: SimEdge[] = edges.flatMap(e => {
+        const src = idMap[e.source];
+        const tgt = idMap[e.target];
+        return src && tgt ? [{ ...e, src, tgt }] : [];
+      });
 
       // Auto-fit. Compute the bounding box of every placed node, then
       // pick pan/zoom so the graph fills ~85% of the canvas. Missing
@@ -378,6 +402,8 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       };
     }
     const sim = simRef.current;
+    if (!sim) return;
+    let raf = 0;
     // Re-sync sim.edges to the current `edges` arg on every effect run
     // (so live mutations to /api/data appear without a reload). Node
     // positions are preserved via idMap. Newly-created entities since
@@ -405,9 +431,11 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       }
     }
     sim.nodes = sim.nodes.filter(n => sim.idMap[n.id]);
-    sim.edges = edges
-      .map(e => ({ ...e, src: sim.idMap[e.source], tgt: sim.idMap[e.target] }))
-      .filter(e => e.src && e.tgt);
+    sim.edges = edges.flatMap(e => {
+      const src = sim.idMap[e.source];
+      const tgt = sim.idMap[e.target];
+      return src && tgt ? [{ ...e, src, tgt }] : [];
+    });
     const wake = (ms = 600) => {
       sim.wakeUntil = performance.now() + ms;
       if (!sim.running) {
@@ -417,11 +445,11 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     };
 
     const mouse = { x: 0, y: 0, down: false };
-    const screenToWorld = (sx, sy) => ({
+    const screenToWorld = (sx: number, sy: number): Point => ({
       x: (sx - sim.pan.x) / sim.zoom,
       y: (sy - sim.pan.y) / sim.zoom,
     });
-    const findNodeAt = (sx, sy) => {
+    const findNodeAt = (sx: number, sy: number): SimNode | null => {
       const w = screenToWorld(sx, sy);
       for (let i = sim.nodes.length - 1; i >= 0; i--) {
         const n = sim.nodes[i];
@@ -431,7 +459,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       return null;
     };
 
-    const onMouseDown = (e) => {
+    const onMouseDown = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       mouse.x = e.clientX - rect.left;
       mouse.y = e.clientY - rect.top;
@@ -446,7 +474,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
         wake();
       }
     };
-    const onMouseMove = (e) => {
+    const onMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -468,7 +496,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
         if (next) wake(150);
       }
     };
-    const onMouseUp = (e) => {
+    const onMouseUp = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -491,14 +519,14 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       sim.panning = null;
       mouse.down = false;
     };
-    const onDblClick = (e) => {
+    const onDblClick = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
       const n = findNodeAt(sx, sy);
       if (n) router.go({ view: 'entity', id: n.id });
     };
-    const onWheel = (e) => {
+    const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
@@ -513,7 +541,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       sim.zoom = newZoom;
       wake();
     };
-    const onKeyDown = (e) => { if (e.key === 'Escape') setSelectedId(null); };
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelectedId(null); };
 
     canvas.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mousemove', onMouseMove);
@@ -531,7 +559,6 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     // (recent interaction, an active drag, an active pan, or an
     // explicit wake() call from an external state change). When idle
     // the loop self-terminates, costing zero CPU.
-    let raf;
     const step = () => {
       const now = performance.now();
       draw();
@@ -542,7 +569,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       }
     };
 
-    function nodeRadius(n) {
+    function nodeRadius(n: EntityNode) {
       // Base 7 + small bump for entities mentioned by many statements,
       // so structurally important entities visually pop. Capped so a
       // 200-mention hub doesn't dwarf the rest.
@@ -562,8 +589,8 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       const bgColor = s.theme === 'dark' ? '#0a0a0c' : '#ffffff';
       const fgColor = s.theme === 'dark' ? '#f4f4f5' : '#18181b';
 
-      const selNeighbors = new Set();
-      const hovNeighbors = new Set();
+      const selNeighbors = new Set<string>();
+      const hovNeighbors = new Set<string>();
       if (s.selectedId || s.hoverId) {
         for (const e of sim.edges) {
           if (s.selectedId) {
@@ -736,21 +763,21 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
 
   useEffectE(() => { if (focusId) setSelectedId(focusId); }, [focusId]);
 
-  const selected = selectedId ? idx.byId[selectedId] : null;
-  const selectedNeighbors = selected && selected.kind === 'entity' ? (() => {
-    const out = [];
+  const selected = selectedId ? idx.entities[selectedId] : undefined;
+  const selectedNeighbors = selected ? (() => {
+    const out: SelectedNeighbor[] = [];
     (idx.entityOutgoing[selected.id] || []).forEach(l => {
-      const target = idx.byId[l.to];
+      const target = idx.entities[l.to];
       if (target) out.push({ dir: 'out', link_type: l.link_type, target });
     });
     (idx.entityIncoming[selected.id] || []).forEach(l => {
-      const target = idx.byId[l.from];
+      const target = idx.entities[l.from];
       if (target) out.push({ dir: 'in', link_type: l.link_type, target });
     });
     return out;
   })() : [];
 
-  const aliasNames = selected && selected.kind === 'entity'
+  const aliasNames = selected
     ? (idx.namesByEntity[selected.id] || []).filter(n => n.text !== selected.name).map(n => n.text)
     : [];
 
@@ -767,21 +794,22 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
 
   const { refresh } = useDataCtx();
   const [adding, setAdding] = useStateE(false);
-  const [pendingRemove, setPendingRemove] = useStateE(null);
+  const [pendingRemove, setPendingRemove] = useStateE<string | null>(null);
 
-  const removeLink = async (n) => {
+  const removeLink = async (n: SelectedNeighbor) => {
+    if (!selected) return;
     const from_entity_id = n.dir === 'out' ? selected.id : n.target.id;
     const to_entity_id = n.dir === 'out' ? n.target.id : selected.id;
     const key = `${from_entity_id}→${to_entity_id}|${n.link_type}`;
     setPendingRemove(key);
     try {
-      await postJSON('/remove-entity-links', {
+      await postJSON<unknown>('/remove-entity-links', {
         links: [{ from_entity_id, to_entity_id, link_type: n.link_type }],
       });
       await refresh();
     } catch (e) {
       console.error('remove-entity-links failed', e);
-      alert(`Failed to remove link: ${e.message || e}`);
+      alert(`Failed to remove link: ${errorMessage(e)}`);
     }
     setPendingRemove(null);
   };
@@ -803,11 +831,12 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   // off in a previous search.
   useEffectE(() => { setMatchIndex(0); }, [searchQuery, showIslands]);
 
-  const jumpToMatch = (delta) => {
+  const jumpToMatch = (delta: number) => {
     if (matchList.length === 0) return;
     const next = ((matchIndex + delta) % matchList.length + matchList.length) % matchList.length;
     setMatchIndex(next);
     const id = matchList[next];
+    if (!id) return;
     setSelectedId(id);
     if (drawRef.current.focusNode) drawRef.current.focusNode(id);
   };
@@ -928,7 +957,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
           </div>
         )}
 
-        {selected && selected.kind === 'entity' && (
+        {selected && (
           <>
             <div>
               <RecordTag kind="entity" />
