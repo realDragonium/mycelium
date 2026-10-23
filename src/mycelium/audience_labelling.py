@@ -23,7 +23,15 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from . import ai, ai_prompts, audiences, model_settings, product_settings, store
+from . import (
+    ai,
+    ai_prompts,
+    audiences,
+    model_settings,
+    product_settings,
+    store,
+    timestamps,
+)
 from .ai.pricing import price
 from .audiences import Audience
 
@@ -196,14 +204,27 @@ def drain(conn: sqlite3.Connection, *, call: Call = _call) -> int:
         total += labelled
 
 
-def backfill(*, relabel_ai: bool) -> int:
+class Backfill(BaseModel):
+    started_at: str
+    queued: int
+
+
+#: The last backfill an admin started, kept by the process so its progress
+#: survives leaving the page. A restart forgets it; the queue it filled stays.
+_last_backfill: Backfill | None = None
+
+
+def backfill(*, relabel_ai: bool) -> Backfill:
     """Queue every unlabelled statement (and AI-labelled ones when
-    `relabel_ai`) and wake the worker. Returns how many were queued."""
+    `relabel_ai`) and wake the worker."""
+    global _last_backfill
     conn = store.substrate_connection()
+    started_at = timestamps.now()
     with store.transaction(conn):
         queued = store.audience_labels.enqueue_backfill(conn, relabel_ai=relabel_ai)
+    _last_backfill = Backfill(started_at=started_at, queued=queued)
     wake(force=True)
-    return queued
+    return _last_backfill
 
 
 # --- curator decisions ---------------------------------------------------------
@@ -305,6 +326,11 @@ def stop(timeout: float = 5.0) -> None:
 # --- status --------------------------------------------------------------------
 
 
+class BackfillProgress(Backfill):
+    labelled: int
+    cost_usd: float
+
+
 class Status(BaseModel):
     statements: int
     labelled_ai: int
@@ -314,14 +340,13 @@ class Status(BaseModel):
     failed: int
     last_error: str | None
     cost_usd: float
-    cost_since_usd: float | None
-    labelled_since: int | None
     automatic: bool
     model: str
     provider: str
+    backfill: BackfillProgress | None = None
 
 
-def status(conn: sqlite3.Connection, *, since: str | None = None) -> Status:
+def status(conn: sqlite3.Connection) -> Status:
     counts = conn.execute(
         "SELECT (SELECT COUNT(*) FROM statements) AS total, "
         "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'ai') AS ai, "
@@ -329,16 +354,17 @@ def status(conn: sqlite3.Connection, *, since: str | None = None) -> Status:
         "(SELECT COALESCE(SUM(cost_usd), 0) FROM statement_audience_labels) AS cost"
     ).fetchone()
     queued, failed, error = store.audience_labels.queue_counts(conn)
-    since_row = (
+    selected = model_settings.get("audience_labelling")
+    started = _last_backfill
+    progress = (
         conn.execute(
             "SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost "
             "FROM statement_audience_labels WHERE source = 'ai' AND labelled_at >= ?",
-            (since,),
+            (started.started_at,),
         ).fetchone()
-        if since is not None
+        if started is not None
         else None
     )
-    selected = model_settings.get("audience_labelling")
     return Status(
         statements=int(counts["total"]),
         labelled_ai=int(counts["ai"]),
@@ -348,9 +374,14 @@ def status(conn: sqlite3.Connection, *, since: str | None = None) -> Status:
         failed=failed,
         last_error=error,
         cost_usd=round(float(counts["cost"]), 4),
-        cost_since_usd=round(float(since_row["cost"]), 4) if since_row else None,
-        labelled_since=int(since_row["n"]) if since_row else None,
         automatic=_automatic(),
         model=selected.model,
         provider=selected.provider,
+        backfill=BackfillProgress(
+            **started.model_dump(),
+            labelled=int(progress["n"]),
+            cost_usd=round(float(progress["cost"]), 4),
+        )
+        if started is not None and progress is not None
+        else None,
     )

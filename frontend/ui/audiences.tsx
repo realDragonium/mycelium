@@ -16,9 +16,11 @@ export interface AudienceView extends AudienceRef {
 }
 export interface AudienceStatus {
   statements: number; labelled_ai: number; labelled_curator: number; unlabelled: number; queued: number; failed: number;
-  last_error: string | null; cost_usd: number; cost_since_usd: number | null; labelled_since: number | null;
-  automatic: boolean; model: string; provider: string;
+  last_error: string | null; cost_usd: number; automatic: boolean; model: string; provider: string;
+  backfill: BackfillProgress | null;
 }
+interface Backfill { started_at: string; queued: number }
+interface BackfillProgress extends Backfill { labelled: number; cost_usd: number }
 export interface AudiencesResponse {
   audiences: AudienceView[]; can_configure: boolean; statements: number; unlabelled: number; labelling: AudienceStatus;
 }
@@ -33,7 +35,6 @@ const LABEL_STATES = ['unlabelled', 'ai', 'curator', 'queued'] as const;
 const isLabelState = (value: string): value is Exclude<LabelState, ''> => (LABEL_STATES as readonly string[]).includes(value);
 interface StatementFilter { audience: string; visibility: Visibility; state: LabelState }
 interface AudienceDraft { id: string; name: string; scope: AudienceScope; description: string }
-interface Backfill { startedAt: string; initialQueued: number }
 
 export const AudienceBadge = ({ scope }: { scope: AudienceScope }) => <span className={`audience-badge ${scope}`}>{scope}</span>;
 export const AudienceIdentity = ({ audience }: { audience: AudienceRef }) => <span className="audience-identity"><span>{audience.name}</span><AudienceBadge scope={audience.scope} /></span>;
@@ -43,40 +44,39 @@ const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 
 
 function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: () => void }) {
   const [polledStatus, setPolledStatus] = useState<AudienceStatus | null>(null);
-  const [backfill, setBackfill] = useState<Backfill | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const status = polledStatus || data.labelling;
+  const running = !!status.backfill && status.queued > 0;
   useEffect(() => {
-    if (!backfill) return;
+    if (!running) return;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
-        const next = await getJSON<AudienceStatus>(`/api/audiences/labelling?since=${enc(backfill.startedAt)}`, controller.signal);
+        const next = await getJSON<AudienceStatus>('/api/audiences/labelling', controller.signal);
         if (controller.signal.aborted) return;
         setPolledStatus(next); setError(null);
         if (next.queued > 0) timer = setTimeout(poll, 3000);
         else onReload();
       } catch (cause) { if (!controller.signal.aborted) { setError(errorMessage(cause)); timer = setTimeout(poll, 3000); } }
     };
-    void poll();
+    timer = setTimeout(poll, 3000);
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [backfill, onReload]);
+  }, [running, onReload]);
   const start = async (relabelAi: boolean) => {
     if (relabelAi && !window.confirm('Relabel every AI-labelled statement? Curator labels are kept.')) return;
     setBusy(true); setError(null);
     try {
-      const result = await postJSON<{ queued: number; started_at: string }>('/api/audiences/labelling/backfill', { relabel_ai: relabelAi });
-      setBackfill({ startedAt: result.started_at, initialQueued: result.queued });
-      setPolledStatus({ ...status, queued: result.queued, labelled_since: 0, cost_since_usd: 0 });
+      const result = await postJSON<Backfill>('/api/audiences/labelling/backfill', { relabel_ai: relabelAi });
+      setPolledStatus({ ...status, queued: result.queued, backfill: { ...result, labelled: 0, cost_usd: 0 } });
     } catch (cause) { setError(errorMessage(cause)); }
     finally { setBusy(false); }
   };
-  return <Card title="Statement labelling" actions={data.can_configure && <><button type="button" className="btn sm" disabled={busy || (!!backfill && status.queued > 0)} onClick={() => void start(false)}>Label unlabelled statements</button><button type="button" className="btn ghost sm" disabled={busy || (!!backfill && status.queued > 0)} onClick={() => void start(true)}>Relabel AI labels</button></>}>
+  return <Card title="Statement labelling" actions={data.can_configure && <><button type="button" className="btn sm" disabled={busy || running} onClick={() => void start(false)}>Label unlabelled statements</button><button type="button" className="btn ghost sm" disabled={busy || running} onClick={() => void start(true)}>Relabel AI labels</button></>}>
     <div className="audience-metrics"><div><b>{status.labelled_ai}</b><span>AI-labelled</span></div><div><b>{status.labelled_curator}</b><span>Curator</span></div><div><b>{status.unlabelled}</b><span>Unlabelled</span></div><div><b>{status.queued}</b><span>Queued</span></div><div><b>{status.failed}</b><span>Failed</span></div></div>
     <p className="hint">{status.statements} statements · {formatCost(status.cost_usd)} total cost · {status.provider} / {status.model} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
-    {backfill && <Notice tone={status.queued > 0 ? 'info' : 'success'}>{status.queued > 0 ? `Labelling ${status.labelled_since || 0} of ${backfill.initialQueued} queued statements…` : `Backfill finished: ${status.labelled_since || 0} statements labelled.`} Cost since start: {formatCost(status.cost_since_usd)}.</Notice>}
+    {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements…` : `Backfill finished: ${status.backfill.labelled} statements labelled.`} Cost since start: {formatCost(status.backfill.cost_usd)}.</Notice>}
     {status.last_error && <Notice tone="error">Last labelling error: {status.last_error}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
   </Card>;

@@ -274,6 +274,9 @@ def test_curators_override_labels_and_the_filter_finds_them(tmp_path, monkeypatc
             ).json()["queued"]
             == 1
         )
+        # A page opened later still finds the backfill and its progress.
+        progress = client.get("/api/audiences/labelling").json()["backfill"]
+        assert (progress["queued"], progress["labelled"]) == (1, 0)
         assert (
             client.put(
                 f"/api/statements/{public}/audiences",

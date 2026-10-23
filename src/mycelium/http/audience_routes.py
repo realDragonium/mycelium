@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .. import audience_labelling, audiences, server, store, timestamps
+from .. import audience_labelling, audiences, server, store
 from .access import _enforce_role, _require_principal
 
 router = APIRouter()
@@ -60,11 +60,9 @@ def retire_audience_http(
 
 
 @router.get("/api/audiences/labelling")
-def labelling_status_http(
-    request: Request, since: str | None = None
-) -> audience_labelling.Status:
+def labelling_status_http(request: Request) -> audience_labelling.Status:
     _require_principal(request)
-    return audience_labelling.status(server._db(), since=since)
+    return audience_labelling.status(server._db())
 
 
 class BackfillBody(BaseModel):
@@ -72,19 +70,10 @@ class BackfillBody(BaseModel):
     relabel_ai: bool = False
 
 
-class BackfillResponse(BaseModel):
-    queued: int
-    started_at: str
-
-
 @router.post("/api/audiences/labelling/backfill")
-def backfill_http(body: BackfillBody, request: Request) -> BackfillResponse:
+def backfill_http(body: BackfillBody, request: Request) -> audience_labelling.Backfill:
     _enforce_role(request, "admin", real_role=True)
-    started_at = timestamps.now()
-    return BackfillResponse(
-        queued=audience_labelling.backfill(relabel_ai=body.relabel_ai),
-        started_at=started_at,
-    )
+    return audience_labelling.backfill(relabel_ai=body.relabel_ai)
 
 
 # --- statement labels ----------------------------------------------------------

@@ -41,7 +41,9 @@ statement. Audience ids it invents grant nothing.
   waits for the next backfill. Its statements stay unlabelled meanwhile.
 - **Label unlabelled statements** queues every unlabelled statement and runs
   even with automatic labelling off. **Relabel AI labels** also queues AI
-  labels. Both show progress and the cost so far.
+  labels. Both show progress and the cost so far, also after leaving and
+  reopening the page (`backfill` on `GET /api/audiences/labelling`); a server
+  restart forgets the progress, not the queue.
 - A curator sets a label on the statement page; the AI never replaces it.
   **Hand back to AI** removes the curator label and queues the statement.
 - Deleting or merging a statement deletes the removed statement's label. A
