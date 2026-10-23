@@ -313,7 +313,7 @@ def turn(
 
 def structured(
     task: StructuredTask[Output], config: ModelConfig, client: httpx.Client | None
-) -> Output:
+) -> tuple[Output, Usage]:
     request: _StructuredRequest = {
         "model": config.model,
         "max_tokens": config.max_tokens,
@@ -330,4 +330,4 @@ def structured(
         response = sdk.messages.parse(**request, output_format=task.output_type)
     if response.stop_reason != "end_turn" or response.parsed_output is None:
         raise ModelError("Claude did not return one complete structured result")
-    return response.parsed_output
+    return response.parsed_output, Usage.model_validate(response.usage)

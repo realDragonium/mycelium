@@ -281,27 +281,31 @@ def turn(
                 )
             )
     validate_calls(task, calls)
-    details = response.usage.get("input_tokens_details")
+    return ModelResponse(
+        content=[ProviderHistory(provider="openai", output=response.output), *calls],
+        usage=_usage(response.usage),
+        stop_reason="tool_use" if calls else "end_turn",
+    )
+
+
+def _usage(reported: dict[str, JsonValue]) -> Usage:
+    details = reported.get("input_tokens_details")
     cached = details.get("cached_tokens", 0) if isinstance(details, dict) else 0
     usage = Usage.model_validate(
         {
-            "input_tokens": response.usage.get("input_tokens", 0),
-            "output_tokens": response.usage.get("output_tokens", 0),
+            "input_tokens": reported.get("input_tokens", 0),
+            "output_tokens": reported.get("output_tokens", 0),
             "cache_read_input_tokens": cached,
         }
     )
     # Claude reports uncached input separately; expose the same accounting here.
     usage.input_tokens = max(0, usage.input_tokens - usage.cache_read_input_tokens)
-    return ModelResponse(
-        content=[ProviderHistory(provider="openai", output=response.output), *calls],
-        usage=usage,
-        stop_reason="tool_use" if calls else "end_turn",
-    )
+    return usage
 
 
 def structured(
     task: StructuredTask[Output], config: ModelConfig, client: httpx.Client | None
-) -> Output:
+) -> tuple[Output, Usage]:
     response = _request(
         {
             "model": config.model,
@@ -339,4 +343,4 @@ def structured(
             texts.append(value)
     if len(texts) != 1:
         raise ModelError("OpenAI did not return one complete structured result")
-    return task.output_type.model_validate_json(texts[0])
+    return task.output_type.model_validate_json(texts[0]), _usage(response.usage)
