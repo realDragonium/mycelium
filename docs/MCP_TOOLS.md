@@ -100,7 +100,7 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `restore_prompt_text` | Prompt configuration. |
 | `list_documentation_profiles` | Documentation profile configuration. |
 | `get_documentation_profile` | Documentation profile configuration. |
-| `save_documentation_profile` | Documentation profile configuration. |
+| `save_documentation_profile` | Documentation profile configuration. `audience` chooses the audience the profile writes for; omitted, it keeps the current one. Changing it on an existing profile needs an admin. |
 | `retire_documentation_profile` | Documentation profile configuration. |
 | `list_documentation_models` | Provider configuration. `request_documentation` uses saved settings when the provider is omitted. |
 | `list_documentation_runs` | Run history for the documentation workspace. |

@@ -38,12 +38,16 @@ with theirs.
 
 - `<set>` is the variant's name, kebab-case: `kb-authoring`, `internal-doc`.
   It is the shared prefix that makes a set greppable in a listing.
-- `<slot>` is what the row is for. Three shapes:
+- `<slot>` is what the row is for. Four shapes:
   - `guidance` — the set-wide instructions: how to research, what counts as
     a fact, how to mark uncertainty, what "done" means. Exactly one per set.
   - `exposure` — the set-wide disclosure boundary: what a finished document
     may reveal and what must stay internal. At most one per set; a set without
     one can still write, but its exposure goes unchecked.
+  - `audience` — the id of the audience the set writes for (see
+    [Audiences](AUDIENCES.md)). At most one per set; without one the set
+    writes for the default internal audience. Set it through the profile
+    editor or `save_documentation_profile`; only an admin changes it.
   - a **document type** — `tutorial`, `how-to`, `reference`, `explanation`,
     `troubleshooting`, … — the template for producing that type. As many as
     the set supports.

@@ -9,6 +9,7 @@ model:
 - Documentation: generate and review documents.
 - Draft review: assess submitted knowledge drafts.
 - Alias discovery: propose alternative names from selected existing statements.
+- Audience labelling: decide which documentation audiences may see each statement ([Audiences](AUDIENCES.md)).
 
 Choose Claude or OpenAI GPT independently for each action. Each action remembers
 one model ID and reasoning effort per provider, so switching providers preserves the other provider’s settings.
