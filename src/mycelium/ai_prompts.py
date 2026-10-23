@@ -21,6 +21,7 @@ Action = Literal[
     "draft_review",
     "alias_discovery",
     "audience_labelling",
+    "documentation_planning",
 ]
 ACTIONS: tuple[Action, ...] = (
     "ask",
@@ -30,6 +31,7 @@ ACTIONS: tuple[Action, ...] = (
     "draft_review",
     "alias_discovery",
     "audience_labelling",
+    "documentation_planning",
 )
 TITLES: dict[Action, str] = {
     "ask": "Questions",
@@ -39,6 +41,7 @@ TITLES: dict[Action, str] = {
     "draft_review": "Draft review",
     "alias_discovery": "Alias discovery",
     "audience_labelling": "Audience labelling",
+    "documentation_planning": "Documentation planning",
 }
 
 
@@ -71,6 +74,8 @@ def default_text(action: Action) -> str:
         from .draft_review_model import DEFAULT_INSTRUCTIONS
     elif action == "audience_labelling":
         from .audience_labelling import DEFAULT_INSTRUCTIONS
+    elif action == "documentation_planning":
+        from .documentation_planning import DEFAULT_INSTRUCTIONS
     else:
         from .alias_suggestions import DEFAULT_INSTRUCTIONS
     return DEFAULT_INSTRUCTIONS
@@ -205,6 +210,8 @@ def preview(action: Action, text: str) -> str:
         from .alias_suggestions import build_system_prompt
     elif action == "audience_labelling":
         from .audience_labelling import build_system_prompt
+    elif action == "documentation_planning":
+        from .documentation_planning import build_system_prompt
     else:
         from .docgen import prompts
 

@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
-from .. import auth, server
+from .. import auth, documentation_planning, product_settings, server
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from .access import _enforce_role, _require_principal
@@ -237,3 +237,96 @@ def deliver_document_http(
         return server.deliver_document(document_id, **body.model_dump())
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+# --- documentation planning ------------------------------------------------------
+
+
+@router.get("/api/documentation/plans/{guideline_set}")
+def documentation_plan_http(
+    guideline_set: str, request: Request
+) -> documentation_planning.PlanView:
+    _require_principal(request)
+    return documentation_planning.view(guideline_set)
+
+
+@router.post("/api/documentation/plans/{guideline_set}")
+def plan_documentation_http(
+    guideline_set: str, request: Request
+) -> documentation_planning.PlanView:
+    _enforce_role(request, "writer", real_role=True)
+    documentation_planning.start(
+        guideline_set, created_by=_require_principal(request).id
+    )
+    return documentation_planning.view(guideline_set)
+
+
+class PlanItemsBody(BaseModel):
+    item_ids: list[str] = PydField(min_length=1)
+
+
+class ApprovedItem(BaseModel):
+    item_id: str
+    run: dict[str, object] | None = None
+    error: str | None = None
+
+
+@router.post("/api/documentation/plan-items/approve")
+def approve_plan_items_http(
+    body: PlanItemsBody, request: Request
+) -> list[ApprovedItem]:
+    """Approve several items; each starts its own run, and one that cannot
+    start reports why without stopping the rest."""
+    _enforce_role(request, "writer", real_role=True)
+    limit = product_settings.get(
+        product_settings.DocumentationPlanningSettings
+    ).approve_batch
+    if len(body.item_ids) > limit:
+        raise ValueError(f"Approve at most {limit} items at a time.")
+    principal = _require_principal(request)
+    results: list[ApprovedItem] = []
+    for item_id in dict.fromkeys(body.item_ids):
+        try:
+            run = documentation_planning.approve(item_id, decided_by=principal.id)
+        except (ValueError, LookupError) as exc:
+            results.append(ApprovedItem(item_id=item_id, error=str(exc)))
+        else:
+            results.append(ApprovedItem(item_id=item_id, run=run))
+    return results
+
+
+@router.post("/api/documentation/plan-items/{item_id}/dismiss")
+def dismiss_plan_item_http(item_id: str, request: Request) -> dict[str, bool]:
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        documentation_planning.dismiss_item(
+            item_id, decided_by=_require_principal(request).id
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"dismissed": True}
+
+
+class StaleDismissalBody(BaseModel):
+    revision: int = PydField(ge=1, strict=True)
+
+
+@router.post("/api/documentation/plans/{guideline_set}/stale/{document_id}/dismiss")
+def dismiss_stale_document_http(
+    guideline_set: str, document_id: str, body: StaleDismissalBody, request: Request
+) -> dict[str, bool]:
+    from ..docs_store import RevisionConflict
+
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        documentation_planning.dismiss_stale(
+            guideline_set,
+            document_id,
+            body.revision,
+            decided_by=_require_principal(request).id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"dismissed": True}

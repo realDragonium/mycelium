@@ -14,7 +14,13 @@ from .ai.types import ClaudeEffort
 from .model_credentials import claude_configuration_error
 
 Action = Literal[
-    "ask", "ingest", "docgen", "draft_review", "alias_discovery", "audience_labelling"
+    "ask",
+    "ingest",
+    "docgen",
+    "draft_review",
+    "alias_discovery",
+    "audience_labelling",
+    "documentation_planning",
 ]
 ACTIONS: tuple[Action, ...] = (
     "ask",
@@ -23,6 +29,7 @@ ACTIONS: tuple[Action, ...] = (
     "draft_review",
     "alias_discovery",
     "audience_labelling",
+    "documentation_planning",
 )
 #: Labelling reads every statement, so it defaults to a small model.
 AUDIENCE_LABELLING_MODEL = "claude-haiku-5-5"
@@ -112,7 +119,7 @@ def defaults(action: Action) -> Selection:
 def legacy_selection(action: Action) -> dict[str, str]:
     """Capture legacy values without hiding invalid configuration during migration."""
     default = defaults(action)
-    if action in ("alias_discovery", "audience_labelling"):
+    if action in ("alias_discovery", "audience_labelling", "documentation_planning"):
         return {
             "provider": default.provider,
             "claude_model": default.claude_model,

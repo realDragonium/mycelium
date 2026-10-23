@@ -253,6 +253,38 @@ def _documentation(data_dir: Path) -> None:
         docs_store.finish_run(
             conn, run, outcome="document_written", document_id=document
         )
+        _documentation_plans(conn, run)
+
+
+def _documentation_plans(conn, run: str) -> None:
+    try:
+        from mycelium import doc_plans
+    except ImportError:
+        return
+    plan = doc_plans.create_plan(
+        conn,
+        guideline_set="kb-authoring",
+        audience_id="external-technical",
+        created_by="ada",
+        provider="claude",
+        model="claude-sonnet-4-6",
+    )
+    item = doc_plans.Item(
+        key="create:how-to:title:reset-a-password",
+        action="create",
+        title="Reset a password",
+        document_type="how-to",
+        anchor_entity_id=None,
+        document_id=None,
+        rationale="Users forget passwords.",
+        priority="high",
+        statement_ids=("stm_sign_in",),
+    )
+    doc_plans.finish_plan(conn, plan, items=[item], summary={"cost_usd": 0.01})
+    [row] = doc_plans.items(conn, plan)
+    doc_plans.claim(conn, str(row["id"]), "ada")
+    doc_plans.record_run(conn, str(row["id"]), run)
+    doc_plans.dismiss(conn, "kb-authoring", "create:reference:title:sso", "SSO", "ada")
 
 
 def _prompts(server) -> None:

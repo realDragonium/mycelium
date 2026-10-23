@@ -100,6 +100,9 @@ def init(data_dir: Path) -> None:
     _seed_prompt_texts()
 
     orphaned_docs = docs_store.mark_orphaned(_drafts_db())
+    from .. import doc_plans
+
+    doc_plans.mark_orphaned(_drafts_db())
     if orphaned_docs:
         logger.warning(
             "marked %d documentation run(s) failed: orphaned by restart",

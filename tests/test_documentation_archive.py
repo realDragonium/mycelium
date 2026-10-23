@@ -251,3 +251,31 @@ def test_archive_rejects_publication_that_disagrees_with_receipt(tmp_path, field
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="differs from its receipt"):
         documentation_archive.prepare(staging, required=True)
+
+
+def test_an_archive_from_before_plans_restores_without_them(tmp_path):
+    source, staging = tmp_path / "source", tmp_path / "staging"
+    source.mkdir()
+    staging.mkdir()
+    with closing(docs_store.connect(source / documentation_archive.DB_NAME)) as conn:
+        docs_store.migrate(conn)
+        docs_store.upsert_document(conn, slug="page", title="Page", body="Body")
+    documentation_archive.write(source, staging)
+    section = staging / documentation_archive.FILE_NAME
+    payload = json.loads(section.read_text())
+    for table in (
+        "documentation_plans",
+        "documentation_plan_items",
+        "documentation_plan_dismissals",
+    ):
+        del payload["tables"][table]
+    section.write_text(json.dumps({**payload, "version": 1}))
+
+    prepared = documentation_archive.prepare(staging, required=True)
+
+    assert prepared is not None
+    with closing(docs_store.connect(prepared)) as conn:
+        assert (
+            conn.execute("SELECT title FROM generated_documents").fetchone()[0]
+            == "Page"
+        )
