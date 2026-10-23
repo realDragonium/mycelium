@@ -677,6 +677,35 @@ def test_a_truncated_turn_counts_toward_the_trace_tokens():
     assert result.trace["tokens"]["output"] == 10
 
 
+def test_an_edge_pointing_the_wrong_way_is_flagged_not_queued():
+    emit = _emit_input(
+        ops=[
+            _op(
+                "upsert_statement",
+                {
+                    "kind": "state",
+                    "text": "an invite is pending",
+                    "links": [{"to_id": "stm_99", "link_type": "establishes"}],
+                },
+            )
+        ],
+        ledger=[
+            _ledger_row(
+                "an invite is pending", "new", matched=["stm_99"], considered=["stm_99"]
+            )
+        ],
+    )
+    existing = {"statements": [{"id": "stm_99", "kind": "event", "text": "x"}]}
+    result, _client, substrate, emitter = _run(
+        _reconcile_then_adjacency() + [_message([_tool_use(EMIT_TOOL, emit)])],
+        results={"get_statements": existing},
+    )
+
+    assert ("get_statements", {"ids": ["stm_99"]}) in substrate.calls
+    assert emitter.queued[0][2]["links"] == []
+    assert any("points the wrong way" in f for f in result.flagged)
+
+
 def test_malformed_emit_reprompted_then_degrades():
     bad = {
         "ops": [

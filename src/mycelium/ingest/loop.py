@@ -50,7 +50,7 @@ from ..agentloop import (
 
 # Reuse ask's read seam wholesale — do NOT duplicate it.
 from ..ask.substrate import InProcessSubstrate, SubstrateError, SubstrateReader
-from . import prompts
+from . import directions, prompts
 from .config import DOCTRINE_NAME, IngestConfig
 from .draft import DraftEmitter, InProcessDraftEmitter
 from .schema import (
@@ -337,6 +337,38 @@ def _handle_emit(tool_use: Any, ctx: _RunContext) -> IngestResult | None:
     return _assemble_draft(ops, ledger, flagged, skipped, ctx, degraded=False)
 
 
+def _existing_statements(
+    ids: list[str], ctx: _RunContext
+) -> dict[str, directions.Statement]:
+    """Kind and text of the existing statements a draft links to; whatever
+    cannot be read is left out, so fewer edges get checked."""
+    if not ids or not _substrate_has(ctx.substrate, "get_statements"):
+        return {}
+    arguments = {"ids": ids}
+    try:
+        result = ctx.substrate.call("get_statements", arguments)
+    except SubstrateError as exc:
+        ctx.trace.record_tool_call(
+            "get_statements",
+            arguments,
+            None,
+            ok=False,
+            counts_as_op=False,
+            error=str(exc),
+        )
+        return {}
+    ctx.trace.record_tool_call(
+        "get_statements", arguments, result, ok=True, counts_as_op=False
+    )
+    rows = result.get("statements") if isinstance(result, dict) else None
+    return {
+        row["id"]: directions.Statement(kind=row["kind"], text=row["text"])
+        for row in (rows if isinstance(rows, list) else [])
+        if isinstance(row, dict)
+        and all(isinstance(row.get(k), str) for k in ("id", "kind", "text"))
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Steps
 # --------------------------------------------------------------------------- #
@@ -495,6 +527,10 @@ def _assemble_draft(
         )
         trace.flagged = flagged
         return _nothing(reason, ctx)
+
+    existing = _existing_statements(directions.existing_ids(ops), ctx)
+    ops, flipped = directions.without_flipped(ops, existing)
+    flagged.extend(f"edge dropped, it points the wrong way: {f}" for f in flipped)
 
     valid_kinds = _safe_valid_kinds(emitter)
     indexed: list[tuple[int, ProposedOp]] = []
