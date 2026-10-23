@@ -61,9 +61,13 @@ the substrate is the authority.
 Two inline markers for uncertainty:
 
 ```
-> 💡 likely correct: [what was inferred and from which statement/entity].
-> ⚠️ needs verification: [what's unclear and why the substrate doesn't resolve it].
+> 💡 likely correct: [what was inferred, in the reader's terms].
+> ⚠️ needs verification: [what's unclear, in the reader's terms].
 ```
+
+The markers are for the reader, who never sees the substrate: they never name
+it, a statement or entity id, or a tool. Which statements a section rests on
+travels beside the document, not in it.
 
 Anything written without a marker must be traceable to a substrate statement.
 
@@ -89,6 +93,9 @@ Rules that apply to all types when filling in the template:
 
 - **Audience field** — choose `external` (customers/end-users), `internal` (staff only),
   or `both` (visible everywhere, written for the most cautious audience).
+- **Vocabulary** — write about the product, never about the substrate behind
+  the document: no "substrate", no statement or entity ids (`stm_…`, `ent_…`),
+  no tool names.
 - **Tone** — warm and clear, second person ("you"), active voice. Short sentences. No
   "simply", no "just", no fake enthusiasm.
 - **One doc = one type.** If the material tempts you to mix steps with conceptual

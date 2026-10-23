@@ -104,6 +104,13 @@ _MAX_SLUG_CHARS = 80
 #: mentioned by more names the rest and how to page through them.
 _MAX_ANCHOR_STATEMENTS = 200
 _ANCHOR_PAGE = 100
+#: Words of this harness that mean nothing to a document's reader.
+_INTERNAL_VOCABULARY = re.compile(
+    r"\bsubstrate\b|\b(?:stm|ent)_\w+|\b(?:"
+    + "|".join(sorted(READ_TOOLS | {EMIT_TOOL, GAP_TOOL}))
+    + r")\b",
+    re.IGNORECASE,
+)
 
 if TYPE_CHECKING:
     from ..audiences import Audience
@@ -1109,6 +1116,16 @@ def _emit_problem(
             "it cited statement ids this run never retrieved: "
             f"{shown}. Retrieve them with get_statements, or cite only what "
             "you read"
+        )
+    internal = sorted(
+        {m.group(0).lower() for m in _INTERNAL_VOCABULARY.finditer(title + body)}
+    )
+    if internal:
+        return (
+            f"the document uses internal vocabulary: {', '.join(internal)}. "
+            "Its reader never sees the knowledge base: leave out statement and "
+            "concept ids and tool names, and say what is not known in the "
+            "reader's terms"
         )
     return None
 

@@ -29,9 +29,12 @@ written as behaviour the reader has today. It may be mentioned only where it
 is already published as forthcoming, and only in wording that keeps it
 forthcoming. Internal ticket identifiers and staff names stay out with it.
 
-**The run's own bookkeeping.** Substrate statement ids do not belong in the
-body. Provenance travels beside the document, and a reader who cannot resolve
-an id is being shown a reference to nothing.
+**The run's own bookkeeping.** Statement and entity ids, tool names and the
+word "substrate" do not belong in the title or body, and neither does talk of
+what the knowledge base holds. Provenance travels beside the document, and a
+reader who cannot resolve an id is being shown a reference to nothing. Say
+what is not known in the reader's terms: "this is not documented yet", not
+"the substrate does not say".
 
 **How to defeat a control.** Describe a security control to the depth a reader
 needs to use it — how to turn it on, what it refuses, how to recover from it.

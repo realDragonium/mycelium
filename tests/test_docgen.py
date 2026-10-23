@@ -1065,6 +1065,24 @@ def test_a_blank_title_or_body_is_refused(kb_set):
     assert result.trace["refused_emits"] == ["the title is blank", "the body is blank"]
 
 
+@pytest.mark.parametrize(
+    ("body", "word"),
+    [
+        ("The substrate does not say how long a session lasts.", "substrate"),
+        ("Single sign-on is per workspace (stm_1).", "stm_1"),
+        ("Run get_statements to learn more.", "get_statements"),
+    ],
+)
+def test_a_document_using_internal_vocabulary_is_refused(kb_set, body, word):
+    client = FakeAnthropic([_emit(body=body), _emit(), _review_ok()])
+
+    result = _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    assert isinstance(result, DocumentWritten)
+    [refusal] = result.trace["refused_emits"]
+    assert f"internal vocabulary: {word}" in refusal
+
+
 def test_a_malformed_emit_is_retried_once_then_refused(kb_set):
     client = FakeAnthropic([_emit(title=None), _emit(title=None)])
 
