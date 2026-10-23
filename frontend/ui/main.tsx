@@ -4,24 +4,30 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './shell';
-import { errorMessage, getMe, getSubstrateCounts, isAuthError } from './api';
+import { errorMessage, getMe, getSubstrateCounts, isAuthError, type Me } from './api';
 import { PrefsProvider } from './prefs';
 
-type Boot = { phase: 'loading' } | { phase: 'ready' } | { phase: 'error'; error: unknown };
+type Boot = { phase: 'loading' } | { phase: 'ready'; me: Me } | { phase: 'error'; error: unknown };
 
 function Root() {
   const [boot, setBoot] = useState<Boot>({ phase: 'loading' });
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    getMe().then(me => me.audience_id && !me.audience ? undefined : getSubstrateCounts()).then(
-      () => { if (live) setBoot({ phase: 'ready' }); },
+    // Both at once: a session whose audience was retired is refused the
+    // probe but still gets the app, which sends it to account settings.
+    const probe = getSubstrateCounts().then(() => null, (error: unknown) => ({ error }));
+    Promise.all([getMe(), probe]).then(([me, refused]) => {
+      if (refused && (!me.audience_id || me.audience)) throw refused.error;
+      return me;
+    }).then(
+      me => { if (live) setBoot({ phase: 'ready', me }); },
       error => { if (live) setBoot({ phase: 'error', error }); },
     );
     return () => { live = false; };
   }, [attempt]);
 
-  if (boot.phase === 'ready') return <App />;
+  if (boot.phase === 'ready') return <App me={boot.me} />;
   if (boot.phase === 'error') {
     const unauth = isAuthError(boot.error);
     const next = encodeURIComponent('/ui/' + window.location.hash);

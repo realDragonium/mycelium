@@ -21,7 +21,7 @@ import { SettingsScreen } from './settings';
 import { usd, type Budget } from './ai-usage';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, LoadError, Loading, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
-import { getJSON, getMe, getServerInfo, isScoped, type KnowledgeGap, type Me } from './api';
+import { getJSON, getServerInfo, isScoped, type KnowledgeGap, type Me } from './api';
 import { ensureSubstrate, loadSubstrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
 import { useAsync, useOnSettingsSaved } from './use-async';
@@ -252,7 +252,7 @@ function RouteScreen({ route, ingestNonce, refresh }: ScreenProps) {
 // Screens that need the full width (canvases) or manage their own layout.
 const FULL_BLEED: View[] = ['graph', 'entities'];
 
-export function App() {
+export function App({ me }: { me: Me }) {
   const router = useHashRouter();
   const { route } = router;
   const [version, setVersion] = useState(0);
@@ -260,9 +260,8 @@ export function App() {
   const dataCtx = useMemo(() => ({ version, refresh }), [version, refresh]);
   const [ingestNonce, setIngestNonce] = useState(0);
   const goIngest = useCallback(() => { setIngestNonce(n => n + 1); router.go({ view: 'ingest' }); }, [router]);
-  const me = useAsync(getMe).state;
   const [navOpen, setNavOpen] = useState(false);
-  const audienceRetired = me.status === 'ready' && !!me.data.audience_id && !me.data.audience;
+  const audienceRetired = !!me.audience_id && !me.audience;
   const retiredRouteAllowed = route.view === 'settings' && (route.section === 'account' || route.section === 'appearance');
   useEffect(() => {
     if (audienceRetired && !retiredRouteAllowed) router.go({ view: 'settings', section: 'account' });
@@ -270,22 +269,22 @@ export function App() {
 
   return (
     <RouterCtx.Provider value={router}>
-      <MeCtx.Provider value={me.status === 'ready' ? me.data : null}>
+      <MeCtx.Provider value={me}>
         <DataCtx.Provider value={dataCtx}>
           <GoIngestCtx.Provider value={goIngest}>
             <div className={`shell${FULL_BLEED.includes(route.view) ? ' full-bleed' : ''}`}>
-              <Sidebar me={me.status === 'ready' ? me.data : null} open={navOpen} onClose={() => setNavOpen(false)} />
+              <Sidebar me={me} open={navOpen} onClose={() => setNavOpen(false)} />
               {navOpen && <div className="side-scrim" onClick={() => setNavOpen(false)} />}
               <div className="main-col">
-                {me.status === 'ready' && !isScoped(me.data) && <ServerBanners />}
-                {me.status === 'ready' && me.data.role === 'admin' && <><BudgetBanner /><BlockedWorkBanner /></>}
+                {!isScoped(me) && <ServerBanners />}
+                {me.role === 'admin' && <><BudgetBanner /><BlockedWorkBanner /></>}
                 <header className="topbar">
                   <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Open navigation"><I.menu /></button>
                   {route.view !== 'home' ? <CommandBar /> : <div className="topbar-spacer" />}
-                  {me.status === 'ready' && !isScoped(me.data) && <button className="ingest-btn" onClick={goIngest}><I.ingest width="15" height="15" />Ingest</button>}
+                  {!isScoped(me) && <button className="ingest-btn" onClick={goIngest}><I.ingest width="15" height="15" />Ingest</button>}
                 </header>
                 <ErrorBoundary key={routeToHash(route)}>
-                  {me.status !== 'loading' && (!audienceRetired || retiredRouteAllowed) ? <Screen route={route} ingestNonce={ingestNonce} refresh={refresh} /> : <main className="page"><Loading what="your account" /></main>}
+                  {!audienceRetired || retiredRouteAllowed ? <Screen route={route} ingestNonce={ingestNonce} refresh={refresh} /> : <main className="page"><Loading what="your account" /></main>}
                 </ErrorBoundary>
               </div>
             </div>
