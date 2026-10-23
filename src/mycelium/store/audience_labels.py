@@ -16,6 +16,8 @@ from typing import Literal
 from .kernel import _now
 
 Source = Literal["ai", "curator"]
+Visibility = Literal["visible", "hidden"]
+LabelState = Literal["unlabelled", "ai", "curator", "text_changed", "queued"]
 
 #: Attempts before a failing statement waits for the next backfill.
 MAX_ATTEMPTS = 5
@@ -293,3 +295,77 @@ def queue_counts(conn: sqlite3.Connection) -> tuple[int, int, str | None]:
         int(row["failed"] or 0),
         str(error["last_error"]) if error is not None else None,
     )
+
+
+def is_queued(conn: sqlite3.Connection, statement_id: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM audience_label_queue WHERE statement_id = ?",
+            (statement_id,),
+        ).fetchone()
+        is not None
+    )
+
+
+def list_labelled_statements(
+    conn: sqlite3.Connection,
+    *,
+    audience_id: str | None = None,
+    internal: bool = False,
+    visibility: Visibility | None = None,
+    state: LabelState | None = None,
+    offset: int = 0,
+    limit: int = 50,
+) -> tuple[list[sqlite3.Row], int]:
+    """A page of statements filtered by audience visibility and label state."""
+    conditions: list[str] = []
+    params: list[str | int] = []
+    if visibility is not None:
+        if audience_id is None:
+            raise ValueError("Choose a live audience to filter by visibility.")
+        clause, values = visibility_clause(audience_id, internal)
+        conditions.append(clause if visibility == "visible" else f"NOT {clause}")
+        params.extend(values)
+    if state == "unlabelled":
+        conditions.append("l.statement_id IS NULL")
+    elif state in ("ai", "curator"):
+        conditions.append("l.source = ?")
+        params.append(state)
+    elif state == "text_changed":
+        conditions.append("l.text_changed_at IS NOT NULL")
+    elif state == "queued":
+        conditions.append("q.statement_id IS NOT NULL")
+    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+    base = (
+        "FROM statements s LEFT JOIN statement_audience_labels l "
+        "ON l.statement_id = s.id LEFT JOIN audience_label_queue q "
+        f"ON q.statement_id = s.id {where}"
+    )
+    total = int(conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0])
+    rows = conn.execute(
+        f"SELECT s.id, s.kind, s.text, q.statement_id AS queued {base} "
+        "ORDER BY s.created_at DESC, s.id LIMIT ? OFFSET ?",
+        [*params, limit, offset],
+    ).fetchall()
+    return rows, total
+
+
+def label_counts(conn: sqlite3.Connection) -> tuple[int, int, int, float]:
+    """(total statements, AI labels, curator labels, label cost)."""
+    row = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM statements) AS total, "
+        "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'ai') AS ai, "
+        "(SELECT COUNT(*) FROM statement_audience_labels WHERE source = 'curator') AS curator, "
+        "(SELECT COALESCE(SUM(cost_usd), 0) FROM statement_audience_labels) AS cost"
+    ).fetchone()
+    return int(row["total"]), int(row["ai"]), int(row["curator"]), float(row["cost"])
+
+
+def backfill_counts(conn: sqlite3.Connection, started_at: str) -> tuple[int, float]:
+    """AI labels and their cost since the backfill started."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(cost_usd), 0) AS cost "
+        "FROM statement_audience_labels WHERE source = 'ai' AND labelled_at >= ?",
+        (started_at,),
+    ).fetchone()
+    return int(row["n"]), float(row["cost"])

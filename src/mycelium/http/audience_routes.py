@@ -125,11 +125,7 @@ def _statement_audiences(statement_id: str, request: Request) -> StatementAudien
     return StatementAudiences(
         statement_id=statement_id,
         label=_label(row),
-        queued=conn.execute(
-            "SELECT 1 FROM audience_label_queue WHERE statement_id = ?",
-            (statement_id,),
-        ).fetchone()
-        is not None,
+        queued=store.audience_labels.is_queued(conn, statement_id),
         audiences=[
             AudienceVisibility(
                 id=item.id,
@@ -209,9 +205,8 @@ class LabelledStatements(BaseModel):
 def labelled_statements_http(
     request: Request,
     audience: str | None = None,
-    visibility: Literal["visible", "hidden"] | None = None,
-    state: Literal["unlabelled", "ai", "curator", "text_changed", "queued"]
-    | None = None,
+    visibility: store.audience_labels.Visibility | None = None,
+    state: store.audience_labels.LabelState | None = None,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ) -> LabelledStatements:
@@ -219,39 +214,21 @@ def labelled_statements_http(
     from .. import auth
 
     principal = _require_principal(request)
-    conditions: list[str] = []
-    params: list[str | int] = []
+    chosen = None
     if visibility is not None:
         chosen = next((item for item in audiences.live() if item.id == audience), None)
         if chosen is None:
             raise ValueError("Choose a live audience to filter by visibility.")
-        clause, values = store.audience_labels.visibility_clause(
-            chosen.id, chosen.internal
-        )
-        conditions.append(clause if visibility == "visible" else f"NOT {clause}")
-        params.extend(values)
-    if state == "unlabelled":
-        conditions.append("l.statement_id IS NULL")
-    elif state in ("ai", "curator"):
-        conditions.append("l.source = ?")
-        params.append(state)
-    elif state == "text_changed":
-        conditions.append("l.text_changed_at IS NOT NULL")
-    elif state == "queued":
-        conditions.append("q.statement_id IS NOT NULL")
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    base = (
-        "FROM statements s LEFT JOIN statement_audience_labels l "
-        "ON l.statement_id = s.id LEFT JOIN audience_label_queue q "
-        f"ON q.statement_id = s.id {where}"
-    )
     conn = server._db()
-    total = int(conn.execute(f"SELECT COUNT(*) {base}", params).fetchone()[0])
-    rows = conn.execute(
-        f"SELECT s.id, s.kind, s.text, q.statement_id AS queued {base} "
-        "ORDER BY s.created_at DESC, s.id LIMIT ? OFFSET ?",
-        [*params, limit, offset],
-    ).fetchall()
+    rows, total = store.audience_labels.list_labelled_statements(
+        conn,
+        audience_id=chosen.id if chosen else None,
+        internal=chosen.internal if chosen else False,
+        visibility=visibility,
+        state=state,
+        offset=offset,
+        limit=limit,
+    )
     return LabelledStatements(
         statements=[
             LabelledStatement(
