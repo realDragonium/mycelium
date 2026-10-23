@@ -36,7 +36,7 @@ class AnswerInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     answer: str = Field(
         min_length=1,
-        description="Answer the literal question when answerable. State contradictions and relevant conditions explicitly.",
+        description="Plain prose answer to the literal question, stating only what the evidence says. State contradictions and conditions explicitly. No refs (s1) or IDs.",
     )
     confidence: Literal["high", "medium", "low"]
     interpretation: InterpretationChange | None = Field(
@@ -65,11 +65,16 @@ class CandidateInput(BaseModel):
 class ClarificationInput(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     question: str = Field(min_length=1)
-    candidates: list[CandidateInput] = Field(min_length=2)
+    candidates: list[CandidateInput] = Field(
+        min_length=2, description="At least two distinct interpretations."
+    )
     known_so_far: str
 
 
 _CLARIFY_SCHEMA = ClarificationInput.model_json_schema()
+# Claude rejects a strict tool whose arrays require more than one item, so the
+# minimum is enforced on the submitted input instead.
+del _CLARIFY_SCHEMA["properties"]["candidates"]["minItems"]
 
 
 _SUBMIT_DESC_FLOOR = (

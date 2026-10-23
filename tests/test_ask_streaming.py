@@ -448,6 +448,37 @@ def test_recon_only_reference_cannot_satisfy_adjacency(monkeypatch):
     check = result.trace["evidence_checks"][-1]
     assert check["ok"] is False
     assert "earlier turn" in check["error"]
+    assert "No refs qualify yet" in check["error"]
+
+
+def test_rejected_adjacency_sources_name_the_refs_that_qualify(monkeypatch):
+    turns = [
+        [call("get_statements", {"ids": ["stm_2"]})],
+        [
+            call(
+                "survey_statements",
+                {"query": "related conditions", "adjacency_sources": ["s1"]},
+            )
+        ],
+        [call("submit_answer", _submit_input())],
+    ]
+    scripted_turns(monkeypatch, turns)
+    result = run_ask(
+        "Why?",
+        substrate=FakeSubstrate(
+            {
+                "survey_statements": [{"id": "stm_1", "text": "recon only"}],
+                "get_statements": {
+                    "statements": [{"id": "stm_2", "text": "retrieved"}],
+                    "missing": [],
+                },
+            }
+        ),
+        config=AskConfig(trace_dir=""),
+    )
+    check = result.trace["evidence_checks"][-1]
+    assert check["ok"] is False
+    assert "Refs that qualify as adjacency_sources: s2." in check["error"]
 
 
 def test_forced_finalize_keeps_deterministic_coverage_gaps(monkeypatch):

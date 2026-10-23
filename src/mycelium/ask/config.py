@@ -9,7 +9,7 @@ per-call model inference across its sequential retrieval turns, and Haiku's
 much lower per-call latency is the only lever that brings a multi-hop answer
 under ~40s. The id is config, never hardcoded in logic; set
 `MYCELIUM_ASK_MODEL=claude-sonnet-4-6` before the one-time upgrade import, or choose Sonnet
-in AI settings. Unknown model pricing is omitted from the trace.
+in AI settings. A model missing from the list-price table gets no cost estimate.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import os
 from dataclasses import dataclass, replace
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort
+from ..ai import Provider, ReasoningEffort, pricing
 
 #: Current Haiku model id (confirmed against Anthropic's model catalog:
 #: claude-haiku-4-5, 200K context, $1/$5 per MTok).
@@ -75,9 +75,6 @@ class AskConfig:
     #: are read from cache on turns 2..N instead of re-ingested — a large latency
     #: and cost win on a multi-turn run. Disabled by an off-switch for A/B.
     cache: bool = True
-    #: Cost rates are populated only for the known default Claude model.
-    input_per_mtok: float | None = None
-    output_per_mtok: float | None = None
     #: JSONL sink for the eval-harness trace. None → resolved by the caller to
     #: a default under the data dir (see server wiring).
     trace_log_path: str | None = None
@@ -86,12 +83,12 @@ class AskConfig:
     #: `/api/traces` endpoint can serve it. Empty string disables file writing.
     trace_dir: str | None = None
 
+    @property
+    def price(self) -> pricing.Price | None:
+        return pricing.price(self.provider, self.model)
+
     @classmethod
     def from_env(cls) -> AskConfig:
-        def _f(name: str, default: float) -> float:
-            v = os.environ.get(name)
-            return float(v) if v else default
-
         limits = product_settings.get(product_settings.AskSettings)
         selected = model_settings.get("ask")
 
@@ -107,16 +104,6 @@ class AskConfig:
             request_timeout_s=limits.request_timeout_s,
             thinking=limits.thinking,
             cache=limits.cache,
-            input_per_mtok=(
-                _f("MYCELIUM_ASK_INPUT_PER_MTOK", 1.0)
-                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
-                else None
-            ),
-            output_per_mtok=(
-                _f("MYCELIUM_ASK_OUTPUT_PER_MTOK", 5.0)
-                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
-                else None
-            ),
             trace_log_path=os.environ.get("MYCELIUM_ASK_TRACE_LOG"),
             trace_dir=(
                 os.environ.get("MYCELIUM_ASK_TRACE_DIR")

@@ -147,7 +147,7 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling traces and loop traces are written. |
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_DIR` | `MYCELIUM_TRACE_DIR` | Per-action override of the trace directory. |
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
-| `MYCELIUM_{ASK,INGEST}_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | Ask 1 / 5, ingest 3 / 15 | USD per million tokens used for the cost estimate in traces. Applied only while the action runs its default Claude model. Documentation runs price whichever Claude model ran from a built-in list-price table, including cache reads and writes; other providers get no estimate. |
+| `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude model ran from a built-in list-price table, including cache reads and writes; other providers get no estimate. |
 | `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
 | `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |

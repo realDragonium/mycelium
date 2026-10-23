@@ -1,0 +1,219 @@
+# Questions for the committed Ask evaluation, answered from seed.toml.
+#
+# facts       statements the answer must state (seed keys here; statement ids
+#             in an external case directory)
+# must_not    claims the answer must not make
+# answerable  false when the right answer is "not in the knowledge base"
+# conflict    true when the knowledge base contradicts itself and the answer
+#             must surface both sides
+
+# --- direct lookup -----------------------------------------------------------
+
+[[cases]]
+id = "trial_length"
+question = "How long does the free trial last?"
+categories = ["direct"]
+facts = ["trial_length"]
+
+[[cases]]
+id = "idle_logout"
+question = "After how much inactivity is a member logged out?"
+categories = ["direct"]
+facts = ["session_expiry"]
+
+[[cases]]
+id = "export_rows"
+question = "What is the maximum number of rows in an invoice export?"
+categories = ["direct"]
+facts = ["export_limit"]
+
+[[cases]]
+id = "guest_edit"
+question = "Can a guest edit an invoice?"
+categories = ["direct"]
+facts = ["guest_view"]
+must_not = ["A guest can edit invoices"]
+
+[[cases]]
+id = "starter_members"
+question = "How many members can a workspace on the Starter plan have?"
+categories = ["direct"]
+facts = ["starter_limit"]
+
+[[cases]]
+id = "apikey_permissions"
+question = "What permissions does an API key have?"
+categories = ["direct"]
+facts = ["apikey_scope"]
+
+# --- alias usage -------------------------------------------------------------
+
+[[cases]]
+id = "insights_refresh"
+question = "How often is Insights updated?"
+categories = ["alias", "direct"]
+facts = ["dash_refresh"]
+
+[[cases]]
+id = "activity_log_access"
+question = "Who can view the activity log?"
+categories = ["alias", "direct"]
+facts = ["audit_view"]
+
+[[cases]]
+id = "data_export_link"
+question = "How long does the download link of a data export stay valid?"
+categories = ["alias", "direct"]
+facts = ["export_link_expiry"]
+
+# --- conditional answers -----------------------------------------------------
+
+[[cases]]
+id = "twofa_code"
+question = "When is a member asked for a 2FA code?"
+categories = ["conditional", "alias"]
+facts = ["twofa_code", "twofa_on", "password_login"]
+must_not = ["Every member is always asked for a two-factor code when logging in"]
+
+[[cases]]
+id = "sso_password"
+question = "Can members still log in with email and password once SSO is required?"
+categories = ["conditional"]
+facts = ["sso_login", "password_login", "sso_required"]
+must_not = ["Members can keep logging in with email and password after SSO is required"]
+
+[[cases]]
+id = "trial_end"
+question = "What happens to a workspace when its trial ends?"
+categories = ["conditional", "multi_hop"]
+facts = ["ws_readonly", "plan_chosen"]
+must_not = ["The workspace is deleted when the trial ends"]
+
+[[cases]]
+id = "overdue"
+question = "When does an invoice become overdue?"
+categories = ["conditional"]
+facts = ["due_passes", "invoice_overdue", "invoice_paid"]
+
+# --- multi-hop through links -------------------------------------------------
+
+[[cases]]
+id = "new_workspace"
+question = "What happens after a new workspace is created?"
+categories = ["multi_hop"]
+facts = ["trial_start", "trial_length"]
+
+[[cases]]
+id = "marked_paid"
+question = "What happens when an invoice is marked as paid?"
+categories = ["multi_hop"]
+facts = ["invoice_paid", "webhook_request"]
+
+[[cases]]
+id = "csv_export_flow"
+question = "What happens after a member exports invoices as CSV?"
+categories = ["multi_hop"]
+facts = ["export_ready", "export_email", "export_link_expiry"]
+
+# --- contradictions ----------------------------------------------------------
+
+[[cases]]
+id = "reminder_timing"
+question = "How many days after the due date is a payment reminder sent?"
+categories = ["contradiction"]
+facts = ["reminder_3d", "reminder_7d"]
+conflict = true
+
+[[cases]]
+id = "dunning_alias"
+question = "When does a dunning email go out?"
+categories = ["contradiction", "alias"]
+facts = ["reminder_3d", "reminder_7d"]
+conflict = true
+
+[[cases]]
+id = "dashboard_access"
+question = "Who can see the revenue dashboard?"
+categories = ["contradiction", "spread"]
+facts = ["dash_view", "dash_admins", "guest_dash"]
+conflict = true
+
+# --- answers spread over several entities ------------------------------------
+
+[[cases]]
+id = "admin_abilities"
+question = "What can an admin do?"
+categories = ["spread"]
+facts = [
+    "sso_configure",
+    "sso_require",
+    "invite_member",
+    "guest_invite",
+    "invoice_prefix",
+    "audit_view",
+    "audit_filter",
+    "apikey_create",
+    "apikey_revoke",
+    "webhook_add",
+]
+
+[[cases]]
+id = "guest_abilities"
+question = "What can a guest do in a workspace, and who brings them in?"
+categories = ["spread"]
+facts = ["guest_invite", "guest_view", "guest_dash"]
+
+[[cases]]
+id = "plan_controls"
+question = "What does the billing plan control, and who can change it?"
+categories = ["spread"]
+facts = ["seat_limit", "plan_change", "starter_limit", "team_limit"]
+
+[[cases]]
+id = "webhooks"
+question = "How do webhooks work?"
+categories = ["spread", "multi_hop"]
+facts = ["webhook_add", "webhook_request", "invoice_marked_paid", "webhook_retry"]
+
+[[cases]]
+id = "invoice_numbers"
+question = "How are invoice numbers formed?"
+categories = ["spread"]
+facts = ["invoice_number", "invoice_prefix"]
+
+# --- not in the knowledge base -----------------------------------------------
+
+[[cases]]
+id = "apikey_expiry"
+question = "Do API keys expire?"
+categories = ["unanswerable"]
+answerable = false
+must_not = ["API keys expire after a period of time", "API keys never expire"]
+
+[[cases]]
+id = "audit_retention"
+question = "How long is the audit log kept?"
+categories = ["unanswerable"]
+answerable = false
+must_not = ["The audit log is kept for a specific period"]
+
+[[cases]]
+id = "team_plan_price"
+question = "What does the Team plan cost per month?"
+categories = ["unanswerable"]
+answerable = false
+must_not = ["The Team plan has a specific monthly price"]
+
+[[cases]]
+id = "csv_import"
+question = "Can I import invoices from a CSV file?"
+categories = ["unanswerable"]
+answerable = false
+must_not = ["Invoices can be imported from a CSV file"]
+
+[[cases]]
+id = "crypto_payment"
+question = "Can customers pay an invoice with cryptocurrency?"
+categories = ["unanswerable"]
+answerable = false
+must_not = ["Customers can pay invoices with cryptocurrency"]
