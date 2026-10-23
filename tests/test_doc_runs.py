@@ -1140,3 +1140,34 @@ def test_manual_edit_creates_revision_with_exact_body_and_keeps_previous(tmp_pat
     )
     assert docs_store.get_revision(conn, document_id, 1)["body"] == "Original body"
     assert docs_store.get_run(conn, run_id)["draft_body"] is None
+
+
+def test_an_anchor_must_name_an_entity_and_becomes_the_request_identity(_stores):
+    from mycelium import store
+
+    drafts_conn, prompts_conn = _stores
+    _save_set(prompts_conn, "kb-authoring", ["guidance", "how-to"])
+    substrate = store.connect(":memory:")
+    store.migrate(substrate)
+    store.use_substrate_connection(substrate)
+    try:
+        entity = store.create_entity(substrate, "Single sign-on")
+        substrate.commit()
+        doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: _document()
+        identity = {"guideline_set": "kb-authoring", "document_type": "how-to"}
+
+        with pytest.raises(ValueError, match="anchor entity not found: ent_gone"):
+            server.request_documentation("p", anchor_entity_id="ent_gone", **identity)
+        assert docs_store.list_runs(drafts_conn) == []
+
+        first = server.request_documentation("p", anchor_entity_id=entity, **identity)
+        doc_runs.wait_all()
+        document_id = docs_store.get_run(drafts_conn, first["id"])["document_id"]
+        assert first["anchor_entity_id"] == entity
+
+        again = server.request_documentation("p", anchor_entity_id=entity, **identity)
+        doc_runs.wait_all()
+        assert again["target_document_id"] == document_id
+    finally:
+        store.reset_substrate()
+        substrate.close()

@@ -8,7 +8,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -648,3 +648,75 @@ def test_refresh_reuses_a_recent_answer(conn, github):
     publication.refresh_pull_request(conn, document_id)
 
     assert _serialized(conn, document_id)["delivery_status"] == "published"
+
+
+# --- the same loop through the HTTP routes ----------------------------------
+
+
+def test_the_http_routes_track_the_pull_request_and_offer_both_sides(
+    conn, github, monkeypatch
+):
+    from fastapi.testclient import TestClient
+
+    from mycelium import auth, drafts_store, guidelines, prompt_store
+    from mycelium.http import AuthMiddleware, app
+
+    async def writer(*_):
+        return auth.Principal(id="w", name="Writer", role="writer", type="human")
+
+    monkeypatch.setattr(AuthMiddleware, "_resolve", writer)
+    prompts = prompt_store.connection()
+    # Routes run on worker threads, past a thread-pinned connection.
+    monkeypatch.setattr(drafts_store, "connection", lambda: conn)
+    monkeypatch.setattr(prompt_store, "connection", lambda: prompts)
+    for slot in ("guidance", "how-to"):
+        prompt_store.save(prompts, type=guidelines.TYPE, name=f"kb/{slot}", text="t")
+    monkeypatch.setattr(
+        doc_runs,
+        "_default_runner",
+        lambda prompt, *, revision_target, **kwargs: {
+            "outcome": "document_written",
+            "slug": "sso",
+            "title": "SSO",
+            "body": revision_target.current.body + prompt + "\n",
+            "statement_ids": ["stm_1"],
+        },
+    )
+    client = TestClient(app)
+    document_id = _document(conn)
+    url = f"/api/documentation/documents/{document_id}"
+    delivered = client.post(
+        url + "/delivery", json={"destination": "docs", "expected_revision": 1}
+    )
+    assert delivered.json()["pull_request_number"] == 17
+    assert client.get(url).json()["pull_request"]["state"] == "open"
+
+    github.commit_file(f"mycelium/docs/sso-{document_id}", "docs/sso.md", "# Ed\n")
+    docs_store.upsert_document(
+        conn,
+        slug="sso",
+        title="SSO",
+        body="# SSO, edited here too\n",
+        guideline_set="kb",
+        document_type="how-to",
+        updates=document_id,
+        replacing=docs_store.body_digest("# SSO\n"),
+        expected_revision=1,
+    )
+    revise = {"prompt": "Tidy.", "expected_revision": 2}
+    refused = client.post(url + "/revisions", json=revise)
+    assert (refused.status_code, refused.json()["code"]) == (
+        409,
+        "both_sides_edited",
+    )
+
+    run = client.post(
+        url + "/revisions", json={**revise, "start_from_destination": True}
+    ).json()
+    doc_runs.wait_all()
+    assert run["revision_base"] == "destination"
+    assert docs_store.get_document(conn, document_id)["body"] == "# Ed\nTidy.\n"
+
+    github.merge(17)
+    monkeypatch.setattr(publication, "REFRESH_INTERVAL", timedelta(0))
+    assert client.get(url).json()["pull_request"]["state"] == "merged"

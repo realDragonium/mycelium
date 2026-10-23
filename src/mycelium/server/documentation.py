@@ -12,9 +12,10 @@ from __future__ import annotations
 import json as _json
 from typing import Any, Literal
 
+from .. import store
 from ..require import require
 from .registry import tool
-from .runtime import _drafts_db, _prompts_db
+from .runtime import _db, _drafts_db, _prompts_db
 
 
 def _check_guideline_selection(
@@ -69,6 +70,7 @@ def request_documentation(
     document_type: str | None = None,
     provider: Literal["claude", "openai"] | None = None,
     match_existing: bool = True,
+    anchor_entity_id: str | None = None,
 ) -> dict[str, Any]:
     """Request a background documentation run: generate one document from
     `prompt` and store it as a generated document.
@@ -91,6 +93,10 @@ def request_documentation(
     (default claude). The configured model is captured for writing and review.
     Use list_documentation_models for available choices.
     match_existing defaults to True; False disables matching an existing document.
+    `anchor_entity_id` names the entity the document is about. With
+    `guideline_set` and `document_type` (both required alongside it) it is the
+    document's identity: a repeat request revises the document holding that
+    identity instead of creating a second one, and title matching is skipped.
     Returns {run row: id, prompt, guideline_set, document_type, provider, model, status,
     created_at, created_by, started_at, finished_at, outcome, document_id,
     error}."""
@@ -111,6 +117,11 @@ def request_documentation(
     guideline_set = _optional_name(guideline_set)
     document_type = _optional_name(document_type)
     _check_guideline_selection(guideline_set, document_type)
+    anchor_entity_id = _optional_name(anchor_entity_id)
+    if anchor_entity_id is not None and (
+        store.get_entity_by_id(_db(), anchor_entity_id) is None
+    ):
+        raise ValueError(f"anchor entity not found: {anchor_entity_id}")
 
     principal = _auth.current_principal.get()
     created_by = principal.id if principal is not None else None
@@ -122,6 +133,7 @@ def request_documentation(
         conn=_drafts_db(),
         provider=provider,
         match_existing=match_existing,
+        anchor_entity_id=anchor_entity_id,
     )
     row = require(
         docs_store.get_run(_drafts_db(), run_id), "documentation run just created"
@@ -135,8 +147,16 @@ def revise_document(
     expected_revision: int,
     prompt: str,
     provider: Literal["claude", "openai"] | None = None,
+    start_from_destination: bool = False,
 ) -> dict[str, object]:
-    """Iterate on exactly the selected internal document version."""
+    """Iterate on exactly the selected internal document version.
+
+    A delivered document's revision starts from its published copy when
+    people edited it there and nothing here is unpublished. When both sides
+    changed, the request is refused before a run exists; pass
+    `start_from_destination` to start from the published text anyway, keeping
+    the unpublished revision in history. Returns the serialized run row, whose
+    `revision_base` says which text the run started from."""
     from .. import auth, doc_runs, docs_store
     from ..docgen.config import DocgenConfig
 
@@ -160,6 +180,7 @@ def revise_document(
         target_document_id=document_id,
         expected_revision=expected_revision,
         match_existing=False,
+        start_from_destination=start_from_destination,
     )
     return docs_store.serialize_run(
         require(docs_store.get_run(_drafts_db(), run_id), "new documentation run")
@@ -284,9 +305,14 @@ def list_generated_documents() -> dict[str, Any]:
 def get_generated_document(document_id: str) -> dict[str, Any]:
     """Fetch one generated document by id, including its body.
 
-    Returns the serialized document row. Raises for an unknown document_id."""
+    A document with a pull request first asks GitHub what became of it, at
+    most once a minute; `pull_request.refreshed_at` says when the state shown
+    was read. Returns the serialized document row. Raises for an unknown
+    document_id."""
     from .. import docs_store
+    from ..docgen import publication
 
+    publication.refresh_pull_request(_drafts_db(), document_id)
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
         raise ValueError(f"generated document not found: {document_id}")
@@ -303,61 +329,16 @@ def deliver_document(
 
     Existing documents reuse recorded repository coordinates and path. A receipt
     belongs to the captured immutable version even when generation advances the
-    document while GitHub is processing the publication.
+    document while GitHub is processing the publication. The pull request is
+    tracked: get_generated_document reports whether it is open, merged or
+    closed. Returns {destination, path, reference, content_revision,
+    pull_request_number, revision}.
     """
-    from .. import docs_store
-    from ..docgen import destinations
+    from ..docgen import publication
 
-    with destinations.publication_lock(document_id):
-        row = docs_store.get_document(_drafts_db(), document_id)
-        if row is None:
-            raise ValueError("generated document not found")
-        revision = (
-            int(row["current_revision"])
-            if expected_revision is None
-            else expected_revision
-        )
-        row = docs_store.require_revision(_drafts_db(), document_id, revision)
-        try:
-            configured, binding = destinations.publishing_destination(row, destination)
-        except destinations.DestinationError as exc:
-            raise ValueError(str(exc)) from None
-        document = destinations.DeliveryDocument(
-            id=str(row["id"]),
-            slug=str(row["slug"]),
-            title=str(row["title"]),
-            body=str(row["body"]),
-            guideline_set=str(row["guideline_set"]),
-            document_type=str(row["document_type"]),
-            statement_ids=tuple(_json.loads(row["statement_ids"])),
-            delivered_path=str(row["delivery_path"])
-            if row["delivery_path"] is not None
-            else None,
-            delivered_content_revision=str(row["delivery_content_revision"])
-            if row["delivery_content_revision"] is not None
-            else None,
-            revision_source_content_revision=str(
-                row["revision_source_content_revision"]
-            )
-            if row["revision_source_content_revision"] is not None
-            else None,
-        )
-        try:
-            delivery = destinations.deliver_document(configured, document)
-        except destinations.DestinationError as exc:
-            raise ValueError(str(exc)) from None
-        docs_store.record_delivery(
-            _drafts_db(),
-            document_id,
-            destination=delivery.destination,
-            path=delivery.path,
-            reference=delivery.reference,
-            content_revision=delivery.content_revision,
-            target=destinations.target_identity(configured),
-            revision=revision,
-            binding=binding,
-        )
-        return {**delivery.serialize(), "revision": revision}
+    return publication.publish(
+        _drafts_db(), document_id, destination, expected_revision
+    )
 
 
 @tool

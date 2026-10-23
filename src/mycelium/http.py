@@ -54,6 +54,7 @@ from . import (
 from . import (
     draft_review_settings as review_settings,
 )
+from .docgen.publication import BothSidesEdited
 from .docgen.schema import ManualDocument
 from .server import registry, runtime
 
@@ -1399,6 +1400,7 @@ class DocumentationRequestBody(BaseModel):
     guideline_set: str | None = None
     document_type: str | None = None
     provider: Literal["claude", "openai"] | None = None
+    anchor_entity_id: str | None = None
 
 
 @app.get("/api/documentation/options")
@@ -1501,6 +1503,7 @@ class DocumentRevisionBody(BaseModel):
     prompt: str
     expected_revision: int = PydField(ge=1, strict=True)
     provider: Literal["claude", "openai"] | None = None
+    start_from_destination: bool = False
 
 
 class DocumentDeliveryBody(BaseModel):
@@ -1560,6 +1563,17 @@ def document_revision_http(
         from fastapi import HTTPException
 
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.exception_handler(BothSidesEdited)
+async def _both_sides_edited_handler(
+    request: Request, exc: BothSidesEdited
+) -> JSONResponse:
+    """A conflict the caller resolves by choosing a side, so the client gets a
+    code to offer `start_from_destination` on rather than a message to parse."""
+    return JSONResponse(
+        status_code=409, content={"detail": str(exc), "code": "both_sides_edited"}
+    )
 
 
 @app.post("/api/documentation/documents/{document_id}/revisions")

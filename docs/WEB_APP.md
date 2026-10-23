@@ -26,7 +26,7 @@ focuses it.
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links |
 | | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities |
 | | Entity map | `#/entities?focus=<id>` | Entities and their links; add and remove entity links |
-| | Documents | `#/documentation` | Generate, edit, review and publish documents |
+| | Documents | `#/documentation` | Generate (optionally about a concept), edit, review and publish documents; see each pull request's state; revise from the published copy when both sides changed |
 | Add knowledge | Ingest text | `#/ingest` | Paste prose; a loop extracts a draft |
 | | Research | `#/research?topic=…` | Point a run at a configured repository |
 | Curate | Drafts | `#/drafts`, `#/drafts/<id>` | Review, edit, submit, approve, reject or withdraw drafts; answer the reviewer's questions |
@@ -81,8 +81,8 @@ At start the app loads the whole substrate from `GET /api/data` and builds an
 index in memory. Find, Ask, drafts, gaps, activity, documents, names and
 settings use their own endpoints. These screens still read the in-memory dump:
 Browse, statement and entity detail, both graphs, the draft graph, activity's
-context panel, Find's grep entity strip, Ask's provenance titles, and Home's
-counts.
+context panel, Find's grep entity strip, Ask's provenance titles, the
+Documents concept picker, and Home's counts.
 
 ## Design system
 

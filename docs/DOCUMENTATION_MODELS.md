@@ -14,7 +14,17 @@ OpenAI uses `OPENAI_API_KEY`. Model IDs and provider defaults are saved through
 the settings UI. The provider list reports local configuration, not a live check
 of model access, quota, or compatibility. Failures never silently switch providers.
 
-A new UI generation creates a document. To improve an existing one, open it from
+A new UI generation creates a document. Naming the concept it is about, with a
+writing profile and template, gives it a stable identity: a later request for
+the same concept, profile and template revises that document instead of
+creating another (`anchor_entity_id` over MCP).
+
+Publishing opens or updates a GitHub pull request, and the document shows
+whether it is open, merged or closed. Mycelium asks GitHub when the document is
+opened, at most once a minute, and keeps the last known state when GitHub
+cannot be reached.
+
+ To improve an existing one, open it from
 **Documents** and describe the change under **Create revision**. This targets the
 exact internal version on screen, preserving its identity and earlier revisions.
 If another run changes the document first, reload its current revision before
@@ -26,8 +36,11 @@ first. Mycelium recognises every text it published itself. Any other text there
 is someone's edit, and the revision starts from it, telling the writer to keep
 it. The run records this as `revision_base: destination`. If the document also
 has a revision here that was never published, Mycelium refuses rather than
-merging the two. To continue from the revision here, undo the GitHub edits or
-close the pull request without merging. A deleted file in an open pull request
+merging the two. To keep the GitHub edits, choose **Start from the published
+copy on GitHub** (`start_from_destination` over MCP): the revision starts from
+the GitHub text and the unpublished revision stays in the history. To continue
+from the revision here instead, undo the GitHub edits or close the pull request
+without merging. A deleted file in an open pull request
 is refused the same way. If the published copy cannot be read, the revision is
 refused until the connection or credential binding is restored. A manual edit
 does not read GitHub, so publishing it is refused over GitHub edits it did not
