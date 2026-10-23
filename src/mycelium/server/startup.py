@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .. import databases, quarantine, store, vector
+from .. import databases, embed, quarantine, store, vector
 from ..app_context import AppContext
 from ..layout_baker import LayoutBaker
 from . import runtime
@@ -26,13 +26,17 @@ from .indexes import (
     _clear_dirty_marker,
     _dirty_marker_path,
     _fsync_file,
+    _meta_path,
+    _read_index_identity,
     _rebuild_vector_index,
     _write_dirty_marker,
+    _write_index_identity,
 )
 from .prompt_texts import _seed_prompt_texts
 from .runtime import _auth_db, _db, _drafts_db, _prompts_db
 
 logger = logging.getLogger(__name__)
+index_logger = logging.getLogger("mycelium.server.indexes")
 
 Phase = Literal["starting", "migrating", "indexing", "ready", "failed"]
 
@@ -78,6 +82,29 @@ class _Progress(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         if _startup is not None:
             _report(_startup.state, record.getMessage())
+
+
+def _log_index_rebuild_reason(
+    label: str,
+    index_path: Path,
+    *,
+    dirty: bool,
+    recorded_identity: str,
+    configured_identity: str,
+) -> None:
+    if dirty:
+        index_logger.warning(
+            "rebuilding %s vector index: dirty marker indicates a crash "
+            "before the index was persisted",
+            label,
+        )
+    elif index_path.exists() and recorded_identity != configured_identity:
+        index_logger.warning(
+            "rebuilding %s vector index: built by %s, configured embedder is %s",
+            label,
+            recorded_identity,
+            configured_identity,
+        )
 
 
 def init(data_dir: Path) -> None:
@@ -191,20 +218,27 @@ def _init(data_dir: Path) -> None:
 
     # The .vec files are re-derivable from the substrate, so a backup may omit
     # them while keeping the *_vector_ids mappings in the DB. When a .vec is
-    # missing (a fresh checkout, or a restore of such a backup) or marked dirty
-    # after an interrupted write, rebuild the index by re-embedding, or search
+    # missing (a fresh checkout, or a restore of such a backup), marked dirty,
+    # or built by another embedder, rebuild the index by re-embedding, or search
     # could silently use vectors that diverge from the populated substrate.
     _report("indexing", "Loading the vector indexes")
+    configured_identity = embed.identity()
     index_path = data_dir / "mycelium.vec"
     index_dirty = _dirty_marker_path(index_path).exists()
-    if index_path.exists() and not index_dirty:
+    index_identity = _read_index_identity(index_path)
+    index_matches = index_identity == configured_identity
+    if index_path.exists() and not index_dirty and index_matches:
         index = vector.Index.load(index_path)
+        if not _meta_path(index_path).exists():
+            _write_index_identity(index_path, configured_identity)
     else:
-        if index_dirty:
-            logger.warning(
-                "rebuilding statement vector index: dirty marker indicates a "
-                "crash before the index was persisted"
-            )
+        _log_index_rebuild_reason(
+            "statement",
+            index_path,
+            dirty=index_dirty,
+            recorded_identity=index_identity,
+            configured_identity=configured_identity,
+        )
         _write_dirty_marker(index_path)
         index = vector.Index.empty()
         with store.transaction(_db()):
@@ -218,11 +252,14 @@ def _init(data_dir: Path) -> None:
             )
         index.save(index_path)
         _fsync_file(index_path)
+        _write_index_identity(index_path, configured_identity)
         _clear_dirty_marker(index_path)
 
     name_index_path = data_dir / "mycelium-names.vec"
     name_index_dirty = _dirty_marker_path(name_index_path).exists()
-    if name_index_path.exists() and not name_index_dirty:
+    name_index_identity = _read_index_identity(name_index_path)
+    name_index_matches = name_index_identity == configured_identity
+    if name_index_path.exists() and not name_index_dirty and name_index_matches:
         name_index = vector.Index.load(name_index_path)
         # A migration can drop name rows and their vector mappings while
         # the persisted index keeps the vectors (v6's case-variant merge
@@ -241,12 +278,16 @@ def _init(data_dir: Path) -> None:
             name_index.save(name_index_path)
             _fsync_file(name_index_path)
             _clear_dirty_marker(name_index_path)
+        if not _meta_path(name_index_path).exists():
+            _write_index_identity(name_index_path, configured_identity)
     else:
-        if name_index_dirty:
-            logger.warning(
-                "rebuilding name vector index: dirty marker indicates a crash "
-                "before the index was persisted"
-            )
+        _log_index_rebuild_reason(
+            "name",
+            name_index_path,
+            dirty=name_index_dirty,
+            recorded_identity=name_index_identity,
+            configured_identity=configured_identity,
+        )
         _write_dirty_marker(name_index_path)
         name_index = vector.Index.empty()
         with store.transaction(_db()):
@@ -260,6 +301,7 @@ def _init(data_dir: Path) -> None:
             )
         name_index.save(name_index_path)
         _fsync_file(name_index_path)
+        _write_index_identity(name_index_path, configured_identity)
         _clear_dirty_marker(name_index_path)
 
     _report("starting", "Starting background workers")

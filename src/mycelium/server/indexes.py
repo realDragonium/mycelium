@@ -10,9 +10,11 @@ marker found at startup means the file may disagree with the database, and
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import sqlite3
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -21,6 +23,9 @@ from .. import embed, store, vector
 from .runtime import _db, _idx, _idx_path, _name_idx, _name_idx_path
 
 logger = logging.getLogger(__name__)
+
+_REBUILD_BATCH = embed.OPENAI_BATCH
+_INVALID_IDENTITY = "<invalid index identity>"
 
 
 def _rebuild_vector_index(
@@ -41,26 +46,30 @@ def _rebuild_vector_index(
     valid — and allocate (and persist) a fresh id only for rows with none.
     Called during `init` before the context is assembled, so the index is
     passed explicitly rather than reached through an accessor."""
-    if rows:
-        logger.info(
-            "rebuilding %s vector index: re-embedding %d row(s)", label, len(rows)
-        )
+    logger.info(
+        "rebuilding %s vector index with %s: re-embedding %d row(s)",
+        label,
+        embed.identity(),
+        len(rows),
+    )
     started = time.monotonic()
-    step = max(1, len(rows) // 20)
-    for done, row in enumerate(rows, start=1):
-        existing = get_id(_db(), row["id"])
-        vid = existing if existing is not None else next_id(_db())
-        index.add(vid, embed.embed(row["text"]))
-        if existing is None:
-            set_id(_db(), row["id"], vid)
-        if done % step == 0 or done == len(rows):
-            logger.info(
-                "rebuilding %s vector index: %d/%d re-embedded (%.0fs)",
-                label,
-                done,
-                len(rows),
-                time.monotonic() - started,
-            )
+    for start in range(0, len(rows), _REBUILD_BATCH):
+        batch = rows[start : start + _REBUILD_BATCH]
+        vectors = embed.embed_many([row["text"] for row in batch])
+        for row, embedding in zip(batch, vectors, strict=True):
+            existing = get_id(_db(), row["id"])
+            vid = existing if existing is not None else next_id(_db())
+            index.add(vid, embedding)
+            if existing is None:
+                set_id(_db(), row["id"], vid)
+        done = start + len(batch)
+        logger.info(
+            "rebuilding %s vector index: %d/%d re-embedded (%.0fs)",
+            label,
+            done,
+            len(rows),
+            time.monotonic() - started,
+        )
 
 
 def _persist_index() -> None:
@@ -73,6 +82,41 @@ def _persist_name_index() -> None:
 
 def _dirty_marker_path(index_path: Path) -> Path:
     return index_path.with_name(index_path.name + ".dirty")
+
+
+def _meta_path(index_path: Path) -> Path:
+    return index_path.with_name(index_path.name + ".meta.json")
+
+
+def _read_index_identity(index_path: Path) -> str:
+    path = _meta_path(index_path)
+    if not path.exists():
+        return embed.LEGACY_IDENTITY
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return _INVALID_IDENTITY
+    if not isinstance(payload, dict):
+        return _INVALID_IDENTITY
+    identity = payload.get("embedder")
+    return identity if isinstance(identity, str) else _INVALID_IDENTITY
+
+
+def _write_index_identity(index_path: Path, identity: str) -> None:
+    path = _meta_path(index_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump({"embedder": identity}, file)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp_path, path)
+        _fsync_file(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _fsync_file(path: Path) -> None:

@@ -8,6 +8,23 @@ import os
 
 import pytest
 
+from mycelium import embed as embed_module
+
+_real_embed_many = embed_module.embed_many
+
+
+@pytest.fixture(autouse=True)
+def _route_batched_embeddings_through_embed(monkeypatch):
+    """Keep rebuilds driven by each test's runtime monkeypatch of embed.embed."""
+
+    def embed_many(texts):
+        return [embed_module.embed(text) for text in texts]
+
+    embed_module.reset()
+    monkeypatch.setattr(embed_module, "embed_many", embed_many)
+    yield
+    embed_module.reset()
+
 
 @pytest.fixture(autouse=True)
 def _isolate_prompt_store():

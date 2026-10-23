@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from mycelium import backup, docs_store, drafts_store, prompt_store, store
+from mycelium import backup, docs_store, drafts_store, prompt_store, store, vector
 
 # Build the substrate via the same store helpers normal writes go
 # through, so audit columns and history events populate naturally.
@@ -205,6 +205,28 @@ def test_export_documentation_uses_the_drafts_snapshot(tmp_path, monkeypatch):
     assert manifest["includes_drafts"] is True
     assert manifest["includes_documentation"] is True
     assert manifest["row_counts"]["generated_documents"] == 1
+
+
+def test_vector_identity_sidecars_round_trip(tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    for name in ("mycelium.vec", "mycelium-names.vec"):
+        vector.Index.empty().save(src / name)
+        (src / f"{name}.meta.json").write_text(
+            '{"embedder": "ollama/nomic-embed-text/768"}\n', encoding="utf-8"
+        )
+
+    archive = tmp_path / "snap.tar.gz"
+    backup.export_substrate(src, archive)
+    dst = tmp_path / "dst"
+    backup.import_substrate(archive, dst)
+
+    for name in ("mycelium.vec", "mycelium-names.vec"):
+        assert (dst / name).exists()
+        assert (dst / f"{name}.meta.json").read_text(encoding="utf-8") == (
+            '{"embedder": "ollama/nomic-embed-text/768"}\n'
+        )
 
 
 # --- import -----------------------------------------------------------------
