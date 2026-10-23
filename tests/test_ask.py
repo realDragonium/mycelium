@@ -297,6 +297,23 @@ def test_quick_depth_accepts_first_submit_without_the_floor():
     assert ("search_statements", {"query": "retry"}) not in substrate.calls
 
 
+def test_strict_terminal_schemas_require_at_most_one_array_item():
+    """Claude rejects the whole request when a strict tool's array needs more."""
+    from mycelium.ask.tools import terminal_tool_defs
+
+    def min_items(node: object) -> list[int]:
+        if isinstance(node, dict):
+            own = [node["minItems"]] if "minItems" in node else []
+            return own + [n for value in node.values() for n in min_items(value)]
+        if isinstance(node, list):
+            return [n for value in node for n in min_items(value)]
+        return []
+
+    for tool in terminal_tool_defs():
+        assert tool["strict"] is True
+        assert all(n <= 1 for n in min_items(tool["input_schema"])), tool["name"]
+
+
 def test_quick_depth_tool_defs_drop_the_adjacency_requirement():
     """The submit tool the model sees in quick mode must not claim the adjacency
     re-search is required/gating — otherwise the model does the expensive work
