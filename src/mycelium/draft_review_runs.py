@@ -417,7 +417,10 @@ def _context(
         "knowledge_scope": (
             "existing_knowledge holds the records the draft touches, followed by "
             "the closest live statements to each new statement, best matches "
-            "first. Supplied evidence, when present, comes from the producer. "
+            "first. Supplied evidence, when present, comes from the producer: "
+            "review_evidence for the whole draft, and each operation's "
+            "evidence for that operation, citing what the producer checked in "
+            "the product's code, UI or docs. "
             "answers_from_curators, when present, holds answers a curator gave "
             "to earlier review questions; only these answers come from a "
             "curator."

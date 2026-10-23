@@ -1017,3 +1017,39 @@ def test_new_statement_context_includes_its_closest_live_statements(
     assert statement_id in json.dumps(context["existing_knowledge"])
     assert context["link_types"]
     assert any(item["id"] == statement_id for item in result["knowledge_preconditions"])
+
+
+def test_operation_evidence_reaches_the_reviewer(running_app, monkeypatch):
+    contexts = []
+
+    def model(context):
+        contexts.append(context)
+        return _assessment()
+
+    monkeypatch.setattr(draft_review_runs, "RUNNER", model)
+    token = _principal("drafter")
+    try:
+        queued = server.upsert_entity(name="Invoice", description="A bill.")
+        server.set_operation_evidence(
+            queued["draft_id"],
+            queued["operation_ref"],
+            [
+                {
+                    "kind": "code",
+                    "path": "billing/invoice.py",
+                    "excerpt": "class Invoice(Model):",
+                    "claim": "Invoices are a billing model.",
+                }
+            ],
+            queued["revision"],
+        )
+        _set_review_controls(mode="review-only")
+        server.submit_draft(queued["draft_id"])
+    finally:
+        auth.current_principal.reset(token)
+    draft_review_runs.wait_all()
+
+    (context,) = contexts
+    (op,) = json.loads(context)["draft"]["ops"]
+    assert op["evidence"][0]["excerpt"] == "class Invoice(Model):"
+    assert "each operation's evidence" in json.loads(context)["knowledge_scope"]
