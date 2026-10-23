@@ -406,7 +406,7 @@ export function StatementDetail({ id }: { id: string }) {
         title={<span className="sr-only">Statement {s.id}</span>}
         actions={<>
           <CopyId id={s.id} />
-          <Link to={{ view: 'graph', focus: s.id }} className="btn ghost sm"><I.graph width="14" height="14" />View in graph</Link>
+          <Link to={{ view: 'graph', focus: s.id, all: false }} className="btn ghost sm"><I.graph width="14" height="14" />View in graph</Link>
           <button className="btn sm ask" onClick={() => go({ view: 'ask', query: `Explain: ${s.title}` })}><I.ask width="14" height="14" />Ask about this</button>
         </>} />
 
@@ -500,8 +500,8 @@ export function EntityDetail({ id }: { id: string }) {
         blurb={e.description}
         actions={<>
           <Link to={{ view: 'find', query: e.name, mode: 'grep' }} className="btn ghost sm"><I.find width="13" height="13" />Find mentions</Link>
-          <Link to={{ view: 'entities', focus: e.id }} className="btn ghost sm"><I.hub width="14" height="14" />Entity map</Link>
-          <Link to={{ view: 'graph', focus: e.id }} className="btn ghost sm"><I.graph width="14" height="14" />Statement graph</Link>
+          <Link to={{ view: 'entities', focus: e.id, all: false }} className="btn ghost sm"><I.hub width="14" height="14" />Entity map</Link>
+          <Link to={{ view: 'graph', focus: e.id, all: false }} className="btn ghost sm"><I.graph width="14" height="14" />Statement graph</Link>
         </>} />
       {aliases.length > 0 && <div className="alias-row">{aliases.map(n => <span key={n.id} className="alias">{n.text}</span>)}</div>}
 
@@ -522,7 +522,7 @@ export function EntityDetail({ id }: { id: string }) {
               <EntityLinks title="outgoing" links={outLinks} dir="out" />
               <EntityLinks title="incoming" links={inLinks} dir="in" />
             </div>
-            {!scoped && <p className="hint">Add or remove entity links on the <Link to={{ view: 'entities', focus: e.id }}>entity map</Link>.</p>}
+            {!scoped && <p className="hint">Add or remove entity links on the <Link to={{ view: 'entities', focus: e.id, all: false }}>entity map</Link>.</p>}
           </section>
         </div>
         <aside className="rail">

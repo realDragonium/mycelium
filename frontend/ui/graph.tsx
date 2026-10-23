@@ -1,5 +1,5 @@
 // Force-directed graph view for Mycelium.
-import React from 'react';
+import React, { type ReactNode } from 'react';
 import { useState as useStateG, useEffect as useEffectG, useRef as useRefG, useMemo as useMemoG } from 'react';
 import { getJSON } from './api';
 import { fitCamera, neighbourhood } from './graph-fit';
@@ -113,8 +113,12 @@ const KNOWN_STMT_ENTITY_TYPES = new Set(Object.values(STMT_ENTITY_EDGE_BY_KIND))
 // calc. Use it when GraphView is mounted inside a smaller area (the
 // draft detail page, future inline-graph spots). The canvas itself and
 // every interaction stay identical.
-function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded = false }: {
-  focusId?: string | null; data?: SubstrateData; index?: SubstrateIndex; embedded?: boolean;
+// `layout="spiral"` places entities by mention count around the middle
+// rather than at their baked positions: a neighbourhood's entities are
+// scattered across the baked map, so framing them all leaves every node a dot.
+function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded = false, scope, layout = 'baked' }: {
+  focusId?: string | null; data?: SubstrateData; index?: SubstrateIndex; embedded?: boolean; scope?: ReactNode;
+  layout?: 'baked' | 'spiral';
 }) {
   const router = useRouter();
   const { theme } = usePrefs().prefs;
@@ -381,8 +385,17 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       const entityIdx = nodes.filter(n => n.kind === 'entity');
       const baked = positionsRef.current && positionsRef.current.map;
       const entityPos: Record<string, { x: number; y: number }> = {};
+      if (layout === 'spiral') {
+        const mentions = (id: string) => (idx.mentionsByEntity[id] || []).length;
+        [...entityIdx].sort((a, b) => mentions(b.id) - mentions(a.id)).forEach((e, i) => {
+          const r = 140 * COMPACT_MULT * Math.sqrt(i);
+          const angle = i * 2.39996;
+          entityPos[e.id] = { x: ORIGIN_X + r * Math.cos(angle), y: ORIGIN_Y + r * Math.sin(angle) };
+        });
+      }
       for (const e of entityIdx) {
         const p = baked ? baked[e.id] : null;
+        if (entityPos[e.id]) continue;
         if (p) {
           entityPos[e.id] = {
             x: ORIGIN_X + p.x * ENTITY_LAYOUT_SCALE,
@@ -1382,6 +1395,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       </div>
 
       {!embedded && <aside className="graph-side">
+        {scope}
         {!selected && (
           <div>
             <h3>Graph</h3>

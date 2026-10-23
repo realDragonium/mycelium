@@ -11,6 +11,7 @@ import { EntityDetail, StatementDetail } from './inspect';
 import { FindResults } from './find';
 import { CommandBar } from './command-bar';
 import { GlossaryScreen } from './glossary';
+import { FocusedStatementGraph, GraphPicker, GraphScope } from './graph-scope';
 import { GraphView } from './graph';
 import { HomeScreen } from './home';
 import { IngestSurface } from './ingest';
@@ -22,7 +23,7 @@ import { usd, type Budget } from './ai-usage';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, LoadError, Loading, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
 import { getJSON, getServerInfo, isScoped, type KnowledgeGap, type Me } from './api';
-import { ensureSubstrate, loadSubstrate, substrateLoaded } from './data';
+import { ensureSubstrate, loadSubstrate, substrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
 import { useAsync, useOnSettingsSaved } from './use-async';
 import { useSetup } from './setup';
@@ -35,8 +36,8 @@ function navGroups(activeDrafts: number, openGaps: number, documentUpdates: numb
     { title: null, items: [{ label: 'Home', icon: 'home', to: { view: 'home' }, views: ['home'] }] },
     { title: 'Explore', items: [
       { label: 'Browse', icon: 'table', to: { view: 'browse' }, views: ['browse', 'statement', 'entity'] },
-      { label: 'Statement graph', icon: 'graph', to: { view: 'graph', focus: null }, views: ['graph'] },
-      { label: 'Entity map', icon: 'hub', to: { view: 'entities', focus: null }, views: ['entities'] },
+      { label: 'Statement graph', icon: 'graph', to: { view: 'graph', focus: null, all: false }, views: ['graph'] },
+      { label: 'Entity map', icon: 'hub', to: { view: 'entities', focus: null, all: false }, views: ['entities'] },
       { label: 'Documents', icon: 'doc', to: { view: 'documentation' }, views: ['documentation'] },
       { label: 'Glossary', icon: 'book', to: { view: 'glossary' }, views: ['glossary'] },
     ] },
@@ -45,8 +46,8 @@ function navGroups(activeDrafts: number, openGaps: number, documentUpdates: numb
     { title: null, items: [{ label: 'Home', icon: 'home', to: { view: 'home' }, views: ['home'] }] },
     { title: 'Explore', items: [
       { label: 'Browse', icon: 'table', to: { view: 'browse' }, views: ['browse', 'statement', 'entity'] },
-      { label: 'Statement graph', icon: 'graph', to: { view: 'graph', focus: null }, views: ['graph'] },
-      { label: 'Entity map', icon: 'hub', to: { view: 'entities', focus: null }, views: ['entities'] },
+      { label: 'Statement graph', icon: 'graph', to: { view: 'graph', focus: null, all: false }, views: ['graph'] },
+      { label: 'Entity map', icon: 'hub', to: { view: 'entities', focus: null, all: false }, views: ['entities'] },
       { label: 'Documents', icon: 'doc', to: { view: 'documentation' }, views: ['documentation'], badge: documentUpdates },
     ] },
     { title: 'Add knowledge', items: [
@@ -213,10 +214,15 @@ function BlockedWorkBanner() {
 /* ---------------- Screen for a route ---------------- */
 type ScreenProps = { route: Route; ingestNonce: number; refresh: () => Promise<void> };
 
-// Home reads only its own endpoints; any other screen may read the dump.
+// Home and a graph's picker or neighbourhood read only their own
+// endpoints; any other screen may read the dump.
 function Screen(props: ScreenProps) {
+  const { route } = props;
   const screen = <RouteScreen {...props} />;
-  return props.route.view === 'home' ? screen : <NeedsSubstrate>{screen}</NeedsSubstrate>;
+  const ownData = route.view === 'home'
+    || (route.view === 'graph' && !route.all)
+    || (route.view === 'entities' && !route.all && !route.focus);
+  return ownData ? screen : <NeedsSubstrate>{screen}</NeedsSubstrate>;
 }
 
 function NeedsSubstrate({ children }: { children: ReactNode }) {
@@ -232,8 +238,12 @@ function RouteScreen({ route, ingestNonce, refresh }: ScreenProps) {
     case 'ask': return <AskSurface key={route.query} query={route.query} />;
     case 'find': return <FindResults query={route.query} mode={route.mode} />;
     case 'browse': return <BrowseScreen />;
-    case 'graph': return <GraphView focusId={route.focus} />;
-    case 'entities': return <EntitiesGraph focusId={route.focus} />;
+    case 'graph':
+      if (route.all) return <GraphView focusId={route.focus} scope={<GraphScope view="graph" label={null} />} />;
+      return route.focus ? <FocusedStatementGraph focus={route.focus} /> : <GraphPicker view="graph" />;
+    case 'entities':
+      if (!route.all && !route.focus) return <GraphPicker view="entities" />;
+      return <EntitiesGraph focusId={route.focus} scope={<GraphScope view="entities" label={route.all ? null : `Around ${substrate.index.entities[route.focus ?? '']?.name ?? route.focus}`} />} />;
     case 'statement': return <StatementDetail id={route.id} />;
     case 'entity': return <EntityDetail id={route.id} />;
     case 'documentation': return <DocumentationWorkspace />;
@@ -249,8 +259,11 @@ function RouteScreen({ route, ingestNonce, refresh }: ScreenProps) {
   }
 }
 
-// Screens that need the full width (canvases) or manage their own layout.
+// Screens that need the full width (canvases) or manage their own layout;
+// a graph's concept picker is an ordinary page.
 const FULL_BLEED: View[] = ['graph', 'entities'];
+const fullBleed = (route: Route) => FULL_BLEED.includes(route.view)
+  && !((route.view === 'graph' || route.view === 'entities') && !route.all && !route.focus);
 
 export function App({ me }: { me: Me }) {
   const router = useHashRouter();
@@ -272,7 +285,7 @@ export function App({ me }: { me: Me }) {
       <MeCtx.Provider value={me}>
         <DataCtx.Provider value={dataCtx}>
           <GoIngestCtx.Provider value={goIngest}>
-            <div className={`shell${FULL_BLEED.includes(route.view) ? ' full-bleed' : ''}`}>
+            <div className={`shell${fullBleed(route) ? ' full-bleed' : ''}`}>
               <Sidebar me={me} open={navOpen} onClose={() => setNavOpen(false)} />
               {navOpen && <div className="side-scrim" onClick={() => setNavOpen(false)} />}
               <div className="main-col">

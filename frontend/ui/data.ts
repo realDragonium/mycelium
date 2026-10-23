@@ -132,13 +132,28 @@ export function titleOf(text: string): string {
 interface RawStatementKind { kind: string; description?: string | null; when_to_use?: string | null }
 type RawDump = Omit<SubstrateData, 'statements'> & { statements: Omit<Statement, 'title'>[] };
 
+function fromWire(raw: RawDump): SubstrateData {
+  const statements = raw.statements.map((s): Statement => ({ ...s, mentions: s.mentions || [], title: titleOf(s.text) }));
+  return { ...raw, statements, entity_links: raw.entity_links || [] };
+}
+
+// The part of the dump around one entity or statement, for a graph that
+// opens on it without loading everything.
+export async function loadNeighbourhood(focus: string): Promise<{ data: SubstrateData; index: SubstrateIndex }> {
+  const data = fromWire(await getJSON<RawDump>(`/api/graph/neighbourhood?focus=${encodeURIComponent(focus)}`));
+  return { data, index: buildIndex(data) };
+}
+
+export interface ConceptDegree { id: string; name: string; statements: number; links: number }
+export const loadGraphConcepts = () => getJSON<{ concepts: ConceptDegree[]; statements: number }>('/api/graph/concepts');
+
 export async function loadSubstrate(): Promise<SubstrateData> {
   const [raw, kinds] = await Promise.all([
     getJSON<RawDump>('/api/data'),
     postJSON<RawStatementKind[]>('/list-statement-kinds', {}).catch((): RawStatementKind[] => []),
   ]);
-  const statements = raw.statements.map((s): Statement => ({ ...s, mentions: s.mentions || [], title: titleOf(s.text) }));
-  const data: SubstrateData = { ...raw, statements, entity_links: raw.entity_links || [] };
+  const data = fromWire(raw);
+  const { statements } = data;
 
   // Every kind a statement uses gets a vocabulary entry, so tag and layer
   // lookups never fall through.

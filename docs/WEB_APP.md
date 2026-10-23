@@ -24,8 +24,8 @@ focuses it.
 | Explore | Browse | `#/browse` | Every statement, entity and name as a table |
 | | Statement | `#/s/<id>` | Text (editable), mentions, connections graph or list, conditions, lineage, audiences with their label's source and reason (curators override; a curator label whose text changed since the decision is flagged to confirm or hand back to AI) |
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links |
-| | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities |
-| | Entity map | `#/entities?focus=<id>` | Entities and their links; add and remove entity links |
+| | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities around a picked concept or statement; `?all=1` shows everything |
+| | Entity map | `#/entities?focus=<id>` | Entities and their links, framed on a picked concept; `?all=1` without one; add and remove entity links |
 | | Documents | `#/documentation` | Plan which documents a profile's audience needs, then approve or dismiss each proposal ([Documentation planning](DOCUMENTATION_PLANNING.md)); generate (optionally about a concept; the form says whether it revises an existing document), edit, review and publish documents; see each pull request's state; see which documents are out of date with their sources and revise them; under **Updates** (counted on the Documents badge), see documents revised automatically since your last visit and those waiting on someone, with what changed and the new revision's diff ([Documentation maintenance](DOCUMENTATION_MODELS.md#keeping-documents-up-to-date)); revise from the published copy when both sides changed; read a document's sources as statement text linked to each statement; retry a run that wrote nothing, or see why the review refused it and retry it with those notes briefed to the writer, also from the plan; follow a run as it works and see what it spent (turns, duration, tokens, estimated cost, statements retrieved and cited, gaps filed) on the run and in the generation history, and read the statements a run cited, written or refused |
 | Add knowledge | Ingest text | `#/ingest` | Paste prose; a loop extracts a draft |
 | Curate | Drafts | `#/drafts`, `#/drafts/<id>` | Review, edit, submit, approve, reject or withdraw drafts; answer the reviewer's questions. Each operation shows the evidence its creator attached (location, excerpt and claim; a URL opens). Approving is all-or-nothing: if any statement is refused (the phrasing linter), nothing is applied and each refusal is listed with its reasons. Applying a draft resolves the gaps reported about it |
@@ -136,12 +136,17 @@ is rewritten to the current form.
 ## Data the app loads
 
 Home reads only its own endpoints, so it opens without the substrate: its
-counts come from `GET /api/substrate-counts`. The first other screen opened
+counts come from `GET /api/substrate-counts`. Neither graph opens on the whole
+substrate, which on a real knowledge base is an unreadable clump: without a
+focus both show a concept picker from `GET /api/graph/concepts`, and the
+statement graph around a focus loads only that neighbourhood from
+`GET /api/graph/neighbourhood?focus=<id>`. The first other screen opened
 loads the whole substrate from `GET /api/data` and builds an index in memory,
 which every later screen reuses. Find, Ask, drafts, gaps, activity, documents,
 names and settings use their own endpoints, and so does Knowledge health, which
 counts on the server. These screens still read the in-memory dump: Browse,
-statement and entity detail, both graphs, the draft graph, activity's context
+statement and entity detail, either graph showing everything, the entity map,
+the draft graph, activity's context
 panel, Find's grep entity strip, Ask's provenance titles and the Documents
 concept picker.
 
