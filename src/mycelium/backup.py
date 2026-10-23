@@ -218,7 +218,7 @@ _SECTIONS: tuple[_Section, ...] = (
     _Section(
         "auth.jsonl",
         "mycelium-auth.db",
-        ("users", "oauth_clients", "mcp_tokens", "invites"),
+        ("users", "oauth_clients", "mcp_tokens", "oauth_refresh_tokens", "invites"),
         _migrate_auth,
         "includes_auth",
     ),

@@ -158,6 +158,13 @@ role. If you're demoted from admin to writer, an `admin`-scoped token
 you previously minted immediately downgrades to `writer` — you can't
 escape demotion by hanging onto an old token.
 
+Tokens you mint never expire. The list shows when each was created and
+last used; revoke the ones nothing uses any more. A client that connected
+by signing in through the browser appears as one `OAuth: <client>` entry.
+Its access token lasts an hour and the client renews it by itself (see
+[OAuth token lifetime](DEPLOYMENT.md#oauth-token-lifetime)); revoking the
+entry ends that connection for good.
+
 ---
 
 ## What clients see

@@ -163,6 +163,22 @@ def _auth(data_dir: Path) -> str:
             "created_at) VALUES ('client-1', 'Claude', '[\"http://localhost/cb\"]', "
             "'2026-08-01T00:00:00Z')"
         )
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+        if "oauth_refresh_tokens" in tables:
+            _, grant = auth.issue_token(
+                conn, user_id=admin, name="OAuth: Claude", scope="admin"
+            )
+            conn.execute(
+                "UPDATE mcp_tokens SET client_id = 'client-1', "
+                "expires_at = '2026-08-01T01:00:00+00:00' WHERE id = ?",
+                (grant,),
+            )
+            conn.execute(
+                "INSERT INTO oauth_refresh_tokens (hash, token_id, created_at, "
+                "expires_at) VALUES (?, ?, '2026-08-01T00:00:00+00:00', "
+                "'2026-08-31T00:00:00+00:00')",
+                (auth.hash_token("mycr_scenario"), grant),
+            )
         conn.commit()
     return token
 

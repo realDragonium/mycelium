@@ -149,6 +149,7 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
 | `MYCELIUM_INGEST_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | 3 / 15 | USD per million tokens used for the ingest cost estimate in traces. Applied only while ingest runs its default Claude model. Ask and documentation runs price whichever Claude model ran from a built-in list-price table, including cache reads and writes; other providers get no estimate. |
 | `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
+| `MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS` | `3600` | Lifetime of an access token issued through the OAuth flow. See [OAuth token lifetime](#oauth-token-lifetime). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
 | `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |
 | `MYCELIUM_DISABLE_REVIEW_SWEEP` | unset | `1` stops the sweep that retries failed draft reviews. Meant for tests. |
@@ -339,6 +340,22 @@ a 1-minute to 1-hour bound.
 
 Registration (`/register`) still works for clients that predate the
 mechanism; it is deprecated upstream, not removed.
+
+### OAuth token lifetime
+
+An access token issued through the OAuth flow expires after an hour
+(`MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS`), and comes with a refresh token
+the client uses to get the next one. Each refresh replaces the refresh token
+and gives it 30 more days, so a client in regular use never has to sign in
+again; one left unused for 30 days does. A refresh token presented a second
+time means someone else holds a copy, so the whole grant is revoked and the
+client must authorize again. Refresh tokens are stored hashed, like access
+tokens.
+
+OAuth tokens issued before expiry existed carry no refresh token. Starting
+this version gives each a deadline 30 days from that first startup; after
+it their clients authorize again. Personal tokens minted in Settings never
+expire.
 
 ---
 

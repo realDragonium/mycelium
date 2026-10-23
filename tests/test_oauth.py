@@ -94,6 +94,7 @@ def test_discovery_endpoints_return_metadata(tmp_path, monkeypatch):
         assert meta["token_endpoint"].endswith("/token")
         assert meta["registration_endpoint"].endswith("/register")
         assert "S256" in meta["code_challenge_methods_supported"]
+        assert meta["grant_types_supported"] == ["authorization_code", "refresh_token"]
 
         r = client.get("/.well-known/oauth-protected-resource")
         assert r.status_code == 200
@@ -216,6 +217,7 @@ def test_register_creates_client(tmp_path, monkeypatch):
         assert body["client_id"].startswith("mcp_")
         assert body["redirect_uris"] == ["http://localhost:6274/callback"]
         assert body["token_endpoint_auth_method"] == "none"
+        assert body["grant_types"] == ["authorization_code", "refresh_token"]
 
 
 def test_register_rejects_unsupported_grant_types(tmp_path, monkeypatch):
@@ -361,6 +363,9 @@ def test_full_oauth_flow(tmp_path, monkeypatch):
         body = r.json()
         assert body["token_type"] == "Bearer"
         assert body["access_token"].startswith("myc_")
+        assert body["expires_in"] == 3600
+        assert body["refresh_token"]
+        assert r.headers["cache-control"] == "no-store"
         # The issued token works as a bearer.
         r = client.get(
             "/api/me", headers={"Authorization": f"Bearer {body['access_token']}"}
@@ -1107,3 +1112,139 @@ def test_an_unknown_consent_is_refused(tmp_path, monkeypatch):
             follow_redirects=False,
         )
         assert r.status_code == 400
+
+
+# --- access-token expiry and refresh ----------------------------------------
+
+
+def _refresh(client, refresh_token: str, client_id: str):
+    return client.post(
+        "/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+        },
+    )
+
+
+def _status_as(client, access_token: str) -> int:
+    return client.get(
+        "/api/me", headers={"Authorization": f"Bearer {access_token}"}
+    ).status_code
+
+
+def _expire_access_tokens(conn) -> None:
+    with store.transaction(conn):
+        conn.execute(
+            "UPDATE mcp_tokens SET expires_at = '2000-01-01T00:00:00+00:00' "
+            "WHERE client_id IS NOT NULL"
+        )
+
+
+def test_an_expired_access_token_is_refreshed_with_rotation(tmp_path, monkeypatch):
+    monkeypatch.setenv("MYCELIUM_OAUTH_ACCESS_TOKEN_TTL_SECONDS", "120")
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        conn = runtime._auth_db()
+        admin_bearer, _ = _admin_bearer(conn)
+        r, client_id, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        first = r.json()
+        assert first["expires_in"] == 120
+        stored = conn.execute("SELECT hash FROM oauth_refresh_tokens").fetchall()
+        assert [row["hash"] for row in stored] == [
+            auth.hash_token(first["refresh_token"])
+        ]
+
+        _expire_access_tokens(conn)
+        assert _status_as(client, first["access_token"]) == 401
+
+        r = _refresh(client, first["refresh_token"], "mcp_someone_else")
+        assert r.json()["error"] == "invalid_grant"
+        r = _refresh(client, first["refresh_token"], client_id)
+        assert r.status_code == 200, r.text
+        second = r.json()
+        assert second["expires_in"] == 120
+        assert second["refresh_token"] != first["refresh_token"]
+        assert _status_as(client, second["access_token"]) == 200
+        assert _status_as(client, first["access_token"]) == 401
+        # One grant stays one row in the user's token list.
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM mcp_tokens WHERE client_id IS NOT NULL"
+            ).fetchone()[0]
+            == 1
+        )
+
+
+def test_replaying_a_spent_refresh_token_revokes_the_grant(tmp_path, monkeypatch):
+    """A spent refresh token presented again means two parties hold it, and
+    the server cannot tell which is the client. Ending the grant locks out
+    both; the client authorizes again."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
+        r, client_id, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        first = r.json()
+        second = _refresh(client, first["refresh_token"], client_id).json()
+
+        r = _refresh(client, first["refresh_token"], client_id)
+        assert r.status_code == 400
+        assert r.json()["error"] == "invalid_grant"
+        assert _status_as(client, second["access_token"]) == 401
+        assert _refresh(client, second["refresh_token"], client_id).status_code == 400
+
+
+def test_a_revoked_grant_cannot_be_refreshed(tmp_path, monkeypatch):
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        admin_bearer, _ = _admin_bearer(runtime._auth_db())
+        r, client_id, _, _ = _full_flow(client, admin_bearer=admin_bearer)
+        tokens = client.get(
+            "/api/me/tokens", headers={"Authorization": f"Bearer {admin_bearer}"}
+        ).json()["tokens"]
+        grant = next(t for t in tokens if t["name"].startswith("OAuth"))
+        client.delete(
+            f"/api/me/tokens/{grant['id']}",
+            headers={"Authorization": f"Bearer {admin_bearer}"},
+        )
+        r = _refresh(client, r.json()["refresh_token"], client_id)
+        assert r.json()["error"] == "invalid_grant"
+
+
+def test_oauth_tokens_issued_before_expiry_existed_get_a_deadline():
+    """They carry no refresh token, so the deadline is generous: their
+    clients keep working for a while and then authorize again."""
+    from datetime import UTC, datetime, timedelta
+
+    conn = auth_store.connect(":memory:")
+    auth_store.migrate(conn)
+    uid = auth.create_user(conn, name="U", role="writer", type="human")
+    conn.execute(
+        "INSERT INTO oauth_clients (client_id, redirect_uris, created_at) "
+        "VALUES ('mcp_old', '[]', '2026-01-01')"
+    )
+    _, personal = auth.issue_token(conn, user_id=uid, name="laptop", scope="writer")
+    _, legacy = auth.issue_token(conn, user_id=uid, name="OAuth: X", scope="writer")
+    conn.execute("UPDATE mcp_tokens SET client_id = 'mcp_old' WHERE id = ?", (legacy,))
+
+    auth_store.migrate(conn)
+    deadline = conn.execute(
+        "SELECT expires_at FROM mcp_tokens WHERE id = ?", (legacy,)
+    ).fetchone()[0]
+    expected = datetime.now(UTC) + timedelta(days=30)
+    assert abs(datetime.fromisoformat(deadline) - expected) < timedelta(minutes=1)
+    assert (
+        conn.execute(
+            "SELECT expires_at FROM mcp_tokens WHERE id = ?", (personal,)
+        ).fetchone()[0]
+        is None
+    )
+
+    auth_store.migrate(conn)
+    assert (
+        conn.execute(
+            "SELECT expires_at FROM mcp_tokens WHERE id = ?", (legacy,)
+        ).fetchone()[0]
+        == deadline
+    )
