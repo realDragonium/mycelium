@@ -30,7 +30,7 @@ decision, and the rest runs in-process.
 
 | Tool | Why it is on MCP |
 | --- | --- |
-| `search_statements` | Semantic retrieval with alias boost and graph expansion. `decompose` searches each part of a multi-part question and ranks statements several parts surface first. This is the main read. |
+| `search_statements` | Semantic retrieval with alias boost and graph expansion. `decompose` searches each part of a multi-part question and ranks statements several parts surface first. This is the main read. While the embedding provider is down it falls back to keyword matching and marks hits `retrieval: "keyword"`. |
 | `get_statements` | Hydrates known ids and follows links. |
 | `find_statement_connections` | Finds bounded routes between statements. It cannot be composed cheaply from other reads. |
 | `grep_statements` | Literal lookup for identifiers and quoted strings that semantic search misses. |
@@ -38,7 +38,7 @@ decision, and the rest runs in-process.
 | `discover_facts` | Checks many candidate texts in one call before writing (`exists` / `near` / `new`). The repository's authoring and draft skills depend on it. |
 | `get_entity` | Hydrates an entity's names and entity links. |
 | `list_entities` | Pages entities and matches literal prefixes across aliases. |
-| `search_entities` | Finds entities by semantic name or alias. |
+| `search_entities` | Finds entities by semantic name or alias, or by name substring (`retrieval: "keyword"`) while the embedding provider is down. |
 | `list_link_types` | Lists the statement link vocabulary and its direction rules, which writers need. |
 | `list_statement_kinds` | Lists the statement kind vocabulary. |
 | `list_entity_link_types` | Lists the entity link vocabulary that appears in `get_entity`. |
@@ -46,9 +46,9 @@ decision, and the rest runs in-process.
 | `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. |
 | `upsert_entity` | Creates or describes the entity a statement names. |
 | `upsert_name` | Adds an alias so mentions resolve. |
-| `upsert_statement` | Creates or replaces one statement. Its description holds the statement-kind definitions that the authoring skills refer to. |
-| `upsert_statements` | Creates one or more statements with links, including cross-references within the batch. |
-| `patch_statement` | Edits the text or kind of an existing statement without touching its links. |
+| `upsert_statement` | Creates or replaces one statement. Its description holds the statement-kind definitions that the authoring skills refer to. When embedding is unavailable, the response has `embedding_pending: true` and `near_duplicates: []`. |
+| `upsert_statements` | Creates one or more statements with links, including cross-references within the batch. A non-empty `embedding_pending` list identifies statements awaiting vectors. |
+| `patch_statement` | Edits the text or kind of an existing statement without touching its links. A text edit can return `embedding_pending: true`. |
 | `add_links` | Adds statement links. |
 | `remove_links` | Removes statement links. |
 | `add_entity_links` | Adds structural entity↔entity edges, as the authoring skill instructs. |
@@ -85,7 +85,7 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `find_entity_duplicates` | Audits entity names. This is curation; the Names & aliases workspace lists its results. |
 | `connect_statements` | Curation from the Knowledge health screen: proposes links and concept mentions for statements nothing reaches, as a reviewed draft. Each call spends money under the connect action's limits, so it stays where a curator chooses the batch. Refused before collecting evidence when the connect action's provider has no credentials. |
 | `get_mention_candidates` | Discovery view for the names workspace (`GET /api/mention-candidates`). |
-| `replace_text` | `patch_statement(id, text=...)` covers it. The UI and draft replay use it. |
+| `replace_text` | `patch_statement(id, text=...)` covers it. The UI and draft replay use it. A failed embedding is reported as `embedding_pending: true`. |
 | `move_name` | Alias curation in the names workspace. |
 | `rename_name` | Alias curation in the names workspace. |
 | `delete_name` | Alias curation in the names workspace. |

@@ -143,7 +143,7 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_ALLOWED_EMAIL_DOMAINS` | unset (any domain) | Comma-separated email domains. When set, only people whose email is in one of them can log in or use a session or token; invites to other domains are refused. Exact match, no subdomains; service accounts are exempt. See [Restricting access to your email domains](USERS.md#restricting-access-to-your-email-domains). |
 | `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, each must also be allowed or the server refuses to start. |
 | `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
-| `EMBED_TIMEOUT_S` | `30` | Seconds before one Ollama embedding request fails instead of hanging. |
+| `EMBED_TIMEOUT_S` | `30` | Seconds before one embedding request fails instead of hanging. A failed request is retried twice with backoff. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
 | `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling flamegraphs and metadata sidecars are written. |
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
@@ -717,10 +717,20 @@ and stay. Importing an older archive skips the same data.
 
 ---
 
-## Updating Ollama / embeddings
+## Embedding provider
 
-Mycelium's MVP defaults to `nomic-embed-text` via Ollama. If you're
-embedding new content on this server, you'll also need Ollama running.
+Statements and names are searched through embeddings. Each deployment picks
+one provider:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `MYCELIUM_EMBED_PROVIDER` | `ollama` | `ollama` embeds on a local Ollama server; `openai` calls the OpenAI embeddings API. |
+| `MYCELIUM_EMBED_MODEL` | `nomic-embed-text` for Ollama, `text-embedding-3-small` for OpenAI | The model. Ollama also reads the older `EMBED_MODEL`. Both produce 768-dimensional vectors; a model that returns another size is refused. |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint. |
+| `OPENAI_API_KEY` | unset | Required for `openai`; the same key the OpenAI AI actions use. |
+
+**Ollama** needs the server running and the model pulled, and about 2 GB of
+RAM on top of Mycelium:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
@@ -728,9 +738,49 @@ sudo systemctl enable --now ollama
 sudo -u mycelium ollama pull nomic-embed-text
 ```
 
-Ollama needs ~2 GB RAM headroom on top of Mycelium itself, so size your
-VPS accordingly. If you're only consuming pre-built indexes (read-only
-hosting), you can skip Ollama entirely.
+**OpenAI** needs only the key. Requests are batched, 100 texts at a time, and
+their tokens and cost appear under **Settings → AI usage** as *Embeddings*.
+Re-embedding a knowledge base of a few thousand statements costs well under a
+cent, and each search embeds its query once (repeated queries are cached).
+
+Similarity thresholds (the near-duplicate warning, `find_duplicates`,
+`discover_facts`, `find_entity_duplicates`, search floors) are tuned per model,
+because the models score on different scales. A model without tuned values
+uses its provider's default model's values and logs a warning at first use.
+
+### Switching provider
+
+Set the variables and restart. Embeddings are a derived index, so no knowledge
+changes. Each index file records the embedder that built it in a
+`.meta.json` file beside it (`mycelium.vec.meta.json`,
+`mycelium-names.vec.meta.json`). On startup, an index built by a different
+provider or model is discarded and rebuilt by re-embedding every statement and
+name; vectors from two models are never mixed. The rebuild's progress is
+logged and shown as the startup step in `/api/server-info`, and the server
+answers `503` until it finishes. An index without the file predates it and is
+treated as built by `nomic-embed-text`.
+
+Switching back rebuilds again. Exports carry the `.meta.json` files with the
+indexes.
+
+### When the provider is unavailable
+
+Embedding requests time out after `EMBED_TIMEOUT_S` and are retried twice
+(honouring a rate limit's `Retry-After`, up to 20 seconds). If the provider
+still fails:
+
+- `search_statements` (also with `decompose`) falls back to keyword matching,
+  and `search_entities` to name substring matching. Each hit is marked
+  `retrieval: "keyword"`. Ask and documentation runs keep working, with weaker
+  retrieval. `discover_facts` and `find_duplicates` report the error instead,
+  since a keyword guess would mislead them.
+- A write still succeeds. The statement or name is saved without a vector and
+  stays out of semantic search until a background worker re-embeds it, which it
+  retries every 30 seconds. Statement responses carry `embedding_pending`; name
+  responses are unchanged. An edited statement's old vector is removed, so
+  search never matches its previous wording.
+- A startup that has to rebuild an index fails and reports why; it needs the
+  provider.
 
 ---
 

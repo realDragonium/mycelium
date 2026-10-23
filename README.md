@@ -19,7 +19,8 @@ automatic application configuration.
 
 - Python 3.11.4+
 - [`uv`](https://docs.astral.sh/uv/)
-- Ollama with the configured embedding model (default: `nomic-embed-text`)
+- An embedding provider: Ollama with `nomic-embed-text` (the default), or an
+  OpenAI API key with `MYCELIUM_EMBED_PROVIDER=openai`
 
 ```sh
 uv sync
@@ -61,8 +62,10 @@ The scaffolder creates a `.mcp.json` and an ignored `data/` directory.
 | Variable | Default | Purpose |
 |---|---|---|
 | `MYCELIUM_DATA_DIR` | `./.mycelium` | SQLite and vector-index directory |
+| `MYCELIUM_EMBED_PROVIDER` | `ollama` | Embedding provider: `ollama` or `openai`; see [Embedding provider](docs/DEPLOYMENT.md#embedding-provider) |
+| `MYCELIUM_EMBED_MODEL` | `nomic-embed-text` / `text-embedding-3-small` | Embedding model for the chosen provider (Ollama also reads the older `EMBED_MODEL`) |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
-| `EMBED_MODEL` | `nomic-embed-text` | 768-dimensional embedding model |
+| `OPENAI_API_KEY` | unset | Needed for OpenAI embeddings, as for OpenAI AI actions |
 | `MYCELIUM_HTTP_HOST` | `127.0.0.1` | HTTP bind host |
 | `MYCELIUM_HTTP_PORT` | `8765` | HTTP bind port |
 | `MYCELIUM_AUTH` | `off` | Require authenticated HTTP and remote MCP requests when `on` |
