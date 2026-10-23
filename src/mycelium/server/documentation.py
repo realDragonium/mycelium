@@ -199,49 +199,47 @@ def revise_document(
     )
 
 
-def review_notes_prompt(prompt: str, notes: list[dict[str, str]], limit: int) -> str:
-    """The original request followed by the review's notes, within `limit`.
-    The notes keep at most half of it, so a long request still leaves them
-    room and they never crowd out the request."""
-    lines = ["An earlier attempt was refused at review. Address these notes:"]
-    for note in notes:
-        line = f"- {note['check']}: {note['where']} — {note['problem']}"
-        if len("\n".join([*lines, line])) > limit // 2:
-            break
-        lines.append(line)
-    brief = "\n".join(lines)
-    return f"{prompt.strip()[: limit - len(brief) - 2]}\n\n{brief}"
-
-
-def revise_with_review_notes(run_id: str) -> dict[str, object]:
-    """Start a refused run again, briefed with what its review found: the same
-    profile, type and concept, or a revision of the same document."""
-    from .. import docs_store
-    from ..docgen.config import DocgenConfig
+def retry_documentation_run(
+    run_id: str, *, with_review_notes: bool = False
+) -> dict[str, object]:
+    """Start a run that wrote nothing again: the same request, profile, type
+    and concept, or a revision of the same document. `with_review_notes`
+    briefs the writer with what the refusing review found; the request text
+    the next review reads stays as it was."""
+    from .. import auth, doc_runs, docs_store, document_edits
 
     row = docs_store.get_run(_drafts_db(), run_id)
     if row is None:
         raise LookupError(f"documentation run not found: {run_id}")
+    if row["outcome"] not in ("nothing_written", "failed"):
+        raise ValueError("Only a run that wrote nothing can be retried.")
+    if row["prompt"] == document_edits.MANUAL_EDIT_PROMPT:
+        raise ValueError("Edit the document again to retry a manual edit.")
     summary = _json.loads(row["summary"]) if row["summary"] else {}
-    notes = summary.get("review_findings") or []
-    if row["outcome"] != "nothing_written" or not notes:
-        raise ValueError("Only a run the review refused can be revised with its notes.")
-    prompt = review_notes_prompt(
-        str(row["prompt"]), notes, DocgenConfig.from_env().max_prompt_chars
-    )
-    if row["target_document_id"] is not None:
-        return revise_document(
-            str(row["target_document_id"]),
-            int(row["target_revision"]),
-            prompt=prompt,
-            provider=row["provider"],
-        )
-    return request_documentation(
-        prompt,
+    notes = summary.get("review_findings") or [] if with_review_notes else []
+    if with_review_notes and not notes:
+        raise ValueError("This run has no review notes to retry with.")
+    if row["guideline_set"] and row["document_type"]:
+        _check_guideline_selection(str(row["guideline_set"]), str(row["document_type"]))
+    # An anchored run finds its concept's document afresh, at its current
+    # revision; any other revision run retries the revision it started from.
+    anchored = row["anchor_entity_id"] is not None
+    principal = auth.current_principal.get()
+    new_id = doc_runs.start_run(
+        prompt=str(row["prompt"]),
         guideline_set=row["guideline_set"],
         document_type=row["document_type"],
+        created_by=principal.id if principal is not None else None,
+        conn=_drafts_db(),
         provider=row["provider"],
+        target_document_id=None if anchored else row["target_document_id"],
+        expected_revision=None if anchored else row["target_revision"],
         anchor_entity_id=row["anchor_entity_id"],
+        start_from_destination=not anchored and row["revision_base"] == "destination",
+        review_notes=notes,
+    )
+    return docs_store.serialize_run(
+        require(docs_store.get_run(_drafts_db(), new_id), "new documentation run")
     )
 
 

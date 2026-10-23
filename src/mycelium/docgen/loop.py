@@ -82,7 +82,7 @@ from .tools import (
     resolve_tool_def,
     review_tool_def,
 )
-from .trace import RunSummary, TraceBuilder
+from .trace import ReviewNote, RunSummary, TraceBuilder
 
 _LOG = logging.getLogger(__name__)
 
@@ -134,6 +134,7 @@ def run_docgen(
     run_id: str | None = None,
     on_progress: Callable[[RunSummary], None] | None = None,
     scope_reader: ScopeReader | None = None,
+    review_notes: Sequence[ReviewNote] = (),
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
@@ -185,6 +186,7 @@ def run_docgen(
             on_progress=on_progress,
             load_audience=profiles.audience if profiles is not None else None,
             scope_reader=scope_reader or _scope_reader,
+            review_notes=review_notes,
         )
 
     result.trace["prompts"] = [
@@ -320,6 +322,7 @@ def _execute(
     on_progress: Callable[[RunSummary], None] | None = None,
     load_audience: Callable[[str], Audience | None] | None = None,
     scope_reader: ScopeReader | None = None,
+    review_notes: Sequence[ReviewNote] = (),
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -449,6 +452,7 @@ def _execute(
                 current_document=current_document,
                 edited_at_destination=revision_target is not None
                 and revision_target.base == "destination",
+                review_notes=review_notes,
             ),
         }
     ]

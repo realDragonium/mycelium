@@ -29,7 +29,7 @@ import logging
 import os
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
 from . import ai_prompts, docs_store, product_settings, prompt_store
@@ -71,11 +71,14 @@ def start_run(
     manual_document: ManualDocument | None = None,
     anchor_entity_id: str | None = None,
     start_from_destination: bool = False,
+    review_notes: Sequence[ReviewNote] = (),
 ) -> str:
     """Admit a run, deciding first which document it writes.
 
     `start_from_destination` makes a revision start from the published copy
     even when an unpublished internal revision would otherwise refuse it.
+    `review_notes` brief the writer, and only the writer, with what an earlier
+    review found.
     """
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
@@ -135,6 +138,7 @@ def start_run(
             target_revision=None if target is None else target.revision,
             anchor_entity_id=anchor_entity_id,
             revision_base=None if target is None else target.base,
+            review_notes=review_notes,
         )
         # Anything failing between here and thread.start() must not strand
         # the freshly committed row: finish it as failed, then re-raise.
@@ -176,6 +180,7 @@ def start_run(
                     manual_document,
                     anchor_entity_id,
                     writer_anchor,
+                    review_notes,
                 ),
                 daemon=True,
                 name=f"docgen-{run_id}",
@@ -387,6 +392,7 @@ def _default_runner(
     anchor_entity_id: str | None = None,
     run_id: str | None = None,
     on_progress: Callable[[RunSummary], None] | None = None,
+    review_notes: Sequence[ReviewNote] = (),
 ) -> Any:
     """The real generation loop.
 
@@ -410,6 +416,7 @@ def _default_runner(
         anchor_entity_id=anchor_entity_id,
         run_id=run_id,
         on_progress=on_progress,
+        review_notes=review_notes,
     )
 
 
@@ -428,6 +435,7 @@ def _execute_run(
     manual_document: ManualDocument | None = None,
     anchor_entity_id: str | None = None,
     writer_anchor: str | None = None,
+    review_notes: Sequence[ReviewNote] = (),
 ) -> None:
     own_conn = None
     conn = _in_memory_conns.pop(run_id, None)
@@ -474,6 +482,7 @@ def _execute_run(
                     anchor_entity_id=writer_anchor,
                     run_id=run_id,
                     on_progress=progress,
+                    review_notes=review_notes,
                 )
             else:
                 result = runner(
