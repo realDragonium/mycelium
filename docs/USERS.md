@@ -32,7 +32,7 @@ A tool's required role follows its name prefix unless the tool declares one:
 `ask` requires `asker`, for instance, and `report_knowledge_gap` requires only
 `reader`. Roles are enforced **per request** in two places:
 
-1. The REST mirror (`http.py`) checks before calling the underlying
+1. The REST mirror (`http/tool_routes.py`) checks before calling the underlying
    function.
 2. The MCP `@tool` wrapper (`server/registry.py`) checks via the
    `current_principal` ContextVar that the middleware populated.

@@ -21,7 +21,7 @@ def _app(tmp_path, monkeypatch, *, auth_mode: str = "off"):
     """Build a fresh TestClient with a fresh data dir and toggle state.
 
     Reimports `http` so the module-level `app` is rebuilt against the
-    current env — necessary because `http.py` reads MYCELIUM_DATA_DIR
+    current env — necessary because `mycelium.http` reads MYCELIUM_DATA_DIR
     inside its lifespan, but the AuthMiddleware is registered at import.
     """
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
@@ -414,7 +414,7 @@ def test_tool_list_filtered_by_role(tmp_path, monkeypatch):
     # The filter is driven by the principal in the contextvar, not by
     # auth-mode; we manipulate it manually below. Run with auth off
     # to keep the test from needing a session secret on a fresh
-    # http.py import.
+    # `mycelium.http` import.
     client = _app(tmp_path, monkeypatch, auth_mode="off")
     with client:
         from mycelium import server

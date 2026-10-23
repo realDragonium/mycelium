@@ -11,7 +11,7 @@ Flow
 3. The callback exchanges the code for an ID token, finds-or-creates
    the corresponding `users` row, and writes the user id into the
    signed session cookie.
-4. Middleware (`AuthMiddleware` in http.py) resolves the cookie to a
+4. Middleware (`AuthMiddleware` in http/authentication.py) resolves the cookie to a
    `Principal` on every subsequent request.
 
 Bootstrap admin

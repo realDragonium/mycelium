@@ -96,9 +96,9 @@ def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
     """The bound `tool_name` runs under, or None to use the general worker pool.
 
     Deliberately shared by BOTH transports — the MCP shim below and the REST
-    mirror's handlers in `http.py`. The bound exists to cap memory on the box,
-    which does not care which transport asked, so a caller must not be able to
-    slip past it by calling `/ingest` instead of the MCP tool.
+    mirror's handlers in `http/tool_routes.py`. The bound exists to cap memory on
+    the box, which does not care which transport asked, so a caller must not be
+    able to slip past it by calling `/ingest` instead of the MCP tool.
     """
     if tool_name not in _MODEL_LOOP_TOOLS:
         return None
