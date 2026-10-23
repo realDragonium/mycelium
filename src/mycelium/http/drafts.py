@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from .. import server, store
+from ..server.draft_queue import _require_draft_owner
 from .access import _enforce_curator, _require_principal
 
 router = APIRouter()
@@ -142,13 +143,14 @@ def remove_draft_op_http(
 
 @router.post("/api/drafts/{draft_id}/submit")
 def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
-    _require_principal(request)
+    p = _require_principal(request)
     from .. import drafts_store
 
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         raise HTTPException(status_code=404, detail="draft not found")
+    _require_draft_owner(p, row)
     if drafts_store.status_for(row) != "open":
         raise HTTPException(
             status_code=400,
@@ -228,6 +230,7 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
     row = drafts_store.get_draft(conn, draft_id)
     if row is None:
         raise HTTPException(status_code=404, detail="draft not found")
+    _require_draft_owner(p, row)
     if drafts_store.status_for(row) not in ("open", "submitted"):
         raise HTTPException(
             status_code=400,

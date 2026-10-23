@@ -1180,3 +1180,71 @@ def test_flag_reason_lookup_is_guarded_against_inherited_properties():
     )
     assert "known ? known[0]" in source
     assert "known ? known[1]" in source
+
+
+def _request_as(principal: auth.Principal):
+    class _Req:
+        class state:
+            pass
+
+    _Req.state.principal = principal
+    return _Req()
+
+
+def _victim_draft() -> str:
+    tokens = _as_drafter("sess-victim")
+    try:
+        receipt = server.upsert_entity(name="Victim Work", description="")
+    finally:
+        _restore(tokens)
+    return receipt["draft_id"]
+
+
+def test_a_drafter_cannot_change_another_users_draft(tmp_path, monkeypatch):
+    """Explicit `draft_id` is the other way into someone's draft besides a
+    borrowed session id. A curator approving it would apply the injected ops
+    under the owner's name."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        victim = _victim_draft()
+        other = auth.Principal(
+            id="d2", name="Drafter Two", role="drafter", type="human"
+        )
+        p_tok = auth.current_principal.set(other)
+        try:
+            with pytest.raises(auth.RoleRequired):
+                server.upsert_entity(name="Injected", description="", draft_id=victim)
+            with pytest.raises(auth.RoleRequired):
+                server.discard_draft_op(draft_id=victim, seq=1)
+            with pytest.raises(auth.RoleRequired):
+                server.submit_draft(draft_id=victim)
+        finally:
+            auth.current_principal.reset(p_tok)
+
+        conn = server._drafts_db()
+        assert len(drafts_store.list_ops(conn, victim)) == 1
+        row = drafts_store.get_draft(conn, victim)
+        assert row is not None and drafts_store.status_for(row) == "open"
+
+
+@pytest.mark.parametrize("action", ["submit", "withdraw"])
+def test_only_the_owner_or_a_curator_submits_or_withdraws_over_http(
+    tmp_path, monkeypatch, action
+):
+    from mycelium.http import drafts as draft_routes
+
+    endpoint = {
+        "submit": draft_routes.submit_draft_http,
+        "withdraw": draft_routes.withdraw_draft,
+    }[action]
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        victim = _victim_draft()
+        reader = auth.Principal(id="r1", name="Reader", role="reader", type="human")
+        with pytest.raises(auth.RoleRequired):
+            endpoint(victim, _request_as(reader))
+
+        owner = auth.Principal(
+            id="d1", name="Drafter One", role="drafter", type="human"
+        )
+        assert endpoint(victim, _request_as(owner))["ok"] is True

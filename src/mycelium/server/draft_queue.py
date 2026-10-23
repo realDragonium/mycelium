@@ -10,6 +10,7 @@ writes land on their draft whichever transport they arrive on.
 from __future__ import annotations
 
 import json as _json
+import sqlite3
 from typing import Any, TypedDict
 
 from pydantic import JsonValue
@@ -69,6 +70,24 @@ class DraftReceipt(TypedDict):
 QueuedOp = dict[str, JsonValue]
 
 
+def _require_draft_owner(principal: AuthPrincipal | None, row: sqlite3.Row) -> None:
+    """Refuse a change to someone else's draft unless the caller curates.
+
+    A curator approving a draft applies its ops as its creator's work, so an
+    op slipped into another person's draft, or one struck from it, would be
+    applied or lost under their name. Curators (real writers) edit any draft;
+    no principal means an in-process or stdio call, which is trusted."""
+    from .. import auth as _auth
+
+    if principal is None or _auth.principal_has_real_role(principal, "writer"):
+        return
+    if row["created_by"] != principal.id:
+        raise _auth.RoleRequired(
+            f"draft '{row['id']}' belongs to another user; only its creator "
+            "or a writer can change it"
+        )
+
+
 def _resolve_draft_target(
     principal: AuthPrincipal | None, draft_id: str | None
 ) -> str | None:
@@ -95,6 +114,7 @@ def _resolve_draft_target(
                 f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
                 f"only open drafts accept new ops"
             )
+        _require_draft_owner(principal, row)
         return draft_id
 
     if principal is not None and principal.role == "drafter":

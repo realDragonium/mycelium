@@ -14,8 +14,10 @@ from typing import Any, TypedDict
 
 from pydantic import JsonValue
 
+from .. import auth as _auth
 from .. import store
 from ..auth import Principal as AuthPrincipal
+from .draft_queue import _require_draft_owner
 from .registry import tool
 from .runtime import _drafts_db
 
@@ -64,6 +66,7 @@ def submit_draft(draft_id: str | None = None) -> dict[str, Any]:
                 f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
                 f"only open drafts can be submitted"
             )
+        _require_draft_owner(principal, row)
 
     _submit_for_review(draft_id)
     ops = drafts_store.list_ops(_drafts_db(), draft_id)
@@ -397,6 +400,7 @@ def discard_draft_op(
             f"draft '{draft_id}' is {drafts_store.status_for(row)}; "
             f"can't modify ops on a non-open draft"
         )
+    _require_draft_owner(_auth.current_principal.get(), row)
     with store.transaction(_drafts_db()):
         revision = drafts_store.remove_op(
             _drafts_db(), draft_id, seq, expected_revision=expected_revision
