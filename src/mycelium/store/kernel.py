@@ -455,6 +455,8 @@ CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals (
 -- not see the statement before; they grant nothing until a curator confirms.
 -- `decisions` is a JSON object of the curator's confirmations and rejections
 -- of AI grants, keyed by audience id.
+-- `narrowed` records an edit's relabel that took the statement away from
+-- audiences that saw it: from which label, which audiences, and why.
 CREATE TABLE IF NOT EXISTS statement_audience_labels (
     statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
     audiences       TEXT NOT NULL,
@@ -466,20 +468,23 @@ CREATE TABLE IF NOT EXISTS statement_audience_labels (
     labelled_by     TEXT,
     text_changed_at TEXT,
     pending         TEXT,
-    decisions       TEXT
+    decisions       TEXT,
+    narrowed        TEXT
 );
 
 -- Statements waiting for the audience labelling worker. A new statement or a
 -- text change enqueues in the same transaction; existing statements reach it
 -- only through an explicit backfill, which is what spends money. A failed
 -- batch backs off by `next_attempt_at`; past the attempt limit a row waits
--- for the next backfill.
+-- for the next backfill. `previous` holds the AI label an edit dropped and
+-- the text it judged (JSON), so the relabel starts from it.
 CREATE TABLE IF NOT EXISTS audience_label_queue (
     statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
     enqueued_at     TEXT NOT NULL,
     attempts        INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
-    last_error      TEXT
+    last_error      TEXT,
+    previous        TEXT
 );
 
 -- The last time a statement or knowledge gap was looked at, by the connect

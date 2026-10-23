@@ -145,6 +145,32 @@ def _substrate(server) -> dict[str, str]:
                 '"decision": "confirmed"}}\')',
                 (ids["submit"],),
             )
+        if "narrowed" in labels:
+            db.execute(
+                "UPDATE statement_audience_labels SET narrowed = ? "
+                "WHERE statement_id = ?",
+                (
+                    '{"previous": ["external-non-technical"], '
+                    '"lost": ["external-non-technical"], '
+                    '"reason": "The new text names an internal service."}',
+                    ids["submit"],
+                ),
+            )
+        queue = {
+            row[1] for row in db.execute("PRAGMA table_info(audience_label_queue)")
+        }
+        if "previous" in queue:
+            db.execute(
+                "INSERT INTO audience_label_queue (statement_id, enqueued_at, "
+                "previous) VALUES (?, '2026-08-03T00:00:00Z', ?) "
+                "ON CONFLICT (statement_id) DO UPDATE SET previous = excluded.previous",
+                (
+                    ids["locked"],
+                    '{"text": "The account is disabled.", '
+                    '"audiences": ["external-non-technical"], '
+                    '"reason": "Users see this."}',
+                ),
+            )
     if _has_table(db, "curation_attempts"):
         db.execute(
             "INSERT INTO curation_attempts SELECT id, text, ?, "

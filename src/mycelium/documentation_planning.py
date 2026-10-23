@@ -921,6 +921,7 @@ def _coverage_and_recency(
     audience already sees unlabelled statements, so a label never makes one
     newly visible to it."""
     labelled = scope.audience.scope == "external"
+    sees = sorted(scope.audience.sees)
     with audience_scope.applied(conn, scope):
         counts = {
             str(row["entity_id"]): (str(row["name"]), int(row["statements"]))
@@ -939,8 +940,9 @@ def _coverage_and_recency(
                     "LEFT JOIN main.statement_audience_labels l ON l.statement_id = s.id "
                     "WHERE s.created_at > ? OR (? AND (l.labelled_at > ? "
                     "OR EXISTS (SELECT 1 FROM json_each(l.decisions) d "
-                    "WHERE d.key = ? AND json_extract(d.value, '$.at') > ?)))",
-                    (since, labelled, since, scope.audience.id, since),
+                    "WHERE d.key IN (SELECT value FROM json_each(?)) "
+                    "AND json_extract(d.value, '$.at') > ?)))",
+                    (since, labelled, since, json.dumps(sees), since),
                 ).fetchone()[0]
             )
             if since is not None

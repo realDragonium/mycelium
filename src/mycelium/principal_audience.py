@@ -208,7 +208,7 @@ def readable_documents(
                 continue
             if cited.audience not in visible:
                 visible[cited.audience] = store.visible_statement_ids(
-                    conn, audience_id, internal
+                    conn, audiences.sees_of(audience_id), internal
                 )
             if not visible[cited.audience] <= scope.statement_ids:
                 continue

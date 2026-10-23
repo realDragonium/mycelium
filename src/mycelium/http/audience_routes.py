@@ -91,6 +91,9 @@ class Label(BaseModel):
     labelled_by: str | None
     text_changed_at: str | None
     pending: list[str]
+    #: Set when the AI's relabel after an edit took the statement away from
+    #: audiences that saw it, with the reason it gave.
+    narrowed: store.audience_labels.Narrowed | None
 
 
 class AudienceVisibility(BaseModel):
@@ -121,6 +124,7 @@ def _label(row: sqlite3.Row | None) -> Label | None:
         labelled_by=row["labelled_by"],
         text_changed_at=row["text_changed_at"],
         pending=store.audience_labels.label_pending(row),
+        narrowed=store.audience_labels.label_narrowed(row),
     )
 
 
@@ -143,7 +147,7 @@ def _statement_audiences(statement_id: str, request: Request) -> StatementAudien
                 id=item.id,
                 name=item.name,
                 scope=item.scope,
-                visible=item.id in granted if row else item.internal,
+                visible=bool(item.sees & granted) if row else item.internal,
                 pending=item.id in pending,
             )
             for item in audiences.live()
@@ -235,7 +239,7 @@ def labelled_statements_http(
     conn = server._db()
     rows, total = store.audience_labels.list_labelled_statements(
         conn,
-        audience_id=chosen.id if chosen else None,
+        sees=chosen.sees if chosen else None,
         internal=chosen.internal if chosen else False,
         visibility=visibility,
         state=state,

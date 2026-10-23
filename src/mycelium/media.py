@@ -126,7 +126,7 @@ def content_url(media_id: str) -> str:
 def visible_to(row: sqlite3.Row, audience: audiences.Audience | None) -> bool:
     """Whether the audience may see the item; None is full access by role."""
     return audience is None or store.audience_labels.grants(
-        media_store.label(row), audience.id, audience.internal
+        media_store.label(row), audience.sees, audience.internal
     )
 
 
@@ -642,7 +642,9 @@ def published_files(
         item
         for item in wanted
         if audience is not None
-        and not store.audience_labels.grants(media_store.label(rows[item]), *audience)
+        and not store.audience_labels.grants(
+            media_store.label(rows[item]), audiences.sees_of(audience[0]), audience[1]
+        )
     ]
     if hidden:
         raise ValueError(

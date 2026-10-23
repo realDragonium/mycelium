@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal, TypedDict
+from typing import Literal
+
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 from .kernel import _now
 
@@ -27,6 +31,37 @@ LabelState = Literal["unlabelled", "ai", "curator", "text_changed", "pending", "
 class Sample(TypedDict):
     size: int
     precision: float
+
+
+class Narrowed(TypedDict):
+    """An edit's relabel took the statement away from audiences that saw it."""
+
+    previous: list[str]
+    lost: list[str]
+    reason: str
+
+
+class Previous(TypedDict):
+    """The AI label an edit dropped, kept on the queue row so the relabel
+    can start from it."""
+
+    text: str
+    audiences: list[str]
+    reason: str
+
+
+@dataclass(frozen=True)
+class Graph:
+    """Per live audience the audience ids whose grants it sees (itself and
+    every audience it includes), and which audiences are internal."""
+
+    sees: Mapping[str, frozenset[str]]
+    internal: frozenset[str] = frozenset()
+
+    def seeing(self, granted: Collection[str]) -> frozenset[str]:
+        """The audiences a label granting `granted` is visible to."""
+        wanted = set(granted)
+        return frozenset(key for key, sees in self.sees.items() if sees & wanted)
 
 
 class Decision(TypedDict, total=False):
@@ -42,28 +77,35 @@ MAX_ATTEMPTS = 5
 _BACKOFF = timedelta(minutes=1)
 
 
-def visibility_clause(audience_id: str, internal: bool) -> tuple[str, tuple[str]]:
+def visibility_clause(
+    sees: frozenset[str], internal: bool
+) -> tuple[str, tuple[str, ...]]:
     """SQL over `statements s LEFT JOIN statement_audience_labels l`: whether
-    `s` is visible to the audience."""
-    granted = "EXISTS (SELECT 1 FROM json_each(l.audiences) WHERE value = ?)"
+    `s` is visible to an audience that sees the grants of the audience ids
+    `sees` (itself and every audience it includes)."""
+    ids = tuple(sorted(sees))
+    placeholders = ", ".join("?" for _ in ids)
+    granted = (
+        f"EXISTS (SELECT 1 FROM json_each(l.audiences) WHERE value IN ({placeholders}))"
+    )
     if internal:
-        return f"(l.statement_id IS NULL OR {granted})", (audience_id,)
-    return f"(l.statement_id IS NOT NULL AND {granted})", (audience_id,)
+        return f"(l.statement_id IS NULL OR {granted})", ids
+    return f"(l.statement_id IS NOT NULL AND {granted})", ids
 
 
-def grants(label: Sequence[str] | None, audience_id: str, internal: bool) -> bool:
+def grants(label: Sequence[str] | None, sees: frozenset[str], internal: bool) -> bool:
     """`visibility_clause` for a label held outside the substrate (media):
-    whether a label, None while unlabelled, lets the audience see its item.
-    Keep the two in step."""
+    whether a label, None while unlabelled, lets an audience that sees the
+    grants of `sees` see its item. Keep the two in step."""
     if label is None:
         return internal
-    return audience_id in label
+    return bool(sees & set(label))
 
 
 def visible_statement_ids(
-    conn: sqlite3.Connection, audience_id: str, internal: bool
+    conn: sqlite3.Connection, sees: frozenset[str], internal: bool
 ) -> frozenset[str]:
-    clause, params = visibility_clause(audience_id, internal)
+    clause, params = visibility_clause(sees, internal)
     return frozenset(
         str(row["id"])
         for row in conn.execute(
@@ -76,12 +118,12 @@ def visible_statement_ids(
 
 def visible_among(
     conn: sqlite3.Connection,
-    audience_id: str,
+    sees: frozenset[str],
     internal: bool,
     statement_ids: Sequence[str],
 ) -> frozenset[str]:
     """Which of `statement_ids` the audience may see."""
-    clause, params = visibility_clause(audience_id, internal)
+    clause, params = visibility_clause(sees, internal)
     visible: set[str] = set()
     for offset in range(0, len(statement_ids), 500):
         chunk = list(statement_ids[offset : offset + 500])
@@ -138,6 +180,18 @@ def label_pending(row: sqlite3.Row) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
+_NARROWED: TypeAdapter[Narrowed | None] = TypeAdapter(Narrowed | None)
+_PREVIOUS: TypeAdapter[Previous | None] = TypeAdapter(Previous | None)
+
+
+def label_narrowed(row: sqlite3.Row) -> Narrowed | None:
+    return _NARROWED.validate_json(row["narrowed"] or "null")
+
+
+def queued_previous(row: sqlite3.Row) -> Previous | None:
+    return _PREVIOUS.validate_json(row["previous"] or "null")
+
+
 def label_decisions(row: sqlite3.Row) -> dict[str, Decision]:
     value = json.loads(row["decisions"] or "{}")
     return value if isinstance(value, dict) else {}
@@ -163,19 +217,21 @@ def set_label(
     labelled_by: str | None = None,
     pending: Sequence[str] = (),
     decisions: dict[str, Decision] | None = None,
+    narrowed: Narrowed | None = None,
 ) -> None:
     """Replace the statement's label. The caller decides whether an AI label
     may replace what is there; see `apply_ai_label`."""
     conn.execute(
         "INSERT INTO statement_audience_labels "
         "(statement_id, audiences, source, reason, model, cost_usd, labelled_at, "
-        "labelled_by, pending, decisions) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
+        "labelled_by, pending, decisions, narrowed) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
         "audiences = excluded.audiences, source = excluded.source, "
         "reason = excluded.reason, model = excluded.model, "
         "cost_usd = excluded.cost_usd, labelled_at = excluded.labelled_at, "
         "labelled_by = excluded.labelled_by, text_changed_at = NULL, "
-        "pending = excluded.pending, decisions = excluded.decisions",
+        "pending = excluded.pending, decisions = excluded.decisions, "
+        "narrowed = excluded.narrowed",
         (
             statement_id,
             json.dumps(sorted(set(audiences))),
@@ -187,6 +243,7 @@ def set_label(
             labelled_by,
             _json_list(set(pending)),
             _json_object(decisions or {}),
+            json.dumps(narrowed) if narrowed is not None else None,
         ),
     )
     conn.execute(
@@ -203,11 +260,16 @@ def apply_ai_label(
     model: str,
     cost_usd: float | None,
     hold: Collection[str] = (),
+    graph: Graph | None = None,
+    narrowed: Narrowed | None = None,
 ) -> bool:
     """Store an AI label unless a curator has decided. False when skipped.
 
     A grant to an audience in `hold` that the statement is not already
-    visible to waits in `pending` for a curator. Curator decisions on grants
+    visible to waits in `pending` for a curator. Meanwhile the internal
+    audiences that would see it through their includes, and any audience
+    that already saw the statement, are granted it directly, so a waiting
+    grant never hides the statement from them. Curator decisions on grants
     that stay in force are kept."""
     current = get_label(conn, statement_id)
     if current is not None and current["source"] == "curator":
@@ -217,8 +279,26 @@ def apply_ai_label(
         return False
     visible = set(label_audiences(current)) if current is not None else set()
     granted = set(audiences)
-    waiting = {item for item in granted & set(hold) if item not in visible}
+    graph = graph or Graph({key: frozenset((key,)) for key in granted | visible})
+
+    def sees(key: str) -> frozenset[str]:
+        return graph.sees.get(key, frozenset((key,)))
+
+    waiting = {item for item in granted & set(hold) if not sees(item) & visible}
     kept = granted - waiting
+    candidates = {
+        key
+        for key in graph.sees
+        if key not in waiting
+        and not sees(key) & kept
+        and sees(key) & waiting
+        and (key in graph.internal or sees(key) & visible)
+    }
+    kept |= {
+        key
+        for key in candidates
+        if not any(other in sees(key) for other in candidates - {key})
+    }
     decided = label_decisions(current) if current is not None else {}
     set_label(
         conn,
@@ -230,6 +310,7 @@ def apply_ai_label(
         cost_usd=cost_usd,
         pending=sorted(waiting),
         decisions={key: value for key, value in decided.items() if key in kept},
+        narrowed=narrowed,
     )
     return True
 
@@ -310,9 +391,21 @@ def confirm_label(
     return cursor.rowcount > 0
 
 
-def text_changed(conn: sqlite3.Connection, statement_id: str) -> None:
+def text_changed(conn: sqlite3.Connection, statement_id: str, old_text: str) -> None:
     """A statement's text changed: its AI label no longer describes it, and
-    a curator label is kept but marked for the curator to look at again."""
+    a curator label is kept but marked for the curator to look at again. The
+    dropped AI label and the text it judged wait on the queue row, so the
+    relabel starts from them."""
+    current = get_label(conn, statement_id)
+    previous: Previous | None = (
+        {
+            "text": old_text,
+            "audiences": sorted({*label_audiences(current), *label_pending(current)}),
+            "reason": str(current["reason"]),
+        }
+        if current is not None and current["source"] == "ai"
+        else None
+    )
     conn.execute(
         "DELETE FROM statement_audience_labels WHERE statement_id = ? AND source = 'ai'",
         (statement_id,),
@@ -328,17 +421,26 @@ def text_changed(conn: sqlite3.Connection, statement_id: str) -> None:
         (statement_id,),
     )
     if get_label(conn, statement_id) is None:
-        enqueue(conn, [statement_id])
+        enqueue(conn, [statement_id], previous=previous)
 
 
-def enqueue(conn: sqlite3.Connection, statement_ids: Sequence[str]) -> None:
-    """Queue statements for labelling, re-arming any that exhausted retries."""
+def enqueue(
+    conn: sqlite3.Connection,
+    statement_ids: Sequence[str],
+    *,
+    previous: Previous | None = None,
+) -> None:
+    """Queue statements for labelling, re-arming any that exhausted retries.
+    A queued row keeps the first previous label: later edits before the
+    relabel still compare against the label that was in force."""
     now = _now()
+    value = json.dumps(previous) if previous is not None else None
     conn.executemany(
-        "INSERT INTO audience_label_queue (statement_id, enqueued_at) VALUES (?, ?) "
-        "ON CONFLICT(statement_id) DO UPDATE SET attempts = 0, "
-        "next_attempt_at = NULL, last_error = NULL",
-        [(statement_id, now) for statement_id in statement_ids],
+        "INSERT INTO audience_label_queue (statement_id, enqueued_at, previous) "
+        "VALUES (?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET attempts = 0, "
+        "next_attempt_at = NULL, last_error = NULL, "
+        "previous = COALESCE(audience_label_queue.previous, excluded.previous)",
+        [(statement_id, now, value) for statement_id in statement_ids],
     )
 
 
@@ -368,7 +470,7 @@ def due_batch(
     at = (now or datetime.now(UTC)).isoformat()
     return list(
         conn.execute(
-            "SELECT s.id, s.kind, s.text FROM audience_label_queue q "
+            "SELECT s.id, s.kind, s.text, q.previous FROM audience_label_queue q "
             "JOIN statements s ON s.id = q.statement_id "
             "WHERE q.attempts < ? AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= ?) "
             "ORDER BY q.enqueued_at, q.statement_id LIMIT ?",
@@ -444,20 +546,21 @@ def is_queued(conn: sqlite3.Connection, statement_id: str) -> bool:
 def list_labelled_statements(
     conn: sqlite3.Connection,
     *,
-    audience_id: str | None = None,
+    sees: frozenset[str] | None = None,
     internal: bool = False,
     visibility: Visibility | None = None,
     state: LabelState | None = None,
     offset: int = 0,
     limit: int = 50,
 ) -> tuple[list[sqlite3.Row], int]:
-    """A page of statements filtered by audience visibility and label state."""
+    """A page of statements filtered by label state and by visibility to an
+    audience: `sees` is the audience and every audience it includes."""
     conditions: list[str] = []
     params: list[str | int] = []
     if visibility is not None:
-        if audience_id is None:
+        if sees is None:
             raise ValueError("Choose a live audience to filter by visibility.")
-        clause, values = visibility_clause(audience_id, internal)
+        clause, values = visibility_clause(sees, internal)
         conditions.append(clause if visibility == "visible" else f"NOT {clause}")
         params.extend(values)
     if state == "unlabelled":

@@ -1099,17 +1099,18 @@ def _migration_v24_curation_attempts(conn: sqlite3.Connection) -> None:
 
 
 def _migration_v25_pending_external_grants(conn: sqlite3.Connection) -> None:
-    """Hold the AI's new external audience grants for a curator, and record
-    the curator's confirmations and rejections on the label. Existing grants
-    stay in force."""
-    columns = {
-        row[1] for row in conn.execute("PRAGMA table_info(statement_audience_labels)")
-    }
-    for column in ("pending", "decisions"):
-        if column not in columns:
-            conn.execute(
-                f"ALTER TABLE statement_audience_labels ADD COLUMN {column} TEXT"
-            )
+    """Hold the AI's new external audience grants for a curator, record the
+    curator's confirmations and rejections and an edit's narrowing on the
+    label, and keep the label an edit dropped on the queue row for the
+    relabel. Existing grants stay in force."""
+    for table, added in (
+        ("statement_audience_labels", ("pending", "decisions", "narrowed")),
+        ("audience_label_queue", ("previous",)),
+    ):
+        columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column in added:
+            if column not in columns:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
 
 
 # Ordered registry. Tuple format: (target_version, migration_fn).

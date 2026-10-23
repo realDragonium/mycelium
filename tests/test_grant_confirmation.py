@@ -50,7 +50,10 @@ def _answer(granted: dict[str, list[str]]):
             audience_labelling.Labelling(
                 labels=[
                     audience_labelling.Decision(
-                        statement_id=sid, audiences=ids, reason="Integrators see it."
+                        statement_id=sid,
+                        audiences=ids,
+                        reason="Integrators see it.",
+                        narrowing_reason="",
                     )
                     for sid, ids in granted.items()
                 ]
@@ -62,7 +65,9 @@ def _answer(granted: dict[str, list[str]]):
 
 
 def _visible(db, audience: str) -> frozenset[str]:
-    return store.visible_statement_ids(db, audience, audience.startswith("internal"))
+    return store.visible_statement_ids(
+        db, audiences.sees_of(audience), audience.startswith("internal")
+    )
 
 
 def _label(db, sid: str):
@@ -85,6 +90,26 @@ def test_a_new_external_grant_waits_while_internal_grants_apply(db, prompts):
         db, Audience(EXTERNAL, "External", "external", "x", 1)
     )
     assert sid not in scope.statement_ids
+
+
+def test_a_waiting_grant_stays_visible_to_the_internal_audiences_including_it(
+    db, prompts
+):
+    sid = store.create_statement(db, "capability", "users can archive projects")
+
+    audience_labelling.label_batch(db, call=_answer({sid: [OTHER_EXTERNAL]}))
+
+    row = _label(db, sid)
+    assert labels.label_pending(row) == [OTHER_EXTERNAL]
+    assert labels.label_audiences(row) == ["internal-non-technical"]
+    assert {
+        audience
+        for audience in (INTERNAL, "internal-non-technical", EXTERNAL, OTHER_EXTERNAL)
+        if sid in _visible(db, audience)
+    } == {INTERNAL, "internal-non-technical"}
+
+    grant_confirmation.decide(OTHER_EXTERNAL, [sid], confirm=True, curator="c1")
+    assert sid in _visible(db, EXTERNAL)
 
 
 def test_switching_confirmation_off_applies_external_grants_at_once(

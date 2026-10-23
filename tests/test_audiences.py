@@ -102,6 +102,71 @@ def test_the_last_internal_audience_cannot_be_retired_or_made_external(prompts):
         )
 
 
+def test_older_instances_get_the_seeded_includes_once(prompts):
+    for audience_id, body in audiences.SEEDS:
+        prompt_store._append(
+            prompts,
+            type=audiences.TYPE,
+            name=audience_id,
+            text=body.model_dump_json(exclude={"includes"}),
+            deleted=0,
+            created_by="seed",
+        )
+    assert all(not item.includes for item in audiences.live(prompts))
+
+    audiences.seed(prompts)
+    audiences.seed(prompts)
+
+    live = {item.id: item for item in audiences.live(prompts)}
+    assert live["external-technical"].sees == {
+        "external-technical",
+        "external-non-technical",
+    }
+    assert live["internal-technical"].sees == set(live)
+    assert len(prompt_store.history(prompts, audiences.TYPE, "external-technical")) == 3
+
+
+def test_includes_refuse_cycles_and_external_audiences_reaching_internal_ones(
+    prompts,
+):
+    def includes(audience_id: str, *included: str, revision: int = 1) -> None:
+        current = next(i for i in audiences.live(prompts) if i.id == audience_id)
+        audiences.save(
+            audience_id,
+            audiences.SaveAudience(
+                name=current.name,
+                scope=current.scope,
+                description=current.description,
+                includes=list(included),
+                revision=revision,
+            ),
+            ADMIN,
+        )
+
+    with pytest.raises(ValueError, match="include itself"):
+        includes("external-non-technical", "external-technical")
+    with pytest.raises(ValueError, match="internal"):
+        includes("external-non-technical", "internal-non-technical")
+    with pytest.raises(ValueError, match="internal"):
+        audiences.save(
+            "internal-technical",
+            audiences.SaveAudience(
+                name="Everyone",
+                scope="external",
+                description="x",
+                includes=["internal-non-technical"],
+                revision=1,
+            ),
+            ADMIN,
+        )
+    includes("internal-non-technical", "external-technical")
+    assert audiences.sees_of("internal-non-technical") == {
+        "internal-non-technical",
+        "external-technical",
+        "external-non-technical",
+    }
+
+
 def test_a_profile_without_a_choice_writes_for_the_default_and_a_retired_choice_refuses():
     live = (EXTERNAL, INTERNAL)
     assert audiences.resolve(None, live) == INTERNAL
@@ -115,8 +180,32 @@ def test_a_profile_without_a_choice_writes_for_the_default_and_a_retired_choice_
 def test_new_statements_are_queued_and_unlabelled_ones_fail_closed(db):
     sid = store.create_statement(db, "state", "the invoice is paid")
     assert _queued(db) == {sid}
-    assert store.visible_statement_ids(db, INTERNAL.id, True) == {sid}
-    assert store.visible_statement_ids(db, EXTERNAL.id, False) == frozenset()
+    assert store.visible_statement_ids(db, frozenset({INTERNAL.id}), True) == {sid}
+    assert (
+        store.visible_statement_ids(db, frozenset({EXTERNAL.id}), False) == frozenset()
+    )
+
+
+def test_an_audience_sees_what_the_audiences_it_includes_see(db, prompts):
+    general = store.create_statement(db, "capability", "users can export invoices")
+    technical = store.create_statement(db, "capability", "the export api pages")
+    for sid, granted in (
+        (general, "external-non-technical"),
+        (technical, "external-technical"),
+    ):
+        store.audience_labels.set_label(
+            db, sid, [granted], source="curator", reason="r", labelled_by="c"
+        )
+
+    def visible(audience_id: str) -> frozenset[str]:
+        return store.visible_statement_ids(
+            db, audiences.sees_of(audience_id), audience_id.startswith("internal")
+        )
+
+    assert visible("external-non-technical") == {general}
+    assert visible("external-technical") == {general, technical}
+    assert visible("internal-non-technical") == {general}
+    assert visible("internal-technical") == {general, technical}
 
 
 def test_a_text_change_drops_the_ai_label_and_flags_a_curator_decision(db):
@@ -200,7 +289,7 @@ def test_backfill_progress_is_read_from_the_queue(db, prompts):
 # --- the labeller --------------------------------------------------------------
 
 
-def _answer(*decisions: tuple[str, list[str]]):
+def _answer(*decisions: tuple[str, list[str]], narrowing: str = ""):
     calls: list[str] = []
 
     def call(task, config):
@@ -209,7 +298,10 @@ def _answer(*decisions: tuple[str, list[str]]):
             audience_labelling.Labelling(
                 labels=[
                     audience_labelling.Decision(
-                        statement_id=sid, audiences=granted, reason="because"
+                        statement_id=sid,
+                        audiences=granted,
+                        reason="because",
+                        narrowing_reason=narrowing,
                     )
                     for sid, granted in decisions
                 ]
@@ -397,8 +489,10 @@ def test_curators_override_labels_and_the_filter_finds_them(tmp_path, monkeypatc
             json={"audiences": ["external-technical"], "reason": "Public feature."},
         ).json()
         assert saved["label"]["source"] == "curator"
+        # Internal technical includes external technical, so it sees it too.
         assert {item["id"] for item in saved["audiences"] if item["visible"]} == {
-            "external-technical"
+            "external-technical",
+            "internal-technical",
         }
 
         found = client.get(
@@ -438,3 +532,40 @@ def test_curators_override_labels_and_the_filter_finds_them(tmp_path, monkeypatc
             ).status_code
             == 400
         )
+
+
+def test_an_edit_keeps_the_previous_audiences_unless_the_labeller_says_why(db, prompts):
+    labels = store.audience_labels
+    sid = store.create_statement(db, "rule", "an export holds 100 rows")
+    labels.apply_ai_label(
+        db, sid, ["external-non-technical"], reason="r", model="m", cost_usd=None
+    )
+    store.update_statement_text(db, sid, "an export holds 500 rows")
+    store.update_statement_text(db, sid, "an export holds 1000 rows")
+    narrower = (sid, ["internal-non-technical"])
+
+    call, prompts_sent = _answer(narrower)
+    audience_labelling.label_batch(db, call=call)
+
+    sent = json.loads(prompts_sent[0])["statements"][0]
+    assert sent["previous"]["text"] == "an export holds 100 rows"
+    assert sent["previous"]["audiences"] == ["external-non-technical"]
+    row = labels.get_label(db, sid)
+    assert row is not None
+    # Kept, though changed text still waits for a curator before it is external.
+    assert labels.label_pending(row) == ["external-non-technical"]
+    assert labels.label_audiences(row) == ["internal-non-technical"]
+    assert labels.label_narrowed(row) is None
+
+    store.update_statement_text(db, sid, "an export holds 1000 rows on the ledger")
+    call, _ = _answer(narrower, narrowing="Names the internal ledger service.")
+    audience_labelling.label_batch(db, call=call)
+
+    row = labels.get_label(db, sid)
+    assert row is not None
+    assert labels.label_audiences(row) == ["internal-non-technical"]
+    assert labels.label_narrowed(row) == {
+        "previous": ["external-non-technical", "internal-non-technical"],
+        "lost": ["external-non-technical", "external-technical"],
+        "reason": "Names the internal ledger service.",
+    }
