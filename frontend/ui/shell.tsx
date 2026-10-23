@@ -17,6 +17,7 @@ import { IngestSurface } from './ingest';
 import { KnowledgeGapsScreen } from './knowledge-gaps';
 import { NamesWorkspace } from './names-workspace';
 import { SettingsScreen } from './settings';
+import { usd, type Budget } from './ai-usage';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
 import { getJSON, getMe, getServerInfo, type KnowledgeGap, type Me } from './api';
@@ -136,6 +137,24 @@ function PartialRestoreBanner() {
   );
 }
 
+/* ---------------- AI budget ---------------- */
+// Admins only: the endpoint answers null for everyone else. Checked once per
+// page load; spend moves slowly enough that a stale banner costs nothing.
+function BudgetBanner() {
+  const state = useAsync(useCallback(() => getJSON<Budget | null>('/api/ai-usage/budget'), [])).state;
+  const budget = state.status === 'ready' ? state.data : null;
+  if (!budget || !budget.warning) return null;
+  return (
+    <div className={`restore-banner notice ${budget.paused ? 'error' : 'warn'}`} role="status">
+      <I.warn width="16" height="16" />
+      <span>
+        <strong>AI budget.</strong> Estimated spend this month is {usd(budget.spent_usd)}, {budget.percent}% of the {usd(budget.limit_usd)} budget.
+        {budget.paused ? ' Background actions are paused.' : ''} <Link to={{ view: 'settings', section: 'usage' }}>See AI usage</Link>
+      </span>
+    </div>
+  );
+}
+
 /* ---------------- Screen for a route ---------------- */
 function Screen({ route, ingestNonce, refresh }: { route: Route; ingestNonce: number; refresh: () => Promise<void> }) {
   switch (route.view) {
@@ -183,6 +202,7 @@ export function App() {
               {navOpen && <div className="side-scrim" onClick={() => setNavOpen(false)} />}
               <div className="main-col">
                 <PartialRestoreBanner />
+                {me.status === 'ready' && me.data.role === 'admin' && <BudgetBanner />}
                 <header className="topbar">
                   <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Open navigation"><I.menu /></button>
                   {route.view !== 'home' ? <CommandBar /> : <div className="topbar-spacer" />}

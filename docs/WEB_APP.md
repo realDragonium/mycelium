@@ -52,11 +52,13 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
 | | Draft review | `#/settings/review` | Automatic review mode, reviewer, model, whether reviews may apply; review the backlog |
 | | Limits | `#/settings/limits` | Token, time and operation budgets per action; concurrent runs |
+| | AI usage | `#/settings/usage` | Admins: estimated spend for the last 7, 30 or 90 days per day, action and model, with totals and the costliest runs linked to their run, plan or draft; the optional monthly budget. See [AI usage and budget](AI_MODELS.md#ai-usage-and-budget) |
 | Publishing | Documentation | `#/settings/documentation` | GitHub connection (disconnecting asks first), publishing destinations, writing profiles, their audience and templates |
 | | Audiences | `#/settings/audiences` | Who documents are written for; per audience, visible and unlabelled statements; labelling status, backfill progress and cost; statements by audience and label state, including curator labels whose text changed since the decision. See [Audiences](AUDIENCES.md) |
 
 What a person can change depends on their role; sections say so where it
-applies.
+applies. Once estimated spend passes the monthly budget's warning percentage,
+admins see a banner on every screen linking to AI usage.
 
 ## Older addresses
 

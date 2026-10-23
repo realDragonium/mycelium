@@ -1,4 +1,5 @@
-"""Admin settings: product settings, AI model choices and the draft-review setup.
+"""Admin settings: product settings, AI model choices, the draft-review setup
+and AI usage.
 
 Anyone authenticated may read them; only an admin may save. A conflicting save
 answers 409, and unavailable settings 503.
@@ -6,11 +7,13 @@ answers 409, and unavailable settings 503.
 
 from __future__ import annotations
 
-import anyio.from_thread
-from fastapi import APIRouter, HTTPException, Request
+from typing import Annotated
 
+import anyio.from_thread
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from .. import ai_usage, drafts_store, model_settings, product_settings, server
 from .. import draft_review_settings as review_settings
-from .. import model_settings, product_settings, server
 from .access import _require_admin, _require_principal
 
 router = APIRouter()
@@ -89,3 +92,26 @@ def save_draft_review_settings(
         raise HTTPException(status_code=409, detail=str(exc)) from None
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+def _budget_settings() -> product_settings.AIBudgetSettings:
+    try:
+        return product_settings.get(product_settings.AIBudgetSettings)
+    except model_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@router.get("/api/ai-usage")
+def ai_usage_report(
+    request: Request, days: Annotated[int, Query(ge=1, le=366)] = 30
+) -> ai_usage.UsageView:
+    _require_admin(request)
+    return ai_usage.view(drafts_store.connection(), _budget_settings(), days)
+
+
+@router.get("/api/ai-usage/budget")
+def ai_budget(request: Request) -> ai_usage.Budget | None:
+    """This month's budget for the admin banner; nothing for anyone else."""
+    if not _require_principal(request).is_admin:
+        return None
+    return ai_usage.budget(drafts_store.connection(), _budget_settings())

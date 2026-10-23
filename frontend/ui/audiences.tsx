@@ -91,8 +91,8 @@ function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: 
   };
   return <Card title="Statement labelling" actions={data.can_configure && <><button type="button" className="btn sm" disabled={busy || running} onClick={() => void start(false)}>Label unlabelled statements</button><button type="button" className="btn ghost sm" disabled={busy || running} onClick={() => void start(true)}>Relabel AI labels</button></>}>
     <div className="audience-metrics"><div><b>{status.labelled_ai}</b><span>AI-labelled</span></div><div><b>{status.labelled_curator}</b><span>Curator</span></div><div><b>{status.unlabelled}</b><span>Unlabelled</span></div><div><b>{status.queued}</b><span>Queued</span></div><div><b>{status.failed}</b><span>Failed</span></div></div>
-    <p className="hint">{status.statements} statements · {formatCost(status.cost_usd)} total cost · {status.provider} / {status.model} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
-    {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements…` : `Backfill finished: ${status.backfill.labelled} statements labelled.`} Cost since start: {formatCost(status.backfill.cost_usd)}.</Notice>}
+    <p className="hint">{status.statements} statements · {formatCost(status.cost_usd)} estimated total cost · {status.provider} / {status.model} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
+    {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements…` : `Backfill finished: ${status.backfill.labelled} statements labelled.`} Estimated cost since start: {formatCost(status.backfill.cost_usd)}.</Notice>}
     {status.last_error && <Notice tone="error">Last labelling error: {status.last_error}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
   </Card>;

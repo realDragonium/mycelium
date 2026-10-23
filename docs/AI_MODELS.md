@@ -109,6 +109,45 @@ inside the adapter and cannot switch provider halfway through a run. Embeddings
 remain a separate Ollama configuration, and search indexes are not changed by
 this screen.
 
+## AI usage and budget
+
+`mycelium.ai` meters every `turn` and `structured` call, so no action needs its
+own accounting. Each call becomes one row in the `ai_usage` table of
+`mycelium-drafts.db`: time, action, provider, model, input, cache-read,
+cache-write and output tokens, estimated cost, duration, success, and the run
+and draft it served when there is one (documentation runs, documentation plans
+and draft review runs). A call is attributed by the action around it with
+`ai.usage.attributed(action, run_id=..., draft_id=...)`; a call made outside
+any attribution is still recorded, as `other`. Truncated turns and turns
+rejected after the provider answered (a missing required tool call, an
+incomplete OpenAI response) are recorded with the tokens they used; a request
+that failed before the provider answered is recorded with none. The ledger
+is archived with drafts in backups: it is small, and restoring without it
+would reset the month's spend and the budget with it.
+
+Costs are estimates from the list prices in `mycelium.ai.pricing` (Claude and
+OpenAI, standard tier, base context). They leave out long-context surcharges,
+batch or priority tiers and attempts the SDK retried after a timeout. A model
+without a list price records tokens but no cost, and the usage page says how
+many such calls a total leaves out.
+
+**Settings → AI usage** shows admins the totals, spend per UTC day, per action
+and per model, and the most expensive recent runs, linked. `GET
+/api/ai-usage?days=N` (admin, 1–366, default 30) returns the same report with
+the budget; `GET /api/ai-usage/budget` returns this month's budget state to
+admins and `null` to everyone else.
+
+The optional monthly budget is the `ai_budget` product settings section:
+`monthly_limit_usd` (0 means none), `warn_percent` (default 80) and
+`pause_background` (default off). Spend is counted per UTC calendar month.
+Past the warning percentage, admins see a banner. With pausing on, at 100% the
+background actions (audience labelling, draft review and the connect pass,
+which attributes its calls as `connect`) are refused before a request is sent,
+until the month ends or the budget is raised. A refused labelling batch stays
+due; a refused review run fails with the reason and is retried by the review
+sweep like any failure. Ask, ingest, documentation, planning and alias
+discovery are never paused.
+
 ## Limits and repository integrations
 
 **Settings → Limits** provides independent limits for Ask, Ingest, Documentation,
