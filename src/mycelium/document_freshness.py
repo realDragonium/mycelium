@@ -112,7 +112,7 @@ def for_documents(
 
     The substrate is opened only when some revision recorded citations.
     """
-    snapshots = _cited_snapshots(drafts, document_ids)
+    snapshots = cited_snapshots(drafts, document_ids)
     cited_ids = sorted(
         {
             sid
@@ -158,7 +158,7 @@ def for_documents(
     }
 
 
-def _cited_snapshots(
+def cited_snapshots(
     conn: sqlite3.Connection, document_ids: Iterable[str]
 ) -> dict[str, _Cited]:
     wanted = list(document_ids)

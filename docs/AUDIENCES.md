@@ -2,7 +2,8 @@
 
 An audience is who a document is written for. Each writing profile writes for
 exactly one audience, and a documentation run reads only the statements that
-audience may see. Ask and MCP retrieval are not scoped by audience.
+audience may see. A user or token scoped to an audience reads through the
+same boundary; see [Scoped users and tokens](#scoped-users-and-tokens).
 
 ## Audiences
 
@@ -86,3 +87,32 @@ cites is relabelled so that this audience may no longer see it, the document
 is out of date with the reason "no longer visible to this audience", and its
 revision is briefed to drop what rested on it, so an external document does
 not keep knowledge that has become internal.
+
+## Scoped users and tokens
+
+An admin can scope a user, an MCP token or an OAuth connection to an audience
+(see [Managing users](USERS.md#scoping-to-an-audience)). Without an audience a
+principal has its role's full access. A scoped principal reads exactly what a
+documentation run for that audience reads, and nothing else:
+
+- Its role is clamped to reader. Writes, drafts, gap reports and admin actions
+  are refused whatever its role.
+- It may call only the read tools (the ones Ask and documentation runs use,
+  plus `ask`, `list_generated_documents` and `get_generated_document`) and a
+  short list of read routes: `/api/me` and its own tokens, `/api/data`,
+  `/api/substrate-counts`, `/api/entity-positions`, `/api/history` and the
+  document library. Every other route and tool answers 403, including any
+  added later until it is added to the allowlist in `principal_audience`.
+- Each read runs inside the boundary above. Ask runs its whole loop inside it,
+  so it neither reads nor cites a statement the audience may not see.
+- It may read a generated document written for its audience, or for an
+  audience at least as restricted: an external reader never gets a document
+  written for an internal audience, and every statement the writing audience
+  may see must be visible to it. Every statement the document cites must also
+  still be visible. The out-of-date reasons, which quote changed statements,
+  are left out.
+- History lists only events on statements, concepts and names it may see now,
+  without their before and after values.
+
+A principal scoped to an audience that is later retired reads nothing until an
+admin rescopes it.

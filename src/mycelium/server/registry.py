@@ -21,7 +21,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from .. import auth as _auth
 from .. import hosts as _hosts
-from .. import link_authoring
+from .. import link_authoring, principal_audience
 from .admission import _MODEL_LOOP_TOOLS, _offloaded, _run_tool
 from .draft_queue import (
     _LIST_TOOL_KINDS,
@@ -132,6 +132,11 @@ class _RoleFilteredTools:
             required = getattr(
                 w, "_mycelium_required_role", None
             ) or _auth.required_role_for(name)
+            if (
+                principal.audience_id is not None
+                and name not in principal_audience.TOOLS
+            ):
+                return False
             return _satisfies(
                 principal, required, getattr(w, "_mycelium_real_role", False)
             )
@@ -201,7 +206,8 @@ MCP_TOOLS = frozenset(
 
 
 def _check_role(name: str, required: str, real_role: bool) -> _auth.Principal | None:
-    """Raise unless the current caller clears the tool's role gate; return them."""
+    """Raise unless the current caller clears the tool's role gate and, when
+    scoped to an audience, may call the tool at all; return them."""
     principal = _auth.current_principal.get()
     if principal is not None and not _satisfies(principal, required, real_role):
         raise _auth.RoleRequired(
@@ -209,7 +215,17 @@ def _check_role(name: str, required: str, real_role: bool) -> _auth.Principal | 
             f"{'real ' if real_role else ''}{required} role; "
             f"caller has {principal.role}"
         )
+    principal_audience.check_tool(principal, name)
     return principal
+
+
+def _run_read(name: str, principal: _auth.Principal | None, call: Callable[[], R]) -> R:
+    """Run a read inside the caller's audience boundary, unless the tool
+    applies it itself (`principal_audience.SELF_SCOPED`)."""
+    if name in principal_audience.SELF_SCOPED:
+        return _run_tool(call, budgeted=name in _MODEL_LOOP_TOOLS)
+    with principal_audience.reads(principal):
+        return _run_tool(call, budgeted=False)
 
 
 def _register(
@@ -305,7 +321,9 @@ def tool(
 
         @functools.wraps(func)
         def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-            _check_role(name, required, real_role)
+            principal = _check_role(name, required, real_role)
+            if principal is not None and principal.audience_id is not None:
+                return _run_read(name, principal, lambda: func(*args, **kwargs))
             return _run_tool(lambda: func(*args, **kwargs), budgeted=budgeted)
 
         _register(
@@ -363,10 +381,17 @@ def draft_listing_tool(func: Callable[P, R]) -> Callable[P, R | list[QueuedOp]]:
 
     @functools.wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> R | list[QueuedOp]:
-        _check_role(name, required, False)
+        principal = _check_role(name, required, False)
         draft_id = _pop_draft_id(kwargs)
+        scoped = principal is not None and principal.audience_id is not None
         if draft_id is not None:
+            if scoped:
+                raise principal_audience.Unavailable(
+                    "drafts are not available to a credential scoped to an audience"
+                )
             return _list_from_draft(draft_id, _LIST_TOOL_KINDS[name])
+        if scoped:
+            return _run_read(name, principal, lambda: func(*args, **kwargs))
         return _run_tool(lambda: func(*args, **kwargs), budgeted=False)
 
     _register(func, wrapper, required=required, real_role=False, draftable=True)

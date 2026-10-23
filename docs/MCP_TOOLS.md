@@ -17,6 +17,10 @@ because their writes are queued on a draft, but they do not see `list_drafts`,
 the admin-only `delete_statement`, `merge_statements` or `merge_entities`. An admin
 sees all 37.
 
+A principal scoped to an audience is a reader whatever its role, and sees only
+the read tools in `principal_audience.TOOLS`; see
+[Scoped users and tokens](AUDIENCES.md#scoped-users-and-tokens).
+
 ## Over MCP
 
 MCP covers the read path, statement and entity authoring, drafts, and the

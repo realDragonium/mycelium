@@ -40,7 +40,9 @@ def test_tool_response(monkeypatch, result, verbose):
     monkeypatch.setattr(
         ask.AskConfig, "from_env", lambda: ask.AskConfig(trace_log_path="unused")
     )
-    monkeypatch.setattr(ask, "run_ask", lambda question, *, config: result)
+    monkeypatch.setattr(
+        ask, "run_ask", lambda question, *, config, substrate=None: result
+    )
     arguments = {"verbose": True} if verbose else {}
     response = server.ask.__wrapped__("What is a match score?", **arguments)
     expected = result.model_dump()
