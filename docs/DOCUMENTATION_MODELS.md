@@ -85,6 +85,15 @@ profiles at admission. The selected guidance, exposure rules, template, and thei
 versions are retained with the run. Changing settings while a run is queued does
 not change that run's instructions.
 
+### Images
+
+A run is offered the screenshots and recordings attached to what it reads that
+its audience may see, and places them as `![alt text](media:<id>)`. The
+reviewer checks each image's alt text, relevance and exposure, and a template
+may mark image slots. A document is out of date when an image it places was
+replaced, deleted or relabelled away from its audience. See
+[Media](MEDIA.md#in-documents).
+
 ### Keeping documents up to date
 
 Each writing profile has a maintenance policy, set in its editor under
@@ -136,6 +145,12 @@ Publication is explicit. Failures leave the internal document saved and can be
 retried without another AI run. Later updates preserve the recorded repository,
 branch, credential binding and path, even if its destination settings change.
 A binding removed from the deployment must be restored before publishing there.
+
+Images the document places are committed beside the Markdown, as
+`<file stem>-media/<id>-v<version>.<ext>`, and linked by that relative path; a
+replaced image gets a new file name, so its document changes too. Publishing
+refuses a document placing media that was deleted or that its audience may no
+longer see.
 
 The document shows which revision was published and whether a newer internal
 revision awaits publication. A publication completing during a concurrent local
