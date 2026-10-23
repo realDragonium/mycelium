@@ -12,6 +12,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 # The pre-drafter schema, transcribed verbatim from the prior auth_store.py.
 # We seed a DB with this and then run migrate() to assert the rebuild flips
 # the CHECK constraints without losing rows.
@@ -194,3 +196,53 @@ def test_migrate_on_fresh_db_has_no_role_check(tmp_path):
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'"
     ).fetchone()["sql"]
     assert "CHECK (role IN" not in sql  # role is free-form TEXT
+
+
+@pytest.mark.parametrize("table", ["users", "mcp_tokens", "invites"])
+def test_failed_copy_rolls_back_rebuild_and_can_be_retried(table):
+    from mycelium import auth_store
+
+    conn = _seed_old_db(Path(":memory:"))
+    auth_store._add_audience_columns(conn)
+    conn.execute("PRAGMA foreign_keys = ON")
+    before_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = ?", (table,)
+    ).fetchone()["sql"]
+    before_rows = [tuple(row) for row in conn.execute(f"SELECT * FROM {table}")]
+
+    def deny_copy(action, name, _column, _database, _trigger):
+        if action == sqlite3.SQLITE_INSERT and name == f"{table}_new":
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    try:
+        conn.set_authorizer(deny_copy)
+        with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+            auth_store._drop_role_check(conn)
+        conn.set_authorizer(None)
+        assert not conn.in_transaction
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name GLOB '*_new'"
+            ).fetchall()
+            == []
+        )
+        assert (
+            conn.execute(
+                "SELECT sql FROM sqlite_master WHERE name = ?", (table,)
+            ).fetchone()["sql"]
+            == before_sql
+        )
+        assert [
+            tuple(row) for row in conn.execute(f"SELECT * FROM {table}")
+        ] == before_rows
+
+        auth_store.migrate(conn)
+        assert [
+            tuple(row) for row in conn.execute(f"SELECT * FROM {table}")
+        ] == before_rows
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert auth_store._drop_role_check(conn) is False
+    finally:
+        conn.close()
