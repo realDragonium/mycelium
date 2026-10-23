@@ -25,6 +25,12 @@ def get_substrate_dump() -> dict[str, Any]:
     return store.substrate_dump(store.substrate_connection())
 
 
+@router.get("/api/substrate-counts")
+def get_substrate_counts() -> store.SubstrateCounts:
+    """What Home shows of the substrate, without the dump behind it."""
+    return store.substrate_counts(store.substrate_connection())
+
+
 @router.get("/api/entity-positions", include_in_schema=False)
 def get_entity_positions(request: Request) -> Any:
     """Stream the baked entity layout JSON.

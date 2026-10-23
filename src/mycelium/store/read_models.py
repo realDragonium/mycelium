@@ -1,9 +1,9 @@
-"""UI-shaped read models: substrate dump and activity feed."""
+"""UI-shaped read models: substrate dump, counts and activity feed."""
 
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
+from typing import Any, TypedDict
 
 from .kernel import _load_when_tree
 
@@ -121,6 +121,31 @@ def substrate_dump(conn: sqlite3.Connection) -> dict[str, Any]:
         "links": links,
         "entity_links": entity_links,
     }
+
+
+class SubstrateCounts(TypedDict):
+    statements: int
+    entities: int
+    names: int
+    links: int
+    entity_links: int
+
+
+def substrate_counts(conn: sqlite3.Connection) -> SubstrateCounts:
+    """How many of each record `substrate_dump` would return."""
+    row = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM statements), (SELECT COUNT(*) FROM entities), "
+        "(SELECT COUNT(*) FROM names), (SELECT COUNT(*) FROM statement_links), "
+        "(SELECT COUNT(*) FROM entity_links)"
+    ).fetchone()
+    statements, entities, names, links, entity_links = (int(n) for n in row)
+    return SubstrateCounts(
+        statements=statements,
+        entities=entities,
+        names=names,
+        links=links,
+        entity_links=entity_links,
+    )
 
 
 # The activity feed unions every table's create/update/link timestamps into a
