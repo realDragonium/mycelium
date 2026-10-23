@@ -71,7 +71,9 @@ def ask(
         if scope is None
         else audience_scope.ScopedSubstrate(InProcessSubstrate(), scope)
     )
-    result = run_ask(question, config=config, substrate=substrate)
+    result = run_ask(
+        question, config=config, substrate=substrate, scoped=scope is not None
+    )
     if verbose:
         return result.model_dump()
     if result.outcome == "answered":

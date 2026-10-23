@@ -1046,3 +1046,25 @@ def test_parallel_reads_in_one_turn_all_get_results():
         if b.get("type") == "tool_result"
     }
     assert answered_ids == {"a", "b", "c"}
+
+
+def test_a_scoped_answer_says_unavailable_never_nonexistent():
+    """Under an audience scope, what the tools cannot find may exist for
+    someone else: the prompt rules out claiming it does not exist."""
+    responses = [_message([_tool_use("submit_answer", _submit_input())])]
+    client = FakeAnthropic(responses)
+    substrate = FakeSubstrate({"recon": [{"id": "stm_1", "text": "retry"}]})
+    run_ask(
+        "is there a bulk export?",
+        client=client,
+        substrate=substrate,
+        config=AskConfig(trace_log_path=None),
+        scoped=True,
+    )
+    unscoped = prompts.build_system_prompt("x")
+
+    system = "".join(block["text"] for block in client.calls[0]["system"])
+    assert "not available here" in system
+    assert "Never say that a feature, concept or behaviour does not exist" in system
+    assert '"substrate"' in system
+    assert "not available here" not in unscoped

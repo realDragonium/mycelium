@@ -80,9 +80,13 @@ def run_ask(
     substrate: SubstrateReader | None = None,
     config: AskConfig | None = None,
     stream: AskStream | None = None,
+    scoped: bool = False,
 ) -> AskResult:
     """Resolve `question` against the substrate. Returns `Answered` or
     `NeedsClarification` — never raises for retrieval/closure reasons.
+
+    `scoped` says the substrate shows only what the caller's audience may see,
+    so the answer must not read absence as non-existence.
 
     `client` / `substrate` / `config` are injectable for tests; in production
     they default to the shared model transport, the in-process substrate, and
@@ -97,7 +101,7 @@ def run_ask(
     token = current_stream.set(stream)
     try:
         with tracing.profile_to_html("ask", question):
-            result = _execute(question, client, substrate, config, stream)
+            result = _execute(question, client, substrate, config, stream, scoped)
     finally:
         current_stream.reset(token)
     stream.check()
@@ -160,6 +164,7 @@ def _execute(
     substrate: SubstrateReader,
     config: AskConfig,
     stream: AskStream,
+    scoped: bool,
 ) -> AskResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -175,7 +180,7 @@ def _execute(
     evidence = Evidence()
     ctx = _RunContext(
         question=question,
-        system_prompt=prompts.build_system_prompt(instructions.text),
+        system_prompt=prompts.build_system_prompt(instructions.text, scoped=scoped),
         evidence=evidence,
         targeted_ids=set(),
         stream=stream,
