@@ -8,6 +8,23 @@ import os
 
 import pytest
 
+from mycelium import embed as embed_module
+
+_real_embed_many = embed_module.embed_many
+
+
+@pytest.fixture(autouse=True)
+def _route_batched_embeddings_through_embed(monkeypatch):
+    """Keep rebuilds driven by each test's runtime monkeypatch of embed.embed."""
+
+    def embed_many(texts):
+        return [embed_module.embed(text) for text in texts]
+
+    embed_module.reset()
+    monkeypatch.setattr(embed_module, "embed_many", embed_many)
+    yield
+    embed_module.reset()
+
 
 @pytest.fixture(autouse=True)
 def _isolate_prompt_store():
@@ -52,6 +69,8 @@ def pytest_configure(config):
     # assertions and leaks threads. Tests that exercise recompute call
     # `mention_worker.drain(conn)` synchronously instead.
     os.environ.setdefault("MYCELIUM_DISABLE_MENTION_WORKER", "1")
+    # Embedding retries are exercised synchronously through `reembed_pending`.
+    os.environ.setdefault("MYCELIUM_DISABLE_EMBED_WORKER", "1")
     # The review sweep wakes on a timer; tests call `draft_review_runs.sweep`
     # with an explicit clock instead.
     os.environ.setdefault("MYCELIUM_DISABLE_REVIEW_SWEEP", "1")

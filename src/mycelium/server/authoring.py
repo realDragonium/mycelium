@@ -12,14 +12,13 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from .. import embed, phrasing, store
-from ..require import require
+from .. import phrasing, store
 from .batch_planning import (
     _assemble_batch_results,
     _materialize_batch_edges,
     _plan_batch,
 )
-from .indexes import _persisted_index_write
+from .indexes import _persisted_index_write, _set_statement_vector, _try_embed
 from .registry import draftable_tool
 from .runtime import _db, _idx
 from .search import _near_duplicates
@@ -126,6 +125,8 @@ def upsert_statement(
     without writing. Pass `allow_phrasing_violations=True` to proceed
     anyway — the success response then carries the same violations under
     a `phrasing_violations` key as a warning.
+
+    If embedding is unavailable, the write succeeds with `embedding_pending: true`.
     """
 
     violations, reject = _phrasing_gate(text, kind, allow_phrasing_violations)
@@ -169,7 +170,7 @@ def upsert_statement(
     if flip_errors:
         raise ValueError("flipped link direction:\n" + "\n".join(flip_errors))
 
-    vec = embed.embed(text)
+    vec = _try_embed(text)
     link_pairs = [
         (item["to_id"], item["link_type"], item.get("when")) for item in links
     ]
@@ -177,17 +178,12 @@ def upsert_statement(
     with _persisted_index_write(statements=True):
         if id is not None:
             store.update_statement(_db(), id, kind, text)
-            vector_id = require(
-                store.get_vector_id(_db(), id), "vector_id for statement"
-            )
-            _idx().replace(vector_id, vec)
+            _set_statement_vector(id, vec)
             store.replace_links(_db(), id, link_pairs)
             statement_id = id
         else:
             statement_id = store.create_statement(_db(), kind, text)
-            vector_id = store.next_vector_id(_db())
-            store.set_vector_id(_db(), statement_id, vector_id)
-            _idx().add(vector_id, vec)
+            _set_statement_vector(statement_id, vec)
             store.replace_links(_db(), statement_id, link_pairs)
 
         # Mentions are derived from the text, not asserted by the caller.
@@ -202,8 +198,12 @@ def upsert_statement(
 
     response: dict[str, Any] = {
         "statement_id": statement_id,
-        "near_duplicates": _near_duplicates(vec, exclude_id=statement_id),
+        "near_duplicates": (
+            _near_duplicates(vec, exclude_id=statement_id) if vec is not None else []
+        ),
     }
+    if vec is None:
+        response["embedding_pending"] = True
     if violations:
         response["phrasing_violations"] = violations
     return response
@@ -249,9 +249,12 @@ def upsert_statements(
             {"rejected": True, "reason": "depends_on_rejected",
              "depends_on": [<int indexes>]}                            # cascaded
           ],
-          "near_duplicates": {"stm_...": [...], ...}
+          "near_duplicates": {"stm_...": [...], ...},
+          "embedding_pending": ["stm_...", ...]  # omitted when empty
         }
         ```
+
+    Writes whose embedding is unavailable remain pending for background retry.
     """
 
     n = len(statements)
@@ -261,26 +264,25 @@ def upsert_statements(
     # Phase 0: decide who survives (phrasing → cascade → flip) with no writes.
     plan = _plan_batch(statements)
 
-    # Phase 1: embed surviving items only. Slow path runs first so an
-    # Ollama failure aborts cleanly without leaving partial state.
-    vecs: dict[int, Any] = {}
+    # Phase 1: try to embed surviving items before opening the write transaction.
+    vecs: dict[int, list[float] | None] = {}
     for i, spec in enumerate(statements):
         if i not in plan.rejected:
-            vecs[i] = embed.embed(spec["text"])
+            vecs[i] = _try_embed(spec["text"])
 
     # Phase 2: create surviving statements with their derived mentions, no
     # links yet. The name index is stable across the batch (statements
     # don't create names), so build it once.
     name_index = store.build_name_index(_db())
     statement_ids: dict[int, str] = {}
-    with _persisted_index_write(statements=True):
+    with _persisted_index_write(
+        statements=any(vec is not None for vec in vecs.values())
+    ):
         for i, spec in enumerate(statements):
             if i in plan.rejected:
                 continue
             bid = store.create_statement(_db(), spec["kind"], spec["text"])
-            vid = store.next_vector_id(_db())
-            store.set_vector_id(_db(), bid, vid)
-            _idx().add(vid, vecs[i])
+            _set_statement_vector(bid, vecs[i])
             store.derive_mentions(_db(), bid, spec["text"], name_index)
             statement_ids[i] = bid
 
@@ -301,7 +303,10 @@ def upsert_statements(
     # Near-duplicate warnings per newly-inserted statement.
     near_dups: dict[str, list[dict[str, Any]]] = {}
     for i, bid in statement_ids.items():
-        hits = _near_duplicates(vecs[i], exclude_id=bid)
+        vec = vecs[i]
+        if vec is None:
+            continue
+        hits = _near_duplicates(vec, exclude_id=bid)
         if hits:
             near_dups[bid] = hits
 
@@ -315,7 +320,11 @@ def upsert_statements(
         statement_ids,
     )
 
-    return {"results": results, "near_duplicates": near_dups}
+    response: dict[str, Any] = {"results": results, "near_duplicates": near_dups}
+    pending = [bid for i, bid in statement_ids.items() if vecs[i] is None]
+    if pending:
+        response["embedding_pending"] = pending
+    return response
 
 
 @draftable_tool
@@ -337,6 +346,8 @@ def replace_text(
     statement is unchanged. `allow_phrasing_violations=True` proceeds
     anyway and surfaces the violations as a `phrasing_violations`
     warning on the success response.
+
+    If embedding is unavailable, the write succeeds with `embedding_pending: true`.
     """
     row = store.get_statement(_db(), id)
     if row is None:
@@ -346,14 +357,15 @@ def replace_text(
     if reject is not None:
         return reject
 
-    vec = embed.embed(text)
+    vec = _try_embed(text)
     with _persisted_index_write(statements=True):
         store.update_statement_text(_db(), id, text)
-        vector_id = require(store.get_vector_id(_db(), id), "vector_id for statement")
-        _idx().replace(vector_id, vec)
+        _set_statement_vector(id, vec)
         # Text changed → re-derive mentions.
         _derive_statement_mentions(id, text)
     response: dict[str, Any] = {"statement_id": id}
+    if vec is None:
+        response["embedding_pending"] = True
     if violations:
         response["phrasing_violations"] = violations
     return response
@@ -396,6 +408,8 @@ def patch_statement(
     rejection; `allow_phrasing_violations=True` proceeds and surfaces
     the violations as a `phrasing_violations` warning on success.
 
+    If embedding is unavailable, a text patch succeeds with `embedding_pending: true`.
+
     Raises ValueError if `id` does not exist.
     """
     row = store.get_statement(_db(), id)
@@ -418,10 +432,10 @@ def patch_statement(
         )
         if reject is not None:
             return reject
-        vec = embed.embed(text)
+        vec = _try_embed(text)
 
     # Mutate field-by-field so omitted fields stay untouched.
-    with _persisted_index_write(statements=vec is not None):
+    with _persisted_index_write(statements=text is not None):
         if text is not None and kind is not None:
             store.update_statement(_db(), id, kind, text)
         elif text is not None:
@@ -429,11 +443,8 @@ def patch_statement(
         elif kind is not None:
             store.update_statement_kind(_db(), id, kind)
 
-        if vec is not None:
-            vector_id = require(
-                store.get_vector_id(_db(), id), "vector_id for statement"
-            )
-            _idx().replace(vector_id, vec)
+        if text is not None:
+            _set_statement_vector(id, vec)
         # Re-derive mentions only when the text changed (kind-only patches
         # don't affect what entities the text mentions).
         if text is not None:
@@ -442,7 +453,9 @@ def patch_statement(
     response: dict[str, Any] = {"statement_id": id}
     if violations:
         response["phrasing_violations"] = violations
-    if vec is not None:
+    if text is not None and vec is None:
+        response["embedding_pending"] = True
+    elif vec is not None:
         response["near_duplicates"] = _near_duplicates(vec, exclude_id=id)
     return response
 

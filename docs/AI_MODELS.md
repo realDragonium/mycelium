@@ -140,7 +140,10 @@ and draft it served when there is one (documentation runs, documentation plans,
 draft review runs, and connect passes, whose `cnr_` id is also in the
 `connect_statements` response's trace). A call is attributed by the action around it with
 `ai.usage.attributed(action, run_id=..., draft_id=...)`; a call made outside
-any attribution is still recorded, as `other`. Truncated turns and turns
+any attribution is still recorded, as `other`. OpenAI embedding requests are
+metered the same way under the `embedding` action, keeping the run or draft
+of the action that embedded; local Ollama embeddings are not recorded.
+Truncated turns and turns
 rejected after the provider answered (a missing required tool call, an
 incomplete OpenAI response) are recorded with the tokens they used; a request
 that failed before the provider answered is recorded with none. The ledger

@@ -246,6 +246,76 @@ def test_startup_rebuilds_dirty_indexes(
     )
 
 
+def test_startup_rebuilds_an_index_from_empty_when_embedder_changes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MYCELIUM_EMBED_PROVIDER", raising=False)
+    monkeypatch.delenv("MYCELIUM_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    embed.reset()
+    _init(tmp_path, monkeypatch)
+    statement_id = server.upsert_statement(
+        kind="state", text="the workspace is ready", links=[]
+    )["statement_id"]
+    statement_path = runtime._idx_path()
+    runtime._idx().add(999, _embed("stranded legacy vector"))
+    runtime._idx().save(statement_path)
+    indexes._write_index_identity(statement_path, "openai/catalog-v2/768")
+
+    _restart(tmp_path)
+
+    vector_id = store.get_vector_id(store.substrate_connection(), statement_id)
+    assert vector_id is not None
+    assert runtime._idx().get_vector(vector_id) is not None
+    assert 999 not in runtime._idx().ids()
+    assert indexes._read_index_identity(statement_path) == embed.LEGACY_IDENTITY
+
+
+def test_startup_loads_a_legacy_index_and_adds_its_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MYCELIUM_EMBED_PROVIDER", raising=False)
+    monkeypatch.delenv("MYCELIUM_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    embed.reset()
+    _init(tmp_path, monkeypatch)
+    statement_id = server.upsert_statement(
+        kind="state", text="the workspace remains available", links=[]
+    )["statement_id"]
+    statement_path = runtime._idx_path()
+    indexes._meta_path(statement_path).unlink()
+
+    def unexpected_embed(text: str) -> list[float]:
+        raise AssertionError(f"legacy index was rebuilt for {text}")
+
+    monkeypatch.setattr(embed, "embed", unexpected_embed)
+    _restart(tmp_path)
+
+    vector_id = store.get_vector_id(store.substrate_connection(), statement_id)
+    assert vector_id is not None
+    assert runtime._idx().get_vector(vector_id) is not None
+    assert indexes._read_index_identity(statement_path) == embed.LEGACY_IDENTITY
+
+
+def test_startup_rebuilds_an_index_with_unreadable_identity_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MYCELIUM_EMBED_PROVIDER", raising=False)
+    monkeypatch.delenv("MYCELIUM_EMBED_MODEL", raising=False)
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    embed.reset()
+    _init(tmp_path, monkeypatch)
+    statement_path = runtime._idx_path()
+    runtime._idx().add(999, _embed("stranded corrupt vector"))
+    runtime._idx().save(statement_path)
+    indexes._meta_path(statement_path).write_bytes(b"\xff")
+
+    _restart(tmp_path)
+
+    assert 999 not in runtime._idx().ids()
+    assert indexes._read_index_identity(statement_path) == embed.LEGACY_IDENTITY
+
+
 def test_persist_failure_marker_stays_sticky_until_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

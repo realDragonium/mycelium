@@ -58,6 +58,8 @@ _CLAUDE: dict[str, Price] = {
 
 
 _OPENAI: dict[str, Price] = {
+    "text-embedding-3-small": Price(0.02, 0.0, 0.02),
+    "text-embedding-3-large": Price(0.13, 0.0, 0.13),
     "gpt-6-astra": Price(10.0, 50.0, 1.0),
     "gpt-6.1-sol": Price(2.0, 10.0, 0.10),
     "gpt-6-sol": Price(2.0, 10.0, 0.20),

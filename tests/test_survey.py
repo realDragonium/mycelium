@@ -100,14 +100,16 @@ def test_dedup_subqueries_keeps_first_and_is_order_preserving():
     v0 = [1.0, 0.0, 0.0]
     v0_dup = [1.0, 0.0, 0.0]  # cosine 1.0 with v0 → dropped
     v1 = [0.0, 1.0, 0.0]
-    kept = survey.dedup_subqueries([("rank", v0), ("ranking", v0_dup), ("filter", v1)])
+    kept = survey.dedup_subqueries(
+        [("rank", v0), ("ranking", v0_dup), ("filter", v1)], threshold=0.95
+    )
     assert kept == [("rank", v0), ("filter", v1)]
 
 
 def test_dedup_subqueries_keeps_distinct_angles():
     v0 = [1.0, 0.0]
     v1 = [0.0, 1.0]
-    kept = survey.dedup_subqueries([("a", v0), ("b", v1)])
+    kept = survey.dedup_subqueries([("a", v0), ("b", v1)], threshold=0.95)
     assert [s for s, _ in kept] == ["a", "b"]
 
 
@@ -235,6 +237,21 @@ def test_whole_query_fallback_when_decomposition_is_dry(tmp_path, monkeypatch):
         assert seen == [query]
 
 
+def test_total_embed_outage_falls_back_to_keywords(tmp_path, monkeypatch):
+    def boom(text):
+        raise embed.EmbeddingError("embedding provider down")
+
+    with _client(tmp_path, monkeypatch):
+        statement_id = _add("Workspace exports include invoice totals")
+        monkeypatch.setattr(embed, "embed", boom)
+
+        hits = _decomposed("workspace and invoice exports", 5)
+
+        assert hits[0]["id"] == statement_id
+        assert hits[0]["retrieval"] == "keyword"
+        assert hits[0]["score"] == 1.0
+
+
 def test_dedup_subqueries_threshold_value_and_direction():
     """The 0.95 default must actually be 0.95: a 0.96-similar pair collapses,
     a 0.94-similar pair is kept. Pins both the constant and the comparison
@@ -245,5 +262,5 @@ def test_dedup_subqueries_threshold_value_and_direction():
         return [math.cos(theta), math.sin(theta)]
 
     base = [1.0, 0.0]
-    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.96))])) == 1
-    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.94))])) == 2
+    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.96))], 0.95)) == 1
+    assert len(survey.dedup_subqueries([("a", base), ("b", unit_at(0.94))], 0.95)) == 2

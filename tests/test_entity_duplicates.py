@@ -1,11 +1,14 @@
-"""Duplicate-entity detection against names embedded by nomic-embed-text.
+"""Duplicate-entity detection against recorded embedding-provider output.
 
-The vectors in `fixtures/entity_duplicate_vectors.json` are real model
-output, so the threshold and wording rules are checked against what an
-instance actually sees. Re-record them after changing the names below, with
-Ollama serving the embedding model:
+The vectors are real model output, one recorded set per supported embedder,
+so each model's threshold and the wording rules are checked against what an
+instance actually sees. Re-record the configured embedder after changing the names:
 
     uv run python tests/test_entity_duplicates.py
+
+For OpenAI, this writes the provider-specific fixture:
+
+    MYCELIUM_EMBED_PROVIDER=openai OPENAI_API_KEY=... uv run python tests/test_entity_duplicates.py
 """
 
 from __future__ import annotations
@@ -16,14 +19,35 @@ import os
 import struct
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from mycelium import embed, server, store
 from mycelium.server import runtime
 
-VECTORS = Path(__file__).parent / "fixtures" / "entity_duplicate_vectors.json"
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@dataclass(frozen=True)
+class RecordedSet:
+    provider: embed.Provider
+    model: str
+    path: Path
+
+
+RECORDED_SETS = (
+    RecordedSet(
+        "ollama", "nomic-embed-text", FIXTURES / "entity_duplicate_vectors.json"
+    ),
+    RecordedSet(
+        "openai",
+        "text-embedding-3-small",
+        FIXTURES / "entity_duplicate_vectors.openai-text-embedding-3-small.json",
+    ),
+)
 
 DUPLICATES = [
     ("SSO", "Single sign-on"),
@@ -33,8 +57,7 @@ DUPLICATES = [
     ("Login", "Sign-in"),
     ("Only Admin Exports", "Admin Only Exports"),
 ]
-# Each embeds at least as close to a name above as some true duplicates do:
-# "Sign-up" scores 0.87 against "Sign-in", "Login page" 0.83 to "Sign-in page".
+# Each is semantically close to at least one name above without being a duplicate.
 NEAR_MISSES = ["Logout", "Sign-up", "Sign-out", "Email"]
 # Sibling names that embed as close as the duplicates above: one token tells
 # them apart, one name extends the other, or they share only a stem or a
@@ -80,8 +103,8 @@ def _populate() -> dict[str, str]:
     }
 
 
-def _recorded() -> Callable[[str], list[float]]:
-    blobs = json.loads(VECTORS.read_text())
+def _recorded(recorded: RecordedSet) -> Callable[[str], list[float]]:
+    blobs = json.loads(recorded.path.read_text())
 
     def embedder(text: str) -> list[float]:
         raw = base64.b64decode(blobs[text])
@@ -90,9 +113,17 @@ def _recorded() -> Callable[[str], list[float]]:
     return embedder
 
 
-@pytest.fixture
-def entities(tmp_path, monkeypatch):
-    monkeypatch.setattr(embed, "embed", _recorded())
+@pytest.fixture(params=RECORDED_SETS, ids=[item.model for item in RECORDED_SETS])
+def entities(
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, str]:
+    recorded = cast(RecordedSet, request.param)
+    monkeypatch.setenv("MYCELIUM_EMBED_PROVIDER", recorded.provider)
+    monkeypatch.setenv("MYCELIUM_EMBED_MODEL", recorded.model)
+    embed.reset()
+    monkeypatch.setattr(embed, "embed", _recorded(recorded))
     monkeypatch.setenv("MYCELIUM_DATA_DIR", str(tmp_path))
     store.reset_substrate()
     runtime._ctx = None
@@ -122,7 +153,7 @@ def test_explains_each_match(entities):
     assert by_names[frozenset(("SSO", "Single sign-on"))]["via"] == "initials"
     login = by_names[frozenset(("Login page", "Sign-in page"))]
     assert login["via"] == "embedding"
-    assert 0.75 <= login["score"] < 0.9
+    assert embed.thresholds().entity_duplicate <= login["score"] < 0.9
     admin_only = by_names[frozenset(("Only Admin Exports", "Admin Only Exports"))]
     assert admin_only["via"] == "same_words"
 
@@ -153,6 +184,16 @@ def test_dismissed_pair_stays_hidden_until_an_entity_merges(entities):
 
 
 def _record_vectors() -> None:
+    embed.reset()
+    configured = embed.settings()
+    if (configured.provider, configured.model) == ("ollama", "nomic-embed-text"):
+        vectors = FIXTURES / "entity_duplicate_vectors.json"
+    else:
+        safe_model = configured.model.replace("/", "-")
+        vectors = (
+            FIXTURES
+            / f"entity_duplicate_vectors.{configured.provider}-{safe_model}.json"
+        )
     blobs: dict[str, str] = {}
     real = embed.embed
 
@@ -169,8 +210,8 @@ def _record_vectors() -> None:
         os.environ["MYCELIUM_DATA_DIR"] = data_dir
         server.init(Path(data_dir))
         _populate()
-    VECTORS.parent.mkdir(exist_ok=True)
-    VECTORS.write_text(json.dumps(blobs, indent=0, sort_keys=True) + "\n")
+    vectors.parent.mkdir(exist_ok=True)
+    vectors.write_text(json.dumps(blobs, indent=0, sort_keys=True) + "\n")
 
 
 if __name__ == "__main__":

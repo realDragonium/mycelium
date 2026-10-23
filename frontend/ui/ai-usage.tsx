@@ -20,6 +20,7 @@ const PERIODS = [7, 30, 90] as const;
 export const ACTION_LABELS: Record<string, string> = {
   ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation', documentation_planning: 'Documentation planning',
   draft_review: 'Draft review', alias_discovery: 'Alias discovery', audience_labelling: 'Audience labelling', connect: 'Connect pass',
+  embedding: 'Embeddings',
   other: 'Other',
 };
 const actionLabel = (action: string) => ACTION_LABELS[action] || action;

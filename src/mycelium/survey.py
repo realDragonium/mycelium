@@ -21,10 +21,6 @@ import math
 import re
 from typing import Protocol
 
-#: Sub-queries whose embedding vectors are at least this cosine-similar are
-#: treated as the same angle and collapsed to one search. Tuned from data.
-DEDUP_COSINE = 0.95
-
 #: Function words that carry no retrieval signal on their own. A sub-query
 #: made up entirely of these (or of single-char fragments) is dropped by
 #: `usable` — it would only blur the search. Content words survive, so
@@ -183,7 +179,7 @@ def cosine(a: list[float], b: list[float]) -> float:
 
 def dedup_subqueries(
     subqueries: list[tuple[str, list[float]]],
-    threshold: float = DEDUP_COSINE,
+    threshold: float,
 ) -> list[tuple[str, list[float]]]:
     """Drop sub-queries whose vector is near-identical to one already kept,
     so the same angle is not searched twice.

@@ -9,6 +9,8 @@ author check candidate texts before writing them.
 
 from __future__ import annotations
 
+import logging
+import re
 from typing import Any, Literal
 
 from pydantic import JsonValue
@@ -21,6 +23,8 @@ from .registry import tool
 from .runtime import _db, _idx, _name_idx
 from .specs import ResultLimit, _check_limit
 
+logger = logging.getLogger(__name__)
+
 
 def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
     """Resolve a list of name texts to entity_ids. Raises on any unknown."""
@@ -31,12 +35,6 @@ def _entity_ids_for_names(name_texts: list[str]) -> set[str]:
             raise ValueError(f"name {text!r} does not exist")
         entity_ids.add(row["entity_id"])
     return entity_ids
-
-
-#: Cosine threshold for the write-time near-duplicate warning. Anything
-#: at or above this is surfaced in `near_duplicates` on the upsert
-#: response — soft signal, never blocks the write.
-NEAR_DUPLICATE_THRESHOLD = 0.85
 
 
 #: Truncation cap for `text` snippets returned in `near_duplicates` and
@@ -54,7 +52,7 @@ def _near_duplicates(
     vec: list[float],
     *,
     exclude_id: str | None = None,
-    threshold: float = NEAR_DUPLICATE_THRESHOLD,
+    threshold: float | None = None,
     k: int = 5,
 ) -> list[dict[str, Any]]:
     """Return existing statements whose vector is at or above `threshold`
@@ -62,6 +60,7 @@ def _near_duplicates(
     dropped (used to skip the upsert's own freshly-inserted vector).
     `text` is truncated to a snippet to keep batch responses lean.
     """
+    threshold = embed.thresholds().near_duplicate if threshold is None else threshold
     # +1 to allow excluding the self-hit without dropping under k results.
     hits = _idx().search(vec, k=k + (1 if exclude_id else 0))
     out: list[dict[str, Any]] = []
@@ -150,6 +149,92 @@ def _score_candidates(
     return scored
 
 
+def _keyword_candidates(
+    query: str,
+    limit: int,
+    kind: str | None,
+    required_entity_ids: set[str],
+) -> list[tuple[str, float, float]]:
+    tokens = list(
+        dict.fromkeys(
+            token
+            for token in re.findall(r"[^\W_]+", query.lower())
+            if len(token) >= 3 and token not in survey.STOPWORDS
+        )
+    )
+    if not tokens:
+        return []
+    rows = store.keyword_statement_candidates(
+        _db(),
+        tokens,
+        kind=kind,
+        required_entity_ids=required_entity_ids,
+    )
+    ranked: list[tuple[str, float, int, int]] = []
+    for row in rows:
+        text = str(row["text"]).lower()
+        matched = sum(token in text for token in tokens)
+        occurrences = sum(text.count(token) for token in tokens)
+        ranked.append(
+            (str(row["id"]), matched / len(tokens), occurrences, int(row["rid"]))
+        )
+    ranked.sort(key=lambda item: (-item[1], -item[2], item[3]))
+    return [(statement_id, score, score) for statement_id, score, _n, _rid in ranked][
+        :limit
+    ]
+
+
+def _keyword_fallback(
+    query: str,
+    limit: int,
+    min_score: float,
+    kind: str | None,
+    required_entity_ids: set[str],
+    error: embed.EmbeddingError,
+) -> list[tuple[str, float, float]]:
+    logger.warning("embedding search failed; using keyword retrieval: %s", error)
+    candidates = _keyword_candidates(query, limit, kind, required_entity_ids)
+    return [item for item in candidates if item[1] >= min_score]
+
+
+def _search_statement_candidates_with_mode(
+    query: str,
+    limit: int,
+    min_score: float,
+    mentions: list[str] = [],
+    kind: str | None = None,
+    name_boost: float = 0.3,
+    name_top_k: int = 5,
+    name_min_score: float | None = None,
+) -> tuple[list[tuple[str, float, float]], bool]:
+    """Rank hits without hydrating them; return whether keyword fallback ran."""
+    resolved_name_min_score = (
+        embed.thresholds().name_match if name_min_score is None else name_min_score
+    )
+    required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
+    try:
+        with trace_span("embed"):
+            vec = embed.embed(query)
+    except embed.EmbeddingError as exc:
+        return (
+            _keyword_fallback(query, limit, min_score, kind, required_entity_ids, exc),
+            True,
+        )
+    return (
+        _vector_candidates(
+            vec,
+            limit,
+            min_score,
+            required_entity_ids,
+            kind,
+            name_boost,
+            name_top_k,
+            resolved_name_min_score,
+        ),
+        False,
+    )
+
+
 def _search_statement_candidates(
     query: str,
     limit: int,
@@ -158,22 +243,19 @@ def _search_statement_candidates(
     kind: str | None = None,
     name_boost: float = 0.3,
     name_top_k: int = 5,
-    name_min_score: float = 0.5,
+    name_min_score: float | None = None,
 ) -> list[tuple[str, float, float]]:
-    """Rank semantic hits without hydrating their graph neighborhoods."""
-    required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
-    with trace_span("embed"):
-        vec = embed.embed(query)
-    return _vector_candidates(
-        vec,
+    """Rank vector hits, falling back to keyword candidates on provider failure."""
+    return _search_statement_candidates_with_mode(
+        query,
         limit,
         min_score,
-        required_entity_ids,
+        mentions,
         kind,
         name_boost,
         name_top_k,
         name_min_score,
-    )
+    )[0]
 
 
 def _vector_candidates(
@@ -212,19 +294,27 @@ def _decomposed_candidates(
     name_boost: float,
     name_top_k: int,
     name_min_score: float,
-) -> list[tuple[str, float]]:
+) -> tuple[list[tuple[str, float]], bool]:
     """Search each clause of `query` separately and rank the union: first by
-    how many clauses surfaced a statement, then by its best score."""
+    how many clauses surfaced a statement, then by its best score. Returns
+    whether keyword fallback ran."""
     required_entity_ids = _entity_ids_for_names(mentions) if mentions else set()
     parts: list[tuple[str, list[float]]] = []
-    with trace_span("embed"):
-        for part in survey.decompose(query):
-            if survey.usable(part):
-                parts.append((part, embed.embed(part)))
-    parts = survey.dedup_subqueries(parts)
-    if not parts:
+    try:
         with trace_span("embed"):
-            parts = [(query, embed.embed(query))]
+            for part in survey.decompose(query):
+                if survey.usable(part):
+                    parts.append((part, embed.embed(part)))
+            parts = survey.dedup_subqueries(
+                parts, threshold=embed.thresholds().subquery_dedup
+            )
+            if not parts:
+                parts = [(query, embed.embed(query))]
+    except embed.EmbeddingError as exc:
+        keyword = _keyword_fallback(
+            query, limit, min_score, kind, required_entity_ids, exc
+        )
+        return [(sid, score) for sid, score, _cosine in keyword], True
     union: dict[str, tuple[int, float]] = {}
     for _part, vec in parts:
         for sid, final, _cosine in _vector_candidates(
@@ -239,7 +329,7 @@ def _decomposed_candidates(
         ):
             count, best = union.get(sid, (0, float("-inf")))
             union[sid] = (count + 1, max(best, final))
-    return survey.rank_statements(union)
+    return survey.rank_statements(union), False
 
 
 @tool
@@ -253,13 +343,14 @@ def search_statements(
     kind: str | None = None,
     name_boost: float = 0.3,
     name_top_k: int = 5,
-    name_min_score: float = 0.5,
+    name_min_score: float | None = None,
     decompose: bool = False,
 ) -> list[dict[str, Any]]:
     """Vector-search statements by semantic similarity to `query`.
 
     Returns up to `limit` (at most 100) direct hits with score >= `min_score`,
-    sorted by score descending. Practical floors are usually 0.5–0.8.
+    sorted by score descending. Useful floors depend on the embedding model;
+    0.5–0.8 is typical for nomic-embed-text.
 
     Scoring is cosine similarity + an alias-aware boost: the query is
     also searched against the entity-name index, and statements that
@@ -314,17 +405,32 @@ def search_statements(
     the union comes back deduped: statements surfaced by more parts first,
     then by best score. The result can therefore hold more than `limit` hits.
 
+    If embedding is unavailable, keyword matching is used, hits carry
+    `retrieval: "keyword"`, and scores are the fraction of query words matched.
+
     Boost tunables (defaults usually fine):
       `name_boost`     — weight applied to the best matching entity-name
                          score. 0 disables alias-aware retrieval.
       `name_top_k`     — how many top names to consider from the name index.
       `name_min_score` — drop name matches below this cosine. Keeps
                          canonical queries unaffected when no name is
-                         clearly relevant.
+                         clearly relevant. The configured model supplies the
+                         default (0.5 for nomic-embed-text).
     """
     _check_limit(limit)
     if decompose:
-        ranked = _decomposed_candidates(
+        ranked, keyword_fallback = _decomposed_candidates(
+            query,
+            limit,
+            min_score,
+            mentions,
+            kind,
+            name_boost,
+            name_top_k,
+            embed.thresholds().name_match if name_min_score is None else name_min_score,
+        )
+    else:
+        scored, keyword_fallback = _search_statement_candidates_with_mode(
             query,
             limit,
             min_score,
@@ -334,25 +440,14 @@ def search_statements(
             name_top_k,
             name_min_score,
         )
-    else:
-        ranked = [
-            (sid, final)
-            for sid, final, _cos in _search_statement_candidates(
-                query,
-                limit,
-                min_score,
-                mentions,
-                kind,
-                name_boost,
-                name_top_k,
-                name_min_score,
-            )
-        ]
+        ranked = [(sid, final) for sid, final, _cos in scored]
 
-    direct = [
-        _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
-        for sid, score in ranked
-    ]
+    direct: list[dict[str, Any]] = []
+    for sid, score in ranked:
+        hit = _hydrate_statement_full(sid, score=score, reverse_cap=_REVERSE_EDGE_CAP)
+        if keyword_fallback:
+            hit["retrieval"] = "keyword"
+        direct.append(hit)
     seen = {sid for sid, _score in ranked}
 
     if depth <= 0:
@@ -385,10 +480,11 @@ def find_statement_connections(
     Without requirements, return several alternative source-to-target routes.
 
     Each endpoint is a `stm_...` ID or search text. Text uses alias-aware
-    semantic search with a score floor of 0.5. The best match is selected
-    only if it leads the runner-up by at least 0.05. Otherwise status is
-    `needs_resolution`: inspect the endpoint candidates and retry with IDs.
-    Scores are ranking values, not probabilities. IDs never need embeddings.
+    semantic search with a floor supplied by the configured embedding model
+    (0.5 for nomic-embed-text). The best match is selected only if it leads
+    the runner-up by at least 0.05. Otherwise status is `needs_resolution`:
+    inspect the endpoint candidates and retry with IDs. Scores are ranking
+    values, not probabilities. IDs never need embeddings.
 
     Returns matched endpoints, routes, and their merged statements and edges.
     Routes retain ordered steps; each step references an edge by `edge_id`.
@@ -438,7 +534,9 @@ def find_statement_connections(
 
     def candidates(query: str) -> list[statement_connections.Candidate]:
         matches: list[statement_connections.Candidate] = []
-        for sid, score, _cosine in _search_statement_candidates(query, 3, 0.5):
+        for sid, score, _cosine in _search_statement_candidates(
+            query, 3, embed.thresholds().endpoint_match
+        ):
             statement = graph.statement(sid)
             if statement is not None:
                 matches.append(
@@ -491,7 +589,7 @@ def find_statement_connections(
 
 @tool
 def find_duplicates(
-    threshold: float = 0.92,
+    threshold: float | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     """Audit the whole substrate for near-duplicate statement pairs.
@@ -501,18 +599,19 @@ def find_duplicates(
     `threshold`. Sorted by score descending, capped at `limit`. Pairs
     are reported once (not as both `(A,B)` and `(B,A)`).
 
-    The default `0.92` is the high-confidence band — paired statements
-    are almost certainly the same fact in different wording. Drop to
-    `0.85` to also surface "related, possibly worth linking instead of
-    keeping separate" pairs at the cost of more noise. The write-time
-    `near_duplicates` field on `upsert_statement` uses 0.85 as a soft
-    write-time signal; this tool is the periodic backfill audit.
+    The configured embedding model supplies the default (0.92 for
+    nomic-embed-text), tuned for high-confidence duplicate matches. Its
+    write-time near-duplicate default is 0.85; this tool is the periodic
+    backfill audit.
 
     Each pair: `{a_id, a_text, b_id, b_text, score}`. Use
     `merge_statements(from, into)` to consolidate, or `replace_text` /
     `add_links` if the duplication is structural rather than textual.
     """
 
+    threshold = (
+        embed.thresholds().statement_duplicate if threshold is None else threshold
+    )
     seen_pairs: set[tuple[str, str]] = set()
     pairs: list[dict[str, Any]] = []
 
@@ -563,8 +662,8 @@ def find_duplicates(
 @tool
 def discover_facts(
     texts: list[str],
-    exists_threshold: float = 0.85,
-    near_threshold: float = 0.6,
+    exists_threshold: float | None = None,
+    near_threshold: float | None = None,
     matches_per_text: int = 5,
 ) -> list[dict[str, Any]]:
     """Bulk discovery for many candidate facts at once.
@@ -581,7 +680,7 @@ def discover_facts(
     For each input text, embeds it, queries the vector index, and
     classifies the closest existing statement into one of three buckets:
 
-    - `"exists"`: top match score >= `exists_threshold` (default 0.85).
+    - `"exists"`: top match score >= `exists_threshold`.
       The substrate already has this fact under different wording. Don't
       write a new statement; either link to it, refine it via
       `upsert_statement(id=…)`, or merge afterwards if you wrote
@@ -591,6 +690,9 @@ def discover_facts(
       likely distinct but probably should `link` to one or more of the
       matches instead of standing alone.
     - `"new"`: nothing within `near_threshold`. Safe to write fresh.
+
+    Threshold defaults come from the configured embedding model (0.85 exists
+    and 0.6 near for nomic-embed-text).
 
     Replaces the per-fact loop of sequential `search_statements` calls
     that the discovery phase otherwise prescribes. Pass every text you
@@ -608,6 +710,10 @@ def discover_facts(
     writes.
     """
 
+    if exists_threshold is None:
+        exists_threshold = embed.thresholds().fact_exists
+    if near_threshold is None:
+        near_threshold = embed.thresholds().fact_near
     if exists_threshold < near_threshold:
         raise ValueError(
             "exists_threshold must be >= near_threshold "

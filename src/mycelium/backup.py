@@ -25,7 +25,9 @@ Archive layout
     model-settings.json        saved per-action models (when configured)
     product-settings.json      saved product controls (when configured)
     vectors/mycelium.vec       statement vector index (omit with --no-vectors)
+    vectors/mycelium.vec.meta.json
     vectors/mycelium-names.vec
+    vectors/mycelium-names.vec.meta.json
 
 Records carry their full column set, including audit columns and the
 internal autoincrement keys (link_id, node_id) so the substrate
@@ -364,6 +366,9 @@ def export_substrate(
                     src = data_dir / vf
                     if src.exists():
                         shutil.copy2(src, vectors_dir / vf)
+                        metadata = data_dir / f"{vf}.meta.json"
+                        if metadata.exists():
+                            shutil.copy2(metadata, vectors_dir / metadata.name)
 
             manifest = {
                 "schema_version": SCHEMA_VERSION,
@@ -816,6 +821,9 @@ def import_substrate(
                 src = vectors_src / vf
                 if src.exists() and _index_matches(src, mapped[vf]):
                     shutil.copy2(src, data_dir / vf)
+                    metadata = vectors_src / f"{vf}.meta.json"
+                    if metadata.exists():
+                        shutil.copy2(metadata, data_dir / metadata.name)
 
         return manifest
 
@@ -1163,6 +1171,7 @@ def _wipe_data_dir(data_dir: Path) -> None:
         "mycelium-history.db",
         PROMPTS_DB_NAME,
         *_VECTOR_FILES,
+        *(f"{name}.meta.json" for name in _VECTOR_FILES),
         *_LEGACY_VECTOR_FILES,
     ):
         target = data_dir / name

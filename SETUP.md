@@ -25,6 +25,10 @@ uv run pytest
 The tests use temporary data and fake embeddings, so they do not need a live
 Ollama server.
 
+To embed with OpenAI instead of Ollama, skip Ollama and set
+`MYCELIUM_EMBED_PROVIDER=openai` and `OPENAI_API_KEY` before starting the
+server. See [Embedding provider](docs/DEPLOYMENT.md#embedding-provider).
+
 ## 2. Start the server
 
 For the stdio MCP transport:
@@ -155,9 +159,10 @@ CI rebuilds and fails if `src/mycelium/webui/` differs from what you committed.
 
 - If the MCP tools do not appear, run the configured command in a terminal and
   fix any path or dependency error it prints.
-- If embeddings fail, confirm
+- If embeddings fail with Ollama, confirm
   `curl "${OLLAMA_URL:-http://localhost:11434}/api/tags"` succeeds and that the
-  configured model is present.
+  configured model is present. With OpenAI, check `OPENAI_API_KEY`. Search
+  keeps answering from keyword matches while the provider is down.
 - If the UI reports a data-load failure, confirm `mycelium-http` is running and
   open <http://127.0.0.1:8765/api/data> directly.
 - If a write is rejected, inspect its phrasing violations or submit prose

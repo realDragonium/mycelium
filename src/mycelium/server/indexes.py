@@ -10,9 +10,11 @@ marker found at startup means the file may disagree with the database, and
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import sqlite3
+import tempfile
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -21,6 +23,86 @@ from .. import embed, store, vector
 from .runtime import _db, _idx, _idx_path, _name_idx, _name_idx_path
 
 logger = logging.getLogger(__name__)
+
+_REBUILD_BATCH = embed.OPENAI_BATCH
+_INVALID_IDENTITY = "<invalid index identity>"
+
+
+def _try_embed(text: str) -> list[float] | None:
+    try:
+        return embed.embed(text)
+    except embed.EmbeddingError as exc:
+        logger.warning("embedding deferred: %s", exc)
+        return None
+
+
+def _set_statement_vector(statement_id: str, vec: list[float] | None) -> None:
+    vector_id = store.get_vector_id(_db(), statement_id)
+    if vec is None:
+        if vector_id is not None:
+            _idx().delete(vector_id)
+            store.drop_vector_id(_db(), statement_id)
+        return
+    if vector_id is None:
+        vector_id = store.next_vector_id(_db())
+        store.set_vector_id(_db(), statement_id, vector_id)
+        _idx().add(vector_id, vec)
+    else:
+        _idx().replace(vector_id, vec)
+
+
+def _set_name_vector(name_id: str, vec: list[float] | None) -> None:
+    vector_id = store.get_name_vector_id(_db(), name_id)
+    if vec is None:
+        if vector_id is not None:
+            _name_idx().delete(vector_id)
+            store.delete_name_vector_mapping(_db(), name_id)
+        return
+    if vector_id is None:
+        vector_id = store.next_name_vector_id(_db())
+        store.set_name_vector_id(_db(), name_id, vector_id)
+        _name_idx().add(vector_id, vec)
+    else:
+        _name_idx().replace(vector_id, vec)
+
+
+def reembed_pending(limit: int = 256) -> int:
+    """Embed pending statements and names whose text remains unchanged."""
+    if limit <= 0:
+        return 0
+    statement_rows = store.list_pending_statements(_db(), limit)
+    name_rows = store.list_pending_names(_db(), limit - len(statement_rows))
+    pending = [
+        ("statement", str(row["id"]), str(row["text"])) for row in statement_rows
+    ] + [("name", str(row["id"]), str(row["text"])) for row in name_rows]
+    if not pending:
+        return 0
+    try:
+        vectors = embed.embed_many([text for _kind, _row_id, text in pending])
+    except embed.EmbeddingError as exc:
+        logger.warning("pending embedding pass failed: %s", exc)
+        return 0
+
+    embedded = 0
+    with _persisted_index_write(
+        statements=bool(statement_rows),
+        names=bool(name_rows),
+    ):
+        for (kind, row_id, text), vec in zip(pending, vectors, strict=True):
+            if kind == "statement":
+                row = store.get_statement(_db(), row_id)
+                mapped = store.get_vector_id(_db(), row_id)
+            else:
+                row = store.get_name_by_id(_db(), row_id)
+                mapped = store.get_name_vector_id(_db(), row_id)
+            if row is None or row["text"] != text or mapped is not None:
+                continue
+            if kind == "statement":
+                _set_statement_vector(row_id, vec)
+            else:
+                _set_name_vector(row_id, vec)
+            embedded += 1
+    return embedded
 
 
 def _rebuild_vector_index(
@@ -41,26 +123,30 @@ def _rebuild_vector_index(
     valid — and allocate (and persist) a fresh id only for rows with none.
     Called during `init` before the context is assembled, so the index is
     passed explicitly rather than reached through an accessor."""
-    if rows:
-        logger.info(
-            "rebuilding %s vector index: re-embedding %d row(s)", label, len(rows)
-        )
+    logger.info(
+        "rebuilding %s vector index with %s: re-embedding %d row(s)",
+        label,
+        embed.identity(),
+        len(rows),
+    )
     started = time.monotonic()
-    step = max(1, len(rows) // 20)
-    for done, row in enumerate(rows, start=1):
-        existing = get_id(_db(), row["id"])
-        vid = existing if existing is not None else next_id(_db())
-        index.add(vid, embed.embed(row["text"]))
-        if existing is None:
-            set_id(_db(), row["id"], vid)
-        if done % step == 0 or done == len(rows):
-            logger.info(
-                "rebuilding %s vector index: %d/%d re-embedded (%.0fs)",
-                label,
-                done,
-                len(rows),
-                time.monotonic() - started,
-            )
+    for start in range(0, len(rows), _REBUILD_BATCH):
+        batch = rows[start : start + _REBUILD_BATCH]
+        vectors = embed.embed_many([row["text"] for row in batch])
+        for row, embedding in zip(batch, vectors, strict=True):
+            existing = get_id(_db(), row["id"])
+            vid = existing if existing is not None else next_id(_db())
+            index.add(vid, embedding)
+            if existing is None:
+                set_id(_db(), row["id"], vid)
+        done = start + len(batch)
+        logger.info(
+            "rebuilding %s vector index: %d/%d re-embedded (%.0fs)",
+            label,
+            done,
+            len(rows),
+            time.monotonic() - started,
+        )
 
 
 def _persist_index() -> None:
@@ -73,6 +159,41 @@ def _persist_name_index() -> None:
 
 def _dirty_marker_path(index_path: Path) -> Path:
     return index_path.with_name(index_path.name + ".dirty")
+
+
+def _meta_path(index_path: Path) -> Path:
+    return index_path.with_name(index_path.name + ".meta.json")
+
+
+def _read_index_identity(index_path: Path) -> str:
+    path = _meta_path(index_path)
+    if not path.exists():
+        return embed.LEGACY_IDENTITY
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return _INVALID_IDENTITY
+    if not isinstance(payload, dict):
+        return _INVALID_IDENTITY
+    identity = payload.get("embedder")
+    return identity if isinstance(identity, str) else _INVALID_IDENTITY
+
+
+def _write_index_identity(index_path: Path, identity: str) -> None:
+    path = _meta_path(index_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump({"embedder": identity}, file)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temp_path, path)
+        _fsync_file(path)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def _fsync_file(path: Path) -> None:
