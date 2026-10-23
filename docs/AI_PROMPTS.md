@@ -1,7 +1,7 @@
 # AI prompts
 
 Open **Settings → Prompts**. Choose Questions, Ingestion,
-Research, Document generation, Document review, Draft review, or Alias discovery.
+Document generation, Document review, Draft review, or Alias discovery.
 Writers and administrators can edit instructions; readers can inspect them.
 Claude and OpenAI use the same saved behavioral instructions for each action.
 
@@ -24,24 +24,25 @@ Tool schemas, response validation, permissions, draft revision checks, and
 application safeguards remain controlled by code. Editing instructions does not
 grant an AI new tools or permission to apply a draft.
 
-Each run captures instructions once. Background research, documentation, and
+Each run captures instructions once. Background documentation runs and
 draft reviews capture them before waiting for a model slot. Later saves affect
-new runs. Ask, ingestion, research, and documentation traces include a `prompts`
+new runs. Ask, ingestion, and documentation traces include a `prompts`
 list; draft-review records and alias scan results include a `prompt` reference.
 Each reference records the action, version, source, and text digest. Saved alias
 suggestions retain the scan's reference. Historical records may lack this field.
 
 Texts use the existing versioned `doctrine` rows in `mycelium-prompts.db`, including
-the original `ingest`, `research`, and `docgen` rows. The prompt-text HTTP operations
+the original `ingest` and `docgen` rows. The prompt-text HTTP operations
 and backups continue to work. A missing or retired override uses the default;
-legacy doctrine file configuration remains the fallback for those three actions.
+legacy doctrine file configuration remains the fallback for those two actions.
+The removed research action's `research` rows are deleted on upgrade.
 If the prompt store is unavailable, runs record a diagnostic and use defaults,
 matching the existing loop fallback. The editor reports read errors rather than
 offering an apparently current version to overwrite.
 
 ## When a release changes a default
 
-Ingestion, Research and Document generation start from a seeded version
+Ingestion and Document generation start from a seeded version
 authored by `seed`; the other actions use the shipped default until someone
 saves. On each start the server compares every action with the default the
 running build ships:

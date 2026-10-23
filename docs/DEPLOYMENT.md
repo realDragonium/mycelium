@@ -143,13 +143,12 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. |
 | `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
 | `EMBED_TIMEOUT_S` | `30` | Seconds before one Ollama embedding request fails instead of hanging. |
-| `MYCELIUM_RESEARCH_CLONE_TIMEOUT_S` | `120` | Seconds a research run waits for its source clone. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
 | `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling traces and loop traces are written. |
-| `MYCELIUM_{ASK,INGEST,RESEARCH,DOCGEN}_TRACE_DIR` | `MYCELIUM_TRACE_DIR` | Per-action override of the trace directory. |
-| `MYCELIUM_{ASK,INGEST,RESEARCH,DOCGEN}_TRACE_LOG` | unset; research uses `<data dir>/research_trace.jsonl` | JSONL file that receives one record per run. |
-| `MYCELIUM_{ASK,INGEST,RESEARCH,DOCGEN}_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | Ask 1 / 5, others 3 / 15 | USD per million tokens used for the cost estimate in traces. Applied only while the action runs its default Claude model. |
-| `MYCELIUM_{INGEST,RESEARCH,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
+| `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_DIR` | `MYCELIUM_TRACE_DIR` | Per-action override of the trace directory. |
+| `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
+| `MYCELIUM_{ASK,INGEST,DOCGEN}_INPUT_PER_MTOK`, `…_OUTPUT_PER_MTOK` | Ask 1 / 5, others 3 / 15 | USD per million tokens used for the cost estimate in traces. Applied only while the action runs its default Claude model. |
+| `MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH` | the packaged file | Instruction file used when no edited instructions are saved in [AI prompts](AI_PROMPTS.md). |
 | `MYCELIUM_DISABLE_MCP_HTTP` | unset | `1` serves HTTP without the `/mcp` endpoint. |
 | `MYCELIUM_DISABLE_MENTION_WORKER` | unset | `1` stops the background worker that recomputes mentions after name changes. Meant for tests. |
 | `MYCELIUM_DISABLE_REVIEW_SWEEP` | unset | `1` stops the sweep that retries failed draft reviews. Meant for tests. |
@@ -341,7 +340,7 @@ Everything an instance knows lives in `/var/lib/mycelium`:
 | `mycelium.db` | Knowledge: statements, entities, names, links and conditions, vocabularies, knowledge gaps |
 | `mycelium-history.db` | Audit log of substrate changes |
 | `mycelium-auth.db` | Users, MCP tokens, invites, OAuth clients |
-| `mycelium-drafts.db` | Drafts and their reviews, research and documentation runs, generated documents |
+| `mycelium-drafts.db` | Drafts and their reviews, documentation runs, generated documents |
 | `mycelium-prompts.db` | AI instructions and their history, model, review and product settings, GitHub connections |
 | `mycelium-ops.db` | Only on instances that predate its removal: tool-call telemetry that is no longer written or read, and not archived |
 | `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
@@ -538,8 +537,8 @@ also the way back from a failed migration.
 ### Startup changes that are not migrations
 
 Each start also updates AI instructions (see
-[AI prompts](AI_PROMPTS.md#when-a-release-changes-a-default)): Ingestion,
-Research and Document generation instructions still authored by `seed` get
+[AI prompts](AI_PROMPTS.md#when-a-release-changes-a-default)): Ingestion
+and Document generation instructions still authored by `seed` get
 the new build's default appended as a new version, and saved instructions
 that predate a newer default are logged as a warning. The first start of a
 build with this behaviour also creates `shipped_prompt_texts` in
@@ -549,6 +548,12 @@ Restoring a snapshot undoes these with everything else. A code-only
 rollback does not: the previous build serves the appended versions and
 ignores the new table. To return to the earlier wording, restore it from
 **Version history** in **Settings → Prompts**.
+
+The first start of a build without research runs deletes what that feature
+left: the `research_runs` table in `mycelium-drafts.db`, and the research
+instructions, model selection, limits, sources and concurrency limit in
+`mycelium-prompts.db`. Drafts that research runs created are ordinary drafts
+and stay. Importing an older archive skips the same data.
 
 ---
 

@@ -1,9 +1,9 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 37 of its 87 registered tools over MCP. Every
+question. Mycelium therefore advertises 37 of its 83 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when the tool
-takes no arguments) and stays available to the in-process loops (Ask, Ingest, Research,
+takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
 its MCP advertisement.
 
@@ -75,7 +75,7 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | --- | --- |
 | `survey_statements` | Its own docstring says it is interchangeable with `search_statements`. This is the one duplicate in the read path. An MCP client can split its own question, and `ask` handles broad questions. Ask and Documentation recon use it in-process. |
 | `retrieve_context` | Combines name lookup, entity reads, search, and fetch for the Ask loop's turn budget. It is a distinct primitive, but MCP clients can run the same reads. |
-| `find_duplicates` | Audits the whole substrate in near-quadratic time and takes no candidate text. This is curation, not retrieval, so it does not satisfy the Ingest and Research reconcile floor. |
+| `find_duplicates` | Audits the whole substrate in near-quadratic time and takes no candidate text. This is curation, not retrieval, so it does not satisfy the Ingest reconcile floor. |
 | `find_entity_duplicates` | Audits entity names. This is curation, and nothing calls it except its HTTP route. |
 | `get_mention_candidates` | Discovery view for the names workspace (`GET /api/mention-candidates`). |
 | `replace_text` | `patch_statement(id, text=...)` covers it. The UI and draft replay use it. |
@@ -109,10 +109,6 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `get_document_revision` | Document history. |
 | `deliver_document` | Opens or updates a GitHub pull request and tracks it. Publishing outside the instance stays a UI decision. |
 | `list_documentation_destinations` | Deployment configuration. |
-| `start_research` | Researches a server-configured codebase. MCP coding assistants already have the code and can use `ingest` or write directly. |
-| `list_research_runs` | Research workspace. |
-| `get_research_run` | Research workspace. |
-| `list_research_sources` | Deployment configuration. |
 | `attach_draft_source` | Records CI pull request provenance. Pipeline steps call it over HTTP. |
 | `find_my_draft_by_source` | Looks up a draft by CI provenance. Pipeline steps call it over HTTP. |
 | `revise_draft_operation` | Curator correction. Internal review calls it in-process. |
@@ -126,6 +122,6 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 
 Internal draft review (`draft_review_runs.py`) calls `inspect_draft_review`,
 `record_draft_review`, `append_draft_correction` and `apply_reviewed_draft` as Python
-functions. The Ask, Ingest, Research and Documentation loops discover their read tools
+functions. The Ask, Ingest and Documentation loops discover their read tools
 from `server.TOOLS`. Neither path goes through MCP, so the smaller MCP surface does
 not change what those loops can call.
