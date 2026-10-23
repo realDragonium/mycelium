@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Literal, Self, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from . import timestamps
+from . import errors, timestamps
 from .connections import ConnectionProvider
 from .link_authoring import reject_entity_statement_additions
 
@@ -181,11 +181,11 @@ class Evidence(BaseModel):
 MAX_EVIDENCE = 5
 
 
-class StaleDraftRevisionError(ValueError):
+class StaleDraftRevisionError(errors.Conflict):
     pass
 
 
-class ActiveApplicationError(ValueError):
+class ActiveApplicationError(errors.Conflict):
     pass
 
 

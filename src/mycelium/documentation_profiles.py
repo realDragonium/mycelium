@@ -13,7 +13,7 @@ from typing import Literal, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from . import ai_prompts, audiences, auth, guidelines, prompt_store, store
+from . import ai_prompts, audiences, auth, errors, guidelines, prompt_store, store
 from .audiences import Audience
 
 INSTRUCTIONS = ai_prompts.ACTIONS
@@ -23,7 +23,7 @@ INSTRUCTIONS = ai_prompts.ACTIONS
 Maintenance = Literal["manual", "propose", "auto-revise"]
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 

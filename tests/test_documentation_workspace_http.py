@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, docs_store, drafts_store, server
+from mycelium.docgen.publication import BothSidesEdited
 from mycelium.http import create_app
 from mycelium.http.authentication import AuthMiddleware
 
@@ -63,8 +64,16 @@ def test_library_renders_safe_markdown_and_reads_historical_body(workspace):
 
 
 @pytest.mark.parametrize("action", ["revisions", "delivery"])
-def test_revision_actions_require_real_writer_and_surface_conflicts(
-    workspace, monkeypatch, action
+@pytest.mark.parametrize(
+    ("error", "status", "extra"),
+    [
+        (docs_store.RevisionConflict, 409, {}),
+        (BothSidesEdited, 409, {"code": "both_sides_edited"}),
+        (ValueError, 400, {}),
+    ],
+)
+def test_revision_actions_require_real_writer_and_surface_errors(
+    workspace, monkeypatch, action, error, status, extra
 ):
     client, _, document = workspace
     payload = {
@@ -75,21 +84,21 @@ def test_revision_actions_require_real_writer_and_surface_conflicts(
 
     def conflict(*args, **kwargs):
         calls.append(kwargs)
-        raise docs_store.RevisionConflict(
-            "Document changed. Reload it before continuing."
-        )
+        raise error("Document changed. Reload it before continuing.")
 
     monkeypatch.setattr(
         server,
         "revise_document" if action == "revisions" else "deliver_document",
         conflict,
     )
-    assert (
-        client.post(
-            f"/api/documentation/documents/{document}/{action}", json=payload
-        ).status_code
-        == 409
+    response = client.post(
+        f"/api/documentation/documents/{document}/{action}", json=payload
     )
+    assert response.status_code == status
+    assert response.json() == {
+        "detail": "Document changed. Reload it before continuing.",
+        **extra,
+    }
     assert calls[0]["expected_revision"] == 1
 
     async def reader(*_):
@@ -104,6 +113,22 @@ def test_revision_actions_require_real_writer_and_surface_conflicts(
     )
     assert len(calls) == 1
     assert client.get(f"/api/documentation/documents/{document}").status_code == 200
+
+
+def test_generated_tool_route_surfaces_revision_conflict(workspace):
+    client, _, document = workspace
+    response = client.post(
+        "/revise-document",
+        json={
+            "document_id": document,
+            "expected_revision": 2,
+            "prompt": "Explain workspace exports.",
+        },
+    )
+    assert response.status_code == 409
+    assert response.json() == {
+        "detail": "The document has changed. Reload it before continuing."
+    }
 
 
 def test_delivery_requires_explicit_numeric_revision(workspace):

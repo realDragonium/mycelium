@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from . import auth, prompt_store, store
+from . import auth, errors, prompt_store, store
 from .ai import Provider, ReasoningEffort
 from .ai.pricing import price, provider_of
 from .ai.types import ClaudeEffort
@@ -100,7 +100,7 @@ class Unavailable(ValueError):
     pass
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 

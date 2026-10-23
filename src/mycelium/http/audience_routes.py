@@ -10,17 +10,12 @@ import sqlite3
 from typing import Literal
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import audience_labelling, audiences, server, store
 from .access import _enforce_role, _require_principal
 
 router = APIRouter()
-
-
-async def _audience_conflict(request: Request, exc: audiences.Conflict) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 
 class AudiencesResponse(audiences.AudiencesView):

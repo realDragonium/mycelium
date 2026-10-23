@@ -14,7 +14,7 @@ from pydantic import (
     StringConstraints,
 )
 
-from . import plurals, store
+from . import errors, plurals, store
 from .store.kernel import _record
 
 NameText = Annotated[
@@ -181,7 +181,7 @@ class DismissedDuplicates(Model):
     dismissed: list[DismissedDuplicate]
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 

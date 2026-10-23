@@ -33,7 +33,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .. import docs_store
+from .. import docs_store, errors
 from . import destinations
 from .destinations import DestinationError
 from .schema import CurrentDocument, RevisionBase
@@ -163,9 +163,11 @@ def destination_text(row: sqlite3.Row) -> CurrentDocument | None:
         ) from None
 
 
-class BothSidesEdited(ValueError):
+class BothSidesEdited(errors.Conflict):
     """A revision refused because the published copy and the internal head
     both changed since publication; `start_from_destination` is the way past."""
+
+    code = "both_sides_edited"
 
 
 @dataclass(frozen=True)

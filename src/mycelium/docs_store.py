@@ -44,7 +44,7 @@ import uuid as _uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from . import doc_plans, timestamps
+from . import doc_plans, errors, timestamps
 
 DOCUMENTATION_RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS documentation_runs (
@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS generated_document_deliveries (
 """
 
 
-class RevisionConflict(ValueError):
+class RevisionConflict(errors.Conflict):
     """The selected internal version is no longer the document head."""
 
 

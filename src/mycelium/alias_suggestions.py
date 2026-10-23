@@ -14,6 +14,7 @@ from . import (
     ai_prompts,
     auth,
     drafts_store,
+    errors,
     model_settings,
     product_settings,
     store,
@@ -24,7 +25,7 @@ from .require import require
 KIND = drafts_store.ALIAS_SUGGESTION_KIND
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 

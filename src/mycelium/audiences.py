@@ -16,7 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from . import auth, prompt_store, store
+from . import auth, errors, prompt_store, store
 
 TYPE = "audience"
 Scope = Literal["internal", "external"]
@@ -24,7 +24,7 @@ Scope = Literal["internal", "external"]
 DEFAULT_ID = "internal-technical"
 
 
-class Conflict(ValueError):
+class Conflict(errors.Conflict):
     pass
 
 

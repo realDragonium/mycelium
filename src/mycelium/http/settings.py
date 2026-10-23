@@ -2,7 +2,7 @@
 AI usage and the setup checklist.
 
 Anyone authenticated may read them; only an admin may save. A conflicting save
-answers 409, and unavailable settings 503.
+answers 409 through the shared conflict handler, and unavailable settings 503.
 """
 
 from __future__ import annotations
@@ -46,12 +46,8 @@ def save_product_settings(
         if isinstance(body.settings, product_settings.ConcurrencySettings):
             anyio.from_thread.run_sync(lambda: server.limiter_for("ask"))
         return saved
-    except model_settings.Conflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
     except model_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @router.get("/api/model-settings")
@@ -71,12 +67,8 @@ def save_ai_model_settings(
     try:
         model_settings.save(action, body, principal)
         return model_settings.action_view(action)
-    except model_settings.Conflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
     except model_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @router.get("/api/draft-review/settings")
@@ -96,8 +88,6 @@ def save_draft_review_settings(
     try:
         review_settings.save(body, principal)
         return review_settings.view(principal)
-    except review_settings.Conflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
 
@@ -146,7 +136,5 @@ def dismiss_setup_step(
     try:
         setup_checklist.dismiss(step, body.dismissed, principal)
         return setup_checklist.view(server._db())
-    except model_settings.Conflict as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from None
     except model_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None

@@ -85,19 +85,13 @@ def edit_draft_op(
                 status_code=400,
                 detail=f"cannot edit ops on a {status} draft",
             )
-        try:
-            revision = drafts_store.update_op_payload(
-                conn,
-                draft_id,
-                seq,
-                body.payload,
-                expected_revision=body.expected_revision,
-            )
-        except (
-            drafts_store.StaleDraftRevisionError,
-            drafts_store.ActiveApplicationError,
-        ) as ex:
-            raise HTTPException(status_code=409, detail=str(ex)) from ex
+        revision = drafts_store.update_op_payload(
+            conn,
+            draft_id,
+            seq,
+            body.payload,
+            expected_revision=body.expected_revision,
+        )
     if revision is None:
         raise HTTPException(status_code=404, detail="op seq not found")
     return {"ok": True, "revision": revision}
@@ -127,15 +121,9 @@ def remove_draft_op_http(
                 status_code=400,
                 detail=f"cannot remove ops from a {status} draft",
             )
-        try:
-            revision = drafts_store.remove_op(
-                conn, draft_id, seq, expected_revision=expected_revision
-            )
-        except (
-            drafts_store.StaleDraftRevisionError,
-            drafts_store.ActiveApplicationError,
-        ) as ex:
-            raise HTTPException(status_code=409, detail=str(ex)) from ex
+        revision = drafts_store.remove_op(
+            conn, draft_id, seq, expected_revision=expected_revision
+        )
     if revision is None:
         raise HTTPException(status_code=404, detail="op seq not found")
     return {"ok": True, "revision": revision}
@@ -214,10 +202,7 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
                 status_code=400,
                 detail="only open or submitted drafts can be rejected",
             )
-        try:
-            drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
-        except drafts_store.ActiveApplicationError as ex:
-            raise HTTPException(status_code=409, detail=str(ex)) from ex
+        drafts_store.set_decision(conn, draft_id, decision="rejected", by=p.id)
     return {"ok": True}
 
 
