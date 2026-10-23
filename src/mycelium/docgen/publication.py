@@ -33,7 +33,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from .. import docs_store, errors
+from .. import docs_store, document_freshness, errors, media, media_formats
 from . import destinations
 from .destinations import DestinationError
 from .schema import CurrentDocument, RevisionBase
@@ -67,11 +67,14 @@ def publish(
             else expected_revision
         )
         row = docs_store.require_revision(conn, document_id, revision)
+        files = _media_files(conn, row)
         try:
             configured, binding = destinations.publishing_destination(row, destination)
             delivery = destinations.deliver_document(
                 configured,
-                _delivery_document(row, docs_store.published_blobs(conn, document_id)),
+                _delivery_document(
+                    row, docs_store.published_blobs(conn, document_id), files
+                ),
             )
         except DestinationError as exc:
             raise ValueError(str(exc)) from None
@@ -90,8 +93,32 @@ def publish(
         return {**delivery.serialize(), "revision": revision}
 
 
+def _media_files(
+    conn: sqlite3.Connection, row: sqlite3.Row
+) -> tuple[destinations.MediaFile, ...]:
+    """The images the document places, refused when the audience it was
+    written for may no longer see one."""
+    if not media.referenced(str(row["body"])):
+        return ()
+    cited = document_freshness.cited_snapshots(conn, [str(row["id"])])
+    snapshot = cited.get(str(row["id"]))
+    return tuple(
+        destinations.MediaFile(
+            id=str(item["id"]),
+            version=int(item["content_version"]),
+            extension=media_formats.EXTENSIONS[str(item["content_type"])],
+            data=data,
+        )
+        for item, data in media.published_files(
+            str(row["body"]), snapshot.audience if snapshot is not None else None
+        )
+    )
+
+
 def _delivery_document(
-    row: sqlite3.Row, published: frozenset[str]
+    row: sqlite3.Row,
+    published: frozenset[str],
+    files: tuple[destinations.MediaFile, ...] = (),
 ) -> destinations.DeliveryDocument:
     def optional(column: str) -> str | None:
         value = row[column]
@@ -109,6 +136,7 @@ def _delivery_document(
         delivered_content_revision=optional("delivery_content_revision"),
         revision_source_content_revision=optional("revision_source_content_revision"),
         published_content_revisions=published,
+        media=files,
     )
 
 

@@ -37,11 +37,11 @@ from __future__ import annotations
 import logging
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
-from .. import ai, ai_prompts, tracing
+from .. import ai, ai_prompts, media, tracing
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -116,6 +116,21 @@ ScopeReader = Callable[
 ]
 
 
+class MediaLookup(Protocol):
+    """The media a run may place; `mycelium.media` in production."""
+
+    def offers(
+        self,
+        statement_ids: Iterable[str],
+        entity_ids: Iterable[str],
+        audience: Audience | None,
+    ) -> list[media.Offer]: ...
+
+    def placeable(
+        self, media_ids: Iterable[str], audience: Audience | None
+    ) -> dict[str, media.Offer]: ...
+
+
 def run_docgen(
     prompt: str,
     *,
@@ -135,6 +150,7 @@ def run_docgen(
     on_progress: Callable[[RunSummary], None] | None = None,
     scope_reader: ScopeReader | None = None,
     review_notes: Sequence[ReviewNote] = (),
+    media_lookup: MediaLookup | None = None,
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
@@ -187,6 +203,7 @@ def run_docgen(
             load_audience=profiles.audience if profiles is not None else None,
             scope_reader=scope_reader or _scope_reader,
             review_notes=review_notes,
+            media_lookup=media_lookup or media,
         )
 
     result.trace["prompts"] = [
@@ -299,6 +316,11 @@ class _RunContext:
     malformed_retries: int = 0
     cited_statements: dict[str, str] | None = None
     on_progress: Callable[[RunSummary], None] | None = None
+    media_lookup: MediaLookup | None = None
+    #: Media the writer was told it may place, by id.
+    offered_media: dict[str, media.Offer] = field(default_factory=dict)
+    #: Offers from the reads that ran before the opening message.
+    opening_media: list[str] = field(default_factory=list)
 
 
 def _execute(
@@ -323,6 +345,7 @@ def _execute(
     load_audience: Callable[[str], Audience | None] | None = None,
     scope_reader: ScopeReader | None = None,
     review_notes: Sequence[ReviewNote] = (),
+    media_lookup: MediaLookup | None = None,
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -366,6 +389,7 @@ def _execute(
         emit_blocks=0,
         malformed_retries=0,
         on_progress=on_progress,
+        media_lookup=media_lookup,
     )
 
     resolved = _resolve(
@@ -453,7 +477,8 @@ def _execute(
                 edited_at_destination=revision_target is not None
                 and revision_target.base == "destination",
                 review_notes=review_notes,
-            ),
+            )
+            + "".join(ctx.opening_media),
         }
     ]
     if manual_document is not None:
@@ -687,7 +712,8 @@ def _recon(ctx: _RunContext) -> Any:
             "search_statements", args, recon, ok=True, counts_as_op=True
         )
         ctx.successful_reads += 1
-        _note_retrieved(ctx, recon, prompts.format_recon(recon))
+        found = _note_retrieved(ctx, recon, prompts.format_recon(recon))
+        ctx.opening_media.append(_offer_media(ctx, found))
         return recon
     except SubstrateError as exc:
         trace.record_tool_call(
@@ -751,7 +777,8 @@ def _read_anchor(ctx: _RunContext, entity_id: str) -> prompts.Anchor | None:
         statements=statements,
         total=max(total, len(statements)),
     )
-    _note_retrieved(ctx, statements, prompts.format_anchor(anchor))
+    found = _note_retrieved(ctx, statements, prompts.format_anchor(anchor))
+    ctx.opening_media.append(_offer_media(ctx, found, (entity_id,)))
     return anchor
 
 
@@ -804,12 +831,15 @@ def _dispatch_read(
     trace.record_tool_call(name, arguments, result, ok=True, counts_as_op=True)
     ctx.successful_reads += 1
     sent = _serialize(result)
-    _note_retrieved(ctx, result, sent)
-    _append_tool_result(ctx.messages, tool_use_id, sent, error=False)
+    found = _note_retrieved(ctx, result, sent)
+    _append_tool_result(
+        ctx.messages, tool_use_id, sent + _offer_media(ctx, found), error=False
+    )
 
 
-def _note_retrieved(ctx: _RunContext, result: Any, sent: str) -> None:
-    """Record which statements this read actually put in front of the model.
+def _note_retrieved(ctx: _RunContext, result: Any, sent: str) -> set[str]:
+    """Record which statements this read actually put in front of the model,
+    and return those it is the first to.
 
     Two filters, and both matter. The structural one (`collect_statement_ids`)
     takes only `id` keys, so a link's `to_id` — a pointer to something not
@@ -821,7 +851,29 @@ def _note_retrieved(ctx: _RunContext, result: Any, sent: str) -> None:
     """
     seen: set[str] = set()
     collect_statement_ids(result, seen)
-    ctx.retrieved_ids.update(ids_present_in(sent, seen))
+    found = set(ids_present_in(sent, seen)) - ctx.retrieved_ids
+    ctx.retrieved_ids.update(found)
+    return found
+
+
+def _offer_media(
+    ctx: _RunContext, statement_ids: Iterable[str], entity_ids: Iterable[str] = ()
+) -> str:
+    """Tell the writer about media attached to what it just read that its
+    audience may see. Best-effort: a run without media still writes."""
+    if ctx.media_lookup is None:
+        return ""
+    try:
+        found = ctx.media_lookup.offers(statement_ids, entity_ids, ctx.audience)
+    except Exception as exc:  # noqa: BLE001 — media is optional to a run
+        ctx.trace.notes.append(f"media lookup failed: {exc}")
+        return ""
+    fresh = [offer for offer in found if offer.id not in ctx.offered_media]
+    if not fresh:
+        return ""
+    ctx.offered_media.update((offer.id, offer) for offer in fresh)
+    ctx.trace.notes.append("offered media " + ", ".join(offer.id for offer in fresh))
+    return prompts.media_offer_note(fresh)
 
 
 def _handle_gap(tool_use: Any, ctx: _RunContext) -> None:
@@ -877,7 +929,9 @@ def _handle_emit(
 
     if ctx.manual_document is not None:
         title, body = ctx.manual_document.title, ctx.manual_document.body
-    problem = _emit_problem(title, body, ids, ctx.retrieved_ids, ctx.visible_ids)
+    problem = _emit_problem(
+        title, body, ids, ctx.retrieved_ids, ctx.visible_ids
+    ) or _media_problem(ctx, body)
     if problem is not None:
         trace.refused_emits.append(problem)
         if (
@@ -1002,6 +1056,7 @@ def _review(
                 title=title,
                 body=body,
                 statements=statements,
+                placed_media=_placed(ctx, body),
             ),
         }
     ]
@@ -1109,6 +1164,40 @@ def _emit_problem(
             "it cited statement ids this run never retrieved: "
             f"{shown}. Retrieve them with get_statements, or cite only what "
             "you read"
+        )
+    return None
+
+
+def _placed(ctx: _RunContext, body: str) -> list[media.Offer]:
+    placed = media.referenced(body)
+    if not placed:
+        return []
+    if ctx.manual_document is not None and ctx.media_lookup is not None:
+        known = ctx.media_lookup.placeable(placed, ctx.audience)
+    else:
+        known = ctx.offered_media
+    return [known[item] for item in placed if item in known]
+
+
+def _media_problem(ctx: _RunContext, body: str) -> str | None:
+    """Why the media this body places may not stand, or None. The writer may
+    place only what it was offered; a manual edit, which no writer chose
+    from offers, may place what the document's audience may see."""
+    images = media.IMAGE.findall(body)
+    if len(images) != len(media.REFERENCE.findall(body)):
+        return (
+            "it refers to media outside an image. Place media only as "
+            "![what it shows](media:med_…)"
+        )
+    if any(not alt.strip() for alt, _item in images):
+        return "an image has no alt text. Say what each image shows in its alt text"
+    allowed = {item.id for item in _placed(ctx, body)}
+    unknown = [item for item in media.referenced(body) if item not in allowed]
+    if unknown:
+        shown = ", ".join(unknown[:_MAX_NAMED_IDS])
+        return (
+            f"it places media this run did not offer: {shown}. Place only "
+            "media listed as AVAILABLE MEDIA after a read"
         )
     return None
 

@@ -34,6 +34,9 @@ Reader knows what they want and has basic competence. Get them there.
 
 1. {Action — verb first, specific UI/CLI reference}.
 2. {Action}.
+
+   {Image: the screen this step happens on, when one is offered.}
+
 3. {Action}.
 
 {If a step has sub-steps, nest them:}

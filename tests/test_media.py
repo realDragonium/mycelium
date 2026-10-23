@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import struct
 
 import pytest
@@ -285,4 +286,29 @@ def test_merging_a_statement_moves_its_media(client):
     assert r.status_code == 200, r.text
     assert [(a.kind, a.id) for a in media.get(str(item["id"])).attachments] == [
         ("statement", kept)
+    ]
+
+
+def test_media_is_old_by_age_or_by_product_version():
+    from datetime import UTC, datetime
+
+    from mycelium import product_settings
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+
+    def row(captured_at: str, version: str | None) -> sqlite3.Row:
+        found: sqlite3.Row = conn.execute(
+            "SELECT ? AS captured_at, ? AS content_updated_at, ? AS product_version",
+            (captured_at, captured_at, version),
+        ).fetchone()
+        return found
+
+    config = product_settings.MediaSettings(stale_after_days=30, product_version="2.0")
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+
+    assert media.stale_reasons(row("2026-05-20", "2.0"), config, now) == []
+    assert media.stale_reasons(row("2026-01-01", "1.4"), config, now) == [
+        "older than 30 days",
+        "captured against 1.4; the product is at 2.0",
     ]

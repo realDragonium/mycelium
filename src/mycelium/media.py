@@ -589,16 +589,74 @@ def offers(
             for media_id in media_ids:
                 targets.setdefault(media_id, []).append(target)
     return [
-        Offer(
-            id=row["id"],
-            alt_text=row["alt_text"],
-            caption=row["caption"],
-            content_type=row["content_type"],
-            attached_to=targets[row["id"]],
-        )
+        _offer(row, targets[row["id"]])
         for row in media_store.get_many(conn, targets)
         if row["alt_text"] and visible_to(row, audience)
     ]
+
+
+def placeable(
+    media_ids: Iterable[str], audience: audiences.Audience | None
+) -> dict[str, Offer]:
+    """Of these media, those the audience may see that say what they show."""
+    if not media_store.is_configured():
+        return {}
+    conn = _conn()
+    rows = media_store.get_many(conn, media_ids)
+    attached = media_store.attachments(conn, [row["id"] for row in rows])
+    return {
+        row["id"]: _offer(row, [target for _kind, target in attached[row["id"]]])
+        for row in rows
+        if row["alt_text"] and visible_to(row, audience)
+    }
+
+
+def _offer(row: sqlite3.Row, attached_to: list[str]) -> Offer:
+    return Offer(
+        id=row["id"],
+        alt_text=row["alt_text"],
+        caption=row["caption"],
+        content_type=row["content_type"],
+        attached_to=attached_to,
+    )
+
+
+def published_files(
+    body: str, audience: tuple[str, bool] | None
+) -> list[tuple[sqlite3.Row, bytes]]:
+    """The media a body places, with its bytes, for publishing beside it.
+    Raises `ValueError` naming what is missing or what `audience`, as
+    (id, internal), may not see: publishing never carries such media out."""
+    wanted = referenced(body)
+    if not wanted:
+        return []
+    conn = _conn()
+    rows = {row["id"]: row for row in media_store.get_many(conn, wanted)}
+    missing = [item for item in wanted if item not in rows]
+    if missing:
+        raise ValueError(
+            f"The document places media that no longer exists: {', '.join(missing)}. "
+            "Revise it before publishing."
+        )
+    hidden = [
+        item
+        for item in wanted
+        if audience is not None
+        and not store.audience_labels.grants(media_store.label(rows[item]), *audience)
+    ]
+    if hidden:
+        raise ValueError(
+            "The document places media its audience may not see: "
+            f"{', '.join(hidden)}. Label it for that audience or revise the "
+            "document before publishing."
+        )
+    files: list[tuple[sqlite3.Row, bytes]] = []
+    for item in wanted:
+        data = media_store.blobs.get(conn, item)
+        if data is None:
+            raise ValueError(f"The bytes of media {item} are missing.")
+        files.append((rows[item], data))
+    return files
 
 
 def referenced(body: str) -> list[str]:

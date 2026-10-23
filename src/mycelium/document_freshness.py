@@ -3,7 +3,10 @@
 Each revision keeps the text its cited statements had when it was reviewed.
 A document is out of date once any of those statements has been edited,
 deleted or merged away since, or relabelled so that the audience the document
-was written for may no longer see it. Comparing text rather than timestamps means a
+was written for may no longer see it. The same holds for an image it places
+that was replaced, deleted or relabelled away from that audience; media keeps
+no snapshot, so a replacement is one newer than the revision. Comparing
+statement text rather than timestamps means a
 kind change or an edit that was reverted does not count, and it hands the
 reader the old and new wording without reading history.
 
@@ -20,7 +23,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from . import store
+from . import media, media_store, store
 
 #: How many changes a revision brief spells out before summarising the rest.
 _BRIEF_CHANGES = 10
@@ -40,14 +43,24 @@ class StatementChange:
 
 
 @dataclass(frozen=True)
+class MediaChange:
+    media_id: str
+    change: Literal["replaced", "deleted", "no_longer_visible"]
+    #: What the media shows now; empty when deleted.
+    alt_text: str
+
+
+@dataclass(frozen=True)
 class Freshness:
     status: Literal["unknown", "current", "out_of_date"]
     changes: tuple[StatementChange, ...] = ()
+    media_changes: tuple[MediaChange, ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
             "status": self.status,
             "changes": [asdict(change) for change in self.changes],
+            "media_changes": [asdict(change) for change in self.media_changes],
         }
 
 
@@ -57,6 +70,9 @@ class _Cited:
     #: The audience the revision was written for, as (id, internal); None
     #: for a revision whose run recorded none.
     audience: tuple[str, bool] | None
+    #: Media the body places, and when the revision was written.
+    media_ids: tuple[str, ...] = ()
+    written_at: str = ""
 
 
 def assess(
@@ -103,6 +119,30 @@ def assess(
     return Freshness("out_of_date" if changes else "current", tuple(changes))
 
 
+def assess_media(
+    cited: _Cited, items: Mapping[str, sqlite3.Row]
+) -> tuple[MediaChange, ...]:
+    """The media a revision places that changed since it was written."""
+    changes: list[MediaChange] = []
+    for media_id in cited.media_ids:
+        row = items.get(media_id)
+        if row is None:
+            changes.append(MediaChange(media_id, "deleted", ""))
+        elif cited.audience is not None and not store.audience_labels.grants(
+            media_store.label(row), *cited.audience
+        ):
+            changes.append(MediaChange(media_id, "no_longer_visible", row["alt_text"]))
+        elif str(row["content_updated_at"]) > cited.written_at:
+            changes.append(MediaChange(media_id, "replaced", row["alt_text"]))
+    return tuple(changes)
+
+
+def _with_media(freshness: Freshness, changes: tuple[MediaChange, ...]) -> Freshness:
+    if not changes:
+        return freshness
+    return Freshness("out_of_date", freshness.changes, changes)
+
+
 def for_documents(
     drafts: sqlite3.Connection,
     substrate: Callable[[], sqlite3.Connection],
@@ -146,13 +186,23 @@ def for_documents(
                 )
         if survivors:
             current.update(store.get_statement_texts(conn, survivors))
+    placed = {item for cited in snapshots.values() for item in cited.media_ids}
+    items: dict[str, sqlite3.Row] = {}
+    if placed and media_store.is_configured():
+        items = {
+            row["id"]: row
+            for row in media_store.get_many(media_store.connection(), placed)
+        }
     unrecorded = _Cited(None, None)
     return {
-        document_id: assess(
-            (cited := snapshots.get(document_id, unrecorded)).statements,
-            current,
-            merged_into,
-            visible.get(cited.audience) if cited.audience is not None else None,
+        document_id: _with_media(
+            assess(
+                (cited := snapshots.get(document_id, unrecorded)).statements,
+                current,
+                merged_into,
+                visible.get(cited.audience) if cited.audience is not None else None,
+            ),
+            assess_media(cited, items) if media_store.is_configured() else (),
         )
         for document_id in document_ids
     }
@@ -167,7 +217,7 @@ def cited_snapshots(
         chunk = wanted[offset : offset + 500]
         placeholders = ", ".join("?" for _document_id in chunk)
         rows = conn.execute(
-            "SELECT r.document_id, r.cited_statements, "
+            "SELECT r.document_id, r.cited_statements, r.body, r.created_at, "
             "json_extract(run.profile_snapshot, '$.audience.id') AS audience, "
             "json_extract(run.profile_snapshot, '$.audience.scope') AS scope "
             "FROM generated_documents AS d JOIN generated_document_revisions AS r "
@@ -183,18 +233,36 @@ def cited_snapshots(
                 None
                 if row["audience"] is None
                 else (str(row["audience"]), row["scope"] == "internal"),
+                tuple(media.referenced(str(row["body"]))),
+                str(row["created_at"]),
             )
     return snapshots
 
 
-def revision_brief(changes: Sequence[StatementChange]) -> str:
+def revision_brief(
+    changes: Sequence[StatementChange], media_changes: Sequence[MediaChange] = ()
+) -> str:
     """Instructions for a revision that brings a document up to date."""
     lines = [
         "Bring this document up to date with these knowledge-base changes to "
-        "statements it cites. Keep everything else as it is. Read a statement "
+        "what it cites and shows. Keep everything else as it is. Read a statement "
         "with get_statements before citing it; never cite a deleted one, and "
         "drop or re-source what rested only on it."
     ]
+    for item in media_changes:
+        if item.change == "replaced":
+            lines.append(
+                f"- Image {item.media_id} was replaced; it now shows: "
+                f"{_clip(item.alt_text)!r}. Keep it only where that still fits, "
+                "and update its alt text."
+            )
+        elif item.change == "no_longer_visible":
+            lines.append(
+                f"- Image {item.media_id} is no longer visible to this audience; "
+                "remove it."
+            )
+        else:
+            lines.append(f"- Image {item.media_id} was deleted; remove it.")
     for change in changes[:_BRIEF_CHANGES]:
         old = _clip(change.old_text)
         if change.change == "edited":

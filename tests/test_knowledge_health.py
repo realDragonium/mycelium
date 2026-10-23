@@ -111,6 +111,7 @@ def test_counts_each_kind_of_attention(conn, drafts):
         "open_gaps": 1,
         "pending_drafts": 1,
         "out_of_date_documents": 0,
+        "old_media": 0,
     }
 
 

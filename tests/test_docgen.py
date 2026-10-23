@@ -18,7 +18,7 @@ import types
 
 import pytest
 
-from mycelium import audiences, guidelines, prompt_store
+from mycelium import audiences, guidelines, media, prompt_store
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 from mycelium.docgen import DocgenConfig, DocumentWritten, NothingWritten
 from mycelium.docgen.loop import _slug, run_docgen
@@ -1734,3 +1734,85 @@ def test_manual_refusal_retains_input_without_rewrite_retry(kb_set, responses):
     assert isinstance(result, NothingWritten)
     assert (result.title, result.body) == (manual.title, manual.body)
     assert len(client.messages.calls) == len(responses)
+
+
+# --------------------------------------------------------------------------- #
+# Media
+# --------------------------------------------------------------------------- #
+
+
+class FakeMedia:
+    """One screenshot attached to stm_1."""
+
+    def __init__(self):
+        self.offer = media.Offer(
+            id="med_000000000001",
+            alt_text="The SSO settings page with Enforce SSO switched on",
+            caption="",
+            content_type="image/png",
+            attached_to=["stm_1"],
+        )
+        self.asked: list[tuple[list[str], list[str]]] = []
+
+    def offers(self, statement_ids, entity_ids, audience):
+        self.asked.append((sorted(statement_ids), sorted(entity_ids)))
+        return [self.offer] if "stm_1" in statement_ids else []
+
+    def placeable(self, media_ids, audience):
+        return {self.offer.id: self.offer} if self.offer.id in media_ids else {}
+
+
+_IMAGE = "![The SSO settings page](media:med_000000000001)"
+
+
+def test_the_writer_is_offered_media_on_what_it_read_and_may_place_only_that(
+    kb_set,
+):
+    lookup = FakeMedia()
+    client = FakeAnthropic(
+        [
+            _emit(body="# SSO\n\n![x](media:med_00000000000f)\n"),
+            _emit(body="# SSO\n\n![ ](media:med_000000000001)\n"),
+            _emit(body=f"# SSO\n\n{_IMAGE}\n"),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(
+        client,
+        media_lookup=lookup,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+
+    assert isinstance(result, DocumentWritten)
+    opening = _content_text(client.calls[0]["messages"][0]["content"])
+    assert "AVAILABLE MEDIA" in opening and "med_000000000001" in opening
+    refused = [
+        call["messages"][-1]["content"][0]["content"] for call in client.calls[1:3]
+    ]
+    assert "did not offer: med_00000000000f" in refused[0]
+    assert "no alt text" in refused[1]
+    review = _content_text(client.calls[3]["messages"][0]["content"])
+    assert "PLACED MEDIA" in review and "Enforce SSO switched on" in review
+
+
+def test_media_is_offered_once_however_often_its_statement_is_read(kb_set):
+    lookup = FakeMedia()
+    client = FakeAnthropic(
+        [
+            _message([_tool_use("get_statements", {"ids": ["stm_1"]})]),
+            _emit(),
+            _review_ok(),
+        ]
+    )
+
+    _run(
+        client,
+        media_lookup=lookup,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+
+    read = client.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "AVAILABLE MEDIA" not in read

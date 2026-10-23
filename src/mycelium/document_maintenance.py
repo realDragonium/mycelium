@@ -167,7 +167,10 @@ def _observe(
 ) -> sqlite3.Row:
     """Record the document's changes; new changes restart the quiet period
     until something was done about the revision."""
-    changes = json.dumps([asdict(change) for change in document.freshness.changes])
+    changes = json.dumps(
+        [asdict(change) for change in document.freshness.changes]
+        + [asdict(change) for change in document.freshness.media_changes]
+    )
     stamp = timestamps.of(now)
     with conn:
         conn.execute(
@@ -217,7 +220,9 @@ def _propose(
                 document_type=document.document_type,
                 anchor_entity_id=document.anchor_entity_id,
                 document_id=document.id,
-                rationale=document_freshness.revision_brief(document.freshness.changes),
+                rationale=document_freshness.revision_brief(
+                    document.freshness.changes, document.freshness.media_changes
+                ),
                 priority="high",
                 statement_ids=tuple(
                     change.statement_id for change in document.freshness.changes
@@ -254,7 +259,9 @@ def _revise(
                 f"The profile no longer has the '{document.document_type}' template."
             )
         run_id = doc_runs.start_run(
-            prompt=document_freshness.revision_brief(document.freshness.changes),
+            prompt=document_freshness.revision_brief(
+                document.freshness.changes, document.freshness.media_changes
+            ),
             guideline_set=guideline_set,
             document_type=document.document_type,
             created_by=None,
