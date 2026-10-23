@@ -124,7 +124,6 @@ def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
 
     @functools.wraps(wrapper)
     async def offloaded(*args: Any, **kwargs: Any) -> Any:
-        request_timing.relabel(f"MCP {name}")
         if name == "ask":
             from ..ask.events import run_cancellable
 

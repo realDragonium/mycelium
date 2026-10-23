@@ -144,7 +144,7 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, each must also be allowed or the server refuses to start. |
 | `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
 | `EMBED_TIMEOUT_S` | `30` | Seconds before one embedding request fails instead of hanging. A failed request is retried twice with backoff. |
-| `MYCELIUM_SLOW_REQUEST_MS` | `2000` | A request or background job that takes at least this long logs one `MYCELIUM_SLOW_REQUEST` line with its route and where the time went. |
+| `MYCELIUM_SLOW_REQUEST_MS` | `2000` | A request or background job that takes at least this long, fails, or whose client leaves before the response ends logs one `MYCELIUM_SLOW_REQUEST` line with its route and where the time went. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
 | `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling flamegraphs and metadata sidecars are written. |
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. |
@@ -796,7 +796,8 @@ still fails:
 | Deploy aborts with `snapshot failed` | A database in `/var/lib/mycelium` failed its check, or the disk is full. The running build was restarted unchanged; read the message above it. |
 | `403` on every login | `MYCELIUM_BOOTSTRAP_ADMIN_EMAIL` doesn't match, or the database already has an admin. Inspect with sqlite3. With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, the email's domain must be listed too. |
 | MCP `/mcp` 401 with a token | Token might be revoked or the user suspended. Check via the Settings UI. |
-| Requests are slow | `GET /api/admin/performance` (admin) gives p50, p95 and max per route over the last 15 minutes, split into waiting for a worker thread, running, write-lock wait and hold, embedding, SQLite and model calls, and shows how busy the worker threads are. Each slow request also logs a `MYCELIUM_SLOW_REQUEST` line with the same split. |
+| Requests are slow | `GET /api/admin/performance` (admin) gives p50, p95 and max per route over the last 15 minutes, split into time to first byte, waiting for a worker thread, running, write-lock wait and hold, embedding, SQLite and model calls, and shows how busy the worker threads are. An MCP request is listed by its method and tool, such as `MCP tools/call ask`. Each slow request also logs a `MYCELIUM_SLOW_REQUEST` line with the same split. |
+| A load balancer reports MCP responses capped at about 15 s | Time to first byte, not duration: for a 2026-07-28 client, the MCP SDK holds the response until the tool finishes or 15 s pass, then streams and pings until it does. The tool ran longer; its `MYCELIUM_SLOW_REQUEST` line has the full time. |
 | MCP `/mcp` hangs | nginx is buffering. Confirm `proxy_buffering off` is in the `/mcp` location block. |
 | Auth0 callback "redirect URI mismatch" | The URL in Auth0's allowed callbacks must be an exact match for `MYCELIUM_OIDC_REDIRECT_URI`, scheme included. |
 

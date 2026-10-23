@@ -38,6 +38,23 @@ def test_summary_reports_nearest_rank_spread_per_route_slowest_first():
     assert fast.phases == {"embed": Spread(p50_ms=0.5, p95_ms=0.5, max_ms=0.5)}
 
 
+@pytest.mark.parametrize(
+    ("body", "label"),
+    [
+        (b'{"jsonrpc":"2.0","id":1,"method":"initialize"}', "MCP initialize"),
+        (
+            b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"ask"}}',
+            "MCP tools/call ask",
+        ),
+        (b'{"method":"tools/call","params":{"name":"a b"}}', "MCP tools/call ?"),
+        (b'[{"method":"tools/list"}]', "MCP batch"),
+        (b"not json", "MCP ?"),
+    ],
+)
+def test_an_mcp_request_is_labelled_by_its_method_and_tool(body, label):
+    assert request_timing._mcp_label(body) == label
+
+
 def test_lock_charges_a_contended_wait_and_only_the_outermost_hold():
     lock = TimedLock()
     held = threading.Event()
@@ -147,3 +164,29 @@ def test_every_route_times_its_wait_for_a_worker_thread():
         and not inspect.iscoroutinefunction(route.endpoint)
     ]
     assert plain == [], "build these routers with route_class=TimedRoute"
+
+
+def test_a_client_that_leaves_mid_response_is_a_disconnect_not_a_failure():
+    import asyncio
+
+    async def streaming_app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b": ping", "more_body": True})
+        assert (await receive())["type"] == "http.disconnect"
+
+    async def receive():
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        pass
+
+    scope = {"type": "http", "method": "GET", "path": "/left-early"}
+    asyncio.run(
+        request_timing.RequestTimingMiddleware(streaming_app)(scope, receive, send)
+    )
+
+    (route,) = (
+        r for r in request_timing.recorder.summary() if r.label == "GET /left-early"
+    )
+    assert (route.disconnects, route.errors) == (1, 0)
+    assert "first_byte" in route.phases

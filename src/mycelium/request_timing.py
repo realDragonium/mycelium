@@ -9,22 +9,28 @@ clock reads when a timing is active and one context-variable read when not.
 Context variables follow a call into its worker thread, so a phase measured
 there lands on the request that started it.
 
+`first_byte` is when the response started, not a share of the time: a
+streamed response (an MCP call past the SDK's 15 s deferral, an Ask stream)
+starts long before it ends.
+
 Phases overlap by design: `thread_run` contains whatever else ran in the
 thread, and SQLite time spent holding the write lock counts in both. Calls a
 request runs in parallel threads can add up to more than its wall time.
 
 A finished timing is kept in a bounded in-memory window (`summary` reports
-p50/p95/max per route over it) and, past `MYCELIUM_SLOW_REQUEST_MS`, logged as
-one `MYCELIUM_SLOW_REQUEST` line.
+p50/p95/max per route over it) and, past `MYCELIUM_SLOW_REQUEST_MS` or when it
+failed or its client left, logged as one `MYCELIUM_SLOW_REQUEST` line.
 """
 
 from __future__ import annotations
 
 import functools
 import inspect
+import json
 import logging
 import math
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -45,9 +51,17 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 Phase = Literal[
-    "thread_wait", "thread_run", "lock_wait", "lock_held", "embed", "sqlite", "model"
+    "first_byte",
+    "thread_wait",
+    "thread_run",
+    "lock_wait",
+    "lock_held",
+    "embed",
+    "sqlite",
+    "model",
 ]
 PHASES: tuple[Phase, ...] = (
+    "first_byte",
     "thread_wait",
     "thread_run",
     "lock_wait",
@@ -78,6 +92,7 @@ class Timing:
     started: float = field(default_factory=time.perf_counter)
     phases: dict[Phase, float] = field(default_factory=dict)
     failed: bool = False
+    disconnected: bool = False
 
     def add(self, name: Phase, seconds: float) -> None:
         self.phases[name] = self.phases.get(name, 0.0) + seconds
@@ -103,14 +118,6 @@ def phase(name: Phase) -> Iterator[None]:
         yield
     finally:
         timing.add(name, time.perf_counter() - started)
-
-
-def relabel(label: str) -> None:
-    """Name the current timing after what it turned out to be, e.g. the MCP
-    tool behind a `POST /mcp`."""
-    timing = _current.get()
-    if timing is not None:
-        timing.label = label
 
 
 @contextmanager
@@ -151,9 +158,10 @@ def _finish(timing: Timing) -> None:
         total=total,
         phases=dict(timing.phases),
         failed=timing.failed,
+        disconnected=timing.disconnected,
     )
     recorder.add(sample)
-    if total * 1000 >= slow_threshold_ms():
+    if total * 1000 >= slow_threshold_ms() or timing.failed or timing.disconnected:
         _LOG.warning("%s %s", SLOW_TOKEN, sample.log_fields())
 
 
@@ -290,9 +298,14 @@ class Sample:
     total: float
     phases: dict[Phase, float]
     failed: bool
+    disconnected: bool = False
 
     def log_fields(self) -> str:
-        parts = [f"route={self.label.replace(' ', '_')}", f"failed={self.failed}"]
+        parts = [
+            f"route={self.label.replace(' ', '_')}",
+            f"failed={self.failed}",
+            f"disconnected={self.disconnected}",
+        ]
         parts.append(f"total_ms={self.total * 1000:.0f}")
         parts.extend(
             f"{name}_ms={self.phases[name] * 1000:.0f}"
@@ -314,6 +327,7 @@ class RouteSummary:
     label: str
     count: int
     errors: int
+    disconnects: int
     total: Spread
     phases: dict[Phase, Spread]
 
@@ -356,6 +370,7 @@ class Recorder:
                 label=label,
                 count=len(samples),
                 errors=sum(s.failed for s in samples),
+                disconnects=sum(s.disconnected for s in samples),
                 total=_spread([s.total for s in samples]),
                 phases={
                     name: _spread(values)
@@ -391,7 +406,37 @@ def _label(scope: Scope) -> str:
     return f"{scope['method']} {path}"
 
 
+_MCP_NAME = re.compile(r"[\w./-]{1,64}")
+
+
+def _mcp_label(body: bytes) -> str:
+    """`MCP <method>`, and the tool for a `tools/call`, from a JSON-RPC body.
+    The names come from the client, so anything unexpected is `?`."""
+
+    def clean(value: object) -> str:
+        return value if isinstance(value, str) and _MCP_NAME.fullmatch(value) else "?"
+
+    try:
+        message = json.loads(body)
+    except ValueError:
+        return "MCP ?"
+    if isinstance(message, list):
+        return "MCP batch"
+    if not isinstance(message, dict):
+        return "MCP ?"
+    method = clean(message.get("method"))
+    params = message.get("params")
+    if method == "tools/call" and isinstance(params, dict):
+        return f"MCP tools/call {clean(params.get('name'))}"
+    return f"MCP {method}"
+
+
 class RequestTimingMiddleware:
+    """Times each HTTP request, including when its response started (which
+    is what a load balancer's response time measures) and whether the client
+    left before the response ended. A `POST /mcp` is labelled with the
+    JSON-RPC method and tool it carried."""
+
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
@@ -399,21 +444,45 @@ class RequestTimingMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        status = 500
+        status: int | None = None
+        finished = False
+        mcp_body: bytearray | None = (
+            bytearray()
+            if scope["method"] == "POST" and scope["path"] == "/mcp"
+            else None
+        )
 
-        async def send_recording_status(message: Message) -> None:
-            nonlocal status
-            if message["type"] == "http.response.start":
-                status = message["status"]
-            await send(message)
-
-        # Labelled on the way out: only routing knows the route's template.
         with track("") as timing:
+
+            async def receive_watching() -> Message:
+                message = await receive()
+                if message["type"] == "http.disconnect" and not finished:
+                    timing.disconnected = True
+                elif message["type"] == "http.request" and mcp_body is not None:
+                    mcp_body.extend(message.get("body", b""))
+                    if not message.get("more_body", False):
+                        timing.label = _mcp_label(bytes(mcp_body))
+                return message
+
+            async def send_recording(message: Message) -> None:
+                nonlocal status, finished
+                if message["type"] == "http.response.start":
+                    status = message["status"]
+                    timing.add("first_byte", time.perf_counter() - timing.started)
+                elif message["type"] == "http.response.body":
+                    finished = not message.get("more_body", False)
+                await send(message)
+
             try:
-                await self.app(scope, receive, send_recording_status)
+                await self.app(scope, receive_watching, send_recording)
             finally:
+                # Labelled on the way out: only routing knows the route's
+                # template.
                 timing.label = timing.label or _label(scope)
-                timing.failed = status >= 500
+                if status is None:
+                    timing.failed = not timing.disconnected
+                else:
+                    timing.failed = status >= 500
 
 
 def _offloaded(endpoint: Callable[..., Any]) -> Callable[..., Any]:
