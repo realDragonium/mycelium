@@ -2,9 +2,10 @@
 
 Four kinds of tool reach the model contexts:
 
-  * the discovered substrate READ primitives (from `substrate.tool_specs()`),
-    which this module never names — `ask/substrate.py` decides what a read is,
-    so a new read primitive reaches a documentation run with no edit here;
+  * the substrate READ primitives the docgen prompts name (`READ_TOOLS`).
+    `ask/substrate.py` decides what a read is; this list decides which reads a
+    writer is offered, because every offered schema is sent on every turn and
+    a tool no prompt mentions costs tokens without being used;
   * `report_knowledge_gap`, named explicitly because it is the one thing
     `ask/substrate.py` deliberately withholds. It carries `role="reader"` but
     writes a knowledge-gap record, so auto-discovery excludes it and every
@@ -36,8 +37,26 @@ from .schema import ReviewCheck, ReviewFinding
 EMIT_TOOL = "emit_document"
 GAP_TOOL = "report_knowledge_gap"
 RESOLVE_TOOL = "choose_guideline_set"
-MATCH_TOOL = "choose_existing_document"
 REVIEW_TOOL = "record_review"
+
+#: The reads the system prompt, the doctrine and the shipped guidance tell a
+#: writer to use; `survey_statements` is also what recon runs.
+#: `tests/test_docgen_prompts.py` fails when served guidance names a tool
+#: outside this set.
+READ_TOOLS = frozenset(
+    {
+        "survey_statements",
+        "search_statements",
+        "get_statements",
+        "get_entity",
+        "list_statements",
+        "grep_statements",
+        "discover_facts",
+        "list_link_types",
+        "list_entity_link_types",
+        "list_statement_kinds",
+    }
+)
 
 _EMIT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -184,26 +203,6 @@ def resolve_tool_def(catalogue: dict[str, list[str]], preferred: str | None) -> 
     }
 
 
-def match_tool_def(document_ids: list[str]) -> dict:
-    return {
-        "name": MATCH_TOOL,
-        "description": "Decide whether this request revises one listed document.",
-        "strict": True,
-        "input_schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "document_id": {
-                    "type": ["string", "null"],
-                    "enum": [*document_ids, None],
-                },
-                "reason": {"type": "string"},
-            },
-            "required": ["document_id", "reason"],
-        },
-    }
-
-
 def review_tool_def(*, check_exposure: bool) -> dict:
     """The reviewer's one forced tool, shaped only for checks it can run.
 
@@ -271,9 +270,10 @@ def review_tool_def(*, check_exposure: bool) -> dict:
 
 
 def build_tools(read_specs: list[ToolSpec]) -> list[dict]:
-    """Full tool list handed to the model: the discovered read primitives,
-    the knowledge-gap report, and the emit terminal."""
-    return read_tool_defs(read_specs) + [gap_tool_def(), emit_tool_def()]
+    """Full tool list handed to the model: the allowed read primitives, the
+    knowledge-gap report, and the emit terminal."""
+    offered = [spec for spec in read_specs if spec.name in READ_TOOLS]
+    return read_tool_defs(offered) + [gap_tool_def(), emit_tool_def()]
 
 
 def parse_emit_input(data: dict) -> tuple[str, str, list[str], list[str]]:

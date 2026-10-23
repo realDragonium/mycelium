@@ -69,7 +69,6 @@ def request_documentation(
     guideline_set: str | None = None,
     document_type: str | None = None,
     provider: Literal["claude", "openai"] | None = None,
-    match_existing: bool = True,
     anchor_entity_id: str | None = None,
 ) -> dict[str, Any]:
     """Request a background documentation run: generate one document from
@@ -92,11 +91,11 @@ def request_documentation(
     `provider` selects claude or openai; omitted uses saved documentation settings
     (default claude). The configured model is captured for writing and review.
     Use list_documentation_models for available choices.
-    match_existing defaults to True; False disables matching an existing document.
     `anchor_entity_id` names the entity the document is about. With
     `guideline_set` and `document_type` (both required alongside it) it is the
     document's identity: a repeat request revises the document holding that
-    identity instead of creating a second one, and title matching is skipped.
+    identity instead of creating a second one. Without an anchor the request
+    creates a document; to change an existing one, call revise_document.
     Returns {run row: id, prompt, guideline_set, document_type, provider, model, status,
     created_at, created_by, started_at, finished_at, outcome, document_id,
     error}."""
@@ -132,7 +131,6 @@ def request_documentation(
         created_by=created_by,
         conn=_drafts_db(),
         provider=provider,
-        match_existing=match_existing,
         anchor_entity_id=anchor_entity_id,
     )
     row = require(
@@ -145,9 +143,10 @@ def request_documentation(
 def revise_document(
     document_id: str,
     expected_revision: int,
-    prompt: str,
+    prompt: str = "",
     provider: Literal["claude", "openai"] | None = None,
     start_from_destination: bool = False,
+    update_sources: bool = False,
 ) -> dict[str, object]:
     """Iterate on exactly the selected internal document version.
 
@@ -155,13 +154,18 @@ def revise_document(
     people edited it there and nothing here is unpublished. When both sides
     changed, the request is refused before a run exists; pass
     `start_from_destination` to start from the published text anyway, keeping
-    the unpublished revision in history. Returns the serialized run row, whose
-    `revision_base` says which text the run started from."""
-    from .. import auth, doc_runs, docs_store
+    the unpublished revision in history.
+
+    `update_sources` brings an out-of-date document (see `stale` on
+    get_generated_document) up to date: the run is briefed with the cited
+    statements that changed, after any `prompt`, which may then be blank.
+    Returns the serialized run row, whose `revision_base` says which text the
+    run started from."""
+    from .. import auth, doc_runs, docs_store, document_freshness
     from ..docgen.config import DocgenConfig
 
     text = prompt.strip()
-    if not text:
+    if not text and not update_sources:
         raise ValueError("prompt is required")
     if len(text) > DocgenConfig.from_env().max_prompt_chars:
         raise ValueError(
@@ -169,6 +173,14 @@ def revise_document(
         )
     row = docs_store.require_revision(_drafts_db(), document_id, expected_revision)
     _check_guideline_selection(str(row["guideline_set"]), str(row["document_type"]))
+    if update_sources:
+        freshness = document_freshness.for_documents(_drafts_db(), _db, [document_id])[
+            document_id
+        ]
+        if freshness.status != "out_of_date":
+            raise ValueError("None of the statements this document cites changed.")
+        brief = document_freshness.revision_brief(freshness.changes)
+        text = f"{text}\n\n{brief}" if text else brief
     principal = auth.current_principal.get()
     run_id = doc_runs.start_run(
         prompt=text,
@@ -179,7 +191,6 @@ def revise_document(
         provider=provider,
         target_document_id=document_id,
         expected_revision=expected_revision,
-        match_existing=False,
         start_from_destination=start_from_destination,
     )
     return docs_store.serialize_run(
@@ -289,14 +300,23 @@ def get_documentation_run(run_id: str) -> dict[str, Any]:
 def list_generated_documents() -> dict[str, Any]:
     """List generated documents, newest first, omitting each document body.
 
+    Each carries `stale`: {status, changes}. `status` is "out_of_date" once a
+    statement the current revision cites was edited, deleted or merged away
+    since it was reviewed, "current" otherwise, and "unknown" for a revision
+    saved before citations were recorded. Each change gives `statement_id`,
+    `change` (edited/deleted/merged), `old_text`, `new_text` and `merged_into`;
+    revise_document(update_sources=True) addresses them.
+
     Returns {"documents": [document summaries]}; get_generated_document returns
     the body."""
     from .. import docs_store
 
+    rows = docs_store.list_documents(_drafts_db(), limit=None)
+    stale = _freshness([str(row["id"]) for row in rows])
     return {
         "documents": [
-            docs_store.serialize_document_summary(row)
-            for row in docs_store.list_documents(_drafts_db(), limit=None)
+            {**docs_store.serialize_document_summary(row), "stale": stale[row["id"]]}
+            for row in rows
         ]
     }
 
@@ -307,7 +327,8 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
 
     A document with a pull request first asks GitHub what became of it, at
     most once a minute; `pull_request.refreshed_at` says when the state shown
-    was read. Returns the serialized document row. Raises for an unknown
+    was read. `stale` is as in list_generated_documents. Returns the
+    serialized document row. Raises for an unknown
     document_id."""
     from .. import docs_store
     from ..docgen import publication
@@ -316,7 +337,21 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
         raise ValueError(f"generated document not found: {document_id}")
-    return docs_store.serialize_document(row)
+    return {
+        **docs_store.serialize_document(row),
+        "stale": _freshness([document_id])[document_id],
+    }
+
+
+def _freshness(document_ids: list[str]) -> dict[str, dict[str, object]]:
+    from .. import document_freshness
+
+    return {
+        document_id: freshness.as_dict()
+        for document_id, freshness in document_freshness.for_documents(
+            _drafts_db(), _db, document_ids
+        ).items()
+    }
 
 
 @tool(role="writer", real_role=True)

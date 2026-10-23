@@ -448,9 +448,8 @@ def test_claude_token_credentials_remain_selectable(monkeypatch):
     assert model_choices()[0]["available"] is True
 
 
-def test_gpt_matching_resolution_and_reads_use_same_transport(monkeypatch):
-    from mycelium.docgen.schema import ExistingDocument
-    from mycelium.docgen.tools import EMIT_TOOL, MATCH_TOOL, RESOLVE_TOOL, REVIEW_TOOL
+def test_gpt_resolution_and_reads_use_same_transport(monkeypatch):
+    from mycelium.docgen.tools import EMIT_TOOL, RESOLVE_TOOL, REVIEW_TOOL
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     requests = []
@@ -462,8 +461,6 @@ def test_gpt_matching_resolution_and_reads_use_same_transport(monkeypatch):
         requests.append(payload)
         choice = payload["tool_choice"]
         name = choice["name"] if isinstance(choice, dict) else None
-        if name == MATCH_TOOL:
-            return _response(_call(name, {"document_id": None, "reason": "new topic"}))
         if name == RESOLVE_TOOL:
             return _response(
                 _call(
@@ -513,24 +510,13 @@ def test_gpt_matching_resolution_and_reads_use_same_transport(monkeypatch):
             doctrine_note=None,
             catalogue={"kb": ["how-to"]},
             load_texts=lambda *_: ("clear", "public", "steps"),
-            existing_documents=(
-                ExistingDocument(
-                    id="doc_other",
-                    slug="other",
-                    title="Other",
-                    guideline_set="kb",
-                    document_type="how-to",
-                    body_digest="old",
-                ),
-            ),
         )
     assert isinstance(result, DocumentWritten)
-    assert [request["model"] for request in requests] == ["configured-gpt"] * 5
-    assert requests[0]["tool_choice"]["name"] == MATCH_TOOL
-    assert requests[1]["tool_choice"]["name"] == RESOLVE_TOOL
-    assert requests[3]["input"][-1]["type"] == "function_call_output"
-    assert requests[3]["input"][-1]["call_id"] == "read_call"
-    assert len(requests[4]["input"]) == 1
+    assert [request["model"] for request in requests] == ["configured-gpt"] * 4
+    assert requests[0]["tool_choice"]["name"] == RESOLVE_TOOL
+    assert requests[2]["input"][-1]["type"] == "function_call_output"
+    assert requests[2]["input"][-1]["call_id"] == "read_call"
+    assert len(requests[3]["input"]) == 1
 
 
 def test_gpt_cannot_emit_unretrieved_knowledge(monkeypatch):

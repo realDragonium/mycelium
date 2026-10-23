@@ -20,9 +20,7 @@ run drives `docgen.run_docgen`; tests set it to a stub, and an explicit
 Which document a run writes is decided here, before the run starts, and never
 by the model. A revision names its document; a request naming an anchor entity
 revises the document holding that identity, if one exists. A request without
-either creates a document. The model's choice among existing titles is only a
-suggestion: when it picks one, the run writes nothing and says which document
-to revise.
+either creates a document.
 """
 
 from __future__ import annotations
@@ -69,7 +67,6 @@ def start_run(
     runner: Callable[..., Any] | None = None,
     target_document_id: str | None = None,
     expected_revision: int | None = None,
-    match_existing: bool = True,
     manual_document: ManualDocument | None = None,
     anchor_entity_id: str | None = None,
     start_from_destination: bool = False,
@@ -79,8 +76,6 @@ def start_run(
     `start_from_destination` makes a revision start from the published copy
     even when an unpublished internal revision would otherwise refuse it.
     """
-    if manual_document is not None or anchor_entity_id is not None:
-        match_existing = False
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
     selected_runner = runner or RUNNER or _default_runner
@@ -171,7 +166,6 @@ def start_run(
                     config,
                     target,
                     profiles,
-                    match_existing,
                     instructions,
                     review_instructions,
                     manual_document,
@@ -354,7 +348,6 @@ def _default_runner(
     *,
     guideline_set: str | None = None,
     document_type: str | None = None,
-    existing_documents: tuple[ExistingDocument, ...] = (),
     config: DocgenConfig | None = None,
     revision_target: RevisionTarget | None = None,
     manual_document: ManualDocument | None = None,
@@ -376,7 +369,6 @@ def _default_runner(
         guideline_set=guideline_set,
         document_type=document_type,
         config=config,
-        existing_documents=existing_documents,
         revision_target=revision_target,
         manual_document=manual_document,
         profiles=profiles,
@@ -395,7 +387,6 @@ def _execute_run(
     config: DocgenConfig | None = None,
     revision_target: RevisionTarget | None = None,
     profiles: CatalogueSnapshot | None = None,
-    match_existing: bool = True,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
     manual_document: ManualDocument | None = None,
@@ -433,9 +424,6 @@ def _execute_run(
                     guideline_set=guideline_set,
                     document_type=document_type,
                     config=config,
-                    existing_documents=_existing_documents(conn)
-                    if match_existing and revision_target is None
-                    else (),
                     revision_target=revision_target,
                     manual_document=manual_document,
                     profiles=profiles,
@@ -468,9 +456,7 @@ def _execute_run(
         )
         reported = payload.get("outcome")
         matched_document_id = (
-            revision_target.document.id
-            if revision_target is not None
-            else payload.get("matched_document_id")
+            revision_target.document.id if revision_target is not None else None
         )
         if profiles is not None and selected_set and selected_type:
             _record_profile(conn, run_id, profiles, selected_set, selected_type)
@@ -503,7 +489,7 @@ def _execute_run(
             # Written before `outcome` is set, so a rejected document (a
             # refused collision, blank slug, or unwritable DB) finishes the run
             # failed rather than claiming a document that is not there. A
-            # creation run never writes into a document the model matched.
+            # creation run never writes into an existing document.
             document_id = docs_store.upsert_document(
                 conn,
                 slug=revision_target.document.slug
@@ -514,6 +500,7 @@ def _execute_run(
                 guideline_set=selected_set,
                 document_type=selected_type,
                 statement_ids=payload.get("statement_ids"),
+                cited_statements=payload.get("cited_statements"),
                 # The loop and DocumentWritten enforce that review ran. This
                 # overridable runner seam accepts older canned runners instead
                 # of making their missing record fatal; the store writes `{}`.
@@ -573,17 +560,3 @@ def _execute_run(
             if own_conn is not None:
                 own_conn.close()
             _threads.pop(run_id, None)
-
-
-def _existing_documents(conn: sqlite3.Connection) -> tuple[ExistingDocument, ...]:
-    return tuple(
-        ExistingDocument(
-            id=str(row["id"]),
-            slug=str(row["slug"]),
-            title=str(row["title"]),
-            guideline_set=str(row["guideline_set"]),
-            document_type=str(row["document_type"]),
-            body_digest=docs_store.body_digest(str(row["body"])),
-        )
-        for row in docs_store.list_documents(conn, limit=None)
-    )

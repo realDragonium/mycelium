@@ -61,3 +61,73 @@ def test_document_payload_detects_markers_sharing_boundary_equals():
     body = "=== DOCUMENT 0 === END DOCUMENT 1 === DOCUMENT 2 ==="
     payload = prompts.document_payload(title="Overlapping markers", body=body)
     assert payload.endswith(f"=== DOCUMENT 3 ===\n{body}\n=== END DOCUMENT 3 ===")
+
+
+_TOOL_VERBS = (
+    "get_",
+    "list_",
+    "search_",
+    "grep_",
+    "survey_",
+    "discover_",
+    "find_",
+    "retrieve_",
+    "report_",
+    "emit_",
+    "choose_",
+    "record_",
+)
+
+
+def _served_texts() -> dict[str, str]:
+    """Everything a documentation run puts in front of a model as guidance."""
+    import ast
+    from pathlib import Path
+
+    package = Path(prompts.__file__).parent.parent
+    texts = {
+        str(path.relative_to(package)): path.read_text(encoding="utf-8")
+        for path in [
+            package / "docgen" / "doctrine.md",
+            *sorted((package / "guidelines").rglob("*.md")),
+        ]
+    }
+    tree = ast.parse(Path(prompts.__file__).read_text(encoding="utf-8"))
+    texts["docgen/prompts.py"] = "\n".join(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
+    return texts
+
+
+def _offered_parameters() -> dict[str, set[str]]:
+    from mycelium import server  # noqa: F401 — registers the tools
+    from mycelium.ask.substrate import InProcessSubstrate
+    from mycelium.docgen import tools
+
+    defs = [
+        *tools.build_tools(InProcessSubstrate().tool_specs()),
+        tools.resolve_tool_def({"set": ["type"]}, None),
+        tools.review_tool_def(check_exposure=True),
+    ]
+    return {d["name"]: set(d["input_schema"].get("properties", {})) for d in defs}
+
+
+def test_served_guidance_names_only_offered_tools_and_parameters():
+    offered = _offered_parameters()
+    problems = []
+    for source, text in _served_texts().items():
+        for match in re.finditer(r"\b([a-z]+(?:_[a-z]+)+)\(([^)]*)\)?", text):
+            name, arguments = match.group(1), match.group(2)
+            if name not in offered:
+                if name.startswith(_TOOL_VERBS):
+                    problems.append(f"{source}: {name}() is not offered")
+                continue
+            for parameter in re.findall(r"\b([a-z_]+)=", arguments):
+                if parameter not in offered[name]:
+                    problems.append(f"{source}: {name}() has no {parameter!r}")
+        for name in re.findall(r"`([a-z]+(?:_[a-z]+)+)`", text):
+            if name.startswith(_TOOL_VERBS) and name not in offered:
+                problems.append(f"{source}: `{name}` is not offered")
+    assert problems == []

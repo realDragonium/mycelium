@@ -113,10 +113,12 @@ class DocumentWritten(BaseModel):
     #: Statement ids the body rests on. Never empty: a document with none is
     #: refused rather than recorded.
     statement_ids: list[str] = Field(default_factory=list)
+    #: The cited statements' text when the document was reviewed, by id: the
+    #: baseline a later edit to one of them makes this document out of date
+    #: against. None when the review could not read them.
+    cited_statements: dict[str, str] | None = None
     guideline_set: str
     document_type: str
-    #: The revision target, when the run revised a document.
-    matched_document_id: str | None = None
     #: The independent gate that accepted this exact document.
     review: ReviewRecord
     #: What the guideline set asked for that the substrate could not supply —
@@ -137,9 +139,6 @@ class NothingWritten(BaseModel):
     reason: str
     guideline_set: str | None = None
     document_type: str | None = None
-    #: The revision target, or the existing document the model suggested this
-    #: request should revise instead of writing a new one.
-    matched_document_id: str | None = None
     #: Present only when a written document reached and failed the review gate.
     review: ReviewRecord | None = None
     #: The refused draft, present only when one was written and the gate turned

@@ -62,24 +62,6 @@ def test_library_renders_safe_markdown_and_reads_historical_body(workspace):
     )
 
 
-def test_ui_creation_never_implicitly_replaces_an_existing_document(
-    workspace, monkeypatch
-):
-    client, _, _ = workspace
-    requests = []
-
-    def request(**kwargs):
-        requests.append(kwargs)
-        return {"id": "run"}
-
-    monkeypatch.setattr(server, "request_documentation", request)
-    assert (
-        client.post("/api/documentation/runs", json={"prompt": "New page"}).status_code
-        == 200
-    )
-    assert requests[0]["match_existing"] is False
-
-
 @pytest.mark.parametrize("action", ["revisions", "delivery"])
 def test_revision_actions_require_real_writer_and_surface_conflicts(
     workspace, monkeypatch, action
@@ -211,12 +193,9 @@ def test_manual_edit_http_preserves_exact_text_and_author(workspace, monkeypatch
     assert captured["created_by"] == "fixture"
     assert captured["expected_revision"] == 1
     assert captured["target_document_id"] == document
-    assert captured["match_existing"] is False
 
 
-def test_failed_draft_recovery_uses_original_profile_without_matching(
-    workspace, monkeypatch
-):
+def test_failed_draft_recovery_uses_original_profile(workspace, monkeypatch):
     from mycelium import doc_runs
 
     client, conn, _ = workspace
@@ -257,7 +236,6 @@ def test_failed_draft_recovery_uses_original_profile_without_matching(
         "internal",
         "guide",
     )
-    assert captured["match_existing"] is False
     assert captured["target_document_id"] is None
     assert captured["manual_document"].body == "Exact\n"
 

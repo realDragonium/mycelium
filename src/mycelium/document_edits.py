@@ -28,7 +28,6 @@ def start_document_edit(
         provider=provider,
         target_document_id=document_id,
         expected_revision=expected_revision,
-        match_existing=False,
         manual_document=document,
     )
 
@@ -57,6 +56,5 @@ def start_draft_edit(
         provider=provider,
         target_document_id=row["target_document_id"],
         expected_revision=row["target_revision"],
-        match_existing=False,
         manual_document=document,
     )

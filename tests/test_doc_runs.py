@@ -83,25 +83,6 @@ def _start(conn, tmp_path, runner=None, **overrides) -> str:
 # --- the executor -----------------------------------------------------------
 
 
-def test_every_registered_document_is_available_for_matching(tmp_path):
-    conn = _conn(tmp_path)
-    document_ids = {
-        docs_store.upsert_document(
-            conn,
-            slug=f"topic-{index}",
-            title=f"Topic {index}",
-            body=f"Body {index}",
-            guideline_set="kb-authoring",
-            document_type="how-to",
-        )
-        for index in range(101)
-    }
-
-    candidates = doc_runs._existing_documents(conn)
-
-    assert {candidate.id for candidate in candidates} == document_ids
-
-
 def test_row_is_running_before_the_runner_returns(tmp_path):
     conn = _conn(tmp_path)
     release = threading.Event()
@@ -140,6 +121,7 @@ def test_runner_resolution_lands_on_the_run_and_the_document(tmp_path):
             guideline_set="kb-authoring",
             document_type="how-to",
             statement_ids=["stm_1", "stm_2"],
+            cited_statements={"stm_1": "One.", "stm_2": "Two."},
         )
 
     run_id = _start(conn, tmp_path, runner)
@@ -156,9 +138,14 @@ def test_runner_resolution_lands_on_the_run_and_the_document(tmp_path):
     assert document["guideline_set"] == "kb-authoring"
     assert document["document_type"] == "how-to"
     assert document["statement_ids"] == ["stm_1", "stm_2"]
+    revision = docs_store.get_revision(conn, row["document_id"], 1)
+    assert json.loads(revision["cited_statements"]) == {
+        "stm_1": "One.",
+        "stm_2": "Two.",
+    }
 
 
-def test_a_creation_run_never_writes_into_the_document_the_model_matched(tmp_path):
+def test_a_creation_run_never_writes_into_an_existing_document(tmp_path):
     conn = _conn(tmp_path)
     first_run_id = _start(
         conn, tmp_path, lambda prompt, *, guideline_set, document_type: _document()
@@ -173,13 +160,11 @@ def test_a_creation_run_never_writes_into_the_document_the_model_matched(tmp_pat
             title="How to X safely",
             slug="how-to-x-safely",
             body="# How to X\n\nRevised.\n",
-            matched_document_id=document_id,
         ),
     )
     doc_runs.wait_all()
 
     run = docs_store.serialize_run(docs_store.get_run(conn, second_run_id))
-    assert run["matched_document_id"] == document_id
     assert run["document_id"] not in (None, document_id)
     assert docs_store.get_document(conn, document_id)["title"] == "How to X"
     assert docs_store.get_document(conn, document_id)["current_revision"] == 1
@@ -207,7 +192,7 @@ def test_an_anchored_request_creates_once_then_revises_the_same_document(
         return _document(title="Doing X, retitled", slug="doing-x-retitled")
 
     monkeypatch.setattr(doc_runs, "_default_runner", runner)
-    first = _anchored(conn, tmp_path, None, match_existing=True)
+    first = _anchored(conn, tmp_path, None)
     doc_runs.wait_all()
     document_id = docs_store.get_run(conn, first)["document_id"]
     second = _anchored(conn, tmp_path, None, prompt="add a troubleshooting step")

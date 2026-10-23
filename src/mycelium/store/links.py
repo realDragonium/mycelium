@@ -463,17 +463,27 @@ def delete_links_touching_statement(
     return outgoing_removed, incoming_removed, when_removed
 
 
-def delete_statement(conn: sqlite3.Connection, statement_id: str) -> None:
+def delete_statement(
+    conn: sqlite3.Connection, statement_id: str, *, merged_into: str | None = None
+) -> None:
     """Delete a statement record and its vector_id mapping. Caller must
     ensure no statement_mentions or statement_links still reference it —
-    FK enforcement will reject otherwise."""
+    FK enforcement will reject otherwise. `merged_into` records, in history,
+    the statement the deleted one's meaning now lives on in."""
     before = _row_dict(get_statement(conn, statement_id))
     conn.execute(
         "DELETE FROM statement_vector_ids WHERE statement_id = ?", (statement_id,)
     )
     conn.execute("DELETE FROM statements WHERE id = ?", (statement_id,))
     if before is not None:
-        _record(conn, "delete", "statement", statement_id, before=before)
+        _record(
+            conn,
+            "delete",
+            "statement",
+            statement_id,
+            before=before,
+            context=None if merged_into is None else {"merged_into": merged_into},
+        )
 
 
 def list_link_types(conn: sqlite3.Connection) -> list[str]:

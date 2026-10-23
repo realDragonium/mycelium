@@ -62,8 +62,9 @@ Three moves, and you need all three:
   capability, walk to what implements it and what constrains it. Call
   `get_statements` on the linked ids — a `to_id` in a link is a pointer, not
   content, and you have not read it until you fetch it.
-- **Hydrate the entities.** `get_entity` returns a named thing with the
-  statements hanging off it. When the topic is *about* a thing, this is
+- **Hydrate the entities.** `list_statements(entity_id=…)` returns the
+  statements that mention a named thing, and `get_entity(id=…)` its names and
+  its links to other things. When the topic is *about* a thing, this is
   usually denser than any search.
 - **Re-search on what you gathered, not on what you were asked.** The
   statement a section needs often has no edge pointing at it. It is reachable
