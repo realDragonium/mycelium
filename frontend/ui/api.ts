@@ -213,7 +213,7 @@ export interface NamesPreview {
   examples: NamesExample[]; example_count: number;
   relationships_before: NamesRelationship[]; relationships_after: NamesRelationship[]; warnings: string[];
 }
-export interface NamesApplied { entity_id: string; revision: string }
+export interface NamesApplied { entity_id: string; revision: string; documents_unanchored: number }
 export interface MentionCandidate {
   statement_id: string; text: string; kind: string;
   names: { name_id: string; text: string }[];
