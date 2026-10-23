@@ -19,12 +19,13 @@ _VERSION_1_TABLES = (
     "generated_document_revisions",
     "generated_document_deliveries",
 )
-TABLES = (
+_VERSION_2_TABLES = (
     *_VERSION_1_TABLES,
     "documentation_plans",
     "documentation_plan_items",
     "documentation_plan_dismissals",
 )
+TABLES = (*_VERSION_2_TABLES, "document_maintenance")
 
 
 class Archive(BaseModel):
@@ -44,7 +45,7 @@ def write(data_dir: Path, staging: Path) -> dict[str, int] | None:
             source.backup(snapshot)
             docs_store.migrate(snapshot)
             archive = Archive(
-                version=2,
+                version=3,
                 tables={
                     table: [
                         dict(row)
@@ -67,7 +68,11 @@ def prepare(staging: Path, *, required: bool) -> Path | None:
             raise ValueError("archive is missing required documentation.json")
         return None
     archive = Archive.model_validate_json(path.read_text(encoding="utf-8"))
-    expected = {1: _VERSION_1_TABLES, 2: TABLES}.get(archive.version)
+    expected = {
+        1: _VERSION_1_TABLES,
+        2: _VERSION_2_TABLES,
+        3: TABLES,
+    }.get(archive.version)
     if expected is None or set(archive.tables) != set(expected):
         raise ValueError("unsupported documentation archive version or tables")
     prepared = staging / "documentation-validated.db"

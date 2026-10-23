@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityScreen } from './activity';
 import { AskSurface } from './ask';
 import { BrowseScreen } from './browse';
-import { DocumentationWorkspace } from './documentation-workspace';
+import { DocumentationWorkspace, loadDocumentUpdates, UPDATES_SEEN_EVENT } from './documentation-workspace';
 import { DraftReview, DraftsList } from './draft-review';
 import { EntitiesGraph } from './entities-graph';
 import { EntityDetail, StatementDetail } from './inspect';
@@ -28,14 +28,14 @@ import { useAsync } from './use-async';
 /* ---------------- Sidebar ---------------- */
 interface NavItem { label: string; icon: IconName; to: Route; views: View[]; badge?: number; badgeTone?: 'warn' }
 
-function useNavGroups(activeDrafts: number, openGaps: number): { title: string | null; items: NavItem[] }[] {
+function useNavGroups(activeDrafts: number, openGaps: number, documentUpdates: number): { title: string | null; items: NavItem[] }[] {
   return [
     { title: null, items: [{ label: 'Home', icon: 'home', to: { view: 'home' }, views: ['home'] }] },
     { title: 'Explore', items: [
       { label: 'Browse', icon: 'table', to: { view: 'browse' }, views: ['browse', 'statement', 'entity'] },
       { label: 'Statement graph', icon: 'graph', to: { view: 'graph', focus: null }, views: ['graph'] },
       { label: 'Entity map', icon: 'hub', to: { view: 'entities', focus: null }, views: ['entities'] },
-      { label: 'Documents', icon: 'doc', to: { view: 'documentation' }, views: ['documentation'] },
+      { label: 'Documents', icon: 'doc', to: { view: 'documentation' }, views: ['documentation'], badge: documentUpdates },
     ] },
     { title: 'Add knowledge', items: [
       { label: 'Ingest text', icon: 'ingest', to: { view: 'ingest' }, views: ['ingest'] },
@@ -53,9 +53,11 @@ function useNavGroups(activeDrafts: number, openGaps: number): { title: string |
 const loadCounts = () => Promise.all([
   getJSON<{ drafts: { status: string }[] }>('/api/drafts?status=all'),
   getJSON<{ gaps: KnowledgeGap[] }>('/api/knowledge-gaps?status=open'),
-]).then(([d, g]) => ({
+  loadDocumentUpdates(),
+]).then(([d, g, documentUpdates]) => ({
   drafts: d.drafts.filter(x => x.status === 'open' || x.status === 'submitted').length,
   gaps: g.gaps.length,
+  documentUpdates,
 }));
 
 function Sidebar({ me, open, onClose }: { me: Me | null; open: boolean; onClose: () => void }) {
@@ -66,9 +68,11 @@ function Sidebar({ me, open, onClose }: { me: Me | null; open: boolean; onClose:
   const { state: counts, reload } = useAsync(loadCounts);
   useEffect(() => {
     window.addEventListener('hashchange', reload);
-    return () => window.removeEventListener('hashchange', reload);
+    window.addEventListener(UPDATES_SEEN_EVENT, reload);
+    return () => { window.removeEventListener('hashchange', reload); window.removeEventListener(UPDATES_SEEN_EVENT, reload); };
   }, [reload]);
-  const groups = useNavGroups(counts.status === 'ready' ? counts.data.drafts : 0, counts.status === 'ready' ? counts.data.gaps : 0);
+  const ready = counts.status === 'ready' ? counts.data : null;
+  const groups = useNavGroups(ready?.drafts ?? 0, ready?.gaps ?? 0, ready?.documentUpdates ?? 0);
   const item = (it: NavItem) => (
     <li key={it.label}>
       <Link to={it.to} className={`side-link${it.views.includes(route.view) ? ' on' : ''}`} onNavigate={onClose}>

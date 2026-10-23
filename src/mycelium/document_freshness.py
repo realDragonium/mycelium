@@ -2,7 +2,8 @@
 
 Each revision keeps the text its cited statements had when it was reviewed.
 A document is out of date once any of those statements has been edited,
-deleted or merged away since. Comparing text rather than timestamps means a
+deleted or merged away since, or relabelled so that the audience the document
+was written for may no longer see it. Comparing text rather than timestamps means a
 kind change or an edit that was reverted does not count, and it hands the
 reader the old and new wording without reading history.
 
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from dataclasses import asdict, dataclass
 from typing import Literal
 
@@ -30,10 +31,10 @@ _BRIEF_TEXT_CHARS = 300
 @dataclass(frozen=True)
 class StatementChange:
     statement_id: str
-    change: Literal["edited", "deleted", "merged"]
+    change: Literal["edited", "deleted", "merged", "no_longer_visible"]
     old_text: str
-    #: Current text: the statement's own when edited, the one it was merged
-    #: into when merged, none when deleted.
+    #: Current text: the statement's own when edited or no longer visible,
+    #: the one it was merged into when merged, none when deleted.
     new_text: str | None
     merged_into: str | None = None
 
@@ -50,21 +51,41 @@ class Freshness:
         }
 
 
+@dataclass(frozen=True)
+class _Cited:
+    statements: dict[str, str] | None
+    #: The audience the revision was written for, as (id, internal); None
+    #: for a revision whose run recorded none.
+    audience: tuple[str, bool] | None
+
+
 def assess(
     cited: Mapping[str, str] | None,
     current: Mapping[str, str],
     merged_into: Mapping[str, str],
+    visible: Set[str] | None = None,
 ) -> Freshness:
     """Compare a revision's cited text with what the substrate holds now.
 
     `cited` is None for a revision saved before citations were recorded.
+    `visible` holds the existing cited statements the document's audience may
+    still see; None skips that check.
     """
     if cited is None:
         return Freshness("unknown")
     changes: list[StatementChange] = []
     for statement_id, old_text in cited.items():
         if statement_id in current:
-            if current[statement_id] != old_text:
+            if visible is not None and statement_id not in visible:
+                changes.append(
+                    StatementChange(
+                        statement_id,
+                        "no_longer_visible",
+                        old_text,
+                        current[statement_id],
+                    )
+                )
+            elif current[statement_id] != old_text:
                 changes.append(
                     StatementChange(
                         statement_id, "edited", old_text, current[statement_id]
@@ -92,42 +113,76 @@ def for_documents(
     The substrate is opened only when some revision recorded citations.
     """
     snapshots = _cited_snapshots(drafts, document_ids)
-    cited_ids = sorted({sid for cited in snapshots.values() if cited for sid in cited})
+    cited_ids = sorted(
+        {
+            sid
+            for cited in snapshots.values()
+            if cited.statements
+            for sid in cited.statements
+        }
+    )
     current: dict[str, str] = {}
     merged_into: dict[str, str] = {}
+    visible: dict[tuple[str, bool], frozenset[str]] = {}
     if cited_ids:
         conn = substrate()
         current = store.get_statement_texts(conn, cited_ids)
         missing = [sid for sid in cited_ids if sid not in current]
         merged_into = store.merge_targets(conn, missing) if missing else {}
         survivors = sorted(set(merged_into.values()) - current.keys())
+        for audience in {cited.audience for cited in snapshots.values()}:
+            if audience is not None:
+                existing = sorted(
+                    {
+                        sid
+                        for cited in snapshots.values()
+                        if cited.audience == audience and cited.statements
+                        for sid in cited.statements
+                        if sid in current
+                    }
+                )
+                visible[audience] = store.audience_labels.visible_among(
+                    conn, *audience, existing
+                )
         if survivors:
             current.update(store.get_statement_texts(conn, survivors))
+    unrecorded = _Cited(None, None)
     return {
-        document_id: assess(snapshots.get(document_id), current, merged_into)
+        document_id: assess(
+            (cited := snapshots.get(document_id, unrecorded)).statements,
+            current,
+            merged_into,
+            visible.get(cited.audience) if cited.audience is not None else None,
+        )
         for document_id in document_ids
     }
 
 
 def _cited_snapshots(
     conn: sqlite3.Connection, document_ids: Iterable[str]
-) -> dict[str, dict[str, str] | None]:
+) -> dict[str, _Cited]:
     wanted = list(document_ids)
-    snapshots: dict[str, dict[str, str] | None] = {}
+    snapshots: dict[str, _Cited] = {}
     for offset in range(0, len(wanted), 500):
         chunk = wanted[offset : offset + 500]
         placeholders = ", ".join("?" for _document_id in chunk)
         rows = conn.execute(
-            "SELECT r.document_id, r.cited_statements "
+            "SELECT r.document_id, r.cited_statements, "
+            "json_extract(run.profile_snapshot, '$.audience.id') AS audience, "
+            "json_extract(run.profile_snapshot, '$.audience.scope') AS scope "
             "FROM generated_documents AS d JOIN generated_document_revisions AS r "
             "ON r.document_id = d.id AND r.revision = d.current_revision "
+            "LEFT JOIN documentation_runs AS run ON run.id = r.run_id "
             f"WHERE d.id IN ({placeholders})",
             tuple(chunk),
         )
         for row in rows:
             raw = row["cited_statements"]
-            snapshots[str(row["document_id"])] = (
-                None if raw is None else dict(json.loads(raw))
+            snapshots[str(row["document_id"])] = _Cited(
+                None if raw is None else dict(json.loads(raw)),
+                None
+                if row["audience"] is None
+                else (str(row["audience"]), row["scope"] == "internal"),
             )
     return snapshots
 
@@ -156,6 +211,11 @@ def revision_brief(changes: Sequence[StatementChange]) -> str:
                     if change.new_text is not None
                     else "."
                 )
+            )
+        elif change.change == "no_longer_visible":
+            lines.append(
+                f"- {change.statement_id} ({old!r}) is no longer visible to this "
+                "audience; remove what rested only on it."
             )
         else:
             lines.append(f"- {change.statement_id} ({old!r}) was deleted.")

@@ -353,3 +353,33 @@ def test_a_retired_audience_leaves_its_profiles_not_ready(db):
     stale = profiles.read("partners")
     assert not stale.ready and stale.effective_audience is None
     assert profiles.capture(db).audience("partners") is None
+
+
+def test_a_writer_sets_the_maintenance_policy_and_can_turn_it_off(db):
+    first = save()
+    assert first.maintenance == "manual"
+
+    def with_policy(revision: str, policy: profiles.Maintenance):
+        return profiles.save(
+            "internal",
+            profiles.SaveProfile(
+                revision=revision,
+                guidance="Use known facts.",
+                exposure="Keep internal.",
+                maintenance=policy,
+                templates=(
+                    profiles.Template(name="reference", text="Write a reference."),
+                ),
+            ),
+            principal("writer"),
+        )
+
+    automatic = with_policy(first.revision, "auto-revise")
+    assert automatic.maintenance == "auto-revise"
+    assert profiles.capture(db).profiles[0].maintenance == "auto-revise"
+    assert profiles.capture(db).catalogue() == {"internal": ["reference"]}
+    assert with_policy(automatic.revision, "manual").maintenance == "manual"
+    with pytest.raises(ValueError, match="Maintenance must be one of"):
+        profiles.save_text(
+            guidelines.TYPE, "internal/maintenance", "always", principal("writer")
+        )

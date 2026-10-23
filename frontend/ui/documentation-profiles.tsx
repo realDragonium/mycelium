@@ -178,14 +178,20 @@ function PromptForm({ editor, name, title, canWrite, onDirty, onSaved, onReload 
 
 /* ============================ documentation profiles ============================ */
 interface Template { name: string; text: string; isNew?: boolean }
+type Maintenance = 'manual' | 'propose' | 'auto-revise';
+const MAINTENANCE: Record<Maintenance, string> = {
+  manual: 'Manual: someone notices and revises',
+  propose: 'Propose: add an update item to the plan',
+  'auto-revise': 'Auto-revise: revise, review and publish by itself',
+};
 interface Profile {
   name: string; revision: string | number; guidance: string; exposure: string; templates: Template[];
-  audience: string | null; effective_audience: string | null;
+  audience: string | null; effective_audience: string | null; maintenance: Maintenance;
   retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
 interface ProfilesView extends Profiles { audiences: AudienceView[] }
-interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null }
+interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance }
 
 export function DocumentationProfiles() {
   const { state, reload } = useAsync(useCallback(async (signal: AbortSignal): Promise<ProfilesView> => {
@@ -213,7 +219,7 @@ export function DocumentationProfiles() {
   const create = (source: Profile | null) => {
     if (!discardOk()) return;
     const audience = source?.audience && data?.audiences.some(item => !item.retired && item.id === source.audience) ? source.audience : null;
-    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null }, true);
+    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual' }, true);
   };
   const change = (patch: Partial<Profile>) => { setForm(f => f && { ...f, ...patch }); setMessage(null); };
   const changeTemplate = (i: number, patch: Partial<Template>) => form && change({ templates: form.templates.map((t, j) => j === i ? { ...t, ...patch } : t) });
@@ -229,7 +235,7 @@ export function DocumentationProfiles() {
   const save = (e: FormEvent) => {
     e.preventDefault();
     if (form) {
-      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience };
+      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience, maintenance: form.maintenance };
       void act(() => putJSON<Profile>(path(form.name), body), 'Profile saved. New runs use it.');
     }
   };
@@ -265,6 +271,9 @@ export function DocumentationProfiles() {
                 {data.audiences.filter(a => !a.retired).map(a => <option key={a.id} value={a.id}>{a.name} · {a.scope}</option>)}
               </select>{!creating && !data.can_retire && <span className="hint">Only administrators can change an existing profile's audience.</span>}</label>
               <p className="hint">Effective audience: {effectiveAudienceId ? (() => { const audience = data.audiences.find(a => a.id === effectiveAudienceId); return audience ? <AudienceIdentity audience={audience} /> : effectiveAudienceId; })() : 'Unavailable'}</p>
+              <label className="field"><span>When a cited statement changes</span><select className="input" value={form.maintenance} onChange={e => change({ maintenance: e.target.value as Maintenance })}>
+                {(Object.keys(MAINTENANCE) as Maintenance[]).map(policy => <option key={policy} value={policy}>{MAINTENANCE[policy]}</option>)}
+              </select><span className="hint">Auto-revise waits for the quiet period and daily limit under Settings → Limits. A published document gets its pull request updated, or a new one; a person still merges it.</span></label>
               <label className="field"><span>Writing guidance</span><textarea className="input" rows={8} value={form.guidance} onChange={e => change({ guidance: e.target.value })} /></label>
               <label className="field"><span>Disclosure rules</span><textarea className="input" rows={6} value={form.exposure} placeholder="What may be disclosed, and what must stay internal." onChange={e => change({ exposure: e.target.value })} /></label>
               <h4 className="section-label">Document templates</h4>

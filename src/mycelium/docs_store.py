@@ -123,6 +123,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_cited_statements(conn)
     _add_run_summary(conn)
     doc_plans.migrate(conn)
+    from . import document_maintenance  # local import: it builds on this module
+
+    document_maintenance.migrate(conn)
     conn.commit()
 
 

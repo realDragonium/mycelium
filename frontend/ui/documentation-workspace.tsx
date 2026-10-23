@@ -34,7 +34,7 @@ interface ReviewNote { check: 'exposure' | 'conformance'; where: string; problem
 interface DeliveryCoordinates { host: string; owner: string; repo: string; base_branch: string }
 interface PullRequest { number: number; state: string; refreshed_at: string | null }
 interface StatementChange {
-  statement_id: string; change: 'edited' | 'deleted' | 'merged'; old_text: string; new_text: string | null; merged_into: string | null;
+  statement_id: string; change: 'edited' | 'deleted' | 'merged' | 'no_longer_visible'; old_text: string; new_text: string | null; merged_into: string | null;
 }
 interface Staleness { status: 'unknown' | 'current' | 'out_of_date'; changes: StatementChange[] }
 interface DocumentationSummary {
@@ -63,6 +63,7 @@ interface PlanItem {
   id: string; action: 'create' | 'update'; title: string; document_type: string; anchor_entity_id: string | null; anchor_name: string | null;
   document_id: string | null; rationale: string; priority: 'high' | 'medium' | 'low'; statement_ids: string[];
   state: 'proposed' | 'approved' | 'dismissed'; run: { id: string; status: string; document_id: string | null; review_notes: boolean } | null;
+  maintenance: boolean;
 }
 interface PlanSummary {
   id: string; created_at: string; finished_at: string | null; outcome: 'planned' | 'failed' | null; error: string | null; activity: string | null;
@@ -75,6 +76,13 @@ interface DocumentationPlan {
   visible_statements: number; new_since_plan: number | null; replan_hint: boolean; dismissed: number; approve_batch: number;
 }
 interface ApprovedItem { item_id: string; run: DocumentationRun | null; error: string | null }
+interface MaintenanceEntry {
+  document_id: string; title: string; guideline_set: string; revision: number; action: 'propose' | 'auto-revise';
+  state: 'proposed' | 'approved' | 'dismissed' | 'running' | 'revised' | 'refused' | 'failed';
+  at: string; changes: StatementChange[]; run_id: string | null; new_revision: number | null; error: string | null;
+  delivery: 'none' | 'publishing' | 'published' | 'failed' | null; pull_request: { number: number; url: string | null; state: string | null } | null; waiting: boolean;
+}
+interface RevisionDiff { from_revision: number; to_revision: number; lines: { op: '+' | '-' | ' ' | '@'; text: string }[] }
 
 const docGet = <T,>(path: string, signal?: AbortSignal) => getJSON<T>('/api/documentation/' + path, signal);
 const docPost = <T,>(path: string, body: unknown) => postJSON<T>('/api/documentation/' + path, body);
@@ -307,7 +315,7 @@ function DocumentationDelivery({ document, canWrite, onUpdated, onConfigure }: {
   </section>;
 }
 
-const STATEMENT_CHANGES: Record<StatementChange['change'], string> = { edited: 'Edited', deleted: 'Deleted', merged: 'Merged into another statement' };
+const STATEMENT_CHANGES: Record<StatementChange['change'], string> = { edited: 'Edited', deleted: 'Deleted', merged: 'Merged into another statement', no_longer_visible: 'No longer visible to this audience' };
 
 function DocumentationStaleness({ document, options, onStarted }: {
   document: DocumentationDocument; options: DocumentationOptions; onStarted: (run: DocumentationRun) => void;
@@ -329,7 +337,7 @@ function DocumentationStaleness({ document, options, onStarted }: {
     <h2>Out of date</h2>
     <p>{changes.length === 1 ? 'A statement' : `${changes.length} statements`} this revision cites changed after it was reviewed. Revising starts a new revision focused on {changes.length === 1 ? 'that change' : 'these changes'}; it is saved internally for review before you publish.</p>
     <ul>{changes.map(change => {
-      const target = change.change === 'merged' ? change.merged_into : change.change === 'edited' ? change.statement_id : null;
+      const target = change.change === 'merged' ? change.merged_into : change.change === 'deleted' ? null : change.statement_id;
       return <li key={change.statement_id}>
         <span className="docw-meta">{STATEMENT_CHANGES[change.change]} · {target ? <a href={'#/s/' + encodeURIComponent(target)}>{target}</a> : change.statement_id}</span>
         <p>Was: {change.old_text}</p>
@@ -529,9 +537,9 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
           {item.state === 'proposed' && options.can_generate && <input type="checkbox" aria-label={'Select ' + item.title} checked={checked} disabled={!checked && chosen.length >= limit} onChange={() => setChosen(value => checked ? value.filter(id => id !== item.id) : [...value, item.id])} />}
           <div>
             <strong>{item.title}</strong>
-            <p className="docw-meta">{item.action === 'create' ? 'New' : 'Change scope of'} {item.document_type} · {PRIORITIES[item.priority]}{item.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: item.anchor_entity_id }}>{item.anchor_name || docEntityName(item.anchor_entity_id)}</Link></>}{item.document_id && <> · updates <a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>the existing document</a></>}</p>
-            <p>{item.rationale}</p>
-            <details><summary>{item.statement_ids.length} statements it would mainly draw on</summary><DocumentationSources ids={item.statement_ids} /></details>
+            <p className="docw-meta">{item.maintenance ? 'Bring up to date' : item.action === 'create' ? 'New' : 'Change scope of'} {item.document_type} · {PRIORITIES[item.priority]}{item.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: item.anchor_entity_id }}>{item.anchor_name || docEntityName(item.anchor_entity_id)}</Link></>}{item.document_id && <> · updates <a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>the existing document</a></>}</p>
+            <p className={item.maintenance ? 'docw-brief' : undefined}>{item.rationale}</p>
+            <details><summary>{item.statement_ids.length} {item.maintenance ? 'changed statements' : 'statements it would mainly draw on'}</summary><DocumentationSources ids={item.statement_ids} /></details>
             {item.state === 'proposed' && options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => approve([item.id])}>Approve</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/dismiss`, {}))}>Dismiss</button></div>}
             {item.state === 'dismissed' && <p className="docw-meta">Dismissed</p>}
             {item.state === 'approved' && <p className="docw-meta">Approved{item.run ? <> · <a href={'#/documentation?run=' + encodeURIComponent(item.run.id)}>{docStatus(item.run.status)}</a>{item.run.document_id && <> · <a href={'#/documentation?document=' + encodeURIComponent(item.run.document_id)}>open document</a></>}</> : ' · starting'}</p>}
@@ -563,11 +571,90 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
   </>;
 }
 
+// The browser remembers when its user last opened Updates; "new" is after that.
+const UPDATES_SEEN = 'mycelium.documentation.updates-seen';
+const UPDATES_SEEN_EVENT = 'mycelium:documentation-updates-seen';
+const needingAttention = (entries: MaintenanceEntry[], seen = localStorage.getItem(UPDATES_SEEN) || '') =>
+  entries.filter(entry => entry.waiting || entry.at > seen).length;
+const loadDocumentUpdates = () => docGet<{ entries: MaintenanceEntry[] }>('maintenance').then(feed => needingAttention(feed.entries));
+const UPDATE_STATES: Record<MaintenanceEntry['state'], string> = {
+  proposed: 'Update proposed in the plan', approved: 'Update approved', dismissed: 'Update dismissed', running: 'Revising automatically',
+  revised: 'Revised automatically', refused: 'Automatic revision refused by review', failed: 'Automatic revision did not run',
+};
+
+function waitingOn(entry: MaintenanceEntry): string | null {
+  if (!entry.waiting) return null;
+  if (entry.state === 'proposed') return 'Waiting for approval in the plan';
+  if (entry.delivery === 'failed') return 'Publishing failed; publish it from the document';
+  if (entry.state === 'revised') return 'Pull request waiting for review on GitHub';
+  return 'Still out of date; revise it from the document';
+}
+
+function DocumentationDiff({ documentId, revision }: { documentId: string; revision: number }) {
+  const [diff, setDiff] = React.useState<RevisionDiff | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    const controller = new AbortController();
+    docGet<RevisionDiff>(`documents/${encodeURIComponent(documentId)}/revisions/${revision}/diff`, controller.signal)
+      .then(setDiff).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)); });
+    return () => controller.abort();
+  }, [documentId, revision]);
+  if (error) return <p role="alert">{error}</p>;
+  if (!diff) return <p role="status">Loading changes…</p>;
+  if (!diff.lines.length) return <p>The text did not change.</p>;
+  return <pre className="docw-source docw-diff" aria-label={`Revision ${diff.to_revision} against revision ${diff.from_revision}`}>{diff.lines.map((line, index) =>
+    <span key={index} className={{ '+': 'add', '-': 'del', '@': 'hunk', ' ': '' }[line.op]}>{line.op === '@' ? line.text : line.op + ' ' + line.text}{'\n'}</span>)}</pre>;
+}
+
+function DocumentationUpdates() {
+  const [entries, setEntries] = React.useState<MaintenanceEntry[] | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [reload, setReload] = React.useState(0);
+  const [diffs, setDiffs] = React.useState<string[]>([]);
+  const [seen] = React.useState(() => localStorage.getItem(UPDATES_SEEN) || '');
+  React.useEffect(() => {
+    const controller = new AbortController();
+    docGet<{ entries: MaintenanceEntry[] }>('maintenance', controller.signal).then(feed => {
+      setEntries(feed.entries); setError(null);
+      localStorage.setItem(UPDATES_SEEN, new Date().toISOString());
+      window.dispatchEvent(new Event(UPDATES_SEEN_EVENT));
+    }).catch(error => { if (!controller.signal.aborted) setError(errorMessage(error)); });
+    return () => controller.abort();
+  }, [reload]);
+  return <section className="docw-panel" aria-label="Document updates">
+    <div className="docw-actions"><h2>Updates</h2><button onClick={() => setReload(value => value + 1)}>Refresh</button></div>
+    <p>Documents of profiles that propose or make their own revisions when a statement they cite changes. Choose the policy per writing profile in Settings → Documentation.</p>
+    {error && <p role="alert">{error}</p>}
+    {entries && !entries.length && <p>Nothing yet. Documents of manually maintained profiles show as out of date in the library instead.</p>}
+    {entries && <div className="docw-plan">{entries.map(entry => {
+      const key = `${entry.document_id}:${entry.revision}`;
+      const waiting = waitingOn(entry);
+      return <article key={key} className="docw-plan-item">
+        <div>
+          <strong><a href={'#/documentation?document=' + encodeURIComponent(entry.document_id)}>{entry.title}</a></strong>
+          {entry.at > seen && <span className="docw-stale-badge">New</span>}
+          <p className="docw-meta">{UPDATE_STATES[entry.state]} · {entry.guideline_set} · revision {entry.revision}{entry.new_revision !== null && ` → ${entry.new_revision}`} · {docDate(entry.at)}
+            {entry.run_id && <> · <a href={'#/documentation?run=' + encodeURIComponent(entry.run_id)}>run</a></>}
+            {entry.pull_request && entry.delivery === 'published' && <> · {entry.pull_request.url ? <a href={entry.pull_request.url} target="_blank" rel="noreferrer">pull request #{entry.pull_request.number}</a> : `pull request #${entry.pull_request.number}`} {docPullRequestState(entry.pull_request.state || '').toLowerCase()}</>}</p>
+          {waiting && <p role="status">{waiting}</p>}
+          {entry.error && <p role="alert">{entry.error}</p>}
+          <details><summary>What changed ({entry.changes.length} {entry.changes.length === 1 ? 'statement' : 'statements'})</summary><ul>{entry.changes.map(change => <li key={change.statement_id}><span className="docw-meta">{STATEMENT_CHANGES[change.change]} · {change.statement_id}</span><p>Was: {change.old_text}</p>{change.new_text !== null && <p>Now: {change.new_text}</p>}</li>)}</ul></details>
+          {entry.new_revision !== null && <details onToggle={event => { const open = event.currentTarget.open; setDiffs(value => open ? [...value, key] : value.filter(item => item !== key)); }}>
+            <summary>Revision {entry.new_revision} against revision {entry.revision}</summary>
+            {diffs.includes(key) && <DocumentationDiff documentId={entry.document_id} revision={entry.new_revision} />}
+          </details>}
+        </div>
+      </article>;
+    })}</div>}
+  </section>;
+}
+
 function DocumentationWorkspace() {
   const [route, setRoute] = React.useState(docRoute);
   const [options, setOptions] = React.useState<DocumentationOptions | null>(null);
   const [documents, setDocuments] = React.useState<DocumentationSummary[]>([]);
   const [runs, setRuns] = React.useState<DocumentationRun[]>([]);
+  const [updates, setUpdates] = React.useState(0);
   const [error, setError] = React.useState<string | null>(null);
   const [refresh, setRefresh] = React.useState(0);
   const [search, setSearch] = React.useState('');
@@ -583,13 +670,14 @@ function DocumentationWorkspace() {
     setError(null);
     const load = async () => {
       try {
-        const [options, library, history] = await Promise.all([
+        const [options, library, history, maintained] = await Promise.all([
           docGet<DocumentationOptions>('options', controller.signal),
           docGet<{ documents: DocumentationSummary[] }>('documents', controller.signal),
           docGet<{ runs: DocumentationRun[] }>('runs', controller.signal),
+          docGet<{ entries: MaintenanceEntry[] }>('maintenance', controller.signal),
         ]);
         if (cancelled) return;
-        setOptions(options); setDocuments(library.documents); setRuns(history.runs); setError(null);
+        setOptions(options); setDocuments(library.documents); setRuns(history.runs); setUpdates(needingAttention(maintained.entries)); setError(null);
         if (history.runs.some(docActive)) timer = setTimeout(load, 2500);
       } catch (error) { if (!cancelled) setError(errorMessage(error)); }
     };
@@ -599,9 +687,10 @@ function DocumentationWorkspace() {
   const filtered = documents.filter(document => [document.title, document.guideline_set, document.document_type].join(' ').toLowerCase().includes(search.toLowerCase()));
   return <main className="page docw"><PageHeader eyebrow="Explore" title="Documents" blurb="Generate documents from the knowledge base, refine them, and publish them to GitHub as pull requests."
       actions={<Link to={{ view: 'settings', section: 'documentation' }} className="btn ghost sm">Profiles &amp; publishing settings</Link>} />
-    <nav className="tabs" aria-label="Documentation sections">{[['library', 'Documents'], ['plan', 'Plan'], ['generate', 'Generate'], ['runs', 'Generation history']].map(([tab, label]) => <button key={tab} className={route.tab === tab ? 'on' : ''} aria-current={route.tab === tab ? 'page' : undefined} onClick={() => docNavigate({ tab })}>{label}</button>)}</nav>
+    <nav className="tabs" aria-label="Documentation sections">{[['library', 'Documents'], ['updates', updates ? `Updates (${updates})` : 'Updates'], ['plan', 'Plan'], ['generate', 'Generate'], ['runs', 'Generation history']].map(([tab, label]) => <button key={tab} className={route.tab === tab ? 'on' : ''} aria-current={route.tab === tab ? 'page' : undefined} onClick={() => docNavigate({ tab })}>{label}</button>)}</nav>
     {error && <p role="alert">{error} <button onClick={update}>Reload documentation</button></p>}
     {!options ? !error && <p role="status">Loading documentation…</p> : <>
+      {route.tab === 'updates' && <DocumentationUpdates />}
       {route.tab === 'plan' && <DocumentationPlanner key={route.profile || ''} options={options} profile={route.profile} />}
       {route.tab === 'generate' && <DocumentationGenerator options={options} documents={documents} onStarted={started} />}
       {route.tab === 'library' && (route.document ? <DocumentationDocument key={route.document} id={route.document} revision={route.revision} options={options} refresh={refresh} onUpdated={update} onStarted={started} /> : <section className="docw-panel">
@@ -615,4 +704,4 @@ function DocumentationWorkspace() {
   </main>;
 }
 
-export { DocumentationWorkspace };
+export { DocumentationWorkspace, loadDocumentUpdates, UPDATES_SEEN_EVENT };

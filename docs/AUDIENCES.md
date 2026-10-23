@@ -81,4 +81,8 @@ excludes; the profile's disclosure rules still apply as a second line of
 defence.
 
 Each run records its audience with the profile snapshot. The document library,
-the document view and the generate form show it.
+the document view and the generate form show it. When a statement a document
+cites is relabelled so that this audience may no longer see it, the document
+is out of date with the reason "no longer visible to this audience", and its
+revision is briefed to drop what rested on it, so an external document does
+not keep knowledge that has become internal.

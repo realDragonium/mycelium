@@ -107,6 +107,9 @@ def init(data_dir: Path) -> None:
     from .. import doc_plans
 
     doc_plans.mark_orphaned(_drafts_db())
+    from .. import document_maintenance
+
+    document_maintenance.mark_interrupted(_drafts_db())
     if orphaned_docs:
         logger.warning(
             "marked %d documentation run(s) failed: orphaned by restart",
@@ -211,3 +214,5 @@ def init(data_dir: Path) -> None:
         from .. import draft_review_runs
 
         draft_review_runs.start_sweeper()
+    if os.environ.get("MYCELIUM_DISABLE_MAINTENANCE_WORKER") != "1":
+        document_maintenance.start()
