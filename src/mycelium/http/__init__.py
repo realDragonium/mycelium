@@ -50,7 +50,7 @@ from .. import (
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from ..server import registry, runtime
-from . import account, gaps, history, substrate, tool_routes, traces
+from . import account, gaps, history, names, substrate, tool_routes, traces
 from .access import _enforce_curator, _enforce_role, _require_admin, _require_principal
 from .account import _serialize_token_row
 from .authentication import AuthMiddleware, _session_secret
@@ -122,6 +122,10 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 
+app.exception_handler(names_workspace.Conflict)(names._names_conflict)
+app.exception_handler(alias_suggestions.Conflict)(names.alias_suggestion_conflict)
+
+
 # Middleware in Starlette runs in *reverse* registration order (last
 # added wraps the outermost). We want session decoding to happen
 # *before* auth resolution reads from `request.session`, so register
@@ -144,18 +148,11 @@ app.include_router(substrate.router)
 app.include_router(gaps.router)
 app.include_router(traces.router)
 app.include_router(account.router)
+app.include_router(names.router)
 
 
 # MCP-over-HTTP is mounted at the bottom of this file so it doesn't
 # shadow more-specific routes; search for "MCP transport mount" below.
-
-
-@app.get("/api/mention-candidates")
-def mention_candidates(
-    request: Request, entity_id: str, after: int = 0, limit: int = 50
-) -> dict[str, JsonValue]:
-    _require_principal(request)
-    return server.get_mention_candidates(entity_id=entity_id, after=after, limit=limit)
 
 
 # --- drafts ---------------------------------------------------------------
@@ -171,51 +168,6 @@ async def _profile_conflict(
     request: Request, exc: documentation_profiles.Conflict
 ) -> JSONResponse:
     return JSONResponse(status_code=409, content={"detail": str(exc)})
-
-
-@app.exception_handler(names_workspace.Conflict)
-async def _names_conflict(
-    request: Request, exc: names_workspace.Conflict
-) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
-
-
-@app.get("/api/names-workspace")
-def names_catalogue_http(request: Request, q: str = "") -> names_workspace.Catalogue:
-    principal = _require_principal(request)
-    result = names_workspace.catalogue(server._db(), q)
-    result.can_write = auth.principal_has_real_role(principal, "writer")
-    if result.can_write:
-        result.allowed_actions = ["add", "correct", "prefer", "move", "split"]
-    if auth.principal_has_real_role(principal, "admin"):
-        result.allowed_actions.extend(("merge", "remove"))
-    return result
-
-
-@app.post("/api/names-workspace/preview")
-def names_preview_http(
-    body: names_workspace.PreviewRequest, request: Request
-) -> names_workspace.Preview:
-    _enforce_curator(request, "editing names and aliases")
-    if body.action.kind in {"merge", "remove"}:
-        _require_admin(request)
-    return names_workspace.preview(server._db(), body.action)
-
-
-@app.post("/api/names-workspace/apply")
-def names_apply_http(
-    body: names_workspace.ApplyRequest, request: Request
-) -> names_workspace.Applied:
-    _enforce_curator(request, "editing names and aliases")
-    if body.action.kind in {"merge", "remove"}:
-        _require_admin(request)
-    return names_workspace.apply(body)
-
-
-@app.get("/api/names-workspace/{entity_id}")
-def names_detail_http(entity_id: str, request: Request) -> names_workspace.Detail:
-    _require_principal(request)
-    return names_workspace.detail(server._db(), entity_id)
 
 
 @app.get("/api/documentation/profiles")
@@ -1186,58 +1138,6 @@ def _ui_redirect() -> RedirectResponse:
 @app.get("/cockpit/{rest:path}", include_in_schema=False)
 def _cockpit_redirect(rest: str = "") -> RedirectResponse:
     return RedirectResponse(url="/ui/", status_code=301)
-
-
-@app.exception_handler(alias_suggestions.Conflict)
-async def alias_suggestion_conflict(
-    request: Request, exc: alias_suggestions.Conflict
-) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
-
-
-@app.get("/api/alias-suggestions")
-def alias_suggestions_http(
-    request: Request, status: str = "pending"
-) -> dict[str, object]:
-    _enforce_role(request, "reader")
-    return {
-        "suggestions": [
-            entry.model_dump(mode="json")
-            for entry in alias_suggestions.list_entries(status)
-        ]
-    }
-
-
-@app.post("/api/alias-suggestions/scan")
-def scan_alias_suggestions_http(
-    request: Request, body: alias_suggestions.ScanRequest
-) -> dict[str, object]:
-    _enforce_role(request, "writer", real_role=True)
-    return alias_suggestions.scan(body, _require_principal(request)).model_dump(
-        mode="json"
-    )
-
-
-@app.post("/api/alias-suggestions/{draft_id}/{operation_ref}/review")
-def review_alias_suggestion_http(
-    draft_id: str,
-    operation_ref: str,
-    request: Request,
-    body: alias_suggestions.ReviewRequest,
-) -> dict[str, object]:
-    _enforce_role(request, "writer", real_role=True)
-    from .. import drafts_store
-
-    try:
-        entry = alias_suggestions.review(
-            draft_id, operation_ref, body, _require_principal(request)
-        )
-    except (
-        drafts_store.StaleDraftRevisionError,
-        drafts_store.ActiveApplicationError,
-    ) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return entry.model_dump(mode="json")
 
 
 # --- MCP transport mount --------------------------------------------------
