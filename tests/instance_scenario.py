@@ -114,6 +114,13 @@ def _substrate(server) -> dict[str, str]:
             "INSERT INTO entity_duplicate_dismissals VALUES (?, ?, '2026-08-01', NULL)",
             sorted((login, session)),
         )
+    if _has_table(db, "statement_audience_labels"):
+        db.execute(
+            "INSERT INTO statement_audience_labels VALUES (?, '[\"external-technical\"]', "
+            "'curator', 'Integrators configure this.', NULL, NULL, "
+            "'2026-08-01T00:00:00Z', 'curator')",
+            (ids["expiry"],),
+        )
     if _has_table(db, "reviewed_draft_applications"):
         db.execute(
             "INSERT INTO reviewed_draft_applications VALUES "

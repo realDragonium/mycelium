@@ -40,6 +40,7 @@ def pytest_configure(config):
     # The review sweep wakes on a timer; tests call `draft_review_runs.sweep`
     # with an explicit clock instead.
     os.environ.setdefault("MYCELIUM_DISABLE_REVIEW_SWEEP", "1")
+    os.environ.setdefault("MYCELIUM_DISABLE_AUDIENCE_WORKER", "1")
 
 
 def _require_spacy_model():

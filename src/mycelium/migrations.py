@@ -1008,6 +1008,31 @@ def _migration_v20_entity_duplicate_dismissals(conn: sqlite3.Connection) -> None
     )
 
 
+def _migration_v21_audience_labels(conn: sqlite3.Connection) -> None:
+    """Store which documentation audiences may see each statement, and the
+    queue of statements waiting to be labelled. Existing statements stay
+    unlabelled until an admin runs the backfill."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS statement_audience_labels ("
+        "statement_id TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE, "
+        "audiences TEXT NOT NULL, "
+        "source TEXT NOT NULL CHECK (source IN ('ai', 'curator')), "
+        "reason TEXT NOT NULL, "
+        "model TEXT, "
+        "cost_usd REAL, "
+        "labelled_at TEXT NOT NULL, "
+        "labelled_by TEXT)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS audience_label_queue ("
+        "statement_id TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE, "
+        "enqueued_at TEXT NOT NULL, "
+        "attempts INTEGER NOT NULL DEFAULT 0, "
+        "next_attempt_at TEXT, "
+        "last_error TEXT)"
+    )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1032,6 +1057,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (18, _migration_v18_drop_kind_link_matrix),
     (19, _migration_v19_sub_type_definition),
     (20, _migration_v20_entity_duplicate_dismissals),
+    (21, _migration_v21_audience_labels),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

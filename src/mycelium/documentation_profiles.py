@@ -12,7 +12,8 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from . import ai_prompts, auth, guidelines, prompt_store, store
+from . import ai_prompts, audiences, auth, guidelines, prompt_store, store
+from .audiences import Audience
 
 INSTRUCTIONS = ai_prompts.ACTIONS
 
@@ -42,7 +43,7 @@ class Template(Model):
     def valid_name(cls, value: str) -> str:
         value = _part(value)
         if value in guidelines.NON_TYPE_SLOTS:
-            raise ValueError("guidance and exposure are reserved names.")
+            raise ValueError("guidance, exposure and audience are reserved names.")
         return value
 
     @field_validator("text")
@@ -56,6 +57,9 @@ class Template(Model):
 class ProfileBody(Model):
     guidance: str = ""
     exposure: str = ""
+    #: The audience id this profile writes for; None writes for the default
+    #: internal audience.
+    audience: str | None = None
     templates: tuple[Template, ...] = ()
 
     @model_validator(mode="after")
@@ -75,6 +79,9 @@ class RevisionRequest(Model):
 
 class Profile(ProfileBody):
     name: str
+    #: The audience runs of this profile write for, after the default applies;
+    #: None when the chosen audience was retired.
+    effective_audience: str | None
     revision: str
     retired: bool
     ready: bool
@@ -139,11 +146,24 @@ class ProfileSnapshot:
     guidance: PromptRevision | None
     exposure: PromptRevision | None
     templates: tuple[TemplateSnapshot, ...]
+    audience: PromptRevision | None = None
 
 
 @dataclass(frozen=True)
 class CatalogueSnapshot:
     profiles: tuple[ProfileSnapshot, ...]
+    audiences: tuple[Audience, ...] = ()
+
+    def audience(self, set_name: str) -> Audience | None:
+        """The audience a profile writes for; None when the profile does not
+        exist or its chosen audience was retired."""
+        profile = next((item for item in self.profiles if item.name == set_name), None)
+        if profile is None:
+            return None
+        return audiences.resolve(
+            profile.audience.text.strip() if profile.audience else None,
+            self.audiences,
+        )
 
     def catalogue(self) -> dict[str, list[str]]:
         return {
@@ -222,9 +242,11 @@ def capture(conn: sqlite3.Connection | None = None) -> CatalogueSnapshot:
                     for slot, prompt in sorted(slots.items())
                     if slot not in guidelines.NON_TYPE_SLOTS
                 ),
+                slots.get(guidelines.AUDIENCE_SLOT),
             )
             for name, slots in sorted(grouped.items())
-        )
+        ),
+        audiences.live(db),
     )
 
 
@@ -238,7 +260,9 @@ def _revision(rows: list[sqlite3.Row]) -> str:
     ).hexdigest()
 
 
-def _profile(name: str, rows: list[sqlite3.Row]) -> Profile:
+def _profile(
+    name: str, rows: list[sqlite3.Row], live_audiences: tuple[Audience, ...]
+) -> Profile:
     live = {
         str(row["name"]).partition("/")[2]: str(row["text"])
         for row in rows
@@ -263,14 +287,26 @@ def _profile(name: str, rows: list[sqlite3.Row]) -> Profile:
         issues.append("No writing guidance is configured.")
     if not live.get("exposure", "").strip():
         issues.append("No disclosure rules are configured; exposure will be unchecked.")
+    chosen = live.get(guidelines.AUDIENCE_SLOT, "").strip() or None
+    effective = audiences.resolve(chosen, live_audiences)
+    if effective is None:
+        issues.append(
+            "The audience this profile writes for was retired; choose another."
+            if chosen
+            else "No internal audience exists to write for."
+        )
     return Profile(
         name=name,
         revision=_revision(rows),
         guidance=live.get("guidance", ""),
         exposure=live.get("exposure", ""),
+        audience=chosen,
+        effective_audience=effective.id if effective else None,
         templates=tuple(templates),
         retired=bool(rows) and not live,
-        ready=bool(templates) and not any("needs repair" in issue for issue in issues),
+        ready=bool(templates)
+        and effective is not None
+        and not any("needs repair" in issue for issue in issues),
         issues=tuple(issues),
         retired_templates=tuple(
             str(row["name"]).partition("/")[2]
@@ -285,7 +321,9 @@ def read(name: str, conn: sqlite3.Connection | None = None) -> Profile:
     _part(name)
     db = conn if conn is not None else prompt_store.connection()
     return _profile(
-        name, [row for row in _rows(db) if str(row["name"]).partition("/")[0] == name]
+        name,
+        [row for row in _rows(db) if str(row["name"]).partition("/")[0] == name],
+        audiences.live(db),
     )
 
 
@@ -307,8 +345,12 @@ def view(principal: auth.Principal) -> Profiles:
     grouped: dict[str, list[sqlite3.Row]] = {}
     for row in _rows(conn):
         grouped.setdefault(str(row["name"]).partition("/")[0], []).append(row)
+    live_audiences = audiences.live(conn)
     return Profiles(
-        profiles=tuple(_profile(name, rows) for name, rows in sorted(grouped.items())),
+        profiles=tuple(
+            _profile(name, rows, live_audiences)
+            for name, rows in sorted(grouped.items())
+        ),
         can_write=auth.principal_has_real_role(principal, "writer"),
         can_retire=principal.is_admin,
         default_profile=_default(conn),
@@ -348,6 +390,8 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
         desired["guidance"] = request.guidance
     if request.exposure.strip():
         desired["exposure"] = request.exposure
+    if request.audience is not None:
+        desired[guidelines.AUDIENCE_SLOT] = request.audience
     if not desired:
         raise ValueError(
             "Add guidance or a template to create a profile; use Retire to remove one."
@@ -364,6 +408,15 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
             for row in rows
             if not row["deleted"]
         }
+        if request.audience is not None and request.audience not in {
+            item.id for item in audiences.live(conn)
+        }:
+            raise ValueError(f"Audience {request.audience!r} is not live.")
+        if live and live.get(guidelines.AUDIENCE_SLOT) != desired.get(
+            guidelines.AUDIENCE_SLOT
+        ):
+            # The audience decides what a profile's documents may disclose.
+            _authorize(principal, "admin")
         if live.keys() - desired.keys():
             _authorize(principal, "admin")
             _protect_default(conn, name, desired)
@@ -415,11 +468,14 @@ def retire(name: str, revision: str, principal: auth.Principal) -> Profile:
 
 def validate_key(type: str, name: str) -> tuple[str, str]:
     type, name = prompt_store._key(type, name)
+    if type == audiences.TYPE:
+        raise ValueError("Edit audiences in Settings, not as prompt texts.")
     if type == guidelines.TYPE:
         profile, separator, slot = name.partition("/")
         if not separator:
             raise ValueError(
-                "Guideline names must use profile/template, profile/guidance or profile/exposure."
+                "Guideline names must use profile/template, profile/guidance, "
+                "profile/exposure or profile/audience."
             )
         _part(profile)
         _part(slot)
@@ -451,6 +507,10 @@ def save_text(
     type, name = validate_key(type, name)
     if not text.strip():
         raise ValueError("Text is required.")
+    if _is_audience_slot(type, name):
+        _authorize(principal, "admin")
+        if text.strip() not in {item.id for item in audiences.live()}:
+            raise ValueError(f"Audience {text.strip()!r} is not live.")
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):
         history = prompt_store.history(conn, type, name)
@@ -520,6 +580,12 @@ def restore_text(request: RestoreText, principal: auth.Principal) -> TextVersion
     if row is None or row["deleted"]:
         raise ValueError("Choose a saved text version to restore.")
     return save_text(type, name, str(row["text"]), principal, revision=request.revision)
+
+
+def _is_audience_slot(type: str, name: str) -> bool:
+    return (
+        type == guidelines.TYPE and name.partition("/")[2] == guidelines.AUDIENCE_SLOT
+    )
 
 
 def editable_key(type: str, name: str) -> None:

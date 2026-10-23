@@ -7,7 +7,7 @@ from dataclasses import asdict
 
 import pytest
 
-from mycelium import ai_prompts, auth, guidelines, prompt_store, server
+from mycelium import ai_prompts, audiences, auth, guidelines, prompt_store, server
 from mycelium import documentation_profiles as profiles
 from mycelium.server import runtime
 from test_prompt_texts import _app, _as
@@ -17,6 +17,7 @@ from test_prompt_texts import _app, _as
 def db():
     conn = prompt_store.connect(":memory:")
     prompt_store.migrate(conn)
+    audiences.seed(conn)
     prompt_store.use_connection(conn)
     yield conn
     prompt_store.reset()
@@ -289,3 +290,66 @@ def test_versioned_prompt_retirement_rejects_stale_heads_and_preserves_legacy_ca
         assert server.retire_prompt_text(guidelines.TYPE, "internal/reference") == {
             "retired": True
         }
+
+
+def _with_audience(revision: str, audience: str | None) -> profiles.SaveProfile:
+    return profiles.SaveProfile(
+        revision=revision,
+        guidance="Use known facts.",
+        exposure="Keep internal.",
+        audience=audience,
+        templates=(profiles.Template(name="reference", text="Write a reference."),),
+    )
+
+
+def test_a_profile_writes_for_one_audience_and_only_admins_change_it(db):
+    first = save()
+    assert first.audience is None
+    assert first.effective_audience == "internal-technical"
+    with pytest.raises(auth.RoleRequired):
+        profiles.save(
+            "internal",
+            _with_audience(first.revision, "external-technical"),
+            principal("writer"),
+        )
+    with pytest.raises(ValueError, match="not live"):
+        profiles.save(
+            "internal", _with_audience(first.revision, "nobody"), principal("admin")
+        )
+    changed = profiles.save(
+        "internal",
+        _with_audience(first.revision, "external-technical"),
+        principal("admin"),
+    )
+    assert changed.effective_audience == "external-technical"
+    assert profiles.capture(db).audience("internal").id == "external-technical"
+    kept = profiles.save(
+        "internal",
+        _with_audience(changed.revision, "external-technical").model_copy(
+            update={"guidance": "Use only known facts."}
+        ),
+        principal("writer"),
+    )
+    assert kept.audience == "external-technical"
+
+
+def test_a_retired_audience_leaves_its_profiles_not_ready(db):
+    created = profiles.save(
+        "partners",
+        _with_audience("", "external-technical"),
+        principal("writer"),
+    )
+    assert created.ready
+    with pytest.raises(ValueError, match="Profiles still write"):
+        audiences.retire(
+            "external-technical",
+            audiences.RetireAudience(revision=1),
+            principal("admin"),
+        )
+    db.execute(
+        "INSERT INTO prompt_texts (type, name, version, text, deleted, created_at) "
+        "VALUES ('audience', 'external-technical', 2, '', 1, '2026-01-01')"
+    )
+    stale = profiles.read("partners")
+    assert not stale.ready and stale.effective_audience is None
+    assert profiles.capture(db).audience("partners") is None

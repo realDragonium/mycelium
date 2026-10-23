@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from collections.abc import Sequence
 
-from . import kernel
+from . import audience_labels, kernel
 from .kernel import _now, _record, _row_dict
 
 # --- statements --------------------------------------------------------------
@@ -26,6 +26,7 @@ def create_statement(conn: sqlite3.Connection, kind: str, text: str) -> str:
         statement_id,
         after=_row_dict(get_statement(conn, statement_id)),
     )
+    audience_labels.enqueue(conn, [statement_id])
     return statement_id
 
 
@@ -105,6 +106,8 @@ def update_statement(
         "WHERE id = ?",
         (kind, text, _now(), kernel.get_actor(), statement_id),
     )
+    if before is not None and before["text"] != text:
+        audience_labels.text_changed(conn, statement_id)
     _record(
         conn,
         "update",
@@ -124,6 +127,8 @@ def update_statement_text(
         "UPDATE statements SET text = ?, updated_at = ?, updated_by = ? WHERE id = ?",
         (text, _now(), kernel.get_actor(), statement_id),
     )
+    if before is not None and before["text"] != text:
+        audience_labels.text_changed(conn, statement_id)
     _record(
         conn,
         "update",

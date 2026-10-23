@@ -445,6 +445,36 @@ CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals (
     CHECK (a_entity_id < b_entity_id)
 );
 
+-- Which documentation audiences may see a statement. One row per labelled
+-- statement; no row means unlabelled, which only internal audiences see.
+-- `audiences` is a JSON array of audience ids from the prompts database
+-- (no foreign key across files; an id of a retired audience grants nothing).
+-- An AI label is dropped when the statement's text changes; a curator label
+-- stays until a curator clears it, and the AI never overwrites it.
+CREATE TABLE IF NOT EXISTS statement_audience_labels (
+    statement_id TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
+    audiences    TEXT NOT NULL,
+    source       TEXT NOT NULL CHECK (source IN ('ai', 'curator')),
+    reason       TEXT NOT NULL,
+    model        TEXT,
+    cost_usd     REAL,
+    labelled_at  TEXT NOT NULL,
+    labelled_by  TEXT
+);
+
+-- Statements waiting for the audience labelling worker. A new statement or a
+-- text change enqueues in the same transaction; existing statements reach it
+-- only through an explicit backfill, which is what spends money. A failed
+-- batch backs off by `next_attempt_at`; past the attempt limit a row waits
+-- for the next backfill.
+CREATE TABLE IF NOT EXISTS audience_label_queue (
+    statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
+    enqueued_at     TEXT NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    last_error      TEXT
+);
+
 -- Durable dirty-queue for asynchronous mention recompute. Statement
 -- upsert derives mentions synchronously (hot path stays consistent); a
 -- name/alias/entity change instead enqueues work here, drained by the
