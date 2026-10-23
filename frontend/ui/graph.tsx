@@ -2,10 +2,14 @@
 import React from 'react';
 import { useState as useStateG, useEffect as useEffectG, useRef as useRefG, useMemo as useMemoG } from 'react';
 import { getJSON } from './api';
+import { fitCamera, neighbourhood } from './graph-fit';
 import { KindTag, RecordTag } from './lib';
 import { usePrefs, type Prefs } from './prefs';
 import { useRouter } from './router';
 import { substrate, type IndexedRecord, type Statement, type SubstrateData, type SubstrateIndex, type When } from './data';
+
+// Low enough to fit the baked entity layout, which entities are pinned to.
+const MIN_ZOOM = 0.05;
 
 type GraphNodeKind = 'statement' | 'entity';
 type GraphEdgeKind = 'statement' | 'mention' | 'entity';
@@ -24,6 +28,9 @@ interface GraphSimulation {
   nodes: SimNode[]; edges: SimEdge[]; idMap: Record<string, SimNode>; entities: SimNode[];
   spreadScale: number; dragging: SimNode | null; pan: Point; zoom: number; panning: Panning | null;
   running: boolean; wakeUntil: number; condHits?: ConditionHit[]; condClick?: ConditionHit | null;
+  // Set while the camera follows the layout, framing `focus`'s neighbourhood
+  // or the whole graph; cleared once it settles or the user pans or zooms.
+  framing: { focus: string | null } | null;
 }
 interface GraphDrawState {
   selectedId: string | null; hoverId: string | null; neighborhood: Set<string> | null;
@@ -224,6 +231,8 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
 
   // Simulation state — kept in refs so we can animate without re-render
   const simRef = useRefG<GraphSimulation | null>(null);
+  // The focus to frame when the simulation is built after the focus arrived.
+  const framingFocusRef = useRefG<string | null>(null);
 
   // Pre-baked entity positions (shared with the entities-only view).
   // Fetch once; bump positionsTick when loaded so the main effect re-runs
@@ -537,45 +546,8 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         // hover, pan, zoom, toolbar toggle) bumps `wakeUntil` so the
         // sim runs for a brief window even when the graph was settled.
         running: true, wakeUntil: performance.now() + initialWakeMs,
+        framing: { focus: framingFocusRef.current },
       };
-      // Embedded view auto-fits the camera so curators land looking at
-      // the content instead of an empty quadrant of the canvas. Fit
-      // runs twice: a fast pass once the integrator has relaxed obvious
-      // overlaps, then again after the wake window so the final layout
-      // is correctly framed. Reads canvas dimensions fresh at fit time
-      // (rather than the closure-captured values) because
-      // ResizeObserver may not have fired by the first scheduled tick.
-      if (embedded) {
-        const fitNow = () => {
-          const s = simRef.current;
-          if (!s || !s.nodes.length) return;
-          const w = container.clientWidth, h = container.clientHeight;
-          if (w <= 0 || h <= 0) return;
-          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-          for (const n of s.nodes) {
-            if (n.x < minX) minX = n.x;
-            if (n.y < minY) minY = n.y;
-            if (n.x > maxX) maxX = n.x;
-            if (n.y > maxY) maxY = n.y;
-          }
-          const bw = Math.max(1, maxX - minX);
-          const bh = Math.max(1, maxY - minY);
-          const PAD = 60;
-          const zX = (w - PAD * 2) / bw;
-          const zY = (h - PAD * 2) / bh;
-          const z = Math.max(0.3, Math.min(2.5, Math.min(zX, zY)));
-          s.zoom = z;
-          s.pan.x = w / 2 - ((minX + maxX) / 2) * z;
-          s.pan.y = h / 2 - ((minY + maxY) / 2) * z;
-        };
-        // First fit: quick framing as soon as the spawn positions are
-        // in. Second fit: after the wake window settles, snap to the
-        // final layout. User interactions in between (drag/zoom) just
-        // get overwritten — acceptable given they happen in the first
-        // ~1.5s of a fresh page load.
-        setTimeout(fitNow, 200);
-        setTimeout(fitNow, Math.min(2000, initialWakeMs + 200));
-      }
     }
     const sim = simRef.current;
     if (!sim) return;
@@ -648,10 +620,12 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       mouse.x = sx; mouse.y = sy;
       if (sim.dragging) {
         const w = screenToWorld(sx, sy);
+        sim.framing = null;
         sim.dragging.fx = w.x;
         sim.dragging.fy = w.y;
         wake(2000);
       } else if (sim.panning) {
+        sim.framing = null;
         sim.pan.x = sim.panning.panX + (sx - sim.panning.startX);
         sim.pan.y = sim.panning.panY + (sy - sim.panning.startY);
         wake();
@@ -718,7 +692,8 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
       const factor = Math.exp(-e.deltaY * 0.0015);
-      const newZoom = Math.max(0.3, Math.min(3, sim.zoom * factor));
+      const newZoom = Math.max(MIN_ZOOM, Math.min(3, sim.zoom * factor));
+      sim.framing = null;
       // zoom around cursor
       sim.pan.x = sx - (sx - sim.pan.x) * (newZoom / sim.zoom);
       sim.pan.y = sy - (sy - sim.pan.y) * (newZoom / sim.zoom);
@@ -960,6 +935,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       }
       }  // end substep loop
 
+      if (sim.framing) frame(sim.framing.focus);
       draw();
 
       // Quench: stop the RAF loop if both (a) the layout has settled
@@ -967,11 +943,18 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       // future. Anything that wants the loop running calls wake().
       const settled = ke < QUENCH_KE * N;
       if (settled && now > sim.wakeUntil) {
+        sim.framing = null;
         sim.running = false;
         return;  // do NOT requestAnimationFrame
       }
       raf = requestAnimationFrame(step);
     };
+
+    function frame(focus: string | null) {
+      const focused = focus ? neighbourhood(focus, sim.nodes, sim.edges) : [];
+      const camera = fitCamera(focused.length ? focused : sim.nodes, width, height, MIN_ZOOM, 2.5);
+      if (camera) { sim.pan = camera.pan; sim.zoom = camera.zoom; }
+    }
 
     function nodeRadius(n: SimNode) {
       if (n.kind === 'statement') return 6;
@@ -1264,8 +1247,18 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     }
   }, [selectedId, hoverId, neighborhood, activeTypes, showEntities, showStatements, theme, searchMatches]);
 
-  // Update focus ID from prop
-  useEffectG(() => { if (focusId) setSelectedId(focusId); }, [focusId]);
+  // Update focus ID from prop, and frame it.
+  useEffectG(() => {
+    if (!focusId) return;
+    setSelectedId(focusId);
+    framingFocusRef.current = focusId;
+    const sim = simRef.current;
+    if (sim) {
+      sim.framing = { focus: focusId };
+      sim.wakeUntil = performance.now() + 600;
+      if (!sim.running && drawRef.current.requestStep) drawRef.current.requestStep();
+    }
+  }, [focusId]);
 
   const colors = theme === 'dark' ? LINK_TYPE_COLORS_DARK : LINK_TYPE_COLORS_LIGHT;
   // Filter list is driven by the data: every link_type that actually

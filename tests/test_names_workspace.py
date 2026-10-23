@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from mycelium import auth, backup, embed, mention_worker, server, store
+from mycelium import auth, backup, docs_store, embed, mention_worker, server, store
 from mycelium import names_workspace as names
 from mycelium.server import runtime
 from test_auth import _app
@@ -140,9 +140,20 @@ def test_merge_preview_matches_applied_relationships_and_chosen_description(srv)
         preferred_name_id=preferred,
         description="Chosen description",
     )
+    for anchor in (source, target):
+        docs_store.upsert_document(
+            srv._drafts_db(),
+            slug=anchor,
+            title=anchor,
+            body="",
+            guideline_set="kb",
+            document_type="how-to",
+            anchor_entity_id=anchor,
+        )
     view = names.preview(conn, action)
     result = apply(action)
     assert result.entity_id == target
+    assert result.documents_unanchored == 1
     assert store.get_entity_by_id(conn, source) is None
     assert names.concept(conn, target).label == "Workspaces"
     assert names.concept(conn, target).description == "Chosen description"

@@ -122,6 +122,9 @@ def test_upgrade_updates_untouched_doctrines_and_reports_edited_ones(
     assert "saved research instructions predate" in caplog.text
     assert ai_prompts.editor("research").newer_default_since is not None
     assert ai_prompts.editor("ingest").newer_default_since is None
+    listed = {item.name: item for item in ai_prompts.summaries()}
+    assert listed["research"].edited and listed["research"].newer_default_since
+    assert listed["ingest"].edited and listed["ingest"].newer_default_since is None
 
     runtime._ctx = None
     server.init(tmp_path)

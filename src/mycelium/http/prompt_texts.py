@@ -95,10 +95,7 @@ def ai_instructions_http(request: Request) -> dict[str, object]:
     principal = _require_principal(request)
     return {
         "names": documentation_profiles.INSTRUCTIONS,
-        "actions": [
-            {"name": name, "title": ai_prompts.TITLES[name]}
-            for name in ai_prompts.ACTIONS
-        ],
+        "actions": [summary.model_dump() for summary in ai_prompts.summaries()],
         "can_write": auth.principal_has_real_role(principal, "writer"),
     }
 

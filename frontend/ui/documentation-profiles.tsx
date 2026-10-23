@@ -58,30 +58,21 @@ function PromptHistory({ type, name, canRestore, onRestored, onBusyChange }: {
 }
 
 /* ============================ prompts ============================ */
-interface PromptAction { name: string; title: string }
+interface PromptAction { name: string; title: string; edited: boolean; newer_default_since: string | null }
 interface Snapshot { version: number; text: string; source: string; note?: string | null }
 interface Editor { current: Snapshot; default_text: string; newer_default_since: string | null; preview: string }
 
 export function AIInstructions() {
   const list = useAsync(useCallback(() => getJSON<{ actions: PromptAction[]; can_write: boolean }>('/api/ai-instructions'), []));
-  // Each action's editor carries newer_default_since; read them all so the list
-  // can mark the prompts whose shipped default moved on after an edit.
-  const listed = list.state.status === 'ready' ? list.state.data : null;
-  const loadAll = useCallback(async (): Promise<Record<string, Editor | null>> => {
-    if (!listed) return {};
-    const entries = await Promise.all(listed.actions.map(async a =>
-      [a.name, await getJSON<Editor>(`/api/ai-instructions/${enc(a.name)}`).catch(() => null)] as const));
-    return Object.fromEntries(entries);
-  }, [listed]);
-  const editors = useAsync(loadAll);
   const [name, setName] = useState('ask');
   const [dirty, setDirty] = useState(false);
 
-  if (list.state.status === 'loading') return <Loading what="prompts" />;
-  if (list.state.status === 'error') return <LoadError error={list.state.error} what="prompts" onRetry={list.reload} />;
-  const { actions, can_write } = list.state.data;
-  const loaded = editors.state.status === 'ready' ? editors.state.data : {};
-  const drifted = actions.filter(a => loaded[a.name]?.newer_default_since);
+  // A reload after a save keeps the previous list so the open editor stays mounted.
+  const listed = list.state.status === 'ready' ? list.state.data : list.state.previous;
+  if (!listed && list.state.status === 'error') return <LoadError error={list.state.error} what="prompts" onRetry={list.reload} />;
+  if (!listed) return <Loading what="prompts" />;
+  const { actions, can_write } = listed;
+  const drifted = actions.filter(a => a.newer_default_since);
   const choose = (next: string) => { if (next !== name && (!dirty || window.confirm('Discard unsaved instruction changes?'))) { setName(next); setDirty(false); } };
 
   return <>
@@ -92,13 +83,13 @@ export function AIInstructions() {
         {actions.map(a => (
           <button key={a.name} className={`sub-item${a.name === name ? ' on' : ''}`} aria-current={a.name === name} onClick={() => choose(a.name)}>
             <span>{a.title}</span>
-            {loaded[a.name]?.current.source === 'saved' && <span className="tag">edited</span>}
-            {loaded[a.name]?.newer_default_since && <span className="tag warn">new default</span>}
+            {a.edited && <span className="tag">edited</span>}
+            {a.newer_default_since && <span className="tag warn">new default</span>}
           </button>
         ))}
       </nav>
       <PromptEditor key={name} name={name} title={actions.find(a => a.name === name)?.title || name} canWrite={can_write}
-        onDirty={setDirty} onSaved={editors.reload} />
+        onDirty={setDirty} onSaved={list.reload} />
     </div>
   </>;
 }

@@ -7,6 +7,7 @@ import {
   type NamesRelationship, type WorkspaceConcept,
 } from './api';
 import { PageHeader } from './lib';
+import { Link } from './router';
 
 const isAbortError = (error: unknown) => error instanceof Error && error.name === 'AbortError';
 const isNameActionKind = (value: string): value is NameActionKind =>
@@ -26,7 +27,7 @@ interface NamesEditorProps {
   entity: WorkspaceConcept;
   entities: WorkspaceConcept[];
   allowedActions: NameActionKind[];
-  onChanged: (id?: string) => void;
+  onChanged: (id?: string, documentsUnanchored?: number) => void;
 }
 
 function NamesEditor({entity, entities, allowedActions, onChanged}: NamesEditorProps) {
@@ -62,7 +63,7 @@ function NamesEditor({entity, entities, allowedActions, onChanged}: NamesEditorP
     try {
       if (apply) {
         if (!currentPreview) return;
-        const result = await namesWorkspace.apply(currentPreview.action, currentPreview.revision); setPreview(null); onChanged(result.entity_id);
+        const result = await namesWorkspace.apply(currentPreview.action, currentPreview.revision); setPreview(null); onChanged(result.entity_id, result.documents_unanchored);
       } else setPreview(await namesWorkspace.preview(action()));
     } catch (error) { setError(errorMessage(error)); if (apply) setPreview(null); }
     finally { inFlight.current = false; setBusy(false); }
@@ -155,15 +156,17 @@ function NamesWorkspace({onDataChanged}: { onDataChanged?: () => Promise<void> }
     namesWorkspace.catalogue(controller.signal).then(setCatalogue).catch(error => {if (!isAbortError(error)) setError(errorMessage(error));});
     return () => controller.abort();
   }, [refresh]);
-  const changed = (id?: string) => {if (id) setSelected(id); setRefresh(value => value + 1); setNotice('Change saved. Discovery is being recomputed.'); if (onDataChanged) onDataChanged().catch(() => setNotice('Change saved. Reload the page to refresh other views.'));};
+  const [unanchored, setUnanchored] = React.useState(0);
+  const changed = (id?: string, documentsUnanchored = 0) => {if (id) setSelected(id); setRefresh(value => value + 1); setUnanchored(documentsUnanchored); setNotice('Change saved. Discovery is being recomputed.'); if (onDataChanged) onDataChanged().catch(() => setNotice('Change saved. Reload the page to refresh other views.'));};
   const filtered = (catalogue?.entities || []).filter(entity => (entity.label + ' ' + entity.description + ' ' + entity.names.map(name => name.text).join(' ')).toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   return <main className="page names-workspace"><PageHeader eyebrow="Curate" title="Names & aliases" blurb="Keep every name for a concept together: add, correct, move or merge aliases, and decide AI alias suggestions. Statements keep their original wording; mentions follow the names." />
     <nav className="tabs" aria-label="Names workspace"><button className={tab === 'names' ? 'on' : ''} aria-pressed={tab === 'names'} onClick={() => setTab('names')}>Names</button><button className={tab === 'suggestions' ? 'on' : ''} aria-pressed={tab === 'suggestions'} onClick={() => setTab('suggestions')}>AI suggestions</button></nav>
     {error && <p role="alert">{error} <button onClick={() => setRefresh(value => value + 1)}>Retry</button></p>}
     {notice && <p role="status">{notice}</p>}
+    {unanchored > 0 && <p role="status">{unanchored === 1 ? '1 document' : `${unanchored} documents`} lost {unanchored === 1 ? 'its' : 'their'} concept anchor. <Link to={{ view: 'documentation' }}>Review in Documents</Link></p>}
     {!catalogue ? <p>Loading names…</p> : tab === 'suggestions' ? <AliasSuggestions canWrite={catalogue.can_write} onChanged={() => changed()}/> : <>
       {!catalogue.can_write && <p>Writer or admin access is required to edit names.</p>}
-      <div className="names-layout"><aside><label>Find a name or alias<input type="search" value={query} onChange={event => setQuery(event.target.value)}/></label><p>{filtered.length} concepts</p><ul className="names-catalogue">{filtered.map(entity => <li key={entity.id}><button aria-current={selected === entity.id ? 'true' : undefined} onClick={() => {setSelected(entity.id); setNotice(null);}}><b>{entity.label}</b><small>{entity.names.filter(name => !name.generated_from_name_id && name.text !== entity.label).map(name => name.text).join(', ') || 'No other authored names'}</small></button></li>)}</ul></aside>
+      <div className="names-layout"><aside><label>Find a name or alias<input type="search" value={query} onChange={event => setQuery(event.target.value)}/></label><p>{filtered.length} concepts</p><ul className="names-catalogue">{filtered.map(entity => <li key={entity.id}><button aria-current={selected === entity.id ? 'true' : undefined} onClick={() => {setSelected(entity.id); setNotice(null); setUnanchored(0);}}><b>{entity.label}</b><small>{entity.names.filter(name => !name.generated_from_name_id && name.text !== entity.label).map(name => name.text).join(', ') || 'No other authored names'}</small></button></li>)}</ul></aside>
       {selected ? <NamesConcept id={selected} entities={catalogue.entities} canWrite={catalogue.can_write} allowedActions={catalogue.allowed_actions} refresh={refresh} onChanged={changed}/> : <p>Select a concept to inspect its names and examples.</p>}
       </div>
     </>}

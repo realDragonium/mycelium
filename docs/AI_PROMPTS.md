@@ -52,7 +52,8 @@ running build ships:
 - If a person saved the newest version, it is never changed. When the shipped
   default first appeared on this instance after that save, the server logs a
   warning (`saved <action> instructions predate the default this build
-  ships`) and the editor API reports `newer_default_since`. Compare with
+  ships`) and both the editor API and the `/api/ai-instructions` list report
+  `newer_default_since`. Compare with
   **Use shipped default**; saving any version clears the report. **Settings →
   Prompts** marks such prompts **new default** and offers a side-by-side compare.
 

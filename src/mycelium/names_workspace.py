@@ -164,6 +164,7 @@ class Preview(Model):
 class Applied(Model):
     entity_id: str
     revision: str
+    documents_unanchored: int = 0
 
 
 class Conflict(ValueError):
@@ -420,7 +421,9 @@ def preview(conn: sqlite3.Connection, action: Action) -> Preview:
         )
 
 
-def _perform(conn: sqlite3.Connection, action: Action) -> str:
+def _perform(conn: sqlite3.Connection, action: Action) -> tuple[str, int]:
+    """Apply the action; return the concept to show next and how many
+    generated documents lost their concept anchor."""
     from . import (
         server,  # local import: server exposes the shared indexed write operations
     )
@@ -433,7 +436,7 @@ def _perform(conn: sqlite3.Connection, action: Action) -> str:
         store.set_preferred_name(conn, action.entity_id, action.name_id)
     elif isinstance(action, MoveAlias):
         server.move_name(action.name_id, action.target_entity_id)
-        return action.target_entity_id
+        return action.target_entity_id, 0
     elif isinstance(action, RemoveAlias):
         server.delete_name(action.name_id)
     elif isinstance(action, SplitConcept):
@@ -441,17 +444,20 @@ def _perform(conn: sqlite3.Connection, action: Action) -> str:
         for name_id in action.name_ids:
             server.move_name(name_id, target)
         store.set_preferred_name(conn, target, action.preferred_name_id)
-        return target
+        return target, 0
     elif isinstance(action, MergeConcepts):
-        server.merge_entities(action.entity_id, action.target_entity_id)
+        merged = server.merge_entities(action.entity_id, action.target_entity_id)
         store.update_entity_description(
             conn, action.target_entity_id, action.description
         )
         store.set_preferred_name(
             conn, action.target_entity_id, action.preferred_name_id
         )
-        return action.target_entity_id
-    return action.entity_id
+        # Applying requires a real curator, whose writes are never drafted.
+        if "draft_id" in merged:
+            raise RuntimeError("a names workspace merge was queued onto a draft")
+        return action.target_entity_id, merged["documents_unanchored"]
+    return action.entity_id, 0
 
 
 def apply(body: ApplyRequest) -> Applied:
@@ -474,7 +480,7 @@ def apply(body: ApplyRequest) -> Applied:
                 ).model_dump()
             elif isinstance(body.action, SplitConcept):
                 destination_before = None
-            entity_id = _perform(conn, body.action)
+            entity_id, unanchored = _perform(conn, body.action)
             _record(
                 conn,
                 "update",
@@ -503,4 +509,8 @@ def apply(body: ApplyRequest) -> Applied:
                         "destination_entity_id": entity_id,
                     },
                 )
-        return Applied(entity_id=entity_id, revision=revision(conn))
+        return Applied(
+            entity_id=entity_id,
+            revision=revision(conn),
+            documents_unanchored=unanchored,
+        )
