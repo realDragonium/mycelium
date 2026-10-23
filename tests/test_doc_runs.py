@@ -30,6 +30,11 @@ from product_settings_helpers import set_product
 
 
 @pytest.fixture(autouse=True)
+def _anthropic_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+
+
+@pytest.fixture(autouse=True)
 def _reset_doc_runs():
     doc_runs.RUNNER = None
     doc_runs._threads.clear()

@@ -19,6 +19,12 @@ from mycelium.docgen import publication
 from mycelium.docgen.schema import CurrentDocument, RevisionTarget
 from product_settings_helpers import import_product_environment
 
+
+@pytest.fixture(autouse=True)
+def _anthropic_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+
+
 TARGET = json.dumps(
     {"host": "github.com", "owner": "acme", "repo": "handbook", "base_branch": "main"}
 )

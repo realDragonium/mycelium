@@ -28,6 +28,12 @@ from mycelium.documentation_planning import (
 from mycelium.documentation_profiles import PromptRevision, TemplateSnapshot
 from product_settings_helpers import connection as product_connection
 
+
+@pytest.fixture(autouse=True)
+def _anthropic_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+
+
 EXTERNAL = Audience(
     "external-technical", "External technical", "external", "Integrators.", 1
 )

@@ -11,6 +11,11 @@ from mycelium.http import create_app
 from mycelium.http.authentication import AuthMiddleware
 
 
+@pytest.fixture(autouse=True)
+def _anthropic_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+
+
 @pytest.fixture
 def workspace(tmp_path, monkeypatch):
     async def resolve(*_):

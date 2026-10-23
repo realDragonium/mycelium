@@ -29,6 +29,11 @@ from mycelium.docgen.schema import RevisionTarget
 from product_settings_helpers import import_product_environment
 
 
+@pytest.fixture(autouse=True)
+def _anthropic_credentials(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+
+
 @pytest.fixture
 def db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
     conn = docs_store.connect(tmp_path / "drafts.db")
