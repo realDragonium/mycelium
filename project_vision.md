@@ -15,13 +15,17 @@ evidence for its own claims.
 ## Consumers
 
 - Coding assistants using MCP or HTTP retrieval tools.
+- Agents working in a product's codebase, which curate the knowledge base by
+  claiming work and proposing changes with evidence from the code.
 - Documentation agents running on the server.
-- Aurora's persistent memory integration, with its own knowledge directory.
-- Future support and product reasoning workflows using the same primitives.
+- Support and product reasoning workflows, including external ones whose
+  connection is scoped to an audience.
 
-The server's model-driven actions (ask, ingest, documentation, draft review
-and alias discovery) go through one provider boundary, `mycelium.ai`, and
-an administrator chooses Claude or OpenAI GPT for each action. The substrate and
+The server's model-driven actions (ask, ingest, documentation and its
+planning, draft review, audience labelling, the connect pass and alias
+discovery) go through one provider boundary, `mycelium.ai`, and an
+administrator chooses Claude or OpenAI GPT for each action. Every model call
+is recorded with its estimated cost. The substrate and
 tool contracts work independently of the model provider.
 
 ## Ingestion
@@ -46,7 +50,8 @@ judges links, duplicates, and contradictions against the graph.
 Evaluation must start with source prose and expected statements, relationships,
 and matches to existing knowledge. Measuring whether already-extracted
 statements retain cues for an existing graph does not test this workflow.
-The old link-pattern hit-rate reports were retired on 2026-09-06.
+The repository's evaluation sets for ingest and Ask use invented product data;
+real knowledge bases are evaluated only outside the repository.
 
 ## Data model
 
@@ -87,20 +92,35 @@ available knowledge cannot settle a question a person could answer, the
 reviewer asks that question instead of rejecting: the draft waits, a knowledge
 gap records the question, and a curator's answer starts a fresh review. Rejections and resolved contradictions are filed as knowledge
 gaps, and reviews that failed are retried. The reviewer has no tools of its own
-to investigate sources; giving it that is the remaining step toward an AI
-curator that resolves the whole draft. See `docs/DRAFT_REVIEW.md`.
+to investigate sources. Evidence comes from the producer instead: an agent
+working in the product's codebase attaches the code, screen or document that
+supports each proposed operation, and the reviewer weighs it. See
+`docs/DRAFT_REVIEW.md`.
 
-Documentation starts with a concept and an intended audience, internal or
-user-facing. Mycelium selects guidance and a template from configurable
-guideline sets, writes and reviews the document internally, and keeps every
-version as an immutable revision; revising a document adds a revision to the
-same document. On request it opens or updates a GitHub pull request, through a
-GitHub App connection or server credentials. After merge, the destination
-repository's existing workflow owns deployment; Mycelium does not yet track
-whether the pull request merged. Repeated requests should update the intended
-document. Today that depends on a model choosing among existing titles, and
-only over MCP: the UI always creates a new document. Generated documents remain
-outputs and must not silently change the underlying knowledge.
+Knowledge health lists what needs a curator: isolated statements, statements
+naming no concept, concepts without a description, unlabelled statements, open
+gaps and out-of-date documents. A server-side connect pass proposes links for
+the obvious cases; agents with access to the code claim the rest as curation
+work. Either way the result is a draft. See `docs/KNOWLEDGE_HEALTH.md`.
+
+Documentation is written for an audience. Audiences are configurable; the
+default four are internal and external, each technical and non-technical. AI
+labels which statements each audience may see, a curator can override a label,
+and an unlabelled statement is visible to internal audiences only. A
+documentation run can only read and cite what its audience may see; the same
+boundary applies to Ask and MCP connections scoped to an audience. See
+`docs/AUDIENCES.md`.
+
+A writing profile targets one audience and supplies guidance and templates.
+For each profile a planner proposes which documents should exist; approved
+items are written and reviewed internally. Every version is kept as an
+immutable revision. A document's identity is its profile, type and anchor
+concept, so a repeated request revises the same document. A document whose
+cited statements change goes out of date, and a profile can propose or make
+the revision automatically. On request Mycelium opens or updates a GitHub pull
+request and follows whether it merged; after merge, the destination
+repository's workflow owns deployment. Generated documents remain outputs and
+must not silently change the underlying knowledge.
 
 ## Implementation posture
 
