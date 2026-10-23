@@ -392,7 +392,7 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
   return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run.status)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
     {run.target_document_id && <p>Revises <a href={'#/documentation?document=' + encodeURIComponent(run.target_document_id)}>an existing document</a>, starting from its revision {run.target_revision}.</p>}
     {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
-    {docActive(run) && <p role="status">{run.summary?.activity ? `${run.summary.activity} · turn ${run.summary.turns} so far. ` : ''}You can leave this screen while generation and review finish.</p>}
+    {docActive(run) && <p role="status">{run.summary?.activity ? `${run.summary.activity}. ` : ''}You can leave this screen while generation and review finish.</p>}
     {run.summary && <DocumentationRunSummary summary={run.summary} />}
     {run.error && <p role="alert">{run.error}</p>}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}
