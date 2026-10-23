@@ -97,6 +97,8 @@ Code in the product repository, or a CI agent) can. Mycelium hands such
 agents the same lists as claimable work over MCP and takes their proposals
 as drafts with evidence, so the reviewer and curators can judge them. The
 server never reads the code itself.
+The `mycelium-code-curation` skill (`skills/`) walks an agent through this
+workflow.
 
 The agent needs a token with the drafter role or higher. A drafter's writes
 go to its draft, so nothing lands without review. A token scoped to an

@@ -145,6 +145,7 @@ packaged as the `mycelium` plugin. Install it in Claude Code:
 | `mycelium-draft-review` | Work the draft queue alongside the internal reviewer |
 | `mycelium-documentation` | Have the server write, revise and plan documents |
 | `mycelium-curation` | Knowledge health, the connect pass, duplicates and gaps |
+| `mycelium-code-curation` | Work the curation queue from a product's repository, with code evidence |
 
 See [skills/README.md](skills/README.md). A checkout of this repository loads
 the same skills through `.claude/skills`.
