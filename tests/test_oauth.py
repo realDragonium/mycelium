@@ -239,6 +239,31 @@ def test_register_requires_redirect_uri(tmp_path, monkeypatch):
         assert r.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"client_name": "X" * 201, "redirect_uris": ["http://localhost/cb"]},
+        {"client_name": "X", "redirect_uris": ["http://localhost/cb"] * 21},
+        {"client_name": "X", "redirect_uris": ["http://localhost/" + "a" * 2048]},
+        {
+            "client_name": "X",
+            "redirect_uris": ["http://localhost/cb"],
+            "pad": "a" * 70_000,
+        },
+    ],
+    ids=["long-name", "many-uris", "long-uri", "large-body"],
+)
+def test_register_refuses_oversized_metadata(tmp_path, monkeypatch, body):
+    """Registration is open to anyone and every accepted client is stored,
+    so nothing bounded what one anonymous request could make us keep."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        r = client.post("/register", json=body)
+        assert r.status_code in (400, 413)
+        n = runtime._auth_db().execute("SELECT COUNT(*) FROM oauth_clients").fetchone()
+        assert n[0] == 0
+
+
 # --- authorize → token ---------------------------------------------------
 
 
@@ -367,6 +392,30 @@ def test_authorize_redirects_to_login_when_unauthenticated(tmp_path, monkeypatch
         )
         assert r.status_code == 302
         assert "/auth/login" in r.headers["location"]
+
+
+def test_authorize_accepts_only_the_advertised_pkce_method(tmp_path, monkeypatch):
+    """With `plain` the challenge is the verifier, and it travels in the
+    authorization URL, so whoever intercepts the code can usually also
+    redeem it. Metadata advertises S256 alone."""
+    client = _app(tmp_path, monkeypatch, auth_mode="on")
+    with client:
+        reg = client.post(
+            "/register",
+            json={"client_name": "X", "redirect_uris": ["http://localhost/cb"]},
+        ).json()
+        r = client.get(
+            "/authorize",
+            params={
+                "client_id": reg["client_id"],
+                "redirect_uri": "http://localhost/cb",
+                "response_type": "code",
+                "code_challenge": "a" * 43,
+                "code_challenge_method": "plain",
+            },
+            follow_redirects=False,
+        )
+        assert r.status_code == 400
 
 
 def test_token_rejects_pkce_mismatch(tmp_path, monkeypatch):
