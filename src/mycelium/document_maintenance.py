@@ -35,6 +35,7 @@ from . import (
     documentation_profiles,
     model_settings,
     product_settings,
+    store,
     timestamps,
 )
 from .docgen import publication
@@ -118,6 +119,7 @@ def sweep(now: datetime | None = None) -> list[str]:
             if (
                 document.freshness.status != "out_of_date"
                 or stale_key(document) in dismissed
+                or _awaiting_labels(document)
             ):
                 continue
             row = _observe(drafts, profile.name, document, now)
@@ -139,6 +141,22 @@ def sweep(now: datetime | None = None) -> list[str]:
             if run_id is not None:
                 started.append(run_id)
     return started
+
+
+def _awaiting_labels(document: ExistingDocument) -> bool:
+    """An edit drops a statement's AI label until it is labelled again, so
+    until then the edit looks like the statement was hidden from the
+    audience. Acting on that would remove the fact instead of updating it."""
+    from . import server
+
+    hidden = [
+        change.statement_id
+        for change in document.freshness.changes
+        if change.change == "no_longer_visible"
+    ]
+    return bool(hidden) and bool(
+        store.audience_labels.awaiting_label(server._db(), hidden)
+    )
 
 
 def _observe(
