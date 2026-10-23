@@ -50,6 +50,13 @@ def _text(t: str):
     return types.SimpleNamespace(type="text", text=t)
 
 
+def _content_text(content) -> str:
+    """Cached turns carry their text as blocks; the assertions only need the text."""
+    if isinstance(content, str):
+        return content
+    return "".join(b["text"] if isinstance(b, dict) else b.text for b in content)
+
+
 def _tool_use(name: str, inp: dict, id: str = "tu"):
     return types.SimpleNamespace(type="tool_use", id=id, name=name, input=inp)
 
@@ -346,10 +353,12 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
         ),
     )
     assert isinstance(result, DocumentWritten)
-    first_message = client.calls[0]["messages"][0]["content"]
+    first_message = _content_text(client.calls[0]["messages"][0]["content"])
     assert "Internal body the user selected" in first_message
     assert "people edited" not in first_message
-    assert "Changed template after admission" not in json.dumps(client.calls)
+    assert "Changed template after admission" not in json.dumps(
+        client.calls, default=str
+    )
 
 
 def test_a_revision_of_the_published_copy_tells_the_writer_to_keep_its_edits(kb_set):
@@ -371,7 +380,7 @@ def test_a_revision_of_the_published_copy_tells_the_writer_to_keep_its_edits(kb_
         ),
     )
 
-    first_message = client.calls[0]["messages"][0]["content"]
+    first_message = _content_text(client.calls[0]["messages"][0]["content"])
     assert "# Edited on GitHub" in first_message
     assert "Keep their edits" in first_message
 
@@ -384,7 +393,9 @@ def test_the_writer_is_told_todays_date_for_the_frontmatter(kb_set, monkeypatch)
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
-    assert "Today is 2031-02-03." in client.calls[0]["messages"][0]["content"]
+    assert "Today is 2031-02-03." in _content_text(
+        client.calls[0]["messages"][0]["content"]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -679,7 +690,7 @@ def test_both_guideline_texts_are_injected_and_labelled(kb_set):
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
-    system = client.calls[0]["system"]
+    system = _content_text(client.calls[0]["system"])
     assert "SET-WIDE GUIDANCE: source everything." in system
     assert "HOW-TO TEMPLATE: steps." in system
     assert "REFERENCE TEMPLATE: tables." not in system  # only the resolved type
@@ -693,7 +704,7 @@ def test_the_resolved_sets_exposure_text_reaches_the_writer(kb_set):
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
-    system = client.calls[0]["system"]
+    system = _content_text(client.calls[0]["system"])
     assert "--- kb-authoring/exposure ---" in system
     assert "EXPOSURE RULES: reveal only published behaviour." in system
 
@@ -706,7 +717,7 @@ def test_the_stored_doctrine_wins_over_the_packaged_file(kb_set):
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
-    system = client.calls[0]["system"]
+    system = _content_text(client.calls[0]["system"])
     assert "EDITED DOCTRINE ROW" in system
     assert "GENERATION DOCTRINE" in system
 
@@ -723,7 +734,7 @@ def test_an_unreadable_doctrine_leaves_the_run_standing(kb_set, tmp_path):
 
     assert isinstance(result, DocumentWritten)
     assert any("doctrine unreadable" in n for n in result.trace["notes"])
-    assert "GENERATION DOCTRINE" not in client.calls[0]["system"]
+    assert "GENERATION DOCTRINE" not in _content_text(client.calls[0]["system"])
 
 
 def test_the_packaged_doctrine_is_what_a_fresh_instance_reads(kb_set):
@@ -733,7 +744,9 @@ def test_the_packaged_doctrine_is_what_a_fresh_instance_reads(kb_set):
 
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
-    assert "# Documentation generation doctrine" in client.calls[0]["system"]
+    assert "# Documentation generation doctrine" in _content_text(
+        client.calls[0]["system"]
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -757,6 +770,86 @@ def test_recon_runs_on_the_request_and_its_ids_count_as_retrieved(kb_set):
     # stm_1 came back from recon, so citing it is allowed with no further read.
     assert isinstance(result, DocumentWritten)
     assert result.trace["grounding"]["retrieved_ids"] == 1
+
+
+def _anchored_substrate():
+    substrate = _substrate(
+        survey_statements=[],
+        get_entity={
+            "id": "ent_sso",
+            "names": [{"text": "single sign-on"}, {"text": "SSO"}],
+            "description": "Signing in through the workspace's identity provider.",
+        },
+        list_statements={
+            "total": 1,
+            "statements": [
+                {"id": "stm_anchor", "kind": "rule", "text": "only admins enable sso"}
+            ],
+        },
+    )
+    substrate._specs.append(ToolSpec("list_statements", "", _MIN_SCHEMA))
+    return substrate
+
+
+def test_an_anchored_run_opens_on_the_concept_and_may_cite_its_statements(kb_set):
+    client = FakeAnthropic([_emit(statement_ids=["stm_anchor"]), _review_ok()])
+
+    result = _run(
+        client,
+        substrate=_anchored_substrate(),
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        anchor_entity_id="ent_sso",
+    )
+
+    assert isinstance(result, DocumentWritten)
+    assert result.statement_ids == ["stm_anchor"]
+    opening = _content_text(client.calls[0]["messages"][0]["content"])
+    assert '"single sign-on" (ent_sso)' in opening
+    assert "Also called: SSO" in opening
+    assert "- stm_anchor [rule] only admins enable sso" in opening
+
+
+def test_writing_turns_ask_for_prompt_caching(kb_set):
+    client = FakeAnthropic([_emit(), _review_ok()])
+
+    _run(client, guideline_set="kb-authoring", document_type="how-to")
+
+    for call in client.calls:
+        assert call["system"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_progress_and_the_summary_describe_the_run(kb_set):
+    updates = []
+    client = FakeAnthropic([_emit(), _review_ok()])
+
+    result = _run(
+        client,
+        config=_config(model="claude-sonnet-4-6"),
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        run_id="drn_1",
+        on_progress=updates.append,
+    )
+
+    assert [u["activity"] for u in updates] == [
+        "Surveying the knowledge base",
+        "Model turn 1",
+        "Reviewing the document",
+    ]
+    summary = result.trace["summary"]
+    assert result.trace["run_id"] == "drn_1"
+    assert summary["activity"] is None
+    assert summary["turns"] == 2
+    assert summary["tokens"] == {
+        "input": 20,
+        "cache_read": 0,
+        "cache_creation": 0,
+        "output": 10,
+    }
+    assert summary["cost_usd"] == round((20 * 3 + 10 * 15) / 1_000_000, 6)
+    assert (summary["statements_retrieved"], summary["statements_cited"]) == (1, 1)
+    assert summary["gaps_filed"] == 0
 
 
 def test_a_failing_read_is_reported_not_fabricated(kb_set):
@@ -1108,7 +1201,9 @@ def test_a_text_only_turn_is_nudged_once_then_forced(kb_set):
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
 
     assert isinstance(result, DocumentWritten)
-    assert "You stopped without finishing" in client.calls[1]["messages"][-1]["content"]
+    assert "You stopped without finishing" in _content_text(
+        client.calls[1]["messages"][-1]["content"]
+    )
 
 
 def test_a_model_error_mid_run_degrades_rather_than_raising(kb_set):
@@ -1162,7 +1257,9 @@ def test_the_reviewer_never_receives_the_writers_reasoning(kb_set):
     review_call = reviewer_calls[0]
     assert len(review_call["messages"]) == 1
     assert review_call["messages"][0]["role"] == "user"
-    assert review_call["system"] != writer_calls[0]["system"]
+    assert _content_text(review_call["system"]) != _content_text(
+        writer_calls[0]["system"]
+    )
 
 
 def test_the_reviewer_is_given_the_document_the_exposure_text_and_the_template(
@@ -1176,10 +1273,14 @@ def test_the_reviewer_is_given_the_document_the_exposure_text_and_the_template(
     _run(client, guideline_set="kb-authoring", document_type="how-to")
 
     review_call = client.calls[1]
-    assert body in review_call["messages"][0]["content"]
-    assert "EXPOSURE RULES: reveal only published behaviour." in review_call["system"]
-    assert "HOW-TO TEMPLATE: steps." in review_call["system"]
-    assert "SET-WIDE GUIDANCE: source everything." not in review_call["system"]
+    assert body in _content_text(review_call["messages"][0]["content"])
+    assert "EXPOSURE RULES: reveal only published behaviour." in _content_text(
+        review_call["system"]
+    )
+    assert "HOW-TO TEMPLATE: steps." in _content_text(review_call["system"])
+    assert "SET-WIDE GUIDANCE: source everything." not in _content_text(
+        review_call["system"]
+    )
 
 
 def test_the_reviewer_sees_the_statements_the_document_cited(kb_set):
@@ -1257,7 +1358,7 @@ def test_a_failed_review_returns_to_the_writer_exactly_once(kb_set):
     retry = client.calls[2]
     assert len(retry["messages"]) == 1
     assert retry["messages"][0]["role"] == "user"
-    retry_text = retry["messages"][0]["content"]
+    retry_text = _content_text(retry["messages"][0]["content"])
     assert "add the missing verification step" in retry_text
     assert rejected_body in retry_text
     assert "RECON (survey_statements" not in retry_text
@@ -1305,7 +1406,7 @@ def test_findings_make_a_check_fail_however_the_reviewer_labelled_it(kb_set):
 
     assert isinstance(result, DocumentWritten)
     assert result.trace["reviews"][0]["exposure"]["status"] == "fail"
-    assert problem in client.calls[2]["messages"][0]["content"]
+    assert problem in _content_text(client.calls[2]["messages"][0]["content"])
 
 
 def test_a_reviewer_that_fails_a_check_without_saying_where_still_gives_the_writer_something(
@@ -1325,7 +1426,7 @@ def test_a_reviewer_that_fails_a_check_without_saying_where_still_gives_the_writ
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
 
     assert isinstance(result, DocumentWritten)
-    retry_text = client.calls[2]["messages"][0]["content"]
+    retry_text = _content_text(client.calls[2]["messages"][0]["content"])
     assert "without naming a problem" in retry_text
     first_finding = result.trace["reviews"][0]["conformance"]["findings"][0]
     assert first_finding["where"] == "the document (no location supplied)"
@@ -1360,7 +1461,7 @@ def test_a_finding_that_names_nothing_is_treated_as_a_bare_fail(kb_set, blank):
     result = _run(client, guideline_set="kb-authoring", document_type="how-to")
 
     assert isinstance(result, DocumentWritten)
-    retry_text = client.calls[2]["messages"][0]["content"]
+    retry_text = _content_text(client.calls[2]["messages"][0]["content"])
     assert "without naming a problem" in retry_text
     assert " — \n" not in retry_text and not retry_text.endswith(" — ")
     findings = result.trace["reviews"][0]["conformance"]["findings"]
@@ -1545,11 +1646,11 @@ def test_manual_edit_reviews_and_saves_exact_input_despite_model_rewrite(kb_set,
     )
     assert isinstance(result, DocumentWritten)
     assert (result.title, result.body) == (manual.title, manual.body)
-    review_text = client.messages.calls[-1]["messages"][0]["content"]
+    review_text = _content_text(client.messages.calls[-1]["messages"][0]["content"])
     from mycelium.docgen import prompts
 
     payload = prompts.document_payload(title=manual.title, body=manual.body)
-    assert payload in client.messages.calls[0]["messages"][0]["content"]
+    assert payload in _content_text(client.messages.calls[0]["messages"][0]["content"])
     assert payload in review_text
     assert manual.body in review_text
     assert "Changed" not in review_text

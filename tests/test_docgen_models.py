@@ -60,8 +60,6 @@ def _config() -> DocgenConfig:
         provider="openai",
         model="configured-gpt",
         trace_dir="",
-        input_per_mtok=None,
-        output_per_mtok=None,
     )
 
 

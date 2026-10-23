@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from .. import timestamps
@@ -46,6 +47,8 @@ __all__ = [
     "malformed_retry_message",
     "forced_finalize_message",
     "format_recon",
+    "format_anchor",
+    "Anchor",
     "NO_TERMINAL_NUDGE",
 ]
 
@@ -82,7 +85,10 @@ truth. You finish by calling exactly ONE terminal tool: `emit_document`.
 
 THE FLOW YOU DRIVE (one context)
 1. MAP the topic. A wide `survey_statements` of the request has already run \
-   and is in the first message — treat it as a starting map, not as material.
+   and is in the first message — treat it as a starting map, not as material. \
+   When the request names the concept the document is about, the first \
+   message also carries that concept and every statement that mentions it: \
+   that is where coverage starts.
 2. GATHER. Follow the links out of what the map found, hydrate the ids, and \
    RE-SEARCH on the concepts you have gathered rather than on the request's \
    original wording — the statement a section needs often has no edge \
@@ -242,14 +248,15 @@ def build_review_system_prompt(
             "Run TWO checks and report them separately, because they fail "
             "differently. EXPOSURE: does the text respect what this guideline "
             "set may reveal? The rules are below. CONFORMANCE: does it match "
-            f"the template below and the content expectations of a "
-            f"`{document_type}`?"
+            "the template below and the content expectations of "
+            f"{_article(document_type)} `{document_type}`?"
         )
     else:
         checks = (
             "Run the CONFORMANCE check: does the document match the template "
-            "below and the content expectations of a "
-            f"`{document_type}`? Report that check separately."
+            "below and the content expectations of "
+            f"{_article(document_type)} `{document_type}`? Report that check "
+            "separately."
         )
     parts = [_REVIEW_PROTOCOL.format(checks=checks, instructions=instructions)]
     if exposure_text:
@@ -320,12 +327,64 @@ def resolution_retry_message(chosen_set: str, chosen_type: str, available: list)
 # --------------------------------------------------------------------------- #
 
 
+@dataclass(frozen=True)
+class Anchor:
+    """The concept a document is about, as the harness read it."""
+
+    entity_id: str
+    names: list[str]
+    description: str
+    statements: list[dict[str, Any]]
+    #: How many statements mention it, of which `statements` is the first page.
+    total: int
+
+
+def _article(noun: str) -> str:
+    return "an" if noun[:1].lower() in "aeiou" else "a"
+
+
+def format_anchor(anchor: Anchor) -> str:
+    name = anchor.names[0] if anchor.names else anchor.entity_id
+    lines = [
+        f"THE DOCUMENT IS ABOUT ONE CONCEPT: {json.dumps(name, ensure_ascii=False)} "
+        f"({anchor.entity_id}). Write about this concept; the request says what to "
+        "say about it."
+    ]
+    if len(anchor.names) > 1:
+        lines.append("Also called: " + ", ".join(anchor.names[1:]))
+    if anchor.description.strip():
+        lines.append("Description: " + anchor.description.strip())
+    lines.append(
+        f"\nSTATEMENTS THAT MENTION IT ({len(anchor.statements)} of {anchor.total}; "
+        "already retrieved, so you may cite them directly):"
+    )
+    lines.extend(
+        f"- {row.get('id')} [{row.get('kind')}] {row.get('text')}"
+        for row in anchor.statements
+    )
+    if anchor.total > len(anchor.statements):
+        lines.append(
+            f"(The other {anchor.total - len(anchor.statements)} are reachable "
+            f"with list_statements(entity_id={anchor.entity_id!r}, "
+            f"offset={len(anchor.statements)}).)"
+        )
+    lines.append(
+        "\nCOVERAGE STARTS HERE. Each statement above is about the concept, so "
+        "each belongs in the document unless it is off-topic for what the "
+        "request asks; leave one out deliberately, never by not getting to it. "
+        "Then follow their links and search for what is about the concept "
+        "without naming it."
+    )
+    return "\n".join(lines)
+
+
 def initial_user_message(
     prompt: str,
     recon: Any,
     *,
     guideline_set: str,
     document_type: str,
+    anchor: Anchor | None = None,
     current_document: str | None = None,
     edited_at_destination: bool = False,
 ) -> str:
@@ -345,10 +404,11 @@ def initial_user_message(
     return (
         f"DOCUMENTATION REQUEST:\n-----\n{prompt}\n-----\n\n"
         f"Today is {timestamps.now()[:10]}.\n"
-        f"You are writing a `{document_type}` against the `{guideline_set}` "
-        "guideline set, whose guidance, exposure rules, and template are in "
-        "your system prompt.\n\n"
-        "RECON (survey_statements of the request — a wide starting map, not "
+        f"You are writing {_article(document_type)} `{document_type}` "
+        f"against the `{guideline_set}` guideline set, whose guidance, exposure "
+        "rules, and template are in your system prompt.\n\n"
+        + (format_anchor(anchor) + "\n\n" if anchor is not None else "")
+        + "RECON (survey_statements of the request — a wide starting map, not "
         "material to write from):\n"
         f"{format_recon(recon)}\n\n"
         "Gather from here: follow the links out of what looks relevant, "

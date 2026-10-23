@@ -1,38 +1,11 @@
 # Knowledge-Base Authoring from Substrate
 
 Query the mycelium product substrate to gather facts about a topic, then write a
-markdown document using a Diátaxis template that matches what the reader needs.
+markdown document from the Diátaxis template for the document type you were given.
 
 The substrate is the **source of truth for product behaviour**. Do not fill in template
 sections from training-data assumptions. If a fact isn't in the substrate, flag it with
 a confidence marker rather than inventing it.
-
----
-
-## Step 0: Determine template type and output path
-
-Before querying anything, settle two things:
-
-**Template type** — answer the question "what does the reader want right now?"
-
-| Reader wants to… | Template |
-|---|---|
-| Walk through their first success with a topic | `tutorial` |
-| Accomplish a specific task (incl. configuration) | `how-to` |
-| Look something up: settings, fields, params, limits | `reference` |
-| Understand how or why something works | `explanation` |
-| Fix a problem they're hitting right now | `troubleshooting` |
-
-If the user's request doesn't clearly map to one type, prefer `how-to` for action-oriented
-requests and `explanation` for concept-oriented ones. If genuinely ambiguous, ask once.
-
-**Output path** — infer from context:
-
-- User-facing public article → `user-docs/pages/<topic>/`
-- Internal staff article → `user-docs/internal/en-GB/<topic>/`
-- Standalone knowledge doc → wherever the caller specifies
-
-Always confirm the output path with the caller if it isn't obvious.
 
 ---
 
@@ -48,7 +21,7 @@ one statement.
 search_statements(query=<topic>, min_score=0.7, depth=2)
 ```
 
-Run this first. Then expand into the entities the hits mention:
+Then expand into the entities the hits mention:
 
 ```
 list_statements(name=<entity-name>)  # statements that mention the entity, by any alias
@@ -96,7 +69,7 @@ Anything written without a marker must be traceable to a substrate statement.
 
 ---
 
-## Step 3: Load and fill the template
+## Step 3: Fill the template
 
 The template for each type is a sibling row of this one: same `guideline-set` type,
 named for the document type it produces.
@@ -109,8 +82,8 @@ named for the document type it produces.
 | Explanation | `kb-authoring/explanation` |
 | Troubleshooting | `kb-authoring/troubleshooting` |
 
-The row for the type you settled on in Step 0 is already in front of you. Write
-the document using it as the starting point.
+The row for the type you were given is already in front of you. Write the
+document using it as the starting point.
 
 Rules that apply to all types when filling in the template:
 
@@ -118,8 +91,8 @@ Rules that apply to all types when filling in the template:
   or `both` (visible everywhere, written for the most cautious audience).
 - **Tone** — warm and clear, second person ("you"), active voice. Short sentences. No
   "simply", no "just", no fake enthusiasm.
-- **One doc = one type.** If writing tempts you to mix steps with conceptual explanation,
-  split and link.
+- **One doc = one type.** If the material tempts you to mix steps with conceptual
+  explanation, keep to this document's type and leave the rest out.
 - **Frontmatter** — fill every field you have a source for, and never leave a
   placeholder in the final output. Two fields have no source in the substrate;
   both are covered below.
@@ -134,26 +107,15 @@ Rules that apply to all types when filling in the template:
   same rule: link real articles, and delete the section when there are none. A
   link whose path is still `{path}` points nowhere, and a section saying no
   articles exist is not a section.
-- **Remove HTML comments** (`<!-- … -->`) before saving — they are authoring notes, not
-  reader content.
-
----
-
-## Step 4: Save and verify
-
-1. Save to the agreed output path. Use kebab-case filenames.
-2. If the doc contains relative links, validate them where the docs they point at
-   live — `go run tools/validate-links.go` in that repository. Without a checkout,
-   hand the links back to the caller as unvalidated rather than claiming they hold.
-3. Check the quality checklist below before declaring done.
+- **Remove HTML comments** (`<!-- … -->`) — they are authoring notes, not reader
+  content.
 
 ---
 
 ## Quality checklist
 
-- [ ] Template type matches what the reader actually needs right now
 - [ ] Every non-trivial fact traces to a substrate statement or carries a confidence marker
-- [ ] No placeholder text (`{…}`) left in the saved file
+- [ ] No placeholder text (`{…}`) left in the document
 - [ ] Frontmatter carries every field with a source (`title`, `type`, `audience`, `last_updated`), `related` lists only articles that exist, and `owner` is blank
 - [ ] Cross-link sections either link real articles or are deleted
 - [ ] Tone: second person, active voice, no "simply" / "just"
@@ -161,4 +123,3 @@ Rules that apply to all types when filling in the template:
 - [ ] Reference: tables used for structured data; prose only in `Notes` and section preambles
 - [ ] Explanation: analogy or mental model present; no step-by-step instructions
 - [ ] Troubleshooting: organized by symptom (what the user sees), not by internal cause
-- [ ] Related links populated where appropriate

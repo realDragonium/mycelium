@@ -231,6 +231,14 @@ def test_browser_flow_saves_only_verified_repository_metadata(
     assert "code_verifier=" in exchange.content.decode()
 
 
+def test_a_connected_repository_ends_the_setup_flow(web: TestClient):
+    connect(web)
+
+    status = web.get("/api/github").json()
+    assert (status["selecting"], status["message"]) == (False, None)
+    assert status["connections"][0]["enabled"] is True
+
+
 def test_spoofed_installation_and_unwritable_repository_cannot_connect(
     web: TestClient, github: FakeGitHub
 ):

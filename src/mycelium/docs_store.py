@@ -121,6 +121,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_document_revisions(conn)
     _add_document_lifecycle(conn)
     _add_cited_statements(conn)
+    _add_run_summary(conn)
     conn.commit()
 
 
@@ -230,6 +231,16 @@ def _add_cited_statements(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE generated_document_revisions ADD COLUMN cited_statements TEXT"
         )
+
+
+def _add_run_summary(conn: sqlite3.Connection) -> None:
+    """What each run spent and gathered. NULL for a run recorded before this,
+    and for one that never reached its first model turn."""
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    if "summary" not in columns:
+        conn.execute("ALTER TABLE documentation_runs ADD COLUMN summary TEXT")
 
 
 def _add_document_revisions(conn: sqlite3.Connection) -> None:
@@ -681,6 +692,17 @@ def mark_started(
     conn.commit()
 
 
+def record_progress(
+    conn: sqlite3.Connection, run_id: str, summary: Mapping[str, object]
+) -> None:
+    """Replace a running run's summary with the latest one."""
+    conn.execute(
+        "UPDATE documentation_runs SET summary = ? WHERE id = ? AND finished_at IS NULL",
+        (json.dumps(summary), run_id),
+    )
+    conn.commit()
+
+
 def finish_run(
     conn: sqlite3.Connection,
     run_id: str,
@@ -692,19 +714,24 @@ def finish_run(
     draft_body: str | None = None,
     matched_document_id: str | None = None,
     result_revision: int | None = None,
+    summary: Mapping[str, object] | None = None,
 ) -> None:
     """Close a run, keeping the text of a draft the review gate turned down.
 
     The draft lands here rather than in `generated_documents` because it is a
     record of the attempt, not a document. Nothing that serves documents to a
     reader can reach it, which is what makes keeping refused text safe.
+
+    Without a final `summary`, the last progress summary stays, minus what
+    the run was doing: a run that crashed still shows what it had spent.
     """
     if outcome not in OUTCOMES:
         raise ValueError(f"invalid outcome: {outcome}")
     conn.execute(
         "UPDATE documentation_runs "
         "SET finished_at = ?, outcome = ?, document_id = ?, error = ?, "
-        "draft_title = ?, draft_body = ?, matched_document_id = ?, result_revision = COALESCE(?, result_revision) "
+        "draft_title = ?, draft_body = ?, matched_document_id = ?, result_revision = COALESCE(?, result_revision), "
+        "summary = COALESCE(?, json_set(summary, '$.activity', NULL)) "
         "WHERE id = ? AND finished_at IS NULL",
         (
             _now(),
@@ -715,6 +742,7 @@ def finish_run(
             draft_body,
             matched_document_id,
             result_revision,
+            None if summary is None else json.dumps(summary),
             run_id,
         ),
     )
@@ -762,7 +790,8 @@ def mark_orphaned(conn: sqlite3.Connection) -> int:
     # between create_run and mark_started.
     cur = conn.execute(
         "UPDATE documentation_runs "
-        "SET finished_at = ?, outcome = 'failed', error = 'orphaned by restart' "
+        "SET finished_at = ?, outcome = 'failed', error = 'orphaned by restart', "
+        "summary = json_set(summary, '$.activity', NULL) "
         "WHERE finished_at IS NULL",
         (_now(),),
     )
@@ -803,6 +832,7 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "document_superseded": _document_superseded(row),
         "error": row["error"],
         "draft_chars": len(row["draft_body"] or ""),
+        "summary": None if row["summary"] is None else json.loads(row["summary"]),
     }
 
 

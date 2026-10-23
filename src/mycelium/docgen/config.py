@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Final, TypedDict
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort
+from ..ai import Provider, ReasoningEffort, pricing
 from ..guidelines import SET_NAME
 from ..ingest.config import DEFAULT_MODEL
 from ..model_credentials import (
@@ -128,14 +128,15 @@ class DocgenConfig:
     #: Path to the docgen doctrine seeded into the store and injected into
     #: the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
-    #: Cost rates are populated only for the known default Claude model.
-    input_per_mtok: float | None = 3.0
-    output_per_mtok: float | None = 15.0
     #: JSONL sink for the trace. None disables it.
     trace_log_path: str | None = None
     #: Directory for per-run speedscope timing files. Defaults under the data
     #: dir (shared with ask/ingest); empty string disables writing.
     trace_dir: str | None = None
+
+    @property
+    def price(self) -> pricing.Price | None:
+        return pricing.price(self.provider, self.model)
 
     @classmethod
     def from_env(cls, *, provider: Provider | None = None) -> DocgenConfig:
@@ -149,10 +150,6 @@ class DocgenConfig:
             if selected_provider == "claude"
             else selected.openai_model
         )
-
-        def _f(name: str, default: float) -> float:
-            v = os.environ.get(name)
-            return float(v) if v else default
 
         return cls(
             provider=selected_provider,
@@ -172,16 +169,6 @@ class DocgenConfig:
             doctrine_path=(
                 os.environ.get("MYCELIUM_DOCGEN_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH
-            ),
-            input_per_mtok=(
-                None
-                if selected_provider != "claude" or selected_model != DEFAULT_MODEL
-                else _f("MYCELIUM_DOCGEN_INPUT_PER_MTOK", 3.0)
-            ),
-            output_per_mtok=(
-                None
-                if selected_provider != "claude" or selected_model != DEFAULT_MODEL
-                else _f("MYCELIUM_DOCGEN_OUTPUT_PER_MTOK", 15.0)
             ),
             trace_log_path=os.environ.get("MYCELIUM_DOCGEN_TRACE_LOG"),
             trace_dir=(

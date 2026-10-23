@@ -34,6 +34,7 @@ between the three packages is a layout, not a common implementation.
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -81,7 +82,9 @@ from .tools import (
     resolve_tool_def,
     review_tool_def,
 )
-from .trace import TraceBuilder
+from .trace import RunSummary, TraceBuilder
+
+_LOG = logging.getLogger(__name__)
 
 #: Safety stops so a stubborn model can't spin forever without consuming ops.
 _MAX_EMIT_BLOCKS = 3
@@ -97,6 +100,10 @@ _MAX_NAMED_IDS = 10
 _MAX_REVIEW_FINDINGS = 8
 #: Longest slug the harness will derive from a title.
 _MAX_SLUG_CHARS = 80
+#: How many of the anchor's statements the opening message carries. A concept
+#: mentioned by more names the rest and how to page through them.
+_MAX_ANCHOR_STATEMENTS = 200
+_ANCHOR_PAGE = 100
 
 if TYPE_CHECKING:
     from ..documentation_profiles import CatalogueSnapshot
@@ -116,13 +123,17 @@ def run_docgen(
     profiles: CatalogueSnapshot | None = None,
     instructions: ai_prompts.Snapshot | None = None,
     review_instructions: ai_prompts.Snapshot | None = None,
+    anchor_entity_id: str | None = None,
+    run_id: str | None = None,
+    on_progress: Callable[[RunSummary], None] | None = None,
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
     reasons, and never writes to the substrate.
 
     `guideline_set` / `document_type` are what the REQUEST named; either may
-    be None, in which case the run resolves it. Everything else is injectable
+    be None, in which case the run resolves it. `anchor_entity_id` is the
+    concept the document is about; the writer starts from it. Everything else is injectable
     for tests; in production they default to the selected provider client, the
     in-process substrate, `server.report_knowledge_gap`, and env-derived
     config.
@@ -157,6 +168,9 @@ def run_docgen(
             load_texts=profiles.texts if profiles is not None else _store_texts,
             revision_target=revision_target,
             manual_document=manual_document,
+            anchor_entity_id=anchor_entity_id,
+            run_id=run_id,
+            on_progress=on_progress,
         )
 
     result.trace["prompts"] = [
@@ -256,6 +270,7 @@ class _RunContext:
     emit_blocks: int = 0
     malformed_retries: int = 0
     cited_statements: dict[str, str] | None = None
+    on_progress: Callable[[RunSummary], None] | None = None
 
 
 def _execute(
@@ -274,11 +289,15 @@ def _execute(
     revision_target: RevisionTarget | None = None,
     manual_document: ManualDocument | None = None,
     review_instructions: str = prompts.DEFAULT_REVIEW_INSTRUCTIONS,
+    anchor_entity_id: str | None = None,
+    run_id: str | None = None,
+    on_progress: Callable[[RunSummary], None] | None = None,
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
         model=config.model,
         provider=config.provider,
+        run_id=run_id,
         op_cap=config.op_cap,
         wall_clock_s=config.wall_clock_s,
         prompt=prompt,
@@ -315,6 +334,7 @@ def _execute(
         nudged=False,
         emit_blocks=0,
         malformed_retries=0,
+        on_progress=on_progress,
     )
 
     resolved = _resolve(
@@ -371,6 +391,7 @@ def _execute(
         )
     ctx.tools = build_tools(substrate.tool_specs())
 
+    anchor = _read_anchor(ctx, anchor_entity_id) if anchor_entity_id else None
     recon = _recon(ctx)
     ctx.messages = [
         {
@@ -380,6 +401,7 @@ def _execute(
                 recon,
                 guideline_set=ctx.guideline_set,
                 document_type=ctx.document_type,
+                anchor=anchor,
                 current_document=current_document,
                 edited_at_destination=revision_target is not None
                 and revision_target.base == "destination",
@@ -395,6 +417,7 @@ def _execute(
                     recon,
                     guideline_set=ctx.guideline_set,
                     document_type=ctx.document_type,
+                    anchor=anchor,
                 )
                 + "\n\nIMMUTABLE USER-SUPPLIED DOCUMENT:\n"
                 + prompts.document_payload(
@@ -415,6 +438,7 @@ def _write(ctx: _RunContext) -> DocgenResult:
         if reason:
             return _forced_finalize(reason, ctx)
 
+        _progress(ctx, f"Model turn {trace.model_turns + 1}")
         try:
             with trace.span("model_turn"):
                 resp = _model_turn(ctx, ctx.messages, force_tool=None)
@@ -422,8 +446,7 @@ def _write(ctx: _RunContext) -> DocgenResult:
             ctx.model_error = f"model error: {exc}"
             trace.notes.append(ctx.model_error)
             return _forced_finalize("api_error", ctx)
-        trace.model_turns += 1
-        trace.add_usage(getattr(resp, "usage", None))
+        trace.add_usage(resp.usage, "write")
         ctx.messages.append({"role": "assistant", "content": resp.content})
 
         tool_use = _first_tool_use(resp)
@@ -499,6 +522,7 @@ def _resolve(
             f"no configured guideline set has a template for document type "
             f"'{requested_type}'; configured: {catalogue}",
         )
+    _progress(ctx, "Choosing the profile and template")
     tool = resolve_tool_def(narrowed, ctx.config.guideline_set)
     messages: list[dict[str, Any]] = [
         {
@@ -580,8 +604,7 @@ def _resolution_turn(
             resp = _model_turn(ctx, messages, force_tool=RESOLVE_TOOL, tools=[tool])
     except Exception as exc:  # noqa: BLE001 — terminal API error after backoff
         return _unresolvable(ctx, f"guideline resolution failed: {exc}")
-    trace.model_turns += 1
-    trace.add_usage(getattr(resp, "usage", None))
+    trace.add_usage(resp.usage, "resolve")
     messages.append({"role": "assistant", "content": resp.content})
 
     tool_use = _first_tool_use(resp)
@@ -605,6 +628,7 @@ def _recon(ctx: _RunContext) -> Any:
     ids count as retrieved — the map is how a run finds what to hydrate."""
     trace: TraceBuilder = ctx.trace
     args = {"query": ctx.prompt, "k": ctx.config.recon_k}
+    _progress(ctx, "Surveying the knowledge base")
     if not _substrate_has(ctx.substrate, "survey_statements"):
         trace.notes.append("recon skipped: survey_statements not available")
         return []
@@ -625,6 +649,82 @@ def _recon(ctx: _RunContext) -> Any:
         return []
 
 
+def _read_anchor(ctx: _RunContext, entity_id: str) -> prompts.Anchor | None:
+    """The concept the document is about: its names and every statement that
+    mentions it, read by the harness before the first writing turn so that
+    coverage starts from the concept rather than from free-text search. Its
+    statements count as retrieved, so the writer may cite them directly."""
+    trace: TraceBuilder = ctx.trace
+    _progress(ctx, "Reading the concept the document is about")
+    if not (
+        _substrate_has(ctx.substrate, "get_entity")
+        and _substrate_has(ctx.substrate, "list_statements")
+    ):
+        trace.notes.append("anchor skipped: get_entity or list_statements missing")
+        return None
+    statements: list[dict[str, Any]] = []
+    total = 0
+    try:
+        args: dict[str, Any] = {"id": entity_id}
+        entity = ctx.substrate.call("get_entity", args)
+        trace.record_tool_call("get_entity", args, entity, ok=True, counts_as_op=True)
+        if not isinstance(entity, dict) or entity.get("missing"):
+            trace.notes.append(f"anchor {entity_id} not found")
+            return None
+        while len(statements) < _MAX_ANCHOR_STATEMENTS:
+            args = {
+                "entity_id": entity_id,
+                "limit": _ANCHOR_PAGE,
+                "offset": len(statements),
+            }
+            page = ctx.substrate.call("list_statements", args)
+            trace.record_tool_call(
+                "list_statements", args, page, ok=True, counts_as_op=True
+            )
+            rows = page.get("statements") if isinstance(page, dict) else None
+            if not isinstance(rows, list):
+                break
+            total = int(page.get("total") or 0)
+            statements.extend(row for row in rows if isinstance(row, dict))
+            if len(rows) < _ANCHOR_PAGE or len(statements) >= total:
+                break
+    except SubstrateError as exc:
+        trace.notes.append(f"anchor read failed: {exc}")
+        return None
+    ctx.successful_reads += 1
+    anchor = prompts.Anchor(
+        entity_id=entity_id,
+        names=[
+            str(name["text"])
+            for name in entity.get("names") or []
+            if isinstance(name, dict) and "text" in name
+        ],
+        description=str(entity.get("description") or ""),
+        statements=statements,
+        total=max(total, len(statements)),
+    )
+    _note_retrieved(ctx, statements, prompts.format_anchor(anchor))
+    return anchor
+
+
+def _progress(ctx: _RunContext, activity: str) -> None:
+    """Report what the run is doing. Best-effort: a progress sink that fails
+    must not end the run it is describing."""
+    if ctx.on_progress is None:
+        return
+    try:
+        ctx.on_progress(
+            ctx.trace.progress(
+                activity,
+                elapsed_s=time.monotonic() - ctx.start,
+                retrieved=len(ctx.retrieved_ids),
+                price=ctx.config.price,
+            )
+        )
+    except Exception:  # noqa: BLE001 — progress is advisory
+        _LOG.warning("documentation run progress was not recorded", exc_info=True)
+
+
 def _dispatch_read(
     name: str, arguments: dict[str, Any], tool_use_id: str, ctx: _RunContext
 ) -> None:
@@ -641,6 +741,7 @@ def _dispatch_read(
         )
         _append_tool_error(ctx.messages, tool_use_id, f"unknown tool: {name}")
         return
+    _progress(ctx, f"Reading: {name}")
     try:
         with trace.span(f"tool:{name}"):
             result = ctx.substrate.call(name, arguments)
@@ -689,6 +790,7 @@ def _handle_gap(tool_use: Any, ctx: _RunContext) -> None:
             ctx.messages, tool_use.id, "report_knowledge_gap needs a non-empty text."
         )
         return
+    _progress(ctx, "Filing a knowledge gap")
     try:
         with trace.span(f"tool:{GAP_TOOL}"):
             result = ctx.report_gap(text)
@@ -807,6 +909,7 @@ def _review(
     footing without inheriting how the writer justified it.
     """
     trace: TraceBuilder = ctx.trace
+    _progress(ctx, "Reviewing the document")
     statements: Any | None = None
     args = {"ids": ids}
     if not _substrate_has(ctx.substrate, "get_statements"):
@@ -866,8 +969,7 @@ def _review(
         ctx.review_error = f"review model error: {exc}"
         trace.notes.append(ctx.review_error)
         return None
-    trace.model_turns += 1
-    trace.add_usage(getattr(resp, "usage", None))
+    trace.add_usage(resp.usage, "review")
 
     tool_use = _first_tool_use(resp)
     if tool_use is None or tool_use.name != REVIEW_TOOL:
@@ -965,8 +1067,7 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> DocgenResult:
     try:
         with trace.span("model_turn:forced"):
             resp = _model_turn(ctx, ctx.messages, force_tool=EMIT_TOOL)
-        trace.model_turns += 1
-        trace.add_usage(getattr(resp, "usage", None))
+        trace.add_usage(resp.usage, "forced")
         tool_use = _first_tool_use(resp)
         if tool_use is not None and tool_use.name == EMIT_TOOL:
             result = _handle_emit(tool_use, ctx, degraded=True)
@@ -1047,8 +1148,7 @@ def _build_trace(ctx: _RunContext, outcome: str, *, cited: list[str]) -> dict:
             "cited_ids": len(cited),
             "gaps_filed": len(trace.reported_gaps),
         },
-        input_per_mtok=config.input_per_mtok,
-        output_per_mtok=config.output_per_mtok,
+        price=config.price,
     )
     tracing.emit_trace(
         trace.spans,
@@ -1107,6 +1207,7 @@ def _model_turn(
             max_retries=config.max_retries,
             thinking=config.thinking,
             reasoning_effort=config.reasoning_effort,
+            cache=True,
         ),
         client=ctx.client,
     )

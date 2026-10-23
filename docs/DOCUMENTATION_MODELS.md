@@ -14,10 +14,19 @@ another Anthropic SDK credential) for Claude, `OPENAI_API_KEY` for GPT. Model
 IDs and provider defaults are saved through the settings UI. The provider list reports local configuration, not a live check
 of model access, quota, or compatibility. Failures never silently switch providers.
 
-A document takes several minutes and many model turns. Set
-`MYCELIUM_DOCGEN_TRACE_LOG` to a file path to append one JSON line per run with
-its turns, tool calls, token usage and, for the default Claude model, an
-estimated cost; nothing is recorded otherwise.
+A document takes several minutes and many model turns. Claude runs cache the
+system prompt, tools and conversation between turns, so each turn pays full
+price only for what it added. Every run records a summary: what it is doing
+while it runs, then turns, duration, input, cached and output tokens, the
+statements it retrieved and cited, the gaps it filed and, for a Claude model
+with a list price, an estimated cost. The workspace shows it on the run and in
+the generation history. Set `MYCELIUM_DOCGEN_TRACE_LOG` to a file path to also
+append one JSON line per run with its turns, tool calls and per-turn usage,
+keyed by the run id.
+
+A document about a concept starts from that concept: before the first writing
+turn the run reads the concept's names and the statements that mention it and
+hands them to the writer as already retrieved.
 
 A new generation creates a document. Naming the concept it is about, with a
 writing profile and template, gives it a stable identity: a later request for
@@ -133,8 +142,8 @@ not the writer's conversation history.
 Existing tool-operation, turn, wall-clock and request-timeout limits apply. The
 Anthropic retry setting remains specific to the Claude SDK; the GPT transport
 does not retry HTTP requests automatically. The loop retains its bounded final
-attempt when a model call fails. GPT trace cost is null because a Claude price
-estimate would be misleading; token usage is still recorded.
+attempt when a model call fails. GPT trace cost is null because no list price
+is kept for it; token usage is still recorded.
 
 Transport and workflow tests use local fake Responses payloads and isolated
 stores. They establish routing and gates, not the prose quality or account

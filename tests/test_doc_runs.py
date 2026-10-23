@@ -705,6 +705,9 @@ def test_the_default_runner_is_the_generation_loop(tmp_path, monkeypatch):
         profiles=None,
         instructions=None,
         review_instructions=None,
+        anchor_entity_id=None,
+        run_id=None,
+        on_progress=None,
     ):
         assert config.provider == "claude"
         assert instructions.action == "docgen"
@@ -727,6 +730,41 @@ def test_the_default_runner_is_the_generation_loop(tmp_path, monkeypatch):
         "document_type": "how-to",
     }
     assert docs_store.get_run(conn, run_id)["outcome"] == "document_written"
+
+
+def test_the_generation_loop_reports_progress_and_its_summary_onto_the_run(
+    tmp_path, monkeypatch
+):
+    from mycelium import docgen
+
+    conn = _conn(tmp_path)
+    during = {}
+
+    def fake_run_docgen(prompt, *, run_id=None, on_progress=None, **_kwargs):
+        on_progress({"activity": "Model turn 1", "turns": 0})
+        during.update(docs_store.serialize_run(docs_store.get_run(conn, run_id)))
+        return _document(trace={"summary": {"activity": None, "turns": 3}})
+
+    monkeypatch.setattr(docgen, "run_docgen", fake_run_docgen)
+
+    run_id = _start(conn, tmp_path)
+    doc_runs.wait_all()
+
+    assert during["summary"] == {"activity": "Model turn 1", "turns": 0}
+    finished = docs_store.serialize_run(docs_store.get_run(conn, run_id))
+    assert finished["summary"] == {"activity": None, "turns": 3}
+
+
+def test_a_failed_run_keeps_what_it_had_spent_but_not_what_it_was_doing(tmp_path):
+    conn = _conn(tmp_path)
+    run_id = docs_store.create_run(conn, prompt="p", created_by=None)
+    docs_store.mark_started(conn, run_id)
+    docs_store.record_progress(conn, run_id, {"activity": "Model turn 4", "turns": 3})
+
+    docs_store.finish_run(conn, run_id, outcome="failed", error="boom")
+
+    summary = docs_store.serialize_run(docs_store.get_run(conn, run_id))["summary"]
+    assert summary == {"activity": None, "turns": 3}
 
 
 def test_a_runner_that_raises_finishes_the_run_failed(tmp_path):
