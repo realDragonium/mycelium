@@ -60,7 +60,9 @@ transaction.
 - `GET /api/names-workspace/{entity_id}`: concept detail and history.
 - `POST /api/names-workspace/preview`: `{ "action": { "kind": "add", "entity_id": "...", "text": "..." } }`.
 - `POST /api/names-workspace/apply`: the same action plus the preview's
-  `expected_revision`. A stale revision returns HTTP 409.
+  `expected_revision`. A stale revision returns HTTP 409. A merge reports
+  `documents_unanchored`, and the workspace tells the curator when documents
+  lost their concept anchor.
 - `GET /api/mention-candidates?entity_id=...&after=...&limit=...`: bounded
   read-only discovery, including ambiguous matches. Follow `next_after` while
   `has_more` is true, even if a page contains no matches.
