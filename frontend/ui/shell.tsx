@@ -24,7 +24,8 @@ import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, typ
 import { getJSON, getMe, getServerInfo, type KnowledgeGap, type Me } from './api';
 import { ensureSubstrate, loadSubstrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
-import { useAsync } from './use-async';
+import { useAsync, useOnSettingsSaved } from './use-async';
+import { useSetup } from './setup';
 
 /* ---------------- Sidebar ---------------- */
 interface NavItem { label: string; icon: IconName; to: Route; views: View[]; badge?: number; badgeTone?: 'warn' }
@@ -126,9 +127,22 @@ const LOST_WITH: Record<string, string> = {
 
 // Not dismissible: the condition lasts until the files are restored and the
 // server restarts, and an operator should not have to read logs to find it.
-function PartialRestoreBanner() {
+function ServerBanners() {
   const info = useAsync(getServerInfo).state;
-  const missing = info.status === 'ready' ? info.data.partial_restore : [];
+  if (info.status !== 'ready') return null;
+  return <>
+    {info.data.quarantine && <div className="restore-banner notice warn" role="status">
+      <I.warn width="16" height="16" />
+      <span>
+        <strong>Quarantine.</strong> This server was started with <code>--quarantine</code>: background AI work, draft review and publishing to GitHub are off.
+        Restart it without the flag once this copy is safe to act on.
+      </span>
+    </div>}
+    <PartialRestoreBanner missing={info.data.partial_restore} />
+  </>;
+}
+
+function PartialRestoreBanner({ missing }: { missing: string[] }) {
   if (!missing.length) return null;
   const lost = missing.map(name => LOST_WITH[name] ?? name).join(', ');
   return (
@@ -144,10 +158,12 @@ function PartialRestoreBanner() {
 }
 
 /* ---------------- AI budget ---------------- */
-// Admins only: the endpoint answers null for everyone else. Checked once per
-// page load; spend moves slowly enough that a stale banner costs nothing.
+// Admins only: the endpoint answers null for everyone else. Checked on page
+// load and after a settings save; spend moves slowly enough that a banner a
+// little behind it costs nothing.
 function BudgetBanner() {
-  const state = useAsync(useCallback(() => getJSON<Budget | null>('/api/ai-usage/budget'), [])).state;
+  const { state, reload } = useAsync(useCallback(() => getJSON<Budget | null>('/api/ai-usage/budget'), []));
+  useOnSettingsSaved(reload);
   const budget = state.status === 'ready' ? state.data : null;
   if (!budget || !budget.warning) return null;
   return (
@@ -156,6 +172,25 @@ function BudgetBanner() {
       <span>
         <strong>AI budget.</strong> Estimated spend this month is {usd(budget.spent_usd)}, {budget.percent}% of the {usd(budget.limit_usd)} budget.
         {budget.paused ? ' Background actions are paused.' : ''} <Link to={{ view: 'settings', section: 'usage' }}>See AI usage</Link>
+      </span>
+    </div>
+  );
+}
+
+/* ---------------- Blocked background work ---------------- */
+// Admins only. One line per switched-on worker that lacks provider
+// credentials; the workers themselves wait quietly instead of failing.
+function BlockedWorkBanner() {
+  const state = useSetup().state;
+  const blocked = state.status === 'ready' ? state.data.blocked : [];
+  if (!blocked.length) return null;
+  return (
+    <div className="restore-banner notice warn" role="status">
+      <I.warn width="16" height="16" />
+      <span>
+        <strong>Background AI work is waiting.</strong>{' '}
+        {blocked.map(b => <span key={b.worker}>{b.worker}: {b.reason} </span>)}
+        <Link to={{ view: 'settings', section: 'models' }}>Check the models</Link>
       </span>
     </div>
   );
@@ -223,8 +258,8 @@ export function App() {
               <Sidebar me={me.status === 'ready' ? me.data : null} open={navOpen} onClose={() => setNavOpen(false)} />
               {navOpen && <div className="side-scrim" onClick={() => setNavOpen(false)} />}
               <div className="main-col">
-                <PartialRestoreBanner />
-                {me.status === 'ready' && me.data.role === 'admin' && <BudgetBanner />}
+                <ServerBanners />
+                {me.status === 'ready' && me.data.role === 'admin' && <><BudgetBanner /><BlockedWorkBanner /></>}
                 <header className="topbar">
                   <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Open navigation"><I.menu /></button>
                   {route.view !== 'home' ? <CommandBar /> : <div className="topbar-spacer" />}

@@ -5,6 +5,7 @@ import { ActionModels, DraftReviewSettings } from './ai-settings';
 import { AIUsage } from './ai-usage';
 import { AIInstructions, DocumentationProfiles } from './documentation-profiles';
 import { ProductSettings } from './product-settings';
+import { SetupSection } from './setup';
 import { AudiencesSettings } from './audiences';
 import { Card, I, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
 import { Link, type SettingsSection } from './router';
@@ -19,6 +20,9 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
   { title: 'You', sections: [
     { id: 'account', label: 'Account & tokens', blurb: 'Who you are signed in as, and the MCP tokens your clients use.' },
     { id: 'appearance', label: 'Appearance', blurb: 'Theme and density for this browser.' },
+  ] },
+  { title: 'Instance', sections: [
+    { id: 'setup', label: 'Set up Mycelium', blurb: 'What this instance still needs before its AI work runs, each step linking to where it is done.' },
   ] },
   { title: 'People', sections: [
     { id: 'members', label: 'Members & invites', blurb: 'Who can use this instance, with which role, plus service accounts for agents.' },
@@ -61,6 +65,7 @@ function Section({ id }: { id: SettingsSection }) {
   switch (id) {
     case 'account': return <><AccountCard /><TokensCard /></>;
     case 'appearance': return <AppearanceCard />;
+    case 'setup': return <SetupSection />;
     case 'members': return <MembersSection />;
     case 'models': return <ActionModels />;
     case 'prompts': return <AIInstructions />;

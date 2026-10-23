@@ -643,3 +643,12 @@ main.page.home { padding-top: 56px; }
 .health-row-body { min-width: 0; flex: 1; }
 .health-row-body > a { color: var(--ink); }
 .health-error { color: var(--danger); }
+
+/* Setup checklist */
+.setup-steps { list-style: none; margin: 0; padding: 0; }
+.setup-step { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.setup-step:first-child { border-top: 0; }
+.setup-step .ss-mark { flex: 0 0 auto; margin-top: 2px; color: var(--warn); }
+.setup-step.done .ss-mark { color: var(--bio); }
+.setup-step.dismissed .ss-mark, .setup-step.dismissed .ss-title a { color: var(--ink-4); }
+.setup-step .ss-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

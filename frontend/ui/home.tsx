@@ -5,6 +5,7 @@ import { I, useGoIngest } from './lib';
 import { Link } from './router';
 import { getJSON, getSubstrateCounts, type KnowledgeGap } from './api';
 import { asksPerson, type DraftSummary } from './draft-review';
+import { HomeSetup } from './setup';
 import { useAsync } from './use-async';
 
 const loadQueue = () => Promise.all([
@@ -41,6 +42,8 @@ export function HomeScreen() {
       </div>
 
       <div className="home-cmd"><CommandBar hero /></div>
+
+      <HomeSetup />
 
       <div className="tier-cards">
         <div className="tier-card ask">
