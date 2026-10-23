@@ -33,6 +33,18 @@ def _describe(kinds: KindSet) -> str:
     return "/".join(sorted(kinds))
 
 
+def kind_error(link_type: str, from_kind: str, to_kind: str) -> str | None:
+    """Return an error when a statement link's kinds break its declared
+    direction, whether or not swapping the ends would fix it."""
+    kinds = LINK_DIRECTION.get(link_type)
+    if kinds is None or _satisfies(kinds, from_kind, to_kind):
+        return None
+    return flip_error(link_type, from_kind, to_kind) or (
+        f"`{link_type}` goes {_describe(kinds[0])} -> {_describe(kinds[1])}, "
+        f"but this edge goes {from_kind} -> {to_kind}"
+    )
+
+
 def flip_error(link_type: str, from_kind: str, to_kind: str) -> str | None:
     """Return an error only when a statement link is provably backwards."""
     kinds = LINK_DIRECTION.get(link_type)

@@ -44,8 +44,10 @@ adjacency floor. Its draft may only:
 Anything else is dropped and listed in the draft's flags: statement creation,
 rewrites, merges and deletions, edges that touch no batch statement,
 self-links, an edge conditioned on one of its own ends, a "new" concept whose name already exists (that would rewrite its
-description), and a name or alias the batch text does not contain. Edges whose
-statement kinds show they point the wrong way are dropped as in ingest.
+description), and a name or alias the batch text does not contain. Unlike
+ingest, which drops only an edge that is provably backwards, the pass drops
+every edge whose statement kinds break its type's direction (for example
+`accepts` to anything other than a `property`).
 
 "Connect next N" sends the next N statements after the last run's (remembered
 in the browser), skipping statements already in a pending draft. **Start from

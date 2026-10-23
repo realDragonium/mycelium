@@ -703,7 +703,7 @@ def test_an_edge_pointing_the_wrong_way_is_flagged_not_queued():
 
     assert ("get_statements", {"ids": ["stm_99"]}) in substrate.calls
     assert emitter.queued[0][2]["links"] == []
-    assert any("points the wrong way" in f for f in result.flagged)
+    assert any("looks flipped" in f for f in result.flagged)
 
 
 def test_malformed_emit_reprompted_then_degrades():

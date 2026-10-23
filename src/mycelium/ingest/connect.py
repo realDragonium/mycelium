@@ -19,6 +19,7 @@ from typing import Any, Final
 
 from .. import (
     ai_prompts,
+    link_rules,
     mentions,
     model_settings,
     product_settings,
@@ -85,7 +86,9 @@ OPERATIONS YOU MAY EMIT
   are existing `stm_` ids and every edge touches a statement in the batch, as an
   end or as its `when` condition. A `when` never names an end of its own edge; it
   is {"statement_id": ID} or {"op": "and"|"or"|"not", "of": [...]}.
-  Pick `link_type` from the live vocabulary; never invent one.
+  Pick `link_type` from the live vocabulary; never invent one. An edge whose
+  statement kinds break the type's direction (e.g. `accepts` to anything but a
+  `property`) is dropped.
 - alias_suggestion: {"entity_id", "alias", "quote", "reason", "ambiguity",
   "statement_id"}. `statement_id` is the batch statement whose text uses the
   alias, `quote` an exact excerpt of that text containing the alias, and the
@@ -296,6 +299,7 @@ def run_connect(
         title=f"connect: {len(batch)} statement{'' if len(batch) == 1 else 's'}",
         notes=(instructions.note,) if instructions.note else (),
         screen=screen(batch, known_name),
+        edge_check=link_rules.kind_error,
         quotable={t.id: t.text for t in batch},
     )
     return run(

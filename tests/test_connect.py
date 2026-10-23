@@ -161,6 +161,27 @@ def test_drops_a_wrong_way_edge_like_ingest():
     assert isinstance(result, NothingToIngest)
 
 
+def test_drops_an_edge_whose_kinds_break_its_type_even_if_not_flipped():
+    # `accepts` only ends on a property; neither end here is one.
+    result, emitter, _ = _connect(
+        [
+            _op(
+                "add_links",
+                {
+                    "links": [
+                        _edge("stm_invoice", "stm_queued", "accepts"),
+                        _edge("stm_invoice", "stm_export"),
+                    ]
+                },
+            )
+        ]
+    )
+
+    assert emitter.queued[0][2] == {"links": [_edge("stm_invoice", "stm_export")]}
+    assert isinstance(result, DraftCreated)
+    assert any("`accepts` goes any -> property" in line for line in result.flagged)
+
+
 def test_a_new_concept_must_be_named_by_the_batch_and_not_exist():
     result, emitter, _ = _connect(
         [

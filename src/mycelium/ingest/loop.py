@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx
 
-from .. import ai, ai_prompts, tracing, when_expression
+from .. import ai, ai_prompts, link_rules, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
@@ -186,6 +186,9 @@ class Task:
     #: Narrows one op to what this task may propose: the op, possibly with
     #: fewer edges, or None to drop it, plus a line per thing dropped.
     screen: Callable[[dict], tuple[dict | None, list[str]]] | None = None
+    #: Which statement edges to drop by their kinds, given (link type, source
+    #: kind, target kind). Ingest drops only edges applying would reject.
+    edge_check: directions.EdgeCheck = link_rules.flip_error
     #: Statements alias evidence may quote instead of `text`, by id.
     quotable: Mapping[str, str] = field(default_factory=dict)
 
@@ -575,8 +578,8 @@ def _assemble_draft(
         return _nothing(reason, ctx)
 
     existing = _existing_statements(directions.existing_ids(ops), ctx)
-    ops, flipped = directions.without_flipped(ops, existing)
-    flagged.extend(f"edge dropped, it points the wrong way: {f}" for f in flipped)
+    ops, flipped = directions.without_flipped(ops, existing, ctx.task.edge_check)
+    flagged.extend(f"edge dropped: {f}" for f in flipped)
 
     valid_kinds = _safe_valid_kinds(emitter)
     indexed: list[tuple[int, ProposedOp]] = []
