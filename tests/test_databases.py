@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 import instance_scenario
-from mycelium import databases, embed, phrasing, server, store
+from mycelium import databases, embed, migrations, phrasing, server, store
 from mycelium.http import create_app
 from mycelium.server import runtime
 
@@ -120,7 +120,7 @@ def test_a_substrate_without_knowledge_is_not_a_partial_restore(tmp_path):
         conn.execute("PRAGMA foreign_keys = OFF")
         conn.executescript("DELETE FROM statements; DELETE FROM entities;")
     for peer in _PEERS:
-        (tmp_path / "data" / peer).unlink()
+        (tmp_path / "data" / peer).unlink(missing_ok=True)
 
     assert databases.partial_restore(tmp_path / "data") == ()
 
@@ -143,7 +143,11 @@ def test_every_shipped_instance_upgrades_without_alarm(fixture, tmp_path):
     assert databases.partial_restore(tmp_path / "data") == ()
 
 
-@pytest.mark.parametrize("peer", _PEERS)
+@pytest.mark.parametrize(
+    # A database newer than the current schema is checked from the next migration.
+    "peer",
+    [name for name in _PEERS if databases.FILES[name] <= migrations.CURRENT_VERSION],
+)
 @pytest.mark.parametrize("how", ["deleted", "truncated"])
 def test_any_missing_peer_beside_knowledge_is_a_partial_restore(peer, how, tmp_path):
     _load(_FIXTURES[-1], tmp_path / "data")

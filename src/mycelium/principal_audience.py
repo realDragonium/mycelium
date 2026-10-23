@@ -51,6 +51,7 @@ TOOLS = frozenset(
         "list_link_type_aliases",
         "list_generated_documents",
         "get_generated_document",
+        "list_media",
     }
 )
 
@@ -72,6 +73,7 @@ ROUTES = frozenset(
         ("GET", "/api/history"),
         ("GET", "/api/documentation/documents"),
         ("GET", "/api/documentation/documents/{document_id}"),
+        ("GET", "/api/media/{media_id}/content"),
     }
 )
 

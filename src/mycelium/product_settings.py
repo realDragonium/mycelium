@@ -174,6 +174,19 @@ class AIBudgetSettings(SettingsModel):
     pause_background: bool = False
 
 
+class MediaSettings(SettingsModel):
+    """Limits and freshness for screenshots and recordings."""
+
+    kind: Literal["media"] = "media"
+    image_max_bytes: int = Field(default=5 * 1024 * 1024, gt=0, le=50 * 1024 * 1024)
+    video_max_bytes: int = Field(default=20 * 1024 * 1024, gt=0, le=200 * 1024 * 1024)
+    #: Media captured or replaced longer ago than this is flagged as old.
+    stale_after_days: int = Field(default=365, gt=0)
+    #: The product version media should show. Media captured against another
+    #: version is flagged; empty turns the check off.
+    product_version: str = Field(default="", max_length=100)
+
+
 SetupStep = Literal[
     "credentials", "models", "audiences", "profile", "github", "review", "budget"
 ]
@@ -266,6 +279,7 @@ Section = Literal[
     "documentation",
     "ai_budget",
     "setup",
+    "media",
 ]
 Body = Annotated[
     AskSettings
@@ -280,7 +294,8 @@ Body = Annotated[
     | ConcurrencySettings
     | DocumentationSettings
     | AIBudgetSettings
-    | SetupSettings,
+    | SetupSettings
+    | MediaSettings,
     Field(discriminator="kind"),
 ]
 BODY: TypeAdapter[Body] = TypeAdapter(Body)
@@ -298,6 +313,7 @@ DEFAULTS: tuple[Body, ...] = (
     DocumentationSettings(),
     AIBudgetSettings(),
     SetupSettings(),
+    MediaSettings(),
 )
 
 
@@ -350,7 +366,8 @@ T = TypeVar(
     | ConcurrencySettings
     | DocumentationSettings
     | AIBudgetSettings
-    | SetupSettings,
+    | SetupSettings
+    | MediaSettings,
 )
 
 
@@ -475,7 +492,8 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         | AIBudgetSettings
         | DocumentationMaintenanceSettings
         | ConnectSettings
-        | SetupSettings,
+        | SetupSettings
+        | MediaSettings,
     ):
         return default
     if isinstance(default, DocumentationSettings):

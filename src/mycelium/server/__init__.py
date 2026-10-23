@@ -80,6 +80,7 @@ from .entities import (
 from .gaps import report_knowledge_gap
 from .links import add_links, remove_links
 from .lookups import get_statements, grep_statements, list_statements, retrieve_context
+from .media import create_media_upload, list_media
 from .model_loops import ask, connect_statements, ingest
 from .names import (
     delete_name,
@@ -200,6 +201,8 @@ __all__ = [
     "get_draft_review_run",
     "set_draft_review_evidence",
     "set_operation_evidence",
+    "list_media",
+    "create_media_upload",
     "list_my_drafts",
     "list_drafts",
     "get_draft",

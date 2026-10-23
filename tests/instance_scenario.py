@@ -58,6 +58,7 @@ def populate(data_dir: Path) -> dict[str, str]:
     _documentation(data_dir)
     _prompts(data_dir)
     _github(data_dir)
+    _media(ids)
     return ids
 
 
@@ -411,3 +412,20 @@ def _has_table(conn: sqlite3.Connection, table: str) -> bool:
         ).fetchone()
         is not None
     )
+
+
+def _media(ids: dict[str, str]) -> None:
+    try:
+        from mycelium import media
+    except ImportError:
+        return
+    import media_samples
+
+    item = media.create(
+        media_samples.png(),
+        media.Details(alt_text="The sign-in form", caption="Signing in"),
+        origin="uploaded",
+        actor="curator",
+        attach=[("statement", ids["submit"])],
+    )
+    media.set_label(item.id, ["external-technical"], curator="curator")

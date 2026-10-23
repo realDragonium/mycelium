@@ -40,6 +40,8 @@ _AUTH_EXEMPT_PREFIXES = (
     "/docs",  # FastAPI swagger
     "/openapi.json",
     "/redoc",
+    # An upload link is its own credential (see `mycelium.media`).
+    "/api/media/uploads/",
 )
 _AUTH_EXEMPT_PATHS = {
     "/",

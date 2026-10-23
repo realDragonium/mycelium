@@ -15,7 +15,7 @@ from typing import Any, TypedDict
 from pydantic import JsonValue, TypeAdapter
 
 from .. import auth as _auth
-from .. import drafts_store, store
+from .. import drafts_store, media, store
 from ..auth import Principal as AuthPrincipal
 from .draft_queue import _require_draft_owner
 from .registry import tool
@@ -169,10 +169,13 @@ def set_operation_evidence(
     reviewer weighs; an empty list removes it.
 
     Use it for what you checked in the product itself: each item has a
-    `kind` (code, ui, doc or other), where it is (`path` relative to the
-    repository root with optional `lines` such as "40-52" and `commit`, or a
-    `url`), a short `excerpt` (at most 1500 characters) and a one-line
-    `claim` saying what it shows. At most five items per operation. A link
+    `kind` (code, ui, doc, media or other), where it is (`path` relative to
+    the repository root with optional `lines` such as "40-52" and `commit`,
+    or a `url`), a short `excerpt` (at most 1500 characters) and a one-line
+    `claim` saying what it shows. Media evidence names a `media_id` from
+    `create_media_upload` instead of a place; applying the draft attaches
+    that screenshot or recording to what the operation writes. At most five
+    items per operation. A link
     backed by a concrete code excerpt can be accepted on that basis; a link
     without evidence is judged more strictly. `operation_ref` is in the
     receipt of the queued write and in `get_draft`. Only the draft's creator
@@ -180,7 +183,7 @@ def set_operation_evidence(
     """
     principal = _identified_principal()
     # In-process callers pass plain dicts; MCP and HTTP have validated already.
-    items = _evidence_list.validate_python(evidence)
+    items = media.describe_evidence(_evidence_list.validate_python(evidence))
     conn = _drafts_db()
     with store.transaction(conn):
         row = _require_mutable_draft(draft_id)

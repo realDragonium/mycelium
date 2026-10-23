@@ -25,11 +25,13 @@ from fastapi.staticfiles import StaticFiles
 from mcp.server.transport_security import RequestBodyLimitMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.routing import BaseRoute
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .. import (
     auth,
     errors,
     github_connect,
+    media_formats,
     oauth_server,
     oidc,
     quarantine,
@@ -47,6 +49,7 @@ from . import (
     gaps,
     health,
     history,
+    media,
     names,
     prompt_texts,
     settings,
@@ -70,6 +73,22 @@ def _max_body_bytes() -> int:
     caller can make the server hold in memory."""
     raw = (os.environ.get("MYCELIUM_MAX_BODY_BYTES") or "").strip()
     return int(raw) if raw else 4 * 1024 * 1024
+
+
+class _BodyLimit:
+    """The app-wide body limit, except on the routes that take a file: those
+    read their body against the media caps, which are larger and can change
+    while the app runs."""
+
+    def __init__(self, app: ASGIApp, max_body_size: int) -> None:
+        self.app = app
+        self.limited = RequestBodyLimitMiddleware(app, max_body_size)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and media.RAW_BODY.match(scope["path"]):
+            await self.app(scope, receive, send)
+            return
+        await self.limited(scope, receive, send)
 
 
 def _start_in_background(data_dir: Path, on_failure: Callable[[], None]) -> None:
@@ -135,6 +154,8 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     app.exception_handler(errors.Conflict)(_conflict_handler)
     app.exception_handler(auth.RoleRequired)(_role_required_handler)
     app.exception_handler(Exception)(_unhandled_error_handler)
+    app.exception_handler(media.TooLarge)(media._too_large)
+    app.exception_handler(media_formats.Rejected)(media._rejected)
 
     # Middleware in Starlette runs in *reverse* registration order (last
     # added wraps the outermost). We want session decoding to happen
@@ -148,7 +169,7 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
         same_site="lax",
         https_only=session_cookie_secure(),
     )
-    app.add_middleware(RequestBodyLimitMiddleware, max_body_size=_max_body_bytes())
+    app.add_middleware(_BodyLimit, max_body_size=_max_body_bytes())
     app.add_middleware(HostAllowlistMiddleware)
     # Outside every layer that reads a database, so nothing reaches one
     # mid-startup.
@@ -196,6 +217,7 @@ def _routes() -> tuple[BaseRoute, ...]:
         account.router,
         names.router,
         audience_routes.router,
+        media.router,
         prompt_texts.router,
         settings.router,
         draft_review.router,

@@ -160,6 +160,10 @@ def _init(data_dir: Path) -> None:
 
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
+    from .. import media_store
+
+    media_store.configure(data_dir / media_store.DB_NAME)
+    media_store.migrate(media_store.connection())
     ai_usage.install(data_dir / "mycelium-drafts.db")
     from .. import draft_review_store
 

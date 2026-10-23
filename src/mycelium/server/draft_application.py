@@ -16,12 +16,12 @@ import logging
 import re
 import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NotRequired, TypedDict
 
 from pydantic import JsonValue
 
-from .. import auth, link_authoring, store, timestamps
+from .. import auth, link_authoring, media, store, timestamps
 from .draft_review import _draft_operation_findings, _review_knowledge_preconditions
 from .drafts import _identified_principal
 from .indexes import _persisted_index_write, _restore_index_snapshots
@@ -381,11 +381,27 @@ def apply_draft(
     for _, snapshot_path, _ in snapshots:
         with contextlib.suppress(OSError):
             snapshot_path.unlink(missing_ok=True)
+    _attach_media(ops, results)
     return {
         "applied": sum("result" in item for item in results),
         "skipped": sum("skipped" in item for item in results),
         "results": results,
     }
+
+
+def _attach_media(
+    ops: list[sqlite3.Row], results: Sequence[Mapping[str, object]]
+) -> None:
+    """Media lives in its own database, so it is attached once the substrate
+    has committed. A failure here leaves the knowledge applied and the
+    media unattached, for a curator to attach from the library."""
+    approver = auth.current_principal.get()
+    try:
+        media.attach_applied(
+            ops, results, actor=approver.id if approver is not None else None
+        )
+    except Exception:  # noqa: BLE001 — the draft's knowledge has landed
+        logger.exception("attaching a draft's media evidence failed")
 
 
 def _reviewed_apply_enabled() -> bool:
@@ -570,8 +586,10 @@ def _apply_claimed_draft(
                     f"replay returned after substrate commit: {exc}",
                 )
             result = {**committed, "recovered": True}
+            _attach_media(drafts_store.list_ops(conn, draft_id), result["results"])
     else:
         result = {**result, "recovered": True}
+        _attach_media(drafts_store.list_ops(conn, draft_id), result["results"])
 
     try:
         with store.transaction(conn):
