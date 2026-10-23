@@ -10,6 +10,7 @@ model:
 - Draft review: assess submitted knowledge drafts.
 - Alias discovery: propose alternative names from selected existing statements.
 - Audience labelling: decide which documentation audiences may see each statement ([Audiences](AUDIENCES.md)).
+- Documentation planning: propose which documents a writing profile's audience needs ([Documentation planning](DOCUMENTATION_PLANNING.md)).
 
 Choose Claude or OpenAI GPT independently for each action. Each action remembers
 one model ID and reasoning effort per provider, so switching providers preserves the other provider’s settings.
@@ -77,7 +78,7 @@ editable. Database-level failures still require operator repair. Backup refuses 
 unreadable instance configuration, and restore validates required settings
 sections before replacing the target. Older archives without settings receive built-in defaults, with automation off; restore never imports the target environment.
 
-Authenticated `GET /api/model-settings` returns all five actions, their effective
+Authenticated `GET /api/model-settings` returns every action, their effective
 provider, selected model, remembered model IDs, source, and revision. Admin-only
 `PATCH /api/model-settings/{action}` accepts `provider`, `claude_model`,
 `openai_model`, optional `claude_reasoning_effort` and `openai_reasoning_effort`, and the current `revision`. Omitted effort fields preserve saved values; explicit `null` restores Model default. Concurrent or stale saves return 409

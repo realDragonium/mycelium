@@ -1,8 +1,8 @@
 # AI prompts
 
 Open **Settings → Prompts**. Choose Questions, Ingestion,
-Document generation, Document review, Draft review, Alias discovery, or
-Audience labelling.
+Document generation, Document review, Draft review, Alias discovery,
+Audience labelling, or Documentation planning.
 Writers and administrators can edit instructions; readers can inspect them.
 Claude and OpenAI use the same saved behavioral instructions for each action.
 

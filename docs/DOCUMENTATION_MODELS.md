@@ -25,7 +25,8 @@ append one JSON line per run with its turns, tool calls and per-turn usage,
 keyed by the run id.
 
 A run writes for its profile's audience and reads only what that audience
-may see; see [Audiences](AUDIENCES.md).
+may see; see [Audiences](AUDIENCES.md). To decide which documents a profile
+needs, see [Documentation planning](DOCUMENTATION_PLANNING.md).
 
 A document about a concept starts from that concept: before the first writing
 turn the run reads the concept's names and the statements that mention it and
