@@ -43,7 +43,10 @@ An unsupported combination fails explicitly without changing models or effort.
 
 Claude’s existing extended-thinking toggle remains separate: effort controls
 response work even without thinking blocks. Forced final tool calls retain the
-existing thinking policy and still receive the configured effort. Increasing
+existing thinking policy and still receive the configured effort. Claude Fable
+5.1, Mythos 5.1, Opus 5.5 and Sonnet 5.5 refuse a forced tool choice, so on
+those models a turn that needs a tool asks for it in the prompt instead, keeps
+thinking, and still fails unless the reply is exactly that one call. Increasing
 effort does not raise token, timeout, or whole-run limits automatically.
 
 Effort is captured when work starts and included in saved draft-review attempts

@@ -141,7 +141,17 @@ Schemas keep their existing optional fields with `strict: false`; the existing
 tool dispatch and document/review parsers validate arguments. Incomplete,
 malformed, parallel-call and HTTP error responses cannot bypass the gates.
 The fresh review conversation receives the candidate document and review rules,
-not the writer's conversation history.
+not the writer's conversation history. Of the cited statements it sees only id,
+kind and text, not who changed them or when. It judges exposure on the
+document's title and body, and does not fail conformance for a section, table
+column or field the writer left out or marked unverified because no cited
+statement supports it; the templates tell the writer to do that and file a
+knowledge gap.
+
+A run the review refused shows the failed findings, grouped by check, and a
+writer can start **Revise with these notes**: a new run with the same profile,
+type and concept (or a revision of the same document), whose request is the
+original one followed by the findings.
 
 Existing tool-operation, turn, wall-clock and request-timeout limits apply. The
 Anthropic retry setting remains specific to the Claude SDK; the GPT transport
