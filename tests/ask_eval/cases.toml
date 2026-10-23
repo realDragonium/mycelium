@@ -49,8 +49,8 @@ facts = ["apikey_scope"]
 # --- alias usage -------------------------------------------------------------
 
 [[cases]]
-id = "insights_refresh"
-question = "How often is Insights updated?"
+id = "revenue_overview_refresh"
+question = "How often is the revenue overview updated?"
 categories = ["alias", "direct"]
 facts = ["dash_refresh"]
 

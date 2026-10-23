@@ -102,7 +102,7 @@ description = "The billing plan for larger teams."
 key = "dashboard"
 name = "Revenue dashboard"
 description = "A page with charts of a workspace's invoiced and paid revenue."
-aliases = ["Insights"]
+aliases = ["Revenue overview"]
 
 [[entities]]
 key = "view"
