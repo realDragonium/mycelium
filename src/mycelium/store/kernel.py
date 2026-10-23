@@ -477,6 +477,16 @@ CREATE TABLE IF NOT EXISTS audience_label_queue (
     last_error      TEXT
 );
 
+-- The last time the connect pass looked at a statement and what it saw:
+-- its text, and the statements it weighed (a JSON array of ids). Until
+-- one of those changes, "connect next" does not offer the statement again.
+CREATE TABLE IF NOT EXISTS connect_attempts (
+    statement_id TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
+    text         TEXT NOT NULL,
+    neighbours   TEXT NOT NULL,
+    attempted_at TEXT NOT NULL
+);
+
 -- Durable dirty-queue for asynchronous mention recompute. Statement
 -- upsert derives mentions synchronously (hot path stays consistent); a
 -- name/alias/entity change instead enqueues work here, drained by the

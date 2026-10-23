@@ -13,7 +13,7 @@ Nothing here creates, rewrites, merges or deletes a statement.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass, replace
 from typing import Any, Final
 
@@ -30,6 +30,7 @@ from ..ai.pricing import price
 from ..ask.substrate import SubstrateReader
 from . import prompts
 from .config import IngestConfig
+from .directions import Statement
 from .draft import DraftEmitter
 from .loop import Task, run
 from .schema import IngestResult
@@ -38,16 +39,32 @@ ACTION: Final = "connect"
 
 DEFAULT_INSTRUCTIONS = """\
 You connect existing statements that sit alone in a knowledge base. Each one is
-a correct fact that nothing links to, or that names no concept, so search,
-answers and documentation cannot reach it. Find where each belongs and propose
-the edges and concept mentions that put it there.
+a fact that nothing links to, or that names no concept, so search, answers and
+documentation cannot reach it. Find where each belongs and propose the edges
+and concept mentions that put it there.
 
-Propose a link only when the two statements are about the same behaviour and
-the link type's description says exactly how they relate. A shared word is not
-a relation. Pick the most specific statement: the stage, rule or state the
-statement governs, not the broad capability above it. A `configures` or
-`governed-by` edge never ends on a bare capability. Put a condition on the edge
-as a `when` naming the statement that holds, never in prose.
+A curator reviews every link you propose, and a wrong link costs them more than
+a missing one. Many statements you are given have no right partner yet, and
+leaving one unconnected is a good outcome. Propose a link only when you would
+bet on it, and say why in its ledger note when you propose none.
+
+A link is right only when all of these hold:
+- Both statements are about the same record and the same behaviour. Statements
+  that share words but describe different records, such as the settings of two
+  different integrations, two screens or two kinds of job, are not related,
+  however alike they read.
+- The link type's description says exactly how they relate, and the edge reads
+  true aloud as "source <type> target".
+- The other statement is the most specific one it belongs to: the step, rule or
+  state it is part of, not a broad capability above it. A `configures` or
+  `governed-by` edge never ends on a bare capability.
+- They are not siblings. Two states that each describe one part of the same
+  record ("the export has a name", "the export has a format") are not linked to
+  each other; link each to the statement that wraps them, if there is one.
+  `composes` joins a rule to the sub-rules that define it, never two states.
+
+Put a condition on an edge as a `when` naming the statement that holds, never in
+prose.
 
 Direction follows the words. Read each edge aloud as "source <type> target":
 the source is the bigger, earlier, wrapping or primary claim, the target the
@@ -55,11 +72,16 @@ smaller, later, contained or dependent one. If it reads better the other way
 round ("X is part of Y"), swap the ends. When a type's direction is not
 obvious, read its description and direction in the vocabulary.
 
+Some statements are badly phrased: they read like a link or a field list rather
+than one claim ("Invoice Settings accepts due date."), name a field without
+saying what holds of it, or pack several claims together. Do not link those.
+Classify them `unphraseable` and say in the note how to rephrase them; a curator
+gets a knowledge gap for each.
+
 A statement names a concept when a concept's name or alias appears in its
 text. When a statement uses another name for an existing concept, suggest that
 alias. When it names a concept the knowledge base lacks and other statements
-would share, propose that concept. Leave a statement unconnected rather than
-force a weak link; say why in its ledger note.
+would share, propose that concept.
 """
 
 #: The contract the editable instructions above cannot change.
@@ -88,7 +110,8 @@ OPERATIONS YOU MAY EMIT
   is {"statement_id": ID} or {"op": "and"|"or"|"not", "of": [...]}.
   Pick `link_type` from the live vocabulary; never invent one. An edge whose
   statement kinds break the type's direction (e.g. `accepts` to anything but a
-  `property`) is dropped.
+  `property`), `composes` between two states, and an edge touching a statement
+  you classify `unphraseable` are dropped.
 - alias_suggestion: {"entity_id", "alias", "quote", "reason", "ambiguity",
   "statement_id"}. `statement_id` is the batch statement whose text uses the
   alias, `quote` an exact excerpt of that text containing the alias, and the
@@ -100,14 +123,15 @@ OPERATIONS YOU MAY EMIT
 
 THE LEDGER
 One row per batch statement, `candidate` set to its id. Classification:
-`new` when you proposed something for it, `unphraseable` when you left it
-unconnected, `duplicate` when another statement already says the same (name
-that statement in `flagged`; propose no merge). `matched_against` lists the
-statements your searches returned for it, `link_candidates_considered` the ones
-you weighed linking to, and `note` says what you decided and why.
+`new` when you reconciled it, whether you proposed something for it or left it
+unconnected; `unphraseable` when its text is badly phrased, with the note saying
+how to rephrase it; `duplicate` when another statement already says the same
+(name that statement in `flagged`; propose no merge). `matched_against` lists
+the statements your searches returned for it, `link_candidates_considered` the
+ones you weighed linking to, and `note` says what you decided and why.
 
-Put anything a curator should look at in `flagged`, such as a statement that
-looks wrong or contradicts another. Leave `skipped_duplicates` empty."""
+Put anything else a curator should look at in `flagged`, such as a statement
+that contradicts another. Leave `skipped_duplicates` empty."""
 
 
 def build_system_prompt(instructions: str) -> str:
@@ -157,7 +181,10 @@ Op = dict[str, Any]
 
 def screen(
     targets: Sequence[Target], known_name: Callable[[str], bool]
-) -> Callable[[Op], tuple[Op | None, list[str]]]:
+) -> Callable[
+    [Op, Mapping[str, Statement], Sequence[Mapping[str, Any]]],
+    tuple[Op | None, list[str]],
+]:
     """What the pass may propose for `targets`; see the module docstring.
 
     `known_name` says whether a name already belongs to a concept: proposing
@@ -165,13 +192,23 @@ def screen(
     """
     texts = {t.id: t.text for t in targets}
 
-    def check(op: Op) -> tuple[Op | None, list[str]]:
+    def check(
+        op: Op, existing: Mapping[str, Statement], ledger: Sequence[Mapping[str, Any]]
+    ) -> tuple[Op | None, list[str]]:
         kind = op.get("op")
         payload = op.get("payload")
         if not isinstance(payload, Mapping):
             return op, []
         if kind == "add_links":
-            return _links(op, payload, texts)
+            kinds = {i: s.kind for i, s in existing.items()} | {
+                t.id: t.kind for t in targets
+            }
+            unphraseable = {
+                row.get("candidate")
+                for row in ledger
+                if row.get("classification") == "unphraseable"
+            }
+            return _links(op, payload, texts, kinds, unphraseable)
         if kind == "upsert_entity":
             name = payload.get("name")
             if not isinstance(name, str) or not name.strip():
@@ -213,7 +250,11 @@ def screen(
 
 
 def _links(
-    op: Op, payload: Mapping[str, Any], texts: Mapping[str, str]
+    op: Op,
+    payload: Mapping[str, Any],
+    texts: Mapping[str, str],
+    kinds: Mapping[str, str],
+    unphraseable: Set[object],
 ) -> tuple[Op | None, list[str]]:
     links = payload.get("links")
     if not isinstance(links, list):
@@ -226,6 +267,7 @@ def _links(
             continue
         ends = (edge.get("from_id"), edge.get("to_id"))
         conditions = _conditions(edge.get("when"))
+        named = f"{ends[0]} -{edge.get('link_type')}-> {ends[1]}"
         if ends[0] == ends[1]:
             dropped.append(f"(add_links) edge dropped: {ends[0]} links to itself")
         elif conditions & set(ends):
@@ -235,8 +277,19 @@ def _links(
             )
         elif not any(s in texts for s in (*ends, *conditions)):
             dropped.append(
-                f"(add_links) edge dropped: {ends[0]} -> {ends[1]} touches no "
-                "statement in the batch"
+                f"(add_links) edge dropped: {named} touches no statement in the batch"
+            )
+        elif edge.get("link_type") == "composes" and all(
+            kinds.get(str(e)) == "state" for e in ends
+        ):
+            dropped.append(
+                f"(add_links) edge dropped: {named} joins two states; `composes` "
+                "builds a rule from sub-rules"
+            )
+        elif unphraseable & {*ends, *conditions}:
+            dropped.append(
+                f"(add_links) edge dropped: {named} touches a statement to "
+                "rephrase first"
             )
         else:
             kept.append(edge)
@@ -254,6 +307,49 @@ def _conditions(when: object) -> set[str]:
     except ValueError:
         return set()
     return when_expression.leaves(when)
+
+
+@dataclass(frozen=True)
+class Looked:
+    """What one run made of a statement in its batch."""
+
+    statement_id: str
+    #: The statements it weighed for this one.
+    neighbours: tuple[str, ...]
+    #: How to rephrase it, when the run found it too badly phrased to link.
+    rephrase: str | None
+
+
+def looked_at(trace: Mapping[str, Any], targets: Sequence[Target]) -> list[Looked]:
+    """The batch statements the run reconciled, from its ledger; a statement
+    it ran out of budget before reaching is left out."""
+    batch = {t.id for t in targets}
+    looked: dict[str, Looked] = {}
+    for row in trace.get("candidate_ledger") or []:
+        candidate = row.get("candidate")
+        classification = row.get("classification")
+        if candidate not in batch or classification == "unprocessed":
+            continue
+        seen = [
+            *row.get("matched_against", []),
+            *row.get("link_candidates_considered", []),
+        ]
+        looked[candidate] = Looked(
+            statement_id=candidate,
+            neighbours=tuple(
+                dict.fromkeys(
+                    n
+                    for n in seen
+                    if isinstance(n, str) and n.startswith("stm_") and n != candidate
+                )
+            ),
+            rephrase=(
+                str(row.get("note") or "").strip() or "rephrase it as one claim"
+                if classification == "unphraseable"
+                else None
+            ),
+        )
+    return list(looked.values())
 
 
 def config_from_settings() -> IngestConfig:

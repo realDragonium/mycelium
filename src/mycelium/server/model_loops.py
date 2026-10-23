@@ -142,11 +142,14 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
     at most `batch_size` statements per call, an operation cap, a wall clock
     and a spending cap. The draft goes to review exactly as an ingest draft
     does. Returns the same shapes as `ingest`, with `cost_usd` (null when the
-    model has no known price). Refused while the monthly AI budget pauses
+    model has no known price), and `gaps_filed`: the knowledge gaps opened
+    for statements too badly phrased to connect. The statements it looked at
+    are not offered to "connect next" again until they or the statements
+    around them change. Refused while the monthly AI budget pauses
     background actions.
     """
     from .. import ai, knowledge_health, model_settings, product_settings, store
-    from ..ingest.connect import config_from_settings, run_connect
+    from ..ingest.connect import config_from_settings, looked_at, run_connect
 
     if reason := model_settings.credentials_error("connect"):
         raise ValueError(reason)
@@ -171,8 +174,24 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
         )
     except ai.usage.Paused as exc:
         raise ValueError(str(exc)) from exc
+    looked = looked_at(result.trace, targets)
+    with store.transaction(_db()):
+        knowledge_health.record_attempts(
+            _db(), {item.statement_id: item.neighbours for item in looked}
+        )
+        gaps = [
+            store.create_knowledge_gap(
+                _db(),
+                f"Rephrase this statement before it is connected: {item.rephrase}",
+                statement_id=item.statement_id,
+            )
+            for item in looked
+            if item.rephrase is not None
+            and not knowledge_health.has_open_gap(_db(), item.statement_id)
+        ]
     response = result.model_dump()
     response["cost_usd"] = result.trace.get("cost_usd")
+    response["gaps_filed"] = gaps
     if result.outcome == "draft_created":
         response["submitted_for_review"] = _auto_submit(result.draft_id)
     return response

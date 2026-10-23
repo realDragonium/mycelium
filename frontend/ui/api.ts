@@ -393,18 +393,18 @@ export interface ConnectLimits { batch_size: number; max_cost_usd: number; provi
 export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null }
 export interface HealthStatement {
   id: string; kind: string; text: string; links: number; mentions: string[];
-  label_error: string | null; in_pending_draft: boolean;
+  label_error: string | null; in_pending_draft: boolean; settled_at: string | null;
 }
 export interface HealthEntity { id: string; name: string | null; description: string | null }
 export interface Page<T> { items: T[]; next_after: string | null }
-export type ConnectResult = IngestResult & { cost_usd: number | null; flagged?: string[] };
+export type ConnectResult = IngestResult & { cost_usd: number | null; flagged?: string[]; gaps_filed?: string[] };
 
 export const knowledgeHealth = {
   view: () => getJSON<HealthView>('/api/knowledge-health'),
-  statements: (which: StatementFilter, params: { after?: string | null; limit?: number; skipPending?: boolean } = {}) => {
+  statements: (which: StatementFilter, params: { after?: string | null; limit?: number; toConnect?: boolean } = {}) => {
     const qs = new URLSearchParams({ limit: String(params.limit ?? 50) });
     if (params.after) qs.set('after', params.after);
-    if (params.skipPending) qs.set('skip_pending', 'true');
+    if (params.toConnect) qs.set('to_connect', 'true');
     return getJSON<Page<HealthStatement>>(`/api/knowledge-health/statements/${which}?${qs}`);
   },
   entities: (which: EntityFilter, after?: string | null) =>

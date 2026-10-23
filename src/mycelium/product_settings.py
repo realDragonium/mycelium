@@ -150,8 +150,8 @@ class DocumentationMaintenanceSettings(SettingsModel):
 class ConnectSettings(LoopLimits):
     kind: Literal["connect"] = "connect"
     #: Most statements one connect run takes; each run is one draft.
-    batch_size: int = Field(default=10, gt=0, le=25)
-    max_cost_usd: float = Field(default=0.75, gt=0)
+    batch_size: int = Field(default=5, gt=0, le=25)
+    max_cost_usd: float = Field(default=0.5, gt=0)
     max_tokens: int = Field(default=32000, gt=0)
     op_cap: int = Field(default=60, gt=0)
     wall_clock_s: float = Field(default=300.0, gt=0)

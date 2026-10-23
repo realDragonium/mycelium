@@ -37,6 +37,7 @@ from ..agentloop import (
 )
 from ..agentloop import (
     check_budget,
+    cost_usd,
 )
 from ..agentloop import (
     first_tool_use as _first_tool_use,
@@ -187,8 +188,15 @@ class Task:
     title: str
     notes: tuple[str, ...] = ()
     #: Narrows one op to what this task may propose: the op, possibly with
-    #: fewer edges, or None to drop it, plus a line per thing dropped.
-    screen: Callable[[dict], tuple[dict | None, list[str]]] | None = None
+    #: fewer edges, or None to drop it, plus a line per thing dropped. It is
+    #: given the existing statements the draft's edges touch and the ledger.
+    screen: (
+        Callable[
+            [dict, Mapping[str, directions.Statement], Sequence[dict]],
+            tuple[dict | None, list[str]],
+        ]
+        | None
+    ) = None
     #: Which statement edges to drop by their kinds, given (link type, source
     #: kind, target kind). Ingest drops only edges applying would reject.
     edge_check: directions.EdgeCheck = link_rules.flip_error
@@ -219,6 +227,11 @@ class _RunContext:
     nudged: bool = False
     floor_blocks: int = 0
     malformed_retries: int = 0
+    #: Held back from the spending cap so the turns that end the run fit
+    #: under it: see `_reserve`.
+    largest_turn_usd: float = 0.0
+    largest_output_tokens: int = 0
+    history_tokens: int = 0
 
 
 def _execute(
@@ -270,10 +283,12 @@ def _execute(
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
         reason = check_budget(trace, config, start, max_turns) or _cost_reached(
-            trace, config
+            trace, config, _reserve(ctx, config)
         )
         if reason:
             return _forced_finalize(reason, ctx)
+        spent_before = _spent(trace, config)
+        tokens_before = dict(trace.tokens)
 
         try:
             with trace.span("model_turn"):
@@ -289,6 +304,7 @@ def _execute(
             return _forced_finalize("api_error", ctx)
         trace.model_turns += 1
         trace.add_usage(getattr(resp, "usage", None))
+        _note_turn(ctx, config, spent_before, tokens_before)
         messages.append({"role": "assistant", "content": resp.content})
 
         tool_uses = [block for block in resp.content if isinstance(block, ai.ToolUse)]
@@ -338,13 +354,51 @@ def _execute(
             return result
 
 
-def _cost_reached(trace: TraceBuilder, config: IngestConfig) -> str | None:
-    """The spending cap, checked before each turn: the turn under way when it
-    is crossed still finishes, and so does the forced emit after it."""
-    if config.max_cost_usd is None:
+def _spent(trace: TraceBuilder, config: IngestConfig) -> float:
+    return trace.cost_usd(config.input_per_mtok, config.output_per_mtok) or 0.0
+
+
+def _note_turn(
+    ctx: _RunContext,
+    config: IngestConfig,
+    spent_before: float,
+    tokens_before: Mapping[str, int],
+) -> None:
+    turn = {k: v - tokens_before[k] for k, v in ctx.trace.tokens.items()}
+    ctx.largest_turn_usd = max(
+        ctx.largest_turn_usd, _spent(ctx.trace, config) - spent_before
+    )
+    ctx.largest_output_tokens = max(ctx.largest_output_tokens, turn["output"])
+    ctx.history_tokens = sum(turn.values())
+
+
+def _reserve(ctx: _RunContext, config: IngestConfig) -> float:
+    """What the run may still spend after this check: one more reading turn
+    like the dearest so far, then the forced emit. Forcing the emit turns
+    thinking off and so invalidates the cached history: that turn writes the
+    whole history to the cache again."""
+    if config.input_per_mtok is None or config.output_per_mtok is None:
+        return 0.0
+    emit = {
+        "input": 0,
+        "cache_read": 0,
+        "cache_creation": ctx.history_tokens,
+        "output": ctx.largest_output_tokens,
+    }
+    return ctx.largest_turn_usd + cost_usd(
+        emit, config.input_per_mtok, config.output_per_mtok
+    )
+
+
+def _cost_reached(
+    trace: TraceBuilder, config: IngestConfig, reserve_usd: float
+) -> str | None:
+    """The spending cap, checked before each turn; an unpriced model has no
+    cap."""
+    if config.max_cost_usd is None or config.input_per_mtok is None:
         return None
-    spent = trace.cost_usd(config.input_per_mtok, config.output_per_mtok)
-    return "cost_cap" if spent is not None and spent >= config.max_cost_usd else None
+    spent = _spent(trace, config)
+    return "cost_cap" if spent + reserve_usd >= config.max_cost_usd else None
 
 
 def _handle_emit(tool_use: Any, ctx: _RunContext) -> IngestResult | None:
@@ -589,7 +643,7 @@ def _assemble_draft(
     valid_kinds = _safe_valid_kinds(emitter)
     indexed: list[tuple[int, ProposedOp]] = []
     for idx, op in enumerate(ops):
-        kept = _screen_and_validate(op, idx, valid_kinds, flagged, ctx)
+        kept = _screen_and_validate(op, idx, valid_kinds, flagged, ctx, existing)
         if kept is not None:
             indexed.append((idx, kept))
     validated = [p for _, p in indexed]
@@ -673,10 +727,15 @@ def _assemble_draft(
 
 
 def _screen_and_validate(
-    op: dict, idx: int, valid_kinds: set[str], flagged: list[str], ctx: _RunContext
+    op: dict,
+    idx: int,
+    valid_kinds: set[str],
+    flagged: list[str],
+    ctx: _RunContext,
+    existing: Mapping[str, directions.Statement],
 ) -> ProposedOp | None:
     if ctx.task.screen is not None:
-        screened, dropped = ctx.task.screen(op)
+        screened, dropped = ctx.task.screen(op, existing, ctx.trace.candidate_ledger)
         flagged.extend(f"op[{idx}] {line}" for line in dropped)
         if screened is None:
             return None
