@@ -291,7 +291,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   }>({});
 
   // Pre-baked positions, fetched once. The Python script
-  // scripts/build_entity_layout.py writes this file from the substrate
+  // mycelium.entity_layout writes this file from the substrate
   // DB; the UI just renders it. `positionsTick` bumps when the fetch
   // completes so the main effect can re-run and pick up the data.
   const positionsRef = useRefE<PositionMap | null>(null);
@@ -339,7 +339,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
 
     // Static layout — positions come from the pre-baked
     // entity-positions.json (generated offline by
-    // scripts/build_entity_layout.py). The UI does not run any physics;
+    // mycelium.entity_layout). The UI does not run any physics;
     // it just renders the baked coordinates. Sim init is gated on the
     // fetch having completed; until then the effect returns early and
     // is re-run when positionsTick bumps.

@@ -23,7 +23,9 @@ declaration-free.
 from __future__ import annotations
 
 import json
+import os
 import re
+import sqlite3
 import subprocess
 import sys
 import zipfile
@@ -110,6 +112,46 @@ def test_doctrines_ship_inside_the_wheel(wheel):
             member = path.resolve().relative_to(_REPO_ROOT / "src").as_posix()
             assert member in members
             assert zf.read(member).decode("utf-8") == path.read_text(encoding="utf-8")
+
+
+def test_layout_module_runs_from_wheel_outside_checkout(wheel, tmp_path):
+    extracted = tmp_path / "installed"
+    with zipfile.ZipFile(wheel) as zf:
+        zf.extractall(extracted)
+
+    db_path = tmp_path / "mycelium.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE entities (id TEXT PRIMARY KEY);
+        CREATE TABLE names (entity_id TEXT, text TEXT);
+        CREATE TABLE entity_links (from_entity_id TEXT, to_entity_id TEXT);
+        INSERT INTO entities VALUES ('login'), ('sso');
+        INSERT INTO names VALUES ('login', 'Login'), ('sso', 'SSO');
+        INSERT INTO entity_links VALUES ('login', 'sso');
+    """)
+    conn.close()
+    output_path = tmp_path / "entity-positions.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mycelium.entity_layout",
+            "--db",
+            str(db_path),
+            "--output",
+            str(output_path),
+            "--iters",
+            "2",
+        ],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(extracted)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(output_path.read_text())
+    assert {node["name"] for node in payload["nodes"]} == {"Login", "SSO"}
+    assert all(node["degree"] == 1 for node in payload["nodes"])
 
 
 _WEBUI = _REPO_ROOT / "src" / "mycelium" / "webui"
