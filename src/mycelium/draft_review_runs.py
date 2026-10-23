@@ -534,6 +534,7 @@ def _execute(
             instructions = instructions or ai_prompts.resolve("draft_review")
             run.prompt = instructions.reference()
             result = _assess(context, inspection, settings, limits, instructions)
+        result = _without_redundant_tool_names(result, inspection)
         draft_review_model.validate_assessment(result)
         _validate_corrections(result, inspection)
         run.label = result.label
@@ -667,6 +668,14 @@ def _finish(
                 _mutation_authority(run, inspection, settings)
                 _correct(run.draft_id, correction)
             final = server.inspect_draft_review(run.draft_id)
+            if final["operation_findings"]:
+                raise ValueError(
+                    "the corrected draft still has operation findings: "
+                    + "; ".join(
+                        f"{item['operation_ref']}: {item['finding']}"
+                        for item in final["operation_findings"]
+                    )
+                )
             _check_correction_knowledge(inspection, final, reads)
             _mutation_authority(run, inspection, settings)
             outcome: Literal["rejected", "refined", "accepted"] = (
@@ -911,6 +920,30 @@ def _supporting_preconditions(
                 ),
             }
     return [conditions[key] for key in sorted(conditions)]
+
+
+def _without_redundant_tool_names(
+    result: Assessment, inspection: DraftReviewInspection
+) -> Assessment:
+    """Reviewers often name the tool of the operation they revise or strike.
+    That restates the operation's own kind, so it is dropped rather than
+    failing the whole review."""
+    ops = inspection["draft"].get("ops")
+    kinds = {
+        op["operation_ref"]: op.get("kind")
+        for op in (ops if isinstance(ops, list) else [])
+        if isinstance(op, dict) and isinstance(op.get("operation_ref"), str)
+    }
+    corrections = [
+        correction.model_copy(update={"tool_name": None})
+        if correction.action != "append"
+        and correction.operation_ref is not None
+        and correction.tool_name is not None
+        and kinds.get(correction.operation_ref) == correction.tool_name
+        else correction
+        for correction in result.corrections
+    ]
+    return result.model_copy(update={"corrections": corrections})
 
 
 def _validate_corrections(

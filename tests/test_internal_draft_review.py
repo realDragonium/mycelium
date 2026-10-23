@@ -265,6 +265,56 @@ def test_corrections_apply_as_exact_reviewed_revision(running_app, monkeypatch):
     assert server.list_entities()["entities"][0]["description"] == "Corrected fact"
 
 
+def test_revise_naming_its_own_operation_tool_still_applies(running_app, monkeypatch):
+    draft_id = _draft()
+    op = server.get_draft(draft_id)["ops"][0]
+    correction = Correction(
+        action="revise",
+        operation_ref=op["operation_ref"],
+        tool_name=op["kind"],
+        payload_json='{"name":"Review subject","description":"Corrected fact"}',
+        reason="Use the corrected supplied description.",
+    )
+    monkeypatch.setattr(
+        draft_review_runs,
+        "RUNNER",
+        lambda context: _assessment("changes_suggested", [correction]),
+    )
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
+    _request(draft_id)
+    assert _result(draft_id)["application"] == "applied"
+    assert server.list_entities()["entities"][0]["description"] == "Corrected fact"
+
+
+def test_correction_leaving_a_phrasing_finding_fails_naming_it(
+    running_app, monkeypatch
+):
+    draft_id = _draft()
+    correction = Correction(
+        action="append",
+        operation_ref=None,
+        tool_name="upsert_statement",
+        payload_json=(
+            '{"kind":"rule","links":[],'
+            '"text":"An invoice is locked because it was exported"}'
+        ),
+        reason="Add the export rule.",
+    )
+    monkeypatch.setattr(
+        draft_review_runs,
+        "RUNNER",
+        lambda context: _assessment("changes_suggested", [correction]),
+    )
+    _set_review_controls(mode="review-and-apply")
+    _set_review_controls(application_enabled=True)
+    _request(draft_id)
+    result = _result(draft_id)
+    assert result["status"] == "failed"
+    assert "still has operation findings" in result["previous_failure"]
+    assert "because" in result["previous_failure"]
+
+
 def test_default_application_gate_and_bad_reviewer(running_app, monkeypatch):
     _set_review_controls(mode="review-and-apply")
     draft_id = _draft()
