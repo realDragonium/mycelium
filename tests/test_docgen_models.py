@@ -342,7 +342,8 @@ def test_http_selection_and_real_role(monkeypatch, tmp_path, role, expected):
     from fastapi.testclient import TestClient
 
     from mycelium import auth, guidelines, prompt_store
-    from mycelium.http import AuthMiddleware, app
+    from mycelium.http import app
+    from mycelium.http.authentication import AuthMiddleware
 
     principal = auth.Principal(id="fixture", name="Fixture", role=role, type="human")
 

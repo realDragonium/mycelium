@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.middleware.errors import ServerErrorMiddleware
 
 from mycelium import http, tracing
+from mycelium.http.authentication import AuthMiddleware
 
 
 def _app_with_handlers() -> FastAPI:
@@ -98,7 +99,7 @@ def test_client_disconnect_without_response_is_not_an_error(monkeypatch):
         "session": {},
     }
     app = ServerErrorMiddleware(
-        http.AuthMiddleware(gone_client_app),
+        AuthMiddleware(gone_client_app),
         handler=http._unhandled_error_handler,
     )
 

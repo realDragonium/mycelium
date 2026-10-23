@@ -12,7 +12,8 @@ import re
 from fastapi.testclient import TestClient
 
 from mycelium import auth
-from mycelium.http import AuthMiddleware, app
+from mycelium.http import app
+from mycelium.http.authentication import AuthMiddleware
 
 
 def _reader(monkeypatch):

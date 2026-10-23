@@ -117,6 +117,7 @@ module = [
     "mycelium.github_credentials",
     "mycelium.guidelines",
     "mycelium.http.access",
+    "mycelium.http.authentication",
     "mycelium.ingest",
     "mycelium.ingest.config",
     "mycelium.ingest.prompts",

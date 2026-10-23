@@ -21,7 +21,8 @@ import httpx
 import pytest
 
 from mycelium import auth
-from mycelium.http import AuthMiddleware, app, get_server_info
+from mycelium.http import app, get_server_info
+from mycelium.http.authentication import AuthMiddleware
 
 
 def test_health_endpoint_is_async_so_it_never_needs_a_worker_thread():
