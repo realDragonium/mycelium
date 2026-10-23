@@ -119,6 +119,7 @@ module = [
     "mycelium.http.access",
     "mycelium.http.account",
     "mycelium.http.authentication",
+    "mycelium.http.documentation",
     "mycelium.http.draft_review",
     "mycelium.http.gaps",
     "mycelium.http.history",
