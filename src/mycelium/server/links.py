@@ -12,7 +12,7 @@ import sqlite3
 from typing import Any
 
 from .. import link_authoring, store, when_expression
-from .registry import tool
+from .registry import draftable_tool
 from .runtime import _db
 from .specs import EdgeSpec
 from .write_checks import _collect_flip_errors
@@ -78,7 +78,7 @@ def _validate_edge_endpoints(links: list[EdgeSpec]) -> dict[str, sqlite3.Row]:
     return statement_rows
 
 
-@tool
+@draftable_tool
 def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     """Insert one or more statement-to-statement typed edges.
 
@@ -137,7 +137,7 @@ def add_links(links: list[EdgeSpec]) -> dict[str, int]:
     return {"inserted": inserted}
 
 
-@tool
+@draftable_tool
 def remove_links(links: list[EdgeSpec]) -> dict[str, int]:
     """Remove one or more typed statement↔statement edges.
 

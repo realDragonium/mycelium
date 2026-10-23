@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from pydantic import Field as PydField
@@ -60,8 +60,6 @@ def create_user(body: CreateUserBody, request: Request) -> dict[str, Any]:
     for service accounts whose entire identity is their tokens."""
     admin = _require_admin(request)
     if body.type == "human" and not body.email:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=400, detail="human users require an email")
     conn = runtime._auth_db()
     with store.transaction(conn):
@@ -98,8 +96,6 @@ def update_user(user_id: str, body: UpdateUserBody, request: Request) -> dict[st
                 name=body.name,
             )
     except LookupError as ex:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(ex))
     return {"user": _serialize_user_row(row)}
 
@@ -132,8 +128,6 @@ def mint_token_for_user(
                 conn, user_id=user_id, name=body.name, scope=body.scope
             )
     except LookupError as ex:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(ex))
     return {"token": raw, **_serialize_token_row(row)}
 

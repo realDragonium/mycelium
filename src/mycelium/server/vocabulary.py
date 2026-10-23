@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import link_rules, store
-from .registry import tool
+from .registry import draft_listing_tool, draftable_tool, tool
 from .runtime import _db
 
 
@@ -27,7 +27,7 @@ def _direction_entry(link_type: str) -> dict[str, list[str] | None] | None:
     }
 
 
-@tool
+@draft_listing_tool
 def list_link_types() -> list[dict[str, Any]]:
     """List the statement→statement link types known to the substrate.
 
@@ -97,7 +97,7 @@ def list_link_types() -> list[dict[str, Any]]:
     return rows
 
 
-@tool
+@draft_listing_tool
 def list_statement_kinds() -> list[dict[str, Any]]:
     """List the statement `kind` values known to the substrate.
 
@@ -133,7 +133,7 @@ def list_statement_kinds() -> list[dict[str, Any]]:
     ]
 
 
-@tool
+@draft_listing_tool
 def list_entity_link_types() -> list[dict[str, Any]]:
     """List entity→entity link types known to the substrate.
 
@@ -161,7 +161,7 @@ def list_entity_link_types() -> list[dict[str, Any]]:
     ]
 
 
-@tool
+@draftable_tool
 def upsert_statement_kind(
     kind: str, description: str, when_to_use: str | None = None
 ) -> dict[str, str]:
@@ -185,7 +185,7 @@ def upsert_statement_kind(
     return {"kind": kind}
 
 
-@tool
+@draftable_tool
 def delete_statement_kind(kind: str) -> dict[str, str]:
     """Remove a statement-kind glossary entry.
 
@@ -201,7 +201,7 @@ def delete_statement_kind(kind: str) -> dict[str, str]:
     return {"kind": kind}
 
 
-@tool
+@draftable_tool
 def upsert_link_type(link_type: str, description: str) -> dict[str, str]:
     """Create or update a statement→statement link-type glossary entry.
 
@@ -220,7 +220,7 @@ def upsert_link_type(link_type: str, description: str) -> dict[str, str]:
     return {"link_type": link_type}
 
 
-@tool
+@draftable_tool
 def delete_link_type(link_type: str) -> dict[str, str]:
     """Remove a statement→statement link-type glossary entry.
 
@@ -241,7 +241,7 @@ def delete_link_type(link_type: str) -> dict[str, str]:
 ALIAS_PROVENANCE = ("curator", "auto", "auto:low-confidence")
 
 
-@tool
+@draftable_tool
 def upsert_link_type_alias(
     link_type: str,
     alias: str,
@@ -301,7 +301,7 @@ def upsert_link_type_alias(
     }
 
 
-@tool
+@draftable_tool
 def delete_link_type_alias(link_type: str, alias: str) -> dict[str, Any]:
     """Delete one alternative phrasing from a canonical link type.
 
@@ -337,7 +337,7 @@ def list_link_type_aliases(
     ]
 
 
-@tool
+@draftable_tool
 def upsert_entity_link_type(link_type: str, description: str) -> dict[str, str]:
     """Create or update an entity→entity link-type glossary entry.
 
@@ -355,7 +355,7 @@ def upsert_entity_link_type(link_type: str, description: str) -> dict[str, str]:
     return {"link_type": link_type}
 
 
-@tool
+@draftable_tool
 def delete_entity_link_type(link_type: str) -> dict[str, str]:
     """Remove an entity→entity link-type glossary entry.
 

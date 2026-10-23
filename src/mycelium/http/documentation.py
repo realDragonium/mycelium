@@ -3,9 +3,6 @@ delivering them to a destination.
 
 Reads are open to any authenticated caller; anything that starts a run or
 delivers needs a real writer. A stale `expected_revision` answers 409.
-
-`@tool` erases the server functions' return types, so their results are
-bound to the type each one declares before being returned.
 """
 
 from __future__ import annotations
@@ -52,28 +49,21 @@ def request_documentation_http(
     body: DocumentationRequestBody, request: Request
 ) -> dict[str, object]:
     _enforce_role(request, "writer", real_role=True)
-    run: dict[str, object] = server.request_documentation(
-        **body.model_dump(), match_existing=False
-    )
-    return run
+    return server.request_documentation(**body.model_dump(), match_existing=False)
 
 
 @router.get("/api/documentation/runs")
 def documentation_runs_http(request: Request) -> dict[str, object]:
     _require_principal(request)
-    runs: dict[str, object] = server.list_documentation_runs()
-    return runs
+    return server.list_documentation_runs()
 
 
 @router.get("/api/documentation/runs/{run_id}")
 def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
     _require_principal(request)
     try:
-        run: dict[str, object] = server.get_documentation_run(run_id)
-        return run
+        return server.get_documentation_run(run_id)
     except ValueError as exc:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -110,8 +100,7 @@ def edit_saved_document_http(
         )
     except docs_store.RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    run: dict[str, object] = server.get_documentation_run(run_id)
-    return run
+    return server.get_documentation_run(run_id)
 
 
 @router.post("/api/documentation/runs/{run_id}/edits")
@@ -132,8 +121,7 @@ def edit_document_draft_http(
         )
     except docs_store.RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    run: dict[str, object] = server.get_documentation_run(new_run_id)
-    return run
+    return server.get_documentation_run(new_run_id)
 
 
 class DocumentRevisionBody(BaseModel):
@@ -163,15 +151,13 @@ def _document_preview(document: dict[str, object]) -> dict[str, object]:
 @router.get("/api/documentation/documents")
 def generated_documents_http(request: Request) -> dict[str, object]:
     _require_principal(request)
-    documents: dict[str, object] = server.list_generated_documents()
-    return documents
+    return server.list_generated_documents()
 
 
 @router.get("/api/documentation/destinations")
 def documentation_destinations_http(request: Request) -> dict[str, object]:
     _require_principal(request)
-    destinations: dict[str, object] = server.list_documentation_destinations()
-    return destinations
+    return server.list_documentation_destinations()
 
 
 @router.get("/api/documentation/documents/{document_id}")
@@ -180,16 +166,13 @@ def generated_document_http(document_id: str, request: Request) -> dict[str, obj
     try:
         return _document_preview(server.get_generated_document(document_id))
     except ValueError as exc:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/api/documentation/documents/{document_id}/revisions")
 def document_revisions_http(document_id: str, request: Request) -> dict[str, object]:
     _require_principal(request)
-    revisions: dict[str, object] = server.list_document_revisions(document_id)
-    return revisions
+    return server.list_document_revisions(document_id)
 
 
 @router.get("/api/documentation/documents/{document_id}/revisions/{revision}")
@@ -200,8 +183,6 @@ def document_revision_http(
     try:
         return _document_preview(server.get_document_revision(document_id, revision))
     except ValueError as exc:
-        from fastapi import HTTPException
-
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
@@ -219,16 +200,11 @@ async def _both_sides_edited_handler(
 def revise_document_http(
     document_id: str, body: DocumentRevisionBody, request: Request
 ) -> dict[str, object]:
-    from fastapi import HTTPException
-
     from ..docs_store import RevisionConflict
 
     _enforce_role(request, "writer", real_role=True)
     try:
-        revision: dict[str, object] = server.revise_document(
-            document_id, **body.model_dump()
-        )
-        return revision
+        return server.revise_document(document_id, **body.model_dump())
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -237,15 +213,10 @@ def revise_document_http(
 def deliver_document_http(
     document_id: str, body: DocumentDeliveryBody, request: Request
 ) -> dict[str, object]:
-    from fastapi import HTTPException
-
     from ..docs_store import RevisionConflict
 
     _enforce_role(request, "writer", real_role=True)
     try:
-        delivery: dict[str, object] = server.deliver_document(
-            document_id, **body.model_dump()
-        )
-        return delivery
+        return server.deliver_document(document_id, **body.model_dump())
     except RevisionConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc

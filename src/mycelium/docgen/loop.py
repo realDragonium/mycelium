@@ -211,7 +211,7 @@ def _store_texts(
         return None, None, None
 
 
-def _default_gap_reporter(text: str) -> Any:
+def _default_gap_reporter(text: str) -> dict[str, Any]:
     """File a knowledge gap through the substrate's own tool.
 
     Imported here rather than at module scope so the package imports without

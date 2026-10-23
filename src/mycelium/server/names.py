@@ -16,7 +16,7 @@ from pydantic import JsonValue
 
 from .. import embed, mentions, plurals, store
 from .indexes import _persisted_index_write
-from .registry import tool
+from .registry import draftable_tool, tool
 from .runtime import _db, _name_idx
 
 
@@ -145,7 +145,7 @@ def get_mention_candidates(
     )
 
 
-@tool
+@draftable_tool
 def upsert_name(text: str, entity_id: str) -> dict[str, str]:
     """Attach an alias `text` to an existing entity.
 
@@ -170,7 +170,7 @@ def upsert_name(text: str, entity_id: str) -> dict[str, str]:
     return {"name_id": name_id}
 
 
-@tool
+@draftable_tool
 def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
     """Reassign a single name to a different entity.
 
@@ -217,7 +217,7 @@ def move_name(name_id: str, to_entity_id: str) -> dict[str, str]:
     return {"name_id": name_id, "entity_id": to_entity_id}
 
 
-@tool
+@draftable_tool
 def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     """Correct a name's spelling while keeping its id and concept binding.
 
@@ -255,7 +255,7 @@ def rename_name(name_id: str, new_text: str) -> dict[str, str]:
     return {"name_id": name_id, "text": new_text}
 
 
-@tool
+@draftable_tool
 def delete_name(name_id: str) -> dict[str, Any]:
     """Delete a single name (alias) from its entity.
 

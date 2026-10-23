@@ -20,7 +20,7 @@ from .batch_planning import (
     _plan_batch,
 )
 from .indexes import _persisted_index_write
-from .registry import tool
+from .registry import draftable_tool
 from .runtime import _db, _idx
 from .search import _near_duplicates
 from .specs import BatchStatementSpec, IncomingLinkSpec, LinkSpec
@@ -71,7 +71,7 @@ def _validate_statement_refs(
     return statement_rows
 
 
-@tool
+@draftable_tool
 def upsert_statement(
     kind: str,
     text: str,
@@ -209,7 +209,7 @@ def upsert_statement(
     return response
 
 
-@tool
+@draftable_tool
 def upsert_statements(
     statements: list[BatchStatementSpec],
 ) -> dict[str, Any]:
@@ -318,7 +318,7 @@ def upsert_statements(
     return {"results": results, "near_duplicates": near_dups}
 
 
-@tool
+@draftable_tool
 def replace_text(
     id: str, text: str, allow_phrasing_violations: bool = False
 ) -> dict[str, Any]:
@@ -359,7 +359,7 @@ def replace_text(
     return response
 
 
-@tool
+@draftable_tool
 def patch_statement(
     id: str,
     kind: str | None = None,
@@ -447,7 +447,7 @@ def patch_statement(
     return response
 
 
-@tool
+@draftable_tool
 def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     """Merge one Statement into another and delete the source.
 
@@ -529,7 +529,7 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
     }
 
 
-@tool
+@draftable_tool
 def delete_statement(id: str) -> dict[str, Any]:
     """Permanently delete a statement with no replacement.
 

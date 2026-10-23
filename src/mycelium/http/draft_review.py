@@ -7,7 +7,7 @@ admin-only.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, JsonValue
 
 from .. import draft_review_settings as review_settings
@@ -21,8 +21,6 @@ router = APIRouter()
 def draft_review_backlog(request: Request) -> dict[str, list[str]]:
     """Submitted drafts the current review configuration has not reached, to
     offer reviewing them once when review is switched on."""
-    from fastapi import HTTPException
-
     from .. import draft_review_runs
 
     _require_admin(request)
@@ -35,8 +33,6 @@ def draft_review_backlog(request: Request) -> dict[str, list[str]]:
 @router.post("/api/draft-review/backlog")
 def review_draft_backlog(request: Request) -> dict[str, list[str]]:
     """Start reviewing every draft in the backlog; returns their ids."""
-    from fastapi import HTTPException
-
     from .. import draft_review_runs
 
     _require_admin(request)

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import JsonValue, TypeAdapter
 
@@ -629,7 +629,7 @@ def _finish(
             final = server.inspect_draft_review(run.draft_id)
             _check_correction_knowledge(inspection, final, reads)
             _mutation_authority(run, inspection, settings)
-            outcome = (
+            outcome: Literal["rejected", "refined", "accepted"] = (
                 "rejected"
                 if run.label == "reject"
                 else "refined"

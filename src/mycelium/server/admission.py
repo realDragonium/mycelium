@@ -11,12 +11,14 @@ from __future__ import annotations
 import contextlib
 import functools
 from collections.abc import Callable, Iterator
-from typing import Any
+from typing import Any, TypeVar
 
 import anyio
 import anyio.to_thread
 
 from ..model_capacity import Capacity
+
+R = TypeVar("R")
 
 #: Tools that drive a multi-turn model loop, so they occupy a worker thread for
 #: tens of seconds and hold a model context worth of memory while they do. They
@@ -74,13 +76,7 @@ def model_loop_slot() -> Iterator[None]:
         budget.release()
 
 
-def _run_tool(
-    func: Callable[..., Any],
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    *,
-    budgeted: bool,
-) -> Any:
+def _run_tool(call: Callable[[], R], *, budgeted: bool) -> R:
     """Execute a tool body — under the shared model-loop budget when the tool
     declares one.
 
@@ -89,7 +85,7 @@ def _run_tool(
     mirror, stdio and draft replay are all bound by the same accounting.
     """
     with model_loop_slot() if budgeted else contextlib.nullcontext():
-        return func(*args, **kwargs)
+        return call()
 
 
 def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
