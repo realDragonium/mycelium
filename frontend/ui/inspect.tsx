@@ -6,6 +6,7 @@ import { deleteJSON, enc, errorMessage, getJSON, isScoped, putJSON, upsertEntity
 import { substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Statement, type SubstrateIndex, type When } from './data';
 import { AudienceIdentity, TextChangedActions, type AudienceLabel, type AudienceRef } from './audiences';
 import { useAsync } from './use-async';
+import { MediaPanel } from './media';
 
 /* ============================ when-conditions ============================ */
 // A when-tree as one line: leaves are statement titles, groups use AND / OR.
@@ -432,6 +433,8 @@ export function StatementDetail({ id }: { id: string }) {
 
           {!scoped && <StatementAudiences key={`${s.id}:${edits}`} id={s.id} />}
 
+          <MediaPanel kind="statement" id={s.id} />
+
           <Connections statement={s} />
         </div>
 
@@ -524,6 +527,7 @@ export function EntityDetail({ id }: { id: string }) {
             </div>
             {!scoped && <p className="hint">Add or remove entity links on the <Link to={{ view: 'entities', focus: e.id }}>entity map</Link>.</p>}
           </section>
+          <MediaPanel kind="entity" id={e.id} />
         </div>
         <aside className="rail">
           <div className="rail-sec">

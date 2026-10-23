@@ -76,7 +76,7 @@ function Section({ id, audiences }: { id: SettingsSection; audiences: Async<Audi
     case 'models': return <ActionModels />;
     case 'prompts': return <AIInstructions />;
     case 'review': return <DraftReviewSettings />;
-    case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'docgen', 'draft_review', 'alias_discovery', 'audience_labelling', 'documentation_planning', 'documentation_maintenance', 'connect', 'concurrency']} />;
+    case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'docgen', 'draft_review', 'alias_discovery', 'audience_labelling', 'documentation_planning', 'documentation_maintenance', 'connect', 'concurrency', 'media']} />;
     case 'documentation': return <><ProductSettings kinds={['documentation']} /><DocumentationProfiles /></>;
     case 'usage': return <AIUsage />;
     case 'audiences': return <AudiencesSettings />;

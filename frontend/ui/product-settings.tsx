@@ -11,9 +11,10 @@ const TITLES: Record<string, string> = {
   draft_review: 'Draft review', alias_discovery: 'Alias discovery', concurrency: 'Concurrent runs',
   documentation: 'Documentation delivery', audience_labelling: 'Audience labelling',
   documentation_planning: 'Documentation planning', ai_budget: 'Monthly budget', documentation_maintenance: 'Documentation maintenance', connect: 'Connecting statements',
+  media: 'Screenshots and recordings',
 };
 
-// [label, min, step]; booleans have no bounds.
+// [label, min, step]; booleans and strings use only the label.
 const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   max_tokens: ['Maximum output tokens', 1, 1], max_retries: ['Request retries', 0, 1],
   request_timeout_s: ['Request timeout (seconds)', 0.1, 'any'], op_cap: ['Maximum tool operations', 1, 1],
@@ -30,6 +31,9 @@ const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   pause_background: ['Pause background actions at 100%'],
   quiet_minutes: ['Quiet minutes before an automatic revision', 0, 1], revisions_per_day: ['Automatic revisions per profile per day', 0, 1],
   max_cost_usd: ['Spending cap per run (USD)', 0.01, 'any'],
+  image_max_bytes: ['Largest image (bytes)', 1, 1], video_max_bytes: ['Largest video (bytes)', 1, 1],
+  stale_after_days: ['Flag media older than (days)', 1, 1],
+  product_version: ['Current product version (blank turns the version check off)'],
 };
 
 export interface Binding { name: string; host: string; available: boolean; label?: string; owner?: string; repo?: string }
@@ -150,7 +154,7 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
     } finally { setBusy(false); }
   };
 
-  const numericKeys = Object.keys(form).filter(k => k !== 'kind' && FIELDS[k]);
+  const fieldKeys = Object.keys(form).filter(k => k !== 'kind' && FIELDS[k]);
   return (
     <Card title={<>{title}{current.configuration_error && <span className="warn-text small"> · needs attention</span>}</>}
       actions={<button type="button" className="btn ghost sm" onClick={() => void reload()} disabled={busy}>Reload</button>}>
@@ -170,11 +174,13 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
             <DestinationFields items={form.destinations || []} bindings={bindings} onChange={items => change({ destinations: items })} />
           </> : <>
             <div className="field-grid">
-              {numericKeys.map(key => {
+              {fieldKeys.map(key => {
                 const [label, min, step] = FIELDS[key];
                 const value = form[key];
                 return typeof value === 'boolean'
                   ? <label key={key} className="check"><input type="checkbox" checked={value} onChange={e => change({ [key]: e.target.checked })} />{label}</label>
+                  : typeof value === 'string'
+                    ? <label key={key} className="field"><span>{label}</span><input className="input" value={value} maxLength={100} onChange={e => change({ [key]: e.target.value })} /></label>
                   : <label key={key} className="field"><span>{label}</span><input className="input" type="number" value={typeof value === 'number' ? value : ''} min={min} step={step} required
                       onChange={e => change({ [key]: e.target.value === '' ? '' : Number(e.target.value) })} /></label>;
               })}

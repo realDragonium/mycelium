@@ -33,6 +33,7 @@ function tiles(c: HealthCounts): Tile[] {
     { n: c.unlabelled, label: 'statements without an audience label', sub: c.labelling_failed ? `${c.labelling_failed} failed to label` : 'none failed', to: list('unlabelled') },
     { n: c.open_gaps, label: 'open knowledge gaps', sub: 'reported by agents and people', to: { view: 'gaps' }, tone: 'warn' },
     { n: c.out_of_date_documents, label: 'out-of-date documents', sub: 'a statement they cite has changed', to: { view: 'documentation' } },
+    { n: c.old_media, label: 'old media', sub: 'older than the configured age or an older product version', to: { view: 'media', show: 'old' } },
     { n: c.pending_drafts, label: 'pending drafts', sub: 'open with their authors or awaiting a decision', to: { view: 'drafts' }, tone: 'write' },
   ];
 }
