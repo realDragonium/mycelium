@@ -36,11 +36,11 @@ locally.
    `document_type` only when the request makes the type clear, and
    `guideline_set` only when the operator names one; otherwise the run
    resolves them.
-2. Call `request_documentation(prompt=…)`. By default (`match_existing=true`)
-   the run first checks whether the request looks like an update to an
-   existing document. If it does, it writes nothing and its `error` names that
-   document; ask the operator, then either revise it (below) or request again
-   with `match_existing=false` for a separate document.
+2. Check `list_generated_documents` for a document on the same topic; if one
+   exists, revise it (below) instead. Otherwise call
+   `request_documentation(prompt=…)`. When the document is about one concept,
+   pass its `anchor_entity_id` with `guideline_set` and `document_type`: a
+   later request for the same concept then revises the same document.
    - It refuses when the instance's active-run limit is reached. Tell the
      operator rather than retrying in a loop.
 3. Poll `get_documentation_run(run_id)` until `status` is neither `queued` nor `running`.
@@ -62,6 +62,10 @@ locally.
 2. `revise_document(document_id, expected_revision=<current_revision>, prompt=<the change>)`.
 3. Poll and report as above. If another revision landed first, the call is
    refused: read the document again and retry once with the new revision.
+
+When `get_generated_document` reports `stale.status` `out_of_date`, statements
+the document cites changed since it was written. Revise with
+`update_sources=true` (no prompt needed) to bring it up to date.
 
 A published document can be edited on GitHub. A revision then starts from the
 GitHub text and keeps those edits (the run's `revision_base` is

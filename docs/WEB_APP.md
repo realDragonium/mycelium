@@ -26,7 +26,7 @@ focuses it.
 | | Entity | `#/e/<id>` | Aliases, mentioning statements, entity links |
 | | Statement graph | `#/graph?focus=<id>` | Force-directed graph of statements and entities |
 | | Entity map | `#/entities?focus=<id>` | Entities and their links; add and remove entity links |
-| | Documents | `#/documentation` | Generate (optionally about a concept), edit, review and publish documents; see each pull request's state; revise from the published copy when both sides changed |
+| | Documents | `#/documentation` | Generate (optionally about a concept; the form says whether it revises an existing document), edit, review and publish documents; see each pull request's state; see which documents are out of date with their sources and revise them; revise from the published copy when both sides changed |
 | Add knowledge | Ingest text | `#/ingest` | Paste prose; a loop extracts a draft |
 | | Research | `#/research?topic=…` | Point a run at a configured repository |
 | Curate | Drafts | `#/drafts`, `#/drafts/<id>` | Review, edit, submit, approve, reject or withdraw drafts; answer the reviewer's questions. Approving is all-or-nothing: if any statement is refused (the phrasing linter), nothing is applied and each refusal is listed with its reasons. Applying a draft resolves the gaps reported about it |

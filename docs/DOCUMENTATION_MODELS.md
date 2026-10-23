@@ -14,10 +14,12 @@ OpenAI uses `OPENAI_API_KEY`. Model IDs and provider defaults are saved through
 the settings UI. The provider list reports local configuration, not a live check
 of model access, quota, or compatibility. Failures never silently switch providers.
 
-A new UI generation creates a document. Naming the concept it is about, with a
+A new generation creates a document. Naming the concept it is about, with a
 writing profile and template, gives it a stable identity: a later request for
 the same concept, profile and template revises that document instead of
-creating another (`anchor_entity_id` over MCP).
+creating another (`anchor_entity_id` over MCP). The form says which will
+happen before you submit, and links the document a request would revise. The
+model never decides which document a request updates.
 Merging concepts moves the identity to the surviving concept. If that concept
 already has a document for the same profile and template, it keeps that
 identity, and the merged-away concept's document stays as an ordinary document
@@ -25,6 +27,13 @@ without one. Deleting a concept leaves its documents as ordinary documents.
 Both report how many documents lost their identity (`documents_unanchored`).
 A generation still running when its concept is merged or deleted writes under
 the identity the concept's document would have by then.
+
+Each revision remembers the text of the statements it cites as they were when
+it was reviewed. When one of them is later edited, deleted or merged into
+another, the document is marked **Out of date** in the library, and the
+document shows what changed, old wording beside new. **Revise** starts a
+revision briefed with exactly those changes; once it is saved, the document is
+current again. Revisions saved before this was recorded show no status.
 
 Publishing opens or updates a GitHub pull request, and the document shows
 whether it is open, merged or closed. Mycelium asks GitHub when the document is
@@ -97,13 +106,12 @@ REST exposes `request_documentation`, `list_generated_documents`,
 `revise_document`, and `deliver_document`. MCP exposes `request_documentation`,
 `get_documentation_run`, `get_generated_document`, and `revise_document`. Publishing
 stays in the UI; see [the MCP tool manifest](MCP_TOOLS.md).
-`revise_document` requires `document_id`, `expected_revision`, and instructions.
-The UI always supplies the current revision when publishing. With
-`request_documentation`'s default `match_existing=True`, a request that looks
-like an update to an existing document writes nothing. Its run names that
-document in `matched_document_id` and `error`, and the caller decides whether
-to revise it. The model never chooses which document is overwritten. The UI
-creation endpoint disables matching.
+`revise_document` requires `document_id`, `expected_revision`, and either
+instructions or `update_sources=true`, which briefs the run with the cited
+statements that changed (`stale.changes` on `get_generated_document` and
+`list_generated_documents`). The UI always supplies the current revision when
+publishing. `request_documentation` without an anchor always creates a
+document; to change one, revise it.
 
 Readers can inspect documents and runs. Generation and publication require a real
 writer or admin role. Writing profiles describe an audience, not access controls.
