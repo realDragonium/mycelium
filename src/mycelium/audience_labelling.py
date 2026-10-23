@@ -151,8 +151,10 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
         )
         from . import server  # local import: server owns the model-loop budget
 
-        with server.model_loop_slot():
+        with server.model_loop_slot(), ai.usage.attributed("audience_labelling"):
             result, usage = call(task, config)
+    except ai.usage.Paused:
+        raise  # a spent budget is not this batch's failure; it stays due
     except Exception as exc:
         with store.transaction(conn):
             store.audience_labels.record_failure(conn, ids, str(exc))
@@ -196,6 +198,8 @@ def drain(conn: sqlite3.Connection, *, call: Call = _call) -> int:
     while True:
         try:
             labelled = label_batch(conn, call=call)
+        except ai.usage.Paused:
+            return total
         except Exception:
             logger.warning("audience labelling batch failed", exc_info=True)
             return total

@@ -12,6 +12,7 @@ from .types import (
     JSON_OBJECT,
     MESSAGES,
     TOOLS,
+    IncompleteTurn,
     ModelConfig,
     ModelError,
     ModelResponse,
@@ -124,9 +125,7 @@ def _request(
                         )
                     parsed = Response.model_validate_json(response.content)
                     if parsed.status != "completed":
-                        raise ModelError(
-                            "OpenAI response was incomplete or unsuccessful"
-                        )
+                        raise _incomplete(parsed.usage)
                     return parsed
             time.sleep(min(0.5 * 2**attempt, 8.0))
     finally:
@@ -227,9 +226,13 @@ def _stream_events(
         elif kind == "response.completed":
             parsed = Response.model_validate(event.get("response"))
             if parsed.status != "completed":
-                raise ModelError("OpenAI response was incomplete or unsuccessful")
+                raise _incomplete(parsed.usage)
             return parsed
-        elif kind in ("response.failed", "response.incomplete", "error"):
+        elif kind in ("response.failed", "response.incomplete"):
+            ended = event.get("response")
+            reported = ended.get("usage") if isinstance(ended, dict) else None
+            raise _incomplete(reported if isinstance(reported, dict) else {})
+        elif kind == "error":
             raise ModelError("OpenAI response was incomplete or unsuccessful")
     raise ModelError("OpenAI stream ended without a completed response")
 
@@ -280,11 +283,20 @@ def turn(
                     input=JSON_OBJECT.validate_json(call.arguments),
                 )
             )
-    validate_calls(task, calls)
+    try:
+        validate_calls(task, calls)
+    except ModelError as exc:
+        raise IncompleteTurn(str(exc), _usage(response.usage)) from None
     return ModelResponse(
         content=[ProviderHistory(provider="openai", output=response.output), *calls],
         usage=_usage(response.usage),
         stop_reason="tool_use" if calls else "end_turn",
+    )
+
+
+def _incomplete(reported: dict[str, JsonValue]) -> IncompleteTurn:
+    return IncompleteTurn(
+        "OpenAI response was incomplete or unsuccessful", _usage(reported)
     )
 
 

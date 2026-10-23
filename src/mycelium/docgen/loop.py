@@ -1253,25 +1253,26 @@ def _model_turn(
     system: str | None = None,
 ) -> ai.ModelResponse:
     config: DocgenConfig = ctx.config
-    return ai.turn(
-        ai.ToolTask(
-            system=ctx.system_prompt if system is None else system,
-            messages=messages,
-            tools=tools if tools is not None else ctx.tools,
-            force_tool=force_tool,
-        ),
-        ai.ModelConfig(
-            provider=config.provider,
-            model=config.model,
-            max_tokens=config.max_tokens,
-            request_timeout_s=config.request_timeout_s,
-            max_retries=config.max_retries,
-            thinking=config.thinking,
-            reasoning_effort=config.reasoning_effort,
-            cache=True,
-        ),
-        client=ctx.client,
-    )
+    with ai.usage.attributed("docgen"):
+        return ai.turn(
+            ai.ToolTask(
+                system=ctx.system_prompt if system is None else system,
+                messages=messages,
+                tools=tools if tools is not None else ctx.tools,
+                force_tool=force_tool,
+            ),
+            ai.ModelConfig(
+                provider=config.provider,
+                model=config.model,
+                max_tokens=config.max_tokens,
+                request_timeout_s=config.request_timeout_s,
+                max_retries=config.max_retries,
+                thinking=config.thinking,
+                reasoning_effort=config.reasoning_effort,
+                cache=True,
+            ),
+            client=ctx.client,
+        )
 
 
 def _append_tool_result(

@@ -739,28 +739,29 @@ def _model_turn(
     deltas: AnswerDeltas,
     system: str,
 ) -> ai.ModelResponse:
-    return ai.turn(
-        ai.ToolTask(
-            system=system,
-            messages=messages,
-            tools=tools,
-            force_tool=SUBMIT_TOOL if force else None,
-            parallel_tools=not force,
-            on_tool_delta=deltas.receive if deltas.stream.emit else None,
-            check_cancel=deltas.stream.check,
-        ),
-        ai.ModelConfig(
-            provider=config.provider,
-            model=config.model,
-            max_tokens=config.max_tokens,
-            request_timeout_s=config.request_timeout_s,
-            max_retries=config.max_retries,
-            thinking=config.thinking,
-            reasoning_effort=config.reasoning_effort,
-            cache=config.cache,
-        ),
-        client=client,
-    )
+    with ai.usage.attributed("ask"):
+        return ai.turn(
+            ai.ToolTask(
+                system=system,
+                messages=messages,
+                tools=tools,
+                force_tool=SUBMIT_TOOL if force else None,
+                parallel_tools=not force,
+                on_tool_delta=deltas.receive if deltas.stream.emit else None,
+                check_cancel=deltas.stream.check,
+            ),
+            ai.ModelConfig(
+                provider=config.provider,
+                model=config.model,
+                max_tokens=config.max_tokens,
+                request_timeout_s=config.request_timeout_s,
+                max_retries=config.max_retries,
+                thinking=config.thinking,
+                reasoning_effort=config.reasoning_effort,
+                cache=config.cache,
+            ),
+            client=client,
+        )
 
 
 def _tool_uses(resp: ai.ModelResponse) -> list[ai.ToolUse]:

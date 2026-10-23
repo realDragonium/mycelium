@@ -9,7 +9,7 @@ import httpx
 from anthropic import AnthropicError, APIStatusError, APITimeoutError
 from pydantic import ValidationError
 
-from . import claude, openai
+from . import claude, openai, usage
 from .claude import ClaudeClient
 from .types import (
     IncompleteTurn,
@@ -42,6 +42,7 @@ __all__ = [
     "structured",
     "structured_with_usage",
     "turn",
+    "usage",
 ]
 
 
@@ -98,14 +99,20 @@ def turn(
     *,
     client: ClaudeClient | httpx.Client | None = None,
 ) -> ModelResponse:
-    try:
-        if config.provider == "claude":
-            return claude.turn(task, config, client)
-        if client is not None and not isinstance(client, httpx.Client):
-            raise ModelError("OpenAI requires an HTTP client for transport injection")
-        return openai.turn(task, config, client)
-    except (ValidationError, AnthropicError) as exc:
-        raise _provider_failure(config.provider, "turn", exc) from None
+    with usage.metered(config) as report:
+        try:
+            if config.provider == "claude":
+                response = claude.turn(task, config, client)
+            elif client is not None and not isinstance(client, httpx.Client):
+                raise ModelError(
+                    "OpenAI requires an HTTP client for transport injection"
+                )
+            else:
+                response = openai.turn(task, config, client)
+        except (ValidationError, AnthropicError) as exc:
+            raise _provider_failure(config.provider, "turn", exc) from None
+        report(response.usage)
+        return response
 
 
 def structured(
@@ -124,9 +131,14 @@ def structured_with_usage(
     client: httpx.Client | None = None,
 ) -> tuple[Output, Usage]:
     """`structured`, plus the tokens the request used."""
-    try:
-        if config.provider == "claude":
-            return claude.structured(task, config, client)
-        return openai.structured(task, config, client)
-    except (ValidationError, AnthropicError) as exc:
-        raise _provider_failure(config.provider, "structured", exc) from None
+    with usage.metered(config) as report:
+        try:
+            result = (
+                claude.structured(task, config, client)
+                if config.provider == "claude"
+                else openai.structured(task, config, client)
+            )
+        except (ValidationError, AnthropicError) as exc:
+            raise _provider_failure(config.provider, "structured", exc) from None
+        report(result[1])
+        return result

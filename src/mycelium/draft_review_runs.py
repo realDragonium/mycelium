@@ -489,7 +489,12 @@ def _execute(
         return
     auth.current_principal.set(principal)
     try:
-        with server.model_loop_slot():
+        with (
+            server.model_loop_slot(),
+            ai.usage.attributed(
+                "draft_review", run_id=run.run_id, draft_id=run.draft_id
+            ),
+        ):
             context, reads = _context(inspection, run.previous_failure, run.answers)
             instructions = instructions or ai_prompts.resolve("draft_review")
             run.prompt = instructions.reference()

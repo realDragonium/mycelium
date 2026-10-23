@@ -585,7 +585,10 @@ def plan(
         doc_plans.record_activity(drafts, plan_id, "Waiting for a model slot")
         from . import server  # local import: server owns the model-loop budget
 
-        with server.model_loop_slot():
+        with (
+            server.model_loop_slot(),
+            ai.usage.attributed("documentation_planning", run_id=plan_id),
+        ):
             doc_plans.record_activity(drafts, plan_id, "Proposing documents")
             proposal, usage = call(task, config)
         kept = accept(
