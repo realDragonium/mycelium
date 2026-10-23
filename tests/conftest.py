@@ -31,6 +31,10 @@ def _isolate_prompt_store():
 
 def pytest_configure(config):
     _require_spacy_model()
+    # A test that starts the app without its own data dir would otherwise
+    # share ./.mycelium (or an exported instance) with every other test,
+    # worker and local server. Unusable on purpose: it fails at mkdir.
+    os.environ["MYCELIUM_DATA_DIR"] = os.path.join(os.devnull, "mycelium")
     os.environ.setdefault("MYCELIUM_DISABLE_MCP_HTTP", "1")
     # The async mention-recompute worker spawns a daemon thread per
     # server.init(); across many TestClient lifecycles that races the
