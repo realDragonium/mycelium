@@ -11,11 +11,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .. import embed, store
+from .. import docs_store, embed, store
 from .indexes import _persisted_index_write
 from .names import _create_name_with_plural, _drop_name_from_index
 from .registry import tool
-from .runtime import _baker, _db, _name_idx
+from .runtime import _baker, _db, _drafts_db, _name_idx
 from .specs import EntityEdgeSpec, ResultLimit, _check_limit
 
 
@@ -43,7 +43,10 @@ def upsert_entity(name: str, description: str) -> dict[str, str]:
 def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
     """Move every name from `from_entity_id` to `into_entity_id` and delete
     the source entity. Statements that mentioned the moved names continue
-    to point at the same names (now under the new entity)."""
+    to point at the same names (now under the new entity). Generated
+    documents anchored to the source become anchored to the target; where
+    the target already anchors a document of the same guideline set and
+    type, the source's document keeps its body but loses its anchor."""
     if from_entity_id == into_entity_id:
         return {"into_entity_id": into_entity_id, "names_moved": 0}
     if store.get_entity_by_id(_db(), from_entity_id) is None:
@@ -68,6 +71,11 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> dict[str, Any]:
         for nid in moved_name_ids:
             affected.extend(store.statements_mentioning_name(_db(), nid))
         store.enqueue_recompute_statements(_db(), affected)
+        # Anchors live in the drafts DB, so this commits first: a failed
+        # substrate commit then leaves anchors on the surviving target, never
+        # on a deleted source.
+        with store.transaction(_drafts_db()):
+            docs_store.move_anchors(_drafts_db(), from_entity_id, into_entity_id)
     return {
         "into_entity_id": into_entity_id,
         "names_moved": moved,

@@ -379,19 +379,6 @@ CREATE TABLE IF NOT EXISTS entity_links (
     + "\n".join(GLOSSARY_TABLE_DDL.values())
     + """
 
--- Instance configuration: which link types are admissible between a
--- source kind and a target kind. Seeded once from the ontology (kinds
--- × link types, pruned by link_rules.LINK_DIRECTION) when the table is
--- empty; edits persist because a non-empty table is never re-seeded.
-CREATE TABLE IF NOT EXISTS kind_link_matrix (
-    from_kind  TEXT NOT NULL,
-    to_kind    TEXT NOT NULL,
-    link_type  TEXT NOT NULL,
-    created_at TEXT,
-    created_by TEXT,
-    PRIMARY KEY (from_kind, to_kind, link_type)
-);
-
 -- Link-type aliases are the phrasings that express each link type; the
 -- substrate only ever stores the canonical `link_type`. The same alias may
 -- legitimately belong to two types, so identity is the (link_type, alias)
@@ -613,7 +600,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     which catches up legacy DBs and fast-forwards fresh ones. See
     `mycelium.migrations` for details."""
     from .. import migrations
-    from . import glossary, kind_link_matrix, link_type_aliases
+    from . import glossary, link_type_aliases
 
     def absent_glossary_tables() -> frozenset[str]:
         return frozenset(
@@ -650,7 +637,6 @@ def migrate(conn: sqlite3.Connection) -> None:
     migrations.apply_migrations(conn)
     if has_history(conn):
         conn.executescript(HISTORY_SCHEMA)
-    kind_link_matrix.seed_kind_link_matrix(conn)
     link_type_aliases.seed_link_type_aliases(conn)
     conn.commit()
 

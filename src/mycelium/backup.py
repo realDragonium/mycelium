@@ -69,16 +69,17 @@ from . import documentation_archive, migrations, store
 
 logger = logging.getLogger(__name__)
 
-# Record kinds from the removed annotation subsystem. Legacy archives
-# (exported before annotations were deprecated) still carry these lines;
-# the importer skips them rather than erroring on an unknown kind.
-_LEGACY_ANNOTATION_KINDS: frozenset[str] = frozenset(
+# Record kinds of removed tables: the annotation subsystem and, before v18,
+# `kind_link_matrix`. Legacy archives still carry these lines; the importer
+# skips them rather than erroring on an unknown kind.
+_LEGACY_KINDS: frozenset[str] = frozenset(
     {
         "annotation",
         "annotation_mention",
         "statement_annotation",
         "entity_annotation",
         "annotation_vector_id",
+        "kind_link_matrix_entry",
     }
 )
 
@@ -111,7 +112,6 @@ _DATA_TABLES: tuple[str, ...] = (
     "statement_kind_glossary",
     "statement_link_type_glossary",
     "entity_link_type_glossary",
-    "kind_link_matrix",
     "link_type_aliases",
     "knowledge_gaps",
     "reviewed_draft_applications",
@@ -121,7 +121,6 @@ _ONTOLOGY_CONFIG_TABLES: tuple[str, ...] = (
     "statement_kind_glossary",
     "statement_link_type_glossary",
     "entity_link_type_glossary",
-    "kind_link_matrix",
     "link_type_aliases",
 )
 
@@ -157,7 +156,6 @@ _TABLE_TO_KIND: dict[str, str] = {
     "statement_kind_glossary": "statement_kind_glossary_entry",
     "statement_link_type_glossary": "statement_link_type_glossary_entry",
     "entity_link_type_glossary": "entity_link_type_glossary_entry",
-    "kind_link_matrix": "kind_link_matrix_entry",
     "link_type_aliases": "link_type_alias",
     "knowledge_gaps": "knowledge_gap",
     "reviewed_draft_applications": "reviewed_draft_application",
@@ -996,7 +994,7 @@ def _load_data_jsonl(
                 continue
             row = json.loads(line)
             kind = row.pop("_kind")
-            if kind in _LEGACY_ANNOTATION_KINDS:
+            if kind in _LEGACY_KINDS:
                 legacy_skipped += 1
                 continue
             if kind == "when_node":
@@ -1034,7 +1032,7 @@ def _load_data_jsonl(
             )
     if legacy_skipped:
         logger.info(
-            "skipped %d legacy annotation record(s) from pre-removal archive",
+            "skipped %d record(s) of removed tables from a legacy archive",
             legacy_skipped,
         )
 

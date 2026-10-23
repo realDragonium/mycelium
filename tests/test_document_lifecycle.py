@@ -107,6 +107,25 @@ def test_an_unanchored_title_collision_is_still_refused(conn):
         _document(conn, body="# Different\n")
 
 
+def test_merged_anchors_move_to_the_target_unless_it_holds_that_identity(conn):
+    moving = _document(conn, slug="okta", anchor="ent_okta")
+    conn.execute(
+        "UPDATE generated_documents SET document_type = 'reference' WHERE id = ?",
+        (moving,),
+    )
+    conn.commit()
+    unanchored = _document(conn, slug="okta-how-to", anchor="ent_okta")
+    held = _document(conn, slug="sso", anchor="ent_sso")
+
+    docs_store.move_anchors(conn, "ent_okta", "ent_sso")
+
+    anchors = {
+        document_id: docs_store.get_document(conn, document_id)["anchor_entity_id"]
+        for document_id in (moving, unanchored, held)
+    }
+    assert anchors == {moving: "ent_sso", unanchored: None, held: "ent_sso"}
+
+
 # --- pull request tracking --------------------------------------------------
 
 

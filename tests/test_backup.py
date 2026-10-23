@@ -220,7 +220,6 @@ def test_round_trip_preserves_ontology_config(tmp_path):
         store.upsert_entity_link_type_glossary(
             conn, "contains", "edited entity link description"
         )
-        store.set_admissible(conn, "curator-from", "curator-to", ["curator-link"])
         store.upsert_link_type_alias(
             conn, "curator-link", "moves toward", direction="forward"
         )
@@ -236,7 +235,6 @@ def test_round_trip_preserves_ontology_config(tmp_path):
         "statement_kind_glossary",
         "statement_link_type_glossary",
         "entity_link_type_glossary",
-        "kind_link_matrix",
         "link_type_aliases",
     )
     assert all(table in manifest["row_counts"] for table in config_tables)
@@ -264,13 +262,6 @@ def test_round_trip_preserves_ontology_config(tmp_path):
             "WHERE link_type = 'contains'"
         ).fetchone()
         assert entity_link["description"] == "edited entity link description"
-
-        matrix_row = conn.execute(
-            "SELECT 1 FROM kind_link_matrix "
-            "WHERE from_kind = 'curator-from' AND to_kind = 'curator-to' "
-            "AND link_type = 'curator-link'"
-        ).fetchone()
-        assert matrix_row is not None
 
         alias_rows = conn.execute(
             "SELECT alias, direction FROM link_type_aliases "
@@ -382,14 +373,12 @@ def test_import_legacy_archive_without_config_tables_keeps_seeds(tmp_path):
         "statement_kind_glossary",
         "statement_link_type_glossary",
         "entity_link_type_glossary",
-        "kind_link_matrix",
         "link_type_aliases",
     )
     config_kinds = {
         "statement_kind_glossary_entry",
         "statement_link_type_glossary_entry",
         "entity_link_type_glossary_entry",
-        "kind_link_matrix_entry",
         "link_type_alias",
     }
 
@@ -429,14 +418,12 @@ def test_import_accepts_older_schema_version_archive(tmp_path):
         "statement_kind_glossary",
         "statement_link_type_glossary",
         "entity_link_type_glossary",
-        "kind_link_matrix",
         "link_type_aliases",
     )
     config_kinds = {
         "statement_kind_glossary_entry",
         "statement_link_type_glossary_entry",
         "entity_link_type_glossary_entry",
-        "kind_link_matrix_entry",
         "link_type_alias",
     }
 
@@ -484,7 +471,6 @@ def test_import_survives_manifest_stripped_of_config_row_counts(tmp_path):
         "statement_kind_glossary",
         "statement_link_type_glossary",
         "entity_link_type_glossary",
-        "kind_link_matrix",
         "link_type_aliases",
     )
 
@@ -679,10 +665,10 @@ def test_import_rejects_invalid_schema_version(tmp_path, invalid_schema_version)
         backup.import_substrate(tampered, tmp_path / "dst")
 
 
-def test_import_skips_legacy_annotation_records(tmp_path, caplog):
-    """Archives exported before the annotation subsystem was removed still
-    carry annotation-kind records. Import must skip them (one info log),
-    not error, and restore everything else."""
+def test_import_skips_records_of_removed_tables(tmp_path, caplog):
+    """Archives exported before the annotation subsystem and the kind-link
+    matrix were removed still carry their records. Import must skip them
+    (one info log), not error, and restore everything else."""
     import logging
     import shutil
 
@@ -709,6 +695,12 @@ def test_import_skips_legacy_annotation_records(tmp_path, caplog):
         {"_kind": "entity_annotation", "entity_id": "ent_x", "annotation_id": "ann_1"},
         {"_kind": "annotation_mention", "annotation_id": "ann_1", "name_id": "nam_x"},
         {"_kind": "annotation_vector_id", "annotation_id": "ann_1", "vector_id": 0},
+        {
+            "_kind": "kind_link_matrix_entry",
+            "from_kind": "event",
+            "to_kind": "state",
+            "link_type": "establishes",
+        },
     ]
     with (work / "data.jsonl").open("a", encoding="utf-8") as fp:
         for line in legacy_lines:
@@ -724,14 +716,14 @@ def test_import_skips_legacy_annotation_records(tmp_path, caplog):
     with caplog.at_level(logging.INFO, logger="mycelium.backup"):
         backup.import_substrate(legacy_archive, dst)
 
-    skip_logs = [r for r in caplog.records if "legacy annotation" in r.getMessage()]
+    skip_logs = [r for r in caplog.records if "legacy archive" in r.getMessage()]
     assert len(skip_logs) == 1
-    assert "5" in skip_logs[0].getMessage()
+    assert "6" in skip_logs[0].getMessage()
     # Everything else restored.
     assert _row_count(dst, "statements") == _row_count(src, "statements")
     assert _row_count(dst, "entities") == _row_count(src, "entities")
 
-    # An unknown kind that is NOT a legacy annotation kind still errors.
+    # An unknown kind that is NOT a removed table's kind still errors.
     work2 = tmp_path / "work2"
     work2.mkdir()
     with tarfile.open(archive, "r:gz") as tar:

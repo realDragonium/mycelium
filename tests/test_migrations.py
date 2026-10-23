@@ -513,22 +513,16 @@ def test_v6_rebuild_keeps_the_name_entity_index():
     ).fetchone()
 
 
-def test_v7_carries_a_pre_matrix_db_forward_without_reseeding():
-    """A DB that predates the matrix reaches v7 and keeps whatever the
-    curator left behind: the version bump is a no-op because SCHEMA
-    creates the table, and seeding only fires on an empty one."""
+def test_v18_drops_the_kind_link_matrix():
     conn = store.connect(":memory:")
     store.migrate(conn)
-    store.set_admissible(conn, "event", "state", ["triggers"])
-    conn.execute("PRAGMA user_version = 6")
+    conn.execute("CREATE TABLE kind_link_matrix (from_kind TEXT)")
+    conn.execute("PRAGMA user_version = 17")
     conn.commit()
 
     migrations.apply_migrations(conn)
 
-    assert _user_version(conn) == migrations.CURRENT_VERSION
-    assert store.admissible_link_types(conn, "event", "state") == frozenset(
-        {"triggers"}
-    )
+    assert not migrations._has_table(conn, "kind_link_matrix")
 
 
 def _v12_with_condition() -> tuple[sqlite3.Connection, str, str, str]:

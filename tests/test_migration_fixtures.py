@@ -60,6 +60,9 @@ REWRITES: dict[tuple[str, str], str] = {
     ("mycelium.db", "statement_kind_glossary"): (
         "v17 rewrites the untouched seeded `rule` definition"
     ),
+    ("mycelium.db", "kind_link_matrix"): (
+        "v18 drops the matrix; nothing has read it since the connect pipeline"
+    ),
 }
 
 # Columns a migration deliberately removes, with the reason. Any other
