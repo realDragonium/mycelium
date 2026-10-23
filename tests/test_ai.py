@@ -297,6 +297,63 @@ def test_claude_signed_history_cache_and_forced_terminal() -> None:
     assert isinstance(original, list) and "cache_control" not in original[0]
 
 
+def test_claude_asks_for_a_required_tool_on_a_model_that_cannot_be_forced() -> None:
+    sent: list[dict[str, JsonValue]] = []
+    thinking: dict[str, JsonValue] = {
+        "type": "thinking",
+        "thinking": "",
+        "signature": "signed",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(_OBJECT.validate_json(request.content))
+        return _reply(request, _envelope("claude", [thinking, _claude_call("call-1")]))
+
+    config = replace(
+        _config("claude"), model="claude-sonnet-5-5", thinking=True, cache=True
+    )
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        first = ai.turn(_task(), config, client=client)
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": "Question"},
+            {"role": "assistant", "content": first.content},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-1",
+                        "content": "read result",
+                        "is_error": False,
+                    }
+                ],
+            },
+        ]
+        ai.turn(_task(messages, force="read"), config, client=client)
+
+    request = sent[1]
+    assert request["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+    assert request["thinking"] == {"type": "adaptive"}
+    history = request["messages"]
+    assert isinstance(history, list) and isinstance(history[1], dict)
+    # The signed thinking stays: these models reject an edited history.
+    assert history[1]["content"] == [thinking, _claude_call("call-1")]
+    assert isinstance(history[-1], dict)
+    assert history[-1]["content"] == [
+        {
+            "type": "tool_result",
+            "tool_use_id": "call-1",
+            "content": "read result",
+            "is_error": False,
+        },
+        {
+            "type": "text",
+            "text": "Respond now by calling the `read` tool exactly once.",
+            "cache_control": {"type": "ephemeral"},
+        },
+    ]
+
+
 @pytest.mark.parametrize("provider", ["claude", "openai"])
 def test_structured_output_uses_schema_and_keeps_borrowed_client_open(
     provider: ai.Provider,

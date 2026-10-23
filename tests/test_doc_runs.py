@@ -1254,3 +1254,53 @@ def test_merging_an_anchor_entity_moves_its_document_to_the_target(_stores):
     finally:
         store.reset_substrate()
         substrate.close()
+
+
+def test_a_refused_run_can_be_tried_again_with_its_review_notes(_stores):
+    """The review's failed findings land on the run's summary, and a retry
+    starts a new run briefed with them on top of the original request."""
+    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: {
+        "outcome": "nothing_written",
+        "reason": "the document failed review: conformance: Options - no table",
+        "trace": {"summary": {"turns": 3}},
+        "review": {
+            "exposure": {"status": "pass", "findings": []},
+            "conformance": {
+                "status": "fail",
+                "findings": [{"where": "Options", "problem": "no table"}],
+            },
+            "attempts": 2,
+            "passed": False,
+        },
+    }
+    token = auth.current_principal.set(
+        auth.Principal(id="w", name="Writer", role="writer", type="human")
+    )
+    try:
+        refused = server.request_documentation("document the options")["id"]
+        doc_runs.wait_all()
+        summary = server.get_documentation_run(refused)["summary"]
+        assert summary["review_findings"] == [
+            {"check": "conformance", "where": "Options", "problem": "no table"}
+        ]
+
+        retry = server.revise_with_review_notes(refused)
+        doc_runs.wait_all()
+    finally:
+        auth.current_principal.reset(token)
+
+    assert retry["prompt"].startswith("document the options\n\n")
+    assert "- conformance: Options — no table" in retry["prompt"]
+
+
+def test_review_notes_never_crowd_out_the_request():
+    notes = [
+        {"check": "exposure", "where": f"part {n}", "problem": "x" * 40}
+        for n in range(50)
+    ]
+
+    prompt = server.documentation.review_notes_prompt("r" * 1000, notes, 600)
+
+    assert len(prompt) <= 600
+    assert prompt.startswith("r" * 250)
+    assert "part 0" in prompt

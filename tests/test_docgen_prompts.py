@@ -131,3 +131,28 @@ def test_served_guidance_names_only_offered_tools_and_parameters():
             if name.startswith(_TOOL_VERBS) and name not in offered:
                 problems.append(f"{source}: `{name}` is not offered")
     assert problems == []
+
+
+def test_the_reviewer_sees_only_what_cited_statements_say():
+    message = prompts.review_message(
+        prompt="Explain exports",
+        title="Exports",
+        body="# Exports\n",
+        statements={
+            "statements": [
+                {
+                    "id": "stm_1",
+                    "kind": "capability",
+                    "text": "Invoices can be exported.",
+                    "updated_by": "local-admin",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "links": [{"to_id": "stm_2", "link_type": "requires"}],
+                }
+            ],
+            "missing": [],
+        },
+    )
+
+    assert "Invoices can be exported." in message
+    for bookkeeping in ("local-admin", "updated_by", "2026-01-01", "stm_2"):
+        assert bookkeeping not in message

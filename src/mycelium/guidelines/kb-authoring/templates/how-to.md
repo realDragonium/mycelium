@@ -8,6 +8,10 @@ related: []
 ---
 
 <!--
+Leave `owner` blank: a person fills it when the page is adopted. Leave out
+any section, table column or field the knowledge base cannot fill, and file a
+knowledge gap for it; an omitted column is not a defect.
+
 HOW-TO — task-oriented.
 
 Reader knows what they want and has basic competence. Get them there.

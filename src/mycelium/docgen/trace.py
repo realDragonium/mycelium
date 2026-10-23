@@ -14,7 +14,7 @@ core testable with plain data.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from .. import agentloop
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
@@ -31,6 +31,14 @@ class TurnUsage(TypedDict):
     output: int
 
 
+class ReviewNote(TypedDict):
+    """One reason the review refused a run's document."""
+
+    check: Literal["exposure", "conformance"]
+    where: str
+    problem: str
+
+
 class RunSummary(TypedDict):
     """What a run spent and gathered, persisted on its row. While the run is
     going, `activity` says what it is doing and `statements_cited` is 0."""
@@ -43,6 +51,8 @@ class RunSummary(TypedDict):
     statements_retrieved: int
     statements_cited: int
     gaps_filed: int
+    #: Why the review refused the document, when it did.
+    review_findings: NotRequired[list[ReviewNote]]
 
 
 @dataclass

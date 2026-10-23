@@ -30,7 +30,7 @@ import os
 import sqlite3
 import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from . import ai_prompts, docs_store, product_settings, prompt_store
 from .ai import Provider
@@ -40,9 +40,11 @@ from .docgen.schema import (
     CurrentDocument,
     ExistingDocument,
     ManualDocument,
+    ReviewCheck,
+    ReviewRecord,
     RevisionTarget,
 )
-from .docgen.trace import RunSummary
+from .docgen.trace import ReviewNote, RunSummary
 
 if TYPE_CHECKING:
     from .documentation_profiles import CatalogueSnapshot
@@ -349,6 +351,23 @@ def _record_profile(
     conn.commit()
 
 
+def _review_notes(review: object) -> list[ReviewNote]:
+    """The failed checks' findings of a review the runner reported."""
+    if review is None:
+        return []
+    record = ReviewRecord.model_validate(review)
+    checks: list[tuple[Literal["exposure", "conformance"], ReviewCheck]] = [
+        ("exposure", record.exposure),
+        ("conformance", record.conformance),
+    ]
+    return [
+        ReviewNote(check=name, where=finding.where, problem=finding.problem)
+        for name, check in checks
+        if check.status == "fail"
+        for finding in check.findings
+    ]
+
+
 def wait_all(timeout: float = 10.0) -> None:
     for thread in list(_threads.values()):
         thread.join(timeout)
@@ -556,6 +575,8 @@ def _execute_run(
             # Keeping the reason verbatim is how a rejected document's review
             # findings reach the run row; a bare status would discard them.
             error = payload.get("reason")
+            if summary is not None and (notes := _review_notes(payload.get("review"))):
+                summary = {**summary, "review_findings": notes}
             # The findings quote a document, so the document is kept beside
             # them. Present only when one was written and refused.
             draft_title = payload.get("title") or draft_title

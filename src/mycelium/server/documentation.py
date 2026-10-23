@@ -199,6 +199,52 @@ def revise_document(
     )
 
 
+def review_notes_prompt(prompt: str, notes: list[dict[str, str]], limit: int) -> str:
+    """The original request followed by the review's notes, within `limit`.
+    The notes keep at most half of it, so a long request still leaves them
+    room and they never crowd out the request."""
+    lines = ["An earlier attempt was refused at review. Address these notes:"]
+    for note in notes:
+        line = f"- {note['check']}: {note['where']} — {note['problem']}"
+        if len("\n".join([*lines, line])) > limit // 2:
+            break
+        lines.append(line)
+    brief = "\n".join(lines)
+    return f"{prompt.strip()[: limit - len(brief) - 2]}\n\n{brief}"
+
+
+def revise_with_review_notes(run_id: str) -> dict[str, object]:
+    """Start a refused run again, briefed with what its review found: the same
+    profile, type and concept, or a revision of the same document."""
+    from .. import docs_store
+    from ..docgen.config import DocgenConfig
+
+    row = docs_store.get_run(_drafts_db(), run_id)
+    if row is None:
+        raise LookupError(f"documentation run not found: {run_id}")
+    summary = _json.loads(row["summary"]) if row["summary"] else {}
+    notes = summary.get("review_findings") or []
+    if row["outcome"] != "nothing_written" or not notes:
+        raise ValueError("Only a run the review refused can be revised with its notes.")
+    prompt = review_notes_prompt(
+        str(row["prompt"]), notes, DocgenConfig.from_env().max_prompt_chars
+    )
+    if row["target_document_id"] is not None:
+        return revise_document(
+            str(row["target_document_id"]),
+            int(row["target_revision"]),
+            prompt=prompt,
+            provider=row["provider"],
+        )
+    return request_documentation(
+        prompt,
+        guideline_set=row["guideline_set"],
+        document_type=row["document_type"],
+        provider=row["provider"],
+        anchor_entity_id=row["anchor_entity_id"],
+    )
+
+
 @tool
 def list_document_revisions(document_id: str) -> dict[str, object]:
     """List the stored versions of a document, newest first, without bodies."""

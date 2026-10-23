@@ -133,7 +133,20 @@ def _block(block: object) -> dict[str, JsonValue]:
     raise ModelError("Unsupported Claude conversation block")
 
 
+#: Models that reject a forced `tool_choice` ("tool" or "any") with a 400 and
+#: tie thinking blocks to an unedited history. A required tool is asked for in
+#: the prompt instead, and `validate_calls` still insists on that one call.
+_UNFORCEABLE = frozenset(
+    {"claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5-5", "claude-sonnet-5-5"}
+)
+
+
+def _forced(task: ToolTask, config: ModelConfig) -> bool:
+    return bool(task.force_tool) and config.model not in _UNFORCEABLE
+
+
 def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
+    forced = _forced(task, config)
     messages: list[dict[str, JsonValue]] = []
     for message in MESSAGES.validate_python(task.messages):
         if isinstance(message.content, str):
@@ -154,7 +167,7 @@ def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
                 if data.get("type") == "tool_use" and continuation:
                     continue
                 blocks.append(data)
-        if task.force_tool:
+        if forced:
             blocks = [
                 block
                 for block in blocks
@@ -162,6 +175,21 @@ def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
             ]
         if blocks:
             messages.append({"role": message.role, "content": [*blocks]})
+    if task.force_tool and not forced and messages:
+        last = dict(messages[-1])
+        content = last.get("content")
+        request: dict[str, JsonValue] = {
+            "type": "text",
+            "text": f"Respond now by calling the `{task.force_tool}` tool exactly once.",
+        }
+        last["content"] = (
+            [{"type": "text", "text": content}, request]
+            if isinstance(content, str)
+            else [*content, request]
+            if isinstance(content, list)
+            else [request]
+        )
+        messages[-1] = last
     if config.cache and messages:
         last = dict(messages[-1])
         content = last.get("content")
@@ -215,10 +243,15 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
                 "cache_control": {"type": "ephemeral"},
             }
         ]
+    forced = _forced(task, config)
     choice: ToolChoiceParam = (
         {"type": "tool", "name": task.force_tool, "disable_parallel_tool_use": True}
-        if task.force_tool
-        else {"type": "auto", "disable_parallel_tool_use": not task.parallel_tools}
+        if forced and task.force_tool
+        else {
+            "type": "auto",
+            "disable_parallel_tool_use": bool(task.force_tool)
+            or not task.parallel_tools,
+        }
     )
     request: _Request = {
         "model": config.model,
@@ -234,7 +267,7 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         request["output_config"] = {
             "effort": CLAUDE_EFFORT.validate_python(config.reasoning_effort)
         }
-    if config.thinking and not task.force_tool:
+    if config.thinking and not forced:
         request["thinking"] = {"type": "adaptive"}
     configured = client.with_options(
         timeout=config.request_timeout_s, max_retries=config.max_retries

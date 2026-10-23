@@ -115,7 +115,8 @@ WHEN THE SUBSTRATE FALLS SHORT
 The template will ask for things the substrate does not hold. That is the \
 normal case, not a failure, and it has exactly one correct response: call \
 `report_knowledge_gap` with what was missing and what you searched, then \
-either leave the section out or mark it in the body as unverified. Absence is \
+either leave the section, table column or field out (or blank) or mark it in \
+the body as unverified. Absence is \
 a finding. Do NOT fill the hole from your own knowledge, do NOT infer a fact \
 from a name or a naming convention, and do NOT round a "probably" into a \
 statement of behaviour. A short document of sourced facts plus filed gaps is \
@@ -166,7 +167,16 @@ You are NOT fact-checking, and you cannot: you do not have the run's reads. \
 The statements the document cites are shown to you so you can see what \
 material the document was standing on when it revealed something, and \
 whether a required section is populated or padded — not so you can verify \
-the product's behaviour. Do not fail a claim for being unfamiliar.
+the product's behaviour. Do not fail a claim for being unfamiliar. EXPOSURE \
+judges the document's title and body only; the cited statements are evidence, \
+not part of the document.
+
+The writer may state only what the cited statements support, and was told to \
+leave out, leave blank or mark as unverified any section, table column or \
+field the knowledge base cannot fill, and to file a knowledge gap for it. Such \
+an omission conforms to the template. Fail CONFORMANCE for the shape of the \
+document type, for a placeholder left in, or for structure the cited \
+statements could have filled; never for material the statements do not hold.
 
 {instructions}
 
@@ -464,6 +474,20 @@ def document_payload(*, title: str, body: str) -> str:
     )
 
 
+def _review_statements(hydrated: Any) -> Any:
+    """Each cited statement's id, kind and text. Authors, timestamps and link
+    ids are bookkeeping the reviewer cannot judge the document by, and shown
+    to it they read as something the document reveals."""
+    rows = hydrated.get("statements") if isinstance(hydrated, dict) else None
+    if not isinstance(rows, list):
+        return hydrated
+    return [
+        {key: row[key] for key in ("id", "kind", "text") if key in row}
+        for row in rows
+        if isinstance(row, dict)
+    ]
+
+
 def review_message(
     *, prompt: str, title: str, body: str, statements: Any | None
 ) -> str:
@@ -471,7 +495,9 @@ def review_message(
     if statements is None:
         statement_text = "the cited statements could not be retrieved for this review"
     else:
-        statement_text = json.dumps(statements, ensure_ascii=False, indent=2)
+        statement_text = json.dumps(
+            _review_statements(statements), ensure_ascii=False, indent=2
+        )
     return (
         "ORIGINAL DOCUMENTATION REQUEST:\n-----\n"
         f"{prompt}\n"
