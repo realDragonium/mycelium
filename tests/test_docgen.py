@@ -18,7 +18,7 @@ import types
 
 import pytest
 
-from mycelium import guidelines, prompt_store
+from mycelium import audiences, guidelines, prompt_store
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
 from mycelium.docgen import DocgenConfig, DocumentWritten, NothingWritten
 from mycelium.docgen.loop import _slug, run_docgen
@@ -246,6 +246,7 @@ def _substrate(**overrides):
 def prompts_db():
     conn = prompt_store.connect(":memory:")
     prompt_store.migrate(conn)
+    audiences.seed(conn)
     prompt_store.use_connection(conn)
     try:
         yield conn
@@ -284,6 +285,10 @@ def _config(**overrides) -> DocgenConfig:
     }
     base.update(overrides)
     return DocgenConfig(**base)
+
+
+def _everything_visible(substrate, audience):
+    return substrate, frozenset({"stm_1", "stm_2", "stm_9", "stm_12"})
 
 
 def _run(client, substrate=None, report_gap=None, config=None, **kwargs):
@@ -344,6 +349,7 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
     result = _run(
         client,
         profiles=profiles,
+        scope_reader=_everything_visible,
         revision_target=RevisionTarget(
             selected,
             3,
@@ -359,6 +365,39 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
     assert "Changed template after admission" not in json.dumps(
         client.calls, default=str
     )
+
+
+def test_a_profile_run_reads_and_cites_only_what_its_audience_may_see(kb_set):
+    from mycelium import documentation_profiles
+
+    seen = []
+
+    def only_stm_1(substrate, audience):
+        seen.append(audience)
+        return substrate, frozenset({"stm_1"})
+
+    client = FakeAnthropic(
+        [
+            _emit(statement_ids=["stm_1", "stm_9"]),
+            _emit(statement_ids=["stm_1"]),
+            _review_ok(),
+        ]
+    )
+
+    result = _run(
+        client,
+        profiles=documentation_profiles.capture(),
+        scope_reader=only_stm_1,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+    )
+
+    assert isinstance(result, DocumentWritten)
+    assert result.statement_ids == ["stm_1"]
+    assert [item.id for item in seen] == ["internal-technical"]
+    blocked = client.calls[1]["messages"][-1]["content"][0]["content"]
+    assert "stm_9" in blocked and "audience" in blocked
+    assert "=== AUDIENCE `Internal technical`" in client.calls[0]["system"][0]["text"]
 
 
 def test_a_revision_of_the_published_copy_tells_the_writer_to_keep_its_edits(kb_set):

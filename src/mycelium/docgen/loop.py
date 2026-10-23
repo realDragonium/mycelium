@@ -106,7 +106,14 @@ _MAX_ANCHOR_STATEMENTS = 200
 _ANCHOR_PAGE = 100
 
 if TYPE_CHECKING:
+    from ..audiences import Audience
     from ..documentation_profiles import CatalogueSnapshot
+
+#: Wraps the run's reader so it sees only what an audience may; returns the
+#: wrapped reader and the statement ids it can return.
+ScopeReader = Callable[
+    [SubstrateReader, "Audience"], tuple[SubstrateReader, frozenset[str]]
+]
 
 
 def run_docgen(
@@ -126,6 +133,7 @@ def run_docgen(
     anchor_entity_id: str | None = None,
     run_id: str | None = None,
     on_progress: Callable[[RunSummary], None] | None = None,
+    scope_reader: ScopeReader | None = None,
 ) -> DocgenResult:
     """Write one document for `prompt`. Returns `DocumentWritten` or
     `NothingWritten` — never raises for retrieval, resolution or closure
@@ -137,6 +145,10 @@ def run_docgen(
     for tests; in production they default to the selected provider client, the
     in-process substrate, `server.report_knowledge_gap`, and env-derived
     config.
+
+    With `profiles`, the run writes for its profile's audience: every read
+    goes through `scope_reader` and a citation outside what it can return is
+    refused. Without them (a bench script) nothing is scoped.
     """
     config = config or DocgenConfig.from_env()
     if substrate is None:
@@ -171,6 +183,8 @@ def run_docgen(
             anchor_entity_id=anchor_entity_id,
             run_id=run_id,
             on_progress=on_progress,
+            load_audience=profiles.audience if profiles is not None else None,
+            scope_reader=scope_reader or _scope_reader,
         )
 
     result.trace["prompts"] = [
@@ -221,6 +235,15 @@ def _store_texts(
         return None, None, None
 
 
+def _scope_reader(
+    substrate: SubstrateReader, audience: Audience
+) -> tuple[SubstrateReader, frozenset[str]]:
+    from .. import audience_scope
+
+    scoped = audience_scope.scoped(substrate, audience)
+    return scoped, scoped.scope.statement_ids
+
+
 def _default_gap_reporter(text: str) -> dict[str, Any]:
     """File a knowledge gap through the substrate's own tool.
 
@@ -264,6 +287,9 @@ class _RunContext:
     review: ReviewRecord | None = None
     unresolved: str = ""
     retrieved_ids: set[str] = field(default_factory=set)
+    #: What the run's audience may see; None when the run is not scoped.
+    visible_ids: frozenset[str] | None = None
+    audience: Audience | None = None
     successful_reads: int = 0
     gaps: list[str] = field(default_factory=list)
     nudged: bool = False
@@ -292,6 +318,8 @@ def _execute(
     anchor_entity_id: str | None = None,
     run_id: str | None = None,
     on_progress: Callable[[RunSummary], None] | None = None,
+    load_audience: Callable[[str], Audience | None] | None = None,
+    scope_reader: ScopeReader | None = None,
 ) -> DocgenResult:
     start = time.monotonic()
     trace = TraceBuilder(
@@ -367,6 +395,21 @@ def _execute(
         )
     ctx.exposure = exposure
     ctx.template = template
+    if load_audience is not None:
+        audience = load_audience(ctx.guideline_set)
+        if audience is None:
+            return _nothing(
+                ctx,
+                f"profile '{ctx.guideline_set}' writes for an audience that is "
+                "no longer configured; choose one in its documentation profile",
+            )
+        assert scope_reader is not None
+        ctx.substrate, ctx.visible_ids = scope_reader(substrate, audience)
+        ctx.audience = audience
+        trace.notes.append(
+            f"audience {audience.id} ({audience.scope}): "
+            f"{len(ctx.visible_ids)} visible statements"
+        )
 
     # The writer sees the exposure rules so the reviewer never grades against
     # a rule the writer did not see. Enforcement remains the later review
@@ -379,6 +422,7 @@ def _execute(
         guidance=guidance,
         exposure=exposure,
         template=template,
+        audience=ctx.audience,
     )
     if manual_document is not None:
         ctx.system_prompt += (
@@ -829,7 +873,7 @@ def _handle_emit(
 
     if ctx.manual_document is not None:
         title, body = ctx.manual_document.title, ctx.manual_document.body
-    problem = _emit_problem(title, body, ids, ctx.retrieved_ids)
+    problem = _emit_problem(title, body, ids, ctx.retrieved_ids, ctx.visible_ids)
     if problem is not None:
         trace.refused_emits.append(problem)
         if (
@@ -935,7 +979,7 @@ def _review(
             )
             trace.notes.append(f"review statement hydration failed: {exc}")
 
-    check_exposure = bool((ctx.exposure or "").strip())
+    check_exposure = bool((ctx.exposure or "").strip()) or ctx.audience is not None
     # Guideline resolution runs before the first writing turn.
     assert ctx.guideline_set is not None and ctx.document_type is not None
     system = prompts.build_review_system_prompt(
@@ -944,6 +988,7 @@ def _review(
         document_type=ctx.document_type,
         exposure=ctx.exposure,
         template=ctx.template,
+        audience=ctx.audience,
     )
     messages = [
         {
@@ -1020,7 +1065,11 @@ def _statement_texts(hydrated: Any) -> dict[str, str] | None:
 
 
 def _emit_problem(
-    title: str, body: str, ids: list[str], retrieved: set[str]
+    title: str,
+    body: str,
+    ids: list[str],
+    retrieved: set[str],
+    visible: frozenset[str] | None = None,
 ) -> str | None:
     """Why this document may not be recorded, or None.
 
@@ -1041,6 +1090,14 @@ def _emit_problem(
             "it carried no statement_ids. A document that rests on nothing is "
             "not recorded — cite the statements each section came from"
         )
+    if visible is not None:
+        hidden = [i for i in ids if i not in visible]
+        if hidden:
+            shown = ", ".join(sorted(hidden)[:_MAX_NAMED_IDS])
+            return (
+                f"it cited statement ids outside this run's audience: {shown}. "
+                "Cite only statements the read tools returned"
+            )
     unknown = [i for i in ids if i not in retrieved]
     if unknown:
         shown = ", ".join(sorted(unknown)[:_MAX_NAMED_IDS])

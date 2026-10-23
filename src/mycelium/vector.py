@@ -19,8 +19,17 @@ EF_SEARCH = 50
 
 
 class Index:
-    def __init__(self, index: hnswlib.Index) -> None:
+    def __init__(
+        self, index: hnswlib.Index, allowed: frozenset[int] | None = None
+    ) -> None:
         self._index = index
+        self._allowed = allowed
+
+    def restricted(self, allowed: frozenset[int]) -> Index:
+        """A read-only view whose searches rank only `allowed` ids, so a
+        top-k is the k nearest allowed vectors rather than whatever of the
+        global top-k survives a filter."""
+        return Index(self._index, allowed)
 
     @classmethod
     def empty(cls) -> Index:
@@ -142,13 +151,21 @@ class Index:
         if self._index.get_current_count() == 0:
             return []
         k = min(k, self._index.get_current_count())
+        allowed = self._allowed
+        if allowed is not None:
+            k = min(k, len(allowed))
         arr = np.asarray(vec, dtype=np.float32).reshape(1, DIM)
         # hnswlib's knn_query raises when ef can't fill k non-deleted
         # candidates (small indexes with deletes hit this). Walk k down
         # until it succeeds or hits zero.
         while k > 0:
             try:
-                labels, distances = self._index.knn_query(arr, k=k)
+                if allowed is None:
+                    labels, distances = self._index.knn_query(arr, k=k)
+                else:
+                    labels, distances = self._index.knn_query(
+                        arr, k=k, filter=lambda label: label in allowed
+                    )
                 break
             except RuntimeError:
                 k -= 1

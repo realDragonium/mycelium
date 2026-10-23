@@ -69,8 +69,13 @@ def _prompts_db() -> sqlite3.Connection:
 
 def _idx() -> vector.Index:
     """The statement vector index. Loaded by `init`; raises if reached
-    before the server is initialized."""
-    return _context().index
+    before the server is initialized. Inside an audience scope it ranks only
+    the statements that audience may see."""
+    from .. import audience_scope  # local import: the scope imports the store
+
+    scope = audience_scope.active()
+    index = _context().index
+    return index if scope is None else index.restricted(scope.vector_ids)
 
 
 def _idx_path() -> Path:

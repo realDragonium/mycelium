@@ -40,7 +40,23 @@ def documentation_options(request: Request) -> dict[str, object]:
         **server.list_documentation_models(),
         "can_generate": auth.principal_has_real_role(principal, "writer"),
         "guideline_sets": guidelines.catalogue(prompt_store.connection()),
+        "profile_audiences": _profile_audiences(),
         "max_prompt_chars": DocgenConfig.from_env().max_prompt_chars,
+    }
+
+
+def _profile_audiences() -> dict[str, dict[str, str] | None]:
+    """Which audience each profile writes for, so the generate form can say."""
+    from .. import documentation_profiles
+
+    snapshot = documentation_profiles.capture()
+    return {
+        profile.name: (
+            {"id": audience.id, "name": audience.name, "scope": audience.scope}
+            if (audience := snapshot.audience(profile.name)) is not None
+            else None
+        )
+        for profile in snapshot.profiles
     }
 
 

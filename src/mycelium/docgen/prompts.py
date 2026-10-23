@@ -29,11 +29,14 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .. import timestamps
 from ..ask.prompts import format_recon
 from .schema import ReviewFinding
+
+if TYPE_CHECKING:
+    from ..audiences import Audience
 
 __all__ = [
     "build_system_prompt",
@@ -205,6 +208,17 @@ def _guideline_block(
     return "".join(parts)
 
 
+def _audience_block(audience: Audience) -> str:
+    return (
+        f"\n\n=== AUDIENCE `{audience.name}` ({audience.scope}) ===\n"
+        f"{audience.description.strip()}\n"
+        "Only knowledge this audience may see is available: the read tools "
+        "return nothing else, and a document citing anything else is refused. "
+        "Write at the depth, and in the tone, this description asks for.\n"
+        "=== END AUDIENCE ===\n"
+    )
+
+
 def build_system_prompt(
     doctrine_text: str | None,
     *,
@@ -213,6 +227,7 @@ def build_system_prompt(
     guidance: str | None,
     exposure: str | None,
     template: str | None,
+    audience: Audience | None = None,
 ) -> str:
     """The base protocol, the loaded doctrine, then the guideline set — each
     delimited so the model can tell which is which when they disagree.
@@ -223,9 +238,8 @@ def build_system_prompt(
     out = _BASE_PROTOCOL
     if doctrine:
         out += _DOCTRINE_HEADER + doctrine + _DOCTRINE_FOOTER
-    return out + _guideline_block(
-        guideline_set, document_type, guidance, exposure, template
-    )
+    out += _guideline_block(guideline_set, document_type, guidance, exposure, template)
+    return out + _audience_block(audience) if audience is not None else out
 
 
 def build_review_system_prompt(
@@ -235,6 +249,7 @@ def build_review_system_prompt(
     document_type: str,
     exposure: str | None,
     template: str | None,
+    audience: Audience | None = None,
 ) -> str:
     """The independent review protocol and only the rules it judges.
 
@@ -243,7 +258,7 @@ def build_review_system_prompt(
     context only judges the finished one.
     """
     exposure_text = (exposure or "").strip()
-    if exposure_text:
+    if exposure_text or audience is not None:
         checks = (
             "Run TWO checks and report them separately, because they fail "
             "differently. EXPOSURE: does the text respect what this guideline "
@@ -259,6 +274,14 @@ def build_review_system_prompt(
             "separately."
         )
     parts = [_REVIEW_PROTOCOL.format(checks=checks, instructions=instructions)]
+    if audience is not None:
+        parts.append(
+            f"\n\n=== AUDIENCE `{audience.name}` ({audience.scope}) ===\n"
+            f"{audience.description.strip()}\n"
+            "EXPOSURE also fails when the document gives this audience "
+            "something the description says it must not get.\n"
+            "=== END AUDIENCE ===\n"
+        )
     if exposure_text:
         parts.append(
             f"\n\n=== `{guideline_set}` EXPOSURE RULES ===\n"
