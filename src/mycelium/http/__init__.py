@@ -35,7 +35,7 @@ from pydantic import Field as PydField
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from . import (
+from .. import (
     ai_prompts,
     alias_suggestions,
     auth,
@@ -51,12 +51,12 @@ from . import (
     store,
     tracing,
 )
-from . import (
+from .. import (
     draft_review_settings as review_settings,
 )
-from .docgen.publication import BothSidesEdited
-from .docgen.schema import ManualDocument
-from .server import registry, runtime
+from ..docgen.publication import BothSidesEdited
+from ..docgen.schema import ManualDocument
+from ..server import registry, runtime
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -467,7 +467,7 @@ def _make_streaming_post_handler(
         _enforce_role(
             request, required_role, getattr(func, "_mycelium_real_role", False)
         )
-        from .ask.transport import respond
+        from ..ask.transport import respond
 
         return await respond(
             request,
@@ -1181,7 +1181,7 @@ def documentation_prompt_history_http(
 ) -> dict[str, object]:
     _require_principal(request)
     documentation_profiles.editable_key(type, name)
-    from . import prompt_store
+    from .. import prompt_store
 
     return {
         "versions": [
@@ -1339,7 +1339,7 @@ def draft_review_backlog(request: Request) -> dict[str, list[str]]:
     offer reviewing them once when review is switched on."""
     from fastapi import HTTPException
 
-    from . import draft_review_runs
+    from .. import draft_review_runs
 
     _require_admin(request)
     try:
@@ -1353,7 +1353,7 @@ def review_draft_backlog(request: Request) -> dict[str, list[str]]:
     """Start reviewing every draft in the backlog; returns their ids."""
     from fastapi import HTTPException
 
-    from . import draft_review_runs
+    from .. import draft_review_runs
 
     _require_admin(request)
     try:
@@ -1382,7 +1382,7 @@ def answer_draft_review_http(
     """Answer the internal reviewer's questions; the draft is reviewed again."""
     from pydantic import ValidationError
 
-    from . import draft_review_runs
+    from .. import draft_review_runs
 
     principal = _enforce_curator(request, action="answering the internal reviewer")
     try:
@@ -1393,7 +1393,7 @@ def answer_draft_review_http(
 
 
 def _serialize_draft(row, *, ops=None) -> dict[str, Any]:
-    from . import drafts_store
+    from .. import drafts_store
 
     return drafts_store.serialize_draft(row, ops=ops)
 
@@ -1409,8 +1409,8 @@ class DocumentationRequestBody(BaseModel):
 @app.get("/api/documentation/options")
 def documentation_options(request: Request) -> dict[str, object]:
     principal = _require_principal(request)
-    from . import guidelines, prompt_store
-    from .docgen.config import DocgenConfig
+    from .. import guidelines, prompt_store
+    from ..docgen.config import DocgenConfig
 
     return {
         **server.list_documentation_models(),
@@ -1463,7 +1463,7 @@ def preview_document_edit(body: ManualDocument, request: Request) -> dict[str, o
 def edit_saved_document_http(
     document_id: str, body: SavedDocumentEditBody, request: Request
 ) -> dict[str, object]:
-    from . import docs_store, document_edits
+    from .. import docs_store, document_edits
 
     _enforce_role(request, "writer", real_role=True)
     principal = _require_principal(request)
@@ -1485,7 +1485,7 @@ def edit_saved_document_http(
 def edit_document_draft_http(
     run_id: str, body: DocumentEditBody, request: Request
 ) -> dict[str, object]:
-    from . import docs_store, document_edits
+    from .. import docs_store, document_edits
 
     _enforce_role(request, "writer", real_role=True)
     principal = _require_principal(request)
@@ -1585,7 +1585,7 @@ def revise_document_http(
 ) -> dict[str, object]:
     from fastapi import HTTPException
 
-    from .docs_store import RevisionConflict
+    from ..docs_store import RevisionConflict
 
     _enforce_role(request, "writer", real_role=True)
     try:
@@ -1600,7 +1600,7 @@ def deliver_document_http(
 ) -> dict[str, object]:
     from fastapi import HTTPException
 
-    from .docs_store import RevisionConflict
+    from ..docs_store import RevisionConflict
 
     _enforce_role(request, "writer", real_role=True)
     try:
@@ -1615,7 +1615,7 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
     open / submitted / approved / rejected / withdrawn / all (default).
     """
     _require_principal(request)
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     status = status or "all"
@@ -1639,7 +1639,7 @@ def list_drafts(request: Request, status: str | None = None) -> dict[str, Any]:
 @app.get("/api/drafts/{draft_id}")
 def get_draft_detail(draft_id: str, request: Request) -> dict[str, Any]:
     _require_principal(request)
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     row, ops = drafts_store.get_draft_snapshot(conn, draft_id)
@@ -1661,7 +1661,7 @@ def edit_draft_op(
 ) -> dict[str, Any]:
     """Replace an op's payload on an open or submitted draft."""
     _enforce_curator(request, action="editing a draft operation")
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
@@ -1713,7 +1713,7 @@ def remove_draft_op_http(
     expected_revision: int | None = None,
 ) -> dict[str, Any]:
     _enforce_curator(request, action="removing a draft operation")
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
@@ -1761,7 +1761,7 @@ class DraftDecisionBody(BaseModel):
 @app.post("/api/drafts/{draft_id}/submit")
 def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
     _require_principal(request)
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
@@ -1778,7 +1778,7 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
         )
     with store.transaction(conn):
         drafts_store.set_submitted(conn, draft_id)
-    from . import draft_review_runs
+    from .. import draft_review_runs
 
     draft_review_runs.on_submitted(draft_id)
     return {"ok": True}
@@ -1815,7 +1815,7 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
     each one under `rejections` so the curator can fix them.
     """
     p = _enforce_curator(request)
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     try:
@@ -1848,7 +1848,7 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
 @app.post("/api/drafts/{draft_id}/reject")
 def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _enforce_curator(request)
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     with store.transaction(conn):
@@ -1876,7 +1876,7 @@ def reject_draft(draft_id: str, request: Request) -> dict[str, Any]:
 @app.post("/api/drafts/{draft_id}/withdraw")
 def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
     p = _require_principal(request)
-    from . import drafts_store
+    from .. import drafts_store
 
     conn = server._drafts_db()
     row = drafts_store.get_draft(conn, draft_id)
@@ -2122,7 +2122,7 @@ def _root_redirect() -> RedirectResponse:
 
 # The browser app is built from `frontend/` into `webui/`, which is committed so
 # the server runs without Node.
-_WEBUI_DIR = Path(__file__).resolve().parent / "webui"
+_WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
 _UI_DIR = _WEBUI_DIR / "ui"
 app.mount("/ui", StaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
@@ -2183,7 +2183,7 @@ def review_alias_suggestion_http(
     body: alias_suggestions.ReviewRequest,
 ) -> dict[str, object]:
     _enforce_role(request, "writer", real_role=True)
-    from . import drafts_store
+    from .. import drafts_store
 
     try:
         entry = alias_suggestions.review(
