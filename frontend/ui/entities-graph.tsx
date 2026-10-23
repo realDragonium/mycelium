@@ -12,6 +12,7 @@ import { errorMessage, getJSON, postJSON } from './api';
 import { usePrefs, type Prefs } from './prefs';
 import { useRouter } from './router';
 import { substrate, type Entity } from './data';
+import { fitCamera, neighbourhood } from './graph-fit';
 
 interface EntityNode { id: string; label: string; mentions: number }
 interface SimNode extends EntityNode { x: number; y: number; missing: boolean }
@@ -23,6 +24,9 @@ interface EntitySimulation {
   nodes: SimNode[]; edges: SimEdge[]; idMap: Record<string, SimNode>;
   dragging: SimNode | null; dragStart?: Point | null; pan: Point; zoom: number;
   panning: Panning | null; running: boolean; wakeUntil: number;
+  // Set until the camera has framed `focus`'s neighbourhood (or the whole
+  // map) on a sized canvas; cleared by the user panning, zooming or dragging.
+  framing: { focus: string | null } | null;
 }
 interface EntityGraphState {
   selectedId: string | null; hoverId: string | null; neighborhood: Set<string> | null;
@@ -276,6 +280,8 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
   }, [focusMode, selectedId, edges]);
 
   const simRef = useRefE<EntitySimulation | null>(null);
+  // The focus to frame when the map is built after the focus arrived.
+  const framingFocusRef = useRefE<string | null>(null);
   const drawRef = useRefE<{
     state?: EntityGraphState;
     draw?: () => void;
@@ -361,44 +367,12 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
         return src && tgt ? [{ ...e, src, tgt }] : [];
       });
 
-      // Auto-fit. Compute the bounding box of every placed node, then
-      // pick pan/zoom so the graph fills ~85% of the canvas. Missing
-      // nodes (no baked position, all at origin) are excluded so they
-      // don't anchor the box.
-      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-      for (const n of np) {
-        if (n.missing) continue;
-        if (n.x < minX) minX = n.x;
-        if (n.x > maxX) maxX = n.x;
-        if (n.y < minY) minY = n.y;
-        if (n.y > maxY) maxY = n.y;
-      }
-      let zoom = 1, panX = width / 2, panY = height / 2;
-      if (isFinite(minX)) {
-        const w = maxX - minX, h = maxY - minY;
-        // `fit` is the auto-fit ratio that would make the bounding box
-        // exactly fill the canvas; `defaultZoomBoost` scales past that
-        // so the initial view feels close-up rather than zoomed-out.
-        // The periphery clips slightly; the user pans/scrolls to reach
-        // it. Upper clamp matches the scroll-wheel maximum so the boost
-        // never produces a state the user can't replicate manually.
-        const fit = Math.min(
-          width / Math.max(w, 1),
-          height / Math.max(h, 1),
-        );
-        const defaultZoomBoost = 1.4;
-        zoom = Math.max(0.05, Math.min(2.2, fit * defaultZoomBoost));
-        const cx = (minX + maxX) / 2;
-        const cy = (minY + maxY) / 2;
-        panX = width / 2 - cx * zoom;
-        panY = height / 2 - cy * zoom;
-      }
-
       simRef.current = {
         nodes: np, edges: ep, idMap,
-        dragging: null, pan: { x: panX, y: panY }, zoom,
+        dragging: null, pan: { x: 0, y: 0 }, zoom: 1,
         panning: null, running: true,
         wakeUntil: performance.now() + 500,
+        framing: { focus: framingFocusRef.current },
       };
     }
     const sim = simRef.current;
@@ -481,10 +455,12 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       mouse.x = sx; mouse.y = sy;
       if (sim.dragging) {
         const w = screenToWorld(sx, sy);
+        sim.framing = null;
         sim.dragging.x = w.x;
         sim.dragging.y = w.y;
         wake(2000);
       } else if (sim.panning) {
+        sim.framing = null;
         sim.pan.x = sim.panning.panX + (sx - sim.panning.startX);
         sim.pan.y = sim.panning.panY + (sy - sim.panning.startY);
         wake();
@@ -536,6 +512,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
       // of entities across thousands of pixels for big graphs, so the
       // minimum is set generously to let the user fit it on screen.
       const newZoom = Math.max(0.05, Math.min(3, sim.zoom * factor));
+      sim.framing = null;
       sim.pan.x = sx - (sx - sim.pan.x) * (newZoom / sim.zoom);
       sim.pan.y = sy - (sy - sim.pan.y) * (newZoom / sim.zoom);
       sim.zoom = newZoom;
@@ -561,6 +538,7 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     // the loop self-terminates, costing zero CPU.
     const step = () => {
       const now = performance.now();
+      if (sim.framing) frame(sim.framing.focus);
       draw();
       if (now < sim.wakeUntil || sim.dragging || sim.panning) {
         raf = requestAnimationFrame(step);
@@ -568,6 +546,17 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
         sim.running = false;
       }
     };
+
+    // Entities created since the last bake sit at the origin, so they only
+    // count when nothing else is placed.
+    function frame(focus: string | null) {
+      const placed = sim.nodes.filter(n => !n.missing);
+      const focused = focus ? neighbourhood(focus, sim.nodes, sim.edges) : [];
+      const camera = fitCamera(focused.length ? focused : placed.length ? placed : sim.nodes, width, height, 0.05, 2.2);
+      if (!camera) return;
+      sim.pan = camera.pan; sim.zoom = camera.zoom;
+      sim.framing = null;
+    }
 
     function nodeRadius(n: EntityNode) {
       // Base 7 + small bump for entities mentioned by many statements,
@@ -761,7 +750,17 @@ function EntitiesGraph({ focusId }: { focusId?: string | null }) {
     }
   }, [selectedId, hoverId, neighborhood, activeTypes, matchSet, theme]);
 
-  useEffectE(() => { if (focusId) setSelectedId(focusId); }, [focusId]);
+  useEffectE(() => {
+    if (!focusId) return;
+    setSelectedId(focusId);
+    framingFocusRef.current = focusId;
+    const sim = simRef.current;
+    if (sim) {
+      sim.framing = { focus: focusId };
+      sim.wakeUntil = performance.now() + 250;
+      if (!sim.running && drawRef.current.requestStep) drawRef.current.requestStep();
+    }
+  }, [focusId]);
 
   const selected = selectedId ? idx.entities[selectedId] : undefined;
   const selectedNeighbors = selected ? (() => {
