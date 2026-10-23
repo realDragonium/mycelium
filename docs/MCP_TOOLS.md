@@ -59,10 +59,10 @@ decision, and the rest runs in-process.
 | `list_drafts` | Lists the review queue across creators. An AI curator lists and investigates drafts, and a person approves or rejects them in the UI. This tool is the agent's side of that split, and only real writers and admins see it. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
 | `report_knowledge_gap` | Lets an agent report knowledge it could not find. |
-| `request_documentation` | Starts a documentation run. |
+| `request_documentation` | Starts a documentation run. `anchor_entity_id`, with a guideline set and document type, names the entity the document is about, so a repeat request revises that document. |
 | `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. |
-| `get_generated_document` | Reads the written document and the revision that `revise_document` needs. |
-| `revise_document` | Revises a generated document. |
+| `get_generated_document` | Reads the written document and the revision that `revise_document` needs, and the state of its pull request (open, merged or closed), refreshed from GitHub at most once a minute. |
+| `revise_document` | Revises a generated document. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
 
 ## HTTP and in-process only
 
@@ -107,7 +107,7 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 | `list_generated_documents` | Document library browsing. |
 | `list_document_revisions` | Document history. |
 | `get_document_revision` | Document history. |
-| `deliver_document` | Opens a GitHub pull request. Publishing outside the instance stays a UI decision. |
+| `deliver_document` | Opens or updates a GitHub pull request and tracks it. Publishing outside the instance stays a UI decision. |
 | `list_documentation_destinations` | Deployment configuration. |
 | `start_research` | Researches a server-configured codebase. MCP coding assistants already have the code and can use `ingest` or write directly. |
 | `list_research_runs` | Research workspace. |
