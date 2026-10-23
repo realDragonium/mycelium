@@ -331,7 +331,8 @@ def _run_reads(tool_uses: list[ai.ToolUse], ctx: _RunContext) -> None:
             )
             if source_ids and not set(source_ids) <= available_ids:
                 raise ValueError(
-                    "Adjacency sources must have been supplied by a completed targeted retrieval in an earlier turn."
+                    "Adjacency sources must have been supplied by a completed targeted retrieval in an earlier turn. "
+                    + _eligible_sources(ctx.evidence, available_ids)
                 )
         except ValueError as exc:
             ctx.trace.evidence_checks.append(
@@ -443,7 +444,11 @@ def _handle_submit(tool_use: ai.ToolUse, ctx: _RunContext) -> AskResult | None:
         ctx.deltas.reset()
         if ctx.floor_blocks < _MAX_FLOOR_BLOCKS:
             ctx.floor_blocks += 1
-            detail = prompts.floor_block_message(_floor_detail(floor))
+            detail = prompts.floor_block_message(
+                _floor_detail(floor)
+                + " "
+                + _eligible_sources(ctx.evidence, ctx.targeted_ids)
+            )
             _append_tool_error(ctx.messages, tool_use.id, detail)
             return None
         # Stuck below the floor: never accept a floorless answer. Respond
@@ -715,6 +720,16 @@ def _floor_state(ctx: _RunContext) -> dict:
         "adjacency_research": adjacency,
         "satisfied": recon_ok and targeted >= 1 and adjacency >= 1,
     }
+
+
+def _eligible_sources(evidence: Evidence, targeted_ids: set[str]) -> str:
+    refs = sorted(
+        (ref for ref, sid in evidence.by_ref.items() if sid in targeted_ids),
+        key=lambda ref: int(ref[1:]),
+    )
+    if not refs:
+        return "No refs qualify yet: do a targeted retrieval first."
+    return "Refs that qualify as adjacency_sources: " + ", ".join(refs) + "."
 
 
 def _floor_detail(floor: dict) -> str:
