@@ -1,0 +1,53 @@
+id = "saved_view_sharing"
+categories = ["mostly_known", "contradiction", "conditional"]
+prose = """
+Saved views
+
+A member can save a filtered invoice list as a saved view. A saved view is
+private to its creator unless it is shared with the whole workspace. Only an
+admin can share a saved view. When a shared view is deleted by its creator, it
+disappears for every member.
+"""
+
+[[statements]]
+key = "save"
+text = "A member can save a filtered invoice list as a saved view"
+kind = "capability"
+existing = ["seed:view_save"]
+
+[[statements]]
+key = "private"
+text = "A saved view is private to its creator"
+kind = "rule"
+existing = ["seed:view_private"]
+
+[[statements]]
+key = "admins_share"
+text = "Only an admin can share a saved view with the whole workspace"
+kind = ["rule", "capability"]
+
+[[statements]]
+key = "shared"
+text = "A saved view is shared"
+kind = "state"
+existing = ["seed:view_shared"]
+
+[[statements]]
+key = "deleted"
+text = "A saved view is deleted by its creator"
+kind = "event"
+
+[[statements]]
+key = "disappears"
+text = "The saved view is removed for the whole workspace"
+kind = "event"
+
+[[contradictions]]
+key = "admins_share"
+existing = "seed:view_share"
+
+[[links]]
+from = "deleted"
+to = "disappears"
+type = ["triggers", "contains"]
+when = ["shared"]

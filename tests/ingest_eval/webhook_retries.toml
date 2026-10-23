@@ -1,0 +1,71 @@
+id = "webhook_retries"
+categories = ["new", "mostly_known", "conditional"]
+prose = """
+Developer docs: webhook delivery
+
+When an invoice is marked as paid, a webhook request is sent to the endpoint.
+If the endpoint does not answer with a 2xx status within 10 seconds, the
+request is retried, up to five times, with an increasing delay. When all five
+retries have failed, the endpoint is disabled, which sends an email to the
+admin who added it.
+"""
+
+[[statements]]
+key = "marked_paid"
+text = "An invoice is marked as paid"
+kind = "event"
+existing = ["seed:invoice_marked_paid"]
+
+[[statements]]
+key = "request"
+text = "A webhook request is sent to the endpoint"
+kind = "event"
+existing = ["seed:webhook_request"]
+
+[[statements]]
+key = "no_answer"
+text = "The endpoint does not answer with a 2xx status within 10 seconds"
+kind = "state"
+
+[[statements]]
+key = "retried"
+text = "The webhook request is retried up to five times with an increasing delay"
+kind = "event"
+
+[[statements]]
+key = "exhausted"
+text = "Five retries of a webhook request have failed"
+kind = "state"
+
+[[statements]]
+key = "disabled"
+text = "The webhook endpoint is disabled"
+kind = "event"
+
+[[statements]]
+key = "email"
+text = "An email is sent to the admin who added the webhook endpoint"
+kind = "event"
+
+[[links]]
+from = "marked_paid"
+to = "request"
+type = ["triggers"]
+preexisting = true
+
+[[links]]
+from = "request"
+to = "retried"
+type = ["triggers", "proceeds", "contains"]
+when = ["no_answer"]
+
+[[links]]
+from = "retried"
+to = "disabled"
+type = ["triggers", "proceeds"]
+when = ["exhausted"]
+
+[[links]]
+from = "disabled"
+to = "email"
+type = ["triggers"]

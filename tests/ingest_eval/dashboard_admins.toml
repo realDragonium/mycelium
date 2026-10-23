@@ -1,0 +1,30 @@
+id = "dashboard_admins"
+categories = ["mostly_known", "contradiction"]
+prose = """
+Change: revenue dashboard access
+
+From this release, only admins can see the revenue dashboard; other members
+no longer see it. The revenue dashboard is still updated every hour and shows
+revenue per month.
+"""
+
+[[statements]]
+key = "admins_only"
+text = "Only admins can see the revenue dashboard"
+kind = ["rule", "capability"]
+
+[[statements]]
+key = "refresh"
+text = "The revenue dashboard is updated hourly"
+kind = "rule"
+existing = ["seed:dash_refresh"]
+
+[[statements]]
+key = "monthly"
+text = "The revenue dashboard shows revenue per month"
+kind = "capability"
+existing = ["seed:dash_monthly"]
+
+[[contradictions]]
+key = "admins_only"
+existing = "seed:dash_view"

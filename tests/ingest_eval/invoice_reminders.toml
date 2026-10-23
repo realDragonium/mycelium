@@ -1,0 +1,55 @@
+id = "invoice_reminders"
+categories = ["mostly_known", "conditional", "negation"]
+prose = """
+Help article: automatic payment reminders
+
+When an invoice becomes overdue, a payment reminder is sent to the customer
+automatically. A second payment reminder is sent seven days after the first
+one, unless the invoice has been paid in the meantime. Members can still
+schedule a payment reminder for an invoice by hand.
+"""
+
+[[statements]]
+key = "becomes_overdue"
+text = "The due date of an invoice passes"
+kind = "event"
+
+[[statements]]
+key = "overdue"
+text = "An invoice is overdue"
+kind = "state"
+existing = ["seed:invoice_overdue"]
+
+[[statements]]
+key = "reminder_sent"
+text = "A payment reminder is sent to the customer"
+kind = "event"
+existing = ["seed:reminder_sent"]
+
+[[statements]]
+key = "second_reminder"
+text = "A second payment reminder is sent seven days later"
+kind = "event"
+
+[[statements]]
+key = "paid"
+text = "An invoice is paid"
+kind = "state"
+existing = ["seed:invoice_paid"]
+
+[[statements]]
+key = "schedule"
+text = "A member can schedule a payment reminder for an invoice"
+kind = "capability"
+existing = ["seed:reminder_schedule"]
+
+[[links]]
+from = "becomes_overdue"
+to = "reminder_sent"
+type = ["triggers"]
+
+[[links]]
+from = "reminder_sent"
+to = "second_reminder"
+type = ["triggers", "proceeds"]
+when = ["!paid"]

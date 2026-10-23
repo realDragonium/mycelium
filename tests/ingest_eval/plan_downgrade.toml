@@ -1,0 +1,48 @@
+id = "plan_downgrade"
+categories = ["new", "mostly_known", "conditional", "negation"]
+prose = """
+Billing FAQ: downgrading
+
+The workspace owner can change the billing plan. When the owner requests a
+downgrade and the workspace has more members than the new plan allows, the
+downgrade is blocked until members are removed. Otherwise the downgrade takes
+effect at the start of the next billing period, not immediately.
+"""
+
+[[statements]]
+key = "change"
+text = "The workspace owner can change the billing plan"
+kind = "capability"
+existing = ["seed:plan_change"]
+
+[[statements]]
+key = "requested"
+text = "The workspace owner requests a billing plan downgrade"
+kind = "event"
+
+[[statements]]
+key = "too_many"
+text = "The workspace has more members than the new billing plan allows"
+kind = "state"
+
+[[statements]]
+key = "blocked"
+text = "The downgrade is blocked"
+kind = ["event", "state"]
+
+[[statements]]
+key = "effective"
+text = "The downgrade takes effect at the start of the next billing period"
+kind = ["event", "rule"]
+
+[[links]]
+from = "requested"
+to = "blocked"
+type = ["triggers", "contains", "proceeds", "establishes"]
+when = ["too_many"]
+
+[[links]]
+from = "requested"
+to = "effective"
+type = ["triggers", "contains", "proceeds"]
+when = ["!too_many"]

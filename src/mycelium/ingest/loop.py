@@ -244,8 +244,8 @@ def _execute(
         trace.add_usage(getattr(resp, "usage", None))
         messages.append({"role": "assistant", "content": resp.content})
 
-        tool_use = _first_tool_use(resp)
-        if tool_use is None:
+        tool_uses = [block for block in resp.content if isinstance(block, ai.ToolUse)]
+        if not tool_uses:
             # Text only / end_turn with no terminal tool.
             if not ctx.nudged:
                 ctx.nudged = True
@@ -257,22 +257,38 @@ def _execute(
         # single stray text turn earlier doesn't doom a later one. The nudge
         # budget is per consecutive-text-streak, not per session.
         ctx.nudged = False
-        name = tool_use.name
 
-        # ---- Terminal: emit_draft (gated by the floor + ledger well-formedness) ----
-        if name == EMIT_TOOL:
-            result = _handle_emit(tool_use, ctx)
-            if result is not None:
-                return result
-            continue
-
-        # ---- A substrate READ primitive ----
+        # ---- Substrate READ primitives: every read of this turn ----
         # Only a SUCCESSFUL read counts toward the floor — a SubstrateError
         # gathered no data. It still counts toward the op cap (recorded).
-        if _dispatch_read(
-            name, dict(tool_use.input or {}), tool_use.id, substrate, trace, messages
-        ):
-            reads_after_vocab.append(name)
+        for tool_use in tool_uses:
+            if tool_use.name != EMIT_TOOL and _dispatch_read(
+                tool_use.name,
+                dict(tool_use.input),
+                tool_use.id,
+                substrate,
+                trace,
+                messages,
+            ):
+                reads_after_vocab.append(tool_use.name)
+
+        # ---- Terminal: emit_draft (gated by the floor + ledger well-formedness) ----
+        emits = [t for t in tool_uses if t.name == EMIT_TOOL]
+        if not emits:
+            continue
+        if len(tool_uses) != 1:
+            # An emit beside reads was decided without their results.
+            for emit in emits:
+                _append_tool_error(
+                    messages,
+                    emit.id,
+                    "Call emit_draft alone, in a turn after you have read the "
+                    "results of your reads.",
+                )
+            continue
+        result = _handle_emit(emits[0], ctx)
+        if result is not None:
+            return result
 
 
 def _handle_emit(tool_use: Any, ctx: _RunContext) -> IngestResult | None:
@@ -1102,12 +1118,17 @@ def _model_turn(
     *,
     force: bool,
 ) -> ai.ModelResponse:
+    # Stream when no client is injected: an emit_draft turn can outlast
+    # request_timeout_s as one blocking read, but not between streamed chunks.
+    owned = client is None
     return ai.turn(
         ai.ToolTask(
             system=system_prompt,
             messages=messages,
             tools=tools,
             force_tool=EMIT_TOOL if force else None,
+            parallel_tools=not force,
+            on_tool_delta=_discard_tool_delta if owned else None,
         ),
         ai.ModelConfig(
             provider=config.provider,
@@ -1117,28 +1138,36 @@ def _model_turn(
             max_retries=config.max_retries,
             thinking=config.thinking,
             reasoning_effort=config.reasoning_effort,
+            cache=True,
         ),
         client=client,
     )
 
 
+def _discard_tool_delta(_id: str, _name: str, _delta: str) -> None:
+    pass
+
+
 def _append_tool_result(
     messages: list[dict[str, Any]], tool_use_id: str, result: Any, *, is_error: bool
 ) -> None:
-    text = _serialize(result)
-    messages.append(
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": text,
-                    "is_error": is_error,
-                }
-            ],
-        }
-    )
+    block = {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": _serialize(result),
+        "is_error": is_error,
+    }
+    # A turn with several reads answers them all in one user message.
+    pending = messages[-1] if messages else {}
+    content = pending.get("content")
+    if (
+        pending.get("role") == "user"
+        and isinstance(content, list)
+        and any(item.get("type") == "tool_result" for item in content)
+    ):
+        content.append(block)
+    else:
+        messages.append({"role": "user", "content": [block]})
 
 
 def _safe_valid_kinds(emitter: DraftEmitter) -> set[str]:

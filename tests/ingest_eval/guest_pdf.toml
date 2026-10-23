@@ -1,0 +1,45 @@
+id = "guest_pdf"
+categories = ["mostly_known", "conditional", "negation"]
+prose = """
+Permissions: guests
+
+A guest can view invoices but cannot edit them, and a guest cannot export
+invoices. An admin can allow guests to download invoices as PDF. When this is
+allowed, a guest can download an invoice as a PDF.
+"""
+
+[[statements]]
+key = "guest_view"
+text = "A guest can view invoices but cannot edit them"
+kind = "rule"
+existing = ["seed:guest_view"]
+
+[[statements]]
+key = "no_export"
+text = "A guest cannot export invoices"
+kind = ["rule", "capability"]
+
+[[statements]]
+key = "allow"
+text = "An admin can allow guests to download invoices as PDF"
+kind = "capability"
+
+[[statements]]
+key = "allowed"
+text = "Guest PDF downloads are turned on for the workspace"
+kind = "state"
+
+[[statements]]
+key = "guest_pdf"
+text = "A guest can download an invoice as a PDF"
+kind = "capability"
+
+[[links]]
+from = "allow"
+to = "allowed"
+type = ["establishes", "enables", "configures"]
+
+[[links]]
+from = "allowed"
+to = "guest_pdf"
+type = ["enables"]

@@ -1,0 +1,376 @@
+# Seed knowledge base for the committed ingest evaluation: a fictional
+# invoicing app. Cases refer to these records as "seed:<key>".
+
+[[entities]]
+key = "workspace"
+name = "Workspace"
+description = "The account a team works in; it holds members, invoices and settings."
+
+[[entities]]
+key = "owner"
+name = "Workspace owner"
+description = "The user who created a workspace and controls its billing."
+
+[[entities]]
+key = "admin"
+name = "Admin"
+description = "A member who manages people, security and integrations of a workspace."
+
+[[entities]]
+key = "member"
+name = "Member"
+description = "A user who belongs to a workspace."
+
+[[entities]]
+key = "guest"
+name = "Guest"
+description = "An outside user with read access to some of a workspace."
+
+[[entities]]
+key = "sso"
+name = "SSO"
+description = "Single sign-on through the workspace's identity provider."
+aliases = ["Single sign-on"]
+
+[[entities]]
+key = "twofa"
+name = "Two-factor authentication"
+description = "A login step that asks for a code from an authenticator app."
+aliases = ["2FA"]
+
+[[entities]]
+key = "invoice"
+name = "Invoice"
+description = "A bill a workspace sends to one of its customers."
+
+[[entities]]
+key = "customer"
+name = "Customer"
+description = "A person or company a workspace bills."
+
+[[entities]]
+key = "reminder"
+name = "Payment reminder"
+description = "An email asking a customer to pay an invoice."
+
+[[entities]]
+key = "export"
+name = "Export"
+description = "A file of invoice data produced for download."
+
+[[entities]]
+key = "audit"
+name = "Audit log"
+description = "The record of changes made in a workspace."
+
+[[entities]]
+key = "apikey"
+name = "API key"
+description = "A secret that authenticates requests to the public API."
+
+[[entities]]
+key = "webhook"
+name = "Webhook"
+description = "An HTTP callback the app sends to an endpoint an admin configured."
+
+[[entities]]
+key = "plan"
+name = "Billing plan"
+description = "The subscription tier of a workspace."
+
+[[entities]]
+key = "trial"
+name = "Trial"
+description = "The free period a new workspace starts with."
+
+[[entities]]
+key = "dashboard"
+name = "Revenue dashboard"
+description = "A page with charts of a workspace's invoiced and paid revenue."
+
+[[entities]]
+key = "view"
+name = "Saved view"
+description = "A named, filtered list of invoices."
+
+# --- login -------------------------------------------------------------------
+
+[[statements]]
+key = "login_event"
+kind = "event"
+text = "A member logs in"
+
+[[statements]]
+key = "password_login"
+kind = "capability"
+text = "A member can log in with email and password"
+
+[[statements]]
+key = "sso_login"
+kind = "capability"
+text = "A member can log in via SSO"
+
+[[statements]]
+key = "sso_configure"
+kind = "capability"
+text = "An admin can connect an identity provider for SSO"
+
+[[statements]]
+key = "twofa_enable"
+kind = "capability"
+text = "A member can turn on two-factor authentication"
+
+[[statements]]
+key = "twofa_on"
+kind = "state"
+text = "Two-factor authentication is turned on for a member"
+
+[[statements]]
+key = "twofa_code"
+kind = "event"
+text = "A member is asked for a two-factor authentication code"
+incoming = [{ from = "password_login", type = "contains", when = ["twofa_on"] }]
+
+[[statements]]
+key = "session_expiry"
+kind = "rule"
+text = "The session timeout is 12 hours of inactivity"
+
+# --- workspace and roles -----------------------------------------------------
+
+[[statements]]
+key = "ws_create"
+kind = "capability"
+text = "A user can create a workspace"
+
+[[statements]]
+key = "owner_role"
+kind = "rule"
+text = "The user who creates a workspace is its workspace owner"
+
+[[statements]]
+key = "invite_member"
+kind = "capability"
+text = "An admin can invite a member to a workspace"
+
+[[statements]]
+key = "invite_sent"
+kind = "event"
+text = "An invitation email is sent"
+incoming = [{ from = "invite_member", type = "triggers" }]
+
+[[statements]]
+key = "guest_invite"
+kind = "capability"
+text = "An admin can invite a guest to a workspace"
+
+[[statements]]
+key = "guest_view"
+kind = "rule"
+text = "A guest can view invoices but cannot edit them"
+
+[[statements]]
+key = "seat_limit"
+kind = "rule"
+text = "The number of members in a workspace is limited by its billing plan"
+
+# --- invoices ----------------------------------------------------------------
+
+[[statements]]
+key = "invoice_create"
+kind = "capability"
+text = "A member can create an invoice for a customer"
+
+[[statements]]
+key = "invoice_send"
+kind = "capability"
+text = "A member can send an invoice to a customer by email"
+
+[[statements]]
+key = "invoice_due"
+kind = "property"
+text = "The due date of an invoice"
+
+[[statements]]
+key = "invoice_overdue"
+kind = "state"
+text = "An invoice is overdue"
+
+[[statements]]
+key = "invoice_paid"
+kind = "state"
+text = "An invoice is paid"
+
+[[statements]]
+key = "invoice_marked_paid"
+kind = "event"
+text = "An invoice is marked as paid"
+links = [{ to = "invoice_paid", type = "establishes" }]
+
+[[statements]]
+key = "reminder_schedule"
+kind = "capability"
+text = "A member can schedule a payment reminder for an invoice"
+
+[[statements]]
+key = "reminder_sent"
+kind = "event"
+text = "A payment reminder is sent to the customer"
+
+[[statements]]
+key = "invoice_number"
+kind = "rule"
+text = "Invoice numbers are sequential within a workspace"
+
+[[statements]]
+key = "invoice_prefix"
+kind = "capability"
+text = "An admin can set an invoice number prefix for a workspace"
+
+[[statements]]
+key = "invoice_pdf"
+kind = "capability"
+text = "A member can download an invoice as a PDF"
+
+# --- exports -----------------------------------------------------------------
+
+[[statements]]
+key = "export_csv"
+kind = "capability"
+text = "A member can export invoices as a CSV file"
+
+[[statements]]
+key = "export_limit"
+kind = "rule"
+text = "An export contains at most 10,000 rows"
+
+[[statements]]
+key = "export_ready"
+kind = "event"
+text = "An export is ready"
+
+[[statements]]
+key = "export_email"
+kind = "event"
+text = "An email with a download link is sent"
+incoming = [{ from = "export_ready", type = "triggers" }]
+
+# --- audit log ---------------------------------------------------------------
+
+[[statements]]
+key = "audit_record"
+kind = "rule"
+text = "A change to an invoice is recorded in the audit log"
+
+[[statements]]
+key = "audit_view"
+kind = "capability"
+text = "An admin can view the audit log"
+
+[[statements]]
+key = "audit_filter"
+kind = "capability"
+text = "An admin can filter the audit log by member"
+
+# --- API and webhooks --------------------------------------------------------
+
+[[statements]]
+key = "apikey_create"
+kind = "capability"
+text = "An admin can create an API key"
+
+[[statements]]
+key = "apikey_revoke"
+kind = "capability"
+text = "An admin can revoke an API key"
+
+[[statements]]
+key = "apikey_scope"
+kind = "rule"
+text = "An API key has the permissions of the admin who created it"
+
+[[statements]]
+key = "webhook_add"
+kind = "capability"
+text = "An admin can add a webhook endpoint"
+
+[[statements]]
+key = "webhook_request"
+kind = "event"
+text = "A webhook request is sent to the endpoint"
+incoming = [{ from = "invoice_marked_paid", type = "triggers" }]
+
+# --- plans and trial ---------------------------------------------------------
+
+[[statements]]
+key = "ws_created"
+kind = "event"
+text = "A workspace is created"
+
+[[statements]]
+key = "trial_start"
+kind = "event"
+text = "A trial starts"
+incoming = [{ from = "ws_created", type = "triggers" }]
+
+[[statements]]
+key = "trial_length"
+kind = "rule"
+text = "A trial lasts 14 days"
+
+[[statements]]
+key = "trial_end"
+kind = "event"
+text = "A trial ends"
+
+[[statements]]
+key = "ws_readonly"
+kind = "state"
+text = "The workspace is read-only"
+
+[[statements]]
+key = "plan_chosen"
+kind = "state"
+text = "A billing plan is chosen for the workspace"
+
+[[statements]]
+key = "plan_change"
+kind = "capability"
+text = "The workspace owner can change the billing plan"
+
+# --- dashboard and saved views -----------------------------------------------
+
+[[statements]]
+key = "dash_view"
+kind = "rule"
+text = "Members can see the revenue dashboard"
+
+[[statements]]
+key = "dash_refresh"
+kind = "rule"
+text = "The revenue dashboard is updated hourly"
+
+[[statements]]
+key = "dash_monthly"
+kind = "capability"
+text = "The revenue dashboard shows revenue per month"
+
+[[statements]]
+key = "view_save"
+kind = "capability"
+text = "A member can save a filtered invoice list as a saved view"
+
+[[statements]]
+key = "view_share"
+kind = "capability"
+text = "A member can share a saved view with the whole workspace"
+
+[[statements]]
+key = "view_shared"
+kind = "state"
+text = "A saved view is shared"
+
+[[statements]]
+key = "view_private"
+kind = "rule"
+text = "A saved view is private to its creator"

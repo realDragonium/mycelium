@@ -128,4 +128,4 @@ def test_openai_ingest_reconciles_and_only_emits_a_draft(monkeypatch):
     assert result.trace["floor"]["satisfied"] is True
     assert result.trace["provider"] == "openai"
     assert all(request["model"] == "ingestion-model" for request in requests)
-    assert all(request["parallel_tool_calls"] is False for request in requests)
+    assert all(request["parallel_tool_calls"] is True for request in requests)

@@ -1,0 +1,48 @@
+id = "invoice_prefix"
+categories = ["mostly_known", "conditional", "negation"]
+prose = """
+Invoice numbering
+
+Invoice numbers are sequential within a workspace. An admin can set an invoice
+number prefix for the workspace; when a prefix is set, every new invoice
+number starts with it. Changing the prefix does not change the numbers of
+invoices that were already sent.
+"""
+
+[[statements]]
+key = "sequence"
+text = "Invoice numbers are sequential within a workspace"
+kind = "rule"
+existing = ["seed:invoice_number"]
+
+[[statements]]
+key = "set"
+text = "An admin can set an invoice number prefix for a workspace"
+kind = "capability"
+existing = ["seed:invoice_prefix"]
+
+[[statements]]
+key = "prefix_set"
+text = "An invoice number prefix is set for the workspace"
+kind = "state"
+
+[[statements]]
+key = "starts_with"
+text = "A new invoice number starts with the invoice number prefix"
+kind = "rule"
+
+[[statements]]
+key = "unchanged"
+text = "Changing the invoice number prefix does not change the numbers of invoices already sent"
+kind = "rule"
+
+[[links]]
+from = "set"
+to = "prefix_set"
+type = ["establishes", "enables", "configures"]
+
+[[links]]
+from = "sequence"
+to = "starts_with"
+type = ["composes", "contains"]
+when = ["prefix_set"]

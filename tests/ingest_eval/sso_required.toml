@@ -1,0 +1,58 @@
+id = "sso_required"
+categories = ["new", "conditional", "negation"]
+prose = """
+Release notes: require SSO
+
+Admins can now require SSO for their workspace. Requiring SSO is only possible
+once an identity provider has been connected. While SSO is required, members
+cannot log in with email and password and have to log in via SSO. The
+workspace owner can always log in with email and password, so a broken
+identity provider never locks a workspace out.
+"""
+
+[[statements]]
+key = "require"
+text = "An admin can require SSO for a workspace"
+kind = "capability"
+
+[[statements]]
+key = "required"
+text = "SSO is required for a workspace"
+kind = "state"
+
+[[statements]]
+key = "idp_connected"
+text = "An identity provider is connected for SSO"
+kind = "state"
+
+[[statements]]
+key = "password_login"
+text = "A member can log in with email and password"
+kind = "capability"
+existing = ["seed:password_login"]
+
+[[statements]]
+key = "sso_login"
+text = "A member can log in via SSO"
+kind = "capability"
+existing = ["seed:sso_login"]
+
+[[statements]]
+key = "owner_password"
+text = "The workspace owner can always log in with email and password"
+kind = ["rule", "capability"]
+
+[[links]]
+from = "require"
+to = "required"
+type = ["establishes", "enables", "configures"]
+
+[[links]]
+from = "require"
+to = "idp_connected"
+type = ["requires"]
+
+[[links]]
+from = "required"
+to = "password_login"
+type = ["restricts"]

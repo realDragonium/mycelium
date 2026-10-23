@@ -1151,6 +1151,12 @@ def _prompt_store():
     return conn
 
 
+def _system_text(request: dict) -> str:
+    """The system prompt of a request; cached prompts arrive as text blocks."""
+    system = request["system"]
+    return system if isinstance(system, str) else "".join(b["text"] for b in system)
+
+
 def _system_prompt_of_one_run(config=None):
     """Run ingest to a duplicate-only emit; return the system prompt sent."""
     emit = _emit_input(
@@ -1167,7 +1173,7 @@ def _system_prompt_of_one_run(config=None):
         emitter=FakeEmitter(),
         config=config or IngestConfig(trace_log_path=None),
     )
-    return client.calls[0]["system"]
+    return _system_text(client.calls[0])
 
 
 def test_g_stored_doctrine_wins_over_the_packaged_file():
@@ -1258,7 +1264,7 @@ def test_g_unreadable_doctrine_falls_back_to_base_prompt_with_note():
     )
     assert any("doctrine unreadable" in n for n in result.trace["notes"])
     # base protocol still present in the system prompt
-    assert "reviewable DRAFT" in client.calls[0]["system"]
+    assert "reviewable DRAFT" in _system_text(client.calls[0])
 
 
 # (h) vocabulary fetched at runtime — the three list_* calls happen first.
@@ -1873,3 +1879,61 @@ def test_t12_every_validator_accepted_op_binds_against_real_signature():
         assert sig is not None, f"{kind}: missing from _ORIG_SIGNATURES"
         # This is the exact call shape the curator replays. It must NOT raise.
         sig.bind(**queued_payload)
+
+
+def test_model_turns_cache_and_stream_only_on_the_owned_transport(monkeypatch):
+    from mycelium.ingest import loop
+
+    seen = []
+    monkeypatch.setattr(
+        loop.ai, "turn", lambda task, config, client: seen.append((task, config))
+    )
+    cfg = IngestConfig(trace_log_path=None)
+    loop._model_turn(None, cfg, "sys", [], [], force=False)
+    loop._model_turn(FakeAnthropic([]), cfg, "sys", [], [], force=False)
+    (owned, owned_config), (injected, _) = seen
+    assert owned_config.cache is True
+    assert owned.on_tool_delta is not None
+    assert injected.on_tool_delta is None
+
+
+def test_reads_of_one_turn_are_answered_together():
+    responses = [
+        _message(
+            [
+                _tool_use("discover_facts", {"texts": ["an invite"]}, id="a"),
+                _tool_use("search_statements", {"query": "invite"}, id="b"),
+            ]
+        ),
+        _message([_tool_use(EMIT_TOOL, _good_new_op_emit())]),
+    ]
+    result, client, substrate, _emitter = _run(responses)
+    assert isinstance(result, DraftCreated)
+    assert [name for name, _ in substrate.calls][-2:] == [
+        "discover_facts",
+        "search_statements",
+    ]
+    answer = client.calls[1]["messages"][-1]
+    assert [block["tool_use_id"] for block in answer["content"]] == ["a", "b"]
+    assert client.calls[0]["tool_choice"]["disable_parallel_tool_use"] is False
+
+
+def test_an_emit_beside_reads_waits_for_their_results():
+    responses = [
+        *_reconcile_then_adjacency(),
+        _message(
+            [
+                _tool_use("search_statements", {"query": "more"}, id="read"),
+                _tool_use(EMIT_TOOL, _good_new_op_emit(), id="early"),
+            ]
+        ),
+        _message([_tool_use(EMIT_TOOL, _good_new_op_emit(), id="late")]),
+    ]
+    result, client, _substrate, emitter = _run(responses)
+    assert isinstance(result, DraftCreated)
+    assert len(emitter.queued) == 1
+    answer = client.calls[3]["messages"][-1]["content"]
+    assert [(b["tool_use_id"], b["is_error"]) for b in answer] == [
+        ("read", False),
+        ("early", True),
+    ]

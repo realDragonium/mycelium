@@ -1,0 +1,40 @@
+id = "credit_notes"
+categories = ["new"]
+prose = """
+Release notes: credit notes
+
+You can now issue a credit note for a paid invoice. A credit note gets its
+number from the same sequence as invoices. When a credit note is issued, it is
+sent to the customer by email. A credit note cannot be edited after it has
+been issued.
+"""
+
+[[statements]]
+key = "issue"
+text = "A member can issue a credit note for a paid invoice"
+kind = "capability"
+
+[[statements]]
+key = "numbering"
+text = "A credit note is numbered from the same sequence as invoices"
+kind = "rule"
+
+[[statements]]
+key = "issued"
+text = "A credit note is issued"
+kind = "event"
+
+[[statements]]
+key = "emailed"
+text = "The credit note is sent to the customer by email"
+kind = "event"
+
+[[statements]]
+key = "immutable"
+text = "An issued credit note cannot be edited"
+kind = ["rule", "capability"]
+
+[[links]]
+from = "issued"
+to = "emailed"
+type = ["triggers", "contains"]

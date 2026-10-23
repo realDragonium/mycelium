@@ -1,0 +1,58 @@
+id = "api_key_expiry"
+categories = ["new", "conditional"]
+prose = """
+Security update: expiring API keys
+
+API keys now expire 90 days after they are created. Seven days before a key
+expires, an email is sent to the admin who created it. When an API request is
+made with an expired key, the request is rejected with a 401 error. Admins can
+create a new key or revoke an old one at any time.
+"""
+
+[[statements]]
+key = "expiry"
+text = "The lifetime of an API key is 90 days"
+kind = ["rule", "property"]
+
+[[statements]]
+key = "warning"
+text = "An expiry warning email is sent to the admin who created the API key seven days ahead of the expiry date"
+kind = "event"
+
+[[statements]]
+key = "expired"
+text = "An API key is expired"
+kind = "state"
+
+[[statements]]
+key = "request"
+text = "An API request is made with an API key"
+kind = "event"
+
+[[statements]]
+key = "rejected"
+text = "The API request is rejected with a 401 error"
+kind = "event"
+
+[[statements]]
+key = "create"
+text = "An admin can create an API key"
+kind = "capability"
+existing = ["seed:apikey_create"]
+
+[[statements]]
+key = "revoke"
+text = "An admin can revoke an API key"
+kind = "capability"
+existing = ["seed:apikey_revoke"]
+
+[[links]]
+from = "expiry"
+to = "expired"
+type = ["establishes"]
+
+[[links]]
+from = "request"
+to = "rejected"
+type = ["triggers", "contains", "proceeds"]
+when = ["expired"]

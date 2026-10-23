@@ -1,0 +1,55 @@
+id = "mfa_alias"
+categories = ["alias", "mostly_known", "conditional"]
+prose = """
+Support macro: MFA
+
+Members can turn on MFA themselves. If a member has turned on MFA, they are
+asked for an MFA code when they log in with email and password. Logging in
+via SSO never asks for an MFA code.
+"""
+
+[[statements]]
+key = "enable"
+text = "A member can turn on two-factor authentication"
+kind = "capability"
+existing = ["seed:twofa_enable"]
+
+[[statements]]
+key = "on"
+text = "Two-factor authentication is turned on for a member"
+kind = "state"
+existing = ["seed:twofa_on"]
+
+[[statements]]
+key = "code"
+text = "A member is asked for a two-factor authentication code"
+kind = "event"
+existing = ["seed:twofa_code"]
+
+[[statements]]
+key = "password"
+text = "A member can log in with email and password"
+kind = "capability"
+existing = ["seed:password_login"]
+
+[[statements]]
+key = "sso"
+text = "A member can log in via SSO"
+kind = "capability"
+existing = ["seed:sso_login"]
+
+[[statements]]
+key = "sso_no_code"
+text = "Logging in via SSO never asks for a two-factor authentication code"
+kind = "rule"
+
+[[links]]
+from = "password"
+to = "code"
+type = ["contains"]
+when = ["on"]
+preexisting = true
+
+[[aliases]]
+alias = "MFA"
+entity = "seed:twofa"

@@ -37,7 +37,7 @@ YOUR TOOLS
 You are given the substrate's READ primitives as tools (search_statements, \
 survey_statements, grep_statements, get_statements, get_entity, list_entities, \
 list_statements, find_duplicates, discover_facts, and the list_* vocabulary \
-tools). Use them freely. You have NO write tool. You finish by calling exactly \
+tools). Use them freely, and call independent reads together in one turn. You have NO write tool. You finish by calling exactly \
 ONE terminal tool: `emit_draft`. The harness — not you — queues your ops into a \
 draft for human review.
 
@@ -126,6 +126,22 @@ Conclude by calling `emit_draft` EXACTLY ONCE with:
   linking to (`link_candidates_considered`) with a note;
 - flagged — contradictions (both sides named) and anything you scoped out;
 - skipped_duplicates — each "candidate :: existing_id".
+
+PAYLOAD SHAPES AND REFERENCES
+- upsert_statement: {kind, text, links, incoming_links?}. `links` ([] when \
+  none) are edges FROM this statement: {to_id, link_type, when?}; \
+  `incoming_links` are edges INTO it: {from_id, link_type, when?}.
+- upsert_statements: {statements: [<upsert_statement payloads>]} — the best \
+  shape for the new statements of one story, with their edges inline.
+- add_links: {links: [{from_id, to_id, link_type, when?}]} — edges between \
+  statements that already exist or that earlier ops create.
+- A `when` is {"statement_id": ID}, or {"op": "and"|"or"|"not", "of": [...]}.
+- A statement this draft creates has no stm_ id yet; refer to it by \
+  position. Put the new statements in ONE upsert_statements op, FIRST in \
+  `ops`. Inside it, statement N (counting from 0) is "@N". Any later op \
+  refers to that same statement as "@1:N" — ops count from 1, so never \
+  "@0:N". These work in to_id, from_id and `when` leaves. Never write placeholders such as "SELF", \
+  "NEW_X" or "{{name}}": nothing can resolve them, so the op cannot be applied.
 You do not create the draft and you do not call any write tool. Your job is to \
 decide well and to SHOW YOUR RECONCILE WORK."""
 

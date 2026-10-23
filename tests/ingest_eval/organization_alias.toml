@@ -1,0 +1,50 @@
+id = "organization_alias"
+categories = ["alias", "mostly_known"]
+prose = """
+Getting started: your organization
+
+Any user can create an organization. The user who creates an organization
+becomes its workspace owner. An admin can invite members to the organization,
+and an invitation email is sent for each invite. The number of members in an
+organization is limited by its billing plan.
+"""
+
+[[statements]]
+key = "create"
+text = "A user can create a workspace"
+kind = "capability"
+existing = ["seed:ws_create"]
+
+[[statements]]
+key = "owner"
+text = "The user who creates a workspace is its workspace owner"
+kind = "rule"
+existing = ["seed:owner_role"]
+
+[[statements]]
+key = "invite"
+text = "An admin can invite a member to a workspace"
+kind = "capability"
+existing = ["seed:invite_member"]
+
+[[statements]]
+key = "sent"
+text = "An invitation email is sent"
+kind = "event"
+existing = ["seed:invite_sent"]
+
+[[statements]]
+key = "seats"
+text = "The number of members in a workspace is limited by its billing plan"
+kind = "rule"
+existing = ["seed:seat_limit"]
+
+[[links]]
+from = "invite"
+to = "sent"
+type = ["triggers"]
+preexisting = true
+
+[[aliases]]
+alias = "organization"
+entity = "seed:workspace"

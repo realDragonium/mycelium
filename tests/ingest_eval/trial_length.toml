@@ -1,0 +1,61 @@
+id = "trial_length"
+categories = ["mostly_known", "contradiction", "conditional", "negation"]
+prose = """
+Pricing update: longer trials
+
+Trials now last 30 days instead of 14. A trial still starts when a workspace is
+created. When a trial ends and no billing plan has been chosen, the workspace
+becomes read-only. If a billing plan has been chosen, the workspace stays fully
+usable.
+"""
+
+[[statements]]
+key = "length"
+text = "A trial lasts 30 days"
+kind = "rule"
+
+[[statements]]
+key = "created"
+text = "A workspace is created"
+kind = "event"
+existing = ["seed:ws_created"]
+
+[[statements]]
+key = "start"
+text = "A trial starts"
+kind = "event"
+existing = ["seed:trial_start"]
+
+[[statements]]
+key = "end"
+text = "A trial ends"
+kind = "event"
+existing = ["seed:trial_end"]
+
+[[statements]]
+key = "readonly"
+text = "The workspace is read-only"
+kind = "state"
+existing = ["seed:ws_readonly"]
+
+[[statements]]
+key = "chosen"
+text = "A billing plan is chosen for the workspace"
+kind = "state"
+existing = ["seed:plan_chosen"]
+
+[[contradictions]]
+key = "length"
+existing = "seed:trial_length"
+
+[[links]]
+from = "created"
+to = "start"
+type = ["triggers"]
+preexisting = true
+
+[[links]]
+from = "end"
+to = "readonly"
+type = ["establishes", "triggers"]
+when = ["!chosen"]

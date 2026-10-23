@@ -1,0 +1,37 @@
+id = "audit_retention"
+categories = ["mostly_known"]
+prose = """
+Audit log FAQ
+
+Every change to an invoice is recorded in the audit log. Admins can view the
+audit log and filter it by member. Audit log entries are deleted after one
+year. Nobody can edit the audit log, not even the workspace owner.
+"""
+
+[[statements]]
+key = "record"
+text = "A change to an invoice is recorded in the audit log"
+kind = "rule"
+existing = ["seed:audit_record"]
+
+[[statements]]
+key = "view"
+text = "An admin can view the audit log"
+kind = "capability"
+existing = ["seed:audit_view"]
+
+[[statements]]
+key = "filter"
+text = "An admin can filter the audit log by member"
+kind = "capability"
+existing = ["seed:audit_filter"]
+
+[[statements]]
+key = "retention"
+text = "Audit log entries are kept for one year"
+kind = ["rule", "property"]
+
+[[statements]]
+key = "immutable"
+text = "The audit log cannot be edited"
+kind = ["rule", "capability"]

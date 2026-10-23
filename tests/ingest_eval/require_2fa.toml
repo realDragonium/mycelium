@@ -1,0 +1,57 @@
+id = "require_2fa"
+categories = ["new", "mostly_known", "existing_alias", "conditional", "negation"]
+prose = """
+Admin guide: enforcing 2FA
+
+An admin can require 2FA for every member of a workspace. When 2FA is required,
+a member who has not turned on 2FA is asked to set it up the next time they
+log in. Members cannot turn off 2FA while it is required.
+"""
+
+[[statements]]
+key = "require"
+text = "An admin can require two-factor authentication for a workspace"
+kind = "capability"
+
+[[statements]]
+key = "required"
+text = "Two-factor authentication is required for a workspace"
+kind = "state"
+
+[[statements]]
+key = "login"
+text = "A member logs in"
+kind = "event"
+existing = ["seed:login_event"]
+
+[[statements]]
+key = "on"
+text = "Two-factor authentication is turned on for a member"
+kind = "state"
+existing = ["seed:twofa_on"]
+
+[[statements]]
+key = "setup"
+text = "A member is asked to set up two-factor authentication"
+kind = "event"
+
+[[statements]]
+key = "turn_off"
+text = "A member can turn off two-factor authentication"
+kind = "capability"
+
+[[links]]
+from = "require"
+to = "required"
+type = ["establishes", "enables", "configures"]
+
+[[links]]
+from = "required"
+to = "turn_off"
+type = ["restricts"]
+
+[[links]]
+from = "login"
+to = "setup"
+type = ["triggers", "contains"]
+when = ["required", "!on"]

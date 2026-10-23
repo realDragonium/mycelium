@@ -1,0 +1,48 @@
+id = "export_limit_raised"
+categories = ["mostly_known", "contradiction"]
+prose = """
+Changelog: bigger exports
+
+Exports can now contain up to 50,000 rows, up from 10,000. As before, members
+export invoices as a CSV file, and an email with a download link is sent when
+the export is ready. An export of more than 50,000 rows has to be split by
+date range.
+"""
+
+[[statements]]
+key = "csv"
+text = "A member can export invoices as a CSV file"
+kind = "capability"
+existing = ["seed:export_csv"]
+
+[[statements]]
+key = "limit"
+text = "An export contains at most 50,000 rows"
+kind = "rule"
+
+[[statements]]
+key = "ready"
+text = "An export is ready"
+kind = "event"
+existing = ["seed:export_ready"]
+
+[[statements]]
+key = "email"
+text = "An email with a download link is sent"
+kind = "event"
+existing = ["seed:export_email"]
+
+[[statements]]
+key = "split"
+text = "An export of more than 50,000 rows has to be split by date range"
+kind = "rule"
+
+[[contradictions]]
+key = "limit"
+existing = "seed:export_limit"
+
+[[links]]
+from = "ready"
+to = "email"
+type = ["triggers"]
+preexisting = true
