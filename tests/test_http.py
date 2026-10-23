@@ -3,7 +3,7 @@ import zlib
 import numpy as np
 from fastapi.testclient import TestClient
 
-from mycelium import embed, mention_worker, server, store
+from mycelium import docs_store, embed, mention_worker, server, store
 from mycelium.http import _history_target_id
 from mycelium.server import runtime
 
@@ -381,6 +381,7 @@ def test_merge_entities_preserves_statement_mentions(tmp_path, monkeypatch):
         assert r.json() == {
             "into_entity_id": a,
             "names_moved": 2,
+            "documents_unanchored": 0,
         }
 
         # source entity is gone
@@ -2483,6 +2484,16 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
             },
         ).json()["statement_id"]
 
+        anchored = docs_store.upsert_document(
+            server._drafts_db(),
+            slug="login",
+            title="Login",
+            body="# Login\n",
+            guideline_set="kb",
+            document_type="how-to",
+            anchor_entity_id=login_id,
+        )
+
         r = client.post("/delete-entity", json={"id": login_id}).json()
         assert r == {
             "deleted": True,
@@ -2492,7 +2503,10 @@ def test_delete_entity_cascades_names_mentions_and_links(tmp_path, monkeypatch):
             "mentions_removed": 2,  # one text-derived mention per statement
             "outgoing_entity_links_removed": 1,
             "incoming_entity_links_removed": 1,
+            "documents_unanchored": 1,
         }
+        document = docs_store.get_document(server._drafts_db(), anchored)
+        assert (document["anchor_entity_id"], document["body"]) == (None, "# Login\n")
 
         # Entity is gone.
         gone = client.post("/get-entity", json={"id": login_id})

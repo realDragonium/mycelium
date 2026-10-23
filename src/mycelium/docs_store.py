@@ -1071,25 +1071,38 @@ def find_by_anchor(
 
 def move_anchors(
     conn: sqlite3.Connection, from_entity_id: str, into_entity_id: str
-) -> None:
-    """Re-anchor documents on `from_entity_id` to `into_entity_id`.
+) -> int:
+    """Re-anchor documents on `from_entity_id` to `into_entity_id`,
+    returning how many documents lost their anchor.
 
     Where the target already anchors a document of the same guideline set and
     type, the target's document keeps the identity and the source's document
     loses its anchor: it stays a slug-identified document, so no body is lost.
     """
-    conn.execute(
+    unanchored = conn.execute(
         "UPDATE generated_documents SET anchor_entity_id = NULL "
         "WHERE anchor_entity_id = ? AND EXISTS (SELECT 1 FROM generated_documents AS held "
         "WHERE held.anchor_entity_id = ? "
         "AND held.guideline_set = generated_documents.guideline_set "
         "AND held.document_type = generated_documents.document_type)",
         (from_entity_id, into_entity_id),
-    )
+    ).rowcount
     conn.execute(
         "UPDATE generated_documents SET anchor_entity_id = ? WHERE anchor_entity_id = ?",
         (into_entity_id, from_entity_id),
     )
+    return unanchored
+
+
+def clear_anchors(conn: sqlite3.Connection, entity_id: str) -> int:
+    """Drop `entity_id` as an anchor, returning how many documents lost it.
+    The documents stay slug-identified, keeping their bodies and history."""
+    unanchored = conn.execute(
+        "UPDATE generated_documents SET anchor_entity_id = NULL "
+        "WHERE anchor_entity_id = ?",
+        (entity_id,),
+    ).rowcount
+    return unanchored
 
 
 def get_document(conn: sqlite3.Connection, document_id: str) -> sqlite3.Row | None:

@@ -117,7 +117,7 @@ def test_merged_anchors_move_to_the_target_unless_it_holds_that_identity(conn):
     unanchored = _document(conn, slug="okta-how-to", anchor="ent_okta")
     held = _document(conn, slug="sso", anchor="ent_sso")
 
-    docs_store.move_anchors(conn, "ent_okta", "ent_sso")
+    assert docs_store.move_anchors(conn, "ent_okta", "ent_sso") == 1
 
     anchors = {
         document_id: docs_store.get_document(conn, document_id)["anchor_entity_id"]
