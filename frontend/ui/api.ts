@@ -397,7 +397,7 @@ export interface HealthStatement {
 }
 export interface HealthEntity { id: string; name: string | null; description: string | null }
 export interface Page<T> { items: T[]; next_after: string | null }
-export type ConnectResult = IngestResult & { cost_usd: number | null; flagged?: string[] };
+export type ConnectResult = IngestResult & { cost_usd: number | null; flagged?: string[]; gaps_filed?: string[] };
 
 export const knowledgeHealth = {
   view: () => getJSON<HealthView>('/api/knowledge-health'),

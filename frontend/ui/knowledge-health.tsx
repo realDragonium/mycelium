@@ -77,14 +77,16 @@ function RunStatus({ run }: { run: Run }) {
   if (run.phase === 'error') return <Notice tone="error">{run.message}</Notice>;
   const { result } = run;
   const cost = result.cost_usd === null ? 'cost unknown for this model' : `cost ${usd(result.cost_usd)}`;
-  if (result.outcome === 'nothing_to_ingest') return <Notice tone="warn">No connections proposed ({result.reason || 'nothing found'}); {cost}.</Notice>;
+  const gaps = result.gaps_filed?.length || 0;
+  const filed = gaps ? <>; asked for {gaps} statement{gaps === 1 ? '' : 's'} to be rephrased in <Link to={{ view: 'gaps' }}>Knowledge gaps</Link></> : null;
+  if (result.outcome === 'nothing_to_ingest') return <Notice tone="warn">No connections proposed ({result.reason || 'nothing found'}); {cost}{filed}.</Notice>;
   const flagged = result.flagged?.length || 0;
   return (
     <Notice tone="success">
       <span>
         Proposed {result.ops?.length || 0} change{result.ops?.length === 1 ? '' : 's'} in <Link to={{ view: 'draft', id: result.draft_id }}>{result.draft_id}</Link>
         {result.alias_draft_id && result.alias_draft_id !== result.draft_id && <>, aliases in <Link to={{ view: 'draft', id: result.alias_draft_id }}>{result.alias_draft_id}</Link></>}
-        {result.submitted_for_review ? ', submitted to the AI reviewer' : ''}; {cost}{flagged ? `; ${flagged} note${flagged === 1 ? '' : 's'} for the reviewer` : ''}.
+        {result.submitted_for_review ? ', submitted to the AI reviewer' : ''}; {cost}{flagged ? `; ${flagged} note${flagged === 1 ? '' : 's'} for the reviewer` : ''}{filed}.
       </span>
     </Notice>
   );
