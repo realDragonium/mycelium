@@ -724,6 +724,46 @@ def test_approve_failure_halts_and_does_not_mark_decided(tmp_path, monkeypatch):
         assert drafts_store.status_for(row) == "submitted"
 
 
+def test_approve_refuses_the_whole_draft_when_a_statement_is_rejected(
+    tmp_path, monkeypatch
+):
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        tokens = _as_drafter("sess-phrasing")
+        try:
+            queued = server.upsert_entity(name="Kept back", description="d")
+            server.upsert_statement(
+                kind="event", text="The user must log in.", links=[]
+            )
+        finally:
+            _restore(tokens)
+        draft_id = queued["draft_id"]
+        with store.transaction(server._db()):
+            gap_id = store.create_knowledge_gap(
+                server._db(), "Needs a person.", draft_id=draft_id
+            )
+
+        refused = client.post(f"/api/drafts/{draft_id}/approve")
+
+        assert refused.status_code == 422, refused.text
+        [rejection] = refused.json()["detail"]["rejections"]
+        assert rejection["seq"] == 2
+        assert rejection["kind"] == "upsert_statement"
+        assert rejection["text"] == "The user must log in."
+        assert "must" in rejection["reasons"][0]
+        conn = store.substrate_connection()
+        assert conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0] == 0
+        row = drafts_store.get_draft(server._drafts_db(), draft_id)
+        assert drafts_store.status_for(row) == "open"
+        assert store.get_knowledge_gap(server._db(), gap_id)["resolved_at"] is None
+
+        server.discard_draft_op(draft_id=draft_id, seq=2)
+        assert client.post(f"/api/drafts/{draft_id}/approve").status_code == 200
+        gap = store.get_knowledge_gap(server._db(), gap_id)
+        assert gap["resolved_at"] is not None
+        assert gap["resolved_by"] == auth.LOCAL_ADMIN.id
+
+
 def test_approve_failure_restores_vector_indexes(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:

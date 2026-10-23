@@ -32,6 +32,13 @@ export interface DraftSummary {
 type Payload = Record<string, unknown>;
 interface DraftOp { seq: number; kind: string; payload: Payload; provenance: { source?: string } | null }
 interface Draft extends DraftSummary { ops: DraftOp[] }
+// Statements the server refused while applying a draft by hand; nothing was applied.
+interface RejectedStatement { seq: number; kind: string; text: string | null; reasons: string[] }
+const rejectionsOf = (e: unknown): RejectedStatement[] => {
+  if (!(e instanceof HttpError) || e.status !== 422) return [];
+  const { detail } = e;
+  return detail && typeof detail === 'object' && 'rejections' in detail && Array.isArray(detail.rejections) ? detail.rejections as RejectedStatement[] : [];
+};
 interface ReviewSettings { mode: string; can_review: boolean; provider?: string | null; model?: string | null }
 
 const drafts = {
@@ -397,6 +404,7 @@ export function DraftReview({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null);
   const [showGraph, setShowGraph] = useState(false);
   const [moved, setMoved] = useState<string | null>(null);
+  const [rejections, setRejections] = useState<RejectedStatement[]>([]);
   const draft = dataOf(draftQ.state);
   const settings = settingsQ.state.status === 'ready' ? settingsQ.state.data : null;
 
@@ -424,9 +432,9 @@ export function DraftReview({ id }: { id: string }) {
   }
 
   const run = async (label: string, action: () => Promise<unknown>, after?: () => void) => {
-    setBusy(true); setError(null);
+    setBusy(true); setError(null); setRejections([]);
     try { await action(); reloadDraft(); after?.(); return true; }
-    catch (e) { setError(`${label} failed: ${errorMessage(e)}`); return false; }
+    catch (e) { setError(`${label} failed: ${errorMessage(e)}`); setRejections(rejectionsOf(e)); return false; }
     finally { setBusy(false); }
   };
   const decide = (action: 'approve' | 'reject' | 'withdraw', question: string) => {
@@ -452,7 +460,11 @@ export function DraftReview({ id }: { id: string }) {
       {draft.status === 'approved' && <Notice tone="success">Approved {relTime(draft.decided_at)}. The operations were applied to the knowledge base.</Notice>}
       {(draft.status === 'rejected' || draft.status === 'withdrawn') && <Notice>{draft.status === 'rejected' ? 'Rejected' : 'Withdrawn'} {relTime(draft.decided_at)}. The draft is closed without applying its operations{ops.some(o => o.kind === 'alias_suggestion') ? '; aliases accepted earlier stay recorded in Names & aliases' : ''}.</Notice>}
       {pendingAliases && <Notice tone="warn">Decide each alias suggestion in <Link to={{ view: 'names' }}>Names &amp; aliases</Link> before approving or closing this draft. Automatic review stays advisory.</Notice>}
-      {error && <Notice tone="error">{error}</Notice>}
+      {error && <Notice tone="error"><div>{error}{rejections.length > 0 && (
+        <ul>{rejections.map((r, i) => (
+          <li key={`${r.seq}-${i}`}><span className="mono">op {String(r.seq).padStart(2, '0')}</span>{r.text && <> “{r.text}”</>}: {r.reasons.join('; ')}</li>
+        ))}</ul>
+      )}</div></Notice>}
       {moved && <Notice tone="warn">{moved}</Notice>}
       {asksPerson(draft.review_assessment) && draft.review_assessment && draft.status === 'submitted' && (
         <ReviewerQuestion draftId={id} assessment={draft.review_assessment}

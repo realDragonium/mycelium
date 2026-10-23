@@ -1793,7 +1793,9 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
 
     Requires real writer+ (not drafter — see `_enforce_curator`).
     All-or-nothing: a single op failure halts replay and leaves the
-    draft in its prior state so the curator can edit and retry.
+    draft in its prior state so the curator can edit and retry. When a
+    tool refuses statements (the phrasing linter), the 422 detail lists
+    each one under `rejections` so the curator can fix them.
     """
     p = _enforce_curator(request)
     from . import drafts_store
@@ -1808,6 +1810,17 @@ def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=409, detail=str(ex)) from ex
+    except server.DraftOpsRejectedError as ex:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Nothing was applied: fix or discard the refused "
+                "statements, then approve again.",
+                "rejections": ex.rejections,
+            },
+        ) from ex
     except (ValueError, RuntimeError) as ex:
         from fastapi import HTTPException
 

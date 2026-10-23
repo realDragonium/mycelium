@@ -8,10 +8,13 @@
 export class HttpError extends Error {
   readonly status: number;
   readonly path: string;
-  constructor(message: string, status: number, path: string) {
+  // The server's `detail` as sent, for endpoints that return more than a message.
+  readonly detail: unknown;
+  constructor(message: string, status: number, path: string, detail: unknown = null) {
     super(message);
     this.status = status;
     this.path = path;
+    this.detail = detail;
   }
 }
 
@@ -26,6 +29,7 @@ function detailOf(body: unknown): string | null {
   if (!body || typeof body !== 'object' || !('detail' in body)) return null;
   const { detail } = body;
   if (typeof detail === 'string') return detail;
+  if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') return detail.message;
   return detail == null ? null : JSON.stringify(detail);
 }
 
@@ -41,7 +45,7 @@ async function request<T>(method: string, path: string, body?: unknown, signal?:
   if (text) {
     try { parsed = JSON.parse(text); } catch { parsed = text; }
   }
-  if (!res.ok) throw new HttpError(detailOf(parsed) || `${res.status} ${res.statusText}`.trim(), res.status, path);
+  if (!res.ok) throw new HttpError(detailOf(parsed) || `${res.status} ${res.statusText}`.trim(), res.status, path, parsed && typeof parsed === 'object' && 'detail' in parsed ? parsed.detail : null);
   return parsed as T;
 }
 
