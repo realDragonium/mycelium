@@ -1,4 +1,5 @@
 import React from 'react';
+import { substrate } from './data';
 import { PageHeader } from './lib';
 import { Link } from './router';
 
@@ -9,7 +10,7 @@ async function docRequest(path: string, body?: unknown, signal?: AbortSignal) {
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const value = await response.json();
-  if (!response.ok) throw new Error(typeof value.detail === 'string' ? value.detail : 'The request could not be completed. Check the values and try again.');
+  if (!response.ok) throw Object.assign(new Error(typeof value.detail === 'string' ? value.detail : 'The request could not be completed. Check the values and try again.'), { code: value.code });
   return value;
 }
 
@@ -27,7 +28,15 @@ function docNavigate(next: Record<string, string | null | undefined>) {
 
 const docActive = run => ['queued', 'running'].includes(run.status);
 const docStatus = status => ({ queued: 'Queued', running: 'Generating and reviewing', document_written: 'Saved', document_superseded: 'Saved · newer revision exists', nothing_written: 'No document saved', failed: 'Failed' }[status] || status);
-const docDeliveryStatus = status => ({ unpublished: 'Internal only', published: 'Published to GitHub', changes_pending: 'Changes awaiting publication' }[status] || status);
+const docDeliveryStatus = status => ({ unpublished: 'Internal only', published: 'Published to GitHub', changes_pending: 'Changes awaiting publication', merged: 'Pull request merged', closed: 'Pull request closed without merging' }[status] || status);
+const docPullRequestState = state => ({ open: 'Open for review', merged: 'Merged', closed: 'Closed without merging' }[state] || 'State unknown');
+
+// An anchor is the entity a document is about; typed by name or alias, sent by id.
+const docEntityByName = text => {
+  const wanted = text.trim().toLowerCase();
+  return substrate.data.entities.find(entity => entity.name.toLowerCase() === wanted || (substrate.index.namesByEntity[entity.id] || []).some(name => name.text.toLowerCase() === wanted));
+};
+const docEntityName = id => substrate.data.entities.find(entity => entity.id === id)?.name || id;
 const docDate = value => value ? new Date(value).toLocaleString() : 'Not recorded';
 
 function DocumentationModel({ options, value, onChange, disabled }: {
@@ -45,21 +54,25 @@ function DocumentationGenerator({ options, document, onStarted }: { options; doc
   React.useEffect(() => { if (!providerChosen.current) setProvider(options.default_provider); }, [options.default_provider]);
   const [profile, setProfile] = React.useState('');
   const [type, setType] = React.useState('');
+  const [anchor, setAnchor] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
+  const [bothEdited, setBothEdited] = React.useState(false);
   const submitting = React.useRef(false);
   const selected = options.models.find(model => model.provider === provider);
   const allowed = options.can_generate && selected?.available;
-  const submit = async event => {
+  const anchorEntity = anchor.trim() ? docEntityByName(anchor) : null;
+  const submit = async (event, startFromDestination = false) => {
     event.preventDefault();
     if (submitting.current || !allowed || !prompt.trim()) return;
-    submitting.current = true; setBusy(true); setError(null);
+    if (anchor.trim() && !anchorEntity) { setError('Choose a concept from the list, or clear the field.'); return; }
+    submitting.current = true; setBusy(true); setError(null); setBothEdited(false);
     try {
       const run = await docRequest(document ? `documents/${encodeURIComponent(document.id)}/revisions` : 'runs', document
-        ? { prompt: prompt.trim(), provider, expected_revision: document.current_revision }
-        : { prompt: prompt.trim(), provider, guideline_set: profile || null, document_type: type || null });
+        ? { prompt: prompt.trim(), provider, expected_revision: document.current_revision, start_from_destination: startFromDestination }
+        : { prompt: prompt.trim(), provider, guideline_set: profile || null, document_type: type || null, anchor_entity_id: anchorEntity?.id || null });
       onStarted(run);
-    } catch (error) { setError(error.message); }
+    } catch (error) { setError(error.message); setBothEdited(error.code === 'both_sides_edited'); }
     finally { submitting.current = false; setBusy(false); }
   };
   return <form onSubmit={submit} className="docw-panel">
@@ -69,14 +82,19 @@ function DocumentationGenerator({ options, document, onStarted }: { options; doc
       <DocumentationModel options={options} value={provider} onChange={value => { providerChosen.current = true; setProvider(value); }} />
       {!document && <div className="docw-fields">
         <label>Writing profile<select value={profile} onChange={event => { setProfile(event.target.value); setType(''); }}><option value="">Choose automatically</option>{Object.keys(options.guideline_sets).map(name => <option key={name}>{name}</option>)}</select></label>
-        <label>Document template<select value={type} disabled={!profile} onChange={event => setType(event.target.value)}><option value="">Choose automatically</option>{(options.guideline_sets[profile] || []).map(name => <option key={name}>{name}</option>)}</select></label>
+        <label>Document template<select value={type} disabled={!profile} onChange={event => { setType(event.target.value); if (!event.target.value) setAnchor(''); }}><option value="">Choose automatically</option>{(options.guideline_sets[profile] || []).map(name => <option key={name}>{name}</option>)}</select></label>
+        <label>About concept (optional)<input type="text" list="docw-anchor-entities" value={anchor} disabled={!type} onChange={event => setAnchor(event.target.value)} placeholder={type ? 'Concept name or alias' : 'Choose a profile and template first'} spellCheck={false} /></label>
+        <datalist id="docw-anchor-entities">{substrate.data.entities.map(entity => <option key={entity.id} value={entity.name} />)}</datalist>
       </div>}
+      {!document && type && <p className="docw-meta">{anchorEntity ? `Requesting a ${type} about “${anchorEntity.name}” again revises the same document instead of creating a new one.` : 'Naming a concept gives the document a stable identity: a later request for the same concept, profile and template revises it.'}</p>}
       <label>{document ? 'What should change?' : 'What should be documented?'}<textarea required maxLength={options.max_prompt_chars} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder={document ? 'Explain what to improve, add, or remove.' : 'For example: Explain invitation reminders for administrators, including setup and examples.'} /></label>
       <button type="submit" disabled={!allowed || !prompt.trim()}>{busy ? 'Starting…' : document ? 'Generate next revision' : 'Generate document'}</button>
     </fieldset>
     {!options.can_generate && <p>Writer or admin access is required to generate and publish documents.</p>}
     {!selected?.available && <p>The selected provider needs server credentials before it can run.</p>}
     {error && <p role="alert">{error}</p>}
+    {bothEdited && <div className="docw-actions"><button type="button" disabled={busy} onClick={event => submit(event, true)}>Start from the published copy on GitHub</button></div>}
+    {bothEdited && <p>The new revision starts from the GitHub text; revision {document.current_revision} stays in the history.</p>}
   </form>;
 }
 
@@ -149,6 +167,7 @@ function DocumentationDelivery({ document, canWrite, onUpdated, onConfigure }) {
   const selected = destinations.find(item => item.name === destination);
   const coordinates = document.delivery_coordinates || selected?.coordinates;
   const reference = document.delivery_reference;
+  const pullRequest = document.pull_request;
   const publish = async () => {
     if (submitting.current || !destination) return;
     submitting.current = true; setBusy(true); setError(null);
@@ -161,7 +180,8 @@ function DocumentationDelivery({ document, canWrite, onUpdated, onConfigure }) {
   return <section className="docw-panel" aria-label="GitHub publication">
     <h2>GitHub publication</h2>
     <p role="status">{docDeliveryStatus(document.delivery_status)}{document.published_revision ? ` · last published revision ${document.published_revision}` : ''}</p>
-    {typeof reference === 'string' && /^https:\/\//i.test(reference) && <p><a href={reference} target="_blank" rel="noopener noreferrer">Open GitHub pull request ↗</a></p>}
+    {pullRequest && <p className="docw-meta">Pull request #{pullRequest.number} · {docPullRequestState(pullRequest.state)}{pullRequest.refreshed_at ? ` · checked ${docDate(pullRequest.refreshed_at)}` : ''}</p>}
+    {typeof reference === 'string' && /^https:\/\//i.test(reference) && <p><a href={reference} target="_blank" rel="noopener noreferrer">Open GitHub pull request{pullRequest ? ` #${pullRequest.number}` : ''} ↗</a></p>}
     <label>GitHub repository<select value={destination} disabled={!canWrite || busy || !!document.delivery_destination} onChange={event => setDestination(event.target.value)}>
       <option value="">Select a repository</option>
       {document.delivery_destination && !destinations.some(item => item.name === document.delivery_destination) && <option value={document.delivery_destination}>{document.delivery_destination} (recorded destination)</option>}
@@ -204,7 +224,7 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
   return <>
     <section className="docw-panel">
       <button onClick={() => docNavigate({ tab: 'library' })}>← All documents</button>
-      <h2>{selected.title}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type} · revision {revision || current.current_revision}</p>
+      <h2>{selected.title}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type} · revision {revision || current.current_revision}{current.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: current.anchor_entity_id }}>{docEntityName(current.anchor_entity_id)}</Link></>}</p>
       <label>Revision history<select value={revision || current.current_revision} onChange={event => docNavigate({ document: id, revision: event.target.value })}>{history.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}{item.revision === current.current_revision ? ' (current)' : ''} · {docDate(item.created_at)}</option>)}</select></label>
       {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to edit or publish</button></p>}
       <div className="docw-actions"><button onClick={() => setSource(value => !value)}>{source ? 'Read document' : 'View Markdown'}</button><button onClick={download}>Download Markdown</button>{!historical && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`documents/${encodeURIComponent(id)}/edits`) ? 'Resume edit' : 'Edit Markdown'}</button>}</div>
@@ -240,6 +260,7 @@ function DocumentationRun({ id, onCompleted, options, onStarted }) {
   if (!run) return <p role="status">Loading run…</p>;
   if (editing) return <DocumentationEditor title={run.draft_title} body={run.draft_body} path={`runs/${encodeURIComponent(id)}/edits`} options={options} onStarted={onStarted} onCancel={() => setEditing(false)} />;
   return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run.status)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
+    {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
     {docActive(run) && <p role="status">You can leave this screen while generation and review finish.</p>}
     {run.error && <p role="alert">{run.error}</p>}
     {run.document_id && <button onClick={() => docNavigate({ document: run.document_id, revision: run.result_revision })}>{run.result_revision ? `Read saved revision ${run.result_revision}` : 'Open document'}</button>}
