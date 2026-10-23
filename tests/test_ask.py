@@ -832,8 +832,8 @@ def test_the_inner_loop_is_offered_exactly_the_domain_readers():
 
     The vocabulary readers are offered. Seeding leaves link types and statement
     kinds populated on an empty substrate, but they describe how the domain is
-    written down rather than describing this instance, and the ingest and
-    research doctrines name them.
+    written down rather than describing this instance, and the ingest
+    doctrine names them.
     """
     from mycelium import server
     from mycelium.ask.substrate import InProcessSubstrate

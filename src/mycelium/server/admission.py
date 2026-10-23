@@ -24,10 +24,9 @@ R = TypeVar("R")
 #: tens of seconds and hold a model context worth of memory while they do. They
 #: are bounded far tighter than the general pool: memory, not threads, is what
 #: runs out first, and the embedding backend is usually competing for the same
-#: box. `start_research` and `request_documentation` are not here because the
-#: TOOLS are fast — they return a run id immediately. Their background runs are
-#: model loops like any other and draw on the same budget; see
-#: `model_loop_slot`.
+#: box. `request_documentation` is not here because the TOOL is fast — it
+#: returns a run id immediately. Its background runs are model loops like any
+#: other and draw on the same budget; see `model_loop_slot`.
 _MODEL_LOOP_TOOLS = frozenset({"ask", "ingest"})
 
 
@@ -41,7 +40,7 @@ def _model_loop_max_concurrent() -> int:
 # same place. `ask`/`ingest` are requests: they arrive on the event loop, so the
 # CapacityLimiter gates them BEFORE they take a worker thread — without it, an
 # arbitrary number of them would each grab a thread just to sit blocked, which
-# is how the general pool gets starved. A research run has no event loop at all;
+# is how the general pool gets starved. A documentation run has no event loop at all;
 # it is a plain daemon thread, and can only wait on a threading primitive.
 #
 # So the semaphore is the real budget — every model loop holds one of its slots
@@ -66,8 +65,8 @@ def _model_loop_budget() -> Capacity:
 def model_loop_slot() -> Iterator[None]:
     """Hold one slot of the shared model-loop budget for the duration of the
     call. Acquirable from any thread, which is the point: `ask` and `ingest`
-    take a slot from their worker thread, a research run takes one from its own
-    daemon thread, and the three cannot collectively exceed the budget."""
+    take a slot from their worker thread, a documentation run takes one from
+    its own daemon thread, and together they cannot exceed the budget."""
     budget = _model_loop_budget()
     budget.acquire()
     try:

@@ -54,7 +54,6 @@ def test_import_once_preserves_runtime_budgets_and_ignores_later_environment(
         settings.initialize(db, import_environment=True)
     assert settings.get(settings.AskSettings).wall_clock_s == 32.5
     assert settings.get(settings.IngestSettings).op_cap == 73
-    assert settings.get(settings.ResearchSettings).op_cap == 150
     quick = for_depth(AskConfig.from_env(), "quick")
     assert (quick.op_cap, quick.wall_clock_s, quick.request_timeout_s) == (8, 25, 20)
     assert not quick.enforce_floor
@@ -105,38 +104,23 @@ def test_limits_reject_invalid_values(field, value):
 
 def test_invalid_import_stays_disabled_without_persisting_raw_input(db, monkeypatch):
     secret = "do-not-store-this-credential"
-    monkeypatch.setenv("MYCELIUM_SOURCES", '{"token":"' + secret + '"}')
+    monkeypatch.setenv("MYCELIUM_DOC_DESTINATIONS", '{"token":"' + secret + '"}')
     with prompt_store._writing(db):
         settings.initialize(db, import_environment=True)
     assert (
         secret
         not in db.execute(
-            "SELECT body_json FROM product_settings WHERE section = 'sources'"
+            "SELECT body_json FROM product_settings WHERE section = 'documentation'"
         ).fetchone()[0]
     )
     with pytest.raises(settings.Unavailable):
-        settings.get(settings.SourcesSettings)
-    save(settings.SourcesSettings())
-    assert settings.get(settings.SourcesSettings).sources == ()
+        settings.get(settings.DocumentationSettings)
+    save(settings.DocumentationSettings())
+    assert settings.get(settings.DocumentationSettings).destinations == ()
 
 
-def test_legacy_sources_and_destinations_import_bindings_without_tokens(
-    db, monkeypatch
-):
+def test_legacy_destinations_import_bindings_without_tokens(db, monkeypatch):
     monkeypatch.setenv("GITHUB_TEST_TOKEN", "fixture-private-token")
-    monkeypatch.setenv(
-        "MYCELIUM_SOURCES",
-        json.dumps(
-            {
-                "api": {
-                    "owner": "acme",
-                    "repo": "api",
-                    "ref": "dev",
-                    "token_env": "GITHUB_TEST_TOKEN",
-                }
-            }
-        ),
-    )
     monkeypatch.setenv(
         "MYCELIUM_DOC_DESTINATIONS",
         json.dumps(
@@ -155,10 +139,7 @@ def test_legacy_sources_and_destinations_import_bindings_without_tokens(
     )
     with prompt_store._writing(db):
         settings.initialize(db, import_environment=True)
-    source = settings.get(settings.SourcesSettings).sources[0]
     destination = settings.get(settings.DocumentationSettings).destinations[0]
-    assert source.binding == destination.binding
-    assert source.ref == "dev"
     assert destination.destination().settings == {
         "owner": "acme",
         "repo": "docs",
@@ -167,11 +148,6 @@ def test_legacy_sources_and_destinations_import_bindings_without_tokens(
         "token_env": "GITHUB_TEST_TOKEN",
     }
     assert "fixture-private-token" not in settings.archive(db).model_dump_json()
-    monkeypatch.delenv("MYCELIUM_SOURCES")
-    monkeypatch.delenv("MYCELIUM_DOC_DESTINATIONS")
-    from mycelium.research.sources import load_sources
-
-    assert load_sources()["api"].repo == "api"
 
 
 def test_legacy_destination_with_app_connection_imports_that_connection(
@@ -211,23 +187,21 @@ def test_binding_requires_deployment_owned_reference(db, monkeypatch):
         ),
     )
     monkeypatch.setenv("GITHUB_TEST_TOKEN", "fixture-private-token")
-    source = settings.SourceSettings(
-        name="api", owner="acme", repo="api", binding="unknown"
+    destination = settings.DestinationSettings(
+        name="docs",
+        path_template="docs/{slug}.md",
+        owner="acme",
+        repo="docs",
+        base_branch="main",
+        binding="unknown",
     )
     with pytest.raises(ValueError, match="binding is unavailable"):
-        save(settings.SourcesSettings(sources=(source,)))
+        save(settings.DocumentationSettings(destinations=(destination,)))
     save(
-        settings.SourcesSettings(
-            sources=(
-                source.model_copy(
-                    update={"binding": "github", "host": "other.example"}
-                ),
-            )
+        settings.DocumentationSettings(
+            destinations=(destination.model_copy(update={"binding": "github"}),)
         )
     )
-    from mycelium.research.sources import load_sources
-
-    assert load_sources()["api"].host == "github.com"
     assert github_credentials.choices()[0].model_dump() == {
         "name": "github",
         "host": "github.com",
@@ -292,20 +266,23 @@ def test_http_saves_typed_lists_and_rejects_invalid_input(running_app, monkeypat
     current = next(
         item
         for item in initial.json()["sections"]
-        if item["settings"]["kind"] == "sources"
+        if item["settings"]["kind"] == "documentation"
     )
+    destination = {
+        "name": "docs",
+        "path_template": "docs/{slug}.md",
+        "owner": "acme",
+        "repo": "docs",
+        "base_branch": "main",
+        "binding": "github",
+    }
     body = {
         "revision": current["revision"],
-        "settings": {
-            "kind": "sources",
-            "sources": [
-                {"name": "api", "owner": "acme", "repo": "api", "binding": "github"}
-            ],
-        },
+        "settings": {"kind": "documentation", "destinations": [destination]},
     }
     response = client.patch("/api/product-settings", json=body)
     assert response.status_code == 200, response.text
-    assert response.json()["settings"]["sources"][0]["binding"] == "github"
+    assert response.json()["settings"]["destinations"][0]["binding"] == "github"
     assert client.patch("/api/product-settings", json=body).status_code == 409
     assert (
         client.patch(
@@ -320,43 +297,13 @@ def test_http_saves_typed_lists_and_rejects_invalid_input(running_app, monkeypat
             json={
                 "revision": 1,
                 "settings": {
-                    "kind": "sources",
-                    "sources": [{"name": "bad", "owner": "../acme", "repo": "api"}],
+                    "kind": "documentation",
+                    "destinations": [{**destination, "owner": "../acme"}],
                 },
             },
         ).status_code
         == 422
     )
-
-
-def test_research_runner_keeps_admitted_source_and_limits(db, tmp_path, monkeypatch):
-    from mycelium import research, research_runs
-
-    source = settings.SourceSettings(
-        name="api", owner="acme", repo="original", ref="main"
-    )
-    save(settings.SourcesSettings(sources=(source,)))
-    save(settings.ResearchSettings(max_tokens=1234))
-    runner = research_runs._default_runner(str(tmp_path), "api")
-    save(
-        settings.SourcesSettings(
-            sources=(
-                settings.SourceSettings(
-                    name="api", owner="acme", repo="replacement", ref="dev"
-                ),
-            )
-        )
-    )
-    save(settings.ResearchSettings(max_tokens=9876))
-    observed = []
-
-    def execute(topic, source, *, config, emitter, instructions):
-        assert instructions.action == "research"
-        observed.append((source.repo, source.ref, config.max_tokens))
-
-    monkeypatch.setattr(research, "run_research", execute)
-    runner("topic", source="api")
-    assert observed == [("original", "main", 1234)]
 
 
 def test_document_destination_change_refuses_old_delivery_coordinates(db, monkeypatch):
@@ -469,7 +416,7 @@ def test_backup_preserves_disabled_legacy_settings_and_restore_provenance(
         (settings.IngestSettings(max_tokens=1234).model_dump_json(),),
     )
     secret = "invalid-legacy-credential-sentinel"
-    monkeypatch.setenv("MYCELIUM_SOURCES", '{"token":"' + secret + '"}')
+    monkeypatch.setenv("MYCELIUM_MODEL_LOOP_MAX_CONCURRENT", secret)
     prompt_store.initialize_settings(conn, import_environment=True)
     before = settings.archive(conn)
     assert secret not in before.model_dump_json()
@@ -478,9 +425,7 @@ def test_backup_preserves_disabled_legacy_settings_and_restore_provenance(
     archive_path = tmp_path / "settings.tar.gz"
     manifest = backup.export_substrate(source, archive_path)
     assert manifest["includes_product_settings"] is True
-    monkeypatch.setenv(
-        "MYCELIUM_SOURCES", '{"ambient":{"owner":"other","repo":"unrelated"}}'
-    )
+    monkeypatch.setenv("MYCELIUM_MODEL_LOOP_MAX_CONCURRENT", "7")
     target = tmp_path / "restored"
     backup.import_substrate(archive_path, target)
     restored = prompt_store.connect(target / backup.PROMPTS_DB_NAME)
@@ -492,16 +437,16 @@ def test_backup_preserves_disabled_legacy_settings_and_restore_provenance(
             "WHERE name = 'environment-import-disabled'"
         ).fetchone()
         with pytest.raises(settings.Unavailable):
-            settings.get(settings.SourcesSettings, conn=restored)
-        editable = settings.editable(settings.SourcesSettings(), restored)
+            settings.get(settings.ConcurrencySettings, conn=restored)
+        editable = settings.editable(settings.ConcurrencySettings(), restored)
         assert editable.configuration_error
         assert editable.revision == 1
         assert settings.get(settings.IngestSettings, conn=restored).max_tokens == 1234
         prompt_store.use_connection(restored)
-        recovered = save(settings.SourcesSettings())
+        recovered = save(settings.ConcurrencySettings())
         assert recovered.revision == 2
         assert recovered.configuration_error is None
-        assert settings.get(settings.SourcesSettings).sources == ()
+        assert settings.get(settings.ConcurrencySettings).model_loops == 2
     finally:
         prompt_store.reset()
         restored.close()
@@ -512,16 +457,18 @@ def test_backup_preserves_disabled_legacy_settings_and_restore_provenance(
     [
         "{}",
         '{"kind":"unknown","invalid_legacy_configuration":true}',
-        '{"kind":"sources","invalid_legacy_configuration":false}',
-        '{"kind":"sources","invalid_legacy_configuration":1}',
-        '{"kind":"sources","invalid_legacy_configuration":"true"}',
-        '{"kind":"sources","invalid_legacy_configuration":null}',
-        '{"kind":"sources","invalid_legacy_configuration":true,"secret":"hidden"}',
-        '{"kind":"sources","invalid_legacy_configuration":true,"sources":[]}',
+        '{"kind":"documentation","invalid_legacy_configuration":false}',
+        '{"kind":"documentation","invalid_legacy_configuration":1}',
+        '{"kind":"documentation","invalid_legacy_configuration":"true"}',
+        '{"kind":"documentation","invalid_legacy_configuration":null}',
+        '{"kind":"documentation","invalid_legacy_configuration":true,"secret":"hidden"}',
+        '{"kind":"documentation","invalid_legacy_configuration":true,"destinations":[]}',
     ],
 )
 def test_archive_rejects_corruption_and_inexact_disabled_markers(db, body_json):
-    db.execute("INSERT INTO product_settings VALUES ('sources', 1, ?)", (body_json,))
+    db.execute(
+        "INSERT INTO product_settings VALUES ('documentation', 1, ?)", (body_json,)
+    )
     with pytest.raises(ValidationError):
         settings.archive(db)
     archive_json = (
@@ -535,7 +482,7 @@ def test_archive_rejects_corruption_and_inexact_disabled_markers(db, body_json):
 
 def test_archive_rejects_marker_for_different_stored_section(db):
     marker = settings.InvalidLegacySettings(
-        kind="sources", invalid_legacy_configuration=True
+        kind="documentation", invalid_legacy_configuration=True
     )
     db.execute(
         "INSERT INTO product_settings VALUES ('ask', 1, ?)",
@@ -549,7 +496,7 @@ def test_archived_marker_cannot_enter_admin_save_payload():
     with pytest.raises(ValidationError):
         settings.SaveSettings.model_validate_json(
             '{"revision":1,"settings":'
-            '{"kind":"sources","invalid_legacy_configuration":true}}'
+            '{"kind":"documentation","invalid_legacy_configuration":true}}'
         )
 
 

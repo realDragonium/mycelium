@@ -47,7 +47,7 @@ def init(data_dir: Path) -> None:
     # indexes against the new substrate.
     runtime._ctx = None
 
-    from .. import auth_store, docs_store, drafts_store, prompt_store, research_store
+    from .. import auth_store, docs_store, drafts_store, prompt_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
     # Before anything below recreates a missing database empty.
@@ -92,7 +92,6 @@ def init(data_dir: Path) -> None:
             _substrate_application_result(application_id) is not None
         ),
     )
-    research_store.migrate(_drafts_db())
     docs_store.migrate(_drafts_db())
     from ..docgen import destinations
 
@@ -100,11 +99,6 @@ def init(data_dir: Path) -> None:
 
     _seed_prompt_texts()
 
-    orphaned = research_store.mark_orphaned(_drafts_db())
-    if orphaned:
-        logger.warning(
-            "marked %d research run(s) failed: orphaned by restart", orphaned
-        )
     orphaned_docs = docs_store.mark_orphaned(_drafts_db())
     if orphaned_docs:
         logger.warning(

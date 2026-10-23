@@ -1,8 +1,7 @@
 """Documentation generation: a text prompt -> a durable generated document.
 
-The capability is split the way `research` is. This package holds what a
-generation RUN is made of — the loop, its prompts, its tools, its doctrine —
-`doc_runs` holds how one is started and finished, and `docs_store` holds where
+The capability is split in three. This package holds what a generation RUN
+is made of — the loop, its prompts, its tools, its doctrine — `doc_runs` holds how one is started and finished, and `docs_store` holds where
 its rows land.
 
 The loop resolves which guideline set and document type the request wants,

@@ -1,13 +1,12 @@
-"""Shared harness primitives for the three agent-loop packages.
+"""Shared harness primitives for the agent-loop packages.
 
-`ask`, `ingest`, and `research` each drive one model context over the substrate
+`ask`, `ingest`, and `docgen` each drive one model context over the substrate
 read tools inside a deterministic harness (recon/vocab fetch, the tool-use loop,
 an anti-premature-closure floor, op-cap / wall-clock / max-turn ceilings, and
 graceful degradation). The *shape* of each loop differs — ask has parallel tool
-use and two terminals, ingest/research have one emit terminal and draft
-assembly — but a spine of small, boundary-facing helpers is identical across
-them. That spine lives here so the three packages compose over it instead of
-each carrying a copy.
+use and two terminals, ingest has one emit terminal and draft assembly — but a
+spine of small, boundary-facing helpers is identical across them. That spine
+lives here so the packages compose over it instead of each carrying a copy.
 
 The loops import these helpers without reverse dependencies. Model requests
 are routed separately through `mycelium.ai`.
@@ -32,8 +31,8 @@ logger = logging.getLogger(__name__)
 #: Cap on a serialized tool_result fed back to the model.
 _TOOL_RESULT_MAX_CHARS = 20000
 
-#: Prompt-store `type` both doctrines live under. The `name` is the loop's
-#: own — `"ingest"` / `"research"`, declared beside each package's config.
+#: Prompt-store `type` the loop doctrines live under. The `name` is the loop's
+#: own — `"ingest"` / `"docgen"`, declared beside each package's config.
 DOCTRINE_TYPE = "doctrine"
 
 
@@ -48,7 +47,7 @@ def load_doctrine(doctrine_path: str, *, name: str) -> tuple[str, str | None]:
     The editable store decides: a text saved under (`doctrine`, `name`) wins,
     and because the read happens at run start an edit applies to the next run
     without a restart. `doctrine_path` — the packaged file, or whatever
-    MYCELIUM_{INGEST,RESEARCH}_DOCTRINE_PATH points at — is the seed startup
+    MYCELIUM_{INGEST,DOCGEN}_DOCTRINE_PATH points at — is the seed startup
     writes into the store and the fallback when the store holds nothing. So
     the path chooses what a fresh instance starts from; the store chooses
     what a run reads.

@@ -12,7 +12,7 @@ seam (`run_ask`) wires the shared model transport + in-process substrate and
 writes the trace.
 
 The boundary-facing spine (client construction, the budget gate, thinking
-stripping, tool-result serialization, …) is shared with `ingest`/`research` via
+stripping, tool-result serialization, …) is shared with `ingest`/`docgen` via
 `..agentloop`; what stays here is ask-specific: recon, parallel tool use, the
 two terminals, and the semantic-adjacency floor.
 """

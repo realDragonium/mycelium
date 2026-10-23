@@ -22,14 +22,14 @@ writes becomes substrate truth. `report_knowledge_gap` does write — a gap
 record for a human — which is exactly why `ask/substrate.py` withholds it from
 discovery and why this package names it explicitly.
 
-What is NOT shared with `ingest` / `research`
----------------------------------------------
-Their loops terminate in substrate ops, so they share op validation, ledger
+What is NOT shared with `ingest`
+--------------------------------
+Ingest's loop terminates in substrate ops, so it carries op validation, ledger
 normalization, draft assembly and the phrasing gate. A loop terminating in a
 document body can use none of that. What it does share is `..agentloop` — the
 injectable client, `load_doctrine`, the budget gate, tool-result
 serialization, the trace mechanics — and the package layout. The resemblance
-between the four packages is a layout, not a common implementation.
+between the three packages is a layout, not a common implementation.
 """
 
 from __future__ import annotations
@@ -231,7 +231,7 @@ def _default_gap_reporter(text: str) -> dict[str, Any]:
 @dataclass
 class _RunContext:
     """Per-run harness state, so the handlers below don't each need a dozen
-    positional parameters (mirrors ask/ingest/research)."""
+    positional parameters (mirrors ask/ingest)."""
 
     prompt: str
     manual_document: ManualDocument | None

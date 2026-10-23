@@ -2,7 +2,7 @@
 
 One format for everything the system stores about its own substrate and
 its working queues — statements, entities, links, knowledge gaps, drafts,
-research runs: ISO-8601 UTC, millisecond precision, trailing `Z`
+documentation runs: ISO-8601 UTC, millisecond precision, trailing `Z`
 (`2026-07-08T14:30:00.123Z`).
 
 Auth and OAuth deliberately do NOT use this — they keep Python's default

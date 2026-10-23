@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import Counter
+from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
 
@@ -62,6 +63,27 @@ REWRITES: dict[tuple[str, str], str] = {
     ),
     ("mycelium.db", "kind_link_matrix"): (
         "v18 drops the matrix; nothing has read it since the connect pipeline"
+    ),
+    ("mycelium-drafts.db", "research_runs"): (
+        "the drafts store drops the removed research feature's run history"
+    ),
+}
+
+
+def _research_doctrine(row: dict) -> bool:
+    return (row["type"], row["name"]) == ("doctrine", "research")
+
+
+# Rows a store deliberately drops or rewrites, picked out by predicate. Every
+# other row of these tables must still survive. The prompts store removes what
+# the research feature left behind: its doctrine, model selection, settings
+# sections and concurrency limit.
+DROPPED_ROWS: dict[tuple[str, str], Callable[[dict], bool]] = {
+    ("mycelium-prompts.db", "prompt_texts"): _research_doctrine,
+    ("mycelium-prompts.db", "shipped_prompt_texts"): _research_doctrine,
+    ("mycelium-prompts.db", "model_settings"): lambda row: row["action"] == "research",
+    ("mycelium-prompts.db", "product_settings"): lambda row: (
+        row["section"] in ("research", "sources") or "research_runs" in row["body_json"]
     ),
 }
 
@@ -247,6 +269,9 @@ def _assert_rows_kept(before: dict[str, dict[str, list[dict]]], data_dir: Path) 
         for table, rows in tables.items():
             if (db_name, table) in REWRITES:
                 continue
+            dropped_row = DROPPED_ROWS.get((db_name, table))
+            if dropped_row is not None:
+                rows = [row for row in rows if not dropped_row(row)]
             assert table in after, f"{db_name}:{table} was dropped"
             with closing(sqlite3.connect(data_dir / db_name)) as conn:
                 kept = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}

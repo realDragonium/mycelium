@@ -1,14 +1,12 @@
 """Thread-per-run documentation executor.
 
-The same shape as `research_runs`, for the same reasons: a generation run is
-one long agent loop rather than a drainable queue, so each run gets one daemon
-thread; the concurrency bound is counted from the database and therefore
-survives a restart; and `finally: finish_run` means no runner crash can leave
-a row unfinished once the worker starts.
+A generation run is one long agent loop rather than a drainable queue, so each
+run gets one daemon thread; the concurrency bound is counted from the database
+and therefore survives a restart; and `finally: finish_run` means no runner
+crash can leave a row unfinished once the worker starts.
 
-Where it differs is the seam. A research runner writes its own draft and hands
-back an id. A documentation runner hands back the DOCUMENT — slug, title,
-body — and this module persists it. That is what lets the whole executor be
+The runner hands back the DOCUMENT — slug, title, body — and this module
+persists it. That is what lets the whole executor be
 proven against a stub returning a canned document, and it puts the write where
 the run id and the connection already are, so `last_run_id` needs no extra
 plumbing to be correct.

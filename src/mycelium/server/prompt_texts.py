@@ -29,8 +29,6 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
     from ..docgen.config import DocgenConfig
     from ..ingest.config import DOCTRINE_NAME as INGEST_DOCTRINE
     from ..ingest.config import IngestConfig
-    from ..research.config import DOCTRINE_NAME as RESEARCH_DOCTRINE
-    from ..research.config import ResearchConfig
 
     return (
         (
@@ -42,11 +40,6 @@ def _seeded_prompt_texts() -> tuple[tuple[str, str, Callable[[], Path]], ...]:
             DOCTRINE_TYPE,
             DOCGEN_DOCTRINE,
             lambda: Path(DocgenConfig.from_env().doctrine_path),
-        ),
-        (
-            DOCTRINE_TYPE,
-            RESEARCH_DOCTRINE,
-            lambda: Path(ResearchConfig.from_env().doctrine_path),
         ),
     )
 

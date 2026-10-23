@@ -80,11 +80,6 @@ class IngestSettings(LoopLimits):
     max_input_chars: int = Field(default=20000, gt=0)
 
 
-class ResearchSettings(LoopLimits):
-    kind: Literal["research"] = "research"
-    max_topic_chars: int = Field(default=2000, gt=0)
-
-
 class DocgenSettings(LoopLimits):
     kind: Literal["docgen"] = "docgen"
     wall_clock_s: float = Field(default=900.0, gt=0)
@@ -112,38 +107,6 @@ class ConcurrencySettings(SettingsModel):
     kind: Literal["concurrency"] = "concurrency"
     model_loops: int = Field(default=2, gt=0)
     documentation_runs: int = Field(default=2, gt=0)
-    research_runs: int = Field(default=2, gt=0)
-
-
-class SourceSettings(SettingsModel):
-    name: str = Field(min_length=1, max_length=200)
-    owner: str = Field(min_length=1, max_length=200)
-    repo: str = Field(min_length=1, max_length=200)
-    ref: str | None = Field(default=None, max_length=200)
-    binding: str | None = Field(default=None, min_length=1, max_length=200)
-    host: str = Field(default="github.com", max_length=200)
-
-    @model_validator(mode="after")
-    def validate_coordinates(self) -> SourceSettings:
-        from .research.sources import (
-            _HOST_RE,
-            _OWNER_REPO_RE,
-            _REF_RE,
-            SourceError,
-            _validate,
-        )
-
-        try:
-            _validate(self.name, "owner", self.owner, _OWNER_REPO_RE)
-            _validate(self.name, "repo", self.repo, _OWNER_REPO_RE)
-            _validate(self.name, "host", self.host, _HOST_RE)
-            if self.ref:
-                _validate(self.name, "ref", self.ref, _REF_RE)
-        except SourceError:
-            raise ValueError(
-                "Source repository, reference, or host is invalid."
-            ) from None
-        return self
 
 
 class DestinationSettings(SettingsModel):
@@ -213,51 +176,34 @@ class DocumentationSettings(SettingsModel):
         return self
 
 
-class SourcesSettings(SettingsModel):
-    kind: Literal["sources"] = "sources"
-    sources: tuple[SourceSettings, ...] = Field(default=(), strict=False)
-
-    @model_validator(mode="after")
-    def unique_names(self) -> SourcesSettings:
-        if len({item.name for item in self.sources}) != len(self.sources):
-            raise ValueError("Source names must be unique.")
-        return self
-
-
 Section = Literal[
     "ask",
     "ingest",
-    "research",
     "docgen",
     "draft_review",
     "alias_discovery",
     "concurrency",
     "documentation",
-    "sources",
 ]
 Body = Annotated[
     AskSettings
     | IngestSettings
-    | ResearchSettings
     | DocgenSettings
     | ReviewSettings
     | AliasDiscoverySettings
     | ConcurrencySettings
-    | DocumentationSettings
-    | SourcesSettings,
+    | DocumentationSettings,
     Field(discriminator="kind"),
 ]
 BODY: TypeAdapter[Body] = TypeAdapter(Body)
 DEFAULTS: tuple[Body, ...] = (
     AskSettings(),
     IngestSettings(),
-    ResearchSettings(),
     DocgenSettings(),
     ReviewSettings(),
     AliasDiscoverySettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
-    SourcesSettings(),
 )
 
 
@@ -300,13 +246,11 @@ T = TypeVar(
     "T",
     bound=AskSettings
     | IngestSettings
-    | ResearchSettings
     | DocgenSettings
     | ReviewSettings
     | AliasDiscoverySettings
     | ConcurrencySettings
-    | DocumentationSettings
-    | SourcesSettings,
+    | DocumentationSettings,
 )
 
 
@@ -406,31 +350,13 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
 
 
 def validate_secrets(settings: Body, *, conn: sqlite3.Connection | None = None) -> None:
-    entries = (
-        settings.sources
-        if isinstance(settings, SourcesSettings)
-        else settings.destinations
-        if isinstance(settings, DocumentationSettings)
-        else ()
-    )
-    if not entries:
+    if not isinstance(settings, DocumentationSettings) or not settings.destinations:
         return
     bindings = github_credentials.load(conn)
-    for item in entries:
-        if isinstance(item, DestinationSettings):
-            github_credentials.documentation_settings(
-                item.binding, item.owner, item.repo, conn
-            )
-            continue
-        if item.binding and item.binding.startswith(github_connections.PREFIX):
-            github_connections.resolve(item.binding, conn).require_target(
-                item.owner, item.repo
-            )
-            continue
-        if item.binding and item.binding not in bindings:
-            raise ValueError(
-                "GitHub credential binding is unavailable. Choose a configured binding."
-            )
+    for item in settings.destinations:
+        github_credentials.documentation_settings(
+            item.binding, item.owner, item.repo, conn
+        )
     credentials = [
         os.environ.get(binding.token_env, "") for binding in bindings.values()
     ]
@@ -472,35 +398,10 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
             or default.guideline_set,
             destinations=tuple(destinations),
         )
-    if isinstance(default, SourcesSettings):
-        from dataclasses import asdict
-
-        from .research.sources import load_sources
-
-        return SourcesSettings(
-            sources=tuple(
-                SourceSettings.model_validate(
-                    {
-                        **{
-                            key: value
-                            for key, value in asdict(source).items()
-                            if key not in ("token_env", "connection")
-                        },
-                        "binding": github_credentials.import_binding(
-                            conn, source.host, source.token_env
-                        )
-                        if source.token_env
-                        else None,
-                    }
-                )
-                for source in load_sources(os.environ).values()
-            )
-        )
     values = default.model_dump()
     concurrency_names = {
         "model_loops": "MYCELIUM_MODEL_LOOP_MAX_CONCURRENT",
         "documentation_runs": "MYCELIUM_DOCGEN_MAX_ACTIVE",
-        "research_runs": "MYCELIUM_RESEARCH_MAX_ACTIVE",
     }
     for field, value in values.items():
         if field == "kind":

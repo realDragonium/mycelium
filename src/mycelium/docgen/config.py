@@ -5,9 +5,8 @@ once on upgrade. Task budgets come from saved AI settings.
 
 Claude remains the default, with the same built-in model as ingest. GPT uses an
 explicitly configured model ID. A generation
-run is shaped like `research` rather than like `ask` — it surveys the
-substrate before it writes a word — so the op cap and wall clock are sized
-closer to a research run than to a single question.
+run surveys the substrate before it writes a word, so the op cap and wall
+clock are sized well beyond a single `ask` question.
 
 A run reads TWO kinds of steering text, and only one of them is a file here.
 The GUIDELINE SET says how to write a document and lives entirely in the
@@ -135,7 +134,7 @@ class DocgenConfig:
     #: JSONL sink for the trace. None disables it.
     trace_log_path: str | None = None
     #: Directory for per-run speedscope timing files. Defaults under the data
-    #: dir (shared with ask/ingest/research); empty string disables writing.
+    #: dir (shared with ask/ingest); empty string disables writing.
     trace_dir: str | None = None
 
     @classmethod

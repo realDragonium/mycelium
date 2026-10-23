@@ -15,13 +15,11 @@ from mycelium import (
     draft_review_store,
     drafts_store,
     ingest,
-    research_runs,
     server,
     store,
 )
 from mycelium.draft_review_store import Assessment
 from mycelium.ingest import loop as ingest_loop
-from mycelium.ingest.draft import InProcessDraftEmitter
 from mycelium.ingest.tools import EMIT_TOOL
 from mycelium.server import runtime
 from settings_helpers import save_model, set_review_controls
@@ -148,38 +146,6 @@ def test_ingest_leaves_the_draft_open_while_review_is_off(curated_app, monkeypat
     assert draft["status"] == "open"
     assert draft["review_assessment"] is None
     assert "Admin console" not in _entity_names()
-
-
-def test_research_draft_is_applied_without_a_person(curated_app, tmp_path):
-    _automatic()
-
-    def runner(topic, *, source=None):
-        emitter = InProcessDraftEmitter(server)
-        draft_id = emitter.create(title=f"research: {topic}")
-        emitter.add_op(
-            draft_id,
-            "upsert_entity",
-            {"name": "Audit log", "description": "Records administrator actions"},
-        )
-        return {"outcome": "draft_created", "draft_id": draft_id}
-
-    run_id = research_runs.start_run(
-        topic="audit logging",
-        source="fixture",
-        created_by=None,
-        data_dir=tmp_path,
-        conn=server._drafts_db(),
-        runner=runner,
-    )
-    research_runs.wait_all()
-    draft_review_runs.wait_all()
-
-    from mycelium import research_store
-
-    run = research_store.get_run(server._drafts_db(), run_id)
-    assert run is not None and run["outcome"] == "draft_created"
-    assert server.get_draft(run["draft_id"])["status"] == "approved"
-    assert "Audit log" in _entity_names()
 
 
 QUESTION = "Is the Admin console the same concept as the Settings page?"

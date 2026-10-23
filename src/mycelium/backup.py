@@ -83,6 +83,15 @@ _LEGACY_KINDS: frozenset[str] = frozenset(
     }
 )
 
+# Leftovers of the removed research feature that archives from before its
+# removal still carry. The importer skips them; the drafts research created
+# are ordinary drafts and restore as usual.
+_LEGACY_SECTION_TABLES: dict[str, frozenset[str]] = {
+    "drafts.jsonl": frozenset({"research_runs"})
+}
+_LEGACY_MODEL_ACTIONS: frozenset[str] = frozenset({"research"})
+_LEGACY_PRODUCT_SECTIONS: frozenset[str] = frozenset({"research", "sources"})
+
 # Archives carry the schema version the substrate was at when exported.
 # Sourced from the migration runner so the two stay in lock-step.
 SCHEMA_VERSION = migrations.CURRENT_VERSION
@@ -166,10 +175,9 @@ _KIND_TO_TABLE: dict[str, str] = {v: k for k, v in _TABLE_TO_KIND.items()}
 
 
 def _migrate_drafts(conn: sqlite3.Connection) -> None:
-    from . import drafts_store, research_store
+    from . import drafts_store
 
     drafts_store.migrate(conn)
-    research_store.migrate(conn)
 
 
 def _migrate_prompts(conn: sqlite3.Connection) -> None:
@@ -216,7 +224,6 @@ _SECTIONS: tuple[_Section, ...] = (
             "draft_reviews",
             "draft_applications",
             "draft_review_runs",
-            "research_runs",
         ),
         _migrate_drafts,
         "includes_drafts",
@@ -582,9 +589,17 @@ def _archived_model_settings(staging: Path, required: bool) -> list[ModelSnapsho
         if required:
             raise ValueError("Archive is missing its saved model settings")
         return []
-    snapshots = TypeAdapter(list[ModelSnapshot]).validate_json(
-        path.read_text(encoding="utf-8")
-    )
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(saved, list):
+        raise ValueError("Archive contains invalid saved model settings")
+    kept = [
+        item
+        for item in saved
+        if not (isinstance(item, dict) and item.get("action") in _LEGACY_MODEL_ACTIONS)
+    ]
+    if len(kept) != len(saved):
+        logger.info("skipped the model settings of removed actions from the archive")
+    snapshots = TypeAdapter(list[ModelSnapshot]).validate_python(kept)
     if any(item.source != "saved" or item.revision < 1 for item in snapshots):
         raise ValueError("Archive contains invalid saved model settings")
     if len({item.action for item in snapshots}) != len(snapshots):
@@ -837,6 +852,8 @@ def _prepare_section(
     if not path.exists():
         return None
     rows: dict[str, list[dict[str, Any]]] = {table: [] for table in section.tables}
+    legacy = _LEGACY_SECTION_TABLES.get(section.member, frozenset())
+    legacy_skipped = 0
     with path.open(encoding="utf-8") as fp:
         for line in fp:
             if not line.strip():
@@ -845,9 +862,18 @@ def _prepare_section(
             if not isinstance(row, dict):
                 raise ValueError(f"{section.member} records must be JSON objects")
             table = row.pop("_kind", None)
+            if table in legacy:
+                legacy_skipped += 1
+                continue
             if table not in rows:
                 raise ValueError(f"unknown record kind in {section.member}: {table!r}")
             rows[table].append(_decode_blobs(row))
+    if legacy_skipped:
+        logger.info(
+            "skipped %d record(s) of removed tables from %s",
+            legacy_skipped,
+            section.member,
+        )
     with closing(_connect_auxiliary(":memory:")) as conn:
         section.migrate(conn)
         _replace_section_rows(conn, section, rows)
@@ -1170,7 +1196,22 @@ def _archived_product_settings(staging: Path, required: bool) -> ProductArchive 
         if required:
             raise ValueError("Archive is missing product-settings.json")
         return None
-    return Archive.model_validate_json(path.read_text(encoding="utf-8"))
+    archived = json.loads(path.read_text(encoding="utf-8"))
+    sections = archived.get("sections") if isinstance(archived, dict) else None
+    if isinstance(sections, list):
+        kept = []
+        for section in sections:
+            settings = section.get("settings") if isinstance(section, dict) else None
+            if isinstance(settings, dict):
+                if settings.get("kind") in _LEGACY_PRODUCT_SECTIONS:
+                    continue
+                if settings.get("kind") == "concurrency":
+                    settings.pop("research_runs", None)
+            kept.append(section)
+        if len(kept) != len(sections):
+            logger.info("skipped product settings of removed sections from the archive")
+        archived["sections"] = kept
+    return Archive.model_validate(archived)
 
 
 def _restore_product_settings(path: Path, archive: ProductArchive | None) -> None:

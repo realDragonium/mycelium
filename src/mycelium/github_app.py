@@ -86,10 +86,6 @@ class Permissions(APIModel):
                 "Grant the GitHub App Contents and Pull requests read/write permissions."
             )
 
-    def require_read(self) -> None:
-        if self.contents not in ("read", "write"):
-            raise GitHubError("Grant the GitHub App Contents read permission.")
-
 
 class Installation(APIModel):
     id: int
@@ -283,11 +279,9 @@ class GitHubClient:
                 )
         return result
 
-    def installation_token(
-        self, installation_id: int, repository_id: int, *, publish: bool = True
-    ) -> str:
-        """A token for one repository: read/write for publishing, otherwise
-        read-only contents, which is all a research clone needs."""
+    def installation_token(self, installation_id: int, repository_id: int) -> str:
+        """A publishing token for one repository: contents and pull requests
+        read/write."""
         jwt = app_jwt(self.config, int(time.time()))
         installation = self.request(
             "GET", f"/app/installations/{installation_id}", jwt, Installation
@@ -299,12 +293,8 @@ class GitHubClient:
             raise GitHubError(
                 "This GitHub installation is unavailable. Reconnect GitHub."
             )
-        if publish:
-            installation.permissions.require_publish()
-            permissions = {"contents": "write", "pull_requests": "write"}
-        else:
-            installation.permissions.require_read()
-            permissions = {"contents": "read"}
+        installation.permissions.require_publish()
+        permissions = {"contents": "write", "pull_requests": "write"}
         return self.request(
             "POST",
             f"/app/installations/{installation_id}/access_tokens",
