@@ -13,6 +13,7 @@ Nothing here creates, rewrites, merges or deletes a statement.
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass, replace
 from typing import Any, Final
@@ -406,4 +407,5 @@ def run_connect(
         emitter=emitter,
         config=config,
         label=ACTION,
+        run_id="cnr_" + uuid.uuid4().hex[:12],
     )

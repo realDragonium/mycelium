@@ -153,6 +153,7 @@ def run(
     emitter: DraftEmitter | None,
     config: IngestConfig,
     label: str,
+    run_id: str | None = None,
 ) -> IngestResult:
     """Run the loop for `task`, recording which `instructions` it ran under."""
     if substrate is None:
@@ -162,10 +163,12 @@ def run(
 
     with (
         tracing.profile_to_html(label, f"{len(task.text)} chars"),
-        ai.usage.attributed(label),
+        ai.usage.attributed(label, run_id=run_id),
     ):
         result = _execute(task, client, substrate, emitter, config)
 
+    if run_id is not None:
+        result.trace["run_id"] = run_id
     result.trace["prompts"] = [instructions.reference().model_dump(mode="json")]
 
     if config.trace_log_path:

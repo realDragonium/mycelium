@@ -97,7 +97,7 @@ function UsageReport({ view }: { view: UsageView }) {
     <h3 className="section-label">Per model</h3>
     <SpendTable rows={report.models.map(m => ({ key: `${m.provider}/${m.model}`, label: <>{m.provider} / <span className="mono">{m.model}</span>{!m.priced && <span className="warn-text small"> · no list price</span>}</>, ...m }))} />
     <h3 className="section-label">Most expensive runs</h3>
-    {report.runs.length === 0 ? <p className="muted">No documentation runs, plans or draft reviews made model calls in this period.</p> : (
+    {report.runs.length === 0 ? <p className="muted">No documentation runs, plans, draft reviews or connect passes made model calls in this period.</p> : (
       <table className="tbl compact">
         <thead><tr><th>Run</th><th>Action</th><th className="num">Calls</th><th className="num">Est. cost</th><th className="num">Last call</th></tr></thead>
         <tbody>{report.runs.map(r => (

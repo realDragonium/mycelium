@@ -136,8 +136,9 @@ this screen.
 own accounting. Each call becomes one row in the `ai_usage` table of
 `mycelium-drafts.db`: time, action, provider, model, input, cache-read,
 cache-write and output tokens, estimated cost, duration, success, and the run
-and draft it served when there is one (documentation runs, documentation plans
-and draft review runs). A call is attributed by the action around it with
+and draft it served when there is one (documentation runs, documentation plans,
+draft review runs, and connect passes, whose `cnr_` id is also in the
+`connect_statements` response's trace). A call is attributed by the action around it with
 `ai.usage.attributed(action, run_id=..., draft_id=...)`; a call made outside
 any attribution is still recorded, as `other`. Truncated turns and turns
 rejected after the provider answered (a missing required tool call, an
