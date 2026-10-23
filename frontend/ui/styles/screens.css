@@ -602,6 +602,11 @@ main.page.home { padding-top: 56px; }
 .docw-plan-item.dismissed { opacity: 0.6; }
 .docw .docw-plan-item input[type="checkbox"] { width: auto; margin-top: 4px; }
 .docw-plan-item p { margin: 4px 0; }
+.docw-brief { white-space: pre-line; }
+.docw-diff span { display: block; }
+.docw-diff .add { background: color-mix(in oklab, var(--bio) 16%, transparent); }
+.docw-diff .del { background: color-mix(in oklab, var(--warn) 16%, transparent); }
+.docw-diff .hunk { color: var(--ink-4); }
 .docw-source { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--fs-xs); background: var(--bg-inset); padding: 12px; border-radius: var(--r-md); }
 .docw-prose { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 20px 0; margin: 20px 0; line-height: 1.8; color: var(--ink); font-size: var(--fs-md); }
 .docw-prose h1 { font-family: var(--serif); font-weight: 400; font-size: 28px; }

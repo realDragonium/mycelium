@@ -10,7 +10,7 @@ const TITLES: Record<string, string> = {
   ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation',
   draft_review: 'Draft review', alias_discovery: 'Alias discovery', concurrency: 'Concurrent runs',
   documentation: 'Documentation delivery', audience_labelling: 'Audience labelling',
-  documentation_planning: 'Documentation planning',
+  documentation_planning: 'Documentation planning', documentation_maintenance: 'Documentation maintenance',
 };
 
 // [label, min, step]; booleans have no bounds.
@@ -26,6 +26,7 @@ const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   max_entities: ['Concepts in the overview', 1, 1], max_capabilities: ['Key statements in the overview', 0, 1],
   max_items: ['Maximum proposed documents', 1, 1], coverage_min_statements: ['Coverage gap from statements', 1, 1],
   replan_hint_statements: ['Re-plan hint after new statements', 1, 1], approve_batch: ['Items per batch approval', 1, 1],
+  quiet_minutes: ['Quiet minutes before an automatic revision', 0, 1], revisions_per_day: ['Automatic revisions per profile per day', 0, 1],
 };
 
 export interface Binding { name: string; host: string; available: boolean; label?: string; owner?: string; repo?: string }
