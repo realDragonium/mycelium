@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -41,6 +41,14 @@ class Narrowed(TypedDict):
     reason: str
 
 
+class Decision(TypedDict, total=False):
+    decision: Literal["confirmed", "rejected"]
+    by: str | None
+    at: str
+    #: Set when the grant was accepted in bulk after a reviewed sample.
+    sample: Sample
+
+
 class Previous(TypedDict):
     """The AI label an edit dropped, kept on the queue row so the relabel
     can start from it."""
@@ -48,6 +56,19 @@ class Previous(TypedDict):
     text: str
     audiences: list[str]
     reason: str
+    #: The curator confirmations of grants that were in force, and the text
+    #: they were confirmed for.
+    confirmed: dict[str, Decision]
+    confirmed_text: str
+
+
+class SpotCheck(TypedDict):
+    """Confirmed external grants an edit's relabel kept in force."""
+
+    audiences: list[str]
+    #: The text the grants were confirmed for.
+    old_text: str
+    at: str
 
 
 @dataclass(frozen=True)
@@ -62,14 +83,6 @@ class Graph:
         """The audiences a label granting `granted` is visible to."""
         wanted = set(granted)
         return frozenset(key for key, sees in self.sees.items() if sees & wanted)
-
-
-class Decision(TypedDict, total=False):
-    decision: Literal["confirmed", "rejected"]
-    by: str | None
-    at: str
-    #: Set when the grant was accepted in bulk after a reviewed sample.
-    sample: Sample
 
 
 #: Attempts before a failing statement waits for the next backfill.
@@ -182,10 +195,15 @@ def label_pending(row: sqlite3.Row) -> list[str]:
 
 _NARROWED: TypeAdapter[Narrowed | None] = TypeAdapter(Narrowed | None)
 _PREVIOUS: TypeAdapter[Previous | None] = TypeAdapter(Previous | None)
+_SPOT_CHECK: TypeAdapter[SpotCheck | None] = TypeAdapter(SpotCheck | None)
 
 
 def label_narrowed(row: sqlite3.Row) -> Narrowed | None:
     return _NARROWED.validate_json(row["narrowed"] or "null")
+
+
+def label_spot_check(row: sqlite3.Row) -> SpotCheck | None:
+    return _SPOT_CHECK.validate_json(row["kept_on_edit"] or "null")
 
 
 def queued_previous(row: sqlite3.Row) -> Previous | None:
@@ -218,20 +236,21 @@ def set_label(
     pending: Sequence[str] = (),
     decisions: dict[str, Decision] | None = None,
     narrowed: Narrowed | None = None,
+    spot_check: SpotCheck | None = None,
 ) -> None:
     """Replace the statement's label. The caller decides whether an AI label
     may replace what is there; see `apply_ai_label`."""
     conn.execute(
         "INSERT INTO statement_audience_labels "
         "(statement_id, audiences, source, reason, model, cost_usd, labelled_at, "
-        "labelled_by, pending, decisions, narrowed) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
+        "labelled_by, pending, decisions, narrowed, kept_on_edit) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
         "audiences = excluded.audiences, source = excluded.source, "
         "reason = excluded.reason, model = excluded.model, "
         "cost_usd = excluded.cost_usd, labelled_at = excluded.labelled_at, "
         "labelled_by = excluded.labelled_by, text_changed_at = NULL, "
         "pending = excluded.pending, decisions = excluded.decisions, "
-        "narrowed = excluded.narrowed",
+        "narrowed = excluded.narrowed, kept_on_edit = excluded.kept_on_edit",
         (
             statement_id,
             json.dumps(sorted(set(audiences))),
@@ -244,6 +263,7 @@ def set_label(
             _json_list(set(pending)),
             _json_object(decisions or {}),
             json.dumps(narrowed) if narrowed is not None else None,
+            json.dumps(spot_check) if spot_check is not None else None,
         ),
     )
     conn.execute(
@@ -262,6 +282,8 @@ def apply_ai_label(
     hold: Collection[str] = (),
     graph: Graph | None = None,
     narrowed: Narrowed | None = None,
+    carried: Mapping[str, Decision] | None = None,
+    confirmed_text: str = "",
 ) -> bool:
     """Store an AI label unless a curator has decided. False when skipped.
 
@@ -270,14 +292,20 @@ def apply_ai_label(
     audiences that would see it through their includes, and any audience
     that already saw the statement, are granted it directly, so a waiting
     grant never hides the statement from them. Curator decisions on grants
-    that stay in force are kept."""
+    that stay in force are kept.
+
+    `carried` are curator confirmations from before an edit whose grants
+    the relabel keeps: they stay in force and confirmed, and the label is
+    marked for a spot check against `confirmed_text`."""
     current = get_label(conn, statement_id)
     if current is not None and current["source"] == "curator":
         conn.execute(
             "DELETE FROM audience_label_queue WHERE statement_id = ?", (statement_id,)
         )
         return False
+    carried = {key: value for key, value in (carried or {}).items() if key in audiences}
     visible = set(label_audiences(current)) if current is not None else set()
+    visible |= carried.keys()
     granted = set(audiences)
     graph = graph or Graph({key: frozenset((key,)) for key in granted | visible})
 
@@ -286,20 +314,13 @@ def apply_ai_label(
 
     waiting = {item for item in granted & set(hold) if not sees(item) & visible}
     kept = granted - waiting
-    candidates = {
-        key
-        for key in graph.sees
-        if key not in waiting
-        and not sees(key) & kept
-        and sees(key) & waiting
-        and (key in graph.internal or sees(key) & visible)
-    }
-    kept |= {
-        key
-        for key in candidates
-        if not any(other in sees(key) for other in candidates - {key})
-    }
-    decided = label_decisions(current) if current is not None else {}
+    kept |= _cover(
+        graph,
+        waiting,
+        kept,
+        lambda key: key in graph.internal or bool(sees(key) & visible),
+    )
+    decided = {**(label_decisions(current) if current is not None else {}), **carried}
     set_label(
         conn,
         statement_id,
@@ -311,8 +332,41 @@ def apply_ai_label(
         pending=sorted(waiting),
         decisions={key: value for key, value in decided.items() if key in kept},
         narrowed=narrowed,
+        spot_check=(
+            {"audiences": sorted(carried), "old_text": confirmed_text, "at": _now()}
+            if carried
+            else None
+        ),
     )
     return True
+
+
+def _cover(
+    graph: Graph,
+    hidden: Collection[str],
+    kept: Collection[str],
+    eligible: Callable[[str], bool],
+) -> set[str]:
+    """The narrowest eligible audiences that would see a grant to `hidden`
+    through their includes and do not already see `kept`, so that granting
+    them directly keeps the statement in their view."""
+
+    def sees(key: str) -> frozenset[str]:
+        return graph.sees.get(key, frozenset((key,)))
+
+    candidates = {
+        key
+        for key in graph.sees
+        if key not in hidden
+        and not sees(key) & set(kept)
+        and sees(key) & set(hidden)
+        and eligible(key)
+    }
+    return {
+        key
+        for key in candidates
+        if not any(other in sees(key) for other in candidates - {key})
+    }
 
 
 def decide_pending(
@@ -324,9 +378,11 @@ def decide_pending(
     by: str | None,
     reason: str = "",
     sample: Sample | None = None,
+    graph: Graph | None = None,
 ) -> bool:
     """A curator confirms or rejects one pending grant. A confirmation makes
-    it a grant; a rejection makes the label a curator decision without it,
+    it a grant and drops the internal grants that now see the statement
+    through it (`graph`'s includes); a rejection makes the label a curator decision without it,
     so the AI does not grant it again. False when nothing was pending."""
     current = get_label(conn, statement_id)
     if current is None or audience_id not in label_pending(current):
@@ -342,11 +398,18 @@ def decide_pending(
     pending = [item for item in label_pending(current) if item != audience_id]
     granted = label_audiences(current)
     if confirm:
+        redundant = {
+            key
+            for key in granted
+            if graph is not None
+            and key in graph.internal
+            and audience_id in graph.sees.get(key, ())
+        }
         conn.execute(
             "UPDATE statement_audience_labels SET audiences = ?, pending = ?, "
             "decisions = ? WHERE statement_id = ?",
             (
-                json.dumps(sorted({*granted, audience_id})),
+                json.dumps(sorted({*granted, audience_id} - redundant)),
                 _json_list(pending),
                 _json_object(decisions),
                 statement_id,
@@ -367,6 +430,71 @@ def decide_pending(
             ),
         )
     return True
+
+
+def confirm_spot_check(
+    conn: sqlite3.Connection, statement_id: str, *, by: str | None
+) -> bool:
+    """A curator confirms the grants an edit kept for the new text. False
+    when nothing waits for a spot check."""
+    current = get_label(conn, statement_id)
+    checking = label_spot_check(current) if current is not None else None
+    if current is None or checking is None:
+        return False
+    decision: Decision = {"decision": "confirmed", "by": by, "at": _now()}
+    decisions = {
+        **label_decisions(current),
+        **{key: decision for key in checking["audiences"]},
+    }
+    conn.execute(
+        "UPDATE statement_audience_labels SET kept_on_edit = NULL, decisions = ? "
+        "WHERE statement_id = ?",
+        (_json_object(decisions), statement_id),
+    )
+    return True
+
+
+def narrow_spot_check(
+    conn: sqlite3.Connection,
+    statement_id: str,
+    *,
+    by: str | None,
+    reason: str,
+    graph: Graph,
+) -> bool:
+    """A curator withdraws the grants an edit kept. The label becomes theirs,
+    so the AI does not grant them again, and still grants the internal
+    audiences that saw the statement through them. False when nothing waits
+    for a spot check."""
+    current = get_label(conn, statement_id)
+    checking = label_spot_check(current) if current is not None else None
+    if current is None or checking is None:
+        return False
+    withdrawn = set(checking["audiences"])
+    kept = set(label_audiences(current)) - withdrawn
+    kept |= _cover(graph, withdrawn, kept, lambda key: key in graph.internal)
+    set_label(
+        conn,
+        statement_id,
+        sorted(kept),
+        source="curator",
+        reason=reason,
+        labelled_by=by,
+        pending=label_pending(current),
+        decisions={
+            key: value for key, value in label_decisions(current).items() if key in kept
+        },
+    )
+    return True
+
+
+def spot_checks(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Statements whose confirmed external grants an edit kept, newest first."""
+    return conn.execute(
+        "SELECT s.id, s.kind, s.text, l.kept_on_edit FROM statement_audience_labels l "
+        "JOIN statements s ON s.id = l.statement_id WHERE l.kept_on_edit IS NOT NULL "
+        "ORDER BY json_extract(l.kept_on_edit, '$.at') DESC, s.id"
+    ).fetchall()
 
 
 def clear_label(conn: sqlite3.Connection, statement_id: str) -> None:
@@ -397,15 +525,21 @@ def text_changed(conn: sqlite3.Connection, statement_id: str, old_text: str) -> 
     dropped AI label and the text it judged wait on the queue row, so the
     relabel starts from them."""
     current = get_label(conn, statement_id)
-    previous: Previous | None = (
-        {
+    previous: Previous | None = None
+    if current is not None and current["source"] == "ai":
+        granted = label_audiences(current)
+        checking = label_spot_check(current)
+        previous = {
             "text": old_text,
-            "audiences": sorted({*label_audiences(current), *label_pending(current)}),
+            "audiences": sorted({*granted, *label_pending(current)}),
             "reason": str(current["reason"]),
+            "confirmed": {
+                key: value
+                for key, value in label_decisions(current).items()
+                if key in granted and value.get("decision") == "confirmed"
+            },
+            "confirmed_text": checking["old_text"] if checking else old_text,
         }
-        if current is not None and current["source"] == "ai"
-        else None
-    )
     conn.execute(
         "DELETE FROM statement_audience_labels WHERE statement_id = ? AND source = 'ai'",
         (statement_id,),

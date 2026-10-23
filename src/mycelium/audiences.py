@@ -180,6 +180,15 @@ def live(conn: sqlite3.Connection | None = None) -> tuple[Audience, ...]:
     )
 
 
+def graph(current: tuple[Audience, ...] | None = None) -> store.audience_labels.Graph:
+    """The live includes as the label store reads them."""
+    found = current if current is not None else live()
+    return store.audience_labels.Graph(
+        sees={item.id: item.sees for item in found},
+        internal=frozenset(item.id for item in found if item.internal),
+    )
+
+
 def sees_of(
     audience_id: str, current: tuple[Audience, ...] | None = None
 ) -> frozenset[str]:

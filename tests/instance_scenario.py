@@ -156,6 +156,17 @@ def _substrate(server) -> dict[str, str]:
                     ids["submit"],
                 ),
             )
+        if "kept_on_edit" in labels:
+            db.execute(
+                "UPDATE statement_audience_labels SET kept_on_edit = ? "
+                "WHERE statement_id = ?",
+                (
+                    '{"audiences": ["external-technical"], '
+                    '"old_text": "A user submits the sign-in form.", '
+                    '"at": "2026-08-03T00:00:00Z"}',
+                    ids["submit"],
+                ),
+            )
         queue = {
             row[1] for row in db.execute("PRAGMA table_info(audience_label_queue)")
         }
@@ -168,7 +179,10 @@ def _substrate(server) -> dict[str, str]:
                     ids["locked"],
                     '{"text": "The account is disabled.", '
                     '"audiences": ["external-non-technical"], '
-                    '"reason": "Users see this."}',
+                    '"reason": "Users see this.", '
+                    '"confirmed": {"external-non-technical": {"decision": '
+                    '"confirmed", "by": "curator", "at": "2026-08-02T00:00:00Z"}}, '
+                    '"confirmed_text": "The account is disabled."}',
                 ),
             )
     if _has_table(db, "curation_attempts"):

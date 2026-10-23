@@ -457,6 +457,8 @@ CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals (
 -- of AI grants, keyed by audience id.
 -- `narrowed` records an edit's relabel that took the statement away from
 -- audiences that saw it: from which label, which audiences, and why.
+-- `kept_on_edit` marks confirmed external grants an edit's relabel kept in
+-- force, with the text they were confirmed for, until a curator looks.
 CREATE TABLE IF NOT EXISTS statement_audience_labels (
     statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
     audiences       TEXT NOT NULL,
@@ -469,7 +471,8 @@ CREATE TABLE IF NOT EXISTS statement_audience_labels (
     text_changed_at TEXT,
     pending         TEXT,
     decisions       TEXT,
-    narrowed        TEXT
+    narrowed        TEXT,
+    kept_on_edit    TEXT
 );
 
 -- Statements waiting for the audience labelling worker. A new statement or a

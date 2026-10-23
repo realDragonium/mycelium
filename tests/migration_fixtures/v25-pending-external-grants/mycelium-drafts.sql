@@ -16,7 +16,7 @@ CREATE TABLE ai_usage (
     run_id             TEXT,
     draft_id           TEXT
 );
-INSERT INTO "ai_usage" VALUES(1,'2026-10-23T19:19:07.047Z','draft_review','claude','claude-sonnet-5-5',1200,0,0,300,0.0054,4100,1,NULL,'drf_11c0fc6ba2a6');
+INSERT INTO "ai_usage" VALUES(1,'2026-10-23T19:31:49.146Z','draft_review','claude','claude-sonnet-5-5',1200,0,0,300,0.0054,4100,1,NULL,'drf_14f17439b2ce');
 CREATE TABLE document_maintenance (
     document_id   TEXT NOT NULL,
     revision      INTEGER NOT NULL,
@@ -30,7 +30,7 @@ CREATE TABLE document_maintenance (
     delivery      TEXT CHECK (delivery IN ('none', 'publishing', 'published', 'failed')),
     PRIMARY KEY (document_id, revision)
 );
-INSERT INTO "document_maintenance" VALUES('gdc_fd94f8278477',1,'kb-authoring','[]','2026-01-01T00:00:00.000Z','auto-revise','2026-01-01T00:30:00.000Z','drn_b519b5e8f400',NULL,'published');
+INSERT INTO "document_maintenance" VALUES('gdc_ea746f3514f4',1,'kb-authoring','[]','2026-01-01T00:00:00.000Z','auto-revise','2026-01-01T00:30:00.000Z','drn_15fe3291137b',NULL,'published');
 CREATE TABLE documentation_plan_dismissals (
     guideline_set TEXT NOT NULL,
     key           TEXT NOT NULL,
@@ -39,7 +39,7 @@ CREATE TABLE documentation_plan_dismissals (
     dismissed_by  TEXT,
     PRIMARY KEY (guideline_set, key)
 );
-INSERT INTO "documentation_plan_dismissals" VALUES('kb-authoring','create:reference:title:sso','SSO','2026-10-23T19:19:07.048Z','ada');
+INSERT INTO "documentation_plan_dismissals" VALUES('kb-authoring','create:reference:title:sso','SSO','2026-10-23T19:31:49.147Z','ada');
 CREATE TABLE documentation_plan_items (
     id                TEXT PRIMARY KEY,
     plan_id           TEXT NOT NULL REFERENCES documentation_plans(id),
@@ -59,7 +59,7 @@ CREATE TABLE documentation_plan_items (
     decided_by        TEXT,
     run_id            TEXT
 );
-INSERT INTO "documentation_plan_items" VALUES('dpi_b5e5830716c34f0d','dpl_c11f48ca48434520',0,'create:how-to:title:reset-a-password','create','Reset a password','how-to',NULL,NULL,'Users forget passwords.','high','["stm_sign_in"]','approved','2026-10-23T19:19:07.048Z','ada','drn_b519b5e8f400');
+INSERT INTO "documentation_plan_items" VALUES('dpi_5d3dcbc98a8a4212','dpl_da5e9b223ecc4a0f',0,'create:how-to:title:reset-a-password','create','Reset a password','how-to',NULL,NULL,'Users forget passwords.','high','["stm_sign_in"]','approved','2026-10-23T19:31:49.147Z','ada','drn_15fe3291137b');
 CREATE TABLE documentation_plans (
     id            TEXT PRIMARY KEY,
     guideline_set TEXT NOT NULL,
@@ -74,7 +74,7 @@ CREATE TABLE documentation_plans (
     model         TEXT,
     summary       TEXT
 , kind TEXT NOT NULL DEFAULT 'model' CHECK (kind IN ('model', 'maintenance')));
-INSERT INTO "documentation_plans" VALUES('dpl_c11f48ca48434520','kb-authoring','external-technical','2026-10-23T19:19:07.048Z','ada','2026-10-23T19:19:07.048Z','planned',NULL,NULL,'claude','claude-sonnet-4-6','{"cost_usd": 0.01}','model');
+INSERT INTO "documentation_plans" VALUES('dpl_da5e9b223ecc4a0f','kb-authoring','external-technical','2026-10-23T19:31:49.147Z','ada','2026-10-23T19:31:49.147Z','planned',NULL,NULL,'claude','claude-sonnet-4-6','{"cost_usd": 0.01}','model');
 CREATE TABLE documentation_runs (
     id            TEXT PRIMARY KEY,
     prompt        TEXT NOT NULL,
@@ -93,7 +93,7 @@ CREATE TABLE documentation_runs (
     provider      TEXT,
     model         TEXT
 , reasoning_effort TEXT, target_document_id TEXT, target_revision INTEGER, result_revision INTEGER, profile_revisions TEXT NOT NULL DEFAULT '{}', profile_snapshot TEXT NOT NULL DEFAULT '{}', review_notes TEXT, anchor_entity_id TEXT, revision_base TEXT CHECK (revision_base IN ('internal', 'destination')), summary TEXT);
-INSERT INTO "documentation_runs" VALUES('drn_b519b5e8f400','Explain sign-in',NULL,NULL,'2026-10-23T19:19:07.047Z','ada',NULL,'2026-10-23T19:19:07.048Z','document_written','gdc_fd94f8278477',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,'{}','{}',NULL,NULL,NULL,NULL);
+INSERT INTO "documentation_runs" VALUES('drn_15fe3291137b','Explain sign-in',NULL,NULL,'2026-10-23T19:31:49.146Z','ada',NULL,'2026-10-23T19:31:49.147Z','document_written','gdc_ea746f3514f4',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,1,'{}','{}',NULL,NULL,NULL,NULL);
 CREATE TABLE draft_applications (
     id             TEXT PRIMARY KEY,
     draft_id       TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
@@ -105,7 +105,7 @@ CREATE TABLE draft_applications (
     result_json    TEXT,
     failure        TEXT
 );
-INSERT INTO "draft_applications" VALUES('app_0ca4e00e760d','drf_11c0fc6ba2a6','rev_2deba102bf46','committed','2026-10-23T19:19:07.047Z','2026-10-23T19:19:07.047Z','reviewer','{"applied": 1}',NULL);
+INSERT INTO "draft_applications" VALUES('app_dfe1f2971c1f','drf_14f17439b2ce','rev_5572e4d3327a','committed','2026-10-23T19:31:49.146Z','2026-10-23T19:31:49.146Z','reviewer','{"applied": 1}',NULL);
 CREATE TABLE draft_ops (
     id           TEXT PRIMARY KEY,
     draft_id     TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
@@ -118,14 +118,14 @@ CREATE TABLE draft_ops (
     created_by   TEXT,
     UNIQUE (draft_id, seq)
 );
-INSERT INTO "draft_ops" VALUES('op_2eb16038df2a','drf_11c0fc6ba2a6',1,'upsert_statement','{"kind": "state", "text": "The account is unlocked.", "links": []}',NULL,NULL,'2026-10-23T19:19:07.047Z','local-admin');
+INSERT INTO "draft_ops" VALUES('op_3a29beb60493','drf_14f17439b2ce',1,'upsert_statement','{"kind": "state", "text": "The account is unlocked.", "links": []}',NULL,NULL,'2026-10-23T19:31:49.146Z','local-admin');
 CREATE TABLE draft_review_runs (
             id TEXT PRIMARY KEY,
             draft_id TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
             status TEXT NOT NULL,
             body_json TEXT NOT NULL
         );
-INSERT INTO "draft_review_runs" VALUES('drv_bad35528d5c1','drf_11c0fc6ba2a6','completed','{"run_id":"drv_bad35528d5c1","draft_id":"drf_11c0fc6ba2a6","status":"completed","mode":"review-only","draft_revision":1,"provider":null,"model":null,"prompt":null,"reasoning_effort":null,"reviewer_id":null,"settings_revision":null,"model_settings_revision":null,"review_id":null,"stale":false,"knowledge_preconditions":[],"label":"good","rationale":"Fits the graph.","questions":[],"corrections":[],"contradictions":[],"attempt":1,"retries":0,"previous_failure":null,"answers":[],"application":"unapplied","detail":null,"started_at":"2026-10-23T19:19:07.047Z","finished_at":null}');
+INSERT INTO "draft_review_runs" VALUES('drv_d0a1c333c99b','drf_14f17439b2ce','completed','{"run_id":"drv_d0a1c333c99b","draft_id":"drf_14f17439b2ce","status":"completed","mode":"review-only","draft_revision":1,"provider":null,"model":null,"prompt":null,"reasoning_effort":null,"reviewer_id":null,"settings_revision":null,"model_settings_revision":null,"review_id":null,"stale":false,"knowledge_preconditions":[],"label":"good","rationale":"Fits the graph.","questions":[],"corrections":[],"contradictions":[],"attempt":1,"retries":0,"previous_failure":null,"answers":[],"application":"unapplied","detail":null,"started_at":"2026-10-23T19:31:49.146Z","finished_at":null}');
 CREATE TABLE draft_reviews (
     id                 TEXT PRIMARY KEY,
     draft_id           TEXT NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
@@ -139,7 +139,7 @@ CREATE TABLE draft_reviews (
     reviewed_at        TEXT NOT NULL,
     reviewed_by        TEXT NOT NULL
 );
-INSERT INTO "draft_reviews" VALUES('rev_2deba102bf46','drf_11c0fc6ba2a6','accepted','Consistent with existing knowledge.',1,'[]','[]','2026-10-23T19:19:07.047Z','reviewer');
+INSERT INTO "draft_reviews" VALUES('rev_5572e4d3327a','drf_14f17439b2ce','accepted','Consistent with existing knowledge.',1,'[]','[]','2026-10-23T19:31:49.146Z','reviewer');
 CREATE TABLE drafts (
     id           TEXT PRIMARY KEY,
     title        TEXT,
@@ -157,7 +157,7 @@ CREATE TABLE drafts (
     decided_by   TEXT,
     decision     TEXT CHECK (decision IN ('approved', 'rejected', 'withdrawn'))
 , review_assessment_json TEXT, review_evidence TEXT);
-INSERT INTO "drafts" VALUES('drf_11c0fc6ba2a6','Lockout','2026-10-23T19:19:07.047Z','local-admin','s1',1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'{"run_id":"drv_bad35528d5c1","draft_id":"drf_11c0fc6ba2a6","status":"completed","mode":"review-only","draft_revision":1,"provider":null,"model":null,"prompt":null,"reasoning_effort":null,"reviewer_id":null,"settings_revision":null,"model_settings_revision":null,"review_id":null,"stale":false,"knowledge_preconditions":[],"label":"good","rationale":"Fits the graph.","questions":[],"corrections":[],"contradictions":[],"attempt":1,"retries":0,"previous_failure":null,"answers":[],"application":"unapplied","detail":null,"started_at":"2026-10-23T19:19:07.047Z","finished_at":null}',NULL);
+INSERT INTO "drafts" VALUES('drf_14f17439b2ce','Lockout','2026-10-23T19:31:49.146Z','local-admin','s1',1,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'{"run_id":"drv_d0a1c333c99b","draft_id":"drf_14f17439b2ce","status":"completed","mode":"review-only","draft_revision":1,"provider":null,"model":null,"prompt":null,"reasoning_effort":null,"reviewer_id":null,"settings_revision":null,"model_settings_revision":null,"review_id":null,"stale":false,"knowledge_preconditions":[],"label":"good","rationale":"Fits the graph.","questions":[],"corrections":[],"contradictions":[],"attempt":1,"retries":0,"previous_failure":null,"answers":[],"application":"unapplied","detail":null,"started_at":"2026-10-23T19:31:49.146Z","finished_at":null}',NULL);
 CREATE TABLE generated_document_deliveries (
     document_id TEXT NOT NULL,
     revision INTEGER NOT NULL,
@@ -170,7 +170,7 @@ CREATE TABLE generated_document_deliveries (
     created_at TEXT,
     PRIMARY KEY (document_id, revision)
 );
-INSERT INTO "generated_document_deliveries" VALUES('gdc_fd94f8278477',1,'docs','approved','{"host": "github.com", "owner": "example", "repo": "docs", "base_branch": "main"}','docs/sign-in.md','https://github.com/example/docs/pull/1','sha','2026-10-23T19:19:07.048Z');
+INSERT INTO "generated_document_deliveries" VALUES('gdc_ea746f3514f4',1,'docs','approved','{"host": "github.com", "owner": "example", "repo": "docs", "base_branch": "main"}','docs/sign-in.md','https://github.com/example/docs/pull/1','sha','2026-10-23T19:31:49.147Z');
 CREATE TABLE generated_document_revisions (
     document_id TEXT NOT NULL,
     revision INTEGER NOT NULL CHECK (revision > 0),
@@ -186,7 +186,7 @@ CREATE TABLE generated_document_revisions (
     run_id TEXT, cited_statements TEXT,
     PRIMARY KEY (document_id, revision)
 );
-INSERT INTO "generated_document_revisions" VALUES('gdc_fd94f8278477',1,NULL,'sign-in','Sign-in','','','How to sign in.','[]','{}','2026-10-23T19:19:07.047Z','drn_b519b5e8f400','{"stm_sign_in": "A user signs in."}');
+INSERT INTO "generated_document_revisions" VALUES('gdc_ea746f3514f4',1,NULL,'sign-in','Sign-in','','','How to sign in.','[]','{}','2026-10-23T19:31:49.146Z','drn_15fe3291137b','{"stm_sign_in": "A user signs in."}');
 CREATE TABLE generated_documents (
     id            TEXT PRIMARY KEY,
     slug          TEXT NOT NULL,
@@ -206,7 +206,7 @@ CREATE TABLE generated_documents (
     updated_at    TEXT NOT NULL,
     last_run_id   TEXT
 , current_revision INTEGER NOT NULL DEFAULT 1, published_revision INTEGER, delivery_binding TEXT, anchor_entity_id TEXT, pull_request_number INTEGER, pull_request_state TEXT CHECK (pull_request_state IN ('open', 'merged', 'closed')), pull_request_refreshed_at TEXT);
-INSERT INTO "generated_documents" VALUES('gdc_fd94f8278477','sign-in','Sign-in','','','How to sign in.','[]','{}','docs','{"host": "github.com", "owner": "example", "repo": "docs", "base_branch": "main"}','docs/sign-in.md','https://github.com/example/docs/pull/1','sha',NULL,'2026-10-23T19:19:07.047Z','2026-10-23T19:19:07.047Z','drn_b519b5e8f400',1,1,'approved',NULL,1,'open','2026-10-23T19:19:07.048Z');
+INSERT INTO "generated_documents" VALUES('gdc_ea746f3514f4','sign-in','Sign-in','','','How to sign in.','[]','{}','docs','{"host": "github.com", "owner": "example", "repo": "docs", "base_branch": "main"}','docs/sign-in.md','https://github.com/example/docs/pull/1','sha',NULL,'2026-10-23T19:31:49.146Z','2026-10-23T19:31:49.146Z','drn_15fe3291137b',1,1,'approved',NULL,1,'open','2026-10-23T19:31:49.147Z');
 CREATE INDEX drafts_session ON drafts (session_id);
 CREATE INDEX drafts_creator ON drafts (created_by);
 CREATE INDEX draft_ops_draft ON draft_ops (draft_id);

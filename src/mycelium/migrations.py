@@ -1100,11 +1100,14 @@ def _migration_v24_curation_attempts(conn: sqlite3.Connection) -> None:
 
 def _migration_v25_pending_external_grants(conn: sqlite3.Connection) -> None:
     """Hold the AI's new external audience grants for a curator, record the
-    curator's confirmations and rejections and an edit's narrowing on the
-    label, and keep the label an edit dropped on the queue row for the
+    curator's confirmations and rejections, an edit's narrowing and the
+    confirmed grants an edit kept on the label, and keep the label an edit dropped on the queue row for the
     relabel. Existing grants stay in force."""
     for table, added in (
-        ("statement_audience_labels", ("pending", "decisions", "narrowed")),
+        (
+            "statement_audience_labels",
+            ("pending", "decisions", "narrowed", "kept_on_edit"),
+        ),
         ("audience_label_queue", ("previous",)),
     ):
         columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}

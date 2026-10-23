@@ -6,6 +6,11 @@ statement to an external audience waits on the statement's label (see
 waiting grants per statement or per concept, or review a random sample
 stratified by concept and accept the rest in one action, which records the
 sample's precision on every grant it confirms.
+
+An edit whose relabel keeps a confirmed external grant keeps it in force
+and confirmed. Such statements wait in a spot-check list, with the text
+the grant was confirmed for, until a curator confirms the grant for the new
+text or withdraws it.
 """
 
 from __future__ import annotations
@@ -168,6 +173,7 @@ def decide(
     """Confirm or reject the audience's pending grant on each statement.
     Returns how many were pending."""
     audience = live_audience(audience_id)
+    graph = audiences.graph()
     conn = store.substrate_connection()
     decided = 0
     with store.transaction(conn):
@@ -182,6 +188,7 @@ def decide(
                 confirm=confirm,
                 by=curator,
                 reason="" if confirm else _reject_reason(audience, row),
+                graph=graph,
             )
     return decided
 
@@ -228,6 +235,7 @@ def accept_rest(
     reviewed sample's size and precision on each. Rejections stand."""
     audience = live_audience(audience_id)
     limits = product_settings.get(product_settings.AudienceLabellingSettings)
+    graph = audiences.graph()
     conn = store.substrate_connection()
     with store.transaction(conn):
         reviewed = sample_precision(conn, audience.id, sample_ids)
@@ -254,6 +262,7 @@ def accept_rest(
                 confirm=True,
                 by=curator,
                 sample=record,
+                graph=graph,
             )
     return Accepted(
         accepted=len(remaining),
@@ -261,3 +270,48 @@ def accept_rest(
         precision=precision,
         below_threshold=precision * 100 < limits.min_sample_precision_percent,
     )
+
+
+class SpotCheck(BaseModel):
+    id: str
+    kind: str
+    text: str
+    old_text: str
+    audiences: list[str]
+    at: str
+
+
+def spot_checks(conn: sqlite3.Connection) -> list[SpotCheck]:
+    found: list[SpotCheck] = []
+    for row in store.audience_labels.spot_checks(conn):
+        checking = store.audience_labels.label_spot_check(row)
+        if checking is not None:
+            found.append(
+                SpotCheck(
+                    id=str(row["id"]),
+                    kind=str(row["kind"]),
+                    text=str(row["text"]),
+                    old_text=checking["old_text"],
+                    audiences=checking["audiences"],
+                    at=checking["at"],
+                )
+            )
+    return found
+
+
+def decide_spot_check(statement_id: str, *, confirm: bool, curator: str | None) -> bool:
+    """Confirm the kept grants for the new text, or withdraw them. False when
+    the statement waits for no spot check."""
+    conn = store.substrate_connection()
+    with store.transaction(conn):
+        if confirm:
+            return store.audience_labels.confirm_spot_check(
+                conn, statement_id, by=curator
+            )
+        return store.audience_labels.narrow_spot_check(
+            conn,
+            statement_id,
+            by=curator,
+            reason="A curator withdrew the external grants an edit had kept.",
+            graph=audiences.graph(),
+        )

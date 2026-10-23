@@ -184,10 +184,7 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
     cost = price(selected.provider, selected.model)
     share = cost.cost_usd(usage) / len(rows) if cost is not None else None
     known = {item.id for item in live}
-    graph = store.audience_labels.Graph(
-        sees={item.id: item.sees for item in live},
-        internal=frozenset(item.id for item in live if item.internal),
-    )
+    graph = audiences.graph(live)
     previous = {
         str(row["id"]): store.audience_labels.queued_previous(row) for row in rows
     }
@@ -208,9 +205,8 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
             if current is None or current["text"] != texts[statement_id]:
                 continue
             decided.add(statement_id)
-            granted, reason, narrowed = _stable(
-                decision, previous.get(statement_id), known, graph
-            )
+            before = previous.get(statement_id)
+            granted, reason, narrowed = _stable(decision, before, known, graph)
             if store.audience_labels.apply_ai_label(
                 conn,
                 statement_id,
@@ -221,6 +217,8 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
                 hold=hold,
                 graph=graph,
                 narrowed=narrowed,
+                carried=_carried(granted, before, graph) if hold else None,
+                confirmed_text=before["confirmed_text"] if before else "",
             ):
                 labelled += 1
         missing = [item for item in ids if item not in decided]
@@ -256,6 +254,25 @@ def _stable(
             None,
         )
     return granted, reason, {"previous": before, "lost": sorted(lost), "reason": why}
+
+
+def _carried(
+    granted: list[str],
+    previous: store.audience_labels.Previous | None,
+    graph: store.audience_labels.Graph,
+) -> dict[str, store.audience_labels.Decision]:
+    """The confirmations an edit's relabel keeps: those of grants it still
+    makes, unless it reveals the statement to an external audience the
+    confirmed grants did not."""
+    if previous is None:
+        return {}
+    confirmed = {
+        key: value for key, value in previous["confirmed"].items() if key in granted
+    }
+    external = graph.sees.keys() - graph.internal
+    if (graph.seeing(granted) & external) - graph.seeing(confirmed):
+        return {}
+    return confirmed
 
 
 @request_timing.tracked("background audience labelling")

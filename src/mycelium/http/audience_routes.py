@@ -94,6 +94,8 @@ class Label(BaseModel):
     #: Set when the AI's relabel after an edit took the statement away from
     #: audiences that saw it, with the reason it gave.
     narrowed: store.audience_labels.Narrowed | None
+    #: Set while confirmed external grants an edit kept wait for a spot check.
+    spot_check: store.audience_labels.SpotCheck | None
 
 
 class AudienceVisibility(BaseModel):
@@ -125,6 +127,7 @@ def _label(row: sqlite3.Row | None) -> Label | None:
         text_changed_at=row["text_changed_at"],
         pending=store.audience_labels.label_pending(row),
         narrowed=store.audience_labels.label_narrowed(row),
+        spot_check=store.audience_labels.label_spot_check(row),
     )
 
 
@@ -346,4 +349,45 @@ def accept_rest_http(
     _enforce_role(request, "writer", real_role=True)
     return grant_confirmation.accept_rest(
         audience_id, body.sample, curator=_require_principal(request).id
+    )
+
+
+# --- spot checks after edits ----------------------------------------------------
+
+
+class SpotChecks(BaseModel):
+    statements: list[grant_confirmation.SpotCheck]
+    can_curate: bool
+
+
+@router.get("/api/audiences/spot-checks")
+def spot_checks_http(request: Request) -> SpotChecks:
+    """Recently edited statements whose confirmed external grants stayed in force."""
+    from .. import auth
+
+    principal = _require_principal(request)
+    return SpotChecks(
+        statements=grant_confirmation.spot_checks(server._db()),
+        can_curate=auth.principal_has_real_role(principal, "writer"),
+    )
+
+
+class SpotCheckBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    decision: Literal["confirm", "narrow"]
+
+
+@router.post("/api/statements/{statement_id}/audiences/spot-check")
+def decide_spot_check_http(
+    statement_id: str, body: SpotCheckBody, request: Request
+) -> Decided:
+    _enforce_role(request, "writer", real_role=True)
+    return Decided(
+        decided=int(
+            grant_confirmation.decide_spot_check(
+                statement_id,
+                confirm=body.decision == "confirm",
+                curator=_require_principal(request).id,
+            )
+        )
     )

@@ -110,6 +110,8 @@ def test_a_waiting_grant_stays_visible_to_the_internal_audiences_including_it(
 
     grant_confirmation.decide(OTHER_EXTERNAL, [sid], confirm=True, curator="c1")
     assert sid in _visible(db, EXTERNAL)
+    # Internal non-technical sees it through the confirmed grant now.
+    assert labels.label_audiences(_label(db, sid)) == [OTHER_EXTERNAL]
 
 
 def test_switching_confirmation_off_applies_external_grants_at_once(
@@ -297,3 +299,61 @@ def test_a_pending_statement_reaches_an_external_token_only_once_confirmed(
     assert client.post(decide, headers=reader, json=body).status_code == 403
     assert client.post(decide, headers=admin, json=body).json() == {"decided": 1}
     assert seen() == 1
+
+
+def _confirmed(db, text: str, granted: list[str]) -> str:
+    sid = store.create_statement(db, "capability", text)
+    audience_labelling.label_batch(db, call=_answer({sid: granted}))
+    for audience in granted:
+        grant_confirmation.decide(audience, [sid], confirm=True, curator="c1")
+    return sid
+
+
+def test_an_edit_keeps_a_confirmed_grant_in_force_for_a_spot_check(db, prompts):
+    kept, withdrawn = (
+        _confirmed(db, text, [OTHER_EXTERNAL])
+        for text in ("exports hold 100 rows", "invoices list 20 lines")
+    )
+    store.update_statement_text(db, kept, "exports hold 500 rows")
+    store.update_statement_text(db, withdrawn, "invoices list 50 lines")
+
+    audience_labelling.label_batch(
+        db, call=_answer({kept: [OTHER_EXTERNAL], withdrawn: [OTHER_EXTERNAL]})
+    )
+
+    row = _label(db, kept)
+    assert (labels.label_audiences(row), labels.label_pending(row)) == (
+        [OTHER_EXTERNAL],
+        [],
+    )
+    assert labels.label_decisions(row)[OTHER_EXTERNAL]["by"] == "c1"
+    assert {kept, withdrawn} <= _visible(db, EXTERNAL)
+    listed = {item.id: item for item in grant_confirmation.spot_checks(db)}
+    assert (listed[kept].old_text, listed[kept].text) == (
+        "exports hold 100 rows",
+        "exports hold 500 rows",
+    )
+
+    assert grant_confirmation.decide_spot_check(kept, confirm=True, curator="c2")
+    assert grant_confirmation.decide_spot_check(withdrawn, confirm=False, curator="c2")
+
+    assert [item.id for item in grant_confirmation.spot_checks(db)] == []
+    assert labels.label_decisions(_label(db, kept))[OTHER_EXTERNAL]["by"] == "c2"
+    narrowed = _label(db, withdrawn)
+    assert (narrowed["source"], labels.label_audiences(narrowed)) == (
+        "curator",
+        ["internal-non-technical"],
+    )
+    assert withdrawn not in _visible(db, EXTERNAL)
+    assert withdrawn in _visible(db, INTERNAL)
+
+
+def test_an_edit_that_reveals_to_a_new_external_audience_waits_again(db, prompts):
+    sid = _confirmed(db, "the api pages results", [EXTERNAL])
+    store.update_statement_text(db, sid, "the api and the export page results")
+
+    audience_labelling.label_batch(db, call=_answer({sid: [EXTERNAL, OTHER_EXTERNAL]}))
+
+    row = _label(db, sid)
+    assert labels.label_pending(row) == [OTHER_EXTERNAL, EXTERNAL]
+    assert grant_confirmation.spot_checks(db) == []
