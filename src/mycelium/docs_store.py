@@ -41,7 +41,7 @@ import json
 import re
 import sqlite3
 import uuid as _uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from . import doc_plans, timestamps
@@ -266,6 +266,7 @@ def _add_document_revisions(conn: sqlite3.Connection) -> None:
         ("result_revision", "INTEGER"),
         ("profile_revisions", "TEXT NOT NULL DEFAULT '{}'"),
         ("profile_snapshot", "TEXT NOT NULL DEFAULT '{}'"),
+        ("review_notes", "TEXT"),
     ):
         if name not in columns:
             conn.execute(
@@ -629,6 +630,7 @@ def create_run(
     target_revision: int | None = None,
     anchor_entity_id: str | None = None,
     revision_base: str | None = None,
+    review_notes: Sequence[Mapping[str, object]] = (),
 ) -> str:
     run_id = "drn_" + _uuid.uuid4().hex[:12]
     with conn:
@@ -641,8 +643,8 @@ def create_run(
             require_revision(conn, target_document_id, target_revision)
         conn.execute(
             "INSERT INTO documentation_runs "
-            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision, anchor_entity_id, revision_base) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision, anchor_entity_id, revision_base, review_notes) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 prompt,
@@ -657,6 +659,7 @@ def create_run(
                 target_revision,
                 anchor_entity_id,
                 revision_base,
+                json.dumps(list(review_notes)) if review_notes else None,
             ),
         )
     return run_id
@@ -834,6 +837,7 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "error": row["error"],
         "draft_chars": len(row["draft_body"] or ""),
         "summary": None if row["summary"] is None else json.loads(row["summary"]),
+        "review_notes": json.loads(row["review_notes"]) if row["review_notes"] else [],
     }
 
 

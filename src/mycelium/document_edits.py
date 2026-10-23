@@ -8,6 +8,10 @@ from . import doc_runs, docs_store
 from .ai import Provider
 from .docgen.schema import ManualDocument
 
+MANUAL_EDIT_PROMPT = (
+    "Review and save the supplied manual edit without changing its text."
+)
+
 
 def start_document_edit(
     conn: sqlite3.Connection,
@@ -21,7 +25,7 @@ def start_document_edit(
     row = docs_store.require_revision(conn, document_id, expected_revision)
     return doc_runs.start_run(
         conn=conn,
-        prompt="Review and save the supplied manual edit without changing its text.",
+        prompt=MANUAL_EDIT_PROMPT,
         guideline_set=str(row["guideline_set"]),
         document_type=str(row["document_type"]),
         created_by=created_by,

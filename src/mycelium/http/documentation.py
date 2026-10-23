@@ -83,13 +83,21 @@ def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/api/documentation/runs/{run_id}/revise-with-notes")
-def revise_with_review_notes_http(run_id: str, request: Request) -> dict[str, object]:
+class RetryRunBody(BaseModel):
+    with_review_notes: bool = False
+
+
+@router.post("/api/documentation/runs/{run_id}/retry")
+def retry_documentation_run_http(
+    run_id: str, body: RetryRunBody, request: Request
+) -> dict[str, object]:
     from .. import docs_store
 
     _enforce_role(request, "writer", real_role=True)
     try:
-        return server.revise_with_review_notes(run_id)
+        return server.retry_documentation_run(
+            run_id, with_review_notes=body.with_review_notes
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except docs_store.RevisionConflict as exc:
@@ -308,6 +316,25 @@ def approve_plan_items_http(
         else:
             results.append(ApprovedItem(item_id=item_id, run=run))
     return results
+
+
+@router.post("/api/documentation/plan-items/{item_id}/retry")
+def retry_plan_item_http(
+    item_id: str, body: RetryRunBody, request: Request
+) -> dict[str, object]:
+    from .. import docs_store
+
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        return documentation_planning.retry(
+            item_id, with_review_notes=body.with_review_notes
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except docs_store.RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/api/documentation/plan-items/{item_id}/dismiss")

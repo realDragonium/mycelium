@@ -29,8 +29,8 @@ from .documentation import (
     list_documentation_runs,
     list_generated_documents,
     request_documentation,
+    retry_documentation_run,
     revise_document,
-    revise_with_review_notes,
 )
 from .draft_application import (
     DraftOpsRejectedError,
@@ -144,8 +144,8 @@ __all__ = [
     "ask",
     "ingest",
     "request_documentation",
+    "retry_documentation_run",
     "revise_document",
-    "revise_with_review_notes",
     "list_document_revisions",
     "get_document_revision",
     "list_documentation_models",

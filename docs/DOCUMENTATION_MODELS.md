@@ -148,10 +148,12 @@ column or field the writer left out or marked unverified because no cited
 statement supports it; the templates tell the writer to do that and file a
 knowledge gap.
 
-A run the review refused shows the failed findings, grouped by check, and a
-writer can start **Revise with these notes**: a new run with the same profile,
-type and concept (or a revision of the same document), whose request is the
-original one followed by the findings.
+A run the review refused shows the failed findings, grouped by check. A writer
+can start **Retry with these notes**: a new run with the same request, profile,
+type and concept (or a revision of the same document), whose writer is briefed
+with the findings. The notes go to the writer only; the next review reads the
+unchanged request, so a mistaken finding cannot become a requirement. The new
+run lists the notes it was briefed with (`review_notes`).
 
 Existing tool-operation, turn, wall-clock and request-timeout limits apply. The
 Anthropic retry setting remains specific to the Claude SDK; the GPT transport

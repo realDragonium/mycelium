@@ -1301,6 +1301,24 @@ def test_the_reviewer_never_receives_the_writers_reasoning(kb_set):
     )
 
 
+def test_review_notes_brief_the_writer_and_never_reach_the_reviewer(kb_set):
+    """A mistaken review must not carry over: the notes it left are in the
+    writer's opening message and nowhere in the next review's call."""
+    note = "WRONG_EARLIER_FINDING_4b1d"
+    client = FakeAnthropic([_emit(), _review_ok()])
+
+    _run(
+        client,
+        guideline_set="kb-authoring",
+        document_type="how-to",
+        review_notes=[{"check": "conformance", "where": "owner", "problem": note}],
+    )
+
+    writer_call, review_call = client.calls
+    assert note in _content_text(writer_call["messages"][0]["content"])
+    assert note not in json.dumps(review_call, default=str)
+
+
 def test_the_reviewer_is_given_the_document_the_exposure_text_and_the_template(
     kb_set,
 ):

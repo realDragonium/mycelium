@@ -708,6 +708,7 @@ def test_the_default_runner_is_the_generation_loop(tmp_path, monkeypatch):
         anchor_entity_id=None,
         run_id=None,
         on_progress=None,
+        review_notes=(),
     ):
         assert config.provider == "claude"
         assert instructions.action == "docgen"
@@ -1256,51 +1257,61 @@ def test_merging_an_anchor_entity_moves_its_document_to_the_target(_stores):
         substrate.close()
 
 
-def test_a_refused_run_can_be_tried_again_with_its_review_notes(_stores):
-    """The review's failed findings land on the run's summary, and a retry
-    starts a new run briefed with them on top of the original request."""
-    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: {
-        "outcome": "nothing_written",
-        "reason": "the document failed review: conformance: Options - no table",
-        "trace": {"summary": {"turns": 3}},
-        "review": {
-            "exposure": {"status": "pass", "findings": []},
-            "conformance": {
-                "status": "fail",
-                "findings": [{"where": "Options", "problem": "no table"}],
+def test_a_refused_run_is_retried_with_its_notes_kept_out_of_the_request(_stores):
+    """The review's failed findings land on the run summary. A retry with
+    them repeats the request word for word and carries the findings beside
+    it, for the writer only."""
+    seen: list[dict] = []
+
+    def runner(prompt, *, guideline_set, document_type):
+        seen.append({"prompt": prompt})
+        return {
+            "outcome": "nothing_written",
+            "reason": "the document failed review: conformance: Options - no table",
+            "trace": {"summary": {"turns": 3}},
+            "review": {
+                "exposure": {"status": "pass", "findings": []},
+                "conformance": {
+                    "status": "fail",
+                    "findings": [{"where": "Options", "problem": "no table"}],
+                },
+                "attempts": 2,
+                "passed": False,
             },
-            "attempts": 2,
-            "passed": False,
-        },
-    }
+        }
+
+    doc_runs.RUNNER = runner
+    finding = {"check": "conformance", "where": "Options", "problem": "no table"}
     token = auth.current_principal.set(
         auth.Principal(id="w", name="Writer", role="writer", type="human")
     )
     try:
         refused = server.request_documentation("document the options")["id"]
         doc_runs.wait_all()
-        summary = server.get_documentation_run(refused)["summary"]
-        assert summary["review_findings"] == [
-            {"check": "conformance", "where": "Options", "problem": "no table"}
+        assert server.get_documentation_run(refused)["summary"]["review_findings"] == [
+            finding
         ]
 
-        retry = server.revise_with_review_notes(refused)
+        retry = server.retry_documentation_run(refused, with_review_notes=True)
+        plain = server.retry_documentation_run(refused)
         doc_runs.wait_all()
     finally:
         auth.current_principal.reset(token)
 
-    assert retry["prompt"].startswith("document the options\n\n")
-    assert "- conformance: Options — no table" in retry["prompt"]
+    assert [run["prompt"] for run in seen] == ["document the options"] * 3
+    assert retry["review_notes"] == [finding]
+    assert plain["review_notes"] == []
 
 
-def test_review_notes_never_crowd_out_the_request():
-    notes = [
-        {"check": "exposure", "where": f"part {n}", "problem": "x" * 40}
-        for n in range(50)
-    ]
-
-    prompt = server.documentation.review_notes_prompt("r" * 1000, notes, 600)
-
-    assert len(prompt) <= 600
-    assert prompt.startswith("r" * 250)
-    assert "part 0" in prompt
+def test_only_a_run_that_wrote_nothing_is_retried(_stores):
+    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: _document()
+    token = auth.current_principal.set(
+        auth.Principal(id="w", name="Writer", role="writer", type="human")
+    )
+    try:
+        written = server.request_documentation("document X")["id"]
+        doc_runs.wait_all()
+        with pytest.raises(ValueError, match="wrote nothing"):
+            server.retry_documentation_run(written)
+    finally:
+        auth.current_principal.reset(token)

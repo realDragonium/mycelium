@@ -322,3 +322,52 @@ def test_a_plan_is_reviewed_into_runs_and_a_dismissal_sticks(client, monkeypatch
         ("update", "Export invoices")
     ]
     assert replanned["latest"]["dropped"] == {"dismissed before": 1}
+
+
+def test_an_approved_item_that_wrote_nothing_is_retried_from_the_plan(
+    client, monkeypatch
+):
+    from mycelium import server
+
+    _profile()
+    refusal = {
+        "outcome": "nothing_written",
+        "reason": "the document failed review: conformance: Steps - no steps",
+        "trace": {"summary": {"turns": 1}},
+        "review": {
+            "exposure": {"status": "pass", "findings": []},
+            "conformance": {
+                "status": "fail",
+                "findings": [{"where": "Steps", "problem": "no steps"}],
+            },
+            "attempts": 2,
+            "passed": False,
+        },
+    }
+    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: refusal
+    conn = server._db()
+    with store.transaction(conn):
+        statement = store.create_statement(conn, "capability", "invoices have limits")
+    (item,) = _plan(
+        client, monkeypatch, _item(title="Invoice limits", statement_ids=[statement])
+    )["items"]
+    client.post(
+        "/api/documentation/plan-items/approve", json={"item_ids": [item["id"]]}
+    )
+    doc_runs.wait_all()
+    refused = client.get("/api/documentation/plans/public").json()["items"][0]["run"]
+    assert refused["status"] == "nothing_written"
+    assert refused["review_notes"] is True
+
+    retry = client.post(
+        f"/api/documentation/plan-items/{item['id']}/retry",
+        json={"with_review_notes": True},
+    )
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["review_notes"] == [
+        {"check": "conformance", "where": "Steps", "problem": "no steps"}
+    ]
+    doc_runs.wait_all()
+
+    followed = client.get("/api/documentation/plans/public").json()["items"][0]["run"]
+    assert followed["id"] == retry.json()["id"] != refused["id"]

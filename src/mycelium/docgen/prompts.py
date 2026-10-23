@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +38,7 @@ from .schema import ReviewFinding
 
 if TYPE_CHECKING:
     from ..audiences import Audience
+    from .trace import ReviewNote
 
 __all__ = [
     "build_system_prompt",
@@ -420,6 +422,7 @@ def initial_user_message(
     anchor: Anchor | None = None,
     current_document: str | None = None,
     edited_at_destination: bool = False,
+    review_notes: Sequence[ReviewNote] = (),
 ) -> str:
     provenance = (
         "\nThis is the published copy, which people edited after Mycelium "
@@ -434,9 +437,22 @@ def initial_user_message(
         if current_document is not None
         else ""
     )
+    notes = (
+        "NOTES FROM THE REVIEW THAT REFUSED AN EARLIER ATTEMPT (for you only; "
+        "the next review does not see them). Address each where it holds; the "
+        "guidance, template and statements win where a note contradicts them:\n"
+        + "\n".join(
+            f"- {note['check']}: {note['where']} — {note['problem']}"
+            for note in review_notes
+        )
+        + "\n\n"
+        if review_notes
+        else ""
+    )
     return (
         f"DOCUMENTATION REQUEST:\n-----\n{prompt}\n-----\n\n"
-        f"Today is {timestamps.now()[:10]}.\n"
+        + notes
+        + f"Today is {timestamps.now()[:10]}.\n"
         f"You are writing {_article(document_type)} `{document_type}` "
         f"against the `{guideline_set}` guideline set, whose guidance, exposure "
         "rules, and template are in your system prompt.\n\n"

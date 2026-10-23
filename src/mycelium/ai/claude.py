@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from typing import Protocol, TypedDict, runtime_checkable
 
 import httpx
-from anthropic import Anthropic
+from anthropic import Anthropic, BadRequestError
 from anthropic.types import (
     MessageParam,
     OutputConfigParam,
@@ -29,6 +29,7 @@ from .types import (
     Output,
     ProviderHistory,
     StructuredTask,
+    ToolDefinition,
     ToolTask,
     ToolUse,
     Usage,
@@ -139,10 +140,22 @@ def _block(block: object) -> dict[str, JsonValue]:
 _UNFORCEABLE = frozenset(
     {"claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5-5", "claude-sonnet-5-5"}
 )
+#: Models outside that list that turned out to refuse a forced tool choice,
+#: learnt from the refusal and kept for the life of the process.
+_refused_forcing: set[str] = set()
 
 
 def _forced(task: ToolTask, config: ModelConfig) -> bool:
-    return bool(task.force_tool) and config.model not in _UNFORCEABLE
+    return (
+        bool(task.force_tool)
+        and config.model not in _UNFORCEABLE
+        and config.model not in _refused_forcing
+    )
+
+
+def _refuses_forcing(error: BadRequestError) -> bool:
+    message = str(error)
+    return "tool_choice" in message and "not supported for this model" in message
 
 
 def _messages(task: ToolTask, config: ModelConfig) -> list[MessageParam]:
@@ -243,6 +256,46 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
                 "cache_control": {"type": "ephemeral"},
             }
         ]
+    try:
+        response = _send(task, config, client, system, tools)
+    except BadRequestError as error:
+        if not (_forced(task, config) and _refuses_forcing(error)):
+            raise
+        _refused_forcing.add(config.model)
+        response = _send(task, config, client, system, tools)
+    if response.stop_reason not in ("end_turn", "tool_use"):
+        raise IncompleteTurn(
+            "Claude response was incomplete or unsuccessful "
+            f"(stop_reason={response.stop_reason})",
+            response.usage,
+        )
+    output = [_block(block) for block in response.content]
+    calls = [
+        ToolUse.model_validate(
+            {
+                key: value
+                for key, value in block.items()
+                if key in ("type", "id", "name", "input")
+            }
+        )
+        for block in output
+        if block.get("type") == "tool_use"
+    ]
+    validate_calls(task, calls)
+    return ModelResponse(
+        content=[ProviderHistory(provider="claude", output=output), *calls],
+        usage=response.usage,
+        stop_reason=response.stop_reason,
+    )
+
+
+def _send(
+    task: ToolTask,
+    config: ModelConfig,
+    client: ClaudeClient,
+    system: str | list[TextBlockParam],
+    tools: list[ToolDefinition],
+) -> _Response:
     forced = _forced(task, config)
     choice: ToolChoiceParam = (
         {"type": "tool", "name": task.force_tool, "disable_parallel_tool_use": True}
@@ -277,35 +330,10 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         # than the whole turn. Writing a long document takes longer than any
         # sensible total timeout, and each timed-out attempt is generated,
         # billed and retried from scratch.
-        response = _stream_turn(task, request, configured)
-    elif task.on_tool_delta is not None:
+        return _stream_turn(task, request, configured)
+    if task.on_tool_delta is not None:
         raise ModelError("Streaming Claude turns require an Anthropic transport")
-    else:
-        response = _Response.model_validate(configured.messages.create(**request))
-    if response.stop_reason not in ("end_turn", "tool_use"):
-        raise IncompleteTurn(
-            "Claude response was incomplete or unsuccessful "
-            f"(stop_reason={response.stop_reason})",
-            response.usage,
-        )
-    output = [_block(block) for block in response.content]
-    calls = [
-        ToolUse.model_validate(
-            {
-                key: value
-                for key, value in block.items()
-                if key in ("type", "id", "name", "input")
-            }
-        )
-        for block in output
-        if block.get("type") == "tool_use"
-    ]
-    validate_calls(task, calls)
-    return ModelResponse(
-        content=[ProviderHistory(provider="claude", output=output), *calls],
-        usage=response.usage,
-        stop_reason=response.stop_reason,
-    )
+    return _Response.model_validate(configured.messages.create(**request))
 
 
 def _stream_turn(task: ToolTask, request: _Request, client: Anthropic) -> _Response:

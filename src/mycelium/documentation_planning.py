@@ -718,6 +718,29 @@ def approve(item_id: str, *, decided_by: str | None) -> dict[str, object]:
     return run
 
 
+_retry_lock = threading.Lock()
+
+
+def retry(item_id: str, *, with_review_notes: bool = False) -> dict[str, object]:
+    """Start an approved item's run again when it wrote nothing; the item
+    follows the new run. `with_review_notes` briefs only the writer with what
+    the refusing review found."""
+    from . import server
+
+    drafts = server._drafts_db()
+    with _retry_lock:
+        row = doc_plans.get_item(drafts, item_id)
+        if row is None:
+            raise LookupError("plan item not found")
+        if row["state"] != "approved" or not row["run_id"]:
+            raise ValueError("Only an approved item can be retried.")
+        run = server.retry_documentation_run(
+            str(row["run_id"]), with_review_notes=with_review_notes
+        )
+        doc_plans.record_run(drafts, item_id, str(run["id"]))
+    return run
+
+
 def dismiss_item(item_id: str, *, decided_by: str | None) -> None:
     from . import server
 
@@ -765,6 +788,8 @@ class RunState(BaseModel):
     id: str
     status: str
     document_id: str | None
+    #: The refusing review left findings a retry can brief the writer with.
+    review_notes: bool = False
 
 
 class PlanItem(BaseModel):
@@ -987,6 +1012,9 @@ def _item(
             id=str(run["id"]),
             status=docs_store.status_for(run),
             document_id=run["document_id"],
+            review_notes=bool(
+                run["summary"] and json.loads(run["summary"]).get("review_findings")
+            ),
         )
         if run is not None
         else None,

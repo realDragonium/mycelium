@@ -297,6 +297,41 @@ def test_claude_signed_history_cache_and_forced_terminal() -> None:
     assert isinstance(original, list) and "cache_control" not in original[0]
 
 
+def test_claude_learns_that_a_model_refuses_a_forced_tool(monkeypatch) -> None:
+    from mycelium.ai import claude
+
+    monkeypatch.setattr(claude, "_refused_forcing", set())
+    sent: list[dict[str, JsonValue]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = _OBJECT.validate_json(request.content)
+        sent.append(body)
+        choice = body["tool_choice"]
+        if isinstance(choice, dict) and choice["type"] == "tool":
+            message = (
+                'tool_choice: type "tool" and "any" are not supported for this model.'
+            )
+            return httpx.Response(
+                400,
+                json={
+                    "type": "error",
+                    "error": {"type": "invalid_request_error", "message": message},
+                },
+            )
+        return _reply(request, _envelope("claude", [_claude_call("call-1")]))
+
+    config = replace(_config("claude"), model="claude-newer-model")
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        ai.turn(_task(force="read"), config, client=client)
+        ai.turn(_task(force="read"), config, client=client)
+
+    assert [request["tool_choice"] for request in sent] == [
+        {"type": "tool", "name": "read", "disable_parallel_tool_use": True},
+        {"type": "auto", "disable_parallel_tool_use": True},
+        {"type": "auto", "disable_parallel_tool_use": True},
+    ]
+
+
 def test_claude_asks_for_a_required_tool_on_a_model_that_cannot_be_forced() -> None:
     sent: list[dict[str, JsonValue]] = []
     thinking: dict[str, JsonValue] = {
