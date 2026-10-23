@@ -666,6 +666,17 @@ def test_api_error_degrades_to_forced_finalize():
     assert result.trace["forced_finalize"] == "api_error"
 
 
+def test_a_truncated_turn_counts_toward_the_trace_tokens():
+    responses = [
+        _message([_tool_use("discover_facts", {"texts": ["x"]})], stop="max_tokens"),
+        _message([_tool_use(EMIT_TOOL, _good_new_op_emit())]),
+    ]
+    result, *_ = _run(responses)
+
+    assert result.trace["forced_finalize"] == "api_error"
+    assert result.trace["tokens"]["output"] == 10
+
+
 def test_malformed_emit_reprompted_then_degrades():
     bad = {
         "ops": [

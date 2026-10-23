@@ -107,6 +107,14 @@ class ModelError(ValueError):
     """Safe provider failure text that can be persisted in a run or trace."""
 
 
+class IncompleteTurn(ModelError):
+    """A turn the provider stopped early. It was still generated and billed."""
+
+    def __init__(self, message: str, usage: Usage) -> None:
+        super().__init__(message)
+        self.usage = usage
+
+
 class Message(BaseModel):
     model_config = ConfigDict(extra="forbid")
     role: Literal["user", "assistant"]

@@ -238,6 +238,8 @@ def _execute(
                     client, config, system_prompt, messages, tools, force=False
                 )
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
+            if isinstance(exc, ai.IncompleteTurn):
+                trace.add_usage(exc.usage)
             trace.notes.append(f"model error: {exc}")
             return _forced_finalize("api_error", ctx)
         trace.model_turns += 1
@@ -446,6 +448,8 @@ def _forced_finalize(reason: str, ctx: _RunContext) -> IngestResult:
         else:
             trace.notes.append("forced finalize: model did not emit emit_draft")
     except Exception as exc:  # noqa: BLE001
+        if isinstance(exc, ai.IncompleteTurn):
+            trace.add_usage(exc.usage)
         trace.notes.append(f"forced finalize failed: {exc}")
     return _degrade_no_draft(f"degraded: could not assemble a draft ({reason})", ctx)
 

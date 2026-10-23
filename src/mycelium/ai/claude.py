@@ -22,6 +22,7 @@ from .types import (
     CLAUDE_EFFORT,
     MESSAGES,
     TOOLS,
+    IncompleteTurn,
     ModelConfig,
     ModelError,
     ModelResponse,
@@ -249,9 +250,10 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
     else:
         response = _Response.model_validate(configured.messages.create(**request))
     if response.stop_reason not in ("end_turn", "tool_use"):
-        raise ModelError(
+        raise IncompleteTurn(
             "Claude response was incomplete or unsuccessful "
-            f"(stop_reason={response.stop_reason})"
+            f"(stop_reason={response.stop_reason})",
+            response.usage,
         )
     output = [_block(block) for block in response.content]
     calls = [

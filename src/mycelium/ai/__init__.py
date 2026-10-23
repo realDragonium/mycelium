@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from . import claude, openai
 from .claude import ClaudeClient
 from .types import (
+    IncompleteTurn,
     ModelConfig,
     ModelError,
     ModelResponse,
@@ -27,6 +28,7 @@ from .types import (
 
 __all__ = [
     "ClaudeClient",
+    "IncompleteTurn",
     "ModelConfig",
     "ModelError",
     "ModelResponse",
