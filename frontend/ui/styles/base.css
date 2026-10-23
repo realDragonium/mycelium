@@ -18,7 +18,7 @@ body {
 }
 ::selection { background: var(--sel); }
 a { color: inherit; text-decoration: none; cursor: pointer; }
-p a, .hint a, .notice a, .card li a, .docw-panel li a { color: var(--bio); text-decoration: underline; text-decoration-color: var(--bio-line); text-underline-offset: 2px; }
+p a, .hint a, .notice a, .card li a, .meta-row a, .docw-panel li a { color: var(--bio); text-decoration: underline; text-decoration-color: var(--bio-line); text-underline-offset: 2px; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 input, textarea, select { font: inherit; color: inherit; }

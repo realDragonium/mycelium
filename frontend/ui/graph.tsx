@@ -1,24 +1,52 @@
 // Force-directed graph view for Mycelium.
 import React from 'react';
 import { useState as useStateG, useEffect as useEffectG, useRef as useRefG, useMemo as useMemoG } from 'react';
+import { getJSON } from './api';
 import { KindTag, RecordTag } from './lib';
-import { usePrefs } from './prefs';
+import { usePrefs, type Prefs } from './prefs';
 import { useRouter } from './router';
-import { substrate, type SubstrateData, type SubstrateIndex } from './data';
+import { substrate, type IndexedRecord, type Statement, type SubstrateData, type SubstrateIndex, type When } from './data';
+
+type GraphNodeKind = 'statement' | 'entity';
+type GraphEdgeKind = 'statement' | 'mention' | 'entity';
+interface GraphNode { id: string; kind: GraphNodeKind; claimKind?: string; label: string }
+interface GraphEdge { source: string; target: string; link_type: string; kind: GraphEdgeKind; when?: When }
+interface SimNode extends GraphNode {
+  x: number; y: number; vx: number; vy: number; degree: number; invMass: number;
+  fx?: number; fy?: number; fxAcc: number; fyAcc: number;
+  entityDegree: number; entityNeighbors?: Set<string>;
+}
+interface SimEdge extends GraphEdge { src: SimNode; tgt: SimNode; weight: number }
+interface Point { x: number; y: number }
+interface Panning { startX: number; startY: number; panX: number; panY: number }
+interface ConditionHit extends Point { leafId: string }
+interface GraphSimulation {
+  nodes: SimNode[]; edges: SimEdge[]; idMap: Record<string, SimNode>; entities: SimNode[];
+  spreadScale: number; dragging: SimNode | null; pan: Point; zoom: number; panning: Panning | null;
+  running: boolean; wakeUntil: number; condHits?: ConditionHit[]; condClick?: ConditionHit | null;
+}
+interface GraphDrawState {
+  selectedId: string | null; hoverId: string | null; neighborhood: Set<string> | null;
+  activeTypes: Set<string>; showEntities: boolean; showStatements: boolean;
+  theme: Prefs['theme']; searchMatches: Set<string> | null;
+}
+interface EntityPositions { nodes: { id: string; x: number; y: number }[] }
+interface PositionMap { map: Record<string, Point> }
+interface SelectedNeighbor { dir: 'out' | 'in'; link_type: string; target: IndexedRecord }
 
 // Walk a when-clause tree and yield every leaf statement_id. Tolerates the
 // legacy flat-string form. Same shape as the helper in data.ts —
 // duplicated here so this file stays standalone.
-function* walkWhenLeavesG(when) {
+function* walkWhenLeavesG(when: When | undefined): Generator<string> {
   if (!when) return;
   if (typeof when === 'string') { yield when; return; }
-  if (when.statement_id) { yield when.statement_id; return; }
+  if ('statement_id' in when) { yield when.statement_id; return; }
   if (when.op && Array.isArray(when.of)) {
     for (const child of when.of) yield* walkWhenLeavesG(child);
   }
 }
 
-const LINK_TYPE_COLORS_LIGHT = {
+const LINK_TYPE_COLORS_LIGHT: Record<string, string> = {
   'contains':   '#6b3a8c',
   'triggers':   '#b14b1f',
   'enables':    '#2f6b51',
@@ -35,7 +63,7 @@ const LINK_TYPE_COLORS_LIGHT = {
   'applies-to': '#b45309',
   'involves':   '#7c3aed',
 };
-const LINK_TYPE_COLORS_DARK = {
+const LINK_TYPE_COLORS_DARK: Record<string, string> = {
   'contains':   '#c9a8e0',
   'triggers':   '#e8a385',
   'enables':    '#93c19d',
@@ -59,12 +87,12 @@ const LINK_TYPE_COLORS_DARK = {
 // they get their own color and default-on visibility. Single source of
 // truth so the renderer, the toolbar, the activeTypes default, and the
 // side-panel neighbor list never disagree.
-const STMT_ENTITY_EDGE_BY_KIND = {
+const STMT_ENTITY_EDGE_BY_KIND: Record<string, string> = {
   state:      'describes',
   capability: 'applies-to',
   event:      'involves',
 };
-const stmtEntityEdgeType = (claimKind) => STMT_ENTITY_EDGE_BY_KIND[claimKind] || 'mentions';
+const stmtEntityEdgeType = (claimKind: string | undefined) => claimKind ? STMT_ENTITY_EDGE_BY_KIND[claimKind] || 'mentions' : 'mentions';
 const KNOWN_STMT_ENTITY_TYPES = new Set(Object.values(STMT_ENTITY_EDGE_BY_KIND));
 
 // `data` and `index` are optional — when omitted, GraphView reads the
@@ -86,10 +114,10 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
   const data = dataProp || substrate.data;
   const idx = indexProp || substrate.index;
 
-  const canvasRef = useRefG(null);
-  const containerRef = useRefG(null);
-  const [hoverId, setHoverId] = useStateG(null);
-  const [selectedId, setSelectedId] = useStateG(focusId || null);
+  const canvasRef = useRefG<HTMLCanvasElement | null>(null);
+  const containerRef = useRefG<HTMLDivElement | null>(null);
+  const [hoverId, setHoverId] = useStateG<string | null>(null);
+  const [selectedId, setSelectedId] = useStateG<string | null>(focusId || null);
   const [focusMode, setFocusMode] = useStateG(false);
   const [showEntities, setShowEntities] = useStateG(true);
   const [showStatements, setShowStatements] = useStateG(true);
@@ -101,7 +129,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
   const searchMatches = useMemoG(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return null;
-    const set = new Set();
+    const set = new Set<string>();
     for (const e of data.entities) {
       const names = (idx.namesByEntity[e.id] || []).map(n => n.text);
       const hay = [e.name, e.description || '', ...names].join(' ').toLowerCase();
@@ -121,7 +149,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     // kinds) stays opt-in so a new kind can't suddenly fill the canvas
     // with un-styled noise before it gets its own entry in
     // STMT_ENTITY_EDGE_BY_KIND.
-    const s = new Set();
+    const s = new Set<string>();
     data.links.forEach(l => s.add(l.link_type));
     (data.entity_links || []).forEach(l => s.add(l.link_type));
     KNOWN_STMT_ENTITY_TYPES.forEach(t => s.add(t));
@@ -133,7 +161,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
   // don't silently hide. Existing user toggle decisions are preserved —
   // we only ADD newly-seen types.
   useEffectG(() => {
-    const seen = new Set();
+    const seen = new Set<string>();
     data.links.forEach(l => seen.add(l.link_type));
     (data.entity_links || []).forEach(l => seen.add(l.link_type));
     setActiveTypes(prev => {
@@ -148,14 +176,14 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
 
   // Build node list once
   const { nodes, edges } = useMemoG(() => {
-    const nodes = [];
+    const nodes: GraphNode[] = [];
     data.statements.forEach(b => nodes.push({
       id: b.id, kind: 'statement', claimKind: b.kind,
       label: b.title || b.text.slice(0, 60),
     }));
     data.entities.forEach(e => nodes.push({ id: e.id, kind: 'entity', label: e.name }));
 
-    const edges = [];
+    const edges: GraphEdge[] = [];
     data.links.forEach(l => edges.push({
       source: l.from, target: l.to, link_type: l.link_type, kind: 'statement',
       when: l.when,  // carried so the renderer can draw condition connectors
@@ -195,17 +223,17 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
   }, [focusMode, selectedId, edges]);
 
   // Simulation state — kept in refs so we can animate without re-render
-  const simRef = useRefG(null);
+  const simRef = useRefG<GraphSimulation | null>(null);
 
   // Pre-baked entity positions (shared with the entities-only view).
   // Fetch once; bump positionsTick when loaded so the main effect re-runs
   // and seeds entities from the baked layout instead of the BFS-phyllotaxis
   // fallback.
-  const positionsRef = useRefG(null);
+  const positionsRef = useRefG<PositionMap | null>(null);
   const [positionsTick, setPositionsTick] = useStateG(0);
   useEffectG(() => {
     let cancelled = false;
-    const finalise = (map) => {
+    const finalise = (map: Record<string, Point> | null) => {
       if (cancelled) return;
       // Always set positionsRef (even to an empty map on failure) so the
       // main effect's "wait for positions" gate releases. Without this,
@@ -213,12 +241,10 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       positionsRef.current = { map: map || {} };
       setPositionsTick(t => t + 1);
     };
-    fetch('/api/entity-positions')
-      .then(r => r.ok ? r.json() : null)
+    getJSON<EntityPositions>('/api/entity-positions')
       .then(d => {
-        if (!d) return finalise(null);
-        const map = {};
-        for (const n of (d.nodes || [])) {
+        const map: Record<string, Point> = {};
+        for (const n of d.nodes || []) {
           map[n.id] = { x: n.x, y: n.y };
         }
         finalise(map);
@@ -232,7 +258,9 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
-    const ctx = canvas.getContext('2d');
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    const ctx: CanvasRenderingContext2D = context;
     const dpr = window.devicePixelRatio || 1;
 
     let width = container.clientWidth;
@@ -325,7 +353,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
       };
-      const jitter = (s) => (rand() * 2 - 1) * s;
+      const jitter = (s: number) => (rand() * 2 - 1) * s;
 
       // 1. Seed entity positions from the pre-baked layout.
       //
@@ -372,7 +400,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       }
 
       // 2 + 3. Place each node.
-      const stmtById = {};
+      const stmtById: Record<string, Statement> = {};
       for (const b of data.statements) stmtById[b.id] = b;
       // Pre-compute entity↔entity degree from the baked positions so we
       // can spawn each statement next to its *most-connected* mentioned
@@ -381,7 +409,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       // they had to drift across the canvas before springs settled them.
       // Anchoring to a single specific entity puts the statement next
       // to something it's actually related to from frame 1.
-      const entityDegreeMap = {};
+      const entityDegreeMap: Record<string, number> = {};
       for (const e of entityIdx) entityDegreeMap[e.id] = 0;
       for (const ed of edges) {
         if (ed.kind !== 'entity') continue;
@@ -403,9 +431,9 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       // statement clouds settle around them instead of dragging them.
       const ENTITY_MASS = 25;
       const STATEMENT_MASS = 1;
-      const np = nodes.map(n => {
+      const np = nodes.map((n): SimNode => {
         if (n.kind === 'entity') {
-          const p = entityPos[n.id];
+          const p = entityPos[n.id] || { x: ORIGIN_X, y: ORIGIN_Y };
           // fx/fy pins the entity at its baked position — the integrator
           // (see the `if (n.fx !== undefined)` branch below) honours this
           // by snapping x/y back to fx/fy every frame and zeroing velocity.
@@ -417,6 +445,9 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
             vx: 0, vy: 0,
             degree: 0,
             invMass: 1 / ENTITY_MASS,
+            fxAcc: 0, fyAcc: 0,
+            entityDegree: 0,
+            entityNeighbors: new Set<string>(),
           };
         }
         // Statement: anchor next to the highest-degree mentioned entity.
@@ -427,13 +458,13 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         // always starts close to a real entity, not in dead space.
         const stmt = stmtById[n.id];
         const ents = stmt && stmt.mentions ? stmt.mentions.filter(eid => entityPos[eid]) : [];
-        let ax, ay;
+        let ax: number, ay: number;
         if (ents.length) {
           const anchorId = ents.reduce(
             (best, eid) => (entityDegreeMap[eid] || 0) > (entityDegreeMap[best] || 0) ? eid : best,
-            ents[0],
+            ents[0] || '',
           );
-          const ap = entityPos[anchorId];
+          const ap = entityPos[anchorId] || { x: cgx, y: cgy };
           ax = ap.x; ay = ap.y;
         } else {
           // Orphan statement (no mentions) — drop it at the entity
@@ -447,29 +478,35 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
           vx: 0, vy: 0,
           degree: 0,
           invMass: 1 / STATEMENT_MASS,
+          fxAcc: 0, fyAcc: 0,
+          entityDegree: 0,
         };
       });
-      const idMap = {};
+      const idMap: Record<string, SimNode> = {};
       np.forEach(n => idMap[n.id] = n);
-      const ep = edges.map(e => ({ ...e, src: idMap[e.source], tgt: idMap[e.target] })).filter(e => e.src && e.tgt);
+      const ep: SimEdge[] = edges.flatMap(e => {
+        const src = idMap[e.source];
+        const tgt = idMap[e.target];
+        return src && tgt ? [{ ...e, src, tgt, weight: 1 }] : [];
+      });
       // Precompute total node degree (for degree-weighted springs) and
       // each entity's entity↔entity degree (drives the force-field
       // radius below) plus its set of directly-connected entity ids
       // (force-field exclusions).
       for (const n of np) {
         n.entityDegree = 0;
-        if (n.kind === 'entity') n.entityNeighbors = new Set();
+        if (n.kind === 'entity') n.entityNeighbors = new Set<string>();
       }
       for (const e of ep) {
         e.src.degree++; e.tgt.degree++;
         if (e.kind === 'entity') {
           if (e.src.kind === 'entity') {
             e.src.entityDegree++;
-            e.src.entityNeighbors.add(e.tgt.id);
+            e.src.entityNeighbors?.add(e.tgt.id);
           }
           if (e.tgt.kind === 'entity') {
             e.tgt.entityDegree++;
-            e.tgt.entityNeighbors.add(e.src.id);
+            e.tgt.entityNeighbors?.add(e.src.id);
           }
         }
       }
@@ -541,16 +578,18 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       }
     }
     const sim = simRef.current;
+    if (!sim) return;
+    let raf = 0;
     const wake = (ms = 600) => { sim.wakeUntil = performance.now() + ms; if (!sim.running) { sim.running = true; raf = requestAnimationFrame(step); } };
 
     // Mouse handling
     const mouse = { x: 0, y: 0, down: false };
-    const screenToWorld = (sx, sy) => ({
+    const screenToWorld = (sx: number, sy: number): Point => ({
       x: (sx - sim.pan.x) / sim.zoom,
       y: (sy - sim.pan.y) / sim.zoom,
     });
 
-    const findNodeAt = (sx, sy) => {
+    const findNodeAt = (sx: number, sy: number): SimNode | null => {
       const w = screenToWorld(sx, sy);
       for (let i = sim.nodes.length - 1; i >= 0; i--) {
         const n = sim.nodes[i];
@@ -567,7 +606,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     // when-tree; for composite AND/OR trees that's the first leaf, which
     // is the simplest "which underlying statement do I jump to" answer
     // and keeps clicking deterministic.
-    const findCondHitAt = (sx, sy) => {
+    const findCondHitAt = (sx: number, sy: number): ConditionHit | null => {
       if (!sim.condHits || !sim.condHits.length) return null;
       const w = screenToWorld(sx, sy);
       const tol = 10 / sim.zoom;
@@ -578,7 +617,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       return null;
     };
 
-    const onMouseDown = (e) => {
+    const onMouseDown = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       mouse.x = e.clientX - rect.left;
       mouse.y = e.clientY - rect.top;
@@ -602,7 +641,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       sim.panning = { startX: mouse.x, startY: mouse.y, panX: sim.pan.x, panY: sim.pan.y };
       wake();      // pan only needs the next paint, the layout itself isn't moving
     };
-    const onMouseMove = (e) => {
+    const onMouseMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -625,7 +664,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         if (next || cond) wake(150);  // hover halo needs one repaint, not a full sim
       }
     };
-    const onMouseUp = (e) => {
+    const onMouseUp = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -664,7 +703,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       sim.panning = null;
       mouse.down = false;
     };
-    const onDblClick = (e) => {
+    const onDblClick = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
@@ -673,7 +712,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         router.go(n.kind === 'entity' ? { view: 'entity', id: n.id } : { view: 'statement', id: n.id });
       }
     };
-    const onWheel = (e) => {
+    const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
@@ -687,7 +726,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       wake();
     };
 
-    const onKeyDown = (e) => {
+    const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setSelectedId(null);
     };
 
@@ -717,7 +756,6 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
     // sluggishly while linked statements animated around them. The
     // per-node force cap (MAX_F) protects against any popular-hub
     // node being yanked too hard when many edges pull at once.
-    let raf;
     // Repulsion strength. Bumped up so the inner-cluster pressure
     // can actually push back against the cumulative inward pull of
     // all the springs at once.
@@ -789,7 +827,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
 
       // Bucket nodes into cells. A flat Map keyed by `gx*M+gy` is faster
       // than nested objects/maps in V8 for this size.
-      const grid = new Map();
+      const grid = new Map<number, SimNode[]>();
       for (const n of sim.nodes) {
         n.fxAcc = 0; n.fyAcc = 0;  // reset force accumulator
         const gx = Math.floor(n.x / CELL);
@@ -893,7 +931,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
 
       // Damp + cap + integrate in one pass.
       for (const n of sim.nodes) {
-        if (n.fx !== undefined) {
+        if (n.fx !== undefined && n.fy !== undefined) {
           n.x = n.fx; n.y = n.fy; n.vx = 0; n.vy = 0;
           continue;
         }
@@ -935,7 +973,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       raf = requestAnimationFrame(step);
     };
 
-    function nodeRadius(n) {
+    function nodeRadius(n: SimNode) {
       if (n.kind === 'statement') return 6;
       // entity bigger if more mentions
       const mentions = (idx.mentionsByEntity[n.id] || []).length;
@@ -961,9 +999,9 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
       // current selection, hover, and search matches. Doing this once
       // per frame turns the per-node dim check from O(E) into O(1)
       // lookups.
-      const selNeighbors = new Set();
-      const hovNeighbors = new Set();
-      const searchNeighbors = new Set();
+      const selNeighbors = new Set<string>();
+      const hovNeighbors = new Set<string>();
+      const searchNeighbors = new Set<string>();
       const searchActive = s.searchMatches && s.searchMatches.size > 0;
       if (s.selectedId || s.hoverId || searchActive) {
         for (const e of sim.edges) {
@@ -979,8 +1017,8 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
             // Treat each match like a clicked node — its direct
             // neighbors stay in focus too, so the user can read
             // structure around the match without losing context.
-            if (s.searchMatches.has(e.source)) searchNeighbors.add(e.target);
-            if (s.searchMatches.has(e.target)) searchNeighbors.add(e.source);
+            if (s.searchMatches?.has(e.source)) searchNeighbors.add(e.target);
+            if (s.searchMatches?.has(e.target)) searchNeighbors.add(e.source);
           }
         }
       }
@@ -994,7 +1032,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         // Search dimming mirrors selection dimming: an edge stays full
         // opacity if it's incident to ANY match, dim otherwise. Same
         // rule as "click a node, see its neighborhood."
-        const incidentToMatch = searchActive && (s.searchMatches.has(e.source) || s.searchMatches.has(e.target));
+        const incidentToMatch = searchActive && (s.searchMatches?.has(e.source) || s.searchMatches?.has(e.target));
         const anyFocus = s.selectedId || s.hoverId || searchActive;
         const dim = anyFocus ? !(incidentToSel || incidentToHover || incidentToMatch) : false;
 
@@ -1044,7 +1082,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         const my = (e.src.y + e.tgt.y) / 2;
         // Only record the hit if the marker is actually visible (not
         // dimmed-out by a selection that excludes both endpoints).
-        let firstLeaf = null;
+        let firstLeaf: string | null = null;
         for (const lid of walkWhenLeavesG(e.when)) { firstLeaf = lid; break; }
         if (firstLeaf && sim.idMap[firstLeaf]) {
           sim.condHits.push({ x: mx, y: my, leafId: firstLeaf });
@@ -1057,7 +1095,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
         const incidentToSel = s.selectedId && (e.source === s.selectedId || e.target === s.selectedId);
         const incidentToHover = s.hoverId && (e.source === s.hoverId || e.target === s.hoverId);
         const searchActiveCond = s.searchMatches && s.searchMatches.size > 0;
-        const incidentToMatch = searchActiveCond && (s.searchMatches.has(e.source) || s.searchMatches.has(e.target));
+        const incidentToMatch = searchActiveCond && (s.searchMatches?.has(e.source) || s.searchMatches?.has(e.target));
         const anyFocusCond = s.selectedId || s.hoverId || searchActiveCond;
         const dim = anyFocusCond ? !(incidentToSel || incidentToHover || incidentToMatch) : false;
         const baseAlpha = dim ? dimAlpha : 1;
@@ -1106,7 +1144,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
 
         const isSel = n.id === s.selectedId;
         const isHov = n.id === s.hoverId;
-        const isMatch = searchActive && s.searchMatches.has(n.id);
+        const isMatch = searchActive && !!s.searchMatches?.has(n.id);
         // Same dim rule as a clicked node: full opacity if you're a
         // match, a selection, a hover, or a direct neighbor of any of
         // those. Otherwise dim. This makes a search visually identical
@@ -1132,12 +1170,12 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
           // muted (they read as edge metadata, not peers). Otherwise:
           // events = violet, states = teal, capabilities = amber. Open
           // vocabulary; unknown kinds fall through to violet.
-          const claimColors = s.theme === 'dark'
+          const claimColors: Record<string, string> = s.theme === 'dark'
             ? { event: '#c4b5fd', state: '#5eead4', capability: '#fcd34d' }
             : { event: '#7c3aed', state: '#0d9488', capability: '#b45309' };
           ctx.fillStyle = isCondition
             ? (s.theme === 'dark' ? '#94a3b8' : '#64748b')
-            : (claimColors[n.claimKind] || claimColors.event);
+            : (n.claimKind ? claimColors[n.claimKind] : undefined) || claimColors.event;
           ctx.strokeStyle = bgColor;
           ctx.lineWidth = 2;
           ctx.beginPath();
@@ -1211,7 +1249,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
 
   // Refs for state synced into draw
   const drawRef = useRefG<{
-    state?: { selectedId; hoverId; neighborhood; activeTypes; showEntities; showStatements; theme; searchMatches };
+    state?: GraphDrawState;
     draw?: () => void;
     requestStep?: () => void;
   }>({});
@@ -1237,7 +1275,7 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
   // without a registered color fall through to a neutral grey via the
   // `colors[t] || '#888'` pattern already used by the renderer.
   const { allTypes, typeCounts } = useMemoG(() => {
-    const counts = {};
+    const counts: Record<string, number> = {};
     data.links.forEach(l => { counts[l.link_type] = (counts[l.link_type] || 0) + 1; });
     (data.entity_links || []).forEach(l => { counts[l.link_type] = (counts[l.link_type] || 0) + 1; });
     // Statement→entity edges are synthesized from each statement's
@@ -1262,18 +1300,28 @@ function GraphView({ focusId = null, data: dataProp, index: indexProp, embedded 
 
   const selected = selectedId ? idx.byId[selectedId] : null;
   const selectedNeighbors = selected ? (() => {
-    const out = [];
+    const out: SelectedNeighbor[] = [];
     if (selected.kind === 'statement') {
-      (idx.outgoing[selected.id] || []).forEach(l => out.push({ dir: 'out', link_type: l.link_type, target: idx.byId[l.to] }));
-      (idx.incoming[selected.id] || []).forEach(l => out.push({ dir: 'in', link_type: l.link_type, target: idx.byId[l.from] }));
+      (idx.outgoing[selected.id] || []).forEach(l => {
+        const target = idx.byId[l.to];
+        if (target) out.push({ dir: 'out', link_type: l.link_type, target });
+      });
+      (idx.incoming[selected.id] || []).forEach(l => {
+        const target = idx.byId[l.from];
+        if (target) out.push({ dir: 'in', link_type: l.link_type, target });
+      });
       const selfType = stmtEntityEdgeType(selected.claimKind);
-      (selected.mentions || []).forEach(eid => out.push({ dir: 'out', link_type: selfType, target: idx.byId[eid] }));
+      (selected.mentions || []).forEach(eid => {
+        const target = idx.byId[eid];
+        if (target) out.push({ dir: 'out', link_type: selfType, target });
+      });
     } else if (selected.kind === 'entity') {
       (idx.mentionsByEntity[selected.id] || []).forEach(b => {
-        out.push({ dir: 'in', link_type: stmtEntityEdgeType(b.kind), target: b });
+        const target = idx.byId[b.id];
+        if (target) out.push({ dir: 'in', link_type: stmtEntityEdgeType(b.kind), target });
       });
     }
-    return out.filter(x => x.target);
+    return out;
   })() : [];
 
   return (

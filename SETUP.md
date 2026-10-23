@@ -134,7 +134,7 @@ Before committing a UI change, run the checks CI runs and commit the rebuilt
 output with the source change:
 
 ```sh
-npm run typecheck   # tsc, plus the strict-mode ratchet in strict-ratchet.ts
+npm run typecheck   # tsc in strict mode
 npm run lint        # ESLint; eslint-suppressions.json lists tolerated old findings
 npm run build       # writes src/mycelium/webui/
 ```

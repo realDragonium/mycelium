@@ -1,57 +1,85 @@
 import React from 'react';
+import { errorMessage, getJSON, postJSON, type WorkspaceConcept } from './api';
 
-function AliasSuggestions({ canWrite, onChanged }) {
-  const [entries, setEntries] = React.useState([]);
-  const [status, setStatus] = React.useState('pending');
+type AliasStatus = 'pending' | 'accepted' | 'rejected' | 'all';
+type ReviewAction = 'accept' | 'reject' | 'retarget' | 'refresh';
+
+interface AliasProposal { entity_id: string; alias: string; reason: string; ambiguity: string }
+interface AliasSuggestion {
+  proposal: AliasProposal;
+  original_proposal: AliasProposal;
+  evidence: { statement_id: string | null; text: string; quote: string };
+  status: Exclude<AliasStatus, 'all'>;
+  history: { action: string; entity_id: string; actor_id: string; at: string }[];
+  provider: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
+}
+interface AliasEntry {
+  draft_id: string;
+  draft_title: string | null;
+  draft_status: string;
+  operation_ref: string;
+  revision: number;
+  suggestion: AliasSuggestion;
+  current_names: string[];
+  stale: boolean;
+  acceptance_committed: boolean;
+  examples: { statement_id: string | null; text: string; quote: string }[];
+}
+interface SkippedAlias { proposal: AliasProposal; reason: string }
+interface StatementHit { id: string; text: string }
+interface AliasSuggestionsProps { canWrite: boolean; onChanged?: () => void }
+
+const isAliasStatus = (value: string): value is AliasStatus =>
+  ['pending', 'accepted', 'rejected', 'all'].includes(value);
+
+function AliasSuggestions({ canWrite, onChanged }: AliasSuggestionsProps) {
+  const [entries, setEntries] = React.useState<AliasEntry[]>([]);
+  const [status, setStatus] = React.useState<AliasStatus>('pending');
   const [query, setQuery] = React.useState('');
-  const [matches, setMatches] = React.useState([]);
-  const [selected, setSelected] = React.useState([]);
-  const [targets, setTargets] = React.useState({});
-  const [concepts, setConcepts] = React.useState([]);
+  const [matches, setMatches] = React.useState<StatementHit[]>([]);
+  const [selected, setSelected] = React.useState<StatementHit[]>([]);
+  const [targets, setTargets] = React.useState<Record<string, string>>({});
+  const [concepts, setConcepts] = React.useState<WorkspaceConcept[]>([]);
   const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState(null);
-  const [notice, setNotice] = React.useState(null);
-  const [skipped, setSkipped] = React.useState([]);
-  const request = async (url: string, options?: RequestInit) => {
-    const response = await fetch(url, options);
-    const value = await response.json();
-    if (!response.ok) throw new Error(typeof value.detail === 'string' ? value.detail : 'The alias request could not be completed.');
-    return value;
-  };
+  const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const [skipped, setSkipped] = React.useState<SkippedAlias[]>([]);
   const reload = React.useCallback(async () => {
-    const value = await request(`/api/alias-suggestions?status=${status}`);
+    const value = await getJSON<{ suggestions: AliasEntry[] }>(`/api/alias-suggestions?status=${status}`);
     setEntries(value.suggestions);
   }, [status]);
-  React.useEffect(() => { let cancelled = false; setError(null); request(`/api/alias-suggestions?status=${status}`).then(value => { if (!cancelled) setEntries(value.suggestions); }).catch(e => { if (!cancelled) setError(e.message); }); return () => { cancelled = true; }; }, [status]);
-  const act = async operation => {
+  React.useEffect(() => { let cancelled = false; setError(null); getJSON<{ suggestions: AliasEntry[] }>(`/api/alias-suggestions?status=${status}`).then(value => { if (!cancelled) setEntries(value.suggestions); }).catch(e => { if (!cancelled) setError(errorMessage(e)); }); return () => { cancelled = true; }; }, [status]);
+  const act = async (operation: () => Promise<void>) => {
     setBusy(true); setError(null); setNotice(null);
     try { await operation(); }
-    catch (e) { setError(e.message); }
+    catch (e) { setError(errorMessage(e)); }
     finally { setBusy(false); }
   };
-  const search = event => {
+  const search = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     act(async () => {
-      const value = await request('/grep-statements', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query, limit: 30, match_aliased_mentions: false }) });
+      const value = await postJSON<{ statements?: StatementHit[] }>('/grep-statements', { query, limit: 30, match_aliased_mentions: false });
       setMatches(value.statements || []);
     });
   };
   const scan = () => act(async () => {
     setSkipped([]);
-    const value = await request('/api/alias-suggestions/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ statement_ids: selected.map(item => item.id) }) });
+    const value = await postJSON<{ suggestions: AliasEntry[]; skipped: SkippedAlias[] }>('/api/alias-suggestions/scan', { statement_ids: selected.map(item => item.id) });
     setSkipped(value.skipped || []);
     setNotice(value.suggestions.length ? `${value.suggestions.length} alias suggestion${value.suggestions.length === 1 ? '' : 's'} created for human review.` : 'No supported new aliases were found in the selected statements.');
     setStatus('pending');
-    const pending = await request('/api/alias-suggestions?status=pending'); setEntries(pending.suggestions);
+    const pending = await getJSON<{ suggestions: AliasEntry[] }>('/api/alias-suggestions?status=pending'); setEntries(pending.suggestions);
   });
-  const review = (entry, action) => act(async () => {
-    await request(`/api/alias-suggestions/${entry.draft_id}/${entry.operation_ref}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, expected_revision: entry.revision, ...(action === 'retarget' ? { entity_id: targets[entry.operation_ref] } : {}) }) });
+  const review = (entry: AliasEntry, action: ReviewAction) => act(async () => {
+    await postJSON<AliasEntry>(`/api/alias-suggestions/${entry.draft_id}/${entry.operation_ref}/review`, { action, expected_revision: entry.revision, ...(action === 'retarget' ? { entity_id: targets[entry.operation_ref] } : {}) });
     await reload();
     if (onChanged) onChanged();
     setNotice(action === 'accept' ? 'Alias accepted. Existing statements will be rediscovered using this name.' : action === 'reject' ? 'Suggestion rejected; its evidence remains in the history.' : 'Suggestion updated. Inspect its current target before accepting.');
   });
   const loadConcepts = () => act(async () => {
-    const value = await request('/api/names-workspace');
+    const value = await getJSON<{ entities: WorkspaceConcept[] }>('/api/names-workspace');
     setConcepts(value.entities);
   });
   return <section aria-label="Alias suggestions" className="alias-suggestions">
@@ -66,7 +94,7 @@ function AliasSuggestions({ canWrite, onChanged }) {
       {selected.length > 0 && <><p>{selected.length} statement{selected.length === 1 ? '' : 's'} selected across searches.</p><ul>{selected.map(item => <li key={item.id}>{item.text} <button disabled={busy} onClick={() => setSelected(current => current.filter(chosen => chosen.id !== item.id))}>Remove selection</button></li>)}</ul></>}
       <button disabled={busy || !selected.length} onClick={scan}>{busy ? 'Working…' : 'Discover alias suggestions'}</button>
     </details>}
-    <label>Show <select className="input" aria-label="Alias suggestion status" disabled={busy} value={status} onChange={event => setStatus(event.target.value)}><option value="pending">Needs human review</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option><option value="all">All suggestions</option></select></label>
+    <label>Show <select className="input" aria-label="Alias suggestion status" disabled={busy} value={status} onChange={event => { if (isAliasStatus(event.target.value)) setStatus(event.target.value); }}><option value="pending">Needs human review</option><option value="accepted">Accepted</option><option value="rejected">Rejected</option><option value="all">All suggestions</option></select></label>
     {!entries.length && <p>No {status === 'all' ? '' : status} alias suggestions.</p>}
     {entries.map(entry => {
       const suggestion = entry.suggestion;

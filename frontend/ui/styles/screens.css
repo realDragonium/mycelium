@@ -536,6 +536,7 @@ main.page.home { padding-top: 56px; }
 .docw .docw-panel button[type="submit"] { background: var(--bio); border-color: var(--bio); color: var(--bg-inset); font-weight: 600; }
 .docw .docw-panel button:disabled { opacity: 0.45; }
 .docw-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.docw-fields .docw-wide { grid-column: 1 / -1; }
 .docw-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
 .docw-actions h2 { margin-right: auto; }
 .docw-meta, .docw-list span { color: var(--ink-4); font-size: var(--fs-xs); font-family: var(--mono); }

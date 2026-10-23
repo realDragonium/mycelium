@@ -1,9 +1,4 @@
 {
-  // Tier 1: every file must pass. Strict except for the settings listed below,
-  // which the untyped JSX this code was migrated from cannot meet yet.
-  // Tier 2 (tsconfig.strict.json + strict-ratchet.ts) holds every file to full
-  // strict mode except an explicit list; drop a setting here once that list is
-  // empty.
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2023", "DOM", "DOM.Iterable"],
@@ -17,15 +12,6 @@
     "types": [],
 
     "strict": true,
-    // Not strict yet: component props and most callbacks carry no annotations.
-    // Each unannotated parameter is an implicit `any`.
-    "noImplicitAny": false,
-    // Not strict yet: `useState(null)` narrows to `null` under strict null
-    // checks, and the screens widen it by assignment hundreds of times.
-    "strictNullChecks": false,
-    // Not strict yet: catch blocks read `err.message` / `err.status` directly.
-    "useUnknownInCatchVariables": false,
-
     "noFallthroughCasesInSwitch": true
   },
   "include": ["ui"]

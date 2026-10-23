@@ -2,10 +2,22 @@
 // tables (statement kinds, statement link types, entity link types).
 // Reads from /list-statement-kinds, /list-link-types,
 // /list-entity-link-types; mutates via /upsert-* and /delete-*.
+import { errorMessage, getJSON, postJSON } from './api';
 import { PageHeader } from './lib';
-import { useState as useG, useEffect as useEG, useCallback as useCBG, useRef as useRG } from 'react';
+import { useState as useG, useEffect as useEG, useCallback as useCBG, useRef as useRG, type FormEvent } from 'react';
 
-const GLOSSARY_TABS = [
+type GlossaryTabId = 'kinds' | 'link_types' | 'entity_link_types';
+interface GlossaryTab {
+  id: GlossaryTabId;
+  label: string;
+  keyField: 'kind' | 'link_type';
+  keyLabel: string;
+  hasWhenToUse: boolean;
+  endpoints: { list: string; upsert: string; remove: string };
+  addPlaceholder: string;
+}
+
+const GLOSSARY_TABS: readonly GlossaryTab[] = [
   {
     id: 'kinds',
     label: 'Statement kinds',
@@ -47,29 +59,29 @@ const GLOSSARY_TABS = [
   },
 ];
 
-async function fetchGlossary(endpoint) {
-  const r = await fetch(endpoint, { headers: { accept: 'application/json' } });
-  if (!r.ok) throw new Error(`GET ${endpoint} → ${r.status}`);
-  return r.json();
+interface GlossaryEntry {
+  kind?: string;
+  link_type?: string;
+  description: string;
+  when_to_use?: string;
+  usage_count: number;
 }
 
-async function postJSON(endpoint, body) {
-  const r = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) {
-    let detail;
-    try { detail = (await r.json()).detail; } catch (_) { detail = r.statusText; }
-    throw new Error(detail || `POST ${endpoint} → ${r.status}`);
-  }
-  return r.json();
+type GlossaryResponse = GlossaryEntry[] | { result?: GlossaryEntry[] };
+
+const entryKey = (tab: GlossaryTab, entry: GlossaryEntry): string =>
+  tab.keyField === 'kind' ? entry.kind || '' : entry.link_type || '';
+
+async function fetchGlossary(endpoint: string): Promise<GlossaryEntry[]> {
+  const data = await getJSON<GlossaryResponse>(endpoint);
+  return Array.isArray(data) ? data : (data.result || []);
 }
 
 function GlossaryScreen() {
-  const [activeTab, setActiveTab] = useG(GLOSSARY_TABS[0].id);
+  const [activeTab, setActiveTab] = useG<GlossaryTabId>('kinds');
   const tab = GLOSSARY_TABS.find(t => t.id === activeTab);
+
+  if (!tab) return null;
 
   return (
     <main className="page">
@@ -85,19 +97,17 @@ function GlossaryScreen() {
   );
 }
 
-function GlossaryTab({ tab }) {
-  const [entries, setEntries] = useG(null);
-  const [error, setError] = useG(null);
+function GlossaryTab({ tab }: { tab: GlossaryTab }) {
+  const [entries, setEntries] = useG<GlossaryEntry[]>([]);
+  const [error, setError] = useG<string | null>(null);
   const [loading, setLoading] = useG(true);
 
   const reload = useCBG(async () => {
     setError(null);
     try {
-      const data = await fetchGlossary(tab.endpoints.list);
-      const list = Array.isArray(data) ? data : (data.result || []);
-      setEntries(list);
+      setEntries(await fetchGlossary(tab.endpoints.list));
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e));
     } finally {
       setLoading(false);
     }
@@ -139,7 +149,7 @@ function GlossaryTab({ tab }) {
         <tbody>
           {entries.map(e => (
             <GlossaryRow
-              key={e[tab.keyField]}
+              key={entryKey(tab, e)}
               tab={tab}
               entry={e}
               onSaved={reload}
@@ -156,18 +166,24 @@ function GlossaryTab({ tab }) {
   );
 }
 
-function GlossaryRow({ tab, entry, onSaved }) {
+interface GlossaryRowProps {
+  tab: GlossaryTab;
+  entry: GlossaryEntry;
+  onSaved: () => void;
+}
+
+function GlossaryRow({ tab, entry, onSaved }: GlossaryRowProps) {
   const [editing, setEditing] = useG(false);
   const [description, setDescription] = useG(entry.description || '');
   const [whenToUse, setWhenToUse] = useG(entry.when_to_use || '');
   const [busy, setBusy] = useG(false);
-  const [error, setError] = useG(null);
+  const [error, setError] = useG<string | null>(null);
   // Two-step delete confirm — first click arms the button, second click
   // (within ~3.5s) actually deletes. Auto-disarms on timeout or when the
   // user clicks elsewhere. Cleaner than window.confirm and keeps the
   // user inside the page flow.
   const [confirmingDelete, setConfirmingDelete] = useG(false);
-  const confirmTimerRef = useRG(null);
+  const confirmTimerRef = useRG<ReturnType<typeof setTimeout> | null>(null);
 
   const armDelete = () => {
     if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
@@ -192,13 +208,13 @@ function GlossaryRow({ tab, entry, onSaved }) {
   const save = async () => {
     setBusy(true); setError(null);
     try {
-      const body: Record<string, unknown> = { [tab.keyField]: entry[tab.keyField], description };
+      const body: Record<string, unknown> = { [tab.keyField]: entryKey(tab, entry), description };
       if (tab.hasWhenToUse) body.when_to_use = whenToUse || null;
       await postJSON(tab.endpoints.upsert, body);
       setEditing(false);
       onSaved();
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -208,10 +224,10 @@ function GlossaryRow({ tab, entry, onSaved }) {
     cancelDelete();
     setBusy(true); setError(null);
     try {
-      await postJSON(tab.endpoints.remove, { [tab.keyField]: entry[tab.keyField] });
+      await postJSON<unknown>(tab.endpoints.remove, { [tab.keyField]: entryKey(tab, entry) });
       onSaved();
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e));
       setBusy(false);
     }
   };
@@ -219,7 +235,7 @@ function GlossaryRow({ tab, entry, onSaved }) {
   return (
     <tr className={editing ? 'is-editing' : ''}>
       <td className="col-key">
-        <span className="gls-keytag">{entry[tab.keyField]}</span>
+        <span className="gls-keytag">{entryKey(tab, entry)}</span>
       </td>
       <td>
         {editing ? (
@@ -291,14 +307,14 @@ function GlossaryRow({ tab, entry, onSaved }) {
   );
 }
 
-function NewEntryForm({ tab, onSaved }) {
+function NewEntryForm({ tab, onSaved }: { tab: GlossaryTab; onSaved: () => void }) {
   const [key, setKey] = useG('');
   const [description, setDescription] = useG('');
   const [whenToUse, setWhenToUse] = useG('');
   const [busy, setBusy] = useG(false);
-  const [error, setError] = useG(null);
+  const [error, setError] = useG<string | null>(null);
 
-  const submit = async (e) => {
+  const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setBusy(true); setError(null);
     try {
@@ -308,7 +324,7 @@ function NewEntryForm({ tab, onSaved }) {
       setKey(''); setDescription(''); setWhenToUse('');
       onSaved();
     } catch (e) {
-      setError(e.message);
+      setError(errorMessage(e));
     } finally {
       setBusy(false);
     }
