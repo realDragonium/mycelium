@@ -90,28 +90,20 @@ function RunStatus({ run }: { run: Run }) {
   );
 }
 
-const cursorKey = (scope: StatementFilter) => `mycelium.connect.after.${scope}`;
-
 function ConnectPanel({ limits, onDone }: { limits: ConnectLimits; onDone: () => void }) {
   const [scope, setScope] = useState<StatementFilter>('isolated');
   const [count, setCount] = useState(limits.batch_size);
-  const [after, setAfter] = useState(() => localStorage.getItem(cursorKey('isolated')));
   const [empty, setEmpty] = useState(false);
   const mode = useAsync(getReviewMode).state;
   const { run, start } = useConnect(onDone);
   const n = Math.max(1, Math.min(limits.batch_size, count || 1));
 
-  const pick = (next: StatementFilter) => { setScope(next); setAfter(localStorage.getItem(cursorKey(next))); setEmpty(false); };
-  const remember = (cursor: string | null) => {
-    if (cursor) localStorage.setItem(cursorKey(scope), cursor); else localStorage.removeItem(cursorKey(scope));
-    setAfter(cursor);
-  };
+  const pick = (next: StatementFilter) => { setScope(next); setEmpty(false); };
   const next = async () => {
     setEmpty(false);
-    const page = await knowledgeHealth.statements(scope, { after, limit: n, skipPending: true });
+    const page = await knowledgeHealth.statements(scope, { limit: n, toConnect: true });
     if (!page.items.length) { setEmpty(true); return; }
-    // Advance only once the run is accepted, so a failed run is retried.
-    if (await start(page.items.map(s => s.id))) remember(page.items[page.items.length - 1].id);
+    await start(page.items.map(s => s.id));
   };
 
   return (
@@ -129,13 +121,12 @@ function ConnectPanel({ limits, onDone }: { limits: ConnectLimits; onDone: () =>
       <div className="row gap-sm health-connect-run">
         <label className="health-count">Next <input type="number" min={1} max={limits.batch_size} value={count} onChange={e => setCount(Number(e.target.value))} aria-label="Statements per run" /></label>
         <button className="btn write" disabled={run.phase === 'running'} onClick={() => { void next(); }}>Connect next {n}</button>
-        {after && <button className="btn ghost sm" disabled={run.phase === 'running'} onClick={() => remember(null)} title="Runs continue after the last statement sent; start again from the first.">Start from the first</button>}
       </div>
       <p className="hint">
         {limits.model} · at most {limits.batch_size} statements a run · {limits.priced ? `stops at ${usd(limits.max_cost_usd)} a run` : 'no known price for this model, so cost is not shown and the spending cap cannot apply'}.
-        {' '}Statements already in a pending draft are skipped. <Link to={{ view: 'settings', section: 'limits' }}>Limits</Link> · <Link to={{ view: 'settings', section: 'models' }}>Model</Link>
+        {' '}Statements in a pending draft, and those it already looked at, are skipped until they or the statements around them change. <Link to={{ view: 'settings', section: 'limits' }}>Limits</Link> · <Link to={{ view: 'settings', section: 'models' }}>Model</Link>
       </p>
-      {empty && <Notice>No more {scope === 'isolated' ? 'isolated statements' : 'statements naming no concept'} {after ? 'after the last run' : 'outside pending drafts'}.</Notice>}
+      {empty && <Notice>No {scope === 'isolated' ? 'isolated statements' : 'statements naming no concept'} left that the AI has not already looked at.</Notice>}
       <RunStatus run={run} />
     </section>
   );
@@ -181,6 +172,7 @@ function StatementRows({ which, limits, canConnect, onDone }: { which: Statement
               <span>{s.mentions.length ? `names ${s.mentions.join(', ')}` : 'names no concept'}</span>
               {s.label_error && <span className="health-error">labelling failed: {s.label_error}</span>}
               {s.in_pending_draft && <span className="status-badge open">in a pending draft</span>}
+              {s.settled_at && <span title={`Looked at ${s.settled_at}; offered again once it or the statements around it change`}>already looked at by the AI</span>}
               <span className="mono">{s.id}</span>
             </div>
           </div>
