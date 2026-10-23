@@ -186,6 +186,8 @@ class AudienceView(BaseModel):
     profiles: list[str]
     visible_statements: int
     unlabelled_statements: int
+    #: AI grants to this audience waiting for a curator.
+    pending_statements: int
 
 
 class AudiencesView(BaseModel):
@@ -193,6 +195,7 @@ class AudiencesView(BaseModel):
     can_configure: bool
     statements: int
     unlabelled: int
+    pending: int
 
 
 class SaveAudience(AudienceBody):
@@ -259,6 +262,9 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
             "(SELECT 1 FROM statement_audience_labels l WHERE l.statement_id = s.id)"
         ).fetchone()[0]
     )
+    from .grant_confirmation import pending_counts
+
+    pending = pending_counts(substrate)
     views: list[AudienceView] = []
     for audience in current:
         views.append(
@@ -281,6 +287,7 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
                     )
                 ),
                 unlabelled_statements=unlabelled,
+                pending_statements=pending.get(audience.id, 0),
             )
         )
     for audience_id, row in sorted(rows.items()):
@@ -304,6 +311,7 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
                 profiles=[],
                 visible_statements=0,
                 unlabelled_statements=unlabelled,
+                pending_statements=0,
             )
         )
     return AudiencesView(
@@ -311,6 +319,7 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
         can_configure=principal.is_admin,
         statements=total,
         unlabelled=unlabelled,
+        pending=sum(pending.get(item.id, 0) for item in current),
     )
 
 

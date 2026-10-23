@@ -133,6 +133,18 @@ def _substrate(server) -> dict[str, str]:
                 "'2026-08-02T00:00:00Z' WHERE statement_id = ?",
                 (ids["expiry"],),
             )
+        if "pending" in labels:
+            db.execute(
+                "INSERT INTO statement_audience_labels (statement_id, audiences, "
+                "source, reason, model, cost_usd, labelled_at, labelled_by, pending, "
+                'decisions) VALUES (?, \'["internal-technical", '
+                "\"external-technical\"]', 'ai', 'Users see this.', 'scenario-model', "
+                "0.0001, '2026-08-01T00:00:00Z', NULL, "
+                '\'["external-non-technical"]\', \'{"external-technical": '
+                '{"at": "2026-08-02T00:00:00Z", "by": "curator", '
+                '"decision": "confirmed"}}\')',
+                (ids["submit"],),
+            )
     if _has_table(db, "curation_attempts"):
         db.execute(
             "INSERT INTO curation_attempts SELECT id, text, ?, "

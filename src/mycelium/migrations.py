@@ -1098,6 +1098,20 @@ def _migration_v24_curation_attempts(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE connect_attempts")
 
 
+def _migration_v25_pending_external_grants(conn: sqlite3.Connection) -> None:
+    """Hold the AI's new external audience grants for a curator, and record
+    the curator's confirmations and rejections on the label. Existing grants
+    stay in force."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(statement_audience_labels)")
+    }
+    for column in ("pending", "decisions"):
+        if column not in columns:
+            conn.execute(
+                f"ALTER TABLE statement_audience_labels ADD COLUMN {column} TEXT"
+            )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1126,6 +1140,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (22, _migration_v22_label_text_changed),
     (23, _migration_v23_connect_attempts),
     (24, _migration_v24_curation_attempts),
+    (25, _migration_v25_pending_external_grants),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

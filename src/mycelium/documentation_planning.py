@@ -917,8 +917,9 @@ def _coverage_and_recency(
 ) -> tuple[dict[str, tuple[str, int]], int | None]:
     """Per concept its name and visible statement count, and how many visible
     statements were written after `since` or, for an external audience,
-    labelled after it, read in the scope. An internal audience already sees
-    unlabelled statements, so a label never makes one newly visible to it."""
+    labelled or had a grant confirmed after it, read in the scope. An internal
+    audience already sees unlabelled statements, so a label never makes one
+    newly visible to it."""
     labelled = scope.audience.scope == "external"
     with audience_scope.applied(conn, scope):
         counts = {
@@ -936,8 +937,10 @@ def _coverage_and_recency(
                 conn.execute(
                     "SELECT COUNT(*) FROM statements s "
                     "LEFT JOIN main.statement_audience_labels l ON l.statement_id = s.id "
-                    "WHERE s.created_at > ? OR (? AND l.labelled_at > ?)",
-                    (since, labelled, since),
+                    "WHERE s.created_at > ? OR (? AND (l.labelled_at > ? "
+                    "OR EXISTS (SELECT 1 FROM json_each(l.decisions) d "
+                    "WHERE d.key = ? AND json_extract(d.value, '$.at') > ?)))",
+                    (since, labelled, since, scope.audience.id, since),
                 ).fetchone()[0]
             )
             if since is not None

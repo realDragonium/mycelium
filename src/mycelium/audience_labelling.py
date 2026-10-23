@@ -8,8 +8,10 @@ and is retried; the labels it would have written stay absent, so the
 statements stay visible to internal audiences only.
 
 The model proposes; this module decides what is stored. Audience ids outside
-the supplied set grant nothing, a curator label is never replaced, and a
-statement whose text changed while the call ran is left queued.
+the supplied set grant nothing, a curator label is never replaced, a
+statement whose text changed while the call ran is left queued, and while
+external grants need confirmation a grant that would newly show a statement
+to an external audience waits for a curator (`grant_confirmation`).
 """
 
 from __future__ import annotations
@@ -163,6 +165,11 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
     cost = price(selected.provider, selected.model)
     share = cost.cost_usd(usage) / len(rows) if cost is not None else None
     known = {item.id for item in live}
+    hold = (
+        {item.id for item in live if not item.internal}
+        if limits.confirm_external_grants
+        else set()
+    )
     texts = {str(row["id"]): str(row["text"]) for row in rows}
     labelled = 0
     with store.transaction(conn):
@@ -182,6 +189,7 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
                 reason=decision.reason.strip() or "No reason given.",
                 model=selected.model,
                 cost_usd=share,
+                hold=hold,
             ):
                 labelled += 1
         missing = [item for item in ids if item not in decided]

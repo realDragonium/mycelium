@@ -3,21 +3,39 @@
 A statement's label is the set of documentation audiences that may see it.
 No label means unlabelled, which fails closed: only internal audiences see
 it. Audience ids are owned by the prompts database (`mycelium.audiences`).
+
+An AI grant that would newly show a statement to an audience held for
+confirmation is stored in `pending`, outside `audiences`, so every reader
+of the label treats it as not granted until a curator confirms it.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, TypedDict
 
 from .kernel import _now
 
 Source = Literal["ai", "curator"]
 Visibility = Literal["visible", "hidden"]
-LabelState = Literal["unlabelled", "ai", "curator", "text_changed", "queued"]
+LabelState = Literal["unlabelled", "ai", "curator", "text_changed", "pending", "queued"]
+
+
+class Sample(TypedDict):
+    size: int
+    precision: float
+
+
+class Decision(TypedDict, total=False):
+    decision: Literal["confirmed", "rejected"]
+    by: str | None
+    at: str
+    #: Set when the grant was accepted in bulk after a reviewed sample.
+    sample: Sample
+
 
 #: Attempts before a failing statement waits for the next backfill.
 MAX_ATTEMPTS = 5
@@ -112,6 +130,24 @@ def label_audiences(row: sqlite3.Row) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
+def label_pending(row: sqlite3.Row) -> list[str]:
+    value = json.loads(row["pending"] or "[]")
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def label_decisions(row: sqlite3.Row) -> dict[str, Decision]:
+    value = json.loads(row["decisions"] or "{}")
+    return value if isinstance(value, dict) else {}
+
+
+def _json_list(values: Sequence[str] | set[str]) -> str | None:
+    return json.dumps(sorted(set(values))) if values else None
+
+
+def _json_object(values: dict[str, Decision]) -> str | None:
+    return json.dumps(values, sort_keys=True) if values else None
+
+
 def set_label(
     conn: sqlite3.Connection,
     statement_id: str,
@@ -122,17 +158,21 @@ def set_label(
     model: str | None = None,
     cost_usd: float | None = None,
     labelled_by: str | None = None,
+    pending: Sequence[str] = (),
+    decisions: dict[str, Decision] | None = None,
 ) -> None:
     """Replace the statement's label. The caller decides whether an AI label
     may replace what is there; see `apply_ai_label`."""
     conn.execute(
         "INSERT INTO statement_audience_labels "
-        "(statement_id, audiences, source, reason, model, cost_usd, labelled_at, labelled_by) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
+        "(statement_id, audiences, source, reason, model, cost_usd, labelled_at, "
+        "labelled_by, pending, decisions) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET "
         "audiences = excluded.audiences, source = excluded.source, "
         "reason = excluded.reason, model = excluded.model, "
         "cost_usd = excluded.cost_usd, labelled_at = excluded.labelled_at, "
-        "labelled_by = excluded.labelled_by, text_changed_at = NULL",
+        "labelled_by = excluded.labelled_by, text_changed_at = NULL, "
+        "pending = excluded.pending, decisions = excluded.decisions",
         (
             statement_id,
             json.dumps(sorted(set(audiences))),
@@ -142,6 +182,8 @@ def set_label(
             cost_usd,
             _now(),
             labelled_by,
+            _json_list(set(pending)),
+            _json_object(decisions or {}),
         ),
     )
     conn.execute(
@@ -157,23 +199,89 @@ def apply_ai_label(
     reason: str,
     model: str,
     cost_usd: float | None,
+    hold: Collection[str] = (),
 ) -> bool:
-    """Store an AI label unless a curator has decided. False when skipped."""
+    """Store an AI label unless a curator has decided. False when skipped.
+
+    A grant to an audience in `hold` that the statement is not already
+    visible to waits in `pending` for a curator. Curator decisions on grants
+    that stay in force are kept."""
     current = get_label(conn, statement_id)
     if current is not None and current["source"] == "curator":
         conn.execute(
             "DELETE FROM audience_label_queue WHERE statement_id = ?", (statement_id,)
         )
         return False
+    visible = set(label_audiences(current)) if current is not None else set()
+    granted = set(audiences)
+    waiting = {item for item in granted & set(hold) if item not in visible}
+    kept = granted - waiting
+    decided = label_decisions(current) if current is not None else {}
     set_label(
         conn,
         statement_id,
-        audiences,
+        sorted(kept),
         source="ai",
         reason=reason,
         model=model,
         cost_usd=cost_usd,
+        pending=sorted(waiting),
+        decisions={key: value for key, value in decided.items() if key in kept},
     )
+    return True
+
+
+def decide_pending(
+    conn: sqlite3.Connection,
+    statement_id: str,
+    audience_id: str,
+    *,
+    confirm: bool,
+    by: str | None,
+    reason: str = "",
+    sample: Sample | None = None,
+) -> bool:
+    """A curator confirms or rejects one pending grant. A confirmation makes
+    it a grant; a rejection makes the label a curator decision without it,
+    so the AI does not grant it again. False when nothing was pending."""
+    current = get_label(conn, statement_id)
+    if current is None or audience_id not in label_pending(current):
+        return False
+    decision: Decision = {
+        "decision": "confirmed" if confirm else "rejected",
+        "by": by,
+        "at": _now(),
+    }
+    if sample is not None:
+        decision["sample"] = sample
+    decisions = {**label_decisions(current), audience_id: decision}
+    pending = [item for item in label_pending(current) if item != audience_id]
+    granted = label_audiences(current)
+    if confirm:
+        conn.execute(
+            "UPDATE statement_audience_labels SET audiences = ?, pending = ?, "
+            "decisions = ? WHERE statement_id = ?",
+            (
+                json.dumps(sorted({*granted, audience_id})),
+                _json_list(pending),
+                _json_object(decisions),
+                statement_id,
+            ),
+        )
+    else:
+        conn.execute(
+            "UPDATE statement_audience_labels SET source = 'curator', reason = ?, "
+            "labelled_at = ?, labelled_by = ?, text_changed_at = NULL, pending = ?, "
+            "decisions = ? WHERE statement_id = ?",
+            (
+                reason or "A curator rejected the AI's grant.",
+                decision["at"],
+                by,
+                _json_list(pending),
+                _json_object(decisions),
+                statement_id,
+            ),
+        )
     return True
 
 
@@ -210,6 +318,11 @@ def text_changed(conn: sqlite3.Connection, statement_id: str) -> None:
         "UPDATE statement_audience_labels SET text_changed_at = ? "
         "WHERE statement_id = ? AND text_changed_at IS NULL",
         (_now(), statement_id),
+    )
+    # A pending grant judged the old text; nobody may confirm it for the new.
+    conn.execute(
+        "UPDATE statement_audience_labels SET pending = NULL WHERE statement_id = ?",
+        (statement_id,),
     )
     if get_label(conn, statement_id) is None:
         enqueue(conn, [statement_id])
@@ -351,6 +464,8 @@ def list_labelled_statements(
         params.append(state)
     elif state == "text_changed":
         conditions.append("l.text_changed_at IS NOT NULL")
+    elif state == "pending":
+        conditions.append("l.pending IS NOT NULL")
     elif state == "queued":
         conditions.append("q.statement_id IS NOT NULL")
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""

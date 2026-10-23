@@ -451,6 +451,10 @@ CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals (
 -- An AI label is dropped when the statement's text changes; a curator label
 -- stays until a curator clears it, and the AI never overwrites it. A text
 -- change stamps `text_changed_at` on a curator label until it is decided again.
+-- `pending` is a JSON array of external audiences the AI granted that could
+-- not see the statement before; they grant nothing until a curator confirms.
+-- `decisions` is a JSON object of the curator's confirmations and rejections
+-- of AI grants, keyed by audience id.
 CREATE TABLE IF NOT EXISTS statement_audience_labels (
     statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
     audiences       TEXT NOT NULL,
@@ -460,7 +464,9 @@ CREATE TABLE IF NOT EXISTS statement_audience_labels (
     cost_usd        REAL,
     labelled_at     TEXT NOT NULL,
     labelled_by     TEXT,
-    text_changed_at TEXT
+    text_changed_at TEXT,
+    pending         TEXT,
+    decisions       TEXT
 );
 
 -- Statements waiting for the audience labelling worker. A new statement or a

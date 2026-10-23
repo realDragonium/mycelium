@@ -228,7 +228,7 @@ def test_a_batch_stores_known_audiences_and_retries_what_the_model_skipped(db, p
     assert audience_labelling.label_batch(db, call=call) == 1
 
     label = store.audience_labels.get_label(db, first)
-    assert store.audience_labels.label_audiences(label) == ["external-technical"]
+    assert store.audience_labels.label_pending(label) == ["external-technical"]
     assert label["source"] == "ai" and label["reason"] == "because"
     sent = json.loads(calls[0])
     assert {item["statement_id"] for item in sent["statements"]} == {first, second}
