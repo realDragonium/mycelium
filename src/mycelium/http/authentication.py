@@ -288,9 +288,9 @@ class AuthMiddleware:
 
     @staticmethod
     def _lookup(raw: str | None, user_id: str | None) -> auth.Principal | None:
-        """Resolve credentials against the auth DB. Blocking: a token hit also
-        WRITES (last_used_at), so under concurrent traffic this waits on the
-        single writer — which is why `_resolve` keeps it off the event loop."""
+        """Resolve credentials against the auth DB. Blocking, and a token hit
+        now and then writes its `last_used_at`, which is why `_resolve` keeps
+        it off the event loop."""
         try:
             conn = runtime._auth_db()
         except RuntimeError:
@@ -299,11 +299,9 @@ class AuthMiddleware:
             # configured yet. Treat as no credentials.
             return None
         if raw is not None:
-            # resolve_token bumps last_used_at; own that write here since
-            # the auth layer is the unit of work for the token lookup.
-            with store.transaction(conn):
-                principal = auth.resolve_token(conn, raw)
+            principal = auth.resolve_token(conn, raw)
             if principal is not None:
+                auth.record_token_use(conn, raw)
                 return principal
         return auth.resolve_session_user(conn, user_id)
 

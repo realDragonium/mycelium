@@ -5,6 +5,8 @@ Phase 3 adds OIDC callback tests; the substrate-level pieces tested here
 underpin both.
 """
 
+from datetime import datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -209,11 +211,7 @@ def test_token_lifecycle_via_http(tmp_path, monkeypatch):
         # data dir. We can't easily restart the app here; instead, prove
         # the bearer path resolves the token directly.
         conn = runtime._auth_db()
-        # resolve_token bumps last_used_at; own that write in a transaction
-        # (as the middleware does) so this thread's connection commits and
-        # releases the lock before the delete request writes on another.
-        with store.transaction(conn):
-            principal = auth.resolve_token(conn, raw)
+        principal = auth.resolve_token(conn, raw)
         assert principal is not None
         assert principal.role == "writer"
 
@@ -730,3 +728,32 @@ def test_oversized_request_body_is_refused(tmp_path, monkeypatch):
             headers={"Content-Type": "application/json"},
         )
         assert r.status_code == 413
+
+
+def test_token_use_is_recorded_at_most_once_a_minute():
+    conn = auth_store.connect(":memory:")
+    auth_store.migrate(conn)
+    user_id = auth.create_user(conn, name="Bot", role="reader", type="service")
+    raw, token_id = auth.issue_token(conn, user_id=user_id, name="bot", scope="reader")
+    conn.commit()
+
+    def last_used() -> str | None:
+        return conn.execute(
+            "SELECT last_used_at FROM mcp_tokens WHERE id = ?", (token_id,)
+        ).fetchone()[0]
+
+    auth.resolve_token(conn, raw)
+    assert last_used() is None
+
+    auth.record_token_use(conn, raw)
+    first = last_used()
+    auth.record_token_use(conn, raw)
+    assert first is not None and last_used() == first
+
+    stale = datetime.fromisoformat(first) - auth.TOKEN_USE_RESOLUTION
+    conn.execute(
+        "UPDATE mcp_tokens SET last_used_at = ? WHERE id = ?",
+        (stale.isoformat(), token_id),
+    )
+    auth.record_token_use(conn, raw)
+    assert last_used() > first
