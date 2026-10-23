@@ -105,6 +105,12 @@ expands run-local provenance refs into full statement IDs. Clients receive those
 IDs, not refs such as `s1`. These refs are internal evidence identifiers for
 provenance and adjacency sources; they are not stable across runs and must not
 appear as unexplained codes in answer prose or other final answer values.
+When the model leaves refs in the answer prose anyway, `_finish_answer` rewrites
+them, after the answer has streamed, as the numbers of the provenance list:
+`[s3]` becomes `[2]` when s3 is the second cited statement, and a ref to a
+statement the answer does not cite is dropped. Text that looks like a ref but
+names nothing this run supplied stays. The rewrite does not send
+`answer_reset`; a client shows `result.answer` once the run completes.
 
 Ask's 20,000-character tool-context budget omits whole entries and reports
 `omitted_items`; it never slices a statement or condition tree. Omitted records

@@ -47,7 +47,7 @@ from ..agentloop import (
 from . import prompts
 from .config import AskConfig
 from .events import AnswerDeltas, AskCancelled, AskEvent, AskStream, current_stream
-from .evidence import Evidence
+from .evidence import Evidence, number_refs
 from .schema import Answered, AskResult, Interpretation, NeedsClarification
 from .substrate import InProcessSubstrate, SubstrateError, SubstrateReader
 from .tools import (
@@ -627,6 +627,9 @@ def _finish_answer(
     trace.adjacency_note = f"{_floor_state(ctx)['adjacency_research']} grounded adjacency searches completed"
     if ctx.deltas.text and ctx.deltas.text != parsed.answer:
         ctx.deltas.reset()
+    # After the streamed text is judged, so numbering refs never retracts it:
+    # the completed result carries the corrected answer.
+    tool_input["answer"] = number_refs(parsed.answer, ctx.evidence.by_ref, expanded)
     if degraded:
         tool_input["gaps"] = [
             *tool_input["gaps"],
