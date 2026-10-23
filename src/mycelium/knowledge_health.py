@@ -7,14 +7,16 @@ neither grows with the size of the knowledge base beyond the scan itself.
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, get_args
 
 from pydantic import BaseModel
 
 from . import document_freshness
 from .ingest.connect import Target
+from .store import kernel
 
 StatementFilter = Literal["isolated", "unmentioned", "unlabelled"]
 EntityFilter = Literal["undescribed", "unused"]
@@ -112,6 +114,9 @@ class StatementItem(BaseModel):
     label_error: str | None
     #: An undecided draft already proposes links or aliases for it.
     in_pending_draft: bool
+    #: When the connect pass last looked at it, while neither its text nor
+    #: its neighbourhood has changed since.
+    settled_at: str | None
 
 
 class EntityItem(BaseModel):
@@ -149,6 +154,25 @@ def pending_statement_ids(drafts: sqlite3.Connection) -> set[str]:
     return {str(v) for row in rows for v in row if isinstance(v, str)}
 
 
+#: A connect attempt still holds for `s`: its text is unchanged, no statement
+#: the attempt weighed has changed or gone, and no statement naming one of
+#: the same concepts has been written since.
+_SETTLED = (
+    "EXISTS (SELECT 1 FROM connect_attempts c WHERE c.statement_id = s.id "
+    "AND c.text = s.text "
+    "AND NOT EXISTS (SELECT 1 FROM json_each(c.neighbours) j "
+    "LEFT JOIN statements n ON n.id = j.value "
+    "WHERE n.id IS NULL OR COALESCE(n.updated_at, n.created_at, '') > c.attempted_at) "
+    "AND NOT EXISTS (SELECT 1 FROM statement_mentions m "
+    "JOIN names mine ON mine.id = m.name_id "
+    "JOIN names theirs ON theirs.entity_id = mine.entity_id "
+    "JOIN statement_mentions om ON om.name_id = theirs.id "
+    "JOIN statements o ON o.id = om.statement_id "
+    "WHERE m.statement_id = s.id AND o.id <> s.id "
+    "AND COALESCE(o.updated_at, o.created_at, '') > c.attempted_at))"
+)
+
+
 def statements(
     conn: sqlite3.Connection,
     drafts: sqlite3.Connection,
@@ -156,17 +180,20 @@ def statements(
     *,
     after: str | None = None,
     limit: int = 50,
-    skip_pending: bool = False,
+    to_connect: bool = False,
 ) -> StatementPage:
-    """A page of statements matching `which`, in id order."""
+    """A page of statements matching `which`, in id order. `to_connect`
+    leaves out what the connect pass should not be offered again: statements
+    an undecided draft covers and settled attempts."""
     pending = pending_statement_ids(drafts)
+    where = _STATEMENT_WHERE[which] + (f" AND NOT {_SETTLED}" if to_connect else "")
     chosen: list[sqlite3.Row] = []
     cursor = after or ""
     next_after: str | None = None
     while next_after is None:
         rows = conn.execute(
             f"SELECT s.id, s.kind, s.text FROM statements s "
-            f"WHERE s.id > ? AND {_STATEMENT_WHERE[which]} ORDER BY s.id LIMIT ?",
+            f"WHERE s.id > ? AND {where} ORDER BY s.id LIMIT ?",
             (cursor, limit),
         ).fetchall()
         for row in rows:
@@ -174,7 +201,7 @@ def statements(
                 next_after = str(chosen[-1]["id"])
                 break
             cursor = str(row["id"])
-            if not (skip_pending and cursor in pending):
+            if not (to_connect and cursor in pending):
                 chosen.append(row)
         if next_after is None and len(rows) < limit:
             break
@@ -218,6 +245,15 @@ def _statement_items(
             ids,
         )
     }
+    settled = {
+        str(row[0]): str(row[1])
+        for row in conn.execute(
+            f"SELECT s.id, (SELECT attempted_at FROM connect_attempts "
+            f"WHERE statement_id = s.id) FROM statements s "
+            f"WHERE s.id IN ({marks}) AND {_SETTLED}",
+            ids,
+        )
+    }
     return [
         StatementItem(
             id=str(r["id"]),
@@ -227,6 +263,7 @@ def _statement_items(
             mentions=names.get(str(r["id"]), []),
             label_error=errors.get(str(r["id"])),
             in_pending_draft=str(r["id"]) in pending,
+            settled_at=settled.get(str(r["id"])),
         )
         for r in rows
     ]
@@ -290,3 +327,31 @@ def targets(conn: sqlite3.Connection, ids: Sequence[str]) -> list[Target]:
         )
         for i in unique
     ]
+
+
+def record_attempts(
+    conn: sqlite3.Connection, attempts: Mapping[str, Sequence[str]]
+) -> None:
+    """Remember that the connect pass looked at each statement in `attempts`,
+    with the statements it weighed for it."""
+    now = kernel._now()
+    conn.executemany(
+        "INSERT OR REPLACE INTO connect_attempts "
+        "(statement_id, text, neighbours, attempted_at) "
+        "SELECT id, text, ?, ? FROM statements WHERE id = ?",
+        [
+            (json.dumps(sorted(set(neighbours))), now, statement_id)
+            for statement_id, neighbours in attempts.items()
+        ],
+    )
+
+
+def has_open_gap(conn: sqlite3.Connection, statement_id: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM knowledge_gaps WHERE statement_id = ? "
+            "AND resolved_at IS NULL AND dismissed_at IS NULL",
+            (statement_id,),
+        ).fetchone()
+        is not None
+    )

@@ -132,6 +132,12 @@ def _substrate(server) -> dict[str, str]:
                 "'2026-08-02T00:00:00Z' WHERE statement_id = ?",
                 (ids["expiry"],),
             )
+    if _has_table(db, "connect_attempts"):
+        db.execute(
+            "INSERT INTO connect_attempts SELECT id, text, ?, '2026-08-01T00:00:00Z' "
+            "FROM statements WHERE id = ?",
+            (f'["{ids["expiry"]}"]', ids["submit"]),
+        )
     if _has_table(db, "reviewed_draft_applications"):
         db.execute(
             "INSERT INTO reviewed_draft_applications VALUES "

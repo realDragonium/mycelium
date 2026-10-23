@@ -162,7 +162,7 @@ def test_skips_statements_an_undecided_draft_already_connects(conn, drafts):
 
     marked = knowledge_health.statements(conn, drafts, "isolated")
     skipped = knowledge_health.statements(
-        conn, drafts, "isolated", limit=1, skip_pending=True
+        conn, drafts, "isolated", limit=1, to_connect=True
     )
 
     assert [(i.id, i.in_pending_draft) for i in marked.items] == [
@@ -170,6 +170,42 @@ def test_skips_statements_an_undecided_draft_already_connects(conn, drafts):
         ("stm_d", False),
     ]
     assert [i.id for i in skipped.items] == ["stm_d"]
+
+
+def test_offers_a_looked_at_statement_again_once_it_or_its_neighbourhood_changes(
+    conn, drafts
+):
+    def to_connect():
+        page = knowledge_health.statements(conn, drafts, "isolated", to_connect=True)
+        return [i.id for i in page.items]
+
+    knowledge_health.record_attempts(conn, {"stm_c": ["stm_a"], "stm_d": []})
+    conn.execute("UPDATE connect_attempts SET attempted_at = '2026-01-01'")
+    listed = knowledge_health.statements(conn, drafts, "isolated")
+
+    assert to_connect() == []
+    assert [i.settled_at for i in listed.items] == ["2026-01-01", "2026-01-01"]
+
+    conn.execute("UPDATE statements SET updated_at = '2026-02-01' WHERE id = 'stm_a'")
+    assert to_connect() == ["stm_c"]
+
+    knowledge_health.record_attempts(conn, {"stm_c": ["stm_a"]})
+    conn.execute("UPDATE statements SET text = 'an export ends' WHERE id = 'stm_c'")
+    assert to_connect() == ["stm_c"]
+
+    conn.execute(
+        "INSERT INTO statements (id, kind, text, created_at) "
+        "VALUES ('stm_f', 'rule', 'single sign-on needs a domain', '2026-03-01')"
+    )
+    conn.execute("INSERT INTO statement_mentions VALUES ('stm_f', 'nam_sso')")
+    assert to_connect() == ["stm_c", "stm_d", "stm_f"]
+
+
+def test_knows_whether_a_statement_has_an_open_gap(conn):
+    store.create_knowledge_gap(conn, "rephrase it", statement_id="stm_c")
+
+    assert knowledge_health.has_open_gap(conn, "stm_c")
+    assert not knowledge_health.has_open_gap(conn, "stm_d")
 
 
 def test_lists_entities_by_their_shown_name(conn, drafts):

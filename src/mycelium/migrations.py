@@ -1049,6 +1049,18 @@ def _migration_v22_label_text_changed(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v23_connect_attempts(conn: sqlite3.Connection) -> None:
+    """Remember which statements the connect pass has looked at, so it does
+    not offer them again until their text or neighbourhood changes."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS connect_attempts ("
+        "statement_id TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE, "
+        "text TEXT NOT NULL, "
+        "neighbours TEXT NOT NULL, "
+        "attempted_at TEXT NOT NULL)"
+    )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1075,6 +1087,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (20, _migration_v20_entity_duplicate_dismissals),
     (21, _migration_v21_audience_labels),
     (22, _migration_v22_label_text_changed),
+    (23, _migration_v23_connect_attempts),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

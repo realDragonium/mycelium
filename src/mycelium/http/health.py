@@ -63,7 +63,7 @@ def health_statements_http(
     request: Request,
     after: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
-    skip_pending: bool = False,
+    to_connect: bool = False,
 ) -> knowledge_health.StatementPage:
     _require_principal(request)
     return knowledge_health.statements(
@@ -72,7 +72,7 @@ def health_statements_http(
         which,
         after=after,
         limit=limit,
-        skip_pending=skip_pending,
+        to_connect=to_connect,
     )
 
 
