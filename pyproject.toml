@@ -121,6 +121,7 @@ module = [
     "mycelium.http.authentication",
     "mycelium.http.documentation",
     "mycelium.http.draft_review",
+    "mycelium.http.drafts",
     "mycelium.http.gaps",
     "mycelium.http.history",
     "mycelium.http.names",
