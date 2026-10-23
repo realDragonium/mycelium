@@ -34,6 +34,7 @@ from . import (
     docs_store,
     document_freshness,
     documentation_profiles,
+    drafts_store,
     model_settings,
     product_settings,
     store,
@@ -630,13 +631,11 @@ def start(guideline_set: str, *, created_by: str | None) -> str:
     """Admit a planning call for the profile and run it in the background."""
     import contextvars
 
-    from . import server
-
     planned = target(guideline_set, documentation_profiles.capture())
     selected = model_settings.get("documentation_planning")
     if not selected.model:
         raise Unavailable("Choose a documentation planning model in AI settings.")
-    drafts = server._drafts_db()
+    drafts = drafts_store.connection()
     with _start_lock:
         if doc_plans.active_plan(drafts, guideline_set) is not None:
             raise ValueError("A plan for this profile is already being made.")
@@ -652,7 +651,12 @@ def start(guideline_set: str, *, created_by: str | None) -> str:
 
     def run() -> None:
         try:
-            plan(server._drafts_db(), store.substrate_connection(), plan_id, planned)
+            plan(
+                drafts_store.connection(),
+                store.substrate_connection(),
+                plan_id,
+                planned,
+            )
         finally:
             _threads.pop(plan_id, None)
 
@@ -694,7 +698,7 @@ def approve(item_id: str, *, decided_by: str | None) -> dict[str, object]:
     from . import server
     from .docgen.config import DocgenConfig
 
-    drafts = server._drafts_db()
+    drafts = drafts_store.connection()
     row = doc_plans.claim(drafts, item_id, decided_by)
     try:
         prompt = _brief(row, DocgenConfig.from_env().max_prompt_chars)
@@ -748,7 +752,7 @@ def retry(item_id: str, *, with_review_notes: bool = False) -> dict[str, object]
     the refusing review found."""
     from . import server
 
-    drafts = server._drafts_db()
+    drafts = drafts_store.connection()
     with _retry_lock:
         row = doc_plans.get_item(drafts, item_id)
         if row is None:
@@ -763,9 +767,8 @@ def retry(item_id: str, *, with_review_notes: bool = False) -> dict[str, object]
 
 
 def dismiss_item(item_id: str, *, decided_by: str | None) -> None:
-    from . import server
 
-    drafts = server._drafts_db()
+    drafts = drafts_store.connection()
     row = doc_plans.get_item(drafts, item_id)
     if row is None:
         raise LookupError("plan item not found")
@@ -783,9 +786,8 @@ def dismiss_stale(
     guideline_set: str, document_id: str, revision: int, *, decided_by: str | None
 ) -> None:
     """Stop listing an out-of-date document as an update until its next revision."""
-    from . import server
 
-    drafts = server._drafts_db()
+    drafts = drafts_store.connection()
     document = docs_store.get_document(drafts, document_id)
     if document is None or document["guideline_set"] != guideline_set:
         raise LookupError("generated document not found for this profile")
@@ -944,7 +946,7 @@ def _coverage_and_recency(
 def view(guideline_set: str) -> PlanView:
     from . import server
 
-    drafts = server._drafts_db()
+    drafts = drafts_store.connection()
     limits = product_settings.get(product_settings.DocumentationPlanningSettings)
     latest = doc_plans.latest_plan(drafts, guideline_set)
     planned_row = doc_plans.latest_planned(drafts, guideline_set)

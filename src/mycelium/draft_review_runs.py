@@ -136,7 +136,7 @@ def start(
     # fails, and a restored copy would otherwise fill up with failed runs.
     if reason := credentials_error(settings):
         raise ValueError(reason)
-    conn = server._drafts_db()
+    conn = drafts_store.connection()
     with _spawn_lock, store.transaction(conn):
         row = drafts_store.get_draft(conn, draft_id)
         if row is None or drafts_store.status_for(row) != "submitted":
@@ -837,11 +837,13 @@ def _reject(run: ReviewRun, settings: draft_review_settings.Snapshot) -> None:
 
 
 def _report_gap(draft_id: str, text: str, *, statement_id: str | None = None) -> None:
-    from . import server  # local import: gaps live in the substrate database
 
-    with store.transaction(server._db()):
+    with store.transaction(store.substrate_connection()):
         store.create_knowledge_gap(
-            server._db(), text, draft_id=draft_id, statement_id=statement_id
+            store.substrate_connection(),
+            text,
+            draft_id=draft_id,
+            statement_id=statement_id,
         )
 
 
