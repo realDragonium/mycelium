@@ -222,9 +222,10 @@ def migrate(conn: sqlite3.Connection) -> None:
     }
     if "provenance_json" not in columns:
         conn.execute("ALTER TABLE draft_ops ADD COLUMN provenance_json TEXT")
-    from . import draft_review_store
+    from . import ai_usage, draft_review_store
 
     draft_review_store.migrate(conn)
+    ai_usage.migrate(conn)
     conn.commit()
 
 

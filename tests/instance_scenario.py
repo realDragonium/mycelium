@@ -199,6 +199,7 @@ def _drafts(data_dir: Path, ids: dict[str, str]) -> None:
                 conn, application, status="committed", result={"applied": 1}
             )
         _review_run(conn, draft)
+        _ai_usage(conn, draft)
         conn.commit()
 
 
@@ -212,6 +213,28 @@ def _review_run(conn: sqlite3.Connection, draft: str) -> None:
     run.label = "good"
     run.rationale = "Fits the graph."
     draft_review_store.save(conn, run)
+
+
+def _ai_usage(conn: sqlite3.Connection, draft: str) -> None:
+    try:
+        from mycelium import ai_usage
+        from mycelium.ai import Usage, usage
+    except ImportError:
+        return
+    ai_usage.record(
+        conn,
+        usage.Call(
+            action="draft_review",
+            provider="claude",
+            model="claude-sonnet-5-5",
+            usage=Usage(input_tokens=1200, output_tokens=300),
+            cost_usd=0.0054,
+            duration_ms=4100,
+            ok=True,
+            run_id=None,
+            draft_id=draft,
+        ),
+    )
 
 
 def _documentation(data_dir: Path) -> None:

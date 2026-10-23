@@ -108,7 +108,8 @@ class ModelError(ValueError):
 
 
 class IncompleteTurn(ModelError):
-    """A turn the provider stopped early. It was still generated and billed."""
+    """A turn the provider stopped early or answered unusably. It was still
+    generated and billed, so it carries what it used."""
 
     def __init__(self, message: str, usage: Usage) -> None:
         super().__init__(message)

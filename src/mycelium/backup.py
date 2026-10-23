@@ -13,7 +13,8 @@ Archive layout
                                 discriminated by `_kind`, dependency-ordered
     history.jsonl              audit log events (omit with --no-history)
     auth.jsonl                 users, MCP tokens, invites, OAuth clients
-    drafts.jsonl               drafts, their ops, reviews, applications, runs
+    drafts.jsonl               drafts, their ops, reviews, applications, runs,
+                               and the AI usage ledger
     prompts.jsonl              editable prompt texts, every version
     shipped-prompt-texts.jsonl when each shipped prompt default was first seen
     documentation.json         generated documents, revisions, runs and deliveries
@@ -230,6 +231,7 @@ _SECTIONS: tuple[_Section, ...] = (
             "draft_reviews",
             "draft_applications",
             "draft_review_runs",
+            "ai_usage",
         ),
         _migrate_drafts,
         "includes_drafts",

@@ -2,6 +2,7 @@
 // trying to do. Each section is its own route (#/settings/<section>).
 import { useCallback, useState, type FormEvent, type ReactNode } from 'react';
 import { ActionModels, DraftReviewSettings } from './ai-settings';
+import { AIUsage } from './ai-usage';
 import { AIInstructions, DocumentationProfiles } from './documentation-profiles';
 import { ProductSettings } from './product-settings';
 import { AudiencesSettings } from './audiences';
@@ -27,6 +28,7 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
     { id: 'prompts', label: 'Prompts', blurb: 'The behavioural instructions each AI action follows.' },
     { id: 'review', label: 'Draft review', blurb: 'Whether submitted drafts get an automatic AI review, and whether it may apply them.' },
     { id: 'limits', label: 'Limits', blurb: 'Token, time and concurrency budgets for each AI action.' },
+    { id: 'usage', label: 'AI usage', blurb: 'What each AI action and model is estimated to cost, and an optional monthly budget.' },
   ] },
   { title: 'Publishing', sections: [
     { id: 'documentation', label: 'Documentation', blurb: 'Writing profiles and templates, and the GitHub repositories documents publish to.' },
@@ -65,6 +67,7 @@ function Section({ id }: { id: SettingsSection }) {
     case 'review': return <DraftReviewSettings />;
     case 'limits': return <ProductSettings kinds={['ask', 'ingest', 'docgen', 'draft_review', 'alias_discovery', 'audience_labelling', 'documentation_planning', 'concurrency']} />;
     case 'documentation': return <><ProductSettings kinds={['documentation']} /><DocumentationProfiles /></>;
+    case 'usage': return <AIUsage />;
     case 'audiences': return <AudiencesSettings />;
   }
 }

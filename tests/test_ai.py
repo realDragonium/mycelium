@@ -658,3 +658,72 @@ def test_a_truncated_claude_turn_names_its_stop_reason() -> None:
         with pytest.raises(ai.IncompleteTurn, match="stop_reason=max_tokens") as raised:
             ai.turn(_task(), _config("claude"), client=client)
     assert raised.value.usage.output_tokens == 5
+
+
+@pytest.mark.parametrize("provider", ["claude", "openai"])
+def test_every_turn_is_metered_with_its_attribution(provider: ai.Provider) -> None:
+    calls: list[ai.usage.Call] = []
+    ai.usage.install(calls.append)
+    envelope = _envelope(provider, [])
+    config = replace(
+        _config(provider),
+        model="claude-opus-5-5" if provider == "claude" else "gpt-5.4",
+    )
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda request: _reply(request, envelope))
+    ) as client:
+        with ai.usage.attributed("docgen", run_id="drn_1"):
+            ai.turn(_task(), config, client=client)
+        ai.turn(_task(), config, client=client)
+    first, second = calls
+    assert (first.action, first.run_id, first.ok) == ("docgen", "drn_1", True)
+    assert first.usage.cache_read_input_tokens == 3
+    assert first.cost_usd is not None and first.cost_usd > 0
+    assert (second.action, second.run_id) == ("other", None)
+
+
+@pytest.mark.parametrize("provider", ["claude", "openai"])
+def test_a_failed_turn_is_metered_with_the_tokens_it_used(
+    provider: ai.Provider,
+) -> None:
+    calls: list[ai.usage.Call] = []
+    ai.usage.install(calls.append)
+    envelope = _envelope(
+        provider, [], stop="max_tokens" if provider == "claude" else "incomplete"
+    )
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda request: _reply(request, envelope))
+    ) as client:
+        with pytest.raises(ai.IncompleteTurn) as raised:
+            ai.turn(_task(), _config(provider), client=client)
+    assert raised.value.usage.output_tokens == 5
+    assert [(call.ok, call.usage.output_tokens) for call in calls] == [(False, 5)]
+    assert calls[0].cost_usd is None  # an unpriced model keeps its tokens only
+
+
+def test_a_recorder_failure_never_fails_the_call() -> None:
+    def broken(_: ai.usage.Call) -> None:
+        raise RuntimeError("disk full")
+
+    ai.usage.install(broken)
+    envelope = _envelope("openai", [])
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda request: _reply(request, envelope))
+    ) as client:
+        assert ai.turn(_task(), _config("openai"), client=client).usage.output_tokens
+
+
+def test_a_gated_action_is_refused_before_the_provider_is_called() -> None:
+    sent: list[httpx.Request] = []
+    calls: list[ai.usage.Call] = []
+    ai.usage.install(
+        calls.append, lambda action: "Paused" if action == "draft_review" else None
+    )
+    with httpx.Client(transport=httpx.MockTransport(sent.append)) as client:
+        with ai.usage.attributed("draft_review"), pytest.raises(ai.usage.Paused):
+            ai.structured(
+                ai.StructuredTask("Judge", "Evidence", Result),
+                _config("openai"),
+                client=client,
+            )
+    assert sent == [] and calls == []

@@ -312,7 +312,7 @@ def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
         raise ValueError(
             "The selected statements and vocabulary exceed the alias discovery input limit."
         )
-    with server.model_loop_slot():
+    with server.model_loop_slot(), ai.usage.attributed("alias_discovery"):
         result = ai.structured(
             ai.StructuredTask(
                 system=build_system_prompt(instructions.text),

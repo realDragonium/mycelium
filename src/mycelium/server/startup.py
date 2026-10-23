@@ -47,7 +47,7 @@ def init(data_dir: Path) -> None:
     # indexes against the new substrate.
     runtime._ctx = None
 
-    from .. import auth_store, docs_store, drafts_store, prompt_store
+    from .. import ai_usage, auth_store, docs_store, drafts_store, prompt_store
 
     data_dir.mkdir(parents=True, exist_ok=True)
     # Before anything below recreates a missing database empty.
@@ -87,6 +87,7 @@ def init(data_dir: Path) -> None:
 
     drafts_store.configure(data_dir / "mycelium-drafts.db")
     drafts_store.migrate(_drafts_db())
+    ai_usage.install(data_dir / "mycelium-drafts.db")
     from .. import draft_review_store
 
     draft_review_store.mark_orphaned(

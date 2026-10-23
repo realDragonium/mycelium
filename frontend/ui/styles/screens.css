@@ -618,3 +618,10 @@ main.page.home { padding-top: 56px; }
 
 /* ---------- glossary and activity ride on shared controls ---------- */
 .alias-suggestions .names-panel h3 { margin-top: 0; }
+
+/* AI usage: estimated spend per day */
+.usage-bars { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 2px; height: 120px; padding-bottom: 20px; position: relative; }
+.usage-bar { flex: 1 1 0; height: 100px; display: flex; align-items: flex-end; min-width: 2px; }
+.usage-bar > span { display: block; width: 100%; background: var(--bio-dim); border-radius: 2px 2px 0 0; }
+.usage-bar:hover > span { background: var(--bio); }
+.usage-axis { position: absolute; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; font-family: var(--mono); font-size: var(--fs-2xs); color: var(--ink-4); }

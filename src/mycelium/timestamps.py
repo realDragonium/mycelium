@@ -19,6 +19,11 @@ def _fmt(t: datetime) -> str:
     return f"{t.strftime('%Y-%m-%dT%H:%M:%S')}.{t.microsecond // 1000:03d}Z"
 
 
+def of(t: datetime) -> str:
+    """`t`, which must be timezone-aware, in the canonical format."""
+    return _fmt(t.astimezone(UTC))
+
+
 def now() -> str:
     """ISO-8601 UTC timestamp with millisecond precision and trailing Z."""
     return _fmt(datetime.now(UTC))

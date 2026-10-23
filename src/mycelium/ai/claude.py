@@ -288,7 +288,10 @@ def _turn(task: ToolTask, config: ModelConfig, client: ClaudeClient) -> ModelRes
         for block in output
         if block.get("type") == "tool_use"
     ]
-    validate_calls(task, calls)
+    try:
+        validate_calls(task, calls)
+    except ModelError as exc:
+        raise IncompleteTurn(str(exc), response.usage) from None
     return ModelResponse(
         content=[ProviderHistory(provider="claude", output=output), *calls],
         usage=response.usage,
@@ -397,5 +400,8 @@ def structured(
     with transport(config, client) as sdk:
         response = sdk.messages.parse(**request, output_format=task.output_type)
     if response.stop_reason != "end_turn" or response.parsed_output is None:
-        raise ModelError("Claude did not return one complete structured result")
+        raise IncompleteTurn(
+            "Claude did not return one complete structured result",
+            Usage.model_validate(response.usage),
+        )
     return response.parsed_output, Usage.model_validate(response.usage)

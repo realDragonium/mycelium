@@ -32,7 +32,7 @@ import threading
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
-from . import ai_prompts, docs_store, product_settings, prompt_store
+from . import ai, ai_prompts, docs_store, product_settings, prompt_store
 from .ai import Provider
 from .docgen import publication
 from .docgen.config import DocgenConfig
@@ -163,6 +163,7 @@ def start_run(
                 _in_memory_conns[run_id] = conn
 
             ctx = contextvars.copy_context()
+            ctx.run(ai.usage.attribute, run_id=run_id)
             t = threading.Thread(
                 target=lambda: ctx.run(
                     _execute_run,

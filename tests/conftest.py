@@ -15,18 +15,20 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolate_prompt_store():
-    """Start every test with no prompt store wired up.
+    """Start every test with no prompt store or AI usage recorder wired up.
 
     The store is a process-global provider and the ingest/docgen doctrines
     read it at run start, so a `server.init()` in one test would otherwise
     decide what the next test's loop reads. Tests that want a store pin one
     (`prompt_store.use_connection`) or build a server.
     """
-    from mycelium import prompt_store
+    from mycelium import ai_usage, prompt_store
 
     prompt_store.reset()
+    ai_usage.uninstall()
     yield
     prompt_store.reset()
+    ai_usage.uninstall()
 
 
 def pytest_configure(config):

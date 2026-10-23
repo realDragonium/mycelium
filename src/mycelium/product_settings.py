@@ -142,6 +142,16 @@ class ConcurrencySettings(SettingsModel):
     documentation_runs: int = Field(default=2, gt=0)
 
 
+class AIBudgetSettings(SettingsModel):
+    kind: Literal["ai_budget"] = "ai_budget"
+    #: Estimated USD per UTC calendar month; 0 sets no budget.
+    monthly_limit_usd: float = Field(default=0.0, ge=0)
+    warn_percent: int = Field(default=80, gt=0, le=100)
+    #: At 100%, refuse model calls from background actions until the month
+    #: ends or the budget is raised. Interactive actions are never paused.
+    pause_background: bool = False
+
+
 class DestinationSettings(SettingsModel):
     name: str = Field(min_length=1, max_length=200)
     path_template: str = Field(min_length=1, max_length=1000)
@@ -219,6 +229,7 @@ Section = Literal[
     "documentation_planning",
     "concurrency",
     "documentation",
+    "ai_budget",
 ]
 Body = Annotated[
     AskSettings
@@ -229,7 +240,8 @@ Body = Annotated[
     | AudienceLabellingSettings
     | DocumentationPlanningSettings
     | ConcurrencySettings
-    | DocumentationSettings,
+    | DocumentationSettings
+    | AIBudgetSettings,
     Field(discriminator="kind"),
 ]
 BODY: TypeAdapter[Body] = TypeAdapter(Body)
@@ -243,6 +255,7 @@ DEFAULTS: tuple[Body, ...] = (
     DocumentationPlanningSettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
+    AIBudgetSettings(),
 )
 
 
@@ -291,7 +304,8 @@ T = TypeVar(
     | AudienceLabellingSettings
     | DocumentationPlanningSettings
     | ConcurrencySettings
-    | DocumentationSettings,
+    | DocumentationSettings
+    | AIBudgetSettings,
 )
 
 
@@ -412,7 +426,8 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         default,
         AliasDiscoverySettings
         | AudienceLabellingSettings
-        | DocumentationPlanningSettings,
+        | DocumentationPlanningSettings
+        | AIBudgetSettings,
     ):
         return default
     if isinstance(default, DocumentationSettings):
