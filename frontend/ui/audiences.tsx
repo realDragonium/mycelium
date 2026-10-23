@@ -187,7 +187,7 @@ function SpotCheckRow({ statement, names, canCurate, onDone }: { statement: Spot
   </div>;
 }
 
-function SpotCheckCard({ data }: { data: AudiencesResponse }) {
+function SpotCheckCard({ data, onReload }: { data: AudiencesResponse; onReload: () => void }) {
   const { state, reload } = useAsync(useCallback((signal: AbortSignal) => getJSON<SpotChecks>('/api/audiences/spot-checks', signal), []));
   const checks = dataOf(state);
   const names = (id: string) => data.audiences.find(audience => audience.id === id)?.name || id;
@@ -196,7 +196,7 @@ function SpotCheckCard({ data }: { data: AudiencesResponse }) {
     {!checks && state.status === 'loading' && <Loading what="recently edited statements" />}
     {!checks && state.status === 'error' && <LoadError error={state.error} what="recently edited statements" onRetry={reload} />}
     {checks && !checks.statements.length && <p className="hint">Nothing to check.</p>}
-    {checks?.statements.map(statement => <SpotCheckRow key={statement.id} statement={statement} names={names} canCurate={checks.can_curate} onDone={reload} />)}
+    {checks?.statements.map(statement => <SpotCheckRow key={statement.id} statement={statement} names={names} canCurate={checks.can_curate} onDone={() => { reload(); onReload(); }} />)}
   </Card>;
 }
 
@@ -348,5 +348,5 @@ export function AudiencesSettings() {
   if (!data && state.status === 'error') return <LoadError error={state.error} what="audiences" onRetry={reload} />;
   if (!data) return null;
   const prefilter = (next: StatementFilter) => { setFilter(next); requestAnimationFrame(() => document.querySelector('.audience-filters')?.scrollIntoView({ behavior: 'smooth', block: 'start' })); };
-  return <>{state.status === 'error' && <LoadError error={state.error} what="audiences" onRetry={reload} />}<LabellingCard data={data} onReload={reload} /><PendingGrantsCard data={data} onReload={reload} /><SpotCheckCard data={data} /><AudienceList data={data} onReload={reload} onFilter={prefilter} /><StatementFilterList key={`${filter.audience}:${filter.visibility}:${filter.state}`} audiences={data.audiences} filter={filter} onFilter={setFilter} /></>;
+  return <>{state.status === 'error' && <LoadError error={state.error} what="audiences" onRetry={reload} />}<LabellingCard data={data} onReload={reload} /><PendingGrantsCard data={data} onReload={reload} /><SpotCheckCard data={data} onReload={reload} /><AudienceList data={data} onReload={reload} onFilter={prefilter} /><StatementFilterList key={`${filter.audience}:${filter.visibility}:${filter.state}`} audiences={data.audiences} filter={filter} onFilter={setFilter} /></>;
 }
