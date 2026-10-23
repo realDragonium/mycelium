@@ -94,10 +94,10 @@ def test_editor_api_lists_all_actions_previews_unsaved_text_and_checks_roles(
                 == "Saved behavior"
             )
         assert client.get("/api/ai-instructions/unknown").status_code == 422
-        from mycelium import http
+        from mycelium.http import prompt_texts
 
         reader = auth.Principal(id="reader", name="Reader", role="reader", type="human")
-        monkeypatch.setattr(http, "_require_principal", lambda request: reader)
+        monkeypatch.setattr(prompt_texts, "_require_principal", lambda request: reader)
         assert client.get("/api/ai-instructions").json()["can_write"] is False
         assert (
             client.put(

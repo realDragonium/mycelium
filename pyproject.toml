@@ -122,6 +122,7 @@ module = [
     "mycelium.http.gaps",
     "mycelium.http.history",
     "mycelium.http.names",
+    "mycelium.http.prompt_texts",
     "mycelium.http.substrate",
     "mycelium.http.tool_routes",
     "mycelium.http.traces",

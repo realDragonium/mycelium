@@ -29,7 +29,6 @@ from pydantic import Field as PydField
 from starlette.middleware.sessions import SessionMiddleware
 
 from .. import (
-    ai_prompts,
     alias_suggestions,
     auth,
     connect_page,
@@ -50,7 +49,16 @@ from .. import (
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from ..server import registry, runtime
-from . import account, gaps, history, names, substrate, tool_routes, traces
+from . import (
+    account,
+    gaps,
+    history,
+    names,
+    prompt_texts,
+    substrate,
+    tool_routes,
+    traces,
+)
 from .access import _enforce_curator, _enforce_role, _require_admin, _require_principal
 from .account import _serialize_token_row
 from .authentication import AuthMiddleware, _session_secret
@@ -122,6 +130,9 @@ async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResp
     return JSONResponse(status_code=500, content={"detail": "internal server error"})
 
 
+app.exception_handler(documentation_profiles.Conflict)(prompt_texts._profile_conflict)
+
+
 app.exception_handler(names_workspace.Conflict)(names._names_conflict)
 app.exception_handler(alias_suggestions.Conflict)(names.alias_suggestion_conflict)
 
@@ -149,6 +160,7 @@ app.include_router(gaps.router)
 app.include_router(traces.router)
 app.include_router(account.router)
 app.include_router(names.router)
+app.include_router(prompt_texts.router)
 
 
 # MCP-over-HTTP is mounted at the bottom of this file so it doesn't
@@ -161,113 +173,6 @@ app.include_router(names.router)
 # approve (replay ops against the substrate) or reject (drop without
 # applying). Status is derived from terminal timestamps + decision, same
 # pattern as knowledge_gaps.
-
-
-@app.exception_handler(documentation_profiles.Conflict)
-async def _profile_conflict(
-    request: Request, exc: documentation_profiles.Conflict
-) -> JSONResponse:
-    return JSONResponse(status_code=409, content={"detail": str(exc)})
-
-
-@app.get("/api/documentation/profiles")
-def documentation_profiles_http(request: Request) -> documentation_profiles.Profiles:
-    return documentation_profiles.view(_require_principal(request))
-
-
-@app.get("/api/documentation/profiles/{name}")
-def documentation_profile_http(
-    name: str, request: Request
-) -> documentation_profiles.Profile:
-    _require_principal(request)
-    return documentation_profiles.read(name)
-
-
-@app.put("/api/documentation/profiles/{name}")
-def save_documentation_profile_http(
-    name: str, body: documentation_profiles.SaveProfile, request: Request
-) -> documentation_profiles.Profile:
-    return documentation_profiles.save(name, body, _require_principal(request))
-
-
-@app.delete("/api/documentation/profiles/{name}")
-def retire_documentation_profile_http(
-    name: str, body: documentation_profiles.RevisionRequest, request: Request
-) -> documentation_profiles.Profile:
-    return documentation_profiles.retire(
-        name, body.revision, _require_principal(request)
-    )
-
-
-@app.get("/api/documentation/prompts/history")
-def documentation_prompt_history_http(
-    type: str, name: str, request: Request
-) -> dict[str, object]:
-    _require_principal(request)
-    documentation_profiles.editable_key(type, name)
-    from .. import prompt_store
-
-    return {
-        "versions": [
-            documentation_profiles.text_version(row).model_dump()
-            for row in prompt_store.history(prompt_store.connection(), type, name)
-        ]
-    }
-
-
-@app.put("/api/documentation/prompts")
-def save_documentation_prompt_http(
-    body: documentation_profiles.SaveText, request: Request
-) -> documentation_profiles.TextVersion:
-    documentation_profiles.editable_key(body.type, body.name)
-    return documentation_profiles.save_text(
-        body.type,
-        body.name,
-        body.text,
-        _require_principal(request),
-        revision=body.revision,
-    )
-
-
-@app.post("/api/documentation/prompts/restore")
-def restore_documentation_prompt_http(
-    body: documentation_profiles.RestoreText, request: Request
-) -> documentation_profiles.TextVersion:
-    documentation_profiles.editable_key(body.type, body.name)
-    return documentation_profiles.restore_text(body, _require_principal(request))
-
-
-@app.get("/api/ai-instructions")
-def ai_instructions_http(request: Request) -> dict[str, object]:
-    principal = _require_principal(request)
-    return {
-        "names": documentation_profiles.INSTRUCTIONS,
-        "actions": [
-            {"name": name, "title": ai_prompts.TITLES[name]}
-            for name in ai_prompts.ACTIONS
-        ],
-        "can_write": auth.principal_has_real_role(principal, "writer"),
-    }
-
-
-@app.get("/api/ai-instructions/{action}")
-def ai_instruction_http(
-    action: ai_prompts.Action, request: Request
-) -> ai_prompts.EditorView:
-    _require_principal(request)
-    return ai_prompts.editor(action)
-
-
-class PromptPreviewBody(BaseModel):
-    text: str = PydField(max_length=100000)
-
-
-@app.post("/api/ai-instructions/{action}/preview")
-def ai_instruction_preview_http(
-    action: ai_prompts.Action, body: PromptPreviewBody, request: Request
-) -> dict[str, str]:
-    _require_principal(request)
-    return {"preview": ai_prompts.preview(action, body.text)}
 
 
 @app.get("/api/product-settings")
