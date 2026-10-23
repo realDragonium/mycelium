@@ -83,6 +83,21 @@ def documentation_run_http(run_id: str, request: Request) -> dict[str, object]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/api/documentation/runs/{run_id}/revise-with-notes")
+def revise_with_review_notes_http(run_id: str, request: Request) -> dict[str, object]:
+    from .. import docs_store
+
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        return server.revise_with_review_notes(run_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except docs_store.RevisionConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 class DocumentEditBody(ManualDocument):
     provider: Literal["claude", "openai"] | None = None
 
