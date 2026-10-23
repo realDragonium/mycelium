@@ -62,7 +62,8 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> EntityMerge:
     documents anchored to the source become anchored to the target; where
     the target already anchors a document of the same guideline set and
     type, the source's document keeps its body but loses its anchor;
-    `documents_unanchored` counts those."""
+    `documents_unanchored` counts those. A documentation run still in flight
+    for the source writes under the anchor its document would now have."""
     if from_entity_id == into_entity_id:
         return {
             "into_entity_id": into_entity_id,
@@ -119,7 +120,8 @@ def delete_entity(id: str) -> EntityDeletion:
     - `statement_mentions` referencing any of those names are removed.
     - `entity_links` from or to this entity are removed.
     - Generated documents anchored to it lose the anchor but keep their
-      body and history.
+      body and history; a documentation run still in flight for it writes
+      unanchored.
     - The entity record is dropped.
 
     Returns counts of cascaded rows so the caller can sanity-check the

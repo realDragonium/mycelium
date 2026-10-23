@@ -906,7 +906,9 @@ def upsert_document(
 
     An anchor creates a new document under its own identity. Its title may
     still produce a slug another document holds; a numbered slug keeps the two
-    apart, since an anchored document is known not to be that one.
+    apart, since an anchored document is known not to be that one. A run's
+    write takes the anchor the run holds now rather than the one it started
+    with: merging or deleting the entity meanwhile re-points or clears it.
     """
     slug = slug.strip()
     title = title.strip()
@@ -939,7 +941,12 @@ def upsert_document(
         if anchor_entity_id is not None:
             if updates is not None:
                 raise ValueError("an anchor identifies a new document only")
-            _refuse_second_anchor(conn, guideline_set, document_type, anchor_entity_id)
+            if run_id is not None:
+                anchor_entity_id = _run_anchor(conn, run_id, anchor_entity_id)
+            if anchor_entity_id is not None:
+                _refuse_second_anchor(
+                    conn, guideline_set, document_type, anchor_entity_id
+                )
             slug = _free_slug(conn, guideline_set, document_type, slug)
             existing = None
         refusal = _write_refusal(
@@ -1055,6 +1062,13 @@ def _free_slug(
     return candidate
 
 
+def _run_anchor(conn: sqlite3.Connection, run_id: str, started_with: str) -> str | None:
+    row = conn.execute(
+        "SELECT anchor_entity_id FROM documentation_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    return started_with if row is None else row["anchor_entity_id"]
+
+
 def find_by_anchor(
     conn: sqlite3.Connection,
     guideline_set: str,
@@ -1072,12 +1086,14 @@ def find_by_anchor(
 def move_anchors(
     conn: sqlite3.Connection, from_entity_id: str, into_entity_id: str
 ) -> int:
-    """Re-anchor documents on `from_entity_id` to `into_entity_id`,
-    returning how many documents lost their anchor.
+    """Re-anchor documents and in-flight runs on `from_entity_id` to
+    `into_entity_id`, returning how many documents lost their anchor.
 
     Where the target already anchors a document of the same guideline set and
     type, the target's document keeps the identity and the source's document
     loses its anchor: it stays a slug-identified document, so no body is lost.
+    A run in flight follows the same rule, so it writes under the anchor its
+    entity has by then.
     """
     unanchored = conn.execute(
         "UPDATE generated_documents SET anchor_entity_id = NULL "
@@ -1091,17 +1107,37 @@ def move_anchors(
         "UPDATE generated_documents SET anchor_entity_id = ? WHERE anchor_entity_id = ?",
         (into_entity_id, from_entity_id),
     )
+    conn.execute(
+        "UPDATE documentation_runs SET anchor_entity_id = NULL "
+        "WHERE finished_at IS NULL AND anchor_entity_id = ? "
+        "AND EXISTS (SELECT 1 FROM generated_documents AS held "
+        "WHERE held.anchor_entity_id = ? "
+        "AND held.guideline_set = documentation_runs.guideline_set "
+        "AND held.document_type = documentation_runs.document_type)",
+        (from_entity_id, into_entity_id),
+    )
+    conn.execute(
+        "UPDATE documentation_runs SET anchor_entity_id = ? "
+        "WHERE finished_at IS NULL AND anchor_entity_id = ?",
+        (into_entity_id, from_entity_id),
+    )
     return unanchored
 
 
 def clear_anchors(conn: sqlite3.Connection, entity_id: str) -> int:
-    """Drop `entity_id` as an anchor, returning how many documents lost it.
-    The documents stay slug-identified, keeping their bodies and history."""
+    """Drop `entity_id` as an anchor from documents and in-flight runs,
+    returning how many documents lost it. The documents stay slug-identified,
+    keeping their bodies and history."""
     unanchored = conn.execute(
         "UPDATE generated_documents SET anchor_entity_id = NULL "
         "WHERE anchor_entity_id = ?",
         (entity_id,),
     ).rowcount
+    conn.execute(
+        "UPDATE documentation_runs SET anchor_entity_id = NULL "
+        "WHERE finished_at IS NULL AND anchor_entity_id = ?",
+        (entity_id,),
+    )
     return unanchored
 
 
