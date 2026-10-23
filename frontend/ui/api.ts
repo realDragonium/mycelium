@@ -184,7 +184,8 @@ export interface KnowledgeGap {
   draft_id: string | null; statement_id: string | null; document_id: string | null;
 }
 export const knowledgeGaps = {
-  list: () => getJSON<{ gaps: KnowledgeGap[] }>('/api/knowledge-gaps').then(r => r.gaps),
+  // can_write: whether the caller may resolve, dismiss or reopen a report.
+  list: () => getJSON<{ gaps: KnowledgeGap[]; can_write: boolean }>('/api/knowledge-gaps'),
   update: (id: string, action: GapAction) => patchJSON<{ gap: KnowledgeGap }>(`/api/knowledge-gaps/${enc(id)}`, { action }).then(r => r.gap),
   report: (text: string) => postJSON<unknown>('/report-knowledge-gap', { text }),
 };

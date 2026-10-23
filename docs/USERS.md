@@ -23,9 +23,9 @@ From least to most privileged:
 | Role | Can do |
 |---|---|
 | `asker` | Call `ask` only. None of the read primitives, and none of the web UI's `/api/*` routes except its own account and tokens under `/api/me`. |
-| `reader` | `ask`, plus any read tool (`list_*`, `get_*`, `search_*`, `grep_*`, `discover_*`, `find_*`). Cannot mutate the substrate. |
-| `drafter` | Everything `reader` can, and call the write, delete and merge tools — but every such call is queued as an operation on an open draft instead of changing the substrate. Without an explicit `draft_id`, a drafter's writes collect in one open draft per MCP session (or per account, when the client sends no session), which the drafter submits for review with `submit_draft`. A drafter can add to, prune, submit or withdraw only drafts they created, and cannot approve, reject or apply drafts. |
-| `writer` | Everything `reader` can, plus all mutating tools (`upsert_*`, `add_*`, `patch_*`, `attach_*`, `rename_*`, `move_*`, etc.), which apply directly. Writers curate drafts. |
+| `reader` | `ask`, plus any read tool (`list_*`, `get_*`, `search_*`, `grep_*`, `discover_*`, `find_*`), and reporting knowledge gaps. Cannot mutate the substrate. |
+| `drafter` | Everything `reader` can, and call the write, delete and merge tools — but every such call is queued as an operation on an open draft instead of changing the substrate. Without an explicit `draft_id`, a drafter's writes collect in one open draft per MCP session (or per account, when the client sends no session), which the drafter submits for review with `submit_draft`. A drafter can add to, prune, submit or withdraw only drafts they created, and cannot approve, reject or apply drafts, nor resolve, dismiss or reopen knowledge gaps. |
+| `writer` | Everything `reader` can, plus all mutating tools (`upsert_*`, `add_*`, `patch_*`, `attach_*`, `rename_*`, `move_*`, etc.), which apply directly. Writers curate drafts and resolve, dismiss or reopen knowledge gaps. |
 | `admin` | Everything `writer` can, plus destructive ops (`delete_*`, `merge_*`), the user-management surface and instance settings. |
 
 A tool's required role follows its name prefix unless the tool declares one:
