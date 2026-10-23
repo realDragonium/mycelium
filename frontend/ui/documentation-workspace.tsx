@@ -5,7 +5,7 @@ import { PageHeader } from './lib';
 import { Link } from './router';
 import { AudienceIdentity, type AudienceRef } from './audiences';
 
-interface DocumentationRoute { tab: string; document: string | null; revision: string | null; run: string | null }
+interface DocumentationRoute { tab: string; document: string | null; revision: string | null; run: string | null; profile: string | null }
 interface DocumentationModelOption {
   provider: string; label: string; model: string | null; reasoning_effort: string | null; available: boolean;
 }
@@ -57,6 +57,22 @@ interface DocumentationRevision extends DocumentationRevisionSummary {
 interface DocumentationDestination { name: string; path_template: string; coordinates: DeliveryCoordinates }
 interface LoadedDocument { current: DocumentationDocument; history: DocumentationRevisionSummary[]; selected: DocumentationDocument | DocumentationRevision }
 interface PendingEdit { title: string; body: string; expectedRevision: number | undefined }
+interface PlanItem {
+  id: string; action: 'create' | 'update'; title: string; document_type: string; anchor_entity_id: string | null; anchor_name: string | null;
+  document_id: string | null; rationale: string; priority: 'high' | 'medium' | 'low'; statement_ids: string[];
+  state: 'proposed' | 'approved' | 'dismissed'; run: { id: string; status: string; document_id: string | null } | null;
+}
+interface PlanSummary {
+  id: string; created_at: string; finished_at: string | null; outcome: 'planned' | 'failed' | null; error: string | null; activity: string | null;
+  provider: string | null; model: string | null; cost_usd: number | null; proposed: number | null; dropped: Record<string, number>;
+}
+interface DocumentationPlan {
+  guideline_set: string; audience: AudienceRef | null; unavailable: string | null; latest: PlanSummary | null; items: PlanItem[];
+  stale: { document_id: string; title: string; document_type: string; revision: number; changes: StatementChange[] }[];
+  coverage: { entity_id: string; name: string; statements: number }[];
+  visible_statements: number; new_since_plan: number | null; replan_hint: boolean; dismissed: number; approve_batch: number;
+}
+interface ApprovedItem { item_id: string; run: DocumentationRun | null; error: string | null }
 
 const docGet = <T,>(path: string, signal?: AbortSignal) => getJSON<T>('/api/documentation/' + path, signal);
 const docPost = <T,>(path: string, body: unknown) => postJSON<T>('/api/documentation/' + path, body);
@@ -68,7 +84,7 @@ const PULL_REQUEST_STATES: Record<string, string> = { open: 'Open for review', m
 
 function docRoute(): DocumentationRoute {
   const params = new URLSearchParams(window.location.hash.split('?')[1] || '');
-  return { tab: params.get('tab') || (params.has('run') ? 'runs' : 'library'), document: params.get('document'), revision: params.get('revision'), run: params.get('run') };
+  return { tab: params.get('tab') || (params.has('run') ? 'runs' : 'library'), document: params.get('document'), revision: params.get('revision'), run: params.get('run'), profile: params.get('profile') };
 }
 
 function docNavigate(next: Record<string, string | number | null | undefined>) {
@@ -410,6 +426,110 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
   </section>;
 }
 
+const PRIORITIES: Record<PlanItem['priority'], string> = { high: 'High priority', medium: 'Medium priority', low: 'Low priority' };
+const planActive = (plan: DocumentationPlan) => !!plan.latest && !plan.latest.finished_at;
+const planRunning = (plan: DocumentationPlan) => planActive(plan) || plan.items.some(item => item.run && ['queued', 'running'].includes(item.run.status));
+
+function DocumentationPlanner({ options, profile }: { options: DocumentationOptions; profile: string | null }) {
+  const profiles = Object.keys(options.guideline_sets);
+  const selected = profile && profiles.includes(profile) ? profile : profiles[0] || '';
+  const [plan, setPlan] = React.useState<DocumentationPlan | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [notes, setNotes] = React.useState<string[]>([]);
+  const [busy, setBusy] = React.useState(false);
+  const [chosen, setChosen] = React.useState<string[]>([]);
+  const [reload, setReload] = React.useState(0);
+  const refresh = () => setReload(value => value + 1);
+  React.useEffect(() => {
+    if (!selected) return;
+    let cancelled = false, timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const value = await docGet<DocumentationPlan>('plans/' + encodeURIComponent(selected), controller.signal);
+        if (cancelled) return;
+        setPlan(value); setError(null);
+        if (planRunning(value)) timer = setTimeout(load, 2500);
+      } catch (error) { if (!cancelled) setError(errorMessage(error)); }
+    };
+    load(); return () => { cancelled = true; controller.abort(); clearTimeout(timer); };
+  }, [selected, reload]);
+  const act = async (work: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true); setError(null);
+    try { await work(); refresh(); } catch (error) { setError(errorMessage(error)); } finally { setBusy(false); }
+  };
+  const approve = (ids: string[]) => act(async () => {
+    const results = await docPost<ApprovedItem[]>('plan-items/approve', { item_ids: ids });
+    setChosen([]);
+    setNotes(results.filter(result => result.error).map(result => `${plan?.items.find(item => item.id === result.item_id)?.title || result.item_id}: ${result.error}`));
+  });
+  const reviseStale = (documentId: string, revision: number) => act(() => docPost(`documents/${encodeURIComponent(documentId)}/revisions`, { expected_revision: revision, provider: options.default_provider, update_sources: true }));
+  if (!profiles.length) return <section className="docw-panel"><p>Add a writing profile in Settings before planning documentation.</p></section>;
+  const latest = plan?.latest;
+  const active = !!plan && planActive(plan);
+  const proposed = plan?.items.filter(item => item.state === 'proposed') || [];
+  const limit = plan?.approve_batch || 1;
+  const canAct = options.can_generate && !busy;
+  return <>
+    <section className="docw-panel" aria-label="Documentation plan">
+      <div className="docw-actions"><h2>Plan documentation</h2><button onClick={refresh}>Refresh</button></div>
+      <p>The planner reads what the profile's audience may see and proposes the documents that audience needs. Approving an item starts a documentation run; nothing is written before you approve.</p>
+      <label>Writing profile<select value={selected} onChange={event => docNavigate({ tab: 'plan', profile: event.target.value })}>{profiles.map(name => <option key={name}>{name}</option>)}</select></label>
+      {plan && <p className="docw-meta">{plan.audience ? <>Audience: <AudienceIdentity audience={plan.audience} /> · {plan.visible_statements} visible statements</> : 'No audience'}</p>}
+      {plan?.unavailable && <p role="alert">{plan.unavailable}</p>}
+      {plan && <div className="docw-actions">
+        <button type="button" disabled={!canAct || active || !!plan.unavailable} onClick={() => act(() => docPost('plans/' + encodeURIComponent(selected), {}))}>{active ? 'Planning…' : latest ? 'Plan again' : 'Plan documentation'}</button>
+        {latest?.finished_at && latest.cost_usd !== null && <span className="docw-meta">Last plan cost about ${latest.cost_usd.toFixed(2)} · {latest.model}</span>}
+      </div>}
+      {active && latest && <p role="status">{latest.activity || 'Planning'}… started {docDate(latest.created_at)}. You can leave this screen; the plan keeps running.</p>}
+      {plan?.replan_hint && <p role="status">{plan.new_since_plan} statements became visible to this audience since the last plan. Plan again to consider them.</p>}
+      {latest?.outcome === 'failed' && <p role="alert">The last plan failed: {latest.error}</p>}
+      {!options.can_generate && <p>Writer or admin access is required to plan and approve documents.</p>}
+      {error && <p role="alert">{error}</p>}
+      {notes.map(note => <p key={note} role="alert">{note}</p>)}
+    </section>
+    {plan && <section className="docw-panel" aria-label="Proposed documents">
+      <div className="docw-actions"><h2>Proposed documents</h2>
+        {proposed.length > 0 && <button type="button" disabled={!canAct || !chosen.length || chosen.length > limit} onClick={() => approve(chosen)}>Approve selected ({chosen.length} of at most {limit})</button>}
+      </div>
+      {latest?.outcome === 'planned' || plan.items.length ? <p className="docw-meta">{plan.items.length} proposed{latest?.proposed != null && latest.proposed > plan.items.length ? ` · ${latest.proposed - plan.items.length} more set aside (${Object.entries(latest.dropped).map(([reason, count]) => `${count} ${reason}`).join(', ')})` : ''}{plan.dismissed ? ` · ${plan.dismissed} dismissed proposals are not proposed again` : ''}</p> : <p>No plan yet for this profile.</p>}
+      <div className="docw-plan">{plan.items.map(item => {
+        const checked = chosen.includes(item.id);
+        return <article key={item.id} className={'docw-plan-item ' + item.state}>
+          {item.state === 'proposed' && options.can_generate && <input type="checkbox" aria-label={'Select ' + item.title} checked={checked} disabled={!checked && chosen.length >= limit} onChange={() => setChosen(value => checked ? value.filter(id => id !== item.id) : [...value, item.id])} />}
+          <div>
+            <strong>{item.title}</strong>
+            <p className="docw-meta">{item.action === 'create' ? 'New' : 'Change scope of'} {item.document_type} · {PRIORITIES[item.priority]}{item.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: item.anchor_entity_id }}>{item.anchor_name || docEntityName(item.anchor_entity_id)}</Link></>}{item.document_id && <> · updates <a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>the existing document</a></>}</p>
+            <p>{item.rationale}</p>
+            <details><summary>{item.statement_ids.length} statements it would mainly draw on</summary><DocumentationSources ids={item.statement_ids} /></details>
+            {item.state === 'proposed' && options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => approve([item.id])}>Approve</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/dismiss`, {}))}>Dismiss</button></div>}
+            {item.state === 'dismissed' && <p className="docw-meta">Dismissed</p>}
+            {item.state === 'approved' && <p className="docw-meta">Approved{item.run ? <> · <a href={'#/documentation?run=' + encodeURIComponent(item.run.id)}>{docStatus(item.run.status)}</a>{item.run.document_id && <> · <a href={'#/documentation?document=' + encodeURIComponent(item.run.document_id)}>open document</a></>}</> : ' · starting'}</p>}
+          </div>
+        </article>;
+      })}</div>
+    </section>}
+    {plan && plan.stale.length > 0 && <section className="docw-panel docw-stale" aria-label="Out-of-date documents">
+      <h2>Out-of-date documents</h2>
+      <p>These documents cite statements that changed. Updating one starts a revision briefed with exactly those changes.</p>
+      <div className="docw-plan">{plan.stale.map(item => <article key={item.document_id} className="docw-plan-item">
+        <div>
+          <strong><a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>{item.title}</a></strong>
+          <p className="docw-meta">Update {item.document_type} · revision {item.revision} · {item.changes.length} changed statements</p>
+          <details><summary>What changed</summary><ul>{item.changes.map(change => <li key={change.statement_id}><span className="docw-meta">{STATEMENT_CHANGES[change.change]} · {change.statement_id}</span><p>Was: {change.old_text}</p>{change.new_text !== null && <p>Now: {change.new_text}</p>}</li>)}</ul></details>
+          {options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => reviseStale(item.document_id, item.revision)}>Approve update</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plans/${encodeURIComponent(selected)}/stale/${encodeURIComponent(item.document_id)}/dismiss`, { revision: item.revision }))}>Dismiss</button></div>}
+        </div>
+      </article>)}</div>
+    </section>}
+    {plan && plan.coverage.length > 0 && <section className="docw-panel" aria-label="Coverage">
+      <h2>Concepts without a document</h2>
+      <p>Concepts this audience sees many statements about, with no document of this profile about them.</p>
+      <ul>{plan.coverage.map(gap => <li key={gap.entity_id}><Link to={{ view: 'entity', id: gap.entity_id }}>{gap.name}</Link> <span className="docw-meta">· {gap.statements} visible statements</span></li>)}</ul>
+    </section>}
+  </>;
+}
+
 function DocumentationWorkspace() {
   const [route, setRoute] = React.useState(docRoute);
   const [options, setOptions] = React.useState<DocumentationOptions | null>(null);
@@ -446,9 +566,10 @@ function DocumentationWorkspace() {
   const filtered = documents.filter(document => [document.title, document.guideline_set, document.document_type].join(' ').toLowerCase().includes(search.toLowerCase()));
   return <main className="page docw"><PageHeader eyebrow="Explore" title="Documents" blurb="Generate documents from the knowledge base, refine them, and publish them to GitHub as pull requests."
       actions={<Link to={{ view: 'settings', section: 'documentation' }} className="btn ghost sm">Profiles &amp; publishing settings</Link>} />
-    <nav className="tabs" aria-label="Documentation sections">{[['library', 'Documents'], ['generate', 'Generate'], ['runs', 'Generation history']].map(([tab, label]) => <button key={tab} className={route.tab === tab ? 'on' : ''} aria-current={route.tab === tab ? 'page' : undefined} onClick={() => docNavigate({ tab })}>{label}</button>)}</nav>
+    <nav className="tabs" aria-label="Documentation sections">{[['library', 'Documents'], ['plan', 'Plan'], ['generate', 'Generate'], ['runs', 'Generation history']].map(([tab, label]) => <button key={tab} className={route.tab === tab ? 'on' : ''} aria-current={route.tab === tab ? 'page' : undefined} onClick={() => docNavigate({ tab })}>{label}</button>)}</nav>
     {error && <p role="alert">{error} <button onClick={update}>Reload documentation</button></p>}
     {!options ? !error && <p role="status">Loading documentation…</p> : <>
+      {route.tab === 'plan' && <DocumentationPlanner key={route.profile || ''} options={options} profile={route.profile} />}
       {route.tab === 'generate' && <DocumentationGenerator options={options} documents={documents} onStarted={started} />}
       {route.tab === 'library' && (route.document ? <DocumentationDocument key={route.document} id={route.document} revision={route.revision} options={options} refresh={refresh} onUpdated={update} onStarted={started} /> : <section className="docw-panel">
         <div className="docw-actions"><h2>Saved documents</h2><button onClick={() => docNavigate({ tab: 'generate' })}>Generate document</button><button onClick={update}>Refresh</button></div>

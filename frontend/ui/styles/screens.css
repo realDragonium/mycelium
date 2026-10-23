@@ -594,6 +594,12 @@ main.page.home { padding-top: 56px; }
 .docw-stale { border-color: color-mix(in oklab, var(--warn) 45%, var(--line)); }
 .docw-stale li { margin-bottom: 10px; }
 .docw-stale li p { margin: 2px 0; }
+.docw-plan { display: grid; gap: 10px; margin-top: 12px; }
+.docw-plan-item { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-2); }
+.docw-plan-item > div { grid-column: -2; min-width: 0; }
+.docw-plan-item.dismissed { opacity: 0.6; }
+.docw .docw-plan-item input[type="checkbox"] { width: auto; margin-top: 4px; }
+.docw-plan-item p { margin: 4px 0; }
 .docw-source { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--fs-xs); background: var(--bg-inset); padding: 12px; border-radius: var(--r-md); }
 .docw-prose { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 20px 0; margin: 20px 0; line-height: 1.8; color: var(--ink); font-size: var(--fs-md); }
 .docw-prose h1 { font-family: var(--serif); font-weight: 400; font-size: 28px; }
