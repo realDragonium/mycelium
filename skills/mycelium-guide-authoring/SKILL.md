@@ -1,6 +1,6 @@
 ---
 name: mycelium-guide-authoring
-description: How to write **prescriptive** content into the mycelium substrate — UI procedures (how to configure X, how to set up Y) and diagnostic content (what could be wrong, how to verify, how to resolve). Self-contained for the prescriptive layer. Covers the four prescriptive kinds (`procedure`, `action`, `check`, `cause`), the procedure-as-root pattern (named guide root anchored to a `capability` via `teaches`, composing `property` inputs via `requires` / `accepts` and `action` chains via `contains` / `next`), anchoring action/check/cause to the descriptive layer via `performs` / `verifies` / `violates`, lookup procedures hanging off properties via `obtained-by`, sequencing with `next` / `on-success` / `on-failure`, within-layer links (`confirms` / `refutes` / `resolves`), procedure-to-procedure gating via `when` on a descriptive state, conditional edges via `when`, the procedure shape (linear with branches), the diagnostic shape (cause-driven, branching), phrasing conventions for objective step text, the rule that "Identify X" / "Decide Y" / "Determine Z" are property tells not actions, common patterns (login troubleshooting, MCP connection setup), the prescriptive↔descriptive boundary, plus the shared workflow conventions (tell-before-doing, discovery, batching with `@N` ordering, handling near-duplicates). Use whenever authoring how-to or troubleshooting content, or when calling mycelium write tools (`upsert_statement`, `upsert_statements`, `add_links`, etc.) for prescriptive content (`kind` set to `procedure`, `action`, `check`, or `cause`). For **descriptive** content (event/state/capability/rule/property), use `mycelium-authoring` instead — do not load both.
+description: How to write prescriptive knowledge into a Mycelium knowledge base — how-to guides (how to configure X, how to set up Y) and troubleshooting (what could be wrong, how to verify it, how to resolve it). Covers the four prescriptive kinds (procedure, action, check, cause), the procedure root that teaches a capability and composes property inputs and action chains, anchoring to the descriptive layer (teaches, performs, verifies, violates, obtained-by), sequencing (next, on-success, on-failure, when), the diagnostic loop (confirms, refutes, resolves), objective step phrasing, and why "Identify X" or "Decide Y" is a property, not an action. Use whenever you write procedure, action, check or cause statements, or turn a how-to or troubleshooting page into knowledge. Load mycelium-authoring alongside it for the shared workflow and the descriptive layer the guides anchor to.
 ---
 
 # Mycelium Guide Authoring
@@ -14,29 +14,21 @@ The prescriptive layer is only useful when anchored to the descriptive layer. A 
 
 Four prescriptive kinds:
 
-- **`procedure`** — the named root of a how-to guide. *"How to connect an MCP client to a Mycelium server."* Anchors via `teaches` to a `capability`. Composes its body via `contains` / `next` (to `action`s), `requires` / `accepts` (to `property`s the user supplies), and terminates in a final action (send/submit/save) or a `check` that confirms success.
+- **`procedure`** — the named root of a how-to guide. *"How to connect a reporting tool to a workspace."* Anchors via `teaches` to a `capability`. Composes its body via `contains` / `next` (to `action`s), `requires` / `accepts` (to `property`s the user supplies), and terminates in a final action (send/submit/save) or a `check` that confirms success.
 - **`action`** — a step the user performs. *"Click the Save button."* Anchors via `performs` to an `event` statement (the thing that actually happens in the system when the user does this).
 - **`check`** — a verification step for a diagnostic agent. *"Verify the user's authentication provider matches the login method attempted."* Anchors via `verifies` to a `state` statement (the condition being inspected).
 - **`cause`** — a named failure mode worth investigating. *"User is attempting password login on a social-only account."* Optionally anchors via `violates` to a `state` (when the failure mode is "a required state isn't met"). Free-standing when the failure is environmental, historical, referential, or compound.
 
 **Configurable values the user supplies are not prescriptive.** They live in the descriptive layer as `property` records whose text names their entity, producing a derived mention (`valued-by` a rule for format/value-space when applicable). The procedure references them through `requires` (mandatory in this guide) or `accepts` (optional in this guide). They are *not* pseudo-actions — see §3.
 
-Pick the kind first, write the text second. **Statement text carries no trailing punctuation** — no period, question mark, or exclamation. Statements are labels in a graph. **One statement = one atomic claim** — compound clauses destroy the substrate's ability to link related knowledge.
+Pick the kind first, write the text second. By convention statement text carries no trailing punctuation — statements are labels in a graph. **One statement = one atomic claim** — compound clauses destroy the substrate's ability to link related knowledge.
 
 ## 0. Workflow conventions
 
-These apply to every authoring session, not a specific section. They're load-bearing.
+The shared workflow is in `mycelium-authoring` §8: where your writes land, tell before doing, verify against the code, mark uncertainty, discover before writing, audit links after each chunk, read `near_duplicates`, and batch with `@N`. Two additions for the prescriptive layer:
 
-- **Tell before doing — always.** Present the exact statement texts, `kind`s, link types, mentions, and rationale; wait for operator approval before any mutation. Even one-line changes. The substrate has no undo and no audit log.
 - **Verify against the actual product, not memory.** A check or action describing a screen, field, or button that doesn't exist (or works differently than described) is worse than no documentation — a diagnostic agent following it will get stuck or send users somewhere wrong. When unsure, open the product and confirm.
 - **The descriptive layer is the authority for what the product does.** When writing an action that performs an event *in the modeled product*, the underlying event must already be modeled (or be modeled as part of the same authoring chunk). Don't author prescriptive content over descriptive gaps — flag the gap and pause until it's filled. Dangling anchors are tolerable; *imagined* anchors are not. **Exception:** actions in third-party UIs have no event in the modeled product to anchor to — leave the anchor absent without flagging (§4).
-- **State uncertainty explicitly, never bury it.** Use markers inline so the operator can spot what to verify:
-  - `> 💡 likely correct: [inference + source].`
-  - `> ⚠️ needs verification: [what's unclear and why].`
-
-  Anything without a marker is a claim you can defend from what you read.
-- **Check existing records before creating.** `get_statements(ids)` for known ids; `search_statements` + `grep_statements` for the claim you're about to write. The substrate does not dedup — silent duplicates accumulate.
-- **Audit links after each chunk.** Newly authored statements are frequently isolated. Before declaring a chunk done, walk the most important new records and inspect both `links` and `incoming_links`. Wire orphans in or reconsider whether they should exist.
 
 ## 1. Model the topology before drafting
 
@@ -48,14 +40,14 @@ A named root (`procedure`) composing user-supplied inputs (`property`) and a cha
 
 Sketch:
 
-- **Procedure root** — one `procedure` statement names what the user accomplishes (*"How to connect an MCP client to a Mycelium server"*). Anchors to the `capability` it teaches via `teaches`. Every guide has exactly one root.
-- **Properties** — the configurable values the user supplies. Each is one `property` record on the descriptive side whose text names its entity so a derived mention anchors it (`valued-by` its value-space rule when applicable). The procedure links to them via `requires` (mandatory) or `accepts` (optional). When a property has a non-trivial lookup ("open Settings → Users & invites and create a service account"), that lookup is itself an `action` or sub-`procedure`, hung off the property via `obtained-by`.
+- **Procedure root** — one `procedure` statement names what the user accomplishes (*"How to connect a reporting tool to a workspace"*). Anchors to the `capability` it teaches via `teaches`. Every guide has exactly one root.
+- **Properties** — the configurable values the user supplies. Each is one `property` record on the descriptive side whose text names its entity so a derived mention anchors it (`valued-by` its value-space rule when applicable). The procedure links to them via `requires` (mandatory) or `accepts` (optional). When a property has a non-trivial lookup (creating an API key under **Settings → API keys**), that lookup is itself an `action` or sub-`procedure`, hung off the property via `obtained-by`.
 - **Entry point** — what state must the user be in to start? (Logged in as an admin, on a specific settings page, with a prerequisite procedure already completed.) Each prerequisite is a `state` reference (descriptive layer), attached via `when` on the first action's incoming edge if it's a hard gate. **Procedure-to-procedure ordering:** if Guide 1 must complete before Guide 2 can start, gate Guide 2's first action via `when` on the descriptive state Guide 1 establishes. There is no procedure→procedure link type — the existing `when` machinery covers it.
 - **Linear actions** — the happy-path UI sequence. Each is one `action` statement; the procedure `contains` them (or chains them via `next`). Only real UI interactions belong here: clicks, navigations, entries, copies, sends.
 - **Branches** — when a step has variants. Reify the condition as a state, branch with `on-success` / `on-failure`, or with two `next` edges each carrying a mutually exclusive `when`.
 - **Terminal step** — the procedure ends with a final action (send/submit/save) or a `check` confirming success. The terminal *state* (what's true after completion) is descriptive — `establishes`-ed by the final action's event.
 
-**Mental verbs are property tells, not actions.** When you find yourself writing an action like *"Identify the role to grant"*, *"Decide which server to connect to"*, *"Determine the service account name"* — stop. These aren't UI interactions; they describe the user *choosing a value*. The value is a `property` the procedure `requires` or `accepts`. If finding the value involves real UI steps, those go on the property as `obtained-by → action` (or a sub-`procedure`); if the user just types it in, no `obtained-by` is needed.
+**Mental verbs are property tells, not actions.** When you find yourself writing an action like *"Identify the role to grant"*, *"Decide which workspace to connect to"*, *"Determine the API key name"* — stop. These aren't UI interactions; they describe the user *choosing a value*. The value is a `property` the procedure `requires` or `accepts`. If finding the value involves real UI steps, those go on the property as `obtained-by → action` (or a sub-`procedure`); if the user just types it in, no `obtained-by` is needed.
 
 ### Diagnostic shape (troubleshooting)
 
@@ -73,19 +65,10 @@ Sketch:
 
 ## 2. Discover before writing
 
-The substrate doesn't dedup. Search before writing anything.
-
-- **Bulk authoring** — `discover_facts(texts=[…])`. Returns `{text, status, matches}` per input where status is `exists` (≥0.85 — don't duplicate; link or refine via `upsert_statement(id=…)`), `near` (0.6–0.85 — link instead of standing alone), or `new`.
-- **Single claim** — `search_statements(query, min_score=0.7, depth=1)` for the claim, then `search_statements(query=<entity-name>)` for each entity you plan to mention.
-- **Literal lookup** — `grep_statements(query)` for exact identifiers / phrases that semantic search may miss.
-- **Link-type vocabulary** — `list_link_types()` for what's in use; reuse before inventing.
-
-Two extra discovery steps before writing prescriptive content:
+Run the discovery in `mycelium-authoring` §8 (`discover_facts` for a batch, `search_statements` and `grep_statements` for single claims, `list_link_types()` for the vocabulary). Two extra steps before writing prescriptive content:
 
 - **Search the descriptive layer for the anchor.** Before writing an `action`, search for the `event` it should `performs`. Before writing a `check`, search for the `state` it should `verifies`. Before writing a `cause` that `violates` a required state, search for that state. If the anchor doesn't exist *and the claim sits inside the modeled product*, the descriptive gap comes first. For actions in third-party UIs, no anchor is expected — skip the search (§4).
-- **Search existing prescriptive content for the same procedure or diagnostic tree.** A second author writing a parallel "login troubleshooting" tree without finding the existing one is a common failure mode. Search with phrases like *"verify"*, *"check that"*, *"click"*, *"navigate to"*.
-
-**Pre-create entities with descriptions.** `upsert_entity(name, description)` before referencing a fresh entity in `mentions`. The auto-create path produces an entity with an *empty* description — discoverable only by knowing its name. Pre-create with a one-sentence description of what the entity is, even if you'll refine it later.
+- **Search existing prescriptive content for the same procedure or diagnostic tree.** A second author writing a parallel "login troubleshooting" tree without finding the existing one is a common failure mode. Search with phrases like *"verify"*, *"check that"*, *"click"*, *"navigate to"*, and filter with `kind="procedure"` (or `action`, `check`, `cause`).
 
 ## 3. Pick the right kind
 
@@ -105,16 +88,16 @@ Routing test — ask which question the statement answers:
 
 A `procedure` is the *guide as a whole*. An `action` is a single UI interaction inside it. Every how-to guide has one procedure record at its root; the action chain sits underneath via `contains` or `next`.
 
-A guide *without* a procedure root — just a chain of isolated actions — is wrong shape. The procedure is what consumers query for (*"do we document how to connect over MCP?"*); without it, the guide is unfindable except by walking actions.
+A guide *without* a procedure root — just a chain of isolated actions — is wrong shape. The procedure is what consumers query for (*"do we document how to connect a reporting tool?"*); without it, the guide is unfindable except by walking actions.
 
 ### Action vs property — the "Identify / Decide / Determine" tell
 
 If your action text uses a mental verb (*Identify*, *Decide*, *Determine*, *Choose*, *Pick*, *Find*, *Look up*) and the object is a value the user will then plug into a later real action, it is not an action. It is a `property` the procedure consumes. The real UI interactions (open this page, copy this ID, paste it into that field) are the actions.
 
-- ✗ *"Identify the service account's role"* — that's a property, *"Role to grant"*.
-- ✗ *"Decide which server to connect to"* — property, *"Server base URL"*.
-- ✓ *"Open Settings → Users & invites and create a service account"* — real action; can be `obtained-by` for the *"Service account token"* property.
-- ✓ *"Paste the base URL and token into the MCP client configuration"* — real action; terminal step of the procedure.
+- ✗ *"Identify the API key's role"* — that's a property, *"API key role"*.
+- ✗ *"Decide which workspace to connect to"* — property, *"Workspace API base URL"*.
+- ✓ *"Create an API key under Settings → API keys"* — real action; can be `obtained-by` for the *"API key"* property.
+- ✓ *"Paste the API key into the reporting tool's connection form"* — real action; terminal step of the procedure.
 
 The exception is genuine inspection without a value being plugged later — e.g. *"Look up the user record in the database"* in a diagnostic context, where the lookup is the verification itself. That's a `check`, not an action and not a property.
 
@@ -132,7 +115,7 @@ A statement framed as a user observation (*"the user can see X"*) is usually a `
 These are easy to conflate:
 
 - **`cause`** — names *what is wrong*. Describes the failure mode itself. *"Email format is invalid"*, *"User signed up via Google but is attempting password login"*, *"Browser cache holds an expired session token"*.
-- **`check`** — names *how to find out whether that cause applies*. Describes the verification step. *"Verify the email matches the expected format"*, *"Look up the account and inspect the auth_provider field"*, *"Have the user clear their browser cache"*.
+- **`check`** — names *how to find out whether that cause applies*. Describes the verification step. *"Verify the email matches the expected format"*, *"Inspect the auth_provider field on the account"*, *"Have the user clear their browser cache"*.
 
 One cause may have multiple checks (different ways to verify). One check may rule out multiple causes (a single inspection distinguishing several failure modes).
 
@@ -173,11 +156,11 @@ Read the link as *"this prescriptive record — [type] → that descriptive reco
 [cause]   "Email format is invalid"
    violates → [state]  "Email is valid format"
 
-[procedure]  "How to connect an MCP client to a Mycelium server"
-   teaches  → [capability]  "An MCP client can be connected to a Mycelium server"
-   requires → [property]    "Service account token"
-                obtained-by → [action] "Open Settings → Users & invites and create a service account"
-   accepts  → [property]    "Client display name"
+[procedure]  "How to connect a reporting tool to a workspace"
+   teaches  → [capability]  "A reporting tool can be connected to a workspace"
+   requires → [property]    "API key"
+                obtained-by → [action] "Create an API key under Settings → API keys"
+   accepts  → [property]    "Reporting tool display name"
 ```
 
 ### Anchors are optional, not required
@@ -320,18 +303,18 @@ The flow: check the state; if it holds (success), the cause is refuted; if it fa
 
 ## 7. Phrasing conventions
 
-The substrate does not currently hard-reject prescriptive phrasing — the conventions below are soft. The agent consuming this content is expected to translate objective step text into a friendly conversational style, so author the *objective* form.
+The prescriptive kinds are checked like events: the validator refuses compound text (*"Click Create and copy the token"*), conditions in the text, universal claims (*every*, *all*, *each*), hedges, rule-shaped wording (*must*, *should*, *never*, *always*), property-shaped wording (*is a*, *has a*) and sequencing (*will*). Read the rejection and split or rephrase; pass `allow_phrasing_violations` only for a verbatim quote. The conventions below go further than the validator: they keep step text objective, and the agent consuming it translates that into a friendly conversational style.
 
 ### `procedure` — "How to X" title phrase
 
 A procedure names the user's goal as a guide title. Lead with *"How to"* followed by an imperative verb describing what the user accomplishes.
 
-- ✓ *"How to connect an MCP client to a Mycelium server"*
-- ✓ *"How to configure JIT provisioning for an email domain"*
-- ✓ *"How to invite a single user to a Mycelium server"*
-- ✗ *"Connecting an MCP client"* — gerund, ambiguous between description and instruction; consumers searching for guides expect *"How to"*.
-- ✗ *"The user connects an MCP client"* — third-person narration; that's the descriptive event/capability, not the guide.
-- ✗ *"How to connect an MCP client and invite users"* — two procedures; split (or this is one procedure whose capability covers both, in which case rename to express the unified goal).
+- ✓ *"How to connect a reporting tool to a workspace"*
+- ✓ *"How to configure SSO for a workspace"*
+- ✓ *"How to invite a single member to a workspace"*
+- ✗ *"Connecting a reporting tool"* — gerund, ambiguous between description and instruction; consumers searching for guides expect *"How to"*.
+- ✗ *"The admin connects a reporting tool"* — third-person narration; that's the descriptive event/capability, not the guide.
+- ✗ *"How to connect a reporting tool and invite members"* — two procedures; split (or this is one procedure whose capability covers both, in which case rename to express the unified goal).
 
 The procedure text is the goal, not the steps. Steps live in `action` records the procedure contains.
 
@@ -380,18 +363,18 @@ Conditions go on edges as `when`, not in statement text. The rule applies to all
 
 A check or cause that refers to whether something is "set up" should describe the relationship and its state, not the existence of a record. *"X exists in Y"* is CRUD framing — it talks about a row in a table when the meaningful question is what relationship that row represents and what state it's in.
 
-- ✗ *"Verify the user exists on the server"*
-- ✓ *"Verify the user has an active account on the server"*
+- ✗ *"Verify the member exists in the workspace"*
+- ✓ *"Verify the member's account in the workspace is active"*
 
 - ✗ *"Confirm the integration record is present"*
 - ✓ *"Confirm the integration is connected"*
 
 For causes, the bare-negation form hides the failure mode:
 
-- ✗ *"The user doesn't exist on the server"*
-- ✓ *"The user's account has been suspended"* — or — *"The user has never been invited to the server"*
+- ✗ *"The member doesn't exist in the workspace"*
+- ✓ *"The member's account has been suspended"* — or — *"The user has not been invited to the workspace"*
 
-*"Doesn't exist"* collapses *"never invited"* and *"was active, got suspended"* into one statement. They're different failures with different resolutions.
+*"Doesn't exist"* collapses *"not invited"* and *"was active, got suspended"* into one statement. They're different failures with different resolutions.
 
 **When the technical term is correct, keep it.** This rule is about CRUD framing specifically, not about scrubbing technical vocabulary. *"Verify the JWT signature is valid"*, *"Confirm the webhook payload includes the X-Signature header"*, *"The OAuth refresh token has expired"* — these are precise and stay as-is. The test isn't *"does this sound business-y"*; it's *"am I talking about a record's existence when I should be talking about a relationship's state?"*
 
@@ -404,94 +387,9 @@ Compound clauses destroy the substrate's ability to link related knowledge. Spli
 - A cause that mixes two failure modes (*"Email is invalid or the network is blocked"*) → two causes.
 - Subject changes mid-sentence → two statements.
 
-## 8. The procedure shape — worked pattern
+## 8–9. Worked patterns
 
-### Configuration procedure with properties
-
-When a guide is mostly about *gathering values and submitting them* (an admin filling out a configuration form, an integration setup), the dominant shape is the procedure root composing properties:
-
-```
-[procedure]  "How to connect an MCP client to a Mycelium server"
-   teaches  → [capability]  "An MCP client can be connected to a Mycelium server"
-
-   requires → [property]    "MCP Connection server base URL"
-                obtained-by → [action] "Open the server's Connect page and copy the base URL"
-
-   requires → [property]    "MCP Connection service account token"
-                obtained-by → [action] "Open Settings → Users & invites and create a service account"
-
-   accepts  → [property]    "MCP Connection role to grant the service account"
-                valued-by   → [rule] "Role to grant is one of reader, writer, admin"
-
-   accepts  → [property]    "MCP Connection client display name"
-
-   contains → [action]      "Paste the base URL and token into the MCP client configuration"
-                performs → [event] "An MCP initialize request is submitted"
-```
-
-Notes on this shape:
-
-- **The procedure is the entry point.** Consumers search *"how to connect over MCP"* and land on the procedure record. From there, `requires` / `accepts` enumerate what they need to gather; `contains` enumerates the UI steps.
-- **Properties are shared, not duplicated.** *"Server base URL"* is one record. A second procedure (a diagnostic, a different setup flow) can `requires` the same property without re-authoring it.
-- **`obtained-by` is sparse on purpose.** Most properties have no lookup — the user just types in a display name. Only attach `obtained-by` when there's a real lookup with its own UI steps.
-- **Action chains stay short.** If the procedure is mostly *gather values, send them*, the action layer contains the *send*. Pre-send "actions" like *"Identify the stage"* are property tells (§3), not actions.
-
-### UI walkthrough with sequential clicks
-
-When a guide is mostly *clicks in sequence* (create a service account through the product's own UI), the action chain dominates and properties may be minimal:
-
-```
-[action]   "Navigate to Settings → Users & invites"
-   next → [action]   "Click New service account"
-            next → [action]   "Enter a name for the service account"
-                     next → [action]   "Select a role from the dropdown"
-                              next → [action]   "Click Create and copy the generated token"
-                                       next → [check]   "Verify a test MCP call with the token returns 200"
-                                                on-success → [action]   "Store the token in the client configuration"
-                                                on-failure → [cause]   "The service account was created without the required role"
-                                                              ↑ resolves
-                                                              [action]   "Edit the service account's role and retry"
-```
-
-Notes on this pattern:
-
-- **The procedure terminates in a check, not a save.** The step that confirms the procedure worked is itself a check — the user (or the diagnostic agent watching) verifies that the system reports success. The final store action only runs on the success branch.
-- **Failure branches transition into diagnostic shape.** *"The test call failed"* fans out into causes — missing role, revoked token, wrong base URL — each with its own resolving action. The procedure and the diagnostic share statements; the same `cause` can be reached either way.
-- **Pre-conditions live on the first action's incoming edge.** *"User is logged in as an admin"* and *"The server has authentication enabled"* are descriptive states attached as `when` on the entry edge, not extra action steps.
-
-## 9. The diagnostic shape — worked pattern
-
-Diagnostic trees radiate out from a failing capability. Login can't complete:
-
-```
-[capability]   "A user can log in"                                       (descriptive — entry point)
-   ↑ (this capability is failing)
-
-[cause]   "User is attempting password login on a social-only account"
-   confirms ← [check]   "Look up the account and inspect the auth_provider field"
-                          on-failure → [action]   "Direct the user to the correct social-login button"
-   violates → [state]   "Auth provider on account matches submitted method"
-
-[cause]   "Email format is invalid"
-   confirms ← [check]   "Verify the email matches the expected format"
-                          on-failure → [action]   "Prompt the user to correct the email"
-   violates → [state]   "Email is valid format"
-
-[cause]   "Network blocks the auth domain"                               (no `violates` — environmental)
-   confirms ← [check]   "Have the user attempt the login from a different network"
-                          on-failure → [action]   "Advise the user to contact their network admin"
-
-[cause]   "Account predates current email-verification requirement"      (no `violates` — historical)
-   confirms ← [check]   "Look up the account creation date against the policy effective date"
-                          on-failure → [action]   "Trigger a one-time verification flow for the account"
-```
-
-Notes:
-
-- **The entry point is the capability, not a symptom record.** A diagnostic agent receives a user complaint *"I can't log in"*, resolves it to the `login` capability, and walks the cause neighborhood.
-- **Causes are siblings, not ordered.** Unless one cause is strictly more likely or strictly cheaper to check, leave them as parallel branches and let the agent decide ordering.
-- **Each cause owns its check and resolution.** Don't share checks across causes unless the check genuinely refutes multiple — that's a real `refutes` fan-out, not a shortcut.
-- **Free-standing causes use no `violates`.** The environmental and historical causes above carry no descriptive anchor. They're complete in their own text.
+Full examples of both shapes are in `references/worked-patterns.md`: a configuration procedure composing properties, a UI walkthrough whose failure branch turns diagnostic, and a login diagnostic tree with free-standing causes. Read it before authoring your first guide in a session.
 
 ## 10. The prescriptive↔descriptive boundary
 
@@ -516,28 +414,21 @@ Exceptions:
 - A single-step procedure terminates with one action that has no outgoing `next`. That's fine. But it should have a `performs` anchor (if the step is in the modeled product) and likely an entry condition.
 - An action in a third-party UI legitimately has no `performs` anchor (§4). It must still be wired into the procedure via `next` / `on-success` / `on-failure` or `resolves` — sequence connectivity is what saves it from being a true orphan.
 
-The link audit is part of every chunk (§0): after a batch lands, walk the new ids and `get_statements` them. Orphans show up in clusters when the writer focused on text and forgot direction — finding them at chunk boundaries is much cheaper than finding them after another ten chunks have built around them.
+The link audit is part of every chunk (`mycelium-authoring` §8): after a batch lands, walk the new ids and `get_statements` them. Orphans show up in clusters when the writer focused on text and forgot direction — finding them at chunk boundaries is much cheaper than finding them after another ten chunks have built around them.
 
-## 12. Batch authoring with `upsert_statements`
+## 12. Batch ordering for prescriptive content
 
-`upsert_statements(statements=[...])` writes N records in one call with `@N`-references between siblings. Two mechanics matter for ordering:
-
-- **Define dependencies before the things that reference them.** Condition statements and sub-statements go at LOWER indices; the parent / sequencing statements that reference them via `@N` go at HIGHER indices. The substrate validates `@N` against the slot at index N — putting conditions first means rejections cascade *upward* in a predictable direction.
-- **Cascade rejection is automatic and transitive.** A phrasing rejection on `@3` propagates to anything that references `@3` via outgoing/incoming links or `when` leaves; the cascade reason in the response is `"depends_on_rejected"` with the offending indices. Items with `allow_phrasing_violations: true` per item bypass their own check but still cascade if a *referenced* sibling was rejected.
-
-Two specifics for prescriptive batches:
+`upsert_statements` with `@N` references, and how rejections cascade, are covered in `mycelium-authoring` §8. Two specifics for prescriptive batches:
 
 - **Author the descriptive anchors before (or in the same batch as) the prescriptive statements** *when an anchor is expected*. If you `upsert_statements` a batch of actions whose `performs` targets don't exist yet, the link writes fail. Either run the descriptive batch first or include the descriptive records at lower `@N` indices. Third-party-UI actions (§4) carry no `performs` link in the batch at all — no ordering concern.
 - **Sequencing links go in at the right index too.** When B is `next` after A, define A at a lower index and reference it from B's incoming-link spec, or define both and use a follow-up `add_links` call.
 
-### Pre-create entities before the batch
-
-Mentions auto-create on first use, but in a batch the order is sequential per item — so two siblings mentioning a fresh entity by the same name share the auto-created entity, and the first mention determines its (empty) description. Pre-creating with `upsert_entity(name, description)` before the batch is cheaper than fixing every empty description after.
+Create the concepts the batch names first (`upsert_entity`), so the derived mentions resolve: a statement mentions a concept only when one of its names appears in the text, and nothing is created on first use.
 
 ## Pre-write checklist
 
 1. **Shape identified?** (§1) — procedure or diagnostic. Topology sketched (procedure root + properties + actions; or capability + causes + checks + resolutions).
-2. **Discovered?** (§2) — searched existing prescriptive content for the same procedure or diagnostic tree. Searched descriptive layer for anchor targets (capability for the procedure's `teaches`; properties the procedure will require/accept; events / states for action / check anchors). Entities pre-created with descriptions.
+2. **Discovered?** (§2) — searched existing prescriptive content for the same procedure or diagnostic tree. Searched descriptive layer for anchor targets (capability for the procedure's `teaches`; properties the procedure will require/accept; events / states for action / check anchors). Concepts the texts name exist, with descriptions.
 3. **Procedure root present?** (§1, §3) — every how-to guide starts with one `procedure` statement, `teaches` a capability, composes properties via `requires` / `accepts`, and contains/sequences its actions. A guide that is just a chain of actions is missing its root.
 4. **Configurable inputs modeled as properties, not pseudo-actions?** (§3) — no actions of the form *"Identify X"* / *"Decide Y"* / *"Determine Z"* — those are property tells. Properties live in the descriptive layer, name their entity for a derived mention, and use `valued-by` when applicable. Lookups hang off properties via `obtained-by`.
 5. **Anchors exist, flagged, or legitimately absent?** (§4) — every `procedure` has a `teaches` capability; every `action` in the modeled product has (or has a flagged need for) a `performs` event; actions in third-party UIs have no anchor and need no flag; every `check` has (or needs) a `verifies` state; every non-free-standing `cause` has a `violates` state.
@@ -548,16 +439,11 @@ Mentions auto-create on first use, but in a batch the order is sequential per it
 10. **Boundary check?** (§10) — no checks-without-states, no actions-without-events, no causes-that-are-just-negated-states, no actions-that-are-property-tells, no procedures-that-just-restate-a-capability.
 11. **Connected?** (§11) — at least one statement link in or out per record. Every procedure has `teaches`; every property the procedure consumes is linked through `requires` or `accepts` and names its entity for a derived mention.
 12. **Batch ordered?** (§12) — descriptive anchors (capability, properties, events, states) at lower indices than prescriptive statements (procedure, action, check, cause) that reference them.
-13. **Operator approved?** (§0) — no mutation has run yet.
+13. **Operator approved?** (`mycelium-authoring` §8) — no live mutation has run yet.
 
-## Handling `near_duplicates` from the upsert response
+## `near_duplicates` in prescriptive content
 
-Every `upsert_statement` / `upsert_statements` returns `near_duplicates` — existing records at cosine ≥0.85.
-
-- **≥0.92, same claim in different wording** → you wrote a duplicate. `merge_statements(from=just-written, into=existing)` immediately.
-- **0.85–0.92, related** → not a duplicate, but overlapping ground. Add a link via `add_links` instead of leaving them isolated.
-
-Two specifics for prescriptive content:
+Handle `near_duplicates` as `mycelium-authoring` describes. Two specifics:
 
 - **Parallel diagnostic checks frequently look like near-duplicates.** *"Verify the email format is valid"* and *"Verify the email contains an @ symbol"* score high but are different (one is general, one is specific). They may both stand, with the specific one as a `contains` child of the general one — or the specific one alone is enough. Don't merge reflexively.
-- **A "tip" action duplicating a real step is real duplication.** If you authored an action *"Click Save"* and later authored a second action *"After making changes, click Save"* inside the same procedure, that's the same content twice. Merge them.
+- **A "tip" action duplicating a real step is real duplication.** If you authored an action *"Click Save"* and later authored a second action *"After making changes, click Save"* inside the same procedure, that's the same content twice. Keep one.

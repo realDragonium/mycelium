@@ -6,13 +6,13 @@ Read this when authoring deterministic computation, defaults, bounds, or enumera
 
 | Claim | Kind | Why |
 |---|---|---|
-| "Cosine similarity is bounded between -1 and 1" | rule | Definitional — always true |
-| "This user's role is `admin`" | state | Could be `reader` for another user |
-| "Default result ordering is similarity-descending" | rule | The default itself is fixed |
-| "Statement S is pinned above the similarity ordering" | state | Per-instance override |
-| "Statement kind is one of: event, state, capability, rule, property" | rule | Defines the value space |
-| "Kind boost is a number between 0 and 100" | rule | Value-space rule |
-| "Statement S has kind boost 35" | state | Current value for this instance |
+| "Invoice total is never negative" | rule | Definitional — always true |
+| "The member's role is Viewer" | state | Could be Owner for another member |
+| "Default export format is CSV" | rule | The default itself is fixed |
+| "The workspace exports as XLSX" | state | Per-instance override |
+| "Invoice status is one of: draft, finalized, paid, void" | rule | Defines the value space |
+| "Seat count is a number between 1 and 500" | rule | Value-space rule |
+| "The workspace has 35 seats" | state | Current value for this instance |
 
 The contingency test: **configured/input values** → current value is a `state`, the value space/default/computation is a `rule`. **Derived values** → current value is a `state` (or `property`) `valued-by` the `rule` that computes it.
 
@@ -20,7 +20,7 @@ The contingency test: **configured/input values** → current value is a `state`
 
 - **Calculation** — a formula. Decomposes via `composes` into sub-formulas.
 - **Default** — the value chosen when nothing overrides.
-- **Enumeration** — the possible values for an attribute (*"Statement kind is one of: event, state, capability, rule, property"*).
+- **Enumeration** — the possible values for an attribute (*"Invoice status is one of: draft, finalized, paid, void"*).
 - **Option semantics** — what each enum branch means computationally. Links to its parent via `cases`.
 
 ## Phrasing tells
@@ -37,8 +37,8 @@ Rule phrasing is independent of the event/state/capability catalogs — the moda
 
 ## `cases` vs. `when`-on-`composes` — not interchangeable
 
-- **`cases`** — only for enumeration over a **named, finite value set** (statement kinds, link types). Each `cases` edge points to one branch; the branches are option-semantics rules.
-- **`when` on a `composes` edge** — for **continuous predicates or conditional applicability**. Edge cases are parallel `composes` children of the same parent carrying **mutually exclusive** `when`-conditions (e.g. `total_kind_weight > 0` vs. `= 0`).
+- **`cases`** — only for enumeration over a **named, finite value set** (invoice statuses, plans). Each `cases` edge points to one branch; the branches are option-semantics rules.
+- **`when` on a `composes` edge** — for **continuous predicates or conditional applicability**. Edge cases are parallel `composes` children of the same parent carrying **mutually exclusive** `when`-conditions (e.g. *"The workspace is tax exempt"* vs. its negation via `NOT`).
 
 There is no `sibling`/`parallel` link type — edge cases are just parallel `composes` edges with exclusive `when`s. (Confirm exact link-type availability and direction with `list_link_types()`.)
 
@@ -50,27 +50,25 @@ Only when **other rules traverse it via `cases`** — `cases` requires statement
 
 - Rule `triggers` X — rules don't fire.
 - Event `enables` Rule — rules aren't gated by events.
-- Rule `produces` State — events produce states; rules determine the value a state takes (use `valued-by` on the state/property side).
+- Rule `establishes` State — events establish states; rules determine the value a state takes (use `valued-by` on the state/property side, pointing at the rule).
 
 ## Worked example (sketch)
 
 ```
-[capability] "A rank score can be computed for a query and a statement"
+[capability] "An invoice total can be computed"
    governed-by → [R0]
 
-[R0] "Rank score equals similarity contribution plus recency boost minus staleness penalty"
-   composes → [R1 similarity contribution]   composes → [R2 recency bound]   composes → [R3 staleness penalty]
+[R0] "Invoice total equals the line subtotal plus tax minus discount"
+   composes → [R1 line subtotal]   composes → [R2 tax amount]   composes → [R3 discount]
 
-[R1] "Similarity contribution equals cosine similarity times kind weight share"
-   composes (when total_kind_weight > 0) → [R1a kind weight share formula]
-   composes (when total_kind_weight = 0) → [Rule: kind contribution is zero]
-   composes → [R1b kind weight]
+[R1] "Line subtotal equals the sum of the line amounts"
 
-[R1b] "Kind weight is determined by statement kind"
-   cases → [descriptive kind weights]   cases → [prescriptive kind weights]
-       cases → [capability weight is 1.0] … etc.
+[R2] "Tax amount equals the line subtotal times the tax rate"
+   composes (when NOT "The workspace is tax exempt") → [R2a tax rate]
+   composes (when "The workspace is tax exempt") → [Rule: "Tax amount is zero"]
 
-[R2] "Recency boost is bounded between 0 and 20"
+[R3] "Discount is determined by the plan"
+   cases → ["Discount on the Starter plan is zero"]   cases → [other plans] … etc.
 ```
 
 A consumer enters at the capability and follows `governed-by → composes → cases` to assemble the full computation. Decompose into atomic rules over monolithic statements — compound sentences with multiple subjects or qualifying clauses almost always conceal multiple rules.
