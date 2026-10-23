@@ -64,8 +64,11 @@ statements it weighed, in the memory it shares with
 [outside agents](#curation-work-for-outside-agents). "Connect next N" sends
 the next N statements that are in no pending draft, that no agent holds, and
 that nobody looked at since they, a statement weighed for them, or a
-statement mentioning one of their concepts last changed. A statement the run
-never reached (for example when a cap stopped it) is offered again.
+statement mentioning one of their concepts last changed. It takes first the
+statements whose concepts the most linked statements also name, since those
+sit beside connected knowledge; ties, and statements naming no concept, go in
+id order. A statement the run never reached (for example when a cap stopped
+it) is offered again.
 
 ### Settings
 
