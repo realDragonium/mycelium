@@ -65,6 +65,9 @@ class IngestConfig:
     #: Cost rates are populated only for the known default Claude model.
     input_per_mtok: float | None = None
     output_per_mtok: float | None = None
+    #: Spending cap per run, in USD. Needs both cost rates; without them the
+    #: op cap and wall clock are the only bounds.
+    max_cost_usd: float | None = None
     #: JSONL sink for the trace. None → resolved by the caller to a default
     #: under the data dir (see server wiring).
     trace_log_path: str | None = None
