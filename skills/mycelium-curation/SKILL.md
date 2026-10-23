@@ -35,9 +35,10 @@ those have their own queues (gaps below, `mycelium-documentation`,
 
 Page a list with `GET /api/knowledge-health/statements/{isolated|unmentioned|unlabelled}`
 or `/api/knowledge-health/entities/{undescribed|unused}`, passing `after` (the
-last id you saw) and `limit` (at most 200). On statement lists,
-`skip_pending=true` leaves out statements an undecided draft already touches,
-so you do not propose the same fix twice.
+last id you saw) and `limit` (at most 200). Statement lists mark statements
+an undecided draft already touches and when the connect pass last looked at
+them (`settled_at`); `to_connect=true` leaves out both, so you do not propose
+the same fix twice.
 
 A count is not a defect list. An isolated statement can be a fine fact that
 nothing else needs yet; an unmentioned statement can name a concept nobody
@@ -53,10 +54,14 @@ at once; it is usually the cheapest fix for an `unmentioned` cluster.
 The connect pass asks the server's model to propose links and concept
 mentions for a batch of statements, as an ordinary draft that goes through
 draft review (`docs/KNOWLEDGE_HEALTH.md`). It never creates, rewrites, merges
-or deletes a statement.
+or deletes a statement, and it prefers no link to a doubtful one. A statement
+it finds badly phrased gets no links; the server opens a knowledge gap on it
+asking for a rephrase instead.
 
 - `POST /connect-statements` with `{"statement_ids": [...]}`, or **Connect
-  next N** on the Knowledge health screen. Needs a writer or drafter.
+  next N** on the Knowledge health screen. Needs a writer or drafter. Take
+  the ids from a list with `to_connect=true`: those are the statements the
+  pass has not looked at since they or their neighbours last changed.
 - `connect` in the health response gives the batch size, spending cap and
   model; `connect_error` says why the pass is unavailable (no credentials, a
   paused budget). Do not send more statements than the batch size.
@@ -64,7 +69,7 @@ or deletes a statement.
   operator's go before starting more than one.
 - The result names the draft. Hand it to `mycelium-draft-review`, or tell the
   operator it is in the queue. Dropped proposals are listed in the draft's
-  flags.
+  flags; rephrase requests land in the gap queue (below).
 
 Connect by hand instead when the right link is clear from reading: it is
 free, and you can run the flip test yourself. Follow `mycelium-authoring` for
