@@ -656,3 +656,15 @@ def test_session_cookie_is_secure_when_served_over_https(monkeypatch, env, secur
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     assert authentication.session_cookie_secure() is secure
+
+
+def test_only_read_tools_answer_get(tmp_path, monkeypatch):
+    """A browser follows a link or loads an image with GET and the session
+    cookie, from any site. `submit_draft` takes only an optional `draft_id`,
+    so it was mirrored as GET too: one link would submit the visitor's open
+    draft."""
+    client = _app(tmp_path, monkeypatch)
+    with client:
+        assert client.get("/submit-draft").status_code in (404, 405)
+        assert client.post("/submit-draft", json={}).status_code == 400
+        assert client.get("/list-my-drafts").status_code == 200

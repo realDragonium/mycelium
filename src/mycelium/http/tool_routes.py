@@ -2,8 +2,8 @@
 
 Every function in `server.TOOLS` (everything decorated with `@tool`) gets an
 endpoint here, including the tools `server.MCP_TOOLS` keeps off the MCP
-surface. The path is the kebab-case tool name; the method is GET when the tool
-takes no args, POST otherwise, and the request body's Pydantic schema is
+surface. The path is the kebab-case tool name; the method is GET when a read
+tool takes no args, POST otherwise, and the request body's Pydantic schema is
 derived from the function signature.
 
 Add a tool to a module in `mycelium/server/` with `@tool`, list it in
@@ -200,12 +200,16 @@ def _register(func: Callable[..., Any]) -> None:
         func.__name__
     )
 
-    if not sig.parameters:
+    # GET only for reads: a browser sends GET with the session cookie from
+    # any site that links or embeds the URL.
+    readable = required in ("asker", "reader")
+    if readable and not sig.parameters:
         router.get(path, name=func.__name__)(_make_get_handler(func, required))
         return
 
     if (
-        len(sig.parameters) == 1
+        readable
+        and len(sig.parameters) == 1
         and "draft_id" in sig.parameters
         and sig.parameters["draft_id"].default is None
     ):
