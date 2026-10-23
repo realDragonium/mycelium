@@ -57,6 +57,7 @@ from .. import (
 from ..docgen.publication import BothSidesEdited
 from ..docgen.schema import ManualDocument
 from ..server import registry, runtime
+from .access import _enforce_curator, _enforce_role, _require_admin, _require_principal
 
 # Build the streamable-HTTP sub-app once at import time. Transport
 # configuration lives here rather than on the MCPServer: `MCPServer` holds
@@ -363,32 +364,6 @@ def _path_for(func_name: str) -> str:
 
 def _model_name_for(func_name: str) -> str:
     return func_name.title().replace("_", "") + "Body"
-
-
-# Tool authorization — convention based. The classification helpers
-# live in `auth` so the MCP `@tool` wrapper (server/registry.py) can apply the
-# same policy without depending on the HTTP layer.
-
-
-def _enforce_role(request: Request, required: str, real_role: bool = False) -> None:
-    p = getattr(request.state, "principal", None)
-    if p is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=401, detail="authentication required")
-    # `registry._satisfies` is the one rule the MCP wrapper and the tools/list
-    # filter also ask, so a tool cannot be reachable over one transport and
-    # gated on another.
-    if not registry._satisfies(p, required, real_role):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"this operation requires "
-                f"{'a real' if real_role else 'the'} {required} role"
-            ),
-        )
 
 
 def _make_post_handler(
@@ -751,18 +726,6 @@ def get_history(
 # is off. The synthetic principal is allowed to mint tokens too — handy
 # in single-user local mode for bootstrapping an MCP client without ever
 # enabling auth.
-
-
-def _require_principal(request: Request) -> auth.Principal:
-    p = getattr(request.state, "principal", None)
-    if p is None:
-        # Should be unreachable: middleware either sets a principal or
-        # returns 401 itself. Defensive in case of future middleware
-        # reordering.
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=401, detail="authentication required")
-    return p
 
 
 def _serialize_token_row(row) -> dict[str, Any]:
@@ -1784,26 +1747,6 @@ def submit_draft_http(draft_id: str, request: Request) -> dict[str, Any]:
     return {"ok": True}
 
 
-def _enforce_curator(
-    request: Request, action: str = "approving or rejecting a draft"
-) -> auth.Principal:
-    """Approve/reject require a *real* writer or admin — `_enforce_role`
-    routes drafters through too (because the @tool wrapper's drafter
-    equivalence makes them satisfy writer), which would let a drafter
-    approve their own draft and re-queue every op into a brand new
-    auto-draft at replay time. Use the strict rank check instead.
-    """
-    p = _require_principal(request)
-    if not auth.principal_has_real_role(p, "writer"):
-        from fastapi import HTTPException
-
-        raise HTTPException(
-            status_code=403,
-            detail=f"{action} requires the writer or admin role",
-        )
-    return p
-
-
 @app.post("/api/drafts/{draft_id}/approve")
 def approve_draft(draft_id: str, request: Request) -> dict[str, Any]:
     """Replay the draft's ops against the substrate as the curator.
@@ -1905,15 +1848,6 @@ def withdraw_draft(draft_id: str, request: Request) -> dict[str, Any]:
 # All endpoints require `role == admin`. Service accounts (type=service)
 # represent third-party agents; they can hold tokens but never log in
 # through OIDC.
-
-
-def _require_admin(request: Request) -> auth.Principal:
-    p = _require_principal(request)
-    if not p.is_admin:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=403, detail="admin role required")
-    return p
 
 
 def _serialize_user_row(row) -> dict[str, Any]:
