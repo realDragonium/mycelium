@@ -18,7 +18,7 @@ THE NO-LIVE-WRITE GUARANTEE: the model is handed READ tools plus one terminal
 `emit_draft` tool and never sees a write tool. The only write path in the whole
 package is `drafts_store.create_draft`/`add_op`, reached exclusively through the
 injected `DraftEmitter` in `_assemble_draft`. This module imports no substrate
-write tool and never touches `server._conn`.
+write tool and never touches `server._db()`.
 """
 
 from __future__ import annotations

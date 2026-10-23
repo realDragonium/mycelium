@@ -149,7 +149,6 @@ verification:
 uv run pytest -q
 uv run ruff check src tests scripts
 uv run ruff format --check src tests scripts
-node --test tests/test_ask_client.mjs
 ```
 
 The synthetic comparison in `test_ask_retrieval.py` exercises the same four

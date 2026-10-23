@@ -1,6 +1,7 @@
 // Hash routes for the one app. Each screen has one canonical hash; older
-// hashes from the former /ui and /cockpit apps still resolve (see ALIASES in
-// parseHash) and are rewritten to the canonical one, so bookmarks survive.
+// hashes from the former /ui and /cockpit apps still resolve (see the aliased
+// cases in parseHash) and are rewritten to the canonical one, so bookmarks
+// survive.
 import { createContext, useContext, useEffect, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { isFindMode, isHealthList, type FindMode, type HealthList } from './api';
 

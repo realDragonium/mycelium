@@ -11,10 +11,9 @@ doesn't support cross-database FKs anyway, which is exactly the
 property we want — the substrate has zero schema dependencies on
 identity.
 
-Why a single in-file schema with no migrations? The auth schema is
-new (introduced in this same change), so there's no legacy shape to
-migrate from. If the schema needs to evolve later we can adopt the
-same `user_version` + migration-runner pattern that `store.py` uses.
+The schema is one CREATE-IF-NOT-EXISTS script; `migrate` adds the few
+columns and drops the constraint older files lack or still carry, without
+the substrate's `user_version` runner.
 """
 
 from __future__ import annotations

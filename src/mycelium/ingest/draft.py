@@ -4,7 +4,7 @@
 This module is the single seam through which a draft is created and ops are
 queued — and it does so exclusively via `drafts_store`, which touches only the
 drafts DB. It imports **no** substrate write tool and **never** touches
-`server._conn`.
+`server._db()`.
 
 That is the structural guarantee: the inner model is handed read tools plus one
 terminal `emit_draft` tool and never sees a write tool; the only write path in

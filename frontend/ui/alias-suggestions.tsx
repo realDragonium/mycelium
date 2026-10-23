@@ -1,5 +1,6 @@
 import React from 'react';
 import { errorMessage, getJSON, postJSON, type WorkspaceConcept } from './api';
+import { Link } from './router';
 
 type AliasStatus = 'pending' | 'accepted' | 'rejected' | 'all';
 type ReviewAction = 'accept' | 'reject' | 'retarget' | 'refresh';
@@ -102,7 +103,7 @@ function AliasSuggestions({ canWrite, onChanged }: AliasSuggestionsProps) {
       const actionable = canWrite && suggestion.status === 'pending' && ['open', 'submitted'].includes(entry.draft_status);
       return <article key={entry.operation_ref} className="names-panel">
         <h3>“{proposal.alias}” → {entry.current_names.join(' / ') || proposal.entity_id}</h3>
-        <p>{suggestion.status === 'pending' ? 'Needs human review' : suggestion.status} · <a href={`/cockpit/#/draft/${entry.draft_id}`}>{entry.draft_title || entry.draft_id}</a> · Draft {entry.draft_status}</p>
+        <p>{suggestion.status === 'pending' ? 'Needs human review' : suggestion.status} · <Link to={{ view: 'draft', id: entry.draft_id }}>{entry.draft_title || entry.draft_id}</Link> · Draft {entry.draft_status}</p>
         <blockquote>{suggestion.evidence.quote}</blockquote>
         {suggestion.evidence.text !== suggestion.evidence.quote && <details><summary>Read source context</summary><p className="pre-wrap">{suggestion.evidence.text}</p></details>}
         {suggestion.evidence.statement_id && <p>Source statement: {suggestion.evidence.statement_id}</p>}
