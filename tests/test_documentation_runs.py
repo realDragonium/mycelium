@@ -1243,7 +1243,6 @@ def test_documentation_tools_are_excluded_from_live_substrate_discovery():
     assert {
         "search_statements",
         "get_statements",
-        "survey_statements",
     } <= discovered
 
 

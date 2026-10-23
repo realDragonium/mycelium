@@ -79,7 +79,7 @@ what resolved and what was omitted. Existing truncation totals survive a tighter
 combined limit. Use targeted reads for relevant omitted context or further hops.
 
 This operation is targeted retrieval, not adjacency research. In standard mode,
-a later `search_statements` or `survey_statements` call must supply
+a later `search_statements` call must supply
 `adjacency_sources`: statement refs actually supplied by a completed earlier
 targeted turn. Recon-only evidence, unread link targets, failed reads and sibling
 reads in the same turn cannot qualify. Repeating the literal original question

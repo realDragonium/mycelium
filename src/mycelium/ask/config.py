@@ -54,7 +54,7 @@ class AskConfig:
     #: default — it's what buys thoroughness. The `quick` depth turns it OFF so a
     #: latency-boxed caller gets a fast, direct answer. See `for_depth`.
     enforce_floor: bool = True
-    #: `k` for the step-0 recon survey_statements call.
+    #: Per-part `limit` for the step-0 recon search, which decomposes the question.
     recon_k: int = 8
     #: max_tokens per model turn. Comfortably above a structured answer.
     max_tokens: int = 8000

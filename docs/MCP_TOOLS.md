@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 40 of its 87 registered tools over MCP. Every
+question. Mycelium therefore advertises 40 of its 86 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -30,7 +30,7 @@ decision, and the rest runs in-process.
 
 | Tool | Why it is on MCP |
 | --- | --- |
-| `search_statements` | Semantic retrieval with alias boost and graph expansion. This is the main read. |
+| `search_statements` | Semantic retrieval with alias boost and graph expansion. `decompose` searches each part of a multi-part question and ranks statements several parts surface first. This is the main read. |
 | `get_statements` | Hydrates known ids and follows links. |
 | `find_statement_connections` | Finds bounded routes between statements. It cannot be composed cheaply from other reads. |
 | `grep_statements` | Literal lookup for identifiers and quoted strings that semantic search misses. |
@@ -80,7 +80,6 @@ remain registered functions. Leaving MCP is reversible: add the name back to
 
 | Tool | Why it is not on MCP |
 | --- | --- |
-| `survey_statements` | Its own docstring says it is interchangeable with `search_statements`. This is the one duplicate in the read path. An MCP client can split its own question, and `ask` handles broad questions. Ask and Documentation recon use it in-process. |
 | `retrieve_context` | Combines name lookup, entity reads, search, and fetch for the Ask loop's turn budget. It is a distinct primitive, but MCP clients can run the same reads. |
 | `find_duplicates` | Audits the whole substrate in near-quadratic time and takes no candidate text. This is curation, not retrieval, so it does not satisfy the Ingest reconcile floor. |
 | `find_entity_duplicates` | Audits entity names. This is curation; the Names & aliases workspace lists its results. |

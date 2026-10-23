@@ -122,8 +122,9 @@ class DocgenConfig:
     #: dropping its tail would generate the wrong document instead of an
     #: error the caller can act on.
     max_prompt_chars: int = 2000
-    #: Width of the opening `survey_statements` map of the request. Wider
-    #: than ask's recon: a document covers a topic, not a question.
+    #: Per-part `limit` of the opening decomposed `search_statements` map of
+    #: the request. Wider than ask's recon: a document covers a topic, not a
+    #: question.
     recon_k: int = 30
     #: Path to the docgen doctrine seeded into the store and injected into
     #: the system prompt.

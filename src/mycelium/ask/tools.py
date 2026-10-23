@@ -114,7 +114,7 @@ def build_tools(specs: list[ToolSpec], *, enforce_floor: bool = True) -> list[di
     """Full tool list handed to the model: read primitives + terminal tools."""
     tools = read_tool_defs(specs)
     for tool in tools:
-        if tool["name"] in {"search_statements", "survey_statements"}:
+        if tool["name"] == "search_statements":
             schema = dict(tool["input_schema"])
             schema["properties"] = {
                 **schema.get("properties", {}),

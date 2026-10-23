@@ -55,14 +55,14 @@ def test_openai_question_batches_reads_and_retains_grounded_answer(monkeypatch):
             [
                 ask_fixtures._tool_use("search_statements", {"query": "retry"}, "one"),
                 ask_fixtures._tool_use(
-                    "survey_statements", {"query": "embed retry"}, "two"
+                    "search_statements", {"query": "embed retry"}, "two"
                 ),
             ]
         ),
         ask_fixtures._message(
             [
                 ask_fixtures._tool_use(
-                    "survey_statements",
+                    "search_statements",
                     {"query": "retry conditions", "adjacency_sources": ["s1"]},
                     "adj",
                 )
@@ -79,7 +79,7 @@ def test_openai_question_batches_reads_and_retains_grounded_answer(monkeypatch):
             client=client,
             substrate=ask_fixtures.FakeSubstrate(
                 {
-                    "survey_statements": [{"id": "stm_1", "text": "retry"}],
+                    "recon": [{"id": "stm_1", "text": "retry"}],
                     "search_statements": [{"id": "stm_1", "text": "retry"}],
                 }
             ),

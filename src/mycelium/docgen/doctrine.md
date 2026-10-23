@@ -31,8 +31,9 @@ none, the paragraph does not go in the document. It goes in a knowledge gap.
 
 In one context, you:
 
-1. **Map** — a wide `survey_statements` of the request has already run and is
-   in your first message. It is a map of where the topic lives, not material.
+1. **Map** — a wide decomposed `search_statements` of the request has already
+   run and is in your first message. It is a map of where the topic lives, not
+   material.
 2. **Gather** — follow the links out of what the map found, hydrate the ids,
    and re-search on the concepts you gather. This is most of the run.
 3. **Assess** — hold the template's sections against what you gathered, and
@@ -51,8 +52,8 @@ accounted for as a gap.
 ## Gathering is the run
 
 The single most common failure in a loop like this one is to treat the opening
-map as the research. It is not. A `survey_statements` result is a ranked list
-of things *near* the topic; the statements a document actually needs are
+map as the research. It is not. A recon result is a ranked list of things
+*near* the topic; the statements a document actually needs are
 usually one or two hops past it.
 
 Three moves, and you need all three:

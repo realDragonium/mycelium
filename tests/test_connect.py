@@ -35,7 +35,7 @@ NEIGHBOURS = [
 def _reads():
     return [
         _message([_tool_use("search_statements", {"query": "invoice export"})]),
-        _message([_tool_use("survey_statements", {"query": "export job"})]),
+        _message([_tool_use("search_statements", {"query": "export job"})]),
     ]
 
 

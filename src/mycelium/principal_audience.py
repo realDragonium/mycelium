@@ -34,7 +34,6 @@ TOOLS = frozenset(
         "ask",
         "search_statements",
         "find_statement_connections",
-        "survey_statements",
         "get_statements",
         "retrieve_context",
         "get_entity",

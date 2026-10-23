@@ -109,7 +109,6 @@ from .search import (
     find_duplicates,
     find_statement_connections,
     search_statements,
-    survey_statements,
 )
 from .specs import (
     BatchStatementSpec,
@@ -142,7 +141,6 @@ __all__ = [
     "get_mention_candidates",
     "search_statements",
     "find_statement_connections",
-    "survey_statements",
     "ask",
     "ingest",
     "connect_statements",

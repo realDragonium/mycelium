@@ -40,12 +40,11 @@ RESOLVE_TOOL = "choose_guideline_set"
 REVIEW_TOOL = "record_review"
 
 #: The reads the system prompt, the doctrine and the shipped guidance tell a
-#: writer to use; `survey_statements` is also what recon runs.
+#: writer to use; recon runs `search_statements`.
 #: `tests/test_docgen_prompts.py` fails when served guidance names a tool
 #: outside this set.
 READ_TOOLS = frozenset(
     {
-        "survey_statements",
         "search_statements",
         "get_statements",
         "get_entity",

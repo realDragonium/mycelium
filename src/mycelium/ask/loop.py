@@ -63,7 +63,7 @@ from .tools import (
 from .trace import TraceBuilder
 
 #: Searches that count as semantic-adjacency moves for the floor check.
-_SEARCH_TOOLS = frozenset({"search_statements", "survey_statements"})
+_SEARCH_TOOLS = frozenset({"search_statements"})
 
 #: Safety stops so a stubborn model can't spin forever without consuming ops.
 _MAX_FLOOR_BLOCKS = 3
@@ -368,7 +368,6 @@ def _run_reads(tool_uses: list[ai.ToolUse], ctx: _RunContext) -> None:
         if ok:
             if tu.name in {
                 "search_statements",
-                "survey_statements",
                 "get_statements",
                 "grep_statements",
                 "get_entity",
@@ -487,17 +486,17 @@ def _handle_submit(tool_use: ai.ToolUse, ctx: _RunContext) -> AskResult | None:
 def _recon(
     question: str, substrate: SubstrateReader, config: AskConfig, trace: TraceBuilder
 ) -> Any:
-    args = {"query": question, "k": config.recon_k}
+    args = {"query": question, "limit": config.recon_k, "decompose": True}
     try:
         with trace.span("recon"):
-            recon = substrate.call("survey_statements", args)
+            recon = substrate.call("search_statements", args)
         trace.record_tool_call(
-            "survey_statements", args, recon, ok=True, counts_as_op=True
+            "search_statements", args, recon, ok=True, counts_as_op=True
         )
         return recon
     except SubstrateError as exc:
         trace.record_tool_call(
-            "survey_statements", args, None, ok=False, counts_as_op=True, error=str(exc)
+            "search_statements", args, None, ok=False, counts_as_op=True, error=str(exc)
         )
         trace.notes.append(f"recon failed: {exc}")
         return []

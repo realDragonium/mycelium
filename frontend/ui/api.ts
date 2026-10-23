@@ -140,9 +140,8 @@ export async function findStatements(mode: FindMode, query: string, signal?: Abo
     // Text hits first, alias-only hits after.
     return rows.sort((a, b) => b.occurrences - a.occurrences);
   }
-  const list = mode === 'survey'
-    ? await postJSON<RawScored[]>('/survey-statements', { query: q, k: 6 }, signal)
-    : await postJSON<RawScored[]>('/search-statements', { query: q, limit: 14 }, signal);
+  const body = mode === 'survey' ? { query: q, limit: 6, decompose: true } : { query: q, limit: 14 };
+  const list = await postJSON<RawScored[]>('/search-statements', body, signal);
   return (Array.isArray(list) ? list : [])
     // Depth expansions come back unscored; Find shows direct hits only.
     .filter((s): s is RawScored & { id: string; score: number } => !!s.id && typeof s.score === 'number')
