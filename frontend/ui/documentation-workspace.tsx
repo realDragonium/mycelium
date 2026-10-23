@@ -3,6 +3,7 @@ import { errorMessage, getJSON, HttpError, postJSON } from './api';
 import { substrate } from './data';
 import { PageHeader } from './lib';
 import { Link } from './router';
+import { AudienceIdentity, type AudienceRef } from './audiences';
 
 interface DocumentationRoute { tab: string; document: string | null; revision: string | null; run: string | null }
 interface DocumentationModelOption {
@@ -13,6 +14,7 @@ interface DocumentationOptions {
   models: DocumentationModelOption[];
   can_generate: boolean;
   guideline_sets: Record<string, string[]>;
+  profile_audiences: Record<string, AudienceRef | null>;
   max_prompt_chars: number;
 }
 interface DocumentationRun {
@@ -35,6 +37,7 @@ interface StatementChange {
 interface Staleness { status: 'unknown' | 'current' | 'out_of_date'; changes: StatementChange[] }
 interface DocumentationSummary {
   id: string; slug: string; title: string; guideline_set: string; document_type: string;
+  audience: AudienceRef | null;
   current_revision: number; published_revision: number | null; delivery_status: string;
   updated_at: string; anchor_entity_id: string | null;
   delivery_destination: string | null; delivery_path: string | null; delivery_reference: string | null;
@@ -137,7 +140,10 @@ function DocumentationGenerator({ options, document, documents = [], onStarted }
   const [bothEdited, setBothEdited] = React.useState(false);
   const submitting = React.useRef(false);
   const selected = options.models.find(model => model.provider === provider);
-  const allowed = options.can_generate && selected?.available;
+  const profileName = document?.guideline_set || profile;
+  const profileAudience = profileName ? options.profile_audiences[profileName] : undefined;
+  const audienceUnavailable = !!profileName && profileAudience === null;
+  const allowed = options.can_generate && !!selected?.available && !audienceUnavailable;
   const anchorEntity = anchor.trim() ? docEntityByName(anchor) : null;
   const anchored = anchorEntity ? documents.find(item => item.guideline_set === profile && item.document_type === type && item.anchor_entity_id === anchorEntity.id) : undefined;
   const submit = async (event: { preventDefault: () => void }, startFromDestination = false) => {
@@ -164,6 +170,8 @@ function DocumentationGenerator({ options, document, documents = [], onStarted }
         <label className="docw-wide">About concept (optional)<input type="text" list="docw-anchor-entities" value={anchor} disabled={!type} onChange={event => setAnchor(event.target.value)} placeholder={type ? 'Concept name or alias' : 'Choose a profile and template first'} spellCheck={false} /></label>
         <datalist id="docw-anchor-entities">{substrate.data.entities.map(entity => <option key={entity.id} value={entity.name} />)}</datalist>
       </div>}
+      {profileAudience && <p className="docw-meta">Audience: <AudienceIdentity audience={profileAudience} /></p>}
+      {audienceUnavailable && <p role="alert">This profile's audience was retired. {document ? 'Change its audience in Settings before revising.' : 'Choose another profile or change its audience in Settings.'}</p>}
       {!document && <p className="docw-meta" role="status">{anchored
         ? <>This revises <a href={'#/documentation?document=' + encodeURIComponent(anchored.id)}>“{anchored.title}”</a> (revision {anchored.current_revision}), the {type} about “{anchorEntity?.name}”. Its earlier revisions stay in history.</>
         : anchorEntity ? `This creates a new ${type} about “${anchorEntity.name}”. Requesting it again later revises that document.`
@@ -351,7 +359,7 @@ function DocumentationDocument({ id, revision, options, onStarted, refresh, onUp
   return <>
     <section className="docw-panel">
       <div className="docw-actions"><button onClick={() => docNavigate({ tab: 'library' })}>← All documents</button><button onClick={onUpdated}>Refresh</button></div>
-      <h2>{selected.title}{!historical && current.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type} · revision {revision || current.current_revision}{current.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: current.anchor_entity_id }}>{docEntityName(current.anchor_entity_id)}</Link></>}</p>
+      <h2>{selected.title}{!historical && current.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type}{current.audience && <> · <AudienceIdentity audience={current.audience} /></>} · revision {revision || current.current_revision}{current.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: current.anchor_entity_id }}>{docEntityName(current.anchor_entity_id)}</Link></>}</p>
       <label>Revision history<select value={revision || current.current_revision} onChange={event => docNavigate({ document: id, revision: event.target.value })}>{history.map(item => <option key={item.revision} value={item.revision}>Revision {item.revision}{item.revision === current.current_revision ? ' (current)' : ''} · {docDate(item.created_at)}</option>)}</select></label>
       {historical && <p>You are reading an earlier revision. <button onClick={() => docNavigate({ document: id })}>Open current revision to edit or publish</button></p>}
       <div className="docw-actions"><button onClick={() => setSource(value => !value)}>{source ? 'Read document' : 'View Markdown'}</button><button onClick={download}>Download Markdown</button>{!historical && options.can_generate && <button onClick={() => setEditing(true)}>{docPendingEdits.has(`documents/${encodeURIComponent(id)}/edits`) ? 'Resume edit' : 'Edit Markdown'}</button>}</div>
@@ -446,7 +454,7 @@ function DocumentationWorkspace() {
         <div className="docw-actions"><h2>Saved documents</h2><button onClick={() => docNavigate({ tab: 'generate' })}>Generate document</button><button onClick={update}>Refresh</button></div>
         <p>Documents and their revisions are stored in Mycelium and included in instance backups.</p>
         <label>Find a document<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Title, profile, or template" /></label>
-        {!documents.length ? <p>No documents yet. Start with Generate, or configure a writing profile first.</p> : !filtered.length ? <p>No documents match this search.</p> : <div className="docw-list">{filtered.map(document => <button key={document.id} onClick={() => docNavigate({ document: document.id })}><strong>{document.title}</strong><span>{document.guideline_set} · {document.document_type} · revision {document.current_revision}</span><span>{docDeliveryStatus(document.delivery_status)} · updated {docDate(document.updated_at)}</span>{document.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</button>)}</div>}
+        {!documents.length ? <p>No documents yet. Start with Generate, or configure a writing profile first.</p> : !filtered.length ? <p>No documents match this search.</p> : <div className="docw-list">{filtered.map(document => <button key={document.id} onClick={() => docNavigate({ document: document.id })}><strong>{document.title}</strong><span>{document.guideline_set} · {document.document_type}{document.audience && <> · <AudienceIdentity audience={document.audience} /></>} · revision {document.current_revision}</span><span>{docDeliveryStatus(document.delivery_status)} · updated {docDate(document.updated_at)}</span>{document.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</button>)}</div>}
       </section>)}
       {route.tab === 'runs' && <>{route.run && <DocumentationRun key={route.run} id={route.run} onCompleted={update} options={options} onStarted={started} />}<section className="docw-panel"><div className="docw-actions"><h2>Recent generation runs</h2><button onClick={update}>Refresh</button></div>{!runs.length ? <p>No runs yet.</p> : <div className="docw-list">{runs.map(run => <button key={run.id} onClick={() => docNavigate({ run: run.id })}><strong>{run.prompt}</strong><span>{docStatus(run.status)} · {run.provider} · {docDate(run.created_at)}</span>{run.summary && <span>{docActive(run) && run.summary.activity ? run.summary.activity + ' · ' : ''}{docRunLine(run.summary)}</span>}</button>)}</div>}</section></>}
     </>}

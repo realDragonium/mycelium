@@ -4,6 +4,7 @@ import { useCallback, useState, type FormEvent } from 'react';
 import { Card, LoadError, Loading, Notice, formatDate } from './lib';
 import { HttpError, deleteJSON, enc, errorMessage, getJSON, postJSON, putJSON } from './api';
 import { useAsync } from './use-async';
+import { AudienceIdentity, type AudiencesResponse, type AudienceView } from './audiences';
 
 // Saves are guarded by revision; a 409 keeps the edits and asks for a reload.
 function saveMessage(e: unknown): string {
@@ -179,12 +180,18 @@ function PromptForm({ editor, name, title, canWrite, onDirty, onSaved, onReload 
 interface Template { name: string; text: string; isNew?: boolean }
 interface Profile {
   name: string; revision: string | number; guidance: string; exposure: string; templates: Template[];
+  audience: string | null; effective_audience: string | null;
   retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
+interface ProfilesView extends Profiles { audiences: AudienceView[] }
+interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null }
 
 export function DocumentationProfiles() {
-  const { state, reload } = useAsync(useCallback(() => getJSON<Profiles>('/api/documentation/profiles'), []));
+  const { state, reload } = useAsync(useCallback(async (signal: AbortSignal): Promise<ProfilesView> => {
+    const [profiles, audiences] = await Promise.all([getJSON<Profiles>('/api/documentation/profiles', signal), getJSON<AudiencesResponse>('/api/audiences', signal)]);
+    return { ...profiles, audiences: audiences.audiences };
+  }, []));
   const [form, setForm] = useState<Profile | null>(null);
   const [original, setOriginal] = useState<Profile | null>(null);
   const [creating, setCreating] = useState(false);
@@ -195,13 +202,18 @@ export function DocumentationProfiles() {
   const [showRetired, setShowRetired] = useState(false);
   const dirty = !!form && JSON.stringify(form) !== JSON.stringify(original);
   const data = state.status === 'ready' ? state.data : null;
+  const defaultAudience = data?.audiences.find(audience => audience.default);
+  const effectiveAudienceId = form && data
+    ? !creating && form.audience === original?.audience ? form.effective_audience : form.audience ?? defaultAudience?.id ?? null
+    : null;
 
   const discardOk = (q = 'Discard unsaved profile changes?') => !dirty || window.confirm(q);
   const open = (profile: Profile, isNew: boolean) => { setForm(profile); setOriginal(isNew ? null : profile); setCreating(isNew); setHistory(null); setError(null); setMessage(null); };
   const choose = (p: Profile) => { if (discardOk()) open(p, false); };
   const create = (source: Profile | null) => {
     if (!discardOk()) return;
-    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [] }, true);
+    const audience = source?.audience && data?.audiences.some(item => !item.retired && item.id === source.audience) ? source.audience : null;
+    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null }, true);
   };
   const change = (patch: Partial<Profile>) => { setForm(f => f && { ...f, ...patch }); setMessage(null); };
   const changeTemplate = (i: number, patch: Partial<Template>) => form && change({ templates: form.templates.map((t, j) => j === i ? { ...t, ...patch } : t) });
@@ -216,7 +228,10 @@ export function DocumentationProfiles() {
   const path = (n: string) => `/api/documentation/profiles/${enc(n)}`;
   const save = (e: FormEvent) => {
     e.preventDefault();
-    if (form) void act(() => putJSON<Profile>(path(form.name), { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })) }), 'Profile saved. New runs use it.');
+    if (form) {
+      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience };
+      void act(() => putJSON<Profile>(path(form.name), body), 'Profile saved. New runs use it.');
+    }
   };
   const retire = () => { if (form && window.confirm(`Retire ${form.name}? Its history and generated documents remain.`)) void act(() => deleteJSON<Profile>(path(form.name), { revision: form.revision }), 'Profile retired.'); };
   const reloadProfile = () => { if (form && !creating && discardOk('Discard local edits and load the saved profile?')) void act(() => getJSON<Profile>(path(form.name)), 'Saved profile loaded.'); };
@@ -232,7 +247,7 @@ export function DocumentationProfiles() {
         <div className="row gap-sm wrap">
           {data.profiles.filter(p => showRetired || !p.retired).map(p => (
             <button key={p.name} type="button" className={`fchip${form?.name === p.name && !creating ? ' on' : ''}`} disabled={busy} onClick={() => choose(p)}>
-              {p.name}{p.name === data.default_profile && ' · default'}{p.retired ? ' · retired' : p.ready === false ? ' · incomplete' : ''}
+              {p.name}{p.name === data.default_profile && ' · default'}{p.effective_audience ? ` · ${data.audiences.find(a => a.id === p.effective_audience)?.name || p.effective_audience}` : ' · audience unavailable'}{p.retired ? ' · retired' : p.ready === false ? ' · incomplete' : ''}
             </button>
           ))}
           <label className="check small"><input type="checkbox" checked={showRetired} onChange={e => setShowRetired(e.target.checked)} />Show retired</label>
@@ -244,6 +259,12 @@ export function DocumentationProfiles() {
             {!creating && form.issues?.map(i => <Notice key={i} tone="warn">{i}</Notice>)}
             <form onSubmit={save}><fieldset disabled={busy || !data.can_write} className="stack">
               {creating && <label className="field"><span>Profile name</span><input className="input" value={form.name} required maxLength={200} pattern="[^/]+" placeholder="For example internal-doc" onChange={e => change({ name: e.target.value })} /></label>}
+              <label className="field"><span>Audience</span><select className="input" value={form.audience || ''} disabled={!creating && !data.can_retire} onChange={e => change({ audience: e.target.value || null })}>
+                <option value="">Default ({defaultAudience?.name || 'unavailable'})</option>
+                {form.audience && !data.audiences.some(a => !a.retired && a.id === form.audience) && <option value={form.audience}>{data.audiences.find(a => a.id === form.audience)?.name || form.audience} (retired)</option>}
+                {data.audiences.filter(a => !a.retired).map(a => <option key={a.id} value={a.id}>{a.name} · {a.scope}</option>)}
+              </select>{!creating && !data.can_retire && <span className="hint">Only administrators can change an existing profile's audience.</span>}</label>
+              <p className="hint">Effective audience: {effectiveAudienceId ? (() => { const audience = data.audiences.find(a => a.id === effectiveAudienceId); return audience ? <AudienceIdentity audience={audience} /> : effectiveAudienceId; })() : 'Unavailable'}</p>
               <label className="field"><span>Writing guidance</span><textarea className="input" rows={8} value={form.guidance} onChange={e => change({ guidance: e.target.value })} /></label>
               <label className="field"><span>Disclosure rules</span><textarea className="input" rows={6} value={form.exposure} placeholder="What may be disclosed, and what must stay internal." onChange={e => change({ exposure: e.target.value })} /></label>
               <h4 className="section-label">Document templates</h4>
