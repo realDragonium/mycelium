@@ -46,6 +46,10 @@ statement. Audience ids it invents grant nothing.
   restart forgets the progress, not the queue.
 - A curator sets a label on the statement page; the AI never replaces it.
   **Hand back to AI** removes the curator label and queues the statement.
+- Changing the text of a statement with a curator label keeps the label but
+  flags it **Text changed since decision**, on the statement page and as a
+  label-state filter in **Settings → Audiences**. **Confirm** keeps the label
+  as decided now; **Hand back to AI** removes it and queues the statement.
 - Deleting or merging a statement deletes the removed statement's label. A
   merge keeps the surviving statement's text, so its label stands.
 

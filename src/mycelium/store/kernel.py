@@ -450,16 +450,18 @@ CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals (
 -- `audiences` is a JSON array of audience ids from the prompts database
 -- (no foreign key across files; an id of a retired audience grants nothing).
 -- An AI label is dropped when the statement's text changes; a curator label
--- stays until a curator clears it, and the AI never overwrites it.
+-- stays until a curator clears it, and the AI never overwrites it. A text
+-- change stamps `text_changed_at` on a curator label until it is decided again.
 CREATE TABLE IF NOT EXISTS statement_audience_labels (
-    statement_id TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
-    audiences    TEXT NOT NULL,
-    source       TEXT NOT NULL CHECK (source IN ('ai', 'curator')),
-    reason       TEXT NOT NULL,
-    model        TEXT,
-    cost_usd     REAL,
-    labelled_at  TEXT NOT NULL,
-    labelled_by  TEXT
+    statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
+    audiences       TEXT NOT NULL,
+    source          TEXT NOT NULL CHECK (source IN ('ai', 'curator')),
+    reason          TEXT NOT NULL,
+    model           TEXT,
+    cost_usd        REAL,
+    labelled_at     TEXT NOT NULL,
+    labelled_by     TEXT,
+    text_changed_at TEXT
 );
 
 -- Statements waiting for the audience labelling worker. A new statement or a

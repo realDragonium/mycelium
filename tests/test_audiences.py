@@ -114,7 +114,7 @@ def test_new_statements_are_queued_and_unlabelled_ones_fail_closed(db):
     assert store.visible_statement_ids(db, EXTERNAL.id, False) == frozenset()
 
 
-def test_a_text_change_drops_the_ai_label_but_not_a_curator_decision(db):
+def test_a_text_change_drops_the_ai_label_and_flags_a_curator_decision(db):
     ai_id = store.create_statement(db, "state", "exports run nightly")
     curated = store.create_statement(db, "state", "workspaces have owners")
     store.audience_labels.set_label(
@@ -126,8 +126,14 @@ def test_a_text_change_drops_the_ai_label_but_not_a_curator_decision(db):
     store.update_statement_text(db, ai_id, "exports run hourly")
     store.update_statement_text(db, curated, "workspaces have one owner")
     assert store.audience_labels.get_label(db, ai_id) is None
-    assert store.audience_labels.get_label(db, curated)["source"] == "curator"
+    kept = store.audience_labels.get_label(db, curated)
+    assert kept["source"] == "curator"
+    assert kept["text_changed_at"] is not None
     assert _queued(db) == {ai_id}
+
+    assert store.audience_labels.confirm_label(db, curated, labelled_by="c")
+    assert store.audience_labels.get_label(db, curated)["text_changed_at"] is None
+    assert not store.audience_labels.confirm_label(db, ai_id, labelled_by="c")
 
 
 def test_the_ai_never_overwrites_a_curator(db):
@@ -277,6 +283,15 @@ def test_curators_override_labels_and_the_filter_finds_them(tmp_path, monkeypatc
         # A page opened later still finds the backfill and its progress.
         progress = client.get("/api/audiences/labelling").json()["backfill"]
         assert (progress["queued"], progress["labelled"]) == (1, 0)
+        with store.transaction(conn):
+            store.update_statement_text(conn, public, "invoices can be exported as CSV")
+        changed = client.get(
+            "/api/audiences/statements", params={"state": "text_changed"}
+        ).json()
+        assert [item["id"] for item in changed["statements"]] == [public]
+        confirmed = client.post(f"/api/statements/{public}/audiences/confirm").json()
+        assert confirmed["label"]["text_changed_at"] is None
+        assert confirmed["label"]["audiences"] == ["external-technical"]
         assert (
             client.put(
                 f"/api/statements/{public}/audiences",

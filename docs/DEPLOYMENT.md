@@ -331,7 +331,7 @@ up to the new build's defaults — see
 
 ### Upgrading an instance at schema v14
 
-An instance last deployed at substrate schema v14 runs seven migrations on
+An instance last deployed at substrate schema v14 runs eight migrations on
 the first start of a current build:
 
 | Version | Change |
@@ -343,6 +343,7 @@ the first start of a current build:
 | v19 | Replaces the seeded `sub-type` examples, only if nobody edited them. |
 | v20 | Adds the table of entity pairs dismissed as not duplicates. |
 | v21 | Adds statement audience labels and their queue. |
+| v22 | Records when a curator label's statement text changed after the decision. |
 
 The drafts and prompts databases upgrade themselves on the same start. The
 research feature's data is deleted, as are its settings (see

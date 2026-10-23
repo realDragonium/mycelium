@@ -511,6 +511,8 @@ main.page.home { padding-top: 56px; }
 .audience-statement-text { font-size: var(--fs-sm); line-height: 1.45; }
 .audience-statement-label { font-family: var(--mono); font-size: var(--fs-2xs); color: var(--ink-4); white-space: nowrap; }
 .audience-pages { justify-content: flex-end; margin-top: 14px; }
+.audience-text-changed { margin-top: 8px; }
+.audience-statements > .audience-text-changed { margin: 0; padding: 0 4px 10px; border-bottom: 1px solid var(--line-soft); }
 .statement-audiences { margin-top: 22px; }
 .audience-label-summary { color: var(--ink-3); font-size: var(--fs-sm); }
 .statement-audience-list { display: grid; gap: 6px; margin: 12px 0; }

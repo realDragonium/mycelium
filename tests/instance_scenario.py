@@ -116,11 +116,22 @@ def _substrate(server) -> dict[str, str]:
         )
     if _has_table(db, "statement_audience_labels"):
         db.execute(
-            "INSERT INTO statement_audience_labels VALUES (?, '[\"external-technical\"]', "
+            "INSERT INTO statement_audience_labels (statement_id, audiences, source, "
+            "reason, model, cost_usd, labelled_at, labelled_by) "
+            "VALUES (?, '[\"external-technical\"]', "
             "'curator', 'Integrators configure this.', NULL, NULL, "
             "'2026-08-01T00:00:00Z', 'curator')",
             (ids["expiry"],),
         )
+        labels = {
+            row[1] for row in db.execute("PRAGMA table_info(statement_audience_labels)")
+        }
+        if "text_changed_at" in labels:
+            db.execute(
+                "UPDATE statement_audience_labels SET text_changed_at = "
+                "'2026-08-02T00:00:00Z' WHERE statement_id = ?",
+                (ids["expiry"],),
+            )
     if _has_table(db, "reviewed_draft_applications"):
         db.execute(
             "INSERT INTO reviewed_draft_applications VALUES "

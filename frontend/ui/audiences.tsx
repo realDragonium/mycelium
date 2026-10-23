@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { enc, errorMessage, getJSON, postJSON, putJSON } from './api';
+import { Fragment, useCallback, useEffect, useState, type FormEvent } from 'react';
+import { deleteJSON, enc, errorMessage, getJSON, postJSON, putJSON } from './api';
 import { Card, KindTag, LoadError, Loading, Notice } from './lib';
 import { Link } from './router';
 import { dataOf, useAsync } from './use-async';
@@ -8,7 +8,7 @@ export type AudienceScope = 'internal' | 'external';
 export interface AudienceRef { id: string; name: string; scope: AudienceScope }
 export interface AudienceLabel {
   audiences: string[]; source: 'ai' | 'curator'; reason: string; model: string | null;
-  labelled_at: string; labelled_by: string | null;
+  labelled_at: string; labelled_by: string | null; text_changed_at: string | null;
 }
 export interface AudienceView extends AudienceRef {
   description: string; version: number; retired: boolean; default: boolean; profiles: string[];
@@ -28,10 +28,10 @@ export interface AudiencesResponse {
 interface AudienceStatement {
   id: string; kind: string; text: string; label: AudienceLabel | null; queued: boolean;
 }
-interface AudienceStatementPage { statements: AudienceStatement[]; total: number }
+interface AudienceStatementPage { statements: AudienceStatement[]; total: number; can_curate: boolean }
 type Visibility = '' | 'visible' | 'hidden';
-type LabelState = '' | 'unlabelled' | 'ai' | 'curator' | 'queued';
-const LABEL_STATES = ['unlabelled', 'ai', 'curator', 'queued'] as const;
+type LabelState = '' | 'unlabelled' | 'ai' | 'curator' | 'text_changed' | 'queued';
+const LABEL_STATES = ['unlabelled', 'ai', 'curator', 'text_changed', 'queued'] as const;
 const isLabelState = (value: string): value is Exclude<LabelState, ''> => (LABEL_STATES as readonly string[]).includes(value);
 interface StatementFilter { audience: string; visibility: Visibility; state: LabelState }
 interface AudienceDraft { id: string; name: string; scope: AudienceScope; description: string }
@@ -40,7 +40,23 @@ export const AudienceBadge = ({ scope }: { scope: AudienceScope }) => <span clas
 export const AudienceIdentity = ({ audience }: { audience: AudienceRef }) => <span className="audience-identity"><span>{audience.name}</span><AudienceBadge scope={audience.scope} /></span>;
 
 const formatCost = (value: number | null) => value === null ? '—' : `$${value.toFixed(value >= 1 ? 2 : 4)}`;
-const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}`;
+const labelSummary = (label: AudienceLabel | null, queued: boolean) => queued ? 'Queued for labelling' : !label ? 'Unlabelled' : label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}${label.text_changed_at ? ' · text changed since decision' : ''}`;
+
+export function TextChangedActions({ statementId, onDone }: { statementId: string; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const act = async (request: Promise<unknown>) => {
+    setBusy(true); setError(null);
+    try { await request; onDone(); }
+    catch (cause) { setError(errorMessage(cause)); }
+    finally { setBusy(false); }
+  };
+  return <div className="row gap-sm wrap audience-text-changed">
+    <button type="button" className="btn sm" disabled={busy} onClick={() => void act(postJSON(`/api/statements/${enc(statementId)}/audiences/confirm`))}>Confirm</button>
+    <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void act(deleteJSON(`/api/statements/${enc(statementId)}/audiences`))}>Hand back to AI</button>
+    {error && <Notice tone="error">{error}</Notice>}
+  </div>;
+}
 
 function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: () => void }) {
   const [polledStatus, setPolledStatus] = useState<AudienceStatus | null>(null);
@@ -152,12 +168,12 @@ function StatementFilterList({ audiences, filter, onFilter }: { audiences: Audie
     <div className="field-grid audience-filters">
       <label className="field"><span>Audience</span><select className="input" value={filter.audience} onChange={event => change({ audience: event.target.value })}><option value="">Any audience</option>{audiences.filter(audience => !audience.retired).map(audience => <option key={audience.id} value={audience.id}>{audience.name}</option>)}</select></label>
       {filter.audience && <label className="field"><span>Visibility</span><select className="input" value={filter.visibility} onChange={event => change({ visibility: event.target.value === 'visible' || event.target.value === 'hidden' ? event.target.value : '' })}><option value="">Any visibility</option><option value="visible">Visible</option><option value="hidden">Hidden</option></select></label>}
-      <label className="field"><span>Label state</span><select className="input" value={filter.state} onChange={event => change({ state: isLabelState(event.target.value) ? event.target.value : '' })}><option value="">Any state</option><option value="unlabelled">Unlabelled</option><option value="ai">AI</option><option value="curator">Curator</option><option value="queued">Queued</option></select></label>
+      <label className="field"><span>Label state</span><select className="input" value={filter.state} onChange={event => change({ state: isLabelState(event.target.value) ? event.target.value : '' })}><option value="">Any state</option><option value="unlabelled">Unlabelled</option><option value="ai">AI</option><option value="curator">Curator</option><option value="text_changed">Text changed since decision</option><option value="queued">Queued</option></select></label>
     </div>
     {state.status === 'loading' && !data && <Loading what="statements" />}
     {state.status === 'error' && !data && <LoadError error={state.error} what="statements" onRetry={reload} />}
     {state.status === 'error' && data && <LoadError error={state.error} what="the current statement filters" onRetry={reload} />}
-    {data && <><p className="hint">{data.total} matching statement{data.total === 1 ? '' : 's'}.</p><div className="audience-statements">{data.statements.map(statement => <Link key={statement.id} to={{ view: 'statement', id: statement.id }} className="audience-statement"><KindTag kind={statement.kind} /><span className="audience-statement-text">{statement.text}</span><span className="audience-statement-label">{labelSummary(statement.label, statement.queued)}</span></Link>)}{data.statements.length === 0 && <p className="muted">No statements match these filters.</p>}</div>
+    {data && <><p className="hint">{data.total} matching statement{data.total === 1 ? '' : 's'}.</p><div className="audience-statements">{data.statements.map(statement => <Fragment key={statement.id}><Link to={{ view: 'statement', id: statement.id }} className="audience-statement"><KindTag kind={statement.kind} /><span className="audience-statement-text">{statement.text}</span><span className="audience-statement-label">{labelSummary(statement.label, statement.queued)}</span></Link>{statement.label?.text_changed_at && data.can_curate && <TextChangedActions statementId={statement.id} onDone={reload} />}</Fragment>)}{data.statements.length === 0 && <p className="muted">No statements match these filters.</p>}</div>
       <div className="row gap-sm audience-pages"><button type="button" className="btn ghost sm" disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 50))}>Previous</button><span className="hint">{data.total ? `${offset + 1}–${Math.min(offset + 50, data.total)} of ${data.total}` : '0 results'}</span><button type="button" className="btn ghost sm" disabled={offset + 50 >= data.total} onClick={() => setOffset(value => value + 50)}>Next</button></div></>}
   </Card>;
 }
