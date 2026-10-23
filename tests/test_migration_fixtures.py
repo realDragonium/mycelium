@@ -80,8 +80,8 @@ def _research_doctrine(row: dict) -> bool:
 # Rows a store deliberately drops or rewrites, picked out by predicate. Every
 # other row of these tables must still survive. The prompts store removes what
 # the research feature left behind: its doctrine, model selection, settings
-# sections and concurrency limit, and raises an ingest output budget still at
-# the old default.
+# sections and concurrency limit, and raises an ingest or documentation output
+# budget still at its old default.
 DROPPED_ROWS: dict[tuple[str, str], Callable[[dict], bool]] = {
     ("mycelium-prompts.db", "prompt_texts"): _research_doctrine,
     ("mycelium-prompts.db", "shipped_prompt_texts"): _research_doctrine,
@@ -89,10 +89,8 @@ DROPPED_ROWS: dict[tuple[str, str], Callable[[dict], bool]] = {
     ("mycelium-prompts.db", "product_settings"): lambda row: (
         row["section"] in ("research", "sources")
         or "research_runs" in row["body_json"]
-        or (
-            row["section"] == "ingest"
-            and json.loads(row["body_json"]).get("max_tokens") == 8000
-        )
+        or (row["section"], json.loads(row["body_json"]).get("max_tokens"))
+        in (("ingest", 8000), ("docgen", 12000))
     ),
 }
 

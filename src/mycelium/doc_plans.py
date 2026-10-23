@@ -1,0 +1,292 @@
+"""Documentation plans and their items, in the drafts database beside the
+documentation runs they start.
+
+A plan is one planning call for one writing profile. Its items are what the
+model proposed after this module's checks; each is proposed, approved (with
+the run it started) or dismissed. A dismissal is also kept per profile under
+the item's identity key, so a later plan proposing the same thing drops it.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+import uuid
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Literal
+
+from . import timestamps
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS documentation_plans (
+    id            TEXT PRIMARY KEY,
+    guideline_set TEXT NOT NULL,
+    audience_id   TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    created_by    TEXT,
+    finished_at   TEXT,
+    outcome       TEXT CHECK (outcome IN ('planned', 'failed')),
+    error         TEXT,
+    activity      TEXT,
+    provider      TEXT,
+    model         TEXT,
+    summary       TEXT
+);
+CREATE INDEX IF NOT EXISTS documentation_plans_profile
+    ON documentation_plans (guideline_set, created_at);
+CREATE TABLE IF NOT EXISTS documentation_plan_items (
+    id                TEXT PRIMARY KEY,
+    plan_id           TEXT NOT NULL REFERENCES documentation_plans(id),
+    position          INTEGER NOT NULL,
+    key               TEXT NOT NULL,
+    action            TEXT NOT NULL CHECK (action IN ('create', 'update')),
+    title             TEXT NOT NULL,
+    document_type     TEXT NOT NULL,
+    anchor_entity_id  TEXT,
+    document_id       TEXT,
+    rationale         TEXT NOT NULL,
+    priority          TEXT NOT NULL CHECK (priority IN ('high', 'medium', 'low')),
+    statement_ids     TEXT NOT NULL,
+    state             TEXT NOT NULL DEFAULT 'proposed'
+                      CHECK (state IN ('proposed', 'approved', 'dismissed')),
+    decided_at        TEXT,
+    decided_by        TEXT,
+    run_id            TEXT
+);
+CREATE INDEX IF NOT EXISTS documentation_plan_items_plan
+    ON documentation_plan_items (plan_id, position);
+CREATE TABLE IF NOT EXISTS documentation_plan_dismissals (
+    guideline_set TEXT NOT NULL,
+    key           TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    dismissed_at  TEXT NOT NULL,
+    dismissed_by  TEXT,
+    PRIMARY KEY (guideline_set, key)
+);
+"""
+
+Action = Literal["create", "update"]
+Priority = Literal["high", "medium", "low"]
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    conn.executescript(SCHEMA)
+
+
+@dataclass(frozen=True)
+class Item:
+    key: str
+    action: Action
+    title: str
+    document_type: str
+    anchor_entity_id: str | None
+    document_id: str | None
+    rationale: str
+    priority: Priority
+    statement_ids: tuple[str, ...]
+
+
+def create_plan(
+    conn: sqlite3.Connection,
+    *,
+    guideline_set: str,
+    audience_id: str,
+    created_by: str | None,
+    provider: str,
+    model: str,
+) -> str:
+    plan_id = "dpl_" + uuid.uuid4().hex[:16]
+    conn.execute(
+        "INSERT INTO documentation_plans (id, guideline_set, audience_id, created_at, "
+        "created_by, activity, provider, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            plan_id,
+            guideline_set,
+            audience_id,
+            timestamps.now(),
+            created_by,
+            "Queued",
+            provider,
+            model,
+        ),
+    )
+    conn.commit()
+    return plan_id
+
+
+def record_activity(conn: sqlite3.Connection, plan_id: str, activity: str) -> None:
+    conn.execute(
+        "UPDATE documentation_plans SET activity = ? WHERE id = ?", (activity, plan_id)
+    )
+    conn.commit()
+
+
+def finish_plan(
+    conn: sqlite3.Connection,
+    plan_id: str,
+    *,
+    items: Sequence[Item] = (),
+    error: str | None = None,
+    summary: dict[str, object] | None = None,
+) -> None:
+    with conn:
+        for position, item in enumerate(items):
+            conn.execute(
+                "INSERT INTO documentation_plan_items (id, plan_id, position, key, "
+                "action, title, document_type, anchor_entity_id, document_id, "
+                "rationale, priority, statement_ids) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "dpi_" + uuid.uuid4().hex[:16],
+                    plan_id,
+                    position,
+                    item.key,
+                    item.action,
+                    item.title,
+                    item.document_type,
+                    item.anchor_entity_id,
+                    item.document_id,
+                    item.rationale,
+                    item.priority,
+                    json.dumps(list(item.statement_ids)),
+                ),
+            )
+        conn.execute(
+            "UPDATE documentation_plans SET finished_at = ?, outcome = ?, error = ?, "
+            "activity = NULL, summary = ? WHERE id = ?",
+            (
+                timestamps.now(),
+                "failed" if error is not None else "planned",
+                error,
+                json.dumps(summary) if summary is not None else None,
+                plan_id,
+            ),
+        )
+
+
+def active_plan(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | None:
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM documentation_plans WHERE guideline_set = ? "
+        "AND finished_at IS NULL",
+        (guideline_set,),
+    ).fetchone()
+    return row
+
+
+def latest_plan(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | None:
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM documentation_plans WHERE guideline_set = ? "
+        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (guideline_set,),
+    ).fetchone()
+    return row
+
+
+def latest_planned(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row | None:
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM documentation_plans WHERE guideline_set = ? "
+        "AND outcome = 'planned' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (guideline_set,),
+    ).fetchone()
+    return row
+
+
+def items(conn: sqlite3.Connection, plan_id: str) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            "SELECT * FROM documentation_plan_items WHERE plan_id = ? ORDER BY position",
+            (plan_id,),
+        )
+    )
+
+
+def get_item(conn: sqlite3.Connection, item_id: str) -> sqlite3.Row | None:
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT i.*, p.guideline_set FROM documentation_plan_items i "
+        "JOIN documentation_plans p ON p.id = i.plan_id WHERE i.id = ?",
+        (item_id,),
+    ).fetchone()
+    return row
+
+
+def claim(
+    conn: sqlite3.Connection, item_id: str, decided_by: str | None
+) -> sqlite3.Row:
+    """Mark a proposed item approved, so two approvals cannot both start a
+    run for it. Raises when it is not proposed."""
+    with conn:
+        changed = conn.execute(
+            "UPDATE documentation_plan_items SET state = 'approved', decided_at = ?, "
+            "decided_by = ? WHERE id = ? AND state = 'proposed'",
+            (timestamps.now(), decided_by, item_id),
+        ).rowcount
+    row = get_item(conn, item_id)
+    if row is None:
+        raise LookupError("plan item not found")
+    if not changed:
+        raise ValueError(f"This item was already {row['state']}.")
+    return row
+
+
+def release(conn: sqlite3.Connection, item_id: str) -> None:
+    """Undo a claim whose run could not start."""
+    with conn:
+        conn.execute(
+            "UPDATE documentation_plan_items SET state = 'proposed', decided_at = NULL, "
+            "decided_by = NULL WHERE id = ? AND run_id IS NULL",
+            (item_id,),
+        )
+
+
+def record_run(conn: sqlite3.Connection, item_id: str, run_id: str) -> None:
+    with conn:
+        conn.execute(
+            "UPDATE documentation_plan_items SET run_id = ? WHERE id = ?",
+            (run_id, item_id),
+        )
+
+
+def dismiss(
+    conn: sqlite3.Connection,
+    guideline_set: str,
+    key: str,
+    title: str,
+    dismissed_by: str | None,
+    *,
+    item_id: str | None = None,
+) -> None:
+    now = timestamps.now()
+    with conn:
+        if item_id is not None:
+            changed = conn.execute(
+                "UPDATE documentation_plan_items SET state = 'dismissed', "
+                "decided_at = ?, decided_by = ? WHERE id = ? AND state = 'proposed'",
+                (now, dismissed_by, item_id),
+            ).rowcount
+            if not changed:
+                raise ValueError("Only a proposed item can be dismissed.")
+        conn.execute(
+            "INSERT OR IGNORE INTO documentation_plan_dismissals VALUES (?, ?, ?, ?, ?)",
+            (guideline_set, key, title, now, dismissed_by),
+        )
+
+
+def dismissed(conn: sqlite3.Connection, guideline_set: str) -> list[sqlite3.Row]:
+    return list(
+        conn.execute(
+            "SELECT * FROM documentation_plan_dismissals WHERE guideline_set = ? "
+            "ORDER BY dismissed_at",
+            (guideline_set,),
+        )
+    )
+
+
+def mark_orphaned(conn: sqlite3.Connection) -> int:
+    """At startup no planning thread exists, so every unfinished plan failed."""
+    with conn:
+        return conn.execute(
+            "UPDATE documentation_plans SET finished_at = ?, outcome = 'failed', "
+            "error = 'orphaned by restart', activity = NULL WHERE finished_at IS NULL",
+            (timestamps.now(),),
+        ).rowcount

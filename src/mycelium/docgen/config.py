@@ -107,8 +107,8 @@ class DocgenConfig:
     #: that slot from `ask` and `ingest`.
     wall_clock_s: float = 900.0
     #: max_tokens per model turn. A document body is the largest single thing
-    #: any loop in this tree emits, hence the headroom over ask's.
-    max_tokens: int = 12000
+    #: any loop in this tree emits, and adaptive thinking shares the budget.
+    max_tokens: int = 32000
     #: Provider retries cover 429/5xx/connection with exponential backoff.
     max_retries: int = 4
     #: Per-model-call timeout, seconds. Kept well under the wall clock so

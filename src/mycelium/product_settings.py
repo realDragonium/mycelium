@@ -85,7 +85,8 @@ class IngestSettings(LoopLimits):
 class DocgenSettings(LoopLimits):
     kind: Literal["docgen"] = "docgen"
     wall_clock_s: float = Field(default=900.0, gt=0)
-    max_tokens: int = Field(default=12000, gt=0)
+    # Adaptive thinking plus a whole document body outgrew 12000.
+    max_tokens: int = Field(default=32000, gt=0)
     max_prompt_chars: int = Field(default=2000, gt=0)
     recon_k: int = Field(default=30, gt=0)
 
@@ -114,6 +115,25 @@ class AudienceLabellingSettings(RequestLimits):
     max_tokens: int = Field(default=6000, gt=0)
     max_retries: int = Field(default=2, ge=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
+
+
+class DocumentationPlanningSettings(RequestLimits):
+    kind: Literal["documentation_planning"] = "documentation_planning"
+    max_tokens: int = Field(default=12000, gt=0)
+    max_retries: int = Field(default=2, ge=0)
+    request_timeout_s: float = Field(default=300.0, gt=0)
+    #: Concepts the overview lists, most visible statements first.
+    max_entities: int = Field(default=150, gt=0, le=1000)
+    #: Capability statements the overview quotes, the most linked first.
+    max_capabilities: int = Field(default=150, ge=0, le=1000)
+    max_items: int = Field(default=15, gt=0, le=50)
+    #: A concept with this many visible statements and no document of the
+    #: profile shows in the coverage view.
+    coverage_min_statements: int = Field(default=10, gt=0)
+    #: Newly visible statements since the last plan before re-planning is hinted.
+    replan_hint_statements: int = Field(default=25, gt=0)
+    #: Items one batch approval may start; each is a documentation run.
+    approve_batch: int = Field(default=2, gt=0, le=10)
 
 
 class ConcurrencySettings(SettingsModel):
@@ -196,6 +216,7 @@ Section = Literal[
     "draft_review",
     "alias_discovery",
     "audience_labelling",
+    "documentation_planning",
     "concurrency",
     "documentation",
 ]
@@ -206,6 +227,7 @@ Body = Annotated[
     | ReviewSettings
     | AliasDiscoverySettings
     | AudienceLabellingSettings
+    | DocumentationPlanningSettings
     | ConcurrencySettings
     | DocumentationSettings,
     Field(discriminator="kind"),
@@ -218,6 +240,7 @@ DEFAULTS: tuple[Body, ...] = (
     ReviewSettings(),
     AliasDiscoverySettings(),
     AudienceLabellingSettings(),
+    DocumentationPlanningSettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
 )
@@ -266,6 +289,7 @@ T = TypeVar(
     | ReviewSettings
     | AliasDiscoverySettings
     | AudienceLabellingSettings
+    | DocumentationPlanningSettings
     | ConcurrencySettings
     | DocumentationSettings,
 )
@@ -384,7 +408,12 @@ def validate_secrets(settings: Body, *, conn: sqlite3.Connection | None = None) 
 
 
 def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
-    if isinstance(default, AliasDiscoverySettings | AudienceLabellingSettings):
+    if isinstance(
+        default,
+        AliasDiscoverySettings
+        | AudienceLabellingSettings
+        | DocumentationPlanningSettings,
+    ):
         return default
     if isinstance(default, DocumentationSettings):
         from .docgen.destinations import load_destinations
@@ -474,22 +503,34 @@ def initialize(conn: sqlite3.Connection, *, import_environment: bool) -> None:
     )
 
 
-def raise_ingest_output_budget(conn: sqlite3.Connection) -> None:
-    """Once per instance, lift a saved ingest `max_tokens` still at the old
-    8000 default, which most drafts outgrew."""
-    marker = "ingest-max-tokens-32000"
-    if conn.execute(
-        "SELECT 1 FROM instance_settings_migrations WHERE name = ?", (marker,)
-    ).fetchone():
-        return
-    conn.execute(
-        "UPDATE product_settings SET revision = revision + 1, "
-        "body_json = json_set(body_json, '$.max_tokens', ?) "
-        "WHERE section = 'ingest' AND json_valid(body_json) "
-        "AND json_extract(body_json, '$.max_tokens') = 8000",
-        (IngestSettings().max_tokens,),
-    )
-    conn.execute("INSERT INTO instance_settings_migrations VALUES (?)", (marker,))
+#: Saved `max_tokens` values that were once the shipped default and proved
+#: too small, per section, with the once-per-instance marker that lifts them.
+_OUTGROWN_OUTPUT_BUDGETS = (
+    ("ingest", 8000, "ingest-max-tokens-32000"),
+    ("docgen", 12000, "docgen-max-tokens-32000"),
+)
+
+
+def raise_output_budgets(conn: sqlite3.Connection) -> None:
+    """Once per instance, lift a saved `max_tokens` still at an old default:
+    most ingest drafts outgrew 8000, and a document-writing turn 12000."""
+    current = {
+        "ingest": IngestSettings().max_tokens,
+        "docgen": DocgenSettings().max_tokens,
+    }
+    for section, old, marker in _OUTGROWN_OUTPUT_BUDGETS:
+        if conn.execute(
+            "SELECT 1 FROM instance_settings_migrations WHERE name = ?", (marker,)
+        ).fetchone():
+            continue
+        conn.execute(
+            "UPDATE product_settings SET revision = revision + 1, "
+            "body_json = json_set(body_json, '$.max_tokens', ?) "
+            "WHERE section = ? AND json_valid(body_json) "
+            "AND json_extract(body_json, '$.max_tokens') = ?",
+            (current[section], section, old),
+        )
+        conn.execute("INSERT INTO instance_settings_migrations VALUES (?)", (marker,))
 
 
 class ArchivedSection(SettingsModel):

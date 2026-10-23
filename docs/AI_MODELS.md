@@ -10,6 +10,7 @@ model:
 - Draft review: assess submitted knowledge drafts.
 - Alias discovery: propose alternative names from selected existing statements.
 - Audience labelling: decide which documentation audiences may see each statement ([Audiences](AUDIENCES.md)).
+- Documentation planning: propose which documents a writing profile's audience needs ([Documentation planning](DOCUMENTATION_PLANNING.md)).
 
 Choose Claude or OpenAI GPT independently for each action. Each action remembers
 one model ID and reasoning effort per provider, so switching providers preserves the other provider’s settings.
@@ -77,7 +78,7 @@ editable. Database-level failures still require operator repair. Backup refuses 
 unreadable instance configuration, and restore validates required settings
 sections before replacing the target. Older archives without settings receive built-in defaults, with automation off; restore never imports the target environment.
 
-Authenticated `GET /api/model-settings` returns all five actions, their effective
+Authenticated `GET /api/model-settings` returns every action, their effective
 provider, selected model, remembered model IDs, source, and revision. Admin-only
 `PATCH /api/model-settings/{action}` accepts `provider`, `claude_model`,
 `openai_model`, optional `claude_reasoning_effort` and `openai_reasoning_effort`, and the current `revision`. Omitted effort fields preserve saved values; explicit `null` restores Model default. Concurrent or stale saves return 409
@@ -120,7 +121,9 @@ operations, 25 seconds per run, and 20 seconds per request, and disables its
 retrieval floor. Smaller saved limits remain effective. Ingest allows 32,000
 output tokens per request, thinking included, because a full draft outgrew the
 earlier 8,000; an instance whose saved Ingest limit was still 8,000 is raised
-once on upgrade.
+once on upgrade. Documentation allows 32,000 for the same reason: a document
+body with adaptive thinking outgrew 12,000 and fell back to the forced final
+attempt, so a saved 12,000 is raised once too.
 
 Shared model concurrency and the documentation active-run limit are
 editable. Lowering shared concurrency lets current work finish and holds new

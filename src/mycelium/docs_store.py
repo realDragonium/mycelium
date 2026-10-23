@@ -44,7 +44,7 @@ import uuid as _uuid
 from collections.abc import Mapping
 from pathlib import Path
 
-from . import timestamps
+from . import doc_plans, timestamps
 
 DOCUMENTATION_RUNS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS documentation_runs (
@@ -122,6 +122,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_document_lifecycle(conn)
     _add_cited_statements(conn)
     _add_run_summary(conn)
+    doc_plans.migrate(conn)
     conn.commit()
 
 

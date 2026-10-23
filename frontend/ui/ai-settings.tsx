@@ -50,7 +50,7 @@ interface ActionSettings {
   configuration_error?: string | null; providers: ProviderStatus[];
 }
 interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
-const ACTION_TITLES: Record<string, string> = { ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation', alias_discovery: 'Alias discovery', audience_labelling: 'Audience labelling' };
+const ACTION_TITLES: Record<string, string> = { ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation', alias_discovery: 'Alias discovery', audience_labelling: 'Audience labelling', documentation_planning: 'Documentation planning' };
 
 function formOf(s: ActionSettings) {
   return { provider: s.provider, claude_model: s.claude_model, openai_model: s.openai_model, claude_reasoning_effort: s.claude_reasoning_effort ?? null, openai_reasoning_effort: s.openai_reasoning_effort ?? null, revision: s.revision };
