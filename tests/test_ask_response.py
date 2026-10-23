@@ -16,11 +16,11 @@ from mycelium.ask.transport import respond
 def result(request):
     if request.param == "answered":
         return ask.Answered(
-            answer="A match score measures fit. The exact formula is unknown.",
+            answer="An invoice reminder is sent before the due date. The exact schedule is unknown.",
             confidence="medium",
             interpretation=Interpretation(
-                as_asked="What is a match score?",
-                resolved_to="What is a match score?",
+                as_asked="When is an invoice reminder sent?",
+                resolved_to="When is an invoice reminder sent?",
                 reframed=False,
             ),
             gaps=["Formula unknown"],
@@ -44,7 +44,7 @@ def test_tool_response(monkeypatch, result, verbose):
         ask, "run_ask", lambda question, *, config, substrate=None: result
     )
     arguments = {"verbose": True} if verbose else {}
-    response = server.ask.__wrapped__("What is a match score?", **arguments)
+    response = server.ask.__wrapped__("When is an invoice reminder sent?", **arguments)
     expected = result.model_dump()
     if not verbose:
         fields = (
