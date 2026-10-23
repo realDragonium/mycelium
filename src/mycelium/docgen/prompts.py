@@ -73,8 +73,8 @@ never reaches the page.
 
 YOUR TOOLS
 The substrate's read primitives (search_statements, survey_statements, \
-get_statements, get_entity, grep_statements, discover_facts, the list_* and \
-glossary tools, and more) — use them freely. Plus `report_knowledge_gap`, for \
+get_statements, get_entity, list_statements, grep_statements, discover_facts, \
+and the vocabulary lookups above) — use them freely. Plus `report_knowledge_gap`, for \
 filing what the substrate could not supply. You have NO write tool: nothing \
 you do can change the substrate, and the document does not become substrate \
 truth. You finish by calling exactly ONE terminal tool: `emit_document`.
@@ -302,15 +302,6 @@ def resolution_message(
         "look a value up, to understand why something works, or to fix a "
         "problem they are hitting. Then call choose_guideline_set once. The "
         "document type must be one the set you chose actually lists above."
-    )
-
-
-def match_message(prompt: str, documents: list[dict[str, str]]) -> str:
-    return (
-        "Decide whether this request asks to revise one existing document. "
-        "Choose null when none is the same topic.\n\nREQUEST:\n-----\n"
-        f"{prompt}\n-----\n\nEXISTING DOCUMENTS:\n"
-        f"{json.dumps(documents, ensure_ascii=False, indent=2)}"
     )
 
 

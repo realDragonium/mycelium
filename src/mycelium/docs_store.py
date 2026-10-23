@@ -41,6 +41,7 @@ import json
 import re
 import sqlite3
 import uuid as _uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from . import timestamps
@@ -119,6 +120,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _rekey_generated_documents(conn)
     _add_document_revisions(conn)
     _add_document_lifecycle(conn)
+    _add_cited_statements(conn)
     conn.commit()
 
 
@@ -212,6 +214,22 @@ def _add_document_lifecycle(conn: sqlite3.Connection) -> None:
                 "UPDATE generated_documents SET pull_request_number = ? WHERE id = ?",
                 (int(match.group(1)), row["id"]),
             )
+
+
+def _add_cited_statements(conn: sqlite3.Connection) -> None:
+    """Keep the text each revision's citations had when it was reviewed.
+
+    NULL for a revision saved before this: nothing recorded what its
+    statements said, so whether they changed since is unknown, not "no".
+    """
+    columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(generated_document_revisions)")
+    }
+    if "cited_statements" not in columns:
+        conn.execute(
+            "ALTER TABLE generated_document_revisions ADD COLUMN cited_statements TEXT"
+        )
 
 
 def _add_document_revisions(conn: sqlite3.Connection) -> None:
@@ -888,6 +906,7 @@ def upsert_document(
     revision_source_content_revision: str | None = None,
     expected_revision: int | None = None,
     anchor_entity_id: str | None = None,
+    cited_statements: Mapping[str, str] | None = None,
 ) -> str:
     """Write content while preserving metadata a partial writer omits.
 
@@ -1016,10 +1035,16 @@ def upsert_document(
         conn.execute(
             "INSERT INTO generated_document_revisions "
             "(document_id, revision, parent_revision, slug, title, guideline_set, document_type, body, "
-            "statement_ids, review, created_at, run_id) "
+            "statement_ids, review, created_at, run_id, cited_statements) "
             "SELECT id, current_revision, ?, slug, title, guideline_set, document_type, body, "
-            "statement_ids, review, updated_at, last_run_id FROM generated_documents WHERE id = ?",
-            (revision - 1 if revision > 1 else None, document_id),
+            "statement_ids, review, updated_at, last_run_id, ? FROM generated_documents WHERE id = ?",
+            (
+                revision - 1 if revision > 1 else None,
+                None
+                if cited_statements is None
+                else json.dumps(dict(cited_statements)),
+                document_id,
+            ),
         )
         if run_id is not None:
             conn.execute(

@@ -49,7 +49,7 @@ def request_documentation_http(
     body: DocumentationRequestBody, request: Request
 ) -> dict[str, object]:
     _enforce_role(request, "writer", real_role=True)
-    return server.request_documentation(**body.model_dump(), match_existing=False)
+    return server.request_documentation(**body.model_dump())
 
 
 @router.get("/api/documentation/runs")
@@ -125,10 +125,11 @@ def edit_document_draft_http(
 
 
 class DocumentRevisionBody(BaseModel):
-    prompt: str
+    prompt: str = ""
     expected_revision: int = PydField(ge=1, strict=True)
     provider: Literal["claude", "openai"] | None = None
     start_from_destination: bool = False
+    update_sources: bool = False
 
 
 class DocumentDeliveryBody(BaseModel):

@@ -64,7 +64,6 @@ from .config import DOCTRINE_NAME, DocgenConfig
 from .schema import (
     DocgenResult,
     DocumentWritten,
-    ExistingDocument,
     ManualDocument,
     NothingWritten,
     ReviewRecord,
@@ -73,11 +72,10 @@ from .schema import (
 from .tools import (
     EMIT_TOOL,
     GAP_TOOL,
-    MATCH_TOOL,
+    READ_TOOLS,
     RESOLVE_TOOL,
     REVIEW_TOOL,
     build_tools,
-    match_tool_def,
     parse_emit_input,
     parse_review_input,
     resolve_tool_def,
@@ -113,7 +111,6 @@ def run_docgen(
     substrate: SubstrateReader | None = None,
     report_gap: Callable[[str], Any] | None = None,
     config: DocgenConfig | None = None,
-    existing_documents: tuple[ExistingDocument, ...] = (),
     revision_target: RevisionTarget | None = None,
     manual_document: ManualDocument | None = None,
     profiles: CatalogueSnapshot | None = None,
@@ -158,7 +155,6 @@ def run_docgen(
             if profiles is not None
             else _store_catalogue(),
             load_texts=profiles.texts if profiles is not None else _store_texts,
-            existing_documents=existing_documents,
             revision_target=revision_target,
             manual_document=manual_document,
         )
@@ -259,7 +255,7 @@ class _RunContext:
     nudged: bool = False
     emit_blocks: int = 0
     malformed_retries: int = 0
-    matched_document_id: str | None = None
+    cited_statements: dict[str, str] | None = None
 
 
 def _execute(
@@ -275,7 +271,6 @@ def _execute(
     doctrine_note: str | None,
     catalogue: dict[str, list[str]],
     load_texts: Callable[[str, str], tuple[str | None, str | None, str | None]],
-    existing_documents: tuple[ExistingDocument, ...] = (),
     revision_target: RevisionTarget | None = None,
     manual_document: ManualDocument | None = None,
     review_instructions: str = prompts.DEFAULT_REVIEW_INSTRUCTIONS,
@@ -320,29 +315,7 @@ def _execute(
         nudged=False,
         emit_blocks=0,
         malformed_retries=0,
-        matched_document_id=None,
     )
-
-    candidates = tuple(
-        item
-        for item in existing_documents
-        if (requested_set is None or item.guideline_set == requested_set)
-        and (requested_type is None or item.document_type == requested_type)
-    )
-    if revision_target is not None:
-        ctx.matched_document_id = revision_target.document.id
-    elif candidates:
-        matched, matched_document_id = _match_existing(ctx, candidates)
-        if not matched:
-            return _nothing(ctx, ctx.unresolved)
-        if matched_document_id is not None:
-            # A suggestion, not a decision: the caller chooses whether this
-            # request revises that document.
-            ctx.matched_document_id = matched_document_id
-            suggested = next(
-                item for item in candidates if item.id == matched_document_id
-            )
-            return _nothing(ctx, _suggestion(suggested))
 
     resolved = _resolve(
         prompt,
@@ -430,59 +403,6 @@ def _execute(
             }
         ]
     return _write(ctx)
-
-
-def _suggestion(document: ExistingDocument) -> str:
-    return (
-        f"This request looks like an update to document {document.id} "
-        f"({document.title!r}), so nothing was written. To update it, revise that "
-        "document; to write a separate document, request again without matching "
-        "existing documents."
-    )
-
-
-def _match_existing(
-    ctx: _RunContext, documents: tuple[ExistingDocument, ...]
-) -> tuple[bool, str | None]:
-    listing = [
-        {
-            "id": item.id,
-            "title": item.title,
-            "guideline_set": item.guideline_set,
-            "document_type": item.document_type,
-        }
-        for item in documents
-    ]
-    tool = match_tool_def([item.id for item in documents])
-    try:
-        with ctx.trace.span("model_turn:match"):
-            response = _model_turn(
-                ctx,
-                [
-                    {
-                        "role": "user",
-                        "content": prompts.match_message(ctx.prompt, listing),
-                    }
-                ],
-                force_tool=MATCH_TOOL,
-                tools=[tool],
-            )
-    except Exception as exc:  # noqa: BLE001
-        _unresolvable(ctx, f"document matching failed: {exc}")
-        return False, None
-    ctx.trace.model_turns += 1
-    ctx.trace.add_usage(getattr(response, "usage", None))
-    tool_use = _first_tool_use(response)
-    if tool_use is None or tool_use.name != MATCH_TOOL:
-        _unresolvable(ctx, "the run did not choose whether to revise a document")
-        return False, None
-    chosen = dict(tool_use.input or {}).get("document_id")
-    if chosen is None:
-        return True, None
-    if isinstance(chosen, str) and chosen in {item.id for item in documents}:
-        return True, chosen
-    _unresolvable(ctx, "the run chose a document outside the registry listing")
-    return False, None
 
 
 def _write(ctx: _RunContext) -> DocgenResult:
@@ -715,7 +635,7 @@ def _dispatch_read(
     model, never fabricated into an empty success it could then cite.
     """
     trace: TraceBuilder = ctx.trace
-    if not _substrate_has(ctx.substrate, name):
+    if name not in READ_TOOLS or not _substrate_has(ctx.substrate, name):
         trace.record_tool_call(
             name, arguments, None, ok=False, counts_as_op=True, error="unknown tool"
         )
@@ -868,9 +788,9 @@ def _handle_emit(
         title=title,
         body=body,
         statement_ids=ids,
+        cited_statements=ctx.cited_statements,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
-        matched_document_id=ctx.matched_document_id,
         review=review,
         gaps=_merged_gaps(ctx, gaps),
         trace=_build_trace(ctx, "document_written", cited=ids),
@@ -900,6 +820,7 @@ def _review(
             trace.record_tool_call(
                 "get_statements", args, statements, ok=True, counts_as_op=True
             )
+            ctx.cited_statements = _statement_texts(statements)
         except Exception as exc:  # noqa: BLE001 — review hydration is best-effort
             trace.record_tool_call(
                 "get_statements",
@@ -980,6 +901,20 @@ def _review(
         }
     )
     return record
+
+
+def _statement_texts(hydrated: Any) -> dict[str, str] | None:
+    """The cited statements' text as the reviewer saw it, by id."""
+    if not isinstance(hydrated, dict):
+        return None
+    rows = hydrated.get("statements")
+    if not isinstance(rows, list):
+        return None
+    return {
+        str(row["id"]): str(row["text"])
+        for row in rows
+        if isinstance(row, dict) and "id" in row and "text" in row
+    }
 
 
 def _emit_problem(
@@ -1067,7 +1002,6 @@ def _nothing(
         reason=reason,
         guideline_set=ctx.guideline_set,
         document_type=ctx.document_type,
-        matched_document_id=ctx.matched_document_id,
         review=carried_review,
         title=title,
         body=body,

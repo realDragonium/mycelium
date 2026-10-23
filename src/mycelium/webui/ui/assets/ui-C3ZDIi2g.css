@@ -1104,6 +1104,11 @@ main.page.home { padding-top: 56px; }
 .docw .docw-list button { display: grid; gap: 4px; text-align: left; padding: 14px 16px; background: var(--bg-2); border-color: var(--line); font-size: var(--fs-sm); }
 .docw .docw-list button:hover { border-color: var(--line-strong); }
 .docw-list strong { font-weight: 600; color: var(--ink); }
+.docw-stale-badge { display: inline-block; margin-left: 10px; padding: 1px 8px; border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent); border-radius: 999px; color: var(--warn); font-family: var(--mono); font-size: var(--fs-xs); font-weight: 500; vertical-align: middle; }
+.docw-list .docw-stale-badge { justify-self: start; margin-left: 0; }
+.docw-stale { border-color: color-mix(in oklab, var(--warn) 45%, var(--line)); }
+.docw-stale li { margin-bottom: 10px; }
+.docw-stale li p { margin: 2px 0; }
 .docw-source { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--mono); font-size: var(--fs-xs); background: var(--bg-inset); padding: 12px; border-radius: var(--r-md); }
 .docw-prose { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 20px 0; margin: 20px 0; line-height: 1.8; color: var(--ink); font-size: var(--fs-md); }
 .docw-prose h1 { font-family: var(--serif); font-weight: 400; font-size: 28px; }

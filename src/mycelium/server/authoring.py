@@ -520,7 +520,7 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
         vector_id = store.get_vector_id(_db(), from_id)
         if vector_id is not None:
             _idx().delete(vector_id)
-        store.delete_statement(_db(), from_id)
+        store.delete_statement(_db(), from_id, merged_into=into_id)
     return {
         "into_id": into_id,
         "mentions_moved": mentions_moved,

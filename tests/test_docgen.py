@@ -26,7 +26,6 @@ from mycelium.docgen.schema import CurrentDocument, ExistingDocument, RevisionTa
 from mycelium.docgen.tools import (
     EMIT_TOOL,
     GAP_TOOL,
-    MATCH_TOOL,
     RESOLVE_TOOL,
     REVIEW_TOOL,
     build_tools,
@@ -96,12 +95,6 @@ def _review_ok(*, check_exposure: bool = True):
                 payload,
             )
         ]
-    )
-
-
-def _match(document_id: str | None):
-    return _message(
-        [_tool_use(MATCH_TOOL, {"document_id": document_id, "reason": "same topic"})]
     )
 
 
@@ -344,11 +337,6 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
     result = _run(
         client,
         profiles=profiles,
-        existing_documents=(
-            ExistingDocument(
-                "gdc_competing", "Selected policy", "kb-authoring", "how-to"
-            ),
-        ),
         revision_target=RevisionTarget(
             selected,
             3,
@@ -358,15 +346,10 @@ def test_explicit_revision_bypasses_matching_and_uses_selected_internal_body(kb_
         ),
     )
     assert isinstance(result, DocumentWritten)
-    assert result.matched_document_id == "gdc_selected"
     first_message = client.calls[0]["messages"][0]["content"]
     assert "Internal body the user selected" in first_message
     assert "people edited" not in first_message
     assert "Changed template after admission" not in json.dumps(client.calls)
-    assert all(
-        MATCH_TOOL not in [tool["name"] for tool in call["tools"]]
-        for call in client.calls
-    )
 
 
 def test_a_revision_of_the_published_copy_tells_the_writer_to_keep_its_edits(kb_set):
@@ -393,50 +376,6 @@ def test_a_revision_of_the_published_copy_tells_the_writer_to_keep_its_edits(kb_
     assert "Keep their edits" in first_message
 
 
-def test_a_matched_document_is_only_suggested_and_nothing_is_written(kb_set):
-    existing = ExistingDocument(
-        id="gdc_sso",
-        title="Configuring SSO",
-        guideline_set="kb-authoring",
-        document_type="how-to",
-        slug="configuring-sso",
-    )
-    client = FakeAnthropic([_match("gdc_sso")])
-
-    result = _run(
-        client,
-        guideline_set="kb-authoring",
-        document_type="how-to",
-        existing_documents=(existing,),
-    )
-
-    assert isinstance(result, NothingWritten)
-    assert result.matched_document_id == "gdc_sso"
-    assert "revise that document" in result.reason
-    assert "gdc_sso" in client.calls[0]["messages"][0]["content"]
-    assert len(client.calls) == 1
-
-
-def test_an_unmatched_request_keeps_the_new_document_path(kb_set):
-    existing = ExistingDocument(
-        id="gdc_billing",
-        title="Configuring billing",
-        guideline_set="kb-authoring",
-        document_type="how-to",
-    )
-    client = FakeAnthropic([_match(None), _emit(), _review_ok()])
-
-    result = _run(
-        client,
-        guideline_set="kb-authoring",
-        document_type="how-to",
-        existing_documents=(existing,),
-    )
-
-    assert isinstance(result, DocumentWritten)
-    assert result.matched_document_id is None
-
-
 # --------------------------------------------------------------------------- #
 # The tool surface: what the model can and cannot reach
 # --------------------------------------------------------------------------- #
@@ -460,19 +399,18 @@ def _writer(name):
     return fn
 
 
-def test_the_loop_names_no_read_primitive_of_its_own():
-    """The read surface is whatever `ask/substrate.py` discovers, so a future
-    read primitive reaches a documentation run with no edit in `docgen`."""
+def test_a_run_is_offered_only_the_reads_its_prompts_name():
     stub = types.SimpleNamespace(
         TOOLS=[
-            _reader("search_widgets"),  # a hypothetical FUTURE read primitive
+            _reader("search_statements"),
+            _reader("search_widgets"),  # a read no docgen prompt names
             _reader("report_knowledge_gap"),  # withheld by discovery
             _writer("upsert_widget"),
         ]
     )
     names = [t["name"] for t in build_tools(InProcessSubstrate(stub).tool_specs())]
 
-    assert names == ["search_widgets", GAP_TOOL, EMIT_TOOL]
+    assert names == ["search_statements", GAP_TOOL, EMIT_TOOL]
 
 
 def test_the_gap_report_is_offered_although_discovery_withholds_it():
@@ -1240,7 +1178,8 @@ def test_the_reviewer_sees_the_statements_the_document_cited(kb_set):
     uncited = {"id": "stm_2", "kind": "state", "text": "UNCITED OTHER FACT"}
 
     def get_statements(arguments):
-        return [item for item in (cited, uncited) if item["id"] in arguments["ids"]]
+        found = [item for item in (cited, uncited) if item["id"] in arguments["ids"]]
+        return {"statements": found, "missing": []}
 
     substrate = _substrate(
         survey_statements=[cited, uncited], get_statements=get_statements
@@ -1258,6 +1197,8 @@ def test_the_reviewer_sees_the_statements_the_document_cited(kb_set):
     review_request = json.dumps(client.calls[1], default=str)
     assert "CITED SSO FACT" in review_request
     assert "UNCITED OTHER FACT" not in review_request
+    # What the reviewer judged is the baseline later edits are measured from.
+    assert result.cited_statements == {"stm_1": "CITED SSO FACT"}
 
 
 def test_the_two_checks_are_reported_separately(kb_set):

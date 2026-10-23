@@ -54,6 +54,48 @@ def get_statement_kinds(
     return kinds
 
 
+def get_statement_texts(
+    conn: sqlite3.Connection, statement_ids: Sequence[str]
+) -> dict[str, str]:
+    """Return text for the requested statements that still exist."""
+    texts: dict[str, str] = {}
+    for offset in range(0, len(statement_ids), 500):
+        chunk = statement_ids[offset : offset + 500]
+        placeholders = ", ".join("?" for _statement_id in chunk)
+        rows = conn.execute(
+            f"SELECT id, text FROM statements WHERE id IN ({placeholders})",
+            tuple(chunk),
+        )
+        texts.update((str(row["id"]), str(row["text"])) for row in rows)
+    return texts
+
+
+def merge_targets(
+    conn: sqlite3.Connection, statement_ids: Sequence[str]
+) -> dict[str, str]:
+    """For deleted statements that were merged away, the statement each was
+    merged into, read from the history their deletion recorded. Empty when no
+    history is attached."""
+    if not kernel.has_history(conn):
+        return {}
+    targets: dict[str, str] = {}
+    for offset in range(0, len(statement_ids), 500):
+        chunk = statement_ids[offset : offset + 500]
+        placeholders = ", ".join("?" for _statement_id in chunk)
+        rows = conn.execute(
+            "SELECT target_id, json_extract(context_json, '$.merged_into') AS into_id "
+            "FROM history.history_events WHERE target_kind = 'statement' "
+            f"AND op = 'delete' AND target_id IN ({placeholders}) ORDER BY event_id",
+            tuple(chunk),
+        )
+        for row in rows:
+            if row["into_id"] is not None:
+                targets[str(row["target_id"])] = str(row["into_id"])
+            else:
+                targets.pop(str(row["target_id"]), None)
+    return targets
+
+
 def update_statement(
     conn: sqlite3.Connection, statement_id: str, kind: str, text: str
 ) -> None:

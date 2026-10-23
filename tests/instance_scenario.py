@@ -211,10 +211,8 @@ def _documentation(data_dir: Path) -> None:
         return
     with closing(docs_store.connect(data_dir / "mycelium-drafts.db")) as conn:
         run = docs_store.create_run(conn, prompt="Explain sign-in", created_by="ada")
-        anchored = (
-            "anchor_entity_id"
-            in inspect.signature(docs_store.upsert_document).parameters
-        )
+        parameters = inspect.signature(docs_store.upsert_document).parameters
+        anchored = "anchor_entity_id" in parameters
         document = docs_store.upsert_document(
             conn,
             slug="sign-in",
@@ -222,6 +220,11 @@ def _documentation(data_dir: Path) -> None:
             body="How to sign in.",
             run_id=run,
             **({"anchor_entity_id": "ent_sign_in"} if anchored else {}),
+            **(
+                {"cited_statements": {"stm_sign_in": "A user signs in."}}
+                if "cited_statements" in parameters
+                else {}
+            ),
         )
         record = getattr(docs_store, "record_delivery", None)
         if record is None or "binding" not in inspect.signature(record).parameters:
