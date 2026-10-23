@@ -39,6 +39,16 @@ class DestinationConfig:
 
 
 @dataclass(frozen=True)
+class MediaFile:
+    """An image the document places as `media:<id>`, to publish beside it."""
+
+    id: str
+    version: int
+    extension: str
+    data: bytes
+
+
+@dataclass(frozen=True)
 class DeliveryDocument:
     id: str
     slug: str
@@ -53,6 +63,7 @@ class DeliveryDocument:
     #: Every blob this document published. The base branch holding one of
     #: them is Mycelium's own text, as after a later PR closed unmerged.
     published_content_revisions: frozenset[str] = frozenset()
+    media: tuple[MediaFile, ...] = ()
 
 
 @dataclass(frozen=True)

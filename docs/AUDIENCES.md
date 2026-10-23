@@ -61,6 +61,14 @@ statement. Audience ids it invents grant nothing.
 and how many statements are unlabelled, and lists statements by audience,
 visibility and label state.
 
+## Media
+
+Screenshots and recordings carry their own label, decided by a curator, with
+the same rules: unlabelled media is internal only, and replacing a labelled
+item's file flags the label to confirm. An image is shown to a reader, token or
+run only when its own label allows that audience, whatever the label of the
+statement it is attached to. See [Media](MEDIA.md#audience-labels).
+
 ## What a documentation run sees
 
 The boundary is enforced in the substrate reads, not in the prompt. While a
@@ -70,6 +78,10 @@ run's read tool executes, the run's connection sees only:
 - statement links whose ends, and every statement in their condition, it may
   see;
 - concepts that a visible statement mentions.
+
+The writer is offered only media attached to what it read whose own label
+allows the audience, and publishing refuses a document placing media the
+audience may not see.
 
 Concept descriptions and concept links are curator prose without labels, so
 they fail closed like an unlabelled statement: internal audiences see them,
@@ -89,7 +101,8 @@ the document view and the generate form show it. When a statement a document
 cites is relabelled so that this audience may no longer see it, the document
 is out of date with the reason "no longer visible to this audience", and its
 revision is briefed to drop what rested on it, so an external document does
-not keep knowledge that has become internal.
+not keep knowledge that has become internal. The same holds for an image the
+document places.
 
 ## Scoped users and tokens
 
@@ -101,10 +114,11 @@ documentation run for that audience reads, and nothing else:
 - Its role is clamped to reader. Writes, drafts, gap reports and admin actions
   are refused whatever its role.
 - It may call only the read tools (the ones Ask and documentation runs use,
-  plus `ask`, `list_generated_documents` and `get_generated_document`) and a
-  short list of read routes: `/api/me` and its own tokens, `/api/data`,
-  `/api/substrate-counts`, `/api/entity-positions`, `/api/history` and the
-  document library. Every other route and tool answers 403, including any
+  plus `ask`, `list_generated_documents`, `get_generated_document` and
+  `list_media`) and a short list of read routes: `/api/me` and its own tokens,
+  `/api/data`, `/api/substrate-counts`, `/api/entity-positions`, `/api/history`,
+  the document library and media content (`/api/media/<id>/content`, 404 for
+  media its audience may not see). Every other route and tool answers 403, including any
   added later until it is added to the allowlist in `principal_audience`.
 - Each read runs inside the boundary above. Ask runs its whole loop inside it,
   so it neither reads nor cites a statement the audience may not see.

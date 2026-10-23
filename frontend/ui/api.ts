@@ -53,12 +53,13 @@ function statusMessage(status: number): string {
 
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { accept: 'application/json' };
-  if (body !== undefined) headers['content-type'] = 'application/json';
+  const raw = body instanceof Blob;
+  if (body !== undefined) headers['content-type'] = raw ? body.type || 'application/octet-stream' : 'application/json';
   let res: Response;
   try {
     res = await fetch(path, {
       method, headers, signal, credentials: 'same-origin',
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
@@ -87,6 +88,7 @@ export const postJSON = <T>(path: string, body: unknown = {}, signal?: AbortSign
 export const patchJSON = <T>(path: string, body: unknown) => request<T>('PATCH', path, body);
 export const putJSON = <T>(path: string, body: unknown) => request<T>('PUT', path, body);
 export const deleteJSON = <T>(path: string, body?: unknown) => request<T>('DELETE', path, body);
+export const uploadRaw = <T>(method: 'POST' | 'PUT', path: string, body: Blob, signal?: AbortSignal) => request<T>(method, path, body, signal);
 
 export const enc = encodeURIComponent;
 
@@ -106,6 +108,45 @@ export const getSubstrateCounts = () => getJSON<SubstrateCounts>('/api/substrate
 // server process.
 export interface ServerInfo { partial_restore: string[]; quarantine: boolean }
 export const getServerInfo = () => getJSON<ServerInfo>('/api/server-info');
+
+/* -------------------------------- media ------------------------------- */
+export type MediaFilter = 'all' | 'unattached' | 'no_alt_text' | 'unlabelled' | 'old';
+export const MEDIA_FILTERS: readonly MediaFilter[] = ['all', 'unattached', 'no_alt_text', 'unlabelled', 'old'];
+export const isMediaFilter = (value: string): value is MediaFilter => (MEDIA_FILTERS as readonly string[]).includes(value);
+export type MediaTargetKind = 'statement' | 'entity';
+export interface MediaAttachment { kind: MediaTargetKind; id: string }
+export interface MediaView {
+  id: string; content_type: string; byte_size: number; content_version: number; content_updated_at: string;
+  alt_text: string; caption: string; origin: 'uploaded' | 'agent' | 'captured';
+  source_url: string | null; product_version: string | null; captured_at: string | null;
+  audiences: string[] | null; labelled_by: string | null; labelled_at: string | null;
+  content_changed_at: string | null; attachments: MediaAttachment[]; stale: string[];
+  url: string; created_at: string; created_by: string | null;
+}
+export interface MediaDetails {
+  alt_text: string; caption: string; source_url: string | null; product_version: string | null; captured_at: string | null;
+}
+
+export const media = {
+  library: (show: MediaFilter, signal?: AbortSignal) => getJSON<MediaView[]>(`/api/media?show=${enc(show)}`, signal),
+  attached: (kind: MediaTargetKind, id: string, signal?: AbortSignal) =>
+    postJSON<MediaView[]>('/list-media', kind === 'statement' ? { statement_id: id } : { entity_id: id }, signal),
+  upload: (file: File, details: MediaDetails, target?: MediaAttachment) => {
+    const params = new URLSearchParams({ alt_text: details.alt_text, caption: details.caption });
+    if (details.source_url) params.set('source_url', details.source_url);
+    if (details.product_version) params.set('product_version', details.product_version);
+    if (details.captured_at) params.set('captured_at', details.captured_at);
+    if (target) params.set(target.kind === 'statement' ? 'statement_id' : 'entity_id', target.id);
+    return uploadRaw<MediaView>('POST', `/api/media?${params}`, file);
+  },
+  update: (id: string, details: MediaDetails) => patchJSON<MediaView>(`/api/media/${enc(id)}`, details),
+  replace: (id: string, file: File) => uploadRaw<MediaView>('PUT', `/api/media/${enc(id)}/content`, file),
+  remove: (id: string) => deleteJSON<{ deleted: true }>(`/api/media/${enc(id)}`),
+  label: (id: string, audiences: string[] | null) => putJSON<MediaView>(`/api/media/${enc(id)}/audiences`, { audiences }),
+  confirmLabel: (id: string) => postJSON<MediaView>(`/api/media/${enc(id)}/audiences/confirm`),
+  attach: (id: string, target: MediaAttachment) => postJSON<MediaView>(`/api/media/${enc(id)}/attachments`, target),
+  detach: (id: string, target: MediaAttachment) => deleteJSON<MediaView>(`/api/media/${enc(id)}/attachments/${target.kind}/${enc(target.id)}`),
+};
 
 /* -------------------------------- Find -------------------------------- */
 export type FindMode = 'semantic' | 'grep' | 'survey';
@@ -384,7 +425,7 @@ export interface HealthCounts {
   statements: number; entities: number;
   isolated: number; unmentioned: number; undescribed: number; unused: number;
   unlabelled: number; labelling_failed: number;
-  open_gaps: number; pending_drafts: number; out_of_date_documents: number;
+  open_gaps: number; pending_drafts: number; out_of_date_documents: number; old_media: number;
 }
 // `priced` is false when the model has no known price: then neither the
 // cost nor the spending cap applies.

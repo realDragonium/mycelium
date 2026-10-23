@@ -162,6 +162,22 @@ def test_manual_preview_uses_safe_renderer(workspace):
     assert "<img" not in html
 
 
+def test_only_media_references_render_as_images(workspace):
+    client, _conn, _document = workspace
+    body = (
+        "![The export dialog](media:med_000000000001)\n\n"
+        "![tracking pixel](https://example.test/pixel.png)\n"
+    )
+    response = client.post(
+        "/api/documentation/preview", json={"title": "Title", "body": body}
+    )
+    html = response.json()["body_html"]
+    assert (
+        '<img src="/api/media/med_000000000001/content" alt="The export dialog"' in html
+    )
+    assert "example.test" not in html and "tracking pixel" in html
+
+
 @pytest.mark.parametrize("path", ["preview", "documents/page/edits", "runs/run/edits"])
 def test_manual_edit_requires_writer(workspace, monkeypatch, path):
     client, _, _ = workspace

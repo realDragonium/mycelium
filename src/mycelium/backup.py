@@ -19,6 +19,8 @@ Archive layout
     drafts.jsonl               drafts, their ops, reviews, applications, runs,
                                and the AI usage ledger
     prompts.jsonl              editable prompt texts, every version
+    media.jsonl                media items, their bytes and attachments
+                               (omit with --no-media)
     shipped-prompt-texts.jsonl when each shipped prompt default was first seen
     documentation.json         generated documents, revisions, runs and deliveries
     draft-review-settings.json saved review controls (when configured)
@@ -112,6 +114,8 @@ if TYPE_CHECKING:
 PROMPTS_DB_NAME = "mycelium-prompts.db"
 
 
+MEDIA_FLAG = "includes_media"
+
 # Tables exported in dependency order. The same order is used on import,
 # so foreign keys resolve naturally. Internal mechanism tables that
 # depend on others (when_nodes, *_vector_ids) appear after their parents.
@@ -201,6 +205,12 @@ def _migrate_prompts(conn: sqlite3.Connection) -> None:
     prompt_store.migrate(conn)
 
 
+def _migrate_media(conn: sqlite3.Connection) -> None:
+    from . import media_store
+
+    media_store.migrate(conn)
+
+
 def _migrate_auth(conn: sqlite3.Connection) -> None:
     from . import auth_store
 
@@ -251,6 +261,13 @@ _SECTIONS: tuple[_Section, ...] = (
         _migrate_prompts,
         "includes_shipped_prompt_texts",
     ),
+    _Section(
+        "media.jsonl",
+        "mycelium-media.db",
+        ("media_items", "media_blobs", "media_attachments"),
+        _migrate_media,
+        MEDIA_FLAG,
+    ),
 )
 
 # Tables an archive deliberately leaves behind, by database file. Anything
@@ -265,6 +282,9 @@ UNARCHIVED_TABLES: dict[str, dict[str, str]] = {
             "marks one-time environment imports; restore re-marks them so the "
             "target environment is never imported"
         ),
+    },
+    "mycelium-media.db": {
+        "media_uploads": ("single-use upload links that expire within fifteen minutes"),
     },
     "mycelium.db": {
         "curation_claims": (
@@ -290,8 +310,12 @@ def export_substrate(
     *,
     include_history: bool = True,
     include_vectors: bool = True,
+    include_media: bool = True,
 ) -> dict[str, Any]:
     """Snapshot the substrate at `data_dir` to a .tar.gz at `out_path`.
+
+    `include_media=False` leaves screenshots and recordings out, which keeps
+    the archive small; restoring it leaves the instance without media.
 
     Returns the manifest dict (also written into the archive) so callers
     (scheduled-backup wrappers, integration tests) can verify what they
@@ -337,7 +361,9 @@ def export_substrate(
             models_included = settings_included = products_included = False
             for section in _SECTIONS:
                 path = data_dir / section.db_name
-                if not path.exists():
+                if not path.exists() or (
+                    not include_media and section.manifest_flag == MEDIA_FLAG
+                ):
                     continue
                 with _snapshot(path) as snapshot:
                     section.migrate(snapshot)

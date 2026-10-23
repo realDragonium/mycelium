@@ -355,6 +355,75 @@ def test_read_fetches_the_recorded_path_from_the_base_after_review_closes():
     assert dict(requests[1].url.params) == {"ref": "docs-main"}
 
 
+def test_placed_images_are_committed_beside_the_document_and_read_back():
+    image = b"\x89PNG fake bytes"
+    image_sha = hashlib.sha1(
+        f"blob {len(image)}\0".encode() + image, usedforsecurity=False
+    ).hexdigest()
+    committed = (
+        "# Configuring SSO\n\n"
+        "![The SSO page](configuring-sso.how-to-media/med_000000000001-v2.png)\n"
+    )
+    requests, inner = _responses(blob_sha=_blob_id(committed))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/git/blobs"):
+            if _request_json(request)["encoding"] == "base64":
+                requests.append(request)
+                return httpx.Response(201, json={"sha": image_sha})
+        return inner(request)
+
+    document = replace(
+        _document(),
+        body="# Configuring SSO\n\n![The SSO page](media:med_000000000001)\n",
+        media=(destinations.MediaFile("med_000000000001", 2, "png", image),),
+    )
+    delivery = deliver(
+        _config(),
+        document,
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    blobs = [_request_json(r) for r in requests if r.url.path.endswith("/git/blobs")]
+    assert blobs == [
+        {"content": committed, "encoding": "utf-8"},
+        {"content": base64.b64encode(image).decode(), "encoding": "base64"},
+    ]
+    (tree,) = [_request_json(r) for r in requests if r.url.path.endswith("/git/trees")]
+    assert [(entry["path"], entry["sha"]) for entry in tree["tree"]] == [
+        ("docs/kb-authoring/configuring-sso.how-to.md", _blob_id(committed)),
+        (
+            "docs/kb-authoring/configuring-sso.how-to-media/med_000000000001-v2.png",
+            image_sha,
+        ),
+    ]
+    assert delivery.content_revision == _blob_id(committed)
+
+    def file(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/pulls"):
+            return httpx.Response(200, json=[])
+        return httpx.Response(
+            200,
+            json={
+                "encoding": "base64",
+                "content": base64.b64encode(committed.encode()).decode(),
+                "sha": _blob_id(committed),
+            },
+        )
+
+    current = read(
+        _config(),
+        delivery.path,
+        "gdc_123",
+        "configuring-sso",
+        {"DOCS_GITHUB_TOKEN": TOKEN},
+        client=httpx.Client(transport=httpx.MockTransport(file)),
+    )
+    assert current.body == document.body
+    assert current.content_revision == _blob_id(committed)
+
+
 def test_read_fetches_reviewer_edits_from_the_open_document_branch():
     requests: list[httpx.Request] = []
     body = "# Reviewer edit\n"

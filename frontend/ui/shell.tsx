@@ -16,6 +16,7 @@ import { HomeScreen } from './home';
 import { IngestSurface } from './ingest';
 import { KnowledgeGapsScreen } from './knowledge-gaps';
 import { KnowledgeHealthScreen } from './knowledge-health';
+import { MediaLibrary } from './media';
 import { NamesWorkspace } from './names-workspace';
 import { SettingsScreen } from './settings';
 import { usd, type Budget } from './ai-usage';
@@ -55,6 +56,7 @@ function navGroups(activeDrafts: number, openGaps: number, documentUpdates: numb
     { title: 'Curate', items: [
       { label: 'Drafts', icon: 'prov', to: { view: 'drafts' }, views: ['drafts', 'draft'], badge: activeDrafts },
       { label: 'Knowledge health', icon: 'check', to: { view: 'health', list: null }, views: ['health'] },
+      { label: 'Media', icon: 'doc', to: { view: 'media', show: 'all' }, views: ['media'] },
       { label: 'Knowledge gaps', icon: 'gap', to: { view: 'gaps' }, views: ['gaps'], badge: openGaps, badgeTone: 'warn' },
       { label: 'Names & aliases', icon: 'tag', to: { view: 'names' }, views: ['names'] },
       { label: 'Glossary', icon: 'book', to: { view: 'glossary' }, views: ['glossary'] },
@@ -241,6 +243,7 @@ function RouteScreen({ route, ingestNonce, refresh }: ScreenProps) {
     case 'drafts': return <DraftsList />;
     case 'draft': return <DraftReview id={route.id} />;
     case 'health': return <KnowledgeHealthScreen list={route.list} />;
+    case 'media': return <MediaLibrary show={route.show} />;
     case 'gaps': return <KnowledgeGapsScreen />;
     case 'names': return <NamesWorkspace onDataChanged={refresh} />;
     case 'glossary': return <GlossaryScreen />;

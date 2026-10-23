@@ -179,8 +179,10 @@ def revise_document(
             document_id
         ]
         if freshness.status != "out_of_date":
-            raise ValueError("None of the statements this document cites changed.")
-        brief = document_freshness.revision_brief(freshness.changes)
+            raise ValueError("Nothing this document cites or shows changed.")
+        brief = document_freshness.revision_brief(
+            freshness.changes, freshness.media_changes
+        )
         text = f"{text}\n\n{brief}" if text else brief
     principal = auth.current_principal.get()
     run_id = doc_runs.start_run(
@@ -454,7 +456,7 @@ def _freshness(
     from .. import document_freshness
 
     return {
-        document_id: {**freshness.as_dict(), "changes": []}
+        document_id: {**freshness.as_dict(), "changes": [], "media_changes": []}
         if scoped
         else freshness.as_dict()
         for document_id, freshness in document_freshness.for_documents(

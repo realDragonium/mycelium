@@ -1,4 +1,11 @@
-"""GitHub delivery through the Git Data and pull request APIs."""
+"""GitHub delivery through the Git Data and pull request APIs.
+
+Images a document places as `media:<id>` are committed beside the Markdown, in
+`<file stem>-media/<id>-v<version>.<ext>`, and the body links them by that
+relative path. The version is in the name, so a replaced image changes the
+body and therefore its blob. Reading the file back turns those links into
+`media:` references again, so a revision starts from the text it wrote.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +17,8 @@ import re
 import unicodedata
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import PurePosixPath
 from typing import Literal, TypeAlias, TypeVar, overload
 from urllib.parse import quote, urlsplit
 
@@ -22,6 +30,7 @@ from .destinations import (
     DeliveryDocument,
     DestinationConfig,
     DestinationError,
+    MediaFile,
     _scrub,
     render_path,
 )
@@ -44,6 +53,7 @@ JsonValue: TypeAlias = (
 )
 JsonObject: TypeAlias = dict[str, JsonValue]
 JsonList: TypeAlias = list[JsonValue]
+_MEDIA_LINK_RE = re.compile(r"\]\(media:(med_[0-9a-f]{12})\)")
 
 
 class _Response(BaseModel):
@@ -250,13 +260,55 @@ def read(
             config, DeliveryDocument(document_id, slug, "", "", "", "", ())
         )
         if not _has_open_review(config, branch, active, token):
-            return _file(config, path, config.base_branch, active, token)
+            return _media_references(
+                _file(config, path, config.base_branch, active, token), path
+            )
         current = _file(config, path, branch, active, token)
         if current is None:
             raise _deleted_in_review(config, path, branch)
-        return current
+        return _media_references(current, path)
 
     return _call(destination, env, client, "read", fetch)
+
+
+def _media_folder(path: str) -> str:
+    return f"{PurePosixPath(path).stem}-media"
+
+
+def _media_name(path: str, item: MediaFile) -> str:
+    return f"{_media_folder(path)}/{item.id}-v{item.version}.{item.extension}"
+
+
+def _with_media_files(
+    document: DeliveryDocument, path: str
+) -> tuple[DeliveryDocument, list[tuple[str, MediaFile]]]:
+    """The body as committed, linking its images by relative path, and the
+    repository path of each image."""
+    if not document.media:
+        return document, []
+    names = {item.id: _media_name(path, item) for item in document.media}
+    body = _MEDIA_LINK_RE.sub(
+        lambda match: (
+            f"]({names[match.group(1)]})" if match.group(1) in names else match.group(0)
+        ),
+        document.body,
+    )
+    folder = PurePosixPath(path).parent
+    files = [(str(folder / names[item.id]), item) for item in document.media]
+    return replace(document, body=body), files
+
+
+def _media_references(
+    current: CurrentDocument | None, path: str
+) -> CurrentDocument | None:
+    if current is None:
+        return None
+    link = re.compile(
+        r"\]\("
+        + re.escape(_media_folder(path))
+        + r"/(med_[0-9a-f]{12})-v[0-9]+\.[a-z0-9]+\)"
+    )
+    return replace(current, body=link.sub(r"](media:\1)", current.body))
 
 
 def pull_request_state(
@@ -381,6 +433,7 @@ def _deliver(
     token: str,
 ) -> Delivery:
     path = document.delivered_path or render_path(config.destination, document)
+    document, media_files = _with_media_files(document, path)
     branch = _branch_name(config, document)
     credentials = list(_ACTIVE_CREDENTIALS.get()) or [token]
     if any(
@@ -441,7 +494,11 @@ def _deliver(
                 "so the new revision starts from that text, then publish again."
             )
     content_sha = _blob(config, document, client, token)
-    tree_sha = _tree(config, path, base_tree_sha, content_sha, client, token)
+    entries = [(path, content_sha)] + [
+        (media_path, _media_blob(config, item, client, token))
+        for media_path, item in media_files
+    ]
+    tree_sha = _tree(config, entries, base_tree_sha, client, token)
     delivery_sha = _commit(
         config,
         document,
@@ -612,11 +669,29 @@ def _blob(
     return content_sha
 
 
+def _media_blob(
+    config: GitHubConfig, item: MediaFile, client: httpx.Client, token: str
+) -> str:
+    payload = _request_json(
+        client,
+        config,
+        token,
+        "POST",
+        "/git/blobs",
+        json={"content": base64.b64encode(item.data).decode(), "encoding": "base64"},
+    )
+    content_sha = _sha(config, payload, "blob")
+    if content_sha != _git_object_id(item.data):
+        raise DestinationError(
+            f"destination {config.destination.name!r} returned an invalid blob response"
+        )
+    return content_sha
+
+
 def _tree(
     config: GitHubConfig,
-    path: str,
+    entries: list[tuple[str, str]],
     base_tree_sha: str,
-    content_sha: str,
     client: httpx.Client,
     token: str,
 ) -> str:
@@ -629,12 +704,8 @@ def _tree(
         json={
             "base_tree": base_tree_sha,
             "tree": [
-                {
-                    "path": path,
-                    "mode": "100644",
-                    "type": "blob",
-                    "sha": content_sha,
-                }
+                {"path": path, "mode": "100644", "type": "blob", "sha": sha}
+                for path, sha in entries
             ],
         },
     )
@@ -998,7 +1069,10 @@ def _object_id(config: GitHubConfig, value: object, object_name: str) -> str:
 
 
 def _git_blob_id(body: str) -> str:
-    content = body.encode("utf-8")
+    return _git_object_id(body.encode("utf-8"))
+
+
+def _git_object_id(content: bytes) -> str:
     header = f"blob {len(content)}\0".encode()
     return hashlib.sha1(header + content, usedforsecurity=False).hexdigest()
 

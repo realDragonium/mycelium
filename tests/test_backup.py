@@ -19,7 +19,16 @@ from pathlib import Path
 
 import pytest
 
-from mycelium import backup, docs_store, drafts_store, prompt_store, store, vector
+import media_samples
+from mycelium import (
+    backup,
+    docs_store,
+    drafts_store,
+    media_store,
+    prompt_store,
+    store,
+    vector,
+)
 
 # Build the substrate via the same store helpers normal writes go
 # through, so audit columns and history events populate naturally.
@@ -227,6 +236,40 @@ def test_vector_identity_sidecars_round_trip(tmp_path):
         assert (dst / f"{name}.meta.json").read_text(encoding="utf-8") == (
             '{"embedder": "ollama/nomic-embed-text/768"}\n'
         )
+
+
+def _seed_media(data_dir: Path) -> None:
+    conn = media_store.connect(data_dir / media_store.DB_NAME)
+    media_store.migrate(conn)
+    at = "2026-08-01T00:00:00.000Z"
+    conn.execute(
+        "INSERT INTO media_items (id, content_type, byte_size, sha256, "
+        "content_updated_at, origin, created_at, updated_at) "
+        "VALUES ('med_000000000001', 'image/png', 1, 'x', ?, 'uploaded', ?, ?)",
+        (at, at, at),
+    )
+    media_store.blobs.put(conn, "med_000000000001", media_samples.png())
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize("include_media", [True, False])
+def test_media_round_trips_unless_left_out(tmp_path, include_media):
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    _seed_media(src)
+    archive = tmp_path / "snap.tar.gz"
+
+    manifest = backup.export_substrate(src, archive, include_media=include_media)
+    backup.import_substrate(archive, tmp_path / "dst")
+
+    assert manifest[backup.MEDIA_FLAG] is include_media
+    conn = media_store.connect(tmp_path / "dst" / media_store.DB_NAME)
+    media_store.migrate(conn)
+    restored = media_store.blobs.get(conn, "med_000000000001")
+    conn.close()
+    assert restored == (media_samples.png() if include_media else None)
 
 
 # --- import -----------------------------------------------------------------

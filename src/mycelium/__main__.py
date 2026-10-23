@@ -43,6 +43,7 @@ def _cmd_export(args: argparse.Namespace) -> None:
         args.archive,
         include_history=not args.no_history,
         include_vectors=not args.no_vectors,
+        include_media=not args.no_media,
     )
     print(f"wrote {args.archive}", file=sys.stderr)
     for table, count in sorted(manifest["row_counts"].items()):
@@ -183,6 +184,11 @@ def main() -> None:
         "--no-vectors",
         action="store_true",
         help="omit vector indexes (import will re-embed from text)",
+    )
+    p_export.add_argument(
+        "--no-media",
+        action="store_true",
+        help="omit screenshots and recordings (the restored instance has none)",
     )
     p_export.set_defaults(func=_cmd_export)
 

@@ -153,7 +153,10 @@ class Evidence(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["code", "ui", "doc", "other"]
+    kind: Literal["code", "ui", "doc", "media", "other"]
+    #: A screenshot or recording uploaded with `create_media_upload`; it is
+    #: attached to what the operation writes when the draft is applied.
+    media_id: str | None = Field(default=None, pattern=r"^med_[0-9a-f]{12}$")
     #: Repository-relative file path.
     path: str | None = Field(default=None, max_length=300)
     #: A line or line range in `path`, such as `12` or `12-30`.
@@ -166,7 +169,9 @@ class Evidence(BaseModel):
 
     @model_validator(mode="after")
     def _located(self) -> Self:
-        if self.path is None and self.url is None:
+        if (self.kind == "media") != (self.media_id is not None):
+            raise ValueError("media evidence, and only media evidence, has a media_id")
+        if self.path is None and self.url is None and self.media_id is None:
             raise ValueError("evidence needs a path or a url")
         if self.path is not None and (
             self.path.startswith("/") or ".." in self.path.split("/")

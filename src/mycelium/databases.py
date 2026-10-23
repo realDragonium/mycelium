@@ -31,6 +31,7 @@ FILES: dict[str, int] = {
     "mycelium-auth.db": 5,
     "mycelium-drafts.db": 5,
     "mycelium-prompts.db": 7,
+    "mycelium-media.db": 25,
 }
 
 

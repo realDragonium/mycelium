@@ -73,6 +73,7 @@ def test_scoped_ask_is_offered_only_tools_the_boundary_scopes():
         "ask",
         "list_generated_documents",
         "get_generated_document",
+        "list_media",
     }
 
 

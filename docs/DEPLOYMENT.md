@@ -185,7 +185,8 @@ because load balancers probe it by the instance's address.
 
 Request bodies over 4 MiB get `413` before the server reads the rest.
 `MYCELIUM_MAX_BODY_BYTES` changes the cap, for `/mcp` as well as every
-other route. nginx's own `client_max_body_size` default of 1 MiB is
+other route except media uploads, which are capped by the media size limits
+in **Settings → Limits** (20 MB for video by default). nginx's own `client_max_body_size` default of 1 MiB is
 tighter still and bites first; raise it in the site template if large
 `ingest` payloads get a 413 from nginx.
 
@@ -457,6 +458,7 @@ Everything an instance knows lives in `/var/lib/mycelium`:
 | `mycelium-auth.db` | Users, MCP tokens, invites, OAuth clients |
 | `mycelium-drafts.db` | Drafts, their reviews and applications; generated documents, their revisions, runs, publication receipts, plans and maintenance decisions; the AI usage ledger |
 | `mycelium-prompts.db` | AI instructions and writing profiles with their history, audiences, model, review and product settings, GitHub connections |
+| `mycelium-media.db` | Screenshots and recordings, their labels and attachments ([Media](MEDIA.md)) |
 | `mycelium-ops.db` | Only on instances that predate its removal: tool-call telemetry that is no longer written or read, and not archived |
 | `mycelium.vec`, `mycelium-names.vec` | Vector indexes; rebuilt by re-embedding if missing |
 | `entity-positions.json` | Entity layout cache; rebuilt if missing |
@@ -483,7 +485,9 @@ sudo install -d -o mycelium -g mycelium -m 0700 /var/lib/mycelium-backups
 sudo myc export /var/lib/mycelium-backups/mycelium-$(date -u +%F).tar.gz
 ```
 
-It prints a row count per table. Copy archives off the VPS on a schedule,
+It prints a row count per table. `--no-media` leaves screenshots and
+recordings out, for a smaller archive; restoring such an archive keeps the
+media already in the data directory, and a fresh restore starts without media. Copy archives off the VPS on a schedule,
 for example from root's crontab:
 
 ```cron

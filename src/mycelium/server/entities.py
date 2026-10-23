@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any, TypedDict
 
-from .. import docs_store, embed, store
+from .. import docs_store, embed, media, store
 from .indexes import _persisted_index_write
 from .names import _create_name_with_plural, _drop_name_from_index
 from .registry import draft_listing_tool, draftable_tool, tool
@@ -102,6 +102,7 @@ def merge_entities(from_entity_id: str, into_entity_id: str) -> EntityMerge:
             unanchored = docs_store.move_anchors(
                 _drafts_db(), from_entity_id, into_entity_id
             )
+        media.target_merged("entity", from_entity_id, into_entity_id)
     return {
         "into_entity_id": into_entity_id,
         "names_moved": moved,
@@ -157,6 +158,7 @@ def delete_entity(id: str) -> EntityDeletion:
         # deleted one still holding them.
         with store.transaction(_drafts_db()):
             unanchored = docs_store.clear_anchors(_drafts_db(), id)
+        media.target_deleted("entity", id)
     _baker().schedule_rebake()
     return {
         "deleted": True,

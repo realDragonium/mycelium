@@ -33,6 +33,15 @@ def visibility_clause(audience_id: str, internal: bool) -> tuple[str, tuple[str]
     return f"(l.statement_id IS NOT NULL AND {granted})", (audience_id,)
 
 
+def grants(label: Sequence[str] | None, audience_id: str, internal: bool) -> bool:
+    """`visibility_clause` for a label held outside the substrate (media):
+    whether a label, None while unlabelled, lets the audience see its item.
+    Keep the two in step."""
+    if label is None:
+        return internal
+    return audience_id in label
+
+
 def visible_statement_ids(
     conn: sqlite3.Connection, audience_id: str, internal: bool
 ) -> frozenset[str]:

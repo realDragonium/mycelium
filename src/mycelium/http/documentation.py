@@ -9,6 +9,7 @@ delivers needs a real writer. The shared conflict handler answers 409 for a stal
 from __future__ import annotations
 
 import difflib
+from collections.abc import Sequence
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -19,6 +20,7 @@ from .. import (
     auth,
     document_maintenance,
     documentation_planning,
+    media,
     product_settings,
     server,
 )
@@ -170,15 +172,45 @@ class DocumentDeliveryBody(BaseModel):
     expected_revision: int = PydField(ge=1, strict=True)
 
 
-def _document_preview(document: dict[str, object]) -> dict[str, object]:
+def _render_markdown(body: str) -> str:
+    """Safe HTML for a document body. The only images are media references,
+    served by Mycelium under the reader's own audience check; any other
+    image becomes its alt text, so a document cannot load outside content."""
     from markdown_it import MarkdownIt
+    from markdown_it.common.utils import escapeHtml
+    from markdown_it.renderer import RendererHTML
+    from markdown_it.token import Token
+    from markdown_it.utils import EnvType, OptionsDict
 
+    renderer = MarkdownIt("js-default")
+
+    def image(
+        self: RendererHTML,
+        tokens: Sequence[Token],
+        idx: int,
+        options: OptionsDict,
+        env: EnvType,
+    ) -> str:
+        token = tokens[idx]
+        alt = escapeHtml(self.renderInlineAsText(token.children or [], options, env))
+        found = media.REFERENCE.fullmatch(str(token.attrGet("src") or ""))
+        if found is None:
+            return alt
+        return (
+            f'<img src="{escapeHtml(media.content_url(found.group(1)))}" '
+            f'alt="{alt}" loading="lazy">'
+        )
+
+    renderer.add_render_rule("image", image)
+    html: str = renderer.render(body)
+    return html
+
+
+def _document_preview(document: dict[str, object]) -> dict[str, object]:
     body = document.get("body")
     return {
         **document,
-        "body_html": MarkdownIt("js-default").disable("image").render(body)
-        if isinstance(body, str)
-        else "",
+        "body_html": _render_markdown(body) if isinstance(body, str) else "",
     }
 
 

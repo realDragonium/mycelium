@@ -38,6 +38,7 @@ from .schema import ReviewFinding
 
 if TYPE_CHECKING:
     from ..audiences import Audience
+    from ..media import Offer
     from .trace import ReviewNote
 
 __all__ = [
@@ -115,7 +116,21 @@ WHAT THE HARNESS WILL REFUSE
 statement or entity id, or a tool name. The reader never sees any of them; \
 say what is not known in the reader's terms ("this is not documented yet"), \
 and let the cited ids travel beside the document.
+- Media placed other than as `![alt text](media:med_...)`, an image with \
+  empty alt text, or a media id no read offered you.
 These are checked before anything is stored, and you will be asked again.
+
+MEDIA
+A read result may end with AVAILABLE MEDIA: screenshots and recordings \
+attached to the statements or concept it returned, already cleared for this \
+document's audience, each with an id, alt text and caption. You cannot see \
+them; the alt text says what they show. Place one where it shows a screen or \
+step the text describes, as `![alt text](media:med_...)` on its own line; the \
+server turns the reference into the image. Alt text says what the image shows \
+for a reader who cannot see it. A template may mark an image slot as \
+`{Image: what it should show}`: fill it with an offered item that shows that, \
+or leave the slot out. Never describe a screenshot you were not offered, and \
+leave out media that does not fit the text.
 
 WHEN THE SUBSTRATE FALLS SHORT
 The template will ask for things the substrate does not hold. That is the \
@@ -188,6 +203,12 @@ The reader never sees the knowledge base behind the document. Fail EXPOSURE, \
 or CONFORMANCE when there is no exposure check, for text that talks about it: \
 "substrate", statements, statement or entity ids, tool names, or what the \
 knowledge base holds, where the reader needs only the product.
+Images appear in the body as `![alt text](media:med_...)`, and PLACED MEDIA \
+says what each shows; you cannot see the pixels. Fail CONFORMANCE for an image \
+whose alt text does not say what it shows, or one that, by its alt text and \
+caption, does not show what the surrounding text describes. Fail EXPOSURE for \
+an image whose alt text or caption reveals what this audience must not get. \
+Leaving an image slot empty conforms.
 
 {instructions}
 
@@ -514,9 +535,22 @@ def _review_statements(hydrated: Any) -> Any:
 
 
 def review_message(
-    *, prompt: str, title: str, body: str, statements: Any | None
+    *,
+    prompt: str,
+    title: str,
+    body: str,
+    statements: Any | None,
+    placed_media: Sequence[Offer] = (),
 ) -> str:
     """The reviewer's sole user message, composed without writer history."""
+    media_text = (
+        "PLACED MEDIA (what each image the body places shows; you cannot see "
+        "the pixels):\n"
+        + "\n".join(_media_line(item) for item in placed_media)
+        + "\n\n"
+        if placed_media
+        else ""
+    )
     if statements is None:
         statement_text = "the cited statements could not be retrieved for this review"
     else:
@@ -530,8 +564,36 @@ def review_message(
         f"{document_payload(title=title, body=body)}\n\n"
         "CITED STATEMENTS:\n"
         f"{statement_text}\n\n"
-        "Review only this finished document against the checks in your system "
+        + media_text
+        + "Review only this finished document against the checks in your system "
         "prompt, then call record_review once."
+    )
+
+
+def _media_line(item: Offer) -> str:
+    caption = (
+        f" Caption: {json.dumps(item.caption, ensure_ascii=False)}"
+        if item.caption
+        else ""
+    )
+    return (
+        f"- `{item.id}` ({item.content_type}). Alt text: "
+        f"{json.dumps(item.alt_text, ensure_ascii=False)}.{caption}"
+    )
+
+
+def media_offer_note(offers: Sequence[Offer]) -> str:
+    """Appended to a read: media attached to what it returned that this
+    document's audience may see."""
+    lines = "\n".join(
+        _media_line(item) + f" Attached to {', '.join(item.attached_to)}."
+        for item in offers
+    )
+    return (
+        "\n\nAVAILABLE MEDIA (screenshots and recordings attached to what you "
+        "just read, cleared for this audience). Place one where it shows a step "
+        "or screen the text describes, as ![what it shows](media:<id>), using "
+        "or adapting its alt text:\n" + lines
     )
 
 

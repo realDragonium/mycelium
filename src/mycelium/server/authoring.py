@@ -12,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Any
 
-from .. import phrasing, store
+from .. import media, phrasing, store
 from .batch_planning import (
     _assemble_batch_results,
     _materialize_batch_edges,
@@ -534,6 +534,10 @@ def merge_statements(from_id: str, into_id: str) -> dict[str, Any]:
         if vector_id is not None:
             _idx().delete(vector_id)
         store.delete_statement(_db(), from_id, merged_into=into_id)
+        # Media lives in its own database and commits first, as anchors do
+        # in `merge_entities`: a failed substrate commit leaves the media on
+        # the surviving statement.
+        media.target_merged("statement", from_id, into_id)
     return {
         "into_id": into_id,
         "mentions_moved": mentions_moved,
@@ -596,6 +600,7 @@ def delete_statement(id: str) -> dict[str, Any]:
         if vector_id is not None:
             _idx().delete(vector_id)
         store.delete_statement(_db(), id)
+        media.target_deleted("statement", id)
     return {
         "deleted": True,
         "mentions_removed": mentions_removed,

@@ -14,7 +14,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel
 
-from . import document_freshness
+from . import document_freshness, media, media_store
 from .ingest.connect import Target
 from .store import kernel
 
@@ -61,6 +61,9 @@ class Counts(BaseModel):
     #: Drafts not yet decided: open with their author, or submitted.
     pending_drafts: int
     out_of_date_documents: int
+    #: Media older than the configured age or captured against an older
+    #: product version.
+    old_media: int
 
 
 def counts(
@@ -99,6 +102,7 @@ def counts(
         out_of_date_documents=sum(
             1 for f in freshness.values() if f.status == "out_of_date"
         ),
+        old_media=media.counts().old if media_store.is_configured() else 0,
     )
 
 

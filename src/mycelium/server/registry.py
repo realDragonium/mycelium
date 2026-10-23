@@ -197,6 +197,9 @@ MCP_TOOLS = frozenset(
         "set_draft_review_evidence",
         "set_operation_evidence",
         "report_knowledge_gap",
+        # Media
+        "list_media",
+        "create_media_upload",
         # Curation queue
         "claim_curation_work",
         "release_curation_work",
