@@ -19,7 +19,7 @@ interface DocumentationOptions {
 }
 interface DocumentationRun {
   id: string; prompt: string; provider: string; model: string | null; reasoning_effort: string | null;
-  status: string; created_at: string; document_id: string | null; result_revision: number | null;
+  status: string; queue_position: number | null; created_at: string; document_id: string | null; result_revision: number | null;
   target_document_id: string | null; target_revision: number | null;
   revision_base: string | null; error: string | null; draft_title?: string | null; draft_body?: string | null;
   summary: RunSummary | null; review_notes: ReviewNote[]; retryable?: boolean;
@@ -63,7 +63,7 @@ interface PendingEdit { title: string; body: string; expectedRevision: number | 
 interface PlanItem {
   id: string; action: 'create' | 'update'; title: string; document_type: string; anchor_entity_id: string | null; anchor_name: string | null;
   document_id: string | null; rationale: string; priority: 'high' | 'medium' | 'low'; statement_ids: string[];
-  state: 'proposed' | 'approved' | 'dismissed'; run: { id: string; status: string; document_id: string | null; review_notes: boolean } | null;
+  state: 'proposed' | 'approved' | 'dismissed'; run: { id: string; status: string; queue_position: number | null; document_id: string | null; review_notes: boolean } | null;
   maintenance: boolean;
 }
 interface PlanSummary {
@@ -106,7 +106,8 @@ function docNavigate(next: Record<string, string | number | null | undefined>) {
 }
 
 const docActive = (run: DocumentationRun) => ['queued', 'running'].includes(run.status);
-const docStatus = (status: string) => RUN_STATUSES[status] || status;
+const docStatus = ({ status, queue_position }: { status: string; queue_position: number | null }) =>
+  status === 'queued' && queue_position ? `Queued · ${queue_position === 1 ? 'next to start' : `${queue_position} in line`}` : RUN_STATUSES[status] || status;
 const docDeliveryStatus = (status: string) => DELIVERY_STATUSES[status] || status;
 const docPullRequestState = (state: string) => PULL_REQUEST_STATES[state] || 'State unknown';
 
@@ -424,7 +425,7 @@ function DocumentationRun({ id, onCompleted, options, onStarted }: {
   if (error) return <p role="alert">{error} <button onClick={() => setRetry(value => value + 1)}>Reload run</button></p>;
   if (!run) return <p role="status">Loading run…</p>;
   if (editing) return <DocumentationEditor title={run.draft_title} body={run.draft_body || ''} path={`runs/${encodeURIComponent(id)}/edits`} options={options} onStarted={onStarted} onCancel={() => setEditing(false)} />;
-  return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run.status)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
+  return <section className="docw-panel" aria-label="Generation run"><h2>{docStatus(run)}</h2><p className="docw-meta">{run.provider} · {run.model} · Effort: {run.reasoning_effort ?? 'Model default'} · {docDate(run.created_at)}</p><p>{run.prompt}</p>
     {run.target_document_id && <p>Revises <a href={'#/documentation?document=' + encodeURIComponent(run.target_document_id)}>an existing document</a>, starting from its revision {run.target_revision}.</p>}
     {run.revision_base === 'destination' && <p>This revision started from the published copy on GitHub.</p>}
     {run.review_notes.length > 0 && <details><summary>Writer briefed with notes from an earlier review</summary><ul>{run.review_notes.map((note, index) => <li key={index}><strong>{REVIEW_CHECKS[note.check]}</strong> · {note.where}: {note.problem}</li>)}</ul></details>}
@@ -544,7 +545,7 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
             <details><summary>{item.statement_ids.length} {item.maintenance ? 'changed statements' : 'statements it would mainly draw on'}</summary><DocumentationSources ids={item.statement_ids} /></details>
             {item.state === 'proposed' && options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => approve([item.id])}>Approve</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/dismiss`, {}))}>Dismiss</button></div>}
             {item.state === 'dismissed' && <p className="docw-meta">Dismissed</p>}
-            {item.state === 'approved' && <p className="docw-meta">Approved{item.run ? <> · <a href={'#/documentation?run=' + encodeURIComponent(item.run.id)}>{docStatus(item.run.status)}</a>{item.run.document_id && <> · <a href={'#/documentation?document=' + encodeURIComponent(item.run.document_id)}>open document</a></>}</> : ' · starting'}</p>}
+            {item.state === 'approved' && <p className="docw-meta">Approved{item.run ? <> · <a href={'#/documentation?run=' + encodeURIComponent(item.run.id)}>{docStatus(item.run)}</a>{item.run.document_id && <> · <a href={'#/documentation?document=' + encodeURIComponent(item.run.document_id)}>open document</a></>}</> : ' · starting'}</p>}
             {item.state === 'approved' && item.run && WROTE_NOTHING.includes(item.run.status) && options.can_generate && <div className="docw-actions">
               {item.run.review_notes && <button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/retry`, { with_review_notes: true }))}>Retry with these notes</button>}
               <button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/retry`, {}))}>Retry</button>
@@ -701,7 +702,7 @@ function FullDocumentationWorkspace() {
         <label>Find a document<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Title, profile, or template" /></label>
         {!documents.length ? <p>No documents yet. Start with Generate, or configure a writing profile first.</p> : !filtered.length ? <p>No documents match this search.</p> : <div className="docw-list">{filtered.map(document => <button key={document.id} onClick={() => docNavigate({ document: document.id })}><strong>{document.title}</strong><span>{document.guideline_set} · {document.document_type}{document.audience && <> · <AudienceIdentity audience={document.audience} /></>} · revision {document.current_revision}</span><span>{docDeliveryStatus(document.delivery_status)} · updated {docDate(document.updated_at)}</span>{document.stale.status === 'out_of_date' && <span className="docw-stale-badge">Out of date</span>}</button>)}</div>}
       </section>)}
-      {route.tab === 'runs' && <>{route.run && <DocumentationRun key={route.run} id={route.run} onCompleted={update} options={options} onStarted={started} />}<section className="docw-panel"><div className="docw-actions"><h2>Recent generation runs</h2><button onClick={update}>Refresh</button></div>{!runs.length ? <p>No runs yet.</p> : <div className="docw-list">{runs.map(run => <button key={run.id} onClick={() => docNavigate({ run: run.id })}><strong>{run.prompt}</strong><span>{docStatus(run.status)} · {run.provider} · {docDate(run.created_at)}</span>{run.summary && <span>{docActive(run) && run.summary.activity ? run.summary.activity + ' · ' : ''}{docRunLine(run.summary)}</span>}</button>)}</div>}</section></>}
+      {route.tab === 'runs' && <>{route.run && <DocumentationRun key={route.run} id={route.run} onCompleted={update} options={options} onStarted={started} />}<section className="docw-panel"><div className="docw-actions"><h2>Recent generation runs</h2><button onClick={update}>Refresh</button></div>{!runs.length ? <p>No runs yet.</p> : <div className="docw-list">{runs.map(run => <button key={run.id} onClick={() => docNavigate({ run: run.id })}><strong>{run.prompt}</strong><span>{docStatus(run)} · {run.provider} · {docDate(run.created_at)}</span>{run.summary && <span>{docActive(run) && run.summary.activity ? run.summary.activity + ' · ' : ''}{docRunLine(run.summary)}</span>}</button>)}</div>}</section></>}
     </>}
   </main>;
 }

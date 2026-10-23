@@ -812,6 +812,7 @@ def dismiss_stale(
 class RunState(BaseModel):
     id: str
     status: str
+    queue_position: int | None = None
     document_id: str | None
     #: The refusing review left findings a retry can brief the writer with.
     review_notes: bool = False
@@ -1070,6 +1071,7 @@ def _item(
         run=RunState(
             id=str(run["id"]),
             status=docs_store.status_for(run),
+            queue_position=run["queue_position"],
             document_id=run["document_id"],
             review_notes=bool(
                 run["summary"] and json.loads(run["summary"]).get("review_findings")

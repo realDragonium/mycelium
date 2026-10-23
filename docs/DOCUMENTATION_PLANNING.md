@@ -61,7 +61,9 @@ nothing, **Retry** starts it again and the item follows the new run; when the
 review refused it, **Retry with these notes** also briefs the writer with the
 review's findings (see [Documentation models](DOCUMENTATION_MODELS.md)). Select several items to
 approve them together, up to the batch limit (2 by default); each is its own
-documentation run and counts against the active-run limit. **Dismiss** is
+documentation run and counts against the active-run limit. Runs beyond that
+limit are queued rather than refused: the item shows its place in line and
+starts when a running one finishes. **Dismiss** is
 remembered per profile, so a later plan drops the same proposal. A dismissed
 out-of-date document comes back after its next revision.
 

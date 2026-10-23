@@ -5,6 +5,10 @@ run gets one daemon thread; the concurrency bound is counted from the database
 and therefore survives a restart; and `finally: finish_run` means no runner
 crash can leave a row unfinished once the worker starts.
 
+A run admitted while the bound is full waits, unstarted, in `_waiting` and
+starts in admission order as running ones finish. The wait lives in this
+process, so a restart fails waiting runs with the running ones.
+
 The runner hands back the DOCUMENT — slug, title, body — and this module
 persists it. That is what lets the whole executor be
 proven against a stub returning a canned document, and it puts the write where
@@ -61,6 +65,7 @@ logger = logging.getLogger(__name__)
 RUNNER: Callable[..., Any] | None = None
 _spawn_lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
+_waiting: dict[str, Callable[[sqlite3.Connection], None]] = {}
 _in_memory_conns: dict[str, sqlite3.Connection] = {}
 
 
@@ -99,9 +104,7 @@ def start_run(
         )
     if reason := model_settings.provider_availability(config.provider).reason:
         raise ValueError(reason)
-    max_active = product_settings.get(
-        product_settings.ConcurrencySettings
-    ).documentation_runs
+    max_active = _max_active()
     from . import documentation_profiles
 
     profiles = (
@@ -126,11 +129,6 @@ def start_run(
     )
 
     with _spawn_lock:
-        if docs_store.count_active(conn) >= max_active:
-            raise ValueError(
-                f"too many active documentation runs (max {max_active}); retry when one finishes"
-            )
-
         run_id = docs_store.create_run(
             conn,
             prompt=prompt,
@@ -146,8 +144,26 @@ def start_run(
             revision_base=None if target is None else target.base,
             review_notes=review_notes,
         )
-        # Anything failing between here and thread.start() must not strand
-        # the freshly committed row: finish it as failed, then re-raise.
+
+        def launch(conn: sqlite3.Connection) -> None:
+            _launch(
+                conn,
+                run_id,
+                prompt,
+                guideline_set,
+                document_type,
+                selected_runner,
+                config,
+                target,
+                profiles,
+                instructions,
+                review_instructions,
+                manual_document,
+                anchor_entity_id,
+                writer_anchor,
+                review_notes,
+            )
+
         try:
             if profiles is not None and guideline_set and document_type:
                 _record_profile(conn, run_id, profiles, guideline_set, document_type)
@@ -157,59 +173,113 @@ def start_run(
                     (manual_document.title, manual_document.body, run_id),
                 )
                 conn.commit()
-            docs_store.mark_started(conn, run_id)
-            rows = conn.execute("PRAGMA database_list").fetchall()
-            main = next((row for row in rows if row["name"] == "main"), None)
-            db_path = main["file"] if main is not None else ""
-
-            # Tests and occasional embedded use can run against :memory:. In
-            # that case there is no file path for the worker to reopen, so
-            # reuse the already thread-safe connection handed to start_run.
-            if not db_path:
-                _in_memory_conns[run_id] = conn
-
-            ctx = contextvars.copy_context()
-            ctx.run(ai.usage.attribute, run_id=run_id)
-            t = threading.Thread(
-                target=lambda: ctx.run(
-                    _execute_run,
-                    run_id,
-                    prompt,
-                    guideline_set,
-                    document_type,
-                    db_path,
-                    selected_runner,
-                    config,
-                    target,
-                    profiles,
-                    instructions,
-                    review_instructions,
-                    manual_document,
-                    anchor_entity_id,
-                    writer_anchor,
-                    review_notes,
-                ),
-                daemon=True,
-                name=f"docgen-{run_id}",
-            )
-            _threads[run_id] = t
-            t.start()
+            if _waiting or docs_store.count_active(conn) >= max_active:
+                _waiting[run_id] = launch
+            else:
+                launch(conn)
         except Exception as exc:
-            _in_memory_conns.pop(run_id, None)
-            _threads.pop(run_id, None)
-            try:
-                docs_store.finish_run(
-                    conn,
-                    run_id,
-                    outcome="failed",
-                    error=f"failed to start: {type(exc).__name__}: {exc}",
-                    draft_title=manual_document.title if manual_document else None,
-                    draft_body=manual_document.body if manual_document else None,
-                )
-            except Exception:  # noqa: BLE001 — startup orphan sweep is the backstop
-                logger.exception("could not finalize failed start of %s", run_id)
+            _fail_start(conn, run_id, exc, manual_document)
             raise
         return run_id
+
+
+def _max_active() -> int:
+    return product_settings.get(product_settings.ConcurrencySettings).documentation_runs
+
+
+def _start_waiting(conn: sqlite3.Connection) -> None:
+    """Start waiting runs, oldest first, while the bound has room. `conn` is
+    the finishing worker's: the admitting caller's may belong to its thread."""
+    with _spawn_lock:
+        while _waiting:
+            run_id, launch = next(iter(_waiting.items()))
+            if docs_store.count_active(conn) >= _max_active():
+                return
+            del _waiting[run_id]
+            try:
+                launch(conn)
+            except Exception as exc:  # noqa: BLE001 — the run records why
+                _fail_start(conn, run_id, exc, None)
+
+
+def _launch(
+    conn: sqlite3.Connection,
+    run_id: str,
+    prompt: str,
+    guideline_set: str | None,
+    document_type: str | None,
+    runner: Callable[..., Any],
+    config: DocgenConfig,
+    target: RevisionTarget | None,
+    profiles: CatalogueSnapshot | None,
+    instructions: ai_prompts.Snapshot,
+    review_instructions: ai_prompts.Snapshot,
+    manual_document: ManualDocument | None,
+    anchor_entity_id: str | None,
+    writer_anchor: str | None,
+    review_notes: Sequence[ReviewNote],
+) -> None:
+    """Count the run against the bound and start its worker. Called with
+    `_spawn_lock` held."""
+    docs_store.mark_started(conn, run_id)
+    rows = conn.execute("PRAGMA database_list").fetchall()
+    main = next((row for row in rows if row["name"] == "main"), None)
+    db_path = main["file"] if main is not None else ""
+
+    # Tests and occasional embedded use can run against :memory:. In
+    # that case there is no file path for the worker to reopen, so
+    # reuse the already thread-safe connection handed to start_run.
+    if not db_path:
+        _in_memory_conns[run_id] = conn
+
+    ctx = contextvars.copy_context()
+    ctx.run(ai.usage.attribute, run_id=run_id)
+    t = threading.Thread(
+        target=lambda: ctx.run(
+            _execute_run,
+            run_id,
+            prompt,
+            guideline_set,
+            document_type,
+            db_path,
+            runner,
+            config,
+            target,
+            profiles,
+            instructions,
+            review_instructions,
+            manual_document,
+            anchor_entity_id,
+            writer_anchor,
+            review_notes,
+        ),
+        daemon=True,
+        name=f"docgen-{run_id}",
+    )
+    _threads[run_id] = t
+    t.start()
+
+
+def _fail_start(
+    conn: sqlite3.Connection,
+    run_id: str,
+    exc: Exception,
+    manual_document: ManualDocument | None,
+) -> None:
+    """A run that never got its worker must not stay unfinished."""
+    _in_memory_conns.pop(run_id, None)
+    _threads.pop(run_id, None)
+    try:
+        docs_store.finish_run(
+            conn,
+            run_id,
+            outcome="failed",
+            error=f"failed to start: {type(exc).__name__}: {exc}",
+            draft_title=manual_document.title if manual_document else None,
+            draft_body=manual_document.body if manual_document else None,
+        )
+    except Exception:  # noqa: BLE001 — startup orphan sweep is the backstop
+        logger.exception("could not finalize failed start of %s", run_id)
 
 
 def _target(
@@ -381,8 +451,12 @@ def _review_notes(review: object) -> list[ReviewNote]:
 
 
 def wait_all(timeout: float = 10.0) -> None:
-    for thread in list(_threads.values()):
-        thread.join(timeout)
+    """Wait for every worker, including waiting runs started meanwhile."""
+    while _threads:
+        for thread in list(_threads.values()):
+            thread.join(timeout)
+            if thread.is_alive():
+                return
 
 
 def _default_runner(
@@ -621,6 +695,8 @@ def _execute_run(
                 matched_document_id=matched_document_id,
                 summary=summary,
             )
+            _threads.pop(run_id, None)
+            _start_waiting(conn)
         except Exception:  # noqa: BLE001
             logger.exception("could not finalize documentation run %s", run_id)
         finally:

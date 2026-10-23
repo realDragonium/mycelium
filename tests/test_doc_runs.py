@@ -42,6 +42,7 @@ def _reset_doc_runs():
     doc_runs.wait_all()
     doc_runs.RUNNER = None
     doc_runs._threads.clear()
+    doc_runs._waiting.clear()
     doc_runs._in_memory_conns.clear()
 
 
@@ -789,38 +790,34 @@ def test_a_runner_that_raises_finishes_the_run_failed(tmp_path):
     assert "no API key" in row["error"]
 
 
-def test_capacity_refuses_when_at_max_and_names_the_env_var(tmp_path, monkeypatch):
+def test_runs_over_the_bound_wait_and_start_in_admission_order(tmp_path):
     conn = _conn(tmp_path)
-    set_product(product_settings.ConcurrencySettings(documentation_runs=2))
+    set_product(product_settings.ConcurrencySettings(documentation_runs=1))
     release = threading.Event()
+    started: list[str] = []
 
     def runner(prompt, *, guideline_set, document_type):
+        started.append(prompt)
         release.wait()
         return {"outcome": "nothing_written", "reason": "done"}
 
-    run1 = _start(conn, tmp_path, runner)
-    run2 = _start(conn, tmp_path, runner)
-    assert {
-        docs_store.status_for(docs_store.get_run(conn, run1)),
-        docs_store.status_for(docs_store.get_run(conn, run2)),
-    } == {"running"}
+    running = _start(conn, tmp_path, runner, prompt="first")
+    waiting = [_start(conn, tmp_path, runner, prompt=p) for p in ("second", "third")]
 
-    with pytest.raises(ValueError, match="max 2"):
-        _start(conn, tmp_path, runner)
+    assert docs_store.status_for(docs_store.get_run(conn, running)) == "running"
+    assert docs_store.get_run(conn, running)["queue_position"] is None
+    assert [
+        docs_store.serialize_run(docs_store.get_run(conn, r))["queue_position"]
+        for r in waiting
+    ] == [1, 2]
 
     release.set()
     doc_runs.wait_all()
 
-    run3 = _start(
-        conn,
-        tmp_path,
-        lambda prompt, *, guideline_set, document_type: {
-            "outcome": "nothing_written",
-            "reason": "done",
-        },
-    )
-    doc_runs.wait_all()
-    assert docs_store.status_for(docs_store.get_run(conn, run3)) == "nothing_written"
+    assert started == ["first", "second", "third"]
+    assert {
+        docs_store.status_for(docs_store.get_run(conn, r)) for r in [running, *waiting]
+    } == {"nothing_written"}
 
 
 def test_bound_is_db_derived(tmp_path, monkeypatch):
@@ -831,20 +828,21 @@ def test_bound_is_db_derived(tmp_path, monkeypatch):
     stranded = docs_store.create_run(conn, prompt="stranded", created_by=None)
     docs_store.mark_started(conn, stranded)
 
-    with pytest.raises(ValueError, match="max 1"):
-        _start(
-            conn,
-            tmp_path,
-            lambda prompt, *, guideline_set, document_type: _document(),
-        )
+    run_id = _start(
+        conn,
+        tmp_path,
+        lambda prompt, *, guideline_set, document_type: _document(),
+    )
+
+    assert docs_store.status_for(docs_store.get_run(conn, run_id)) == "queued"
+    doc_runs._waiting.clear()
 
 
-def test_concurrent_starts_race_one_wins(tmp_path, monkeypatch):
+def test_concurrent_starts_race_one_runs_one_waits(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
     set_product(product_settings.ConcurrencySettings(documentation_runs=1))
     release = threading.Event()
     barrier = threading.Barrier(2)
-    errors = []
     run_ids = []
 
     def runner(prompt, *, guideline_set, document_type):
@@ -853,10 +851,7 @@ def test_concurrent_starts_race_one_wins(tmp_path, monkeypatch):
 
     def start():
         barrier.wait()
-        try:
-            run_ids.append(_start(conn, tmp_path, runner))
-        except ValueError as exc:
-            errors.append(exc)
+        run_ids.append(_start(conn, tmp_path, runner))
 
     threads = [threading.Thread(target=start) for _ in range(2)]
     for thread in threads:
@@ -864,9 +859,9 @@ def test_concurrent_starts_race_one_wins(tmp_path, monkeypatch):
     for thread in threads:
         thread.join()
 
-    assert len(run_ids) == 1
-    assert len(errors) == 1
-    assert "max 1" in str(errors[0])
+    assert sorted(
+        docs_store.status_for(docs_store.get_run(conn, r)) for r in run_ids
+    ) == ["queued", "running"]
 
     release.set()
     doc_runs.wait_all()
