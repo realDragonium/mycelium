@@ -195,6 +195,10 @@ class DocumentationPlanningSettings(RequestLimits):
     replan_hint_statements: int = Field(default=25, gt=0)
     #: Items one batch approval may start; each is a documentation run.
     approve_batch: int = Field(default=2, gt=0, le=10)
+    #: Planning calls one plan may make while statements no plan was offered
+    #: remain, each offered the next batch of them and keeping up to
+    #: `max_items`.
+    max_calls: int = Field(default=1, gt=0, le=5)
 
 
 class DocumentationMaintenanceSettings(SettingsModel):
@@ -206,6 +210,10 @@ class DocumentationMaintenanceSettings(SettingsModel):
     quiet_minutes: int = Field(default=30, ge=0)
     #: Automatic revisions one profile may start in any 24 hours.
     revisions_per_day: int = Field(default=5, ge=0)
+    #: For a profile whose recovery is `ai`: how often failed AI work (a plan,
+    #: a plan review, a run that wrote nothing, an item that could not start,
+    #: a publication) is retried before it is given up with a reason.
+    retry_attempts: int = Field(default=2, gt=0, le=5)
 
 
 class ConnectSettings(LoopLimits):
