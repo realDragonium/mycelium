@@ -1,7 +1,7 @@
 # audiences Specification
 
 ## Purpose
-Audiences say who may see which knowledge: each statement carries an audience label decided by an AI labeller or a curator, external grants can wait for curator confirmation, and documentation runs and audience-scoped users or tokens read only what their audience may see.
+Audiences say which knowledge documentation may draw on: each statement carries an audience label decided by an AI labeller or a curator, external grants can wait for curator confirmation, and documentation runs read only what their audience may see. Audiences do not limit what users or tokens read.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ An audience SHALL have an immutable id, a name of 1 to 100 characters, a scope o
 - **THEN** the request is refused as invalid
 
 ### Requirement: Only administrators configure audiences
-The system SHALL let only an administrator create (`POST /api/audiences`), edit or restore (`PUT /api/audiences/{audience_id}`) and retire (`POST /api/audiences/{audience_id}/retire`) audiences, and SHALL refuse anyone else with 403. Any signed-in caller not otherwise restricted MAY read `GET /api/audiences`, whose `can_configure` is true only for an administrator.
+The system SHALL let only an administrator create (`POST /api/audiences`), edit or restore (`PUT /api/audiences/{audience_id}`) and retire (`POST /api/audiences/{audience_id}/retire`) audiences, and SHALL refuse anyone else with 403. Any signed-in caller MAY read `GET /api/audiences`, whose `can_configure` is true only for an administrator.
 
 #### Scenario: Writer tries to create an audience
 - **WHEN** a writer posts to `/api/audiences`
@@ -99,7 +99,7 @@ A statement without a label SHALL be visible to every internal audience and to n
 
 #### Scenario: New statement before labelling
 - **WHEN** a statement has just been written and has no label yet
-- **THEN** an external documentation run or external-scoped token cannot see it
+- **THEN** an external documentation run cannot see it
 - **AND** an internal one can
 
 ### Requirement: Default audience
@@ -215,7 +215,7 @@ While **Confirm external grants** is on (`confirm_external_grants`, default on),
 #### Scenario: New external grant waits
 - **WHEN** the AI labels a new statement about SSO setup for `external-technical`
 - **THEN** the label lists `external-technical` under `pending`
-- **AND** an `external-technical` documentation run or scoped token cannot see the statement
+- **AND** an `external-technical` documentation run cannot see the statement
 
 ### Requirement: Waiting grants keep internal readers
 While a grant waits, the label SHALL grant directly the narrowest internal audiences that include the waiting audience (and keep any audience that already saw the statement), so internal audiences do not lose the statement. Confirming the grant SHALL drop those internal grants that now see the statement through it.
@@ -297,72 +297,16 @@ Reading as an audience, the system SHALL expose only statements it may see, stat
 - **WHEN** a concept "Invoices" has an internal alias "Ledger-X" that no externally visible statement was matched through
 - **THEN** an external audience sees the concept as "Invoices" without "Ledger-X", its description or its concept links
 
-### Requirement: Audience-scoped principals
-An administrator SHALL be able to scope a user (`PATCH /api/admin/users/{user_id}` with `audience_id`), a token (`PATCH /api/admin/tokens/{token_id}`, or `audience_id` when minting) or an OAuth grant (the consent screen) to a live audience; `null` restores full access by role, and an unknown or retired audience SHALL be refused with 400. A user's audience SHALL apply to every token the user holds, overriding the token's own. The scope SHALL be read on every request.
+### Requirement: Media audience labels bound documentation
+Media items SHALL carry their own curator-decided audience label under the same visibility rules (unlabelled media is internal only, inclusion applies), and a media item SHALL be offered to a documentation run only when its own label allows the run's audience, whatever the label of the statement it is attached to; see the `media` capability.
 
-#### Scenario: User scope wins over token scope
-- **WHEN** a user scoped to `external-technical` holds a token scoped to `internal-technical`
-- **THEN** requests with that token read as `external-technical`
+#### Scenario: Unlabelled media and an external run
+- **WHEN** an external documentation run writes about a statement with unlabelled media attached
+- **THEN** the run is not offered the media
 
-### Requirement: Scoped principals are read-only
-A scoped principal's role SHALL be clamped to at most reader, so writes, drafts, gap reports and administration are refused whatever its stored role. Tokens a scoped principal mints SHALL carry its audience, and the last active unscoped administrator SHALL NOT be scopeable (400).
+### Requirement: Audiences do not scope principals
+Users, tokens and OAuth grants SHALL carry no audience: every principal reads what its role allows, and audiences bound only documentation runs, plans and documents.
 
-#### Scenario: Scoped writer
-- **WHEN** a writer scoped to `external-non-technical` calls `upsert_statement`
-- **THEN** the call is refused with 403
-
-### Requirement: Scoped principal tool allowlist
-A scoped principal SHALL call only these tools: `ask`, `list_generated_documents`, `get_generated_document`, `list_media`, `search_statements`, `find_statement_connections`, `get_statements`, `retrieve_context`, `get_entity`, `list_entities`, `search_entities`, `list_statements`, `grep_statements`, `discover_facts`, `find_duplicates`, `find_entity_duplicates`, `get_mention_candidates`, `list_link_types`, `list_statement_kinds`, `list_entity_link_types`, `list_link_type_aliases`.
-
-#### Scenario: Scoped token lists tools
-- **WHEN** a token scoped to `external-technical` with an admin owner sends `tools/list`
-- **THEN** the list contains only allowlisted tools advertised on MCP and no write, draft or curation tool
-
-### Requirement: Other tools refused to scoped principals
-Every tool not on the scoped allowlist, including any tool added later, SHALL be refused to a scoped principal with 403 and left out of its `tools/list`, and a list tool called with a `draft_id` SHALL be refused.
-
-#### Scenario: Scoped token calls a draft tool
-- **WHEN** a scoped token calls `get_draft`
-- **THEN** the call is refused
-
-### Requirement: Scoped principal route allowlist
-Besides allowlisted tool routes, a scoped principal SHALL reach only `GET /api/me`, `GET`/`POST /api/me/tokens`, `DELETE /api/me/tokens/{token_id}`, `GET /api/data`, `/api/substrate-counts`, `/api/entity-positions`, `/api/history`, `/api/documentation/documents[/{document_id}]`, `/api/media/{media_id}/content`, exempt paths, the app shell, sign-in, `/connect` and `/mcp`. Every other route, including later ones, SHALL answer 403.
-
-#### Scenario: Scoped token opens settings
-- **WHEN** a scoped token requests `GET /api/audiences`
-- **THEN** the response is 403
-
-### Requirement: Scoped reads run inside the boundary
-Every read a scoped principal makes SHALL run inside its audience's boundary, and `ask` SHALL run its whole loop inside it.
-
-#### Scenario: Scoped Ask
-- **WHEN** an external-scoped token asks about an internal-only topic
-- **THEN** the answer neither reads nor cites a statement that audience cannot see
-
-### Requirement: Generated documents for scoped principals
-A scoped principal SHALL read a generated document only when it was written for its audience, or for one at least as restricted (never internal for an external principal, and everything the writing audience may see visible to it), and every statement it cites is still visible to it; otherwise the document is not listed and reads as not found. A document whose run recorded no audience or citations SHALL be withheld, and out-of-date reasons quoting changed statements SHALL be omitted.
-
-#### Scenario: External reader and internal document
-- **WHEN** an `external-technical` token lists generated documents
-- **THEN** documents written for `internal-technical` are absent
-
-### Requirement: History for scoped principals
-`GET /api/history` for a scoped principal SHALL list only events on statements, concepts and names the audience may see now, without `before`, `after` or `context` snapshots.
-
-#### Scenario: Old version not exposed
-- **WHEN** a scoped principal reads the history of a statement whose earlier text was internal
-- **THEN** the event is listed without its before and after values
-
-### Requirement: Retired audience on a principal
-A principal scoped to an audience that is no longer live SHALL read nothing: every scoped read SHALL be refused with 403 until an administrator rescopes it, and `GET /api/me` SHALL return its `audience_id` with `audience: null`.
-
-#### Scenario: Audience retired under a token
-- **WHEN** the audience a token is scoped to is retired
-- **THEN** `search_statements` with that token is refused with 403 asking for a rescope
-
-### Requirement: Media audience labels
-Media items SHALL carry their own curator-decided audience label under the same visibility rules (unlabelled media is internal only, inclusion applies), and a media item SHALL be shown to a reader, token or run only when its own label allows that audience, whatever the label of the statement it is attached to; see the `media` capability.
-
-#### Scenario: Media content for a scoped token
-- **WHEN** an external-scoped token requests `/api/media/{media_id}/content` for unlabelled media
-- **THEN** the response is 404
+#### Scenario: Reader and internal-only knowledge
+- **WHEN** a reader token searches for a statement visible only to internal audiences
+- **THEN** the statement is returned

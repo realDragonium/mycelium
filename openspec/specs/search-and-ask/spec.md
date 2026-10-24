@@ -444,13 +444,6 @@ The system SHALL adjust a submitted answer's confidence in code: when any suppli
 - **WHEN** a read returned more records than fit and the model submits with `confidence: "high"`
 - **THEN** the result has `confidence: "medium"` and a gap saying some evidence was omitted
 
-### Requirement: Ask for an audience-scoped caller
-For a caller scoped to an audience, the Ask run SHALL read only what that audience may see, through one consistent view for the whole run, and the answer MUST NOT claim that something does not exist, is unsupported or undocumented, nor suggest that other knowledge is hidden. Visibility rules are defined by the `audiences` capability.
-
-#### Scenario: Topic outside the audience
-- **WHEN** a scoped asker asks about a feature documented only for another audience
-- **THEN** the answer says the information is not available here rather than that the feature does not exist
-
 ### Requirement: Ask over HTTP as JSON
 `POST /ask` with a JSON body `{question, depth, verbose}` and no `Accept: text/event-stream` SHALL respond normally, with its real HTTP status, when the run finishes or fails within 5 seconds; a slower run MUST respond 200 with whitespace sent every 15 seconds followed by the JSON result, and a later failure MUST end the body with `{"detail": "..."}`.
 

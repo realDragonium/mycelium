@@ -24,7 +24,7 @@ The system SHALL queue tasks of kind `documentation`, `document_review`, `docume
 - **THEN** a batch of due statements no open task holds is queued and leased to that agent
 
 ### Requirement: Only real writers claim agent tasks
-The system MUST allow `claim_agent_task`, `read_for_agent_task`, `submit_agent_task` and `release_agent_task` only to a real writer or admin; a drafter, reader, asker or audience-scoped principal is refused, and the tools are not listed to them over MCP.
+The system MUST allow `claim_agent_task`, `read_for_agent_task`, `submit_agent_task` and `release_agent_task` only to a real writer or admin; a drafter, reader or asker is refused, and the tools are not listed to them over MCP.
 
 #### Scenario: Drafter claims
 - **WHEN** a drafter calls `claim_agent_task(kind="documentation")`

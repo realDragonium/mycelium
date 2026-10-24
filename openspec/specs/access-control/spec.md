@@ -189,14 +189,14 @@ Creating an invite for an address outside the allowed domains SHALL be refused w
 - **THEN** their session is cleared and they are sent to the issuer's logout, which returns them to `/auth/login`
 
 ### Requirement: Current principal
-`GET /api/me` SHALL return the caller's `id`, `name`, `role` (after token and audience clamping), `type` (`human` or `service`), `synthetic`, `auth_enabled`, `audience_id` and `audience` (`id`, `name`, `scope`, or null).
+`GET /api/me` SHALL return the caller's `id`, `name`, `role` (after token clamping), `type` (`human` or `service`), `synthetic` and `auth_enabled`.
 
 #### Scenario: Reader-scoped token of an admin
 - **WHEN** an admin calls `/api/me` with a token minted with scope `reader`
 - **THEN** the response has `role: "reader"`
 
 ### Requirement: User management
-Every `/api/admin/*` endpoint SHALL require the admin role (403 "admin role required" otherwise). `GET /api/admin/users` SHALL list users oldest first. `POST /api/admin/users` SHALL create a user (`name` 1 to 120 characters, `role` default `writer`, `type` default `service`); a `human` user MUST have an email (400 otherwise). `PATCH /api/admin/users/{user_id}` SHALL change `role`, `status` (`active` or `suspended`, else 400), `name` and `audience_id` (404 for an unknown user).
+Every `/api/admin/*` endpoint SHALL require the admin role (403 "admin role required" otherwise). `GET /api/admin/users` SHALL list users oldest first. `POST /api/admin/users` SHALL create a user (`name` 1 to 120 characters, `role` default `writer`, `type` default `service`); a `human` user MUST have an email (400 otherwise). `PATCH /api/admin/users/{user_id}` SHALL change `role`, `status` (`active` or `suspended`, else 400) and `name` (404 for an unknown user).
 
 #### Scenario: Create a service account
 - **WHEN** an admin posts `{"name": "ci-export-bot", "role": "writer"}` to `/api/admin/users`
@@ -245,7 +245,7 @@ A token's effective role SHALL be the lower of its scope and its owner's current
 - **THEN** the token acts as writer on its next request
 
 ### Requirement: Personal token management
-Every principal SHALL manage their own tokens: `GET /api/me/tokens` lists them newest first, revoked ones included; `POST /api/me/tokens` mints one (`name` 1 to 80 characters, `scope` default `writer`, capped at the caller's role; only an admin MAY pass `audience_id`, 403 otherwise); `DELETE /api/me/tokens/{token_id}` revokes one, answering 404 for a token unknown or owned by someone else. Personal tokens SHALL never expire.
+Every principal SHALL manage their own tokens: `GET /api/me/tokens` lists them newest first, revoked ones included; `POST /api/me/tokens` mints one (`name` 1 to 80 characters, `scope` default `writer`, capped at the caller's role); `DELETE /api/me/tokens/{token_id}` revokes one, answering 404 for a token unknown or owned by someone else. Personal tokens SHALL never expire.
 
 #### Scenario: Revoking another user's token
 - **WHEN** a writer deletes `/api/me/tokens/{id}` for a token owned by someone else
@@ -256,14 +256,14 @@ Every principal SHALL manage their own tokens: `GET /api/me/tokens` lists them n
 - **THEN** the token is owned by the `local-admin` user
 
 ### Requirement: Token listing fields
-Each listed token SHALL show `id`, `name`, `prefix`, `scope`, `created_at`, `last_used_at`, `revoked_at`, `oauth` (whether an OAuth client holds it) and `audience_id`, and never its secret or hash.
+Each listed token SHALL show `id`, `name`, `prefix`, `scope`, `created_at`, `last_used_at`, `revoked_at` and `oauth` (whether an OAuth client holds it), and never its secret or hash.
 
 #### Scenario: OAuth connection in the list
 - **WHEN** a user has connected a desktop client through OAuth
 - **THEN** their token list has one entry for it with `oauth: true`
 
 ### Requirement: Admin token management
-An admin SHALL list any user's tokens (`GET /api/admin/users/{user_id}/tokens`), revoke any token idempotently (`DELETE /api/admin/tokens/{token_id}`) and set or clear any token's audience, personal or OAuth (`PATCH /api/admin/tokens/{token_id}`; 404 for an unknown token). An OAuth grant SHALL keep its audience across refreshes.
+An admin SHALL list any user's tokens (`GET /api/admin/users/{user_id}/tokens`) and revoke any token idempotently (`DELETE /api/admin/tokens/{token_id}`).
 
 #### Scenario: Revoke twice
 - **WHEN** an admin revokes the same token twice
@@ -337,14 +337,14 @@ An authorization request's `redirect_uri` SHALL match one of the client's redire
 - **THEN** `/authorize` answers 400
 
 ### Requirement: Authorization request and consent
-`GET /authorize` SHALL require `response_type=code`, a `code_challenge`, `code_challenge_method=S256`, a known client and an allowed redirect URI (400 otherwise). Without a signed-in user it SHALL redirect to `/auth/login` with the authorize URL as `next`. Otherwise it SHALL record the request and show a consent page naming the client, the user and role, the redirect host and the access granted, warning on a loopback redirect, and offering an unscoped admin an audience choice.
+`GET /authorize` SHALL require `response_type=code`, a `code_challenge`, `code_challenge_method=S256`, a known client and an allowed redirect URI (400 otherwise). Without a signed-in user it SHALL redirect to `/auth/login` with the authorize URL as `next`. Otherwise it SHALL record the request and show a consent page naming the client, the user and role, the redirect host and the access granted, warning on a loopback redirect.
 
 #### Scenario: Not signed in
 - **WHEN** an anonymous browser opens a valid `/authorize` URL
 - **THEN** it is redirected to `/auth/login?next=<the authorize URL>`
 
 ### Requirement: Consent decisions
-`POST /authorize/decide` SHALL take only the consent id, the decision and an optional audience; every OAuth parameter SHALL come from the recorded request, and the client and redirect SHALL be re-validated. A consent SHALL be answerable once, only by the user it was shown to, within 600 seconds; otherwise the response is 400 `invalid_request`. Only an admin MAY choose an audience (403 otherwise), and a scoped user's own audience SHALL bind the grant.
+`POST /authorize/decide` SHALL take only the consent id and the decision; every OAuth parameter SHALL come from the recorded request, and the client and redirect SHALL be re-validated. A consent SHALL be answerable once, only by the user it was shown to, within 600 seconds; otherwise the response is 400 `invalid_request`.
 
 #### Scenario: Submitted OAuth parameters are ignored
 - **WHEN** an approval is submitted with extra `client_id` and `redirect_uri` fields naming another client
@@ -376,7 +376,7 @@ A `resource` parameter SHALL name this server: the issuer or its `/mcp` endpoint
 - **THEN** the second exchange fails with `invalid_grant` "code already used"
 
 ### Requirement: Token response
-A successful exchange SHALL create a token named `OAuth: <client name>` whose scope is the user's current role and whose audience is the grant's, and answer with `access_token`, `token_type: "Bearer"`, `expires_in`, `refresh_token` and `scope`, with `Cache-Control: no-store`.
+A successful exchange SHALL create a token named `OAuth: <client name>` whose scope is the user's current role, and answer with `access_token`, `token_type: "Bearer"`, `expires_in`, `refresh_token` and `scope`, with `Cache-Control: no-store`.
 
 #### Scenario: Writer connects a client
 - **WHEN** a writer completes the flow
