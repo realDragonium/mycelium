@@ -6,7 +6,7 @@ import { tokens } from './ai-usage';
 import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
 export function draftReviewProviderName(provider: string | null | undefined): string {
-  return provider === 'claude' ? 'Claude' : provider === 'openai' ? 'GPT (OpenAI)' : 'Unknown provider';
+  return provider === 'claude' ? 'Claude' : provider === 'openai' ? 'GPT (OpenAI)' : provider === 'agent' ? 'External agent' : 'Unknown provider';
 }
 
 function ReasoningEffortField({ provider, value, onChange, label = 'Reasoning effort' }: {
@@ -285,17 +285,17 @@ interface Reviewer { id: string; name: string; role: string }
 interface ReviewConfig {
   mode: ReviewMode; application_enabled: boolean; auto_apply: AutoApply; provider: Provider; model: string; reasoning_effort?: Effort;
   claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
-  reviewer_id: string; revision: number | string; model_revision: number | string;
+  reviewer_id: string; external_agent: boolean; revision: number | string; model_revision: number | string;
   source: string; issues: string[]; model_warning?: string | null; can_configure: boolean; providers: ProviderStatus[]; reviewers: Reviewer[];
   catalog: CatalogModel[];
 }
-interface ReviewForm { application_enabled: boolean; auto_apply: AutoApply; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; revision: number | string; model_revision: number | string }
+interface ReviewForm { application_enabled: boolean; auto_apply: AutoApply; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; external_agent: boolean; revision: number | string; model_revision: number | string }
 
 function reviewForm(d: ReviewConfig): ReviewForm {
   return {
     application_enabled: d.application_enabled, auto_apply: d.auto_apply, mode: d.mode, provider: d.provider, model: d.model,
     reasoning_effort: (d.provider === 'claude' ? d.claude_reasoning_effort : d.openai_reasoning_effort) ?? null,
-    reviewer_id: d.reviewer_id, revision: d.revision, model_revision: d.model_revision,
+    reviewer_id: d.reviewer_id, external_agent: d.external_agent, revision: d.revision, model_revision: d.model_revision,
   };
 }
 const MODE_LABEL: Record<ReviewMode, string> = { off: 'Off', 'review-only': 'Review only', 'review-and-apply': 'Review and apply' };
@@ -409,7 +409,7 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
 
   const provider = settings.providers.find(p => p.provider === form.provider);
   const reviewerExists = reviewers.some(r => r.id === form.reviewer_id);
-  const incomplete = form.mode !== 'off' && (!form.model || !reviewerExists || !provider?.available);
+  const incomplete = form.mode !== 'off' && !form.external_agent && (!form.model || !reviewerExists || !provider?.available);
 
   const save = async (e: FormEvent) => {
     e.preventDefault(); setBusy(true); setError(null); setSaved(false);
@@ -431,7 +431,7 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
   return (
     <Card title="Automatic draft review" actions={<button type="button" className="btn ghost sm" onClick={reload} disabled={busy}>Reload</button>}>
       <p className="muted">
-        Now: {MODE_LABEL[settings.mode]}{settings.mode === 'review-and-apply' ? ` (${AUTO_APPLY_LABEL[settings.auto_apply].toLowerCase()})` : ''} · {draftReviewProviderName(settings.provider)} · {settings.model || 'no model chosen'} · effort {settings.reasoning_effort ?? 'model default'}.
+        Now: {MODE_LABEL[settings.mode]}{settings.mode === 'review-and-apply' ? ` (${AUTO_APPLY_LABEL[settings.auto_apply].toLowerCase()})` : ''} · {settings.external_agent ? 'External agent' : `${draftReviewProviderName(settings.provider)} · ${settings.model || 'no model chosen'} · effort ${settings.reasoning_effort ?? 'model default'}`}.
         {' '}Applying accepted reviews is <b>{settings.application_enabled ? 'allowed' : 'not allowed'}</b>; that permission covers both a curator applying a review and automatic application.
       </p>
       {settings.can_configure && settings.mode !== 'off' && <BacklogOffer key={backlogCheck} />}
@@ -455,11 +455,15 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
                 </select>
                 <span className="hint">With only clean approvals, a draft the reviewer wants to correct waits for a curator, who applies or edits the suggested corrections.</span>
               </label>
-              <ProviderSelect label="Provider" value={form.provider} onChange={p => change({
-                provider: p,
-                model: p === 'claude' ? settings.claude_model : settings.openai_model,
-                reasoning_effort: (p === 'claude' ? settings.claude_reasoning_effort : settings.openai_reasoning_effort) ?? null,
-              })} />
+              <ActionRunnerSelect value={form.external_agent ? 'external' : form.provider} agentSupported
+                hint={form.external_agent ? 'Agents with a writer token claim reviews over MCP (claim_agent_task, kind draft_review) and act as the reviewer; never of a draft they created.' : undefined}
+                onChange={p => change(p === 'external' ? { external_agent: true } : {
+                  external_agent: false,
+                  provider: p,
+                  model: p === 'claude' ? settings.claude_model : settings.openai_model,
+                  reasoning_effort: (p === 'claude' ? settings.claude_reasoning_effort : settings.openai_reasoning_effort) ?? null,
+                })} />
+              {!form.external_agent && <>
               <ModelSelect provider={form.provider} value={form.model} catalog={settings.catalog} required={form.mode !== 'off'} onChange={model => change({ model })} />
               <ReasoningEffortField provider={form.provider} value={form.reasoning_effort} onChange={v => change({ reasoning_effort: v })} />
               <label className="field"><span>Reviewer account</span>
@@ -470,7 +474,9 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
                 </select>
                 <span className="hint">The reviewer acts as a stored, active writer or administrator, also when authentication is off.</span>
               </label>
+              </>}
             </div>
+            {!form.external_agent && <>
             <p className="hint">{provider?.available ? 'Provider credentials are configured on the server; model access is checked when a review runs.' : provider?.reason || 'This provider has no credentials on the server.'} API credentials are never stored in this form.</p>
             <details className="disclosure">
               <summary>Create a reviewer account</summary>
@@ -480,6 +486,7 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
                 <button type="button" className="btn" onClick={() => void createReviewer()} disabled={!accountName.trim()}>Create account</button>
               </div>
             </details>
+            </>}
             <p className="hint">Changes apply to new submissions and reruns. Reviews already running can finish but will not apply automatically after a change.</p>
             {incomplete && <Notice tone="warn">Choose a model, a reviewer account and a provider with server credentials before turning reviews on. Saving Off always works.</Notice>}
             <div className="row gap-sm">
