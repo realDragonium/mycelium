@@ -27,7 +27,7 @@ interface AssessmentPart {
 }
 interface Assessment {
   run_id: string; status: 'running' | 'completed' | 'failed' | 'paused'; label?: string | null; stale?: boolean;
-  provider?: string | null; model?: string | null; reasoning_effort?: string | null; mode?: string | null;
+  provider?: string | null; model?: string | null; reasoning_effort?: string | null; mode?: string | null; reviewer_id?: string | null;
   application?: 'unapplied' | 'applied' | 'rejected' | 'needs_human' | 'held' | null; draft_revision?: number;
   rationale?: string | null; detail?: string | null; questions: string[]; corrections: Correction[];
   contradictions?: Contradiction[]; parts?: AssessmentPart[]; answers?: Answer[]; attempt?: number; previous_failure?: string | null;
@@ -60,7 +60,7 @@ const rejectionsOf = (e: unknown): RejectedStatement[] => {
   const { detail } = e;
   return detail && typeof detail === 'object' && 'rejections' in detail && Array.isArray(detail.rejections) ? detail.rejections as RejectedStatement[] : [];
 };
-interface ReviewSettings { mode: string; can_review: boolean; provider?: string | null; model?: string | null }
+interface ReviewSettings { mode: string; can_review: boolean; provider?: string | null; model?: string | null; external_agent?: boolean }
 
 const drafts = {
   list: () => getJSON<{ drafts: DraftSummary[] }>('/api/drafts?status=all').then(r => r.drafts),
@@ -96,7 +96,7 @@ function AssessmentBadge({ assessment }: { assessment: AssessmentSummary }) {
 function AssessmentPanel({ assessment }: { assessment: Assessment }) {
   return (
     <section className="card review-card" aria-label="AI review">
-      <div className="row between"><AssessmentBadge assessment={assessment} /><span className="muted small">{draftReviewProviderName(assessment.provider)} · {assessment.model || 'model not recorded'} · effort {assessment.reasoning_effort ?? 'model default'}</span></div>
+      <div className="row between"><AssessmentBadge assessment={assessment} /><span className="muted small">{assessment.provider === 'agent' ? `External agent · ${assessment.reviewer_id ? `reviewer ${assessment.reviewer_id}` : 'not yet reviewed'}` : `${draftReviewProviderName(assessment.provider)} · ${assessment.model || 'model not recorded'} · effort ${assessment.reasoning_effort ?? 'model default'}`}</span></div>
       <p className="small">
         {assessment.mode === 'review-only' ? 'Review only: this review does not edit, reject or apply the draft.' : 'Review and apply.'}
         {' '}Status: {assessment.status}.{' '}
@@ -640,7 +640,7 @@ export function DraftReview({ id }: { id: string }) {
                   {!settings ? 'Review settings are unavailable.'
                     : !settings.can_review ? 'Running a review needs a real curator role.'
                     : settings.mode === 'off' ? 'Automatic review is off.'
-                    : `${settings.mode === 'review-only' ? 'Review only' : 'Review and apply'} · ${draftReviewProviderName(settings.provider)} · ${settings.model || 'no model configured'}.`}
+                    : `${settings.mode === 'review-only' ? 'Review only' : 'Review and apply'} · ${settings.external_agent ? 'External agent' : `${draftReviewProviderName(settings.provider)} · ${settings.model || 'no model configured'}`}.`}
                   {' '}<Link to={{ view: 'settings', section: 'review' }}>Draft review settings</Link>
                 </p>
               </div>

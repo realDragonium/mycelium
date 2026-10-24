@@ -38,9 +38,8 @@ screen can pick either provider.
 
 ## External agent
 
-Each action runs on its own choice of **Claude**, **OpenAI** or, for
-Documentation, Documentation planning, Audience labelling, Ingest, Connect,
-Alias discovery and Ask, **External agent**. There is no instance-wide switch:
+Each action runs on its own choice of **Claude**, **OpenAI** or **External
+agent**. There is no instance-wide switch:
 changing one action leaves the others as they are, and the overview at the top
 of **Settings → Models** shows where each one runs. The server then queues each
 piece of work as a task, and an outside agent (Claude Code, Codex or another
@@ -48,8 +47,9 @@ MCP client with a writer token) claims it, does the model's part and hands the
 result back. No provider key is needed for that work. The result passes the
 same checks a server model's output would. Ask queues nothing: the caller's
 own agent researches with the read tools, and the server's `ask` tool is
-hidden and refuses to run. Draft review always uses a server model; see
-[Agent tasks](AGENT_TASKS.md#actions) for why.
+hidden and refuses to run. Draft review chooses its runner under
+**Settings → Draft review**; with an external agent the agent that submits a
+review is its reviewer (see [Draft review](DRAFT_REVIEW.md#external-agent)).
 
 Documentation also has a **Review** choice. **Server reviewer** (the default)
 reviews an agent's document with the documentation provider and model set

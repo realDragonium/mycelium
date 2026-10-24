@@ -16,9 +16,10 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from . import (
+    agent_tasks,
     ai,
     ai_prompts,
     ai_usage,
@@ -123,6 +124,8 @@ def mode() -> Mode:
 
 
 def credentials_error(settings: draft_review_settings.Snapshot) -> str | None:
+    if settings.external_agent:
+        return None
     reason = model_settings.provider_availability(settings.provider).reason
     return None if reason is None else f"Internal draft review cannot run: {reason}"
 
@@ -159,7 +162,7 @@ def start(
     limits = product_settings.get(product_settings.ReviewSettings)
     if settings.mode == "off":
         raise ValueError("internal draft review is off")
-    if not settings.model:
+    if not settings.external_agent and not settings.model:
         raise ValueError(
             model_settings.missing_model("draft_review", settings.provider)
         )
@@ -175,19 +178,16 @@ def start(
         previous = draft_review_store.latest(conn, draft_id)
         if admit is not None and not admit(previous):
             raise NotAdmitted("the draft's latest review changed; not started")
-        answers = previous.answers if previous else []
-        if answer is not None:
-            if previous is None or previous.application != "needs_human":
-                raise ValueError("the internal reviewer is not waiting for an answer")
-            if previous.run_id != answer.run_id:
-                raise ValueError("the reviewer has asked again since; reload")
-            if previous.stale:
-                raise ValueError("the draft changed after the reviewer asked; rerun")
-            answers = [
-                *answers,
-                answer.model_copy(update={"questions": previous.questions}),
-            ]
-        if previous and (previous.status == "running" or not rerun):
+        answers = _answers(previous, answer)
+        if (
+            rerun
+            and previous is not None
+            and previous.status == "running"
+            and previous.provider == "agent"
+            and not settings.external_agent
+        ):
+            _end_agent_run(conn, previous)
+        elif previous and (previous.status == "running" or not rerun):
             return previous
         active = conn.execute(
             "SELECT id FROM draft_review_runs WHERE draft_id = ? AND status = 'running'",
@@ -198,10 +198,7 @@ def start(
         instructions = ai_prompts.resolve("draft_review")
         run = draft_review_store.new(draft_id, settings.mode, int(row["revision"]))
         run.prompt = instructions.reference()
-        run.provider = settings.provider
-        run.model = settings.model
-        run.reasoning_effort = settings.reasoning_effort
-        run.reviewer_id = settings.reviewer_id
+        _set_runner(run, settings)
         run.settings_revision = settings.revision
         run.model_settings_revision = settings.model_revision
         run.attempt = attempt
@@ -209,6 +206,9 @@ def start(
         run.previous_failure = previous_failure
         run.answers = answers
         draft_review_store.save(conn, run)
+    if settings.external_agent:
+        _queue_agent_review(run, settings, row["created_by"], previous)
+        return run
     try:
         principal = reviewer(row["created_by"], settings.reviewer_id)
         token = auth.current_principal.set(principal)
@@ -230,6 +230,31 @@ def start(
         _futures.pop(run.run_id, None)
         _failed(run, str(exc))
     return run
+
+
+def _answers(previous: ReviewRun | None, answer: Answer | None) -> list[Answer]:
+    """The curators' answers the next run carries, with `answer` added."""
+    answers = previous.answers if previous else []
+    if answer is None:
+        return answers
+    if previous is None or previous.application != "needs_human":
+        raise ValueError("the internal reviewer is not waiting for an answer")
+    if previous.run_id != answer.run_id:
+        raise ValueError("the reviewer has asked again since; reload")
+    if previous.stale:
+        raise ValueError("the draft changed after the reviewer asked; rerun")
+    return [*answers, answer.model_copy(update={"questions": previous.questions})]
+
+
+def _set_runner(run: ReviewRun, settings: draft_review_settings.Snapshot) -> None:
+    if settings.external_agent:
+        run.provider = "agent"
+        run.detail = draft_review_store.WAITING_FOR_AGENT
+        return
+    run.provider = settings.provider
+    run.model = settings.model
+    run.reasoning_effort = settings.reasoning_effort
+    run.reviewer_id = settings.reviewer_id
 
 
 def on_submitted(draft_id: str) -> None:
@@ -268,7 +293,9 @@ def sweep(now: datetime | None = None) -> list[str]:
     started = []
     conn = drafts_store.connection()
     budget = product_settings.get(product_settings.AIBudgetSettings)
-    if ai_usage.paused_reason(conn, "draft_review", budget, now):
+    if not settings.external_agent and ai_usage.paused_reason(
+        conn, "draft_review", budget, now
+    ):
         return []
     for row in drafts_store.list_drafts(conn, "submitted"):
         run = draft_review_store.latest(conn, row["id"])
@@ -327,24 +354,36 @@ def backlog() -> list[str]:
     cannot reach by itself: submitted while review was off, reviewed only
     advisorily, or failed beyond the sweep, oldest first. Alias suggestion
     drafts await a person and are left out."""
-    current = mode()
+    admits = _backlog_admits()
     conn = drafts_store.connection()
     waiting = []
     for row in reversed(drafts_store.list_drafts(conn, "submitted")):
         ops = drafts_store.list_ops(conn, row["id"])
         if all(op["kind"] == drafts_store.ALIAS_SUGGESTION_KIND for op in ops):
             continue
-        if _in_backlog(draft_review_store.latest(conn, row["id"]), current):
+        if admits(draft_review_store.latest(conn, row["id"])):
             waiting.append(row["id"])
     return waiting
 
 
-def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
+def _backlog_admits() -> Callable[[ReviewRun | None], bool]:
+    settings = _settings()
+    return functools.partial(
+        _in_backlog, current=settings.mode, external=settings.external_agent
+    )
+
+
+def _in_backlog(run: ReviewRun | None, current: Mode, external: bool = False) -> bool:
+    """`external`: an outside agent reviews, so held corrections are
+    reviewed again too: another reviewer may settle what the last one left
+    to a curator."""
     if run is None:
         return True
     if run.status in {"running", "paused"}:
         return False
-    if run.application in ("needs_human", "held"):
+    if run.application == "held":
+        return run.stale or external
+    if run.application == "needs_human":
         return run.stale
     if run.application != "unapplied" or run.review_id is not None:
         return False
@@ -454,11 +493,7 @@ def _drain() -> None:
     while (draft_id := _next_backlog_draft()) is not None:
         since = timestamps.now()
         try:
-            start(
-                draft_id,
-                rerun=True,
-                admit=functools.partial(_in_backlog, current=mode()),
-            )
+            start(draft_id, rerun=True, admit=_backlog_admits())
         except NotAdmitted:
             continue
         except Exception:
@@ -498,6 +533,8 @@ def _next_backlog_draft() -> str | None:
 
 
 def _backlog_spent() -> str | None:
+    if _settings().external_agent:
+        return None
     conn = drafts_store.connection()
     budget = product_settings.get(product_settings.AIBudgetSettings)
     if reason := ai_usage.paused_reason(conn, "draft_review", budget):
@@ -1284,7 +1321,7 @@ def _mutation_authority(
         raise ValueError("automatic action disabled by review mode")
     if draft_review_settings.load() != settings:
         raise ValueError("review configuration changed; rerun before automatic action")
-    principal = reviewer(_creator(inspection), settings.reviewer_id)
+    principal = reviewer(_creator(inspection), run.reviewer_id or "")
     auth.current_principal.set(principal)
 
 
@@ -1349,10 +1386,10 @@ def _finish(
             draft_review_store.save(drafts_store.connection(), run)
         if run.label == "reject":
             run.application = "rejected"
-            run.detail = "Draft rejected by the configured internal reviewer."
+            run.detail = f"Draft rejected by {_reviewer_name(run)}."
             _report_gap(
                 run.draft_id,
-                f"Draft {run.draft_id} was rejected by the internal reviewer: "
+                f"Draft {run.draft_id} was rejected by {_reviewer_name(run)}: "
                 f"{run.rationale}",
             )
             return
@@ -1366,7 +1403,7 @@ def _finish(
             _report_gap(
                 run.draft_id,
                 f"Draft {run.draft_id} contradicted live statement "
-                f"{contradiction.statement_id}; the internal reviewer resolved it "
+                f"{contradiction.statement_id}; {_reviewer_name(run)} resolved it "
                 f"in favour of the draft: {contradiction.resolution}",
                 statement_id=contradiction.statement_id,
             )
@@ -1393,7 +1430,7 @@ def _ask_person(
         draft_review_store.save(conn, run)
     _report_gap(
         run.draft_id,
-        f"Draft {run.draft_id} needs a person to answer the internal reviewer: "
+        f"Draft {run.draft_id} needs a person to answer {_reviewer_name(run)}: "
         + " ".join(run.questions),
     )
 
@@ -1761,3 +1798,350 @@ def _check_binds(name: str, payload: dict[str, JsonValue]) -> None:
         )
     if draft_review._nested_parameter_findings(name, payload):
         raise ValueError("correction payload has unsupported nested parameters")
+
+
+# --- External agent -----------------------------------------------------------
+#
+# With draft review set to External agent, a run calls no model. It queues a
+# `draft_review` task; the agent that claims it gets the context the internal
+# reviewer would, and its submission goes through the same validation and
+# `_finish` as a model's assessment, with the agent as the reviewer.
+
+
+def _reviewer_name(run: ReviewRun) -> str:
+    return (
+        "the external agent reviewer"
+        if run.provider == "agent"
+        else "the internal reviewer"
+    )
+
+
+class AgentReview(BaseModel):
+    """An outside agent's review: one assessment per part of the draft, in
+    the order of the brief's parts."""
+
+    model_config = ConfigDict(extra="forbid")
+    parts: list[Assessment] = Field(min_length=1)
+
+
+_task_settings = TypeAdapter(draft_review_settings.Snapshot)
+
+
+def _queue_agent_review(
+    run: ReviewRun,
+    settings: draft_review_settings.Snapshot,
+    creator: str | None,
+    previous: ReviewRun | None,
+) -> None:
+    state: dict[str, JsonValue] = {
+        "run_id": run.run_id,
+        "settings": settings.model_dump_json(),
+        "earlier_run_id": None if previous is None else previous.run_id,
+    }
+    try:
+        agent_tasks.create(
+            drafts_store.connection(),
+            "draft_review",
+            subject_id=run.run_id,
+            state=state,
+            excluded_claimant=creator,
+        )
+    except Exception as exc:
+        _failed(run, f"could not queue the review for an external agent: {exc}")
+
+
+def _end_agent_run(conn: sqlite3.Connection, run: ReviewRun) -> None:
+    """Close a run still waiting for an agent once reviews no longer go to
+    agents, so a rerun can take its place."""
+    if (task := agent_tasks.latest_for(conn, run.run_id)) is not None:
+        agent_tasks.finish(
+            conn, task.id, "failed", error="Draft review no longer uses agents."
+        )
+    run.status = "failed"
+    run.detail = "Superseded: draft review no longer uses an external agent."
+    run.finished_at = timestamps.now()
+    draft_review_store.save(conn, run)
+
+
+def _task_run(task: agent_tasks.Task) -> ReviewRun:
+    return draft_review_store.get(drafts_store.connection(), str(task.subject_id))
+
+
+def _earlier_review(task: agent_tasks.Task) -> JsonValue:
+    """The review before this one, with its suggested corrections, so a
+    second reviewer sees what the first one made of the draft."""
+    earlier = task.state.get("earlier_run_id")
+    if not isinstance(earlier, str):
+        return None
+    run = draft_review_store.get(drafts_store.connection(), earlier)
+    if run.status != "completed":
+        return None
+    return _json_value.validate_python(
+        run.model_dump(
+            mode="json",
+            include={
+                "run_id",
+                "provider",
+                "label",
+                "rationale",
+                "questions",
+                "corrections",
+                "contradictions",
+                "application",
+                "detail",
+            },
+        )
+    )
+
+
+def _prepare_agent_review(
+    task: agent_tasks.Task, _claimant: str
+) -> agent_tasks.Task | None:
+    """Brief a claimed review with the context the internal reviewer would
+    get, built now so it reflects the knowledge the agent reviews against.
+    None when there is nothing for an agent to review: the run ended, the
+    draft changed, or the server refuses the draft without a review."""
+    from . import server  # local import: server registers the review tools
+
+    conn = drafts_store.connection()
+    run = _task_run(task)
+    if run.status != "running":
+        agent_tasks.finish(
+            conn, task.id, "failed", error="The review this task served has ended."
+        )
+        return None
+    try:
+        inspection = server.inspect_draft_review(run.draft_id)
+        if inspection["draft"].get("status") != "submitted":
+            raise ValueError("draft is no longer submitted")
+        if inspection["draft_revision"] != run.draft_revision:
+            raise ValueError("draft changed while waiting for an agent; rerun")
+        reason = _unsupported(inspection) or _stale(inspection)
+        contexts: list[PartContext] = []
+        if reason is None:
+            try:
+                contexts = _part_contexts(inspection, run.previous_failure, run.answers)
+            except Refused as exc:
+                reason = str(exc)
+    except Exception as exc:
+        _failed(run, str(exc))
+        agent_tasks.finish(conn, task.id, "failed", error=str(exc))
+        return None
+    if reason is not None:
+        # Rejecting needs a reviewer's authority, and no agent judged the
+        # draft, so the refusal stays advisory for a person to act on.
+        _record(run, [(_whole(inspection), _refusal(reason))])
+        run.status = "completed"
+        run.detail = (
+            "The server refuses this draft without a review; a person decides on it."
+        )
+        run.finished_at = timestamps.now()
+        _save(run)
+        agent_tasks.finish(conn, task.id, "done", result={"refused": reason})
+        return None
+    reads: dict[str, Read] = {}
+    for item in contexts:
+        for read in item.reads:
+            reads.setdefault(json.dumps([read.name, read.arguments]), read)
+    settings = _task_settings.validate_json(str(task.state["settings"]))
+    count = len(contexts)
+    brief = agent_tasks.structured_brief(
+        instructions=draft_review_model.build_system_prompt(
+            ai_prompts.resolve("draft_review").text
+        ),
+        input=contexts[0].context
+        if count == 1
+        else "\n\n".join(
+            f"=== PART {index} OF {count} ===\n{item.context}"
+            for index, item in enumerate(contexts, start=1)
+        ),
+        result=(
+            "Your verdict on the draft: `parts` holds one assessment per part, "
+            f"in order ({count} here). Label `good` approves it as submitted, "
+            "`changes_suggested` approves it with your corrections, `reject` "
+            "rejects it with your rationale, and `needs_context` asks a person "
+            "the questions you list."
+        ),
+        schema=AgentReview,
+    )
+    brief.update(
+        {
+            "draft_id": run.draft_id,
+            "parts": count,
+            "mode": settings.mode,
+            "auto_apply": settings.auto_apply,
+            "earlier_review": _earlier_review(task),
+        }
+    )
+    run.knowledge_preconditions = inspection["knowledge_preconditions"]
+    _save(run)
+    agent_tasks.save(
+        conn,
+        task.id,
+        brief=brief,
+        state={
+            **task.state,
+            "inspection": _json_value.validate_python(inspection),
+            "parts": [
+                {
+                    "refs": [str(op["operation_ref"]) for op in item.part.ops],
+                    "records": _json_value.validate_python(item.part.records),
+                }
+                for item in contexts
+            ],
+            "reads": [
+                {"name": read.name, "arguments": read.arguments, "result": read.result}
+                for read in reads.values()
+            ],
+        },
+    )
+    return agent_tasks.get(conn, task.id)
+
+
+class _PartState(BaseModel):
+    refs: list[str]
+    records: list[draft_review_store.Precondition]
+
+
+class _ReadState(BaseModel):
+    name: str
+    arguments: dict[str, JsonValue]
+    result: JsonValue
+
+
+class _Briefed(BaseModel):
+    """What `_prepare_agent_review` kept for the submission."""
+
+    settings: str
+    inspection: dict[str, JsonValue]
+    parts: list[_PartState]
+    reads: list[_ReadState]
+
+
+def _fail_agent_run(
+    run: ReviewRun, settings: draft_review_settings.Snapshot, detail: str
+) -> None:
+    """Fail the run and follow it up as a failed internal run is. The
+    follow-up may act as the reviewer; keep that out of this request."""
+    _failed(run, detail)
+    contextvars.copy_context().run(_follow_up, run, settings, systemic=False)
+
+
+def _submit_agent_review(
+    task: agent_tasks.Task, claimant: str, result: dict[str, JsonValue]
+) -> agent_tasks.Submitted:
+    """Act on an agent's review as on the internal reviewer's assessment:
+    the same checks, then `_finish` with the agent as the reviewer."""
+    from .server.draft_review import DraftReviewInspection
+
+    conn = drafts_store.connection()
+    run = _task_run(task)
+    if run.status != "running":
+        return agent_tasks.closed(
+            conn, task, "This review has ended; nothing was kept.", failed=True
+        )
+    briefed = _Briefed.model_validate(task.state)
+    inspection = TypeAdapter(DraftReviewInspection).validate_python(briefed.inspection)
+    if claimant == _creator(inspection):
+        agent_tasks.set_status(
+            conn, task.id, "waiting", release_reason="claimed by the draft's creator"
+        )
+        raise auth.RoleRequired(
+            f"You created draft {run.draft_id}, and a drafter never reviews its "
+            "own draft. The task went back to the queue for another agent."
+        )
+    settings = _task_settings.validate_json(briefed.settings)
+    ops = {str(op["operation_ref"]): op for op in _ops(inspection)}
+    parts = [
+        Part([ops[ref] for ref in item.refs], list(item.records))
+        for item in briefed.parts
+    ]
+    try:
+        review = AgentReview.model_validate(result)
+        if len(review.parts) != len(parts):
+            raise ValueError(
+                f"parts holds {len(review.parts)} assessments; the draft has "
+                f"{len(parts)} parts, one assessment each"
+            )
+        results = []
+        for index, (part, assessment) in enumerate(
+            zip(parts, review.parts, strict=True), start=1
+        ):
+            assessment = _without_redundant_tool_names(assessment, inspection)
+            try:
+                draft_review_model.validate_assessment(assessment)
+                outside = [
+                    ref
+                    for correction in assessment.corrections
+                    if (ref := correction.operation_ref) in set(ops) - part.refs
+                ]
+                if outside:
+                    raise ValueError(
+                        "a correction names an operation of another part: "
+                        + ", ".join(outside)
+                    )
+            except ValueError as exc:
+                raise ValueError(f"part {index}: {exc}") from exc
+            results.append((part, assessment))
+        _validate_corrections(
+            [c for _, assessment in results for c in assessment.corrections],
+            inspection,
+        )
+    except (ValueError, TypeError) as exc:
+        findings = [agent_tasks.Finding(check="review", problem=str(exc))]
+        if task.failures < agent_tasks.RETRIES:
+            return agent_tasks.refused(
+                conn, task, findings, agent_tasks.RETRIES - task.failures
+            )
+        # The agent stands as reviewer of the failed attempt, as a model
+        # does, so a second failure can reject the draft.
+        run.reviewer_id = claimant
+        _fail_agent_run(
+            run, settings, f"The agent's review was refused too often: {exc}"
+        )
+        return agent_tasks.closed(
+            conn,
+            task,
+            "Refused too often; the review failed.",
+            failed=True,
+            findings=findings,
+        )
+    reads = [Read(read.name, read.arguments, read.result) for read in briefed.reads]
+    run.reviewer_id = claimant
+    run.detail = None
+
+    def act() -> None:
+        _record(run, results)
+        run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
+        _finish(run, inspection, settings, reads)
+
+    try:
+        # _finish sets the acting principal; keep that out of this request.
+        contextvars.copy_context().run(act)
+    except Exception as exc:
+        _fail_agent_run(run, settings, str(exc))
+        return agent_tasks.closed(
+            conn,
+            task,
+            f"The review could not be acted on: {exc}",
+            failed=True,
+        )
+    run.status = "completed"
+    run.finished_at = timestamps.now()
+    _save(run)
+    return agent_tasks.closed(
+        conn,
+        task,
+        run.detail or "Review recorded.",
+        result={
+            "run_id": run.run_id,
+            "draft_id": run.draft_id,
+            "label": run.label,
+            "application": run.application,
+        },
+    )
+
+
+AGENT_TASK = agent_tasks.Handler(
+    prepare=_prepare_agent_review, submit=_submit_agent_review
+)

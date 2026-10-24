@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Set
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -127,7 +127,9 @@ class ReviewRun(BaseModel):
     status: Literal["running", "completed", "failed", "paused"] = "running"
     mode: Mode
     draft_revision: int
-    provider: Literal["claude", "openai"] | None = None
+    #: `agent` when an external agent reviews it (`model` is then None and
+    #: `reviewer_id` the agent's principal once it submits).
+    provider: Literal["claude", "openai", "agent"] | None = None
     model: str | None = None
     prompt: ai_prompts.Reference | None = None
     reasoning_effort: ReasoningEffort | None = None
@@ -211,6 +213,10 @@ HELD_FOR_CURATOR = (
     "Waiting for a curator: the reviewer suggests corrections, which are "
     "never applied automatically under the clean-approvals policy."
 )
+WAITING_FOR_AGENT = (
+    "Waiting for an external agent to claim the review (claim_agent_task, "
+    "kind draft_review)."
+)
 
 
 def new(draft_id: str, mode: Mode, revision: int) -> ReviewRun:
@@ -257,13 +263,19 @@ def reconcile(
 
 
 def mark_orphaned(
-    conn: sqlite3.Connection, committed: Callable[[str], bool] | None = None
+    conn: sqlite3.Connection,
+    committed: Callable[[str], bool] | None = None,
+    waiting: Set[str] = frozenset(),
 ) -> None:
+    """Fail runs a restart interrupted. Runs in `waiting` are an outside
+    agent's to finish and keep running."""
     rows = conn.execute(
         "SELECT body_json FROM draft_review_runs WHERE status = 'running'"
     ).fetchall()
     for row in rows:
         run = ReviewRun.model_validate_json(row["body_json"])
+        if run.run_id in waiting:
+            continue
         run.status = "failed"
         run.detail = (
             "Review interrupted by restart; retried automatically while review is on."

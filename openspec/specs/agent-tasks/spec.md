@@ -5,19 +5,8 @@ Let outside agents do the model work of an action set to External agent instead 
 
 ## Requirements
 
-### Requirement: External agent for an action
-The system SHALL let an admin set `docgen`, `documentation_planning`, `audience_labelling`, `ingest`, `connect`, `alias_discovery` or `ask` to External agent (`external_agent: true` on `PATCH /api/model-settings/{action}`), after which its model work is queued as agent tasks, or for `ask` done by the caller's own agent, instead of calling a provider; other actions MUST refuse it. `GET /api/model-settings` reports `external_agent`, `agent_review` and `agent_supported` per action.
-
-#### Scenario: Unsupported action
-- **WHEN** an admin saves `external_agent: true` for `draft_review`
-- **THEN** the request is refused saying the action cannot be done by an external agent
-
-#### Scenario: Documentation set to External agent
-- **WHEN** documentation is set to External agent and a writer requests a document without a `provider`
-- **THEN** the run is created with provider `agent` and `status` `waiting_for_agent`, and no model is called to write it
-
 ### Requirement: Task kinds
-The system SHALL queue tasks of kind `documentation`, `document_review`, `documentation_planning`, `audience_labelling`, `ingest`, `connect` and `alias_discovery`. Labelling batches are made when an agent claims, from the statements due then, at the labelling batch size, and a statement in an open batch is not put in another.
+The system SHALL queue tasks of kind `documentation`, `document_review`, `documentation_planning`, `audience_labelling`, `ingest`, `connect`, `alias_discovery` and `draft_review`. Labelling batches are made when an agent claims, from the statements due then, at the labelling batch size, and a statement in an open batch is not put in another.
 
 #### Scenario: Labelling batch at claim time
 - **WHEN** audience labelling is set to External agent and an agent claims `audience_labelling` work
@@ -66,11 +55,15 @@ The system SHALL review a grounded agent document against the template and the a
 - **THEN** the submission returns `accepted` and the run reports `document_written`
 
 ### Requirement: Reviewer independence
-The system MUST never offer a `document_review` task to the principal that submitted the document it reviews.
+The system MUST never offer a `document_review` task to the principal that submitted the document it reviews, nor a `draft_review` task to the principal that created the draft. A claim that withheld such tasks SHALL say so in its `note`, and a submission by the draft's creator SHALL be refused naming the reason and the task returned to the queue.
 
 #### Scenario: Another agent reviews
 - **WHEN** documentation review is set to `agent` and writer A's document passes the emit gate
 - **THEN** A's submission returns `in_review`, A is not offered the review, and writer B's passing review saves the document
+
+#### Scenario: A drafter claims its own draft's review
+- **WHEN** the only waiting `draft_review` task is for a draft writer A created and A claims `draft_review`
+- **THEN** A gets no task and a `note` saying the waiting task is its own draft
 
 ### Requirement: Failed reviews return to the writer once
 The system SHALL return the writing task to the queue with a failed review's findings once; a second failed review records the run as nothing written with the refused draft.
@@ -149,9 +142,42 @@ The system SHALL let whoever queued a task, or an admin, call `get_agent_task(ta
 - **WHEN** the writer who called `ingest` asks for its task after an agent's draft was accepted
 - **THEN** the task is `done` and its `result` names the created draft
 
-### Requirement: Draft review and embeddings keep their model
-The system SHALL keep draft review on a server model until its reviewer has an agent task handler, and SHALL never use agents for embeddings. Ask MUST NOT be queued as an agent task.
+### Requirement: External agent for every model action
+The system SHALL let an admin set any model action to External agent (`external_agent: true` on `PATCH /api/model-settings/{action}`, or on `PATCH /api/draft-review/settings` for draft review), after which its model work is queued as agent tasks, or for `ask` done by the caller's own agent, instead of calling a provider. `GET /api/model-settings` reports `external_agent`, `agent_review` and `agent_supported` per action.
 
-#### Scenario: Draft review cannot be set to External agent
-- **WHEN** an admin saves `external_agent: true` for `draft_review`
-- **THEN** the request is refused
+#### Scenario: Documentation set to External agent
+- **WHEN** documentation is set to External agent and a writer requests a document without a `provider`
+- **THEN** the run is created with provider `agent` and `status` `waiting_for_agent`, and no model is called to write it
+
+#### Scenario: Draft review set to External agent
+- **WHEN** draft review is set to External agent and a draft is submitted
+- **THEN** its review run has provider `agent`, stays `running`, and a `draft_review` task waits; no model is called
+
+### Requirement: Agent draft review briefs
+The system SHALL brief a claimed `draft_review` task, at claim time, with the internal reviewer's system prompt and context for each part of the draft, the draft's previous review with its suggested corrections, the review mode and `auto_apply`, and SHALL take `{parts: [assessment, ...]}`, one assessment per part in the internal reviewer's shape. A draft the server refuses without a review (unsupported operations, newer knowledge, too large) SHALL get an advisory rejection and no brief.
+
+#### Scenario: Re-reviewing held corrections
+- **WHEN** an agent claims the review of a draft whose previous review was held with corrections
+- **THEN** the brief's `earlier_review` carries that review and its corrections
+
+### Requirement: Agent draft review verdicts
+The system SHALL validate a `draft_review` submission as the internal reviewer's assessment and corrections, refusing it with findings up to 2 times, and SHALL then act on it exactly as on the internal reviewer's assessment, with the claiming agent's principal as the reviewer.
+
+#### Scenario: Approve with corrections under review-and-apply
+- **WHEN** draft review is External agent in `review-and-apply` with `auto_apply: with_corrections` and an agent submits `changes_suggested` with a valid correction
+- **THEN** the correction is made, the draft is applied, and the recorded review names the agent's principal
+
+#### Scenario: Inconsistent verdict
+- **WHEN** an agent submits `changes_suggested` with no corrections
+- **THEN** the submission is `refused` with a finding and the run keeps waiting
+
+#### Scenario: Review-only
+- **WHEN** the mode is `review-only` and an agent submits `good`
+- **THEN** the draft stays submitted with an advisory assessment and no review record
+
+### Requirement: Embeddings keep their model
+The system SHALL never use agents for embeddings. Ask MUST NOT be queued as an agent task.
+
+#### Scenario: Ask set to External agent
+- **WHEN** Ask is set to External agent and a caller asks a question
+- **THEN** no agent task is queued

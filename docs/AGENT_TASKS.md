@@ -20,7 +20,7 @@ the server, using the agents its people already run.
 | Ingest | Yes | Kind `ingest` |
 | Connect pass | Yes | Kind `connect` |
 | Alias discovery | Yes | Kind `alias_discovery` |
-| Draft review | Not yet | Its reviewer is being reworked; it plugs in as one more kind once that lands |
+| Draft review | Yes | Kind `draft_review`, set under **Settings → Draft review**; see [Draft review](DRAFT_REVIEW.md#external-agent) |
 | Ask | Yes, as the caller's own agent | No task kind; see below |
 | Embeddings | No | They use the local model or an embedding API, never agents |
 
@@ -44,7 +44,9 @@ The agent needs a **writer** or **admin** token. That is the role that may
 already ask the server for documentation, so an agent can do no more than its
 token could request. Drafters cannot claim: a drafter's writes go to a draft
 for review, but an agent's document, plan or labels are saved as a server
-model's would be. Readers cannot claim either.
+model's would be. Readers cannot claim either. A draft's creator is never
+given its review: a claim that held such tasks back says so in `note`, and a
+submission by the creator is refused and the task goes back to the queue.
 
 ## Kinds
 
@@ -57,6 +59,7 @@ model's would be. Readers cannot claim either.
 | `ingest` | `ingest` is called while Ingest is set to External agent | The `emit_draft` input: proposed operations, the reconcile ledger, flags and skipped duplicates |
 | `connect` | `connect_statements` is called while Connect is set to External agent | The same, for the statements in the batch |
 | `alias_discovery` | An alias scan is started while Alias discovery is set to External agent | The aliases the statements show, with their evidence |
+| `draft_review` | A draft is submitted, reviewed again, or reached by the backlog job while Draft review is set to External agent | One assessment per part of the draft: approve (`good`), approve with corrections (`changes_suggested`), `reject` or ask a person (`needs_context`) |
 
 Labelling batches are made when an agent claims, from the statements due
 then, at the labelling batch size set under Limits. A statement in an open
@@ -140,7 +143,7 @@ loop would try again:
 | Citations, vocabulary or media | 3 |
 | Review | 1 (the document returns to its writer with the review's findings) |
 | Malformed review | 1 |
-| Malformed or invalid plan, labels or aliases | 2 |
+| Malformed or invalid plan, labels, aliases or draft review | 2 |
 | Malformed ingest or connect draft | 1 |
 | Ingest or connect reading floor or ledger | 3, then the last submission is kept as a degraded draft, as the loop's forced finalize keeps one |
 

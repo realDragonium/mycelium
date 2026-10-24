@@ -47,6 +47,9 @@ class Settings(Controls):
     provider: Provider = "openai"
     model: str = Field(default="", max_length=200)
     reasoning_effort: ReasoningEffort | None = None
+    #: Queue reviews for outside agents (`agent_tasks`) instead of calling
+    #: `provider`; the agent that submits a review acts as its reviewer.
+    external_agent: bool = False
 
     @model_validator(mode="after")
     def validate_effort(self) -> Settings:
@@ -133,6 +136,7 @@ def load(conn: sqlite3.Connection | None = None) -> Snapshot:
                 provider=model.provider,
                 model=model.model,
                 reasoning_effort=model.reasoning_effort,
+                external_agent=model.external_agent,
                 model_revision=model.revision,
                 source="saved"
                 if controls.source == "saved" or model.source == "saved"
@@ -147,6 +151,8 @@ def load(conn: sqlite3.Connection | None = None) -> Snapshot:
 def configuration_issues(settings: Settings) -> list[str]:
     from .server import runtime
 
+    if settings.external_agent:
+        return []
     issues = []
     if not settings.model:
         issues.append(model_settings.missing_model("draft_review", settings.provider))
@@ -171,6 +177,7 @@ def view(principal: auth.Principal) -> SettingsView:
             provider=model.provider,
             model=model.model,
             reasoning_effort=model.reasoning_effort,
+            external_agent=model.external_agent,
             model_revision=model.revision,
             source="saved"
             if controls.source == "saved" or model.source == "saved"
@@ -217,6 +224,9 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         application_enabled=request.application_enabled,
         auto_apply=request.auto_apply,
     )
+    if "external_agent" not in request.model_fields_set:
+        saved, _ = model_settings.editable("draft_review")
+        request = request.model_copy(update={"external_agent": saved.external_agent})
     if desired.mode != "off":
         issues = configuration_issues(request)
         if issues:
@@ -244,6 +254,7 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
             "draft_review",
             model_settings.SaveSelection(
                 provider=request.provider,
+                external_agent=request.external_agent,
                 claude_reasoning_effort=claude_effort,
                 openai_reasoning_effort=effort
                 if request.provider == "openai"

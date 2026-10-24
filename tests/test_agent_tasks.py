@@ -12,7 +12,15 @@ from audience_corpus import (
     _corpus,
     client,  # noqa: F401 — fixture
 )
-from mycelium import agent_tasks, doc_runs, docs_store, prompt_store, store, timestamps
+from mycelium import (
+    agent_tasks,
+    doc_runs,
+    docs_store,
+    model_settings,
+    prompt_store,
+    store,
+    timestamps,
+)
 from mycelium.docgen import loop
 from mycelium.docgen.schema import ReviewCheck, ReviewRecord
 from settings_helpers import assume_configured_models
@@ -271,17 +279,7 @@ def test_only_agent_capable_actions_take_an_external_agent(client):  # noqa: F81
     admin = _bearer("admin")
     current = client.get("/api/model-settings", headers=admin).json()
     supported = {a["action"] for a in current["actions"] if a["agent_supported"]}
-    assert supported == {
-        "ask",
-        "docgen",
-        "documentation_planning",
-        "audience_labelling",
-        "ingest",
-        "connect",
-        "alias_discovery",
-    }
-    with pytest.raises(AssertionError, match="cannot be done by an external agent"):
-        _select_agent(client, admin, "draft_review")
+    assert supported == set(model_settings.ACTIONS)
     with pytest.raises(AssertionError, match="Only documentation has an agent review"):
         _select_agent(client, admin, "audience_labelling", agent_review="agent")
 

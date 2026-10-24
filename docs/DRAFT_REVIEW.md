@@ -1,6 +1,7 @@
 # Internal draft review
 
-Mycelium can review submitted drafts with Claude or an OpenAI GPT model.
+Mycelium can review submitted drafts with Claude, an OpenAI GPT model or an
+external agent (see [External agent](#external-agent)).
 Review starts on submission from MCP or the web app. It works for
 all drafts; PR provenance is optional. While review is on, `ingest` (over MCP,
 HTTP, and the web app) submits its drafts itself; with review off those drafts
@@ -21,7 +22,9 @@ A curator can explicitly review an existing submitted draft.
 
 Administrators configure review in **Settings → Draft review**, also linked
 from Drafts. It configures this action independently of
-Ask, Ingest, and Documentation. Choose the mode, provider, model (from the [model catalog](AI_MODELS.md#model-catalog)), reasoning
+Ask, Ingest, and Documentation. Choose the mode, where it runs (**Claude**,
+**OpenAI** or **External agent**), model (from the
+[model catalog](AI_MODELS.md#model-catalog)), reasoning
 effort (empty uses the model's default), independent reviewer account, and
 whether **Allow applying accepted reviews** (`application_enabled`) is on, then
 save. Changes take effect for new submissions and explicit reruns
@@ -271,6 +274,48 @@ for a person to check. A draft approved by hand resolves its gaps the same way.
 An automated assessment remains a model judgment; isolated tests verify the
 execution safeguards and API contract, not the model's factual accuracy.
 
+## External agent
+
+With **Runs on** set to **External agent** (`external_agent: true`), no model
+reviews drafts and no provider key, model or reviewer account is needed.
+Each review run queues a `draft_review` task on the
+[agent task queue](AGENT_TASKS.md) instead, and the run shows **Waiting for an
+external agent** until an agent with a writer or admin token claims and
+submits it. The draft's creator is never given its review.
+
+The brief is built when the task is claimed, from the knowledge as it is then.
+`instructions` and `input` are the internal reviewer's system prompt and
+context: the draft and its operations, supplied evidence, affected knowledge,
+the nearest live statements, the link types, curators' answers and any
+earlier failure. A draft reviewed in parts has one context per part in
+`input`, each headed `=== PART i OF n ===`, and `parts` says how many.
+`earlier_review` holds the draft's previous review, with its suggested
+corrections, and `mode` and `auto_apply` say what the verdict will do. A draft
+the server refuses before any review (unsupported operations, newer
+knowledge, too large) gets an advisory rejection instead of a brief; a person
+decides on it.
+
+The agent submits `{parts: [...]}`, one assessment per part in the internal
+reviewer's shape: `good` approves the draft as submitted, `changes_suggested`
+approves it with corrections, `reject` rejects it with the rationale, and
+`needs_context` asks a person its `questions`. A submission whose labels,
+corrections or references fail the internal reviewer's checks is refused with
+findings, at most twice before the attempt fails. A valid one is acted on
+exactly as the internal reviewer's assessment, with the agent's principal as
+the reviewer: the same exact-state checks, **Apply automatically** policy,
+application gate, review records and knowledge gaps. In `review-only` it is
+advisory and a person decides. A failed attempt is followed up, swept and
+retried as a model's is, each time as a new task.
+
+While an external agent reviews, drafts held with corrections are part of the
+backlog: **Review N waiting drafts** queues a task for each, so another
+reviewer can settle them. Under **Only clean approvals** an agent that
+corrects such a draft holds it again; choose **Approvals with corrections
+too** to let agents drain them. The backlog job uses no tokens, so the
+offer asks for no token limit and shows no estimate. A
+run waiting for an agent keeps waiting across a restart. Switching back to a
+model and asking for a rerun ends a waiting run.
+
 ## Inspecting and rerunning
 
 An identified curator can call `request_draft_review(draft_id)` over HTTP to start review
@@ -326,9 +371,10 @@ from the creator-supplied evidence. It returns `{review: ...}` for the new
 attempt.
 
 Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...],
-estimated_tokens}`: submitted drafts the current configuration has not
+estimated_tokens, external_agent}`: submitted drafts the current configuration has not
 reached, and the tokens reviewing them is likely to use, from the average
-review run over the last 30 days (`null` without one). That is a draft with no
+review run over the last 30 days (`null` without one, or while an external
+agent reviews, which `external_agent` says). That is a draft with no
 attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question or held corrections
