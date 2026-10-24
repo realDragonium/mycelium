@@ -79,7 +79,7 @@ def _label(db, sid: str):
 def test_a_new_external_grant_waits_while_internal_grants_apply(db, prompts):
     sid = store.create_statement(db, "capability", "admins can export invoices")
 
-    audience_labelling.label_batch(db, call=_answer({sid: [INTERNAL, EXTERNAL]}))
+    audience_labelling.label_batches(db, call=_answer({sid: [INTERNAL, EXTERNAL]}))
 
     row = _label(db, sid)
     assert labels.label_audiences(row) == [INTERNAL]
@@ -97,7 +97,7 @@ def test_a_waiting_grant_stays_visible_to_the_internal_audiences_including_it(
 ):
     sid = store.create_statement(db, "capability", "users can archive projects")
 
-    audience_labelling.label_batch(db, call=_answer({sid: [OTHER_EXTERNAL]}))
+    audience_labelling.label_batches(db, call=_answer({sid: [OTHER_EXTERNAL]}))
 
     row = _label(db, sid)
     assert labels.label_pending(row) == [OTHER_EXTERNAL]
@@ -128,7 +128,7 @@ def test_switching_confirmation_off_applies_external_grants_at_once(
         ),
     )
 
-    audience_labelling.label_batch(db, call=_answer({sid: [EXTERNAL]}))
+    audience_labelling.label_batches(db, call=_answer({sid: [EXTERNAL]}))
 
     assert labels.label_pending(_label(db, sid)) == []
     assert sid in _visible(db, EXTERNAL)
@@ -303,7 +303,7 @@ def test_a_pending_statement_reaches_an_external_token_only_once_confirmed(
 
 def _confirmed(db, text: str, granted: list[str]) -> str:
     sid = store.create_statement(db, "capability", text)
-    audience_labelling.label_batch(db, call=_answer({sid: granted}))
+    audience_labelling.label_batches(db, call=_answer({sid: granted}))
     for audience in granted:
         grant_confirmation.decide(audience, [sid], confirm=True, curator="c1")
     return sid
@@ -317,7 +317,7 @@ def test_an_edit_keeps_a_confirmed_grant_in_force_for_a_spot_check(db, prompts):
     store.update_statement_text(db, kept, "exports hold 500 rows")
     store.update_statement_text(db, withdrawn, "invoices list 50 lines")
 
-    audience_labelling.label_batch(
+    audience_labelling.label_batches(
         db, call=_answer({kept: [OTHER_EXTERNAL], withdrawn: [OTHER_EXTERNAL]})
     )
 
@@ -352,7 +352,9 @@ def test_an_edit_that_reveals_to_a_new_external_audience_waits_again(db, prompts
     sid = _confirmed(db, "the api pages results", [EXTERNAL])
     store.update_statement_text(db, sid, "the api and the export page results")
 
-    audience_labelling.label_batch(db, call=_answer({sid: [EXTERNAL, OTHER_EXTERNAL]}))
+    audience_labelling.label_batches(
+        db, call=_answer({sid: [EXTERNAL, OTHER_EXTERNAL]})
+    )
 
     row = _label(db, sid)
     assert labels.label_pending(row) == [OTHER_EXTERNAL, EXTERNAL]

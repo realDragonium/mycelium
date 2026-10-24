@@ -124,7 +124,7 @@ Every statement label SHALL record the granted audiences, its source (`ai` or `c
 - **THEN** the response has `label.source: "ai"`, the reason, the model and `can_curate: true`
 
 ### Requirement: New statements are queued for labelling
-Writing a new statement SHALL queue it for audience labelling. While automatic labelling is on (the `automatic` setting of the audience labelling limits, default on), a background worker SHALL label queued statements in batches, polling every 30 seconds and waking on demand. `MYCELIUM_DISABLE_AUDIENCE_WORKER=1` SHALL stop the worker.
+Writing a new statement SHALL queue it for audience labelling. While automatic labelling is on (the `automatic` setting of the audience labelling limits, default on), a background worker SHALL label queued statements in batches, up to three at once outside the shared model concurrency, polling every 30 seconds and waking on demand. `MYCELIUM_DISABLE_AUDIENCE_WORKER=1` SHALL stop the worker.
 
 #### Scenario: Automatic labelling
 - **WHEN** a statement is created while automatic labelling is on and the labelling model has credentials

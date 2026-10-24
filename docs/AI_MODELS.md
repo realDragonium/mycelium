@@ -226,7 +226,9 @@ Shared model concurrency and the documentation active-run limit are
 editable. Lowering shared concurrency lets current work finish and holds new
 work until capacity becomes available. Increasing it wakes waiting workers.
 There is one shared counting gate; changing its limit does not create a second
-pool. The active-run limit counts started unfinished runs, including
+pool. Audience labelling stays outside it and runs at most three batches at
+once, so a backfill never holds capacity Ask, Ingest or documentation runs wait
+for. The active-run limit counts started unfinished runs, including
 those waiting for shared capacity. A run admitted over it is queued, with its
 place in line (`queue_position`), and starts in admission order as running
 ones finish. The queue is held in the server process, so on startup the

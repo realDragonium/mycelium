@@ -46,7 +46,9 @@ statements are labelled automatically). It reads statements in batches, each
 with the concepts it mentions and their descriptions, plus every audience's
 description and includes, and returns the most restricted audiences each
 statement fits and a short reason; the audiences including them see it
-without being named. Audience ids it invents grant nothing.
+without being named. Audience ids it invents grant nothing. The worker labels
+up to three batches at once, outside the shared model concurrency, so a
+backfill does not hold back Ask, Ingest or documentation runs.
 
 - New statements are queued when they are written; a background worker labels
   them while automatic labelling is on.
