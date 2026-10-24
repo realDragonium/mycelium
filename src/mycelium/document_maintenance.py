@@ -1,5 +1,8 @@
 """Keeping generated documents up to date by themselves.
 
+The same sweep also plans for profiles whose planning policy is not `off`
+(`documentation_planning.plan_automatically`).
+
 Each writing profile has a maintenance policy (`documentation_profiles`):
 `manual` leaves an out-of-date document for someone to notice, `propose`
 adds an update item to the profile's plan, and `auto-revise` starts the
@@ -92,8 +95,8 @@ def mark_interrupted(conn: sqlite3.Connection) -> None:
 @request_timing.tracked("background maintenance sweep")
 def sweep(now: datetime | None = None) -> list[str]:
     """Act on every out-of-date document of a profile that is not maintained
-    by hand, and publish finished automatic revisions. Returns the ids of
-    the runs it started."""
+    by hand, publish finished automatic revisions, and plan for profiles
+    that plan by themselves. Returns the ids of the runs it started."""
     from . import server
 
     now = now or datetime.now(UTC)
@@ -143,6 +146,9 @@ def sweep(now: datetime | None = None) -> list[str]:
             run_id = _revise(drafts, profile.name, document, templates, now)
             if run_id is not None:
                 started.append(run_id)
+    started += documentation_planning.plan_automatically(
+        drafts, store.substrate_connection(), snapshot
+    )
     return started
 
 

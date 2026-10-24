@@ -6,6 +6,11 @@ model proposed after this module's checks; each is proposed, approved (with
 the run it started) or dismissed. A dismissal is also kept per profile under
 the item's identity key, so a later plan proposing the same thing drops it.
 
+A plan the server started by itself, under a profile's automatic planning
+policy, is marked `automatic`. Its summary lists the statements no document
+cited that it was asked to place, so automatic planning counts only those no
+plan was offered.
+
 Besides the plans the model makes, each profile may have one standing
 `maintenance` plan holding the update items the maintenance worker proposes
 for out-of-date documents. It is never the profile's latest plan.
@@ -84,6 +89,11 @@ def migrate(conn: sqlite3.Connection) -> None:
             "ALTER TABLE documentation_plans ADD COLUMN kind TEXT NOT NULL "
             "DEFAULT 'model' CHECK (kind IN ('model', 'maintenance'))"
         )
+    if "automatic" not in columns:
+        conn.execute(
+            "ALTER TABLE documentation_plans ADD COLUMN automatic INTEGER NOT NULL "
+            "DEFAULT 0"
+        )
 
 
 @dataclass(frozen=True)
@@ -107,11 +117,13 @@ def create_plan(
     created_by: str | None,
     provider: str,
     model: str,
+    automatic: bool = False,
 ) -> str:
     plan_id = "dpl_" + uuid.uuid4().hex[:16]
     conn.execute(
         "INSERT INTO documentation_plans (id, guideline_set, audience_id, created_at, "
-        "created_by, activity, provider, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "created_by, activity, provider, model, automatic) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             plan_id,
             guideline_set,
@@ -121,6 +133,7 @@ def create_plan(
             "Queued",
             provider,
             model,
+            int(automatic),
         ),
     )
     conn.commit()
@@ -203,6 +216,36 @@ def latest_planned(conn: sqlite3.Connection, guideline_set: str) -> sqlite3.Row 
         (guideline_set,),
     ).fetchone()
     return row
+
+
+def offered(conn: sqlite3.Connection, guideline_set: str) -> set[str]:
+    """The uncovered statements any finished plan of the profile was asked
+    to place."""
+    ids: set[str] = set()
+    for row in conn.execute(
+        "SELECT summary FROM documentation_plans WHERE guideline_set = ? "
+        "AND kind = 'model' AND summary IS NOT NULL",
+        (guideline_set,),
+    ):
+        ids.update(json.loads(row["summary"]).get("uncovered", []))
+    return ids
+
+
+def record_start_failure(
+    conn: sqlite3.Connection, plan_id: str, item_id: str, error: str
+) -> None:
+    """Note on an automatic plan that one of its items could not start its
+    run, so automatic planning leaves it for a person instead of retrying."""
+    with conn:
+        row = conn.execute(
+            "SELECT summary FROM documentation_plans WHERE id = ?", (plan_id,)
+        ).fetchone()
+        summary = json.loads(row["summary"]) if row and row["summary"] else {}
+        summary.setdefault("not_started", {})[item_id] = error
+        conn.execute(
+            "UPDATE documentation_plans SET summary = ? WHERE id = ?",
+            (json.dumps(summary), plan_id),
+        )
 
 
 def maintenance_plan(conn: sqlite3.Connection, guideline_set: str) -> str | None:

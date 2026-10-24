@@ -422,11 +422,15 @@ def test_a_retired_audience_leaves_its_profiles_not_ready(db):
     assert profiles.capture(db).audience("partners") is None
 
 
-def test_a_writer_sets_the_maintenance_policy_and_can_turn_it_off(db):
+def test_a_writer_sets_the_maintenance_and_planning_policies_and_turns_them_off(db):
     first = save()
     assert first.maintenance == "manual"
 
-    def with_policy(revision: str, policy: profiles.Maintenance):
+    def with_policy(
+        revision: str,
+        policy: profiles.Maintenance,
+        planning: profiles.Planning = "off",
+    ):
         return profiles.save(
             "internal",
             profiles.SaveProfile(
@@ -434,6 +438,7 @@ def test_a_writer_sets_the_maintenance_policy_and_can_turn_it_off(db):
                 guidance="Use known facts.",
                 exposure="Keep internal.",
                 maintenance=policy,
+                planning=planning,
                 templates=(
                     profiles.Template(name="reference", text="Write a reference."),
                 ),
@@ -445,8 +450,16 @@ def test_a_writer_sets_the_maintenance_policy_and_can_turn_it_off(db):
     assert automatic.maintenance == "auto-revise"
     assert profiles.capture(db).profiles[0].maintenance == "auto-revise"
     assert profiles.capture(db).catalogue() == {"internal": ["reference"]}
-    assert with_policy(automatic.revision, "manual").maintenance == "manual"
+    planned = with_policy(automatic.revision, "manual", "write")
+    assert (planned.maintenance, planned.planning) == ("manual", "write")
+    assert profiles.capture(db).profiles[0].planning == "write"
+    assert profiles.capture(db).catalogue() == {"internal": ["reference"]}
+    assert with_policy(planned.revision, "manual").planning == "off"
     with pytest.raises(ValueError, match="Maintenance must be one of"):
         profiles.save_text(
             guidelines.TYPE, "internal/maintenance", "always", principal("writer")
+        )
+    with pytest.raises(ValueError, match="Planning must be one of"):
+        profiles.save_text(
+            guidelines.TYPE, "internal/planning", "always", principal("writer")
         )

@@ -181,10 +181,15 @@ class DocumentationPlanningSettings(RequestLimits):
     #: Capability statements the overview quotes, the most linked first.
     max_capabilities: int = Field(default=150, ge=0, le=1000)
     max_items: int = Field(default=15, gt=0, le=50)
+    #: Statements no document of the profile cites that one plan is asked to
+    #: place, those no plan was offered yet first.
+    max_uncovered: int = Field(default=40, ge=0, le=500)
     #: A concept with this many visible statements and no document of the
     #: profile shows in the coverage view.
     coverage_min_statements: int = Field(default=10, gt=0)
-    #: Newly visible statements since the last plan before re-planning is hinted.
+    #: Newly visible statements since the last plan before re-planning is
+    #: hinted, and statements no document cites and no plan was offered
+    #: before a profile with automatic planning plans by itself.
     replan_hint_statements: int = Field(default=25, gt=0)
     #: Items one batch approval may start; each is a documentation run.
     approve_batch: int = Field(default=2, gt=0, le=10)

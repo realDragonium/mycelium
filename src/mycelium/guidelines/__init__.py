@@ -34,11 +34,16 @@ AUDIENCE_SLOT = "audience"
 #: is maintained by hand.
 MAINTENANCE_SLOT = "maintenance"
 
+#: The set-wide planning slot: its text is the policy for statements its
+#: audience may see that no document of the set cites (see
+#: `mycelium.document_maintenance`). A set without one is planned by hand.
+PLANNING_SLOT = "planning"
+
 #: Slots that steer every document in a set rather than naming something the
 #: set can write. Keeping the subtraction here makes another set-wide slot a
 #: one-line addition rather than another catalogue special case.
 NON_TYPE_SLOTS = frozenset(
-    {GUIDANCE_SLOT, EXPOSURE_SLOT, AUDIENCE_SLOT, MAINTENANCE_SLOT}
+    {GUIDANCE_SLOT, EXPOSURE_SLOT, AUDIENCE_SLOT, MAINTENANCE_SLOT, PLANNING_SLOT}
 )
 
 #: The one set that ships. A second set is data — added through the tools,

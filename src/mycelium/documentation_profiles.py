@@ -21,6 +21,10 @@ INSTRUCTIONS = ai_prompts.ACTIONS
 #: nothing until someone revises it, an update item in the profile's plan, or
 #: a revision that runs by itself (see `mycelium.document_maintenance`).
 Maintenance = Literal["manual", "propose", "auto-revise"]
+#: What happens once enough statements the profile's audience may see are
+#: cited by none of its documents: nothing until someone plans, a plan whose
+#: items wait for approval, or a plan whose items start their runs.
+Planning = Literal["off", "propose", "write"]
 
 
 class Conflict(errors.Conflict):
@@ -49,7 +53,8 @@ class Template(Model):
         value = _part(value)
         if value in guidelines.NON_TYPE_SLOTS:
             raise ValueError(
-                "guidance, exposure, audience and maintenance are reserved names."
+                "guidance, exposure, audience, maintenance and planning are "
+                "reserved names."
             )
         return value
 
@@ -68,6 +73,7 @@ class ProfileBody(Model):
     #: internal audience.
     audience: str | None = None
     maintenance: Maintenance = "manual"
+    planning: Planning = "off"
     templates: tuple[Template, ...] = ()
 
     @model_validator(mode="after")
@@ -156,6 +162,7 @@ class ProfileSnapshot:
     templates: tuple[TemplateSnapshot, ...]
     audience: PromptRevision | None = None
     maintenance: Maintenance = "manual"
+    planning: Planning = "off"
 
 
 @dataclass(frozen=True)
@@ -253,6 +260,7 @@ def capture(conn: sqlite3.Connection | None = None) -> CatalogueSnapshot:
                 ),
                 slots.get(guidelines.AUDIENCE_SLOT),
                 maintenance(slots.get(guidelines.MAINTENANCE_SLOT)),
+                planning(slots.get(guidelines.PLANNING_SLOT)),
             )
             for name, slots in sorted(grouped.items())
         ),
@@ -265,6 +273,12 @@ def maintenance(slot: PromptRevision | str | None) -> Maintenance:
     guessing at automation."""
     text = (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
     return cast(Maintenance, text) if text in get_args(Maintenance) else "manual"
+
+
+def planning(slot: PromptRevision | str | None) -> Planning:
+    """The stored policy; an unknown text plans by hand."""
+    text = (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
+    return cast(Planning, text) if text in get_args(Planning) else "off"
 
 
 def _revision(rows: list[sqlite3.Row]) -> str:
@@ -324,6 +338,7 @@ def _profile(
         exposure=live.get("exposure", ""),
         audience=chosen,
         maintenance=maintenance(live.get(guidelines.MAINTENANCE_SLOT)),
+        planning=planning(live.get(guidelines.PLANNING_SLOT)),
         effective_audience=effective.id if effective else None,
         templates=tuple(templates),
         retired=bool(rows) and not live,
@@ -444,6 +459,8 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
         # it needs no more than the writer who turned automation on.
         if request.maintenance != "manual" or guidelines.MAINTENANCE_SLOT in live:
             desired[guidelines.MAINTENANCE_SLOT] = request.maintenance
+        if request.planning != "off" or guidelines.PLANNING_SLOT in live:
+            desired[guidelines.PLANNING_SLOT] = request.planning
         if live.keys() - desired.keys():
             _authorize(principal, "admin")
             _protect_default(conn, name, desired)
@@ -502,7 +519,8 @@ def validate_key(type: str, name: str) -> tuple[str, str]:
         if not separator:
             raise ValueError(
                 "Guideline names must use profile/template, profile/guidance, "
-                "profile/exposure, profile/audience or profile/maintenance."
+                "profile/exposure, profile/audience, profile/maintenance or "
+                "profile/planning."
             )
         _part(profile)
         _part(slot)
@@ -545,6 +563,14 @@ def save_text(
     ):
         raise ValueError(
             "Maintenance must be one of: " + ", ".join(get_args(Maintenance)) + "."
+        )
+    if (
+        type == guidelines.TYPE
+        and name.partition("/")[2] == guidelines.PLANNING_SLOT
+        and text.strip() not in get_args(Planning)
+    ):
+        raise ValueError(
+            "Planning must be one of: " + ", ".join(get_args(Planning)) + "."
         )
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):

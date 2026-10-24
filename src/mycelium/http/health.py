@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from .. import (
     auth,
     curation,
+    documentation_planning,
     knowledge_health,
     model_settings,
     product_settings,
@@ -56,6 +57,9 @@ class HealthView(BaseModel):
     connect_error: str | None
     #: Per curation work kind: who holds items, and what came of them.
     curation: list[CurationView]
+    #: Per writing profile, statements its audience may see that none of its
+    #: documents cites, apart from those dismissed for it.
+    uncovered_by_profile: dict[str, int]
 
 
 def _curation() -> list[CurationView]:
@@ -85,21 +89,33 @@ def knowledge_health_http(request: Request) -> HealthView:
     counts = knowledge_health.counts(
         server._db(), server._drafts_db(), store.substrate_connection
     )
+    uncovered = documentation_planning.uncovered_counts(
+        server._drafts_db(), server._db()
+    )
     work = _curation()
     try:
         limits = product_settings.get(product_settings.ConnectSettings)
         selected = model_settings.get("connect")
     except model_settings.Unavailable as exc:
         return HealthView(
-            counts=counts, connect=None, connect_error=str(exc), curation=work
+            counts=counts,
+            connect=None,
+            connect_error=str(exc),
+            curation=work,
+            uncovered_by_profile=uncovered,
         )
     if reason := model_settings.credentials_error("connect"):
         return HealthView(
-            counts=counts, connect=None, connect_error=reason, curation=work
+            counts=counts,
+            connect=None,
+            connect_error=reason,
+            curation=work,
+            uncovered_by_profile=uncovered,
         )
     return HealthView(
         counts=counts,
         curation=work,
+        uncovered_by_profile=uncovered,
         connect=ConnectLimits(
             batch_size=limits.batch_size,
             max_run_tokens=limits.max_run_tokens,

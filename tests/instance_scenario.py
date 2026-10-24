@@ -439,6 +439,20 @@ def _documentation_plans(conn, run: str) -> None:
     doc_plans.claim(conn, str(row["id"]), "ada")
     doc_plans.record_run(conn, str(row["id"]), run)
     doc_plans.dismiss(conn, "kb-authoring", "create:reference:title:sso", "SSO", "ada")
+    if "automatic" in inspect.signature(doc_plans.create_plan).parameters:
+        automatic = doc_plans.create_plan(
+            conn,
+            guideline_set="kb-authoring",
+            audience_id="external-technical",
+            created_by=None,
+            provider="claude",
+            model="claude-sonnet-4-6",
+            automatic=True,
+        )
+        doc_plans.finish_plan(
+            conn, automatic, summary={"uncovered": ["stm_sign_in"], "proposed": 0}
+        )
+        doc_plans.dismiss(conn, "kb-authoring", "statement:stm_sso", "stm_sso", "ada")
 
 
 def _prompts(data_dir: Path) -> None:
