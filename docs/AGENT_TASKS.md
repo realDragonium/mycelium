@@ -54,7 +54,7 @@ submission by the creator is refused and the task goes back to the queue.
 |---|---|---|
 | `documentation` | A documentation run starts, or a document is revised, while Documentation is set to External agent | The document: title, Markdown body and the statement ids it rests on, as the server's writer emits it |
 | `document_review` | An agent's document passed its checks and Documentation's Review is **Another agent** | The review: exposure and conformance verdicts with findings |
-| `documentation_planning` | A plan is requested for a writing profile while Documentation planning is set to External agent | The proposed documents |
+| `documentation_planning` | A plan is requested for a writing profile, by a person or by the profile's automatic planning, while Documentation planning is set to External agent | The proposed documents, placing the brief's uncovered statements in updates of existing documents or in new ones |
 | `audience_labelling` | An agent asks for labelling work while Audience labelling is set to External agent | A label for each statement in the batch |
 | `ingest` | `ingest` is called while Ingest is set to External agent | The `emit_draft` input: proposed operations, the reconcile ledger, flags and skipped duplicates |
 | `connect` | `connect_statements` is called while Connect is set to External agent | The same, for the statements in the batch |

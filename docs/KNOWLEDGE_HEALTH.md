@@ -12,6 +12,7 @@ count opens the list behind it:
 | Statements without an audience label | Only internal audiences see it; the list shows a failed labelling attempt's error | `#/health/unlabelled` |
 | Open knowledge gaps | Neither resolved nor dismissed | Knowledge gaps |
 | Out-of-date documents | A statement the current revision cites has changed, or an image it places was replaced, deleted or relabelled | Documents |
+| Statements no `<profile>` document cites | One count per writing profile: its audience may see the statement, no document of the profile cites it, and it was not dismissed for the profile (`uncovered_by_profile`; [Uncovered statements](DOCUMENTATION_PLANNING.md#uncovered-statements)) | Documents → Plan |
 | Old media | Captured longer ago than the configured age, or against another product version ([Media](MEDIA.md#out-of-date)) | Curate → Media, **Old** |
 | Pending drafts | Open with their author, or submitted and undecided | Drafts |
 

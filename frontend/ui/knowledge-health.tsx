@@ -23,7 +23,7 @@ const LISTS: Record<HealthList, { title: string; blurb: string; empty: string }>
 
 interface Tile { n: number; label: string; sub: string; to: Route; tone?: 'warn' | 'write' }
 
-function tiles(c: HealthCounts): Tile[] {
+function tiles(c: HealthCounts, uncovered: Record<string, number>): Tile[] {
   const list = (l: HealthList): Route => ({ view: 'health', list: l });
   const of = (n: number, total: number) => total ? `${Math.round(n / total * 100)}% of ${total}` : 'none yet';
   return [
@@ -34,6 +34,7 @@ function tiles(c: HealthCounts): Tile[] {
     { n: c.unlabelled, label: 'statements without an audience label', sub: c.labelling_failed ? `${c.labelling_failed} failed to label` : 'none failed', to: list('unlabelled') },
     { n: c.open_gaps, label: 'open knowledge gaps', sub: 'reported by agents and people', to: { view: 'gaps' }, tone: 'warn' },
     { n: c.out_of_date_documents, label: 'out-of-date documents', sub: 'a statement they cite has changed', to: { view: 'documentation' } },
+    ...Object.entries(uncovered).map(([profile, n]): Tile => ({ n, label: `statements no ${profile} document cites`, sub: 'visible to its audience; plan them under Documents → Plan', to: { view: 'documentation' } })),
     { n: c.old_media, label: 'old media', sub: 'older than the configured age or an older product version', to: { view: 'media', show: 'old' } },
     { n: c.pending_drafts, label: 'pending drafts', sub: 'open with their authors or awaiting a decision', to: { view: 'drafts' }, tone: 'write' },
   ];
@@ -294,7 +295,7 @@ export function KnowledgeHealthScreen({ list }: { list: HealthList | null }) {
       {state.status === 'error' && <LoadError error={state.error} what="knowledge health" onRetry={reload} />}
       {view && <>
         <div className="attention-grid health-grid">
-          {tiles(view.counts).map(t => (
+          {tiles(view.counts, view.uncovered_by_profile).map(t => (
             <Link key={t.label} to={t.to} className={`attention-card${t.n && t.tone ? ` ${t.tone}` : ''}`}>
               <span className="ac-n">{t.n}</span><span className="ac-l">{t.label}</span><span className="ac-sub">{t.sub}</span>
             </Link>

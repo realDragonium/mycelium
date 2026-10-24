@@ -298,6 +298,27 @@ def revision_brief(
     return "\n".join(lines)
 
 
+def addition_brief(statements: Mapping[str, str]) -> str:
+    """Instructions for a revision that takes in statements the document
+    does not cite yet, given by id with their current text."""
+    lines = [
+        "Add what these statements say to this document, where a reader would "
+        "look for it; they are not cited yet. Keep everything else as it is. "
+        "Read a statement with get_statements before citing it."
+    ]
+    listed = list(statements.items())
+    lines.extend(
+        f"- {statement_id}: {_clip(text)!r}"
+        for statement_id, text in listed[:_BRIEF_CHANGES]
+    )
+    if len(listed) > _BRIEF_CHANGES:
+        lines.append(
+            "- …and "
+            + ", ".join(statement_id for statement_id, _ in listed[_BRIEF_CHANGES:])
+        )
+    return "\n".join(lines)
+
+
 def _clip(text: str) -> str:
     if len(text) <= _BRIEF_TEXT_CHARS:
         return text

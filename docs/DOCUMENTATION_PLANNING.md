@@ -9,12 +9,14 @@ needs; nothing is written until you approve an item.
 One model call per plan, through the **documentation planning** action. It has
 its own model (**Settings → Models**), instructions (**Settings → Prompts**) and
 limits (**Settings → Limits**: tokens, timeout, retries, how many concepts and
-key statements the overview carries, how many items a plan keeps, the coverage
-and re-plan thresholds, and how many items one batch approval starts).
+key statements the overview carries, how many uncovered statements a plan
+places, how many items a plan keeps, the coverage and re-plan thresholds, and
+how many items one batch approval starts).
 
 The call gets the profile's audience description, its templates, its existing
-documents (type, concept, out-of-date or not) and an overview of what the
-audience may see: concepts with their counts of visible statements by kind and,
+documents (type, concept, out-of-date or not, and the opening of each), a
+batch of its [uncovered statements](#uncovered-statements) to place, and an
+overview of what the audience may see: concepts with their counts of visible statements by kind and,
 for internal audiences, their parent concept and description, plus the most
 connected capability and procedure statements. The overview is read through
 the same boundary as a documentation run ([Audiences](AUDIENCES.md)), so the
@@ -24,25 +26,44 @@ descriptions.
 
 ## What a plan keeps
 
-Each item is `create` or `update` (a document whose scope should change), with
+Each item is `create` or `update` (a document whose scope should change, or
+that should take in uncovered statements), with
 a title, template, concept, rationale, priority and the statements it would
 mainly draw on. The model proposes; Mycelium keeps an item only when:
 
 - its template belongs to the profile and its concept is in the overview;
 - an update names one of the profile's documents;
 - it draws on at least one statement the audience may see (ids it may not see
-  are removed, and an item about a concept is topped up from that concept's
-  statements);
+  are removed, and a new document about a concept is topped up from that
+  concept's statements);
 - it is not a document the profile already has, another item of the same plan,
   or a proposal dismissed before.
 
 A `create` about a concept that already has a document of that template becomes
 an update of it. The plan shows how many proposals were set aside and why.
 
-Two lists need no model and are always current: **Out-of-date documents**
-(approve to start a revision briefed with the changed statements) and
-**Concepts without a document**, concepts with many visible statements and no
-document of the profile about them.
+Three lists need no model and are always current: **Out-of-date documents**
+(approve to start a revision briefed with the changed statements),
+**Statements without a document** (see below) and **Concepts without a
+document**, concepts with many visible statements and no document of the
+profile about them.
+
+## Uncovered statements
+
+A statement is uncovered for a profile when its audience may see it and no
+document of the profile cites it. The plan page counts them and lists the
+first 50, capabilities and procedures and the most connected first; knowledge
+health counts them per profile. **Dismiss** one the profile should never
+document: it stops counting for that profile, and no plan is offered it.
+
+Each plan is offered up to **Uncovered statements per plan** of them (40 by
+default), those no earlier plan of the profile was offered first, so a large
+backlog is worked through over several plans. The planner places each one a
+reader needs: as an `update` listing it, for the existing document it
+belongs in, or in a `create` that groups it with related statements.
+Approving an update that lists statements its document does not cite starts
+a revision briefed to add them, quoting each one's text, the way an
+out-of-date revision is briefed with what changed.
 
 A profile whose maintenance policy is `propose` (see
 [Keeping documents up to date](DOCUMENTATION_MODELS.md#keeping-documents-up-to-date))
@@ -67,9 +88,27 @@ starts when a running one finishes. **Dismiss** is
 remembered per profile, so a later plan drops the same proposal. A dismissed
 out-of-date document comes back after its next revision.
 
-Re-planning is manual. When enough statements have become visible to the
-audience since the last plan (written after it, or for an external audience
-labelled after it), the page says so.
+Re-planning is manual unless the profile's planning policy says otherwise.
+When enough statements have become visible to the audience since the last
+plan (written after it, or for an external audience labelled after it), the
+page says so.
+
+## Planning by itself
+
+A profile's planning policy (its editor under **Settings → Documentation**)
+is `off` by default. Under `propose` or `write`, the maintenance sweep
+([Keeping documents up to date](DOCUMENTATION_MODELS.md#keeping-documents-up-to-date))
+starts a plan once the profile has as many uncovered statements no plan was
+offered as the re-plan threshold (25 by default). The plan runs through the
+documentation planning action, a server model or an external agent like any
+other. Under `propose` its items wait for approval. Under `write` the sweep
+approves them in order, at most the batch-approval limit per minute and only
+while the active-run limit has room; each run is reviewed like any other.
+
+The sweep waits while the profile has a plan running, while its latest plan
+still has a proposed item or a run that has not finished, while the planning
+model has no credentials, and after its own last plan failed, until a person
+plans. An item whose run could not start stays proposed for a person.
 Plans, items and dismissals live with documentation runs in
 `mycelium-drafts.db` and are included in instance backups. A plan running
 when the server restarts is marked failed.

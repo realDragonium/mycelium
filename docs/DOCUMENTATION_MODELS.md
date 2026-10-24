@@ -122,6 +122,18 @@ cut off before its run was admitted is reported rather than retried; the documen
 someone to revise. Dismissing the document in the plan also stops automatic
 revision until its next revision.
 
+A profile also has a planning policy, beside its maintenance policy, for
+statements its audience may see that none of its documents cites
+([Uncovered statements](DOCUMENTATION_PLANNING.md#uncovered-statements)):
+
+- `off` (the default, also for profiles saved before this existed): someone
+  plans from **Documents → Plan**.
+- `propose`: the same sweep plans by itself once enough uncovered statements
+  were offered to no plan; the items wait for approval.
+- `write`: as `propose`, and the sweep then approves the automatic plan's
+  items itself, within the batch and active-run limits. Each run goes through
+  the same review as any run.
+
 **Documents → Updates** lists what this did: documents revised automatically,
 with what changed and the new revision's diff against the one it replaced, and
 those waiting on someone (a proposal to approve, a pull request to merge, a

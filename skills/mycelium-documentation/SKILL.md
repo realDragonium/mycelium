@@ -131,9 +131,15 @@ written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
    `items` (each `create` or `update`, with title, type, concept, rationale,
    priority and the statements it would draw on), `stale` (out-of-date
    documents), `coverage` (concepts with many visible statements and no
-   document), and `replan_hint` when enough new knowledge became visible.
+   document), `uncovered_statements` and `uncovered` (statements the
+   audience may see that no document of the profile cites), and
+   `replan_hint` when enough new knowledge became visible.
 2. To plan again, `POST /api/documentation/plans/{guideline_set}` (one model
-   call). Re-planning is manual.
+   call). Each plan is offered a batch of the uncovered statements and
+   places them in updates of existing documents or in new ones; approving
+   such an update briefs its revision with the statements to add. Re-planning
+   is manual unless the profile's `planning` policy is `propose` or `write`
+   (see Maintenance).
 3. Present the items to the operator with your view of each. Approving starts
    a documentation run per item, so the operator decides which.
 4. Approve the chosen ones with `POST /api/documentation/plan-items/approve`
@@ -142,7 +148,10 @@ written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
    above. `POST /api/documentation/plan-items/{item_id}/retry` (same body as
    a run retry) restarts an item whose run wrote nothing;
    `POST /api/documentation/plan-items/{item_id}/dismiss` drops a proposal so
-   later plans do not offer it again.
+   later plans do not offer it again, and
+   `POST /api/documentation/plans/{guideline_set}/uncovered/{statement_id}/dismiss`
+   stops a statement the profile should never document counting as
+   uncovered. Dismiss only on the operator's word.
 
 ## Maintenance
 
@@ -153,6 +162,12 @@ a daily cap). `GET /api/documentation/maintenance` lists what it revised and
 what waits on a person: a proposal to approve, a pull request to merge, a
 document still out of date. Report those; revise the ones the operator asks
 for.
+
+A profile's planning policy covers statements no document cites: `off`
+(the default) waits for someone to plan, `propose` plans by itself once
+enough of them were offered to no plan and leaves the items for approval,
+and `write` also starts the items' runs within the batch and active-run
+limits.
 
 ## Not here
 

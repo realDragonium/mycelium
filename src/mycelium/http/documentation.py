@@ -411,6 +411,22 @@ def dismiss_plan_item_http(item_id: str, request: Request) -> dict[str, bool]:
     return {"dismissed": True}
 
 
+@router.post(
+    "/api/documentation/plans/{guideline_set}/uncovered/{statement_id}/dismiss"
+)
+def dismiss_uncovered_statement_http(
+    guideline_set: str, statement_id: str, request: Request
+) -> dict[str, bool]:
+    _enforce_role(request, "writer", real_role=True)
+    try:
+        documentation_planning.dismiss_statement(
+            guideline_set, statement_id, decided_by=_require_principal(request).id
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"dismissed": True}
+
+
 class StaleDismissalBody(BaseModel):
     revision: int = PydField(ge=1, strict=True)
 

@@ -80,6 +80,8 @@ interface DocumentationPlan {
   guideline_set: string; audience: AudienceRef | null; unavailable: string | null; latest: PlanSummary | null; items: PlanItem[];
   stale: { document_id: string; title: string; document_type: string; revision: number; changes: StatementChange[] }[];
   coverage: { entity_id: string; name: string; statements: number }[];
+  uncovered_statements: number; uncovered: { id: string; kind: string; text: string }[]; dismissed_statements: number;
+  planning: 'off' | 'propose' | 'write';
   visible_statements: number; new_since_plan: number | null; replan_hint: boolean; dismissed: number; approve_batch: number;
 }
 interface ApprovedItem { item_id: string; run: DocumentationRun | null; error: string | null }
@@ -491,6 +493,7 @@ function DocumentationRetry({ run, onStarted }: { run: DocumentationRun; onStart
   </div>;
 }
 
+const PLANNING_POLICIES: Record<DocumentationPlan['planning'], string> = { off: 'Planned by hand', propose: 'Plans by itself; items wait for approval', write: 'Plans and writes by itself' };
 const PRIORITIES: Record<PlanItem['priority'], string> = { high: 'High priority', medium: 'Medium priority', low: 'Low priority' };
 const planActive = (plan: DocumentationPlan) => !!plan.latest && !plan.latest.finished_at;
 const WROTE_NOTHING = ['nothing_written', 'failed'];
@@ -542,7 +545,7 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
       <div className="docw-actions"><h2>Plan documentation</h2><button onClick={refresh}>Refresh</button></div>
       <p>The planner reads what the profile's audience may see and proposes the documents that audience needs. Approving an item starts a documentation run; nothing is written before you approve.</p>
       <label>Writing profile<select value={selected} onChange={event => docNavigate({ tab: 'plan', profile: event.target.value })}>{profiles.map(name => <option key={name}>{name}</option>)}</select></label>
-      {plan && <p className="docw-meta">{plan.audience ? <>Audience: <AudienceIdentity audience={plan.audience} /> · {plan.visible_statements} visible statements</> : 'No audience'}</p>}
+      {plan && <p className="docw-meta">{plan.audience ? <>Audience: <AudienceIdentity audience={plan.audience} /> · {plan.visible_statements} visible statements</> : 'No audience'} · {PLANNING_POLICIES[plan.planning]}</p>}
       {plan?.unavailable && <p role="alert">{plan.unavailable}</p>}
       {plan && <div className="docw-actions">
         <button type="button" disabled={!canAct || active || !!plan.unavailable} onClick={() => act(() => docPost('plans/' + encodeURIComponent(selected), {}))}>{active ? 'Planning…' : latest ? 'Plan again' : 'Plan documentation'}</button>
@@ -568,7 +571,7 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
           {item.state === 'proposed' && options.can_generate && <input type="checkbox" aria-label={'Select ' + item.title} checked={checked} disabled={!checked && chosen.length >= limit} onChange={() => setChosen(value => checked ? value.filter(id => id !== item.id) : [...value, item.id])} />}
           <div>
             <strong>{item.title}</strong>
-            <p className="docw-meta">{item.maintenance ? 'Bring up to date' : item.action === 'create' ? 'New' : 'Change scope of'} {item.document_type} · {PRIORITIES[item.priority]}{item.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: item.anchor_entity_id }}>{item.anchor_name || docEntityName(item.anchor_entity_id)}</Link></>}{item.document_id && <> · updates <a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>the existing document</a></>}</p>
+            <p className="docw-meta">{item.maintenance ? 'Bring up to date' : item.action === 'create' ? 'New' : 'Update'} {item.document_type} · {PRIORITIES[item.priority]}{item.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: item.anchor_entity_id }}>{item.anchor_name || docEntityName(item.anchor_entity_id)}</Link></>}{item.document_id && <> · updates <a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>the existing document</a></>}</p>
             <p className={item.maintenance ? 'docw-brief' : undefined}>{item.rationale}</p>
             <details><summary>{item.statement_ids.length} {item.maintenance ? 'changed statements' : 'statements it would mainly draw on'}</summary><DocumentationSources ids={item.statement_ids} /></details>
             {item.state === 'proposed' && options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => approve([item.id])}>Approve</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/dismiss`, {}))}>Dismiss</button></div>}
@@ -593,6 +596,13 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
           {options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => reviseStale(item.document_id, item.revision)}>Approve update</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plans/${encodeURIComponent(selected)}/stale/${encodeURIComponent(item.document_id)}/dismiss`, { revision: item.revision }))}>Dismiss</button></div>}
         </div>
       </article>)}</div>
+    </section>}
+    {plan && plan.uncovered_statements > 0 && <section className="docw-panel" aria-label="Statements without a document">
+      <h2>Statements without a document</h2>
+      <p>{plan.uncovered_statements} statements this audience may see are cited by no document of this profile. Each plan places up to the limit under Settings → Limits in an existing document or a new one. Dismiss a statement this profile should never document{plan.dismissed_statements ? ` (${plan.dismissed_statements} dismissed)` : ''}.</p>
+      <ul>{plan.uncovered.map(statement => <li key={statement.id}><Link to={{ view: 'statement', id: statement.id }}>{statement.text}</Link> <span className="docw-meta">· {statement.kind}</span>
+        {options.can_generate && <> <button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plans/${encodeURIComponent(selected)}/uncovered/${encodeURIComponent(statement.id)}/dismiss`, {}))}>Dismiss</button></>}</li>)}</ul>
+      {plan.uncovered_statements > plan.uncovered.length && <p className="docw-meta">…and {plan.uncovered_statements - plan.uncovered.length} more.</p>}
     </section>}
     {plan && plan.coverage.length > 0 && <section className="docw-panel" aria-label="Coverage">
       <h2>Concepts without a document</h2>
