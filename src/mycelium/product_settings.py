@@ -162,6 +162,9 @@ class AudienceLabellingSettings(RequestLimits):
     confirm_external_grants: bool = True
     #: Have a second AI review grants waiting for external confirmation.
     ai_grant_review: bool = False
+    #: Have the same AI decide curator labels whose statement text changed
+    #: since, and confirmed grants an edit's relabel kept in force.
+    ai_label_decisions: bool = False
     #: Pending grants one review sample draws per external audience.
     sample_size: int = Field(default=50, gt=0, le=500)
     #: Below this sample precision the review suggests relabelling instead
@@ -218,6 +221,16 @@ class ConnectSettings(LoopLimits):
     op_cap: int = Field(default=60, gt=0)
     wall_clock_s: float = Field(default=300.0, gt=0)
     request_timeout_s: float = Field(default=120.0, gt=0)
+    #: The AI curation pass works these lists in the background on the
+    #: connect model while Connecting statements runs on a server model.
+    #: Run the connect pass on the next statements to connect.
+    connect_automatically: bool = False
+    #: Decide duplicate statement and concept candidates.
+    decide_duplicates: bool = False
+    #: Describe concepts that have no description.
+    describe_concepts: bool = False
+    #: Act on rephrase gaps and on gaps about a draft.
+    act_on_gaps: bool = False
 
 
 class ConcurrencySettings(SettingsModel):

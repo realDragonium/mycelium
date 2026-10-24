@@ -34,6 +34,12 @@ class Controls(BaseModel):
     reviewer_id: str = Field(default="", max_length=200)
     application_enabled: bool = False
     alias_decisions: bool = False
+    #: After the internal reviewer asks a person, the draft-review model
+    #: tries to answer from the knowledge base and the draft's evidence.
+    answer_questions: bool = False
+    #: Under an external agent, a draft the server refuses before review is
+    #: rejected with the reason, as under a server model.
+    reject_refused: bool = False
     #: What review-and-apply applies unattended: only drafts the reviewer
     #: approves without corrections, or also those it corrects.
     auto_apply: AutoApply = "clean"
@@ -224,6 +230,8 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         reviewer_id=request.reviewer_id,
         application_enabled=request.application_enabled,
         alias_decisions=request.alias_decisions,
+        answer_questions=request.answer_questions,
+        reject_refused=request.reject_refused,
         auto_apply=request.auto_apply,
     )
     if "external_agent" not in request.model_fields_set:
