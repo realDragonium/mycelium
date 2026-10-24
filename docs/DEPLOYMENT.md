@@ -161,9 +161,7 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_DISABLE_LAYOUT_BAKE` | unset | `1` stops recomputing the entity graph layout after entity changes. Meant for tests. |
 
 `MYCELIUM_INGEST_INPUT_PER_MTOK` and `MYCELIUM_INGEST_OUTPUT_PER_MTOK` are no
-longer read. Ingest prices its model from the built-in list-price table, like
-Ask and documentation runs, including cache reads and writes. A model missing
-from the table gets no estimate and no cost cap.
+longer read. Mycelium keeps no prices; runs report tokens instead.
 
 > **Leave `MYCELIUM_AUTH=on` on anything reachable from a network.** With
 > auth off every caller is `local-admin`, so it is for a single user on their
@@ -812,7 +810,7 @@ sudo -u mycelium ollama pull nomic-embed-text
 ```
 
 **OpenAI** needs only the key. Requests are batched, 100 texts at a time, and
-their tokens and cost appear under **Settings → AI usage** as *Embeddings*.
+their tokens appear under **Settings → AI usage** as *Embeddings*.
 Re-embedding a knowledge base of a few thousand statements costs well under a
 cent, and each search embeds its query once (repeated queries are cached).
 

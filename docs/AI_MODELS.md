@@ -36,10 +36,6 @@ of calling a model. Removing a model an action still uses is refused, naming
 the actions. Documentation counts both of its models, because the generation
 screen can pick either provider.
 
-Costs come from the list prices in `mycelium.ai.pricing`. A catalog model
-without a list price is marked in the card; its calls record tokens but no
-cost.
-
 ## External agent
 
 Each action runs on its own choice of **Claude**, **OpenAI** or, for
@@ -124,8 +120,8 @@ document revision leave their queues untouched, and admins see one banner
 naming each waiting worker instead of a stream of failed runs.
 
 A model ID must belong to its provider: adding an OpenAI ID to the Claude list,
-or the reverse, is refused. IDs this version does not know are accepted, with
-their cost unknown.
+or the reverse, is refused. Any other ID is accepted; Mycelium keeps no list
+of known models.
 
 A fresh instance starts every action on Claude, and Draft review on OpenAI,
 with no model chosen and an empty catalog. Each action’s provider and both model IDs come
@@ -152,7 +148,7 @@ provider, selected model, remembered model IDs, source, and revision. Admin-only
 `openai_model`, optional `claude_reasoning_effort` and `openai_reasoning_effort`, and the current `revision`. Omitted effort fields preserve saved values; explicit `null` restores Model default. Concurrent or stale saves return 409
 and require reloading. A model not in the provider's catalog is refused, unless
 it is the one already saved. The response includes `catalog`: each catalog
-model with its provider and whether it has a list price. The catalog itself is
+model with its provider. The catalog itself is
 read and saved through `GET`/`PATCH /api/product-settings` as the
 `model_catalog` section. Model settings contain no credentials.
 
@@ -182,7 +178,7 @@ changed by this screen.
 `mycelium.ai` meters every `turn` and `structured` call, so no action needs its
 own accounting. Each call becomes one row in the `ai_usage` table of
 `mycelium-drafts.db`: time, action, provider, model, input, cache-read,
-cache-write and output tokens, estimated cost, duration, success, and the run
+cache-write and output tokens, duration, success, and the run
 and draft it served when there is one (documentation runs, documentation plans,
 draft review runs, and connect passes, whose `cnr_` id is also in the
 `connect_statements` response's trace). A call is attributed by the action around it with
@@ -195,23 +191,24 @@ rejected after the provider answered (a missing required tool call, an
 incomplete OpenAI response) are recorded with the tokens they used; a request
 that failed before the provider answered is recorded with none. The ledger
 is archived with drafts in backups: it is small, and restoring without it
-would reset the month's spend and the budget with it.
+would reset the month's usage and the budget with it.
 
-Costs are estimates from the list prices in `mycelium.ai.pricing` (Claude and
-OpenAI, standard tier, base context). They leave out long-context surcharges,
-batch or priority tiers and attempts the SDK retried after a timeout. A model
-without a list price records tokens but no cost, and the usage page says how
-many such calls a total leaves out.
+Usage is counted in tokens. A call's total is every token the provider
+processed for it: input, cache reads, cache writes and output. Reports split
+it into input (uncached input and cache writes), cached (cache reads) and
+output. Mycelium keeps no prices, so it shows no dollar amounts; what the
+tokens cost is on each provider's billing dashboard. Rows written by earlier
+versions keep their estimated `cost_usd`, which nothing reads any more.
 
-**Settings → AI usage** shows admins the totals, spend per UTC day, per action
-and per model, and the most expensive recent runs, linked. `GET
+**Settings → AI usage** shows admins the totals, tokens per UTC day, per action
+and per model, and the recent runs that used the most tokens, linked. `GET
 /api/ai-usage?days=N` (admin, 1–366, default 30) returns the same report with
 the budget; `GET /api/ai-usage/budget` returns this month's budget state to
 admins and `null` to everyone else.
 
 The optional monthly budget is the `ai_budget` product settings section:
-`monthly_limit_usd` (0 means none), `warn_percent` (default 80) and
-`pause_background` (default off). Spend is counted per UTC calendar month.
+`monthly_limit_tokens` (0 means none), `warn_percent` (default 80) and
+`pause_background` (default off). Tokens are counted per UTC calendar month.
 Past the warning percentage, admins see a banner. With pausing on, at 100% the
 background actions (audience labelling, draft review and the connect pass,
 which attributes its calls as `connect`) are refused before a request is sent,
@@ -311,6 +308,24 @@ one saved. The first start of a version with the model catalog saves that
 model explicitly for each such action and logs it, so no action changes the
 model it runs on. It then seeds the catalog with every model the actions and
 Draft review have saved, including models imported from the environment.
+
+## Upgrading to token limits
+
+Earlier versions capped spending in US dollars, estimated from built-in list
+prices. Those prices are gone, and every limit is now a token count. A dollar
+amount has no token equivalent that holds across models, so the first start
+of this version converts saved limits by one rule: a value still at its
+shipped default takes the new token default, and any other value becomes no
+limit, with a warning in the log naming the old amount.
+
+| Old field | New field | Old default → new default |
+| --- | --- | --- |
+| `ai_budget.monthly_limit_usd` | `monthly_limit_tokens` | 0 (none) → 0 (none) |
+| `draft_review.max_cost_usd` | `max_draft_tokens` | $1 → 300,000 |
+| `connect.max_cost_usd` | `max_run_tokens` | $0.50 → 2,000,000 |
+
+A set monthly budget is therefore turned off; set it again in tokens under
+**Settings → AI usage**. Restoring an older backup applies the same rule.
 
 ## Upgrading from pre-settings versions
 

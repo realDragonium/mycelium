@@ -176,5 +176,5 @@ answer. Each names the statements the answer must state, claims it must not
 make and whether it is answerable. A fixed judge model grades each answer
 against the statements and entity descriptions the run retrieved; the run
 reports fact recall, unsupported claims, citation recall and precision, correct
-refusals, flagged contradictions, evidence refs leaked into the answer, cost
+refusals, flagged contradictions, evidence refs leaked into the answer, tokens
 and latency. Results go to `~/mycelium-eval/ask-results/LABEL/`.

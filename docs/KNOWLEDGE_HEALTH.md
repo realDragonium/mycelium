@@ -77,16 +77,15 @@ it) is offered again.
 - Instructions: **Settings → Prompts → Connecting statements**. A fixed
   contract after them says what the run may propose.
 - Limits: **Settings → Limits → Connecting statements**: batch size (most
-  statements per run, default 5), spending cap per run (default $0.50),
+  statements per run, default 5), token cap per run (default 2,000,000, 0 for none),
   operation cap, run time, tokens and retries.
 
 Turns grow as the run reads, so before each model turn the run checks that
-the spend so far plus twice its most expensive turn yet (the next turn and the
-final emit) stays under the spending cap; otherwise it stops reading and emits
-its draft. The estimate can fall short, so a run can still end slightly over
-the cap. A model without a
-known price shows no cost and the cap cannot apply; the operation cap and run
-time still bound the run. Each run's cost is shown with its result and written
+the tokens used so far plus a reserve for the next turn and the final emit
+(its largest turn yet, the history it has added since, and the output bound)
+stays under the token cap; otherwise it stops reading and emits its draft.
+The reserve can fall short, so a run can still end slightly over the cap.
+Each run's tokens are shown with its result and written
 to `connect_trace.jsonl` in the data directory.
 
 Its model calls count towards the monthly AI budget as the connect pass, a

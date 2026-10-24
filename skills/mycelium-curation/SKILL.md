@@ -62,7 +62,7 @@ asking for a rephrase instead.
   next N** on the Knowledge health screen. Needs a writer or drafter. Take
   the ids from a list with `to_connect=true`: those are the statements the
   pass has not looked at since they or their neighbours last changed.
-- `connect` in the health response gives the batch size, spending cap and
+- `connect` in the health response gives the batch size, token cap and
   model; `connect_error` says why the pass is unavailable (no credentials, a
   paused budget). Do not send more statements than the batch size.
 - **Each run costs money.** Say how many runs you intend and get the

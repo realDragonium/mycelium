@@ -62,7 +62,7 @@ backfill does not hold back Ask, Ingest or documentation runs.
   even with automatic labelling off, until no statement it queued has attempts
   left; a failed batch, a budget pause or a server restart delays it but does
   not end it. While it runs it also labels statements queued by edits. **Relabel AI labels** also queues AI
-  labels. Both show progress and the cost so far, also after leaving and
+  labels. Both show progress and the tokens used so far, also after leaving and
   reopening the page or restarting the server (`backfill` on
   `GET /api/audiences/labelling`). Progress is read from the queue: it counts
   from when the oldest waiting statement was queued, including statements
