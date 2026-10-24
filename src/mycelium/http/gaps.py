@@ -40,6 +40,7 @@ def _serialize_gap(row: sqlite3.Row) -> dict[str, Any]:
         "draft_id": row["draft_id"],
         "statement_id": row["statement_id"],
         "document_id": row["document_id"],
+        "closing_reason": row["closing_reason"],
     }
 
 

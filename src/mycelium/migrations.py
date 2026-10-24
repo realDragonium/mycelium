@@ -1129,6 +1129,32 @@ def _migration_v26_backfill_queue_rows(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migration_v27_gap_outcomes(conn: sqlite3.Connection) -> None:
+    """Let curation agents record answering a reviewer's question and
+    resolving or dismissing a gap. SQLite cannot widen a CHECK in place, so
+    the attempt memory is copied into a rebuilt table."""
+    conn.execute("ALTER TABLE curation_attempts RENAME TO curation_attempts_v26")
+    conn.execute(
+        "CREATE TABLE curation_attempts ("
+        "item_id TEXT PRIMARY KEY, "
+        "text TEXT NOT NULL, "
+        "neighbours TEXT NOT NULL, "
+        "attempted_at TEXT NOT NULL, "
+        "attempted_by TEXT, "
+        "outcome TEXT NOT NULL "
+        "CHECK (outcome IN ('looked', 'proposed', 'no_link', 'skipped', "
+        "'answered', 'resolved', 'not_applicable')), "
+        "reason TEXT, "
+        "draft_id TEXT)"
+    )
+    conn.execute(
+        "INSERT INTO curation_attempts SELECT item_id, text, neighbours, "
+        "attempted_at, attempted_by, outcome, reason, draft_id "
+        "FROM curation_attempts_v26"
+    )
+    conn.execute("DROP TABLE curation_attempts_v26")
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1159,6 +1185,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (24, _migration_v24_curation_attempts),
     (25, _migration_v25_pending_external_grants),
     (26, _migration_v26_backfill_queue_rows),
+    (27, _migration_v27_gap_outcomes),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

@@ -144,6 +144,68 @@ def test_a_proposed_gap_waits_on_its_draft(conn, drafts):
     assert _claim(conn, drafts, "gap", now=later)[0] == []
 
 
+def _waiting_for_answer(drafts, *, changed=False):
+    draft = drafts_store.create_draft(drafts, created_by="agent-1", session_id="s")
+    drafts_store.set_submitted(drafts, draft)
+    revision = drafts.execute(
+        "SELECT revision FROM drafts WHERE id = ?", (draft,)
+    ).fetchone()[0]
+    drafts.execute(
+        "UPDATE drafts SET review_assessment_json = json_object("
+        "'application', 'needs_human', 'draft_revision', ?) WHERE id = ?",
+        (revision - 1 if changed else revision, draft),
+    )
+    return draft
+
+
+def test_questions_are_the_newest_gap_of_a_draft_waiting_for_an_answer(conn, drafts):
+    waiting = _waiting_for_answer(drafts)
+    changed = _waiting_for_answer(drafts, changed=True)
+    store.create_knowledge_gap(conn, "Asked first.", draft_id=waiting)
+    conn.execute("UPDATE knowledge_gaps SET created_at = '2026-01-01T00:00:00.000Z'")
+    asked = store.create_knowledge_gap(conn, "Asked again.", draft_id=waiting)
+    store.create_knowledge_gap(conn, "Asked of a changed draft.", draft_id=changed)
+
+    assert _claim(conn, drafts, "question")[0] == [asked]
+    assert _claim(conn, drafts, "gap", who="agent-2")[0] == []
+
+
+def test_gap_outcomes_change_its_status_as_the_agent(conn, drafts):
+    numbered = store.create_knowledge_gap(conn, "How are invoices numbered?")
+    exported = store.create_knowledge_gap(conn, "Which exports exist?")
+    _claim(conn, drafts, "gap")
+
+    curation.release(
+        conn, [numbered], "resolved", claimant="agent-1", now=NOW, draft_id="drf_1"
+    )
+    curation.release(
+        conn,
+        [exported],
+        "not_applicable",
+        claimant="agent-1",
+        now=NOW,
+        reason="Exports are documented elsewhere.",
+    )
+
+    resolved = store.get_knowledge_gap(conn, numbered)
+    assert (resolved["resolved_by"], resolved["draft_id"]) == ("agent-1", "drf_1")
+    dismissed = store.get_knowledge_gap(conn, exported)
+    assert dismissed["dismissed_by"] == "agent-1"
+    assert dismissed["closing_reason"] == "Exports are documented elsewhere."
+    store.set_knowledge_gap_status(conn, exported, "reopen", "writer-1")
+    store.set_knowledge_gap_status(conn, exported, "dismiss", "writer-1")
+    assert store.get_knowledge_gap(conn, exported)["closing_reason"] is None
+
+
+def test_an_outcome_its_kind_does_not_take_is_refused(conn, drafts):
+    _claim(conn, drafts, limit=1)
+
+    with pytest.raises(ValueError, match="isolated items cannot be released as"):
+        curation.release(
+            conn, ["stm_a"], "not_applicable", claimant="agent-1", now=NOW, reason="x"
+        )
+
+
 def test_summaries_count_holders_and_outcomes(conn, drafts):
     knowledge_health.record_attempts(conn, {"stm_c": []})
     _claim(conn, drafts, limit=1)
@@ -152,7 +214,7 @@ def test_summaries_count_holders_and_outcomes(conn, drafts):
     )
     _claim(conn, drafts, who="agent-2", limit=1)
 
-    isolated = curation.summaries(conn, NOW)[0]
+    isolated = curation.summaries(conn, drafts, NOW)[0]
     assert isolated.kind == "isolated"
     assert [(h.claimed_by, h.items) for h in isolated.claims] == [("agent-2", 1)]
     assert isolated.outcomes == {"looked": 1, "no_link": 1}

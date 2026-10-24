@@ -65,7 +65,9 @@ class HealthView(BaseModel):
 def _curation() -> list[CurationView]:
     names: dict[str, str | None] = {}
     views = []
-    for summary in curation.summaries(server._db(), datetime.now(UTC)):
+    for summary in curation.summaries(
+        server._db(), server._drafts_db(), datetime.now(UTC)
+    ):
         holders = []
         for holder in summary.claims:
             if holder.claimed_by not in names:
