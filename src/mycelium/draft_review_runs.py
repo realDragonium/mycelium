@@ -10,7 +10,7 @@ import logging
 import re
 import sqlite3
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -834,7 +834,7 @@ def _base(
         data["previous_attempt_failure"] = previous_failure
     if answers:
         data["answers_from_curators"] = [
-            _json_value.validate_python(item.model_dump(mode="json"))
+            _json_value.validate_python(item.model_dump(mode="json", exclude_none=True))
             for item in answers
         ]
     return data, reads
@@ -852,7 +852,8 @@ _KNOWLEDGE_SCOPE = (
     "workflow run the draft documents. "
     "answers_from_curators, when present, holds answers a curator gave "
     "to earlier review questions; only these answers come from a "
-    "curator."
+    "curator. An answer with evidence came from a curation agent that "
+    "checked the product's code, UI or docs; the evidence says what it saw."
 )
 _PART_SCOPE = (
     "The draft is too large for one review, so it is reviewed in connected "
@@ -1402,15 +1403,23 @@ def _ask_person(
 
 
 def answer(
-    draft_id: str, run_id: str, text: str, principal: auth.Principal
+    draft_id: str,
+    run_id: str,
+    text: str,
+    principal: auth.Principal,
+    evidence: Sequence[drafts_store.Evidence] = (),
 ) -> ReviewRun:
     """Review the draft again with a curator's answer to the questions run
-    `run_id` asked."""
+    `run_id` asked, and what a curation agent checked to give it."""
     return start(
         draft_id,
         rerun=True,
         answer=Answer(
-            run_id=run_id, questions=[], answer=text.strip(), answered_by=principal.id
+            run_id=run_id,
+            questions=[],
+            answer=text.strip(),
+            answered_by=principal.id,
+            evidence=list(evidence),
         ),
     )
 

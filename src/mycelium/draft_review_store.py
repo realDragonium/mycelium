@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from . import ai_prompts, timestamps
 from .ai.types import ReasoningEffort
+from .drafts_store import MAX_EVIDENCE, Evidence
 
 
 class Precondition(TypedDict):
@@ -118,6 +119,8 @@ class Answer(BaseModel):
     answer: str = Field(min_length=1, max_length=6000)
     answered_by: str
     answered_at: str = Field(default_factory=timestamps.now)
+    #: What a curation agent checked in the product; a person's answer has none.
+    evidence: list[Evidence] = Field(default_factory=list, max_length=MAX_EVIDENCE)
 
 
 class ReviewRun(BaseModel):
