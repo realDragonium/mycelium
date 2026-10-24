@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 49 of its 87 registered tools over MCP. Every
+question. Mycelium therefore advertises 50 of its 88 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -11,13 +11,13 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. The minimum role is reader: a reader sees 19 tools. A drafter sees 40
+can invoke. The minimum role is reader: a reader sees 20 tools. A drafter sees 41
 because their writes are queued on a draft, but they do not see `list_drafts`,
 `request_documentation`, `revise_document`, `request_documentation_plan`,
 `deliver_document` or the tools that claim and do agent tasks. A writer sees
-46 and does not see the admin-only
+47 and does not see the admin-only
 `delete_statement`, `merge_statements` or `merge_entities`. An admin sees all
-49. While Ask is set to External agent, `ask` is listed to no one, so each
+50. While Ask is set to External agent, `ask` is listed to no one, so each
 count is one lower.
 
 ## Over MCP
@@ -77,7 +77,8 @@ decision, and the rest runs in-process.
 | `get_agent_task` | Follows work the caller queued for an outside agent, such as an `ingest` that returned `waiting_for_agent`: status, findings and the draft it made. |
 | `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
 | `request_documentation_plan` | Starts the same plan as **Documents → Plan** for a writing profile, on the server's model or as a `documentation_planning` agent task. An agent keeping documentation current needs to ask which documents are missing, not only write the ones it already knows. Writers and admins only. See [Documentation planning](DOCUMENTATION_PLANNING.md). |
-| `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile. Merging stays with the destination repository. Writers and admins only. |
+| `get_documentation_plan` | Reads a writing profile's plan as **Documents → Plan** shows it: the items with their state, the AI reviewer's decisions and reasons, the runs approved items started and why one could not start, out-of-date documents, coverage gaps and the uncovered and dismissed statements. An agent keeping documentation current needs to see what was proposed and decided before it plans again or follows the runs. |
+| `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (`agents`, or `auto`, where the server also publishes each reviewed revision itself; off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile. Merging stays with the destination repository. Writers and admins only. |
 
 ### Uploading media
 

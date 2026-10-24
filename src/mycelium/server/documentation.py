@@ -16,7 +16,7 @@ import sqlite3
 from typing import Any, Literal
 
 from .. import store
-from ..documentation_planning import PlanSummary
+from ..documentation_planning import PlanSummary, PlanView
 from ..require import require
 from .registry import tool
 from .runtime import _db, _drafts_db, _prompts_db
@@ -216,12 +216,15 @@ def _retry_refusal(row: sqlite3.Row) -> str | None:
 
 
 def retry_documentation_run(
-    run_id: str, *, with_review_notes: bool = False
+    run_id: str, *, with_review_notes: bool = False, automatic: bool = False
 ) -> dict[str, object]:
     """Start a run that wrote nothing again: the same request, profile, type
     and concept, or a revision of the same document. `with_review_notes`
     briefs the writer with what the refusing review found; the request text
-    the next review reads stays as it was."""
+    the next review reads stays as it was. The plan item or automatic
+    revision that followed the run follows the retry. `automatic` counts the
+    retry against the profile's recovery attempts; a person's retry starts
+    the count again."""
     from .. import auth, doc_runs, docs_store
 
     row = docs_store.get_run(_drafts_db(), run_id)
@@ -252,7 +255,10 @@ def retry_documentation_run(
         anchor_entity_id=row["anchor_entity_id"],
         start_from_destination=not anchored and row["revision_base"] == "destination",
         review_notes=notes,
+        retry_of=run_id,
+        attempt=int(row["attempt"]) + 1 if automatic else 0,
     )
+    docs_store.follow_retry(_drafts_db(), run_id, new_id)
     return docs_store.serialize_run(
         require(docs_store.get_run(_drafts_db(), new_id), "new documentation run")
     )
@@ -482,6 +488,24 @@ def request_documentation_plan(guideline_set: str) -> PlanSummary:
     return documentation_planning.plan_summary(plan_id)
 
 
+@tool
+def get_documentation_plan(guideline_set: str) -> PlanView:
+    """Read a writing profile's documentation plan, as Documents → Plan
+    shows it: the latest plan (`latest`, with `outcome`, `error` and the
+    `agent_task` an agent makes it through), its `items` with their state,
+    the AI reviewer's decision and reason (`review`), the run each approved
+    item started and why one could not start (`start_error`), the open
+    `review_task`, out-of-date documents (`stale`), concepts without a
+    document (`coverage`), the statements no document of the profile cites
+    (`uncovered`, `uncovered_statements`) and those dismissed for it
+    (`dismissed_uncovered`), and the profile's `planning`, `plan_review` and
+    `recovery` policies with `recovery_note` when automatic planning failed.
+    The statements are those the profile's audience may see."""
+    from .. import documentation_planning
+
+    return documentation_planning.view(guideline_set)
+
+
 @tool(role="writer", real_role=True)
 def deliver_document(
     document_id: str,
@@ -493,8 +517,8 @@ def deliver_document(
     destination repository.
 
     Only for a document whose writing profile lets agents deliver (its
-    delivery setting is `agents`); otherwise people deliver it from the web
-    app. Existing documents reuse recorded repository coordinates and path. A
+    delivery setting is `agents` or `auto`); otherwise people deliver it
+    from the web app. Existing documents reuse recorded repository coordinates and path. A
     receipt belongs to the captured immutable version even when generation
     advances the document while GitHub is processing the publication. The
     pull request is tracked: get_generated_document reports whether it is
@@ -515,7 +539,7 @@ def deliver_document(
         ),
         None,
     )
-    if profile is None or profile.delivery != "agents":
+    if profile is None or profile.delivery == "people":
         raise auth.RoleRequired(
             f"Writing profile '{row['guideline_set']}' does not let agents deliver "
             "its documents. A person can deliver it from the web app, or turn on "

@@ -29,6 +29,7 @@ from .curation import claim_curation_work, release_curation_work
 from .documentation import (
     deliver_document,
     get_document_revision,
+    get_documentation_plan,
     get_documentation_run,
     get_generated_document,
     list_document_revisions,
@@ -156,6 +157,7 @@ __all__ = [
     "get_agent_task",
     "request_documentation",
     "request_documentation_plan",
+    "get_documentation_plan",
     "retry_documentation_run",
     "revise_document",
     "list_document_revisions",
