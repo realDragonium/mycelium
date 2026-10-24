@@ -425,6 +425,7 @@ the first start of a current build:
 | v25 | Lets an external audience grant wait for a curator's confirmation (see below). |
 | v26 | Marks labelling queue rows that belong to a backfill, so a backfill resumes after a restart. |
 | v27 | Lets a curation agent close a knowledge gap as resolved or not applicable. |
+| v28 | Adds the memory of items an automation stopped retrying, until their inputs change or an admin retries them. |
 
 The drafts and prompts databases upgrade themselves on the same start. The
 research feature's data is deleted, as are its settings (see

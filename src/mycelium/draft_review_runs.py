@@ -149,6 +149,7 @@ def start(
     rerun: bool = False,
     attempt: int = 1,
     retries: int = 0,
+    refreshes: int = 0,
     previous_failure: str | None = None,
     answer: Answer | None = None,
     admit: Callable[[ReviewRun | None], bool] | None = None,
@@ -203,6 +204,7 @@ def start(
         run.model_settings_revision = settings.model_revision
         run.attempt = attempt
         run.retries = retries
+        run.refreshes = refreshes
         run.previous_failure = previous_failure
         run.answers = answers
         draft_review_store.save(conn, run)
@@ -1575,13 +1577,34 @@ def _after_completed(
 ) -> None:
     try:
         if review_again:
-            start(run.draft_id, rerun=True)
+            if _review_again_after_refresh(run, limits):
+                start(
+                    run.draft_id,
+                    rerun=True,
+                    refreshes=run.refreshes + 1,
+                )
+            else:
+                _save(run)
             return
         from . import draft_answers
 
         draft_answers.attempt(run, inspection, settings, limits)
     except Exception:
         logger.warning("post-review action for %s failed", run.run_id, exc_info=True)
+
+
+def _review_again_after_refresh(
+    run: ReviewRun, limits: product_settings.ReviewSettings | None
+) -> bool:
+    limits = limits or product_settings.get(product_settings.ReviewSettings)
+    if run.refreshes < limits.refresh_reviews:
+        return True
+    note = (
+        f"Stopped reviewing again after {run.refreshes} refreshed reviews; "
+        "a person starts the review again."
+    )
+    run.detail = f"{run.detail} {note}" if run.detail else note
+    return False
 
 
 def _ask_person(
@@ -2342,6 +2365,8 @@ def _submit_agent_review(
         )
     run.status = "completed"
     run.finished_at = timestamps.now()
+    if review_again:
+        review_again = _review_again_after_refresh(run, None)
     _save(run)
     submitted = agent_tasks.closed(
         conn,
@@ -2356,7 +2381,11 @@ def _submit_agent_review(
     )
     if review_again:
         try:
-            start(run.draft_id, rerun=True)
+            start(
+                run.draft_id,
+                rerun=True,
+                refreshes=run.refreshes + 1,
+            )
         except Exception:
             logger.warning(
                 "could not review refreshed aliases for %s", run.run_id, exc_info=True

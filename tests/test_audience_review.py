@@ -15,6 +15,7 @@ from mycelium import (
     audience_review,
     audiences,
     auth,
+    automation_stops,
     drafts_store,
     product_settings,
     store,
@@ -28,7 +29,6 @@ from settings_helpers import assume_configured_models
 @pytest.fixture(autouse=True)
 def _configured_models(monkeypatch):
     assume_configured_models(monkeypatch)
-    audience_review._failed_attempts.clear()
 
 
 @pytest.fixture
@@ -374,6 +374,65 @@ def test_internal_review_stops_retrying_an_omitted_grant_after_three_attempts(
     row = store.audience_labels.get_label(db, statement_id)
     assert row is not None
     assert store.audience_labels.label_pending(row) == [EXTERNAL]
+
+
+def test_failed_internal_review_stops_until_the_statement_changes(
+    db, prompts, monkeypatch
+):
+    set_product(
+        product_settings.AudienceLabellingSettings(
+            ai_grant_review=True, decision_retries=0
+        )
+    )
+    statement_id = _pending(db, "Workspace owners can export invoices.")
+    monkeypatch.setattr(audience_review, "_external", lambda: False)
+    monkeypatch.setattr(
+        audience_review.model_settings, "credentials_error", lambda _action: None
+    )
+    calls = 0
+
+    def call(task, config):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("model unavailable")
+
+    audience_review.review_batch(db, call=call)
+    audience_review.review_batch(db, call=call)
+
+    assert calls == 1
+    [stopped] = automation_stops.stops(db)
+    assert stopped.item_id == f"grants:{statement_id}:{EXTERNAL}"
+    assert stopped.reason == "The AI review failed: model unavailable"
+
+    db.execute(
+        "UPDATE statements SET text = ? WHERE id = ?",
+        ("Exports include invoices and receipts.", statement_id),
+    )
+    db.commit()
+    audience_review.review_batch(db, call=call)
+    assert calls == 2
+
+
+def test_failed_agent_task_stops_requeueing_its_items(db, prompts, tasks, monkeypatch):
+    set_product(
+        product_settings.AudienceLabellingSettings(
+            ai_grant_review=True, decision_retries=0
+        )
+    )
+    statement_id = _pending(db, "Workspace owners can export invoices.")
+    monkeypatch.setattr(audience_review, "_external", lambda: True)
+    [task] = _claim("reviewer").tasks
+
+    assert _submit("reviewer", task.id, []).status == "refused"
+    assert _submit("reviewer", task.id, []).status == "refused"
+    closed = _submit("reviewer", task.id, [])
+
+    assert closed.status == "failed"
+    assert closed.message is not None
+    assert "1 items stop until" in closed.message
+    assert _claim("another-reviewer").tasks == []
+    [stopped] = automation_stops.stops(db)
+    assert stopped.item_id == f"grants:{statement_id}:{EXTERNAL}"
 
 
 def test_label_decision_setting_off_makes_no_call_or_task(

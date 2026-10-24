@@ -226,6 +226,7 @@ def to_connect(
     which: StatementFilter,
     *,
     limit: int,
+    stopped: Mapping[str, str] | None = None,
 ) -> StatementPage:
     """The statements matching `which` the connect pass should take next,
     likeliest to connect first. Leaves out what it should not be offered
@@ -240,7 +241,13 @@ def to_connect(
         f"ORDER BY {_CONNECTED_NEIGHBOURS} DESC, s.id",
         {"now": kernel._now()},
     )
-    chosen = [row for row in rows if str(row["id"]) not in pending][:limit]
+    stopped = stopped or {}
+    chosen = [
+        row
+        for row in rows
+        if str(row["id"]) not in pending
+        and stopped.get(str(row["id"])) != str(row["text"])
+    ][:limit]
     return StatementPage(
         filter=which, items=_statement_items(conn, chosen, pending), next_after=None
     )

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .. import (
     auth,
+    automation_stops,
     curation,
     documentation_planning,
     knowledge_health,
@@ -60,6 +61,8 @@ class HealthView(BaseModel):
     #: Per writing profile, statements its audience may see that none of its
     #: documents cites, apart from those dismissed for it.
     uncovered_by_profile: dict[str, int]
+    #: Automatic work that exhausted its saved retry limit.
+    stopped: list[automation_stops.Stop]
 
 
 def _curation() -> list[CurationView]:
@@ -95,6 +98,7 @@ def knowledge_health_http(request: Request) -> HealthView:
         server._drafts_db(), server._db()
     )
     work = _curation()
+    stopped = automation_stops.stops(server._db())
     try:
         limits = product_settings.get(product_settings.ConnectSettings)
         selected = model_settings.get("connect")
@@ -105,6 +109,7 @@ def knowledge_health_http(request: Request) -> HealthView:
             connect_error=str(exc),
             curation=work,
             uncovered_by_profile=uncovered,
+            stopped=stopped,
         )
     if reason := model_settings.credentials_error("connect"):
         return HealthView(
@@ -113,11 +118,13 @@ def knowledge_health_http(request: Request) -> HealthView:
             connect_error=reason,
             curation=work,
             uncovered_by_profile=uncovered,
+            stopped=stopped,
         )
     return HealthView(
         counts=counts,
         curation=work,
         uncovered_by_profile=uncovered,
+        stopped=stopped,
         connect=ConnectLimits(
             batch_size=limits.batch_size,
             max_run_tokens=limits.max_run_tokens,
@@ -173,3 +180,20 @@ def free_claims_http(body: FreeClaims, request: Request) -> Freed:
     with store.transaction(server._db()):
         freed = curation.free(server._db(), body.kind, body.claimed_by)
     return Freed(freed=freed)
+
+
+class RetryStopped(BaseModel):
+    kind: automation_stops.Kind
+    item_id: str
+
+
+class Retried(BaseModel):
+    retried: bool
+
+
+@router.post("/api/knowledge-health/stopped/retry")
+def retry_stopped_http(body: RetryStopped, request: Request) -> Retried:
+    _require_admin(request)
+    with store.transaction(server._db()):
+        retried = automation_stops.retry(server._db(), body.kind, body.item_id)
+    return Retried(retried=retried)

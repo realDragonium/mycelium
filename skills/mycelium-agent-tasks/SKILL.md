@@ -113,6 +113,9 @@ whose statement was edited: `confirm` keeps the audiences for the new text,
 `text`; `confirm` only when every listed audience still allows the new text,
 otherwise `reject`, which withdraws them). Decide each `statement_id` once,
 with a reason; leave out one you cannot judge, so another reviewer can.
+A task closed as failed after too many refused submissions counts against
+its items; past the saved limit they stop being queued for any agent until
+they change, and the closed result says how many stopped.
 
 **`ingest` and `connect`.** Follow `brief.instructions` as the ingest or
 connect model would: reconcile every candidate with reads, search around it,

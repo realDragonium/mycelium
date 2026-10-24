@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from . import (
     ai,
+    automation_stops,
     curation,
     drafts_store,
     knowledge_health,
@@ -24,6 +25,7 @@ from . import (
     workers,
 )
 from .ingest.connect import config_from_settings, run_connect
+from .ingest.connect import looked_at as connect_looked_at
 from .ingest.draft import InProcessDraftEmitter
 from .server import curation as server_curation
 from .server import model_loop_slot, model_loops
@@ -121,6 +123,7 @@ def _claim(
     claimant: str,
     *,
     draft_gaps_only: bool = False,
+    follow_up_retries: int | None = None,
 ) -> list[server_curation.WorkItem]:
     pairs: list[curation.DuplicateCandidate] = []
     contexts: dict[str, dict[str, JsonValue]] = {}
@@ -139,6 +142,7 @@ def _claim(
             pairs=pairs,
             exclude_skipped_by=claimant,
             draft_gaps_only=draft_gaps_only,
+            follow_up_retries=follow_up_retries,
         )
     return [
         server_curation.describe_work_item(
@@ -602,10 +606,23 @@ def _gap(
 def _gaps(
     settings: product_settings.ConnectSettings, claimant: str, call: Call
 ) -> None:
-    items = _claim("rephrase", settings.batch_size, claimant)
+    items = _claim(
+        "rephrase",
+        settings.batch_size,
+        claimant,
+        follow_up_retries=settings.follow_up_retries,
+    )
     remaining = settings.batch_size - len(items)
     if remaining:
-        items.extend(_claim("gap", remaining, claimant, draft_gaps_only=True))
+        items.extend(
+            _claim(
+                "gap",
+                remaining,
+                claimant,
+                draft_gaps_only=True,
+                follow_up_retries=settings.follow_up_retries,
+            )
+        )
     if not items:
         return
     try:
@@ -630,25 +647,73 @@ def _connect(settings: product_settings.ConnectSettings) -> None:
     if not _connect_lock.acquire(blocking=False):
         return
     try:
+        conn = _db()
+        with store.transaction(conn):
+            conn.execute(
+                "DELETE FROM automation_stops WHERE kind = 'connect' AND NOT EXISTS "
+                "(SELECT 1 FROM statements s WHERE s.id = item_id AND s.text = inputs)"
+            )
+        stopped = automation_stops.stopped(conn, "connect")
         page = knowledge_health.to_connect(
-            _db(), _drafts_db(), "isolated", limit=settings.batch_size
+            conn,
+            _drafts_db(),
+            "isolated",
+            limit=settings.batch_size,
+            stopped=stopped,
         )
         if not page.items:
             page = knowledge_health.to_connect(
-                _db(), _drafts_db(), "unmentioned", limit=settings.batch_size
+                conn,
+                _drafts_db(),
+                "unmentioned",
+                limit=settings.batch_size,
+                stopped=stopped,
             )
         if not page.items:
             return
-        targets = knowledge_health.targets(_db(), [item.id for item in page.items])
-        config = replace(
-            config_from_settings(),
-            trace_log_path=str(_context().data_dir / "connect_trace.jsonl"),
-        )
-        with model_loop_slot():
-            result = run_connect(
-                targets, known_name=model_loops._known_name, config=config
+        targets = knowledge_health.targets(conn, [item.id for item in page.items])
+        try:
+            config = replace(
+                config_from_settings(),
+                trace_log_path=str(_context().data_dir / "connect_trace.jsonl"),
             )
-        model_loops.connected(result, targets)
+            with model_loop_slot():
+                result = run_connect(
+                    targets, known_name=model_loops._known_name, config=config
+                )
+            looked = connect_looked_at(result.trace, targets)
+        except Exception as exc:
+            with store.transaction(conn):
+                for target in targets:
+                    automation_stops.fail(
+                        conn,
+                        "connect",
+                        target.id,
+                        target.text,
+                        f"The connect run failed: {exc}"[:500],
+                        retries=settings.connect_retries,
+                        now=datetime.now(UTC),
+                    )
+            logger.warning("automatic connect batch failed", exc_info=True)
+            return
+        try:
+            model_loops.connected(result, targets)
+        except Exception:
+            logger.warning("automatic connect result handling failed", exc_info=True)
+        looked_ids = {item.statement_id for item in looked}
+        with store.transaction(conn):
+            automation_stops.clear(conn, "connect", list(looked_ids))
+            for target in targets:
+                if target.id not in looked_ids:
+                    automation_stops.fail(
+                        conn,
+                        "connect",
+                        target.id,
+                        target.text,
+                        f"The connect run ended ({result.outcome}) without looking at it.",
+                        retries=settings.connect_retries,
+                        now=datetime.now(UTC),
+                    )
     finally:
         _connect_lock.release()
 

@@ -142,6 +142,12 @@ class ReviewSettings(RequestLimits):
     #: call from its parts' context and max_tokens; a larger draft is
     #: refused. 0 sets no cap.
     max_draft_tokens: int = Field(default=300_000, ge=0)
+    #: Further AI answers after the reviewer asks again, before its
+    #: questions wait for a person.
+    answer_retries: int = Field(default=2, ge=0)
+    #: Automatic reviews again after refreshed alias suggestions, before
+    #: the draft waits for a person to start its review again.
+    refresh_reviews: int = Field(default=2, ge=0)
 
 
 class AliasDiscoverySettings(RequestLimits):
@@ -171,6 +177,9 @@ class AudienceLabellingSettings(RequestLimits):
     #: of accepting the rest.
     min_sample_precision_percent: int = Field(default=90, ge=0, le=100)
     batch_size: int = Field(default=25, gt=0, le=100)
+    #: Further AI decisions on an item after one failed, before it stops
+    #: until its statement or label changes or a person retries it.
+    decision_retries: int = Field(default=2, ge=0)
     max_tokens: int = Field(default=6000, gt=0)
     max_retries: int = Field(default=2, ge=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
@@ -231,6 +240,12 @@ class ConnectSettings(LoopLimits):
     describe_concepts: bool = False
     #: Act on rephrase gaps and on gaps about a draft.
     act_on_gaps: bool = False
+    #: Further connect runs on a statement after one failed to look at it,
+    #: before it stops until its text changes or a person retries it.
+    connect_retries: int = Field(default=2, ge=0)
+    #: Further curation proposals in one chain of rejected drafts, before
+    #: the next gap about a rejected draft is left for a person.
+    follow_up_retries: int = Field(default=2, ge=0)
 
 
 class ConcurrencySettings(SettingsModel):

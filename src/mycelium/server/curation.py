@@ -22,6 +22,7 @@ from .. import (
     draft_review_store,
     drafts_store,
     media,
+    product_settings,
     store,
 )
 from .names import find_entity_duplicates
@@ -388,6 +389,9 @@ def claim_curation_work(
             claimant=claimant,
             now=datetime.now(UTC),
             pairs=pairs,
+            follow_up_retries=product_settings.get(
+                product_settings.ConnectSettings
+            ).follow_up_retries,
         )
     items: list[WorkItem] = []
     for candidate in chosen:

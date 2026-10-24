@@ -53,7 +53,9 @@ first. Run one job per drafter account at a time.
    enforced. A `duplicate` item has `pair` (its `kind`, sides `a` and `b`,
    and the `score`); `undescribed` and `unused` items have `concept` (names,
    description and the statements naming it); a gap about a draft has
-   `draft` (its operations and the review's rationale).
+   `draft` (its operations and the review's rationale). A gap whose chain of
+   rejected curation proposals is past the saved limit is not offered: a
+   person decides it, so do not propose another draft for it by other means.
 2. **Find the behaviour in the code.** Search the repository for the
    statement's terms, the UI copy, the setting name or the event. Read the
    handler, the job or the check that implements it, and what runs before and

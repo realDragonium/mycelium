@@ -7,6 +7,7 @@ import logging
 import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal, Protocol, TypeVar, overload
 
 from pydantic import (
@@ -18,7 +19,16 @@ from pydantic import (
     ValidationError,
 )
 
-from . import agent_tasks, ai, audiences, auth, model_settings, product_settings, store
+from . import (
+    agent_tasks,
+    ai,
+    audiences,
+    auth,
+    automation_stops,
+    model_settings,
+    product_settings,
+    store,
+)
 from .audiences import Audience
 
 logger = logging.getLogger(__name__)
@@ -182,9 +192,6 @@ def _call(
     return ai.structured_with_usage(task, config)
 
 
-_failed_attempts: dict[AttemptKey, int] = {}
-
-
 def _settings() -> product_settings.AudienceLabellingSettings | None:
     try:
         return product_settings.get(product_settings.AudienceLabellingSettings)
@@ -263,6 +270,17 @@ def _key(subject: Subject, row: sqlite3.Row) -> AttemptKey:
         checking["at"] if checking is not None else "",
         text,
     )
+
+
+def _stop_key(key: AttemptKey) -> tuple[str, str]:
+    subject, statement_id, audience_id, marker, text = key
+    item_id = f"{subject}:{statement_id}:{audience_id}"
+    inputs = json.dumps([marker, text], ensure_ascii=False, separators=(",", ":"))
+    return item_id, inputs
+
+
+def _stop_inputs(keys: set[AttemptKey]) -> dict[str, str]:
+    return dict(_stop_key(key) for key in keys)
 
 
 def _audiences_input(live: tuple[Audience, ...]) -> list[dict[str, object]]:
@@ -418,6 +436,35 @@ def _batch_keys(batch: Batch) -> set[DecisionKey]:
     return {(item.statement_id, "") for item in batch.statements}
 
 
+def _batch_attempt_keys(batch: Batch) -> set[AttemptKey]:
+    if isinstance(batch, AgentBatch):
+        return {
+            (
+                "grants",
+                item.statement_id,
+                item.audience_id,
+                item.labelled_at,
+                item.text,
+            )
+            for item in batch.grants
+        }
+    if isinstance(batch, CuratorLabelBatch):
+        return {
+            (
+                "curator_labels",
+                item.statement_id,
+                "",
+                item.labelled_at,
+                item.text,
+            )
+            for item in batch.statements
+        }
+    return {
+        ("kept_grants", item.statement_id, "", item.kept_at, item.text)
+        for item in batch.statements
+    }
+
+
 def _item_key(item: GrantState | CuratorLabelState | KeptGrantState) -> DecisionKey:
     return (
         item.statement_id,
@@ -464,13 +511,28 @@ def _queue_agent_tasks(limit: int) -> int:
     ]
     held = {key for batch in open_batches for key in _batch_keys(batch)}
     live_ids = {item.id for item in live}
+    pending = {
+        subject: [
+            row
+            for row in _pending(conn, subject)
+            if subject != "grants" or str(row["audience_id"]) in live_ids
+        ]
+        for subject in subjects
+    }
+    current_keys = {
+        _key(subject, row) for subject, rows in pending.items() for row in rows
+    }
+    with store.transaction(conn):
+        automation_stops.prune(conn, "audience_review", _stop_inputs(current_keys))
+    stopped = automation_stops.stopped(conn, "audience_review")
     queued = 0
     for subject in subjects:
         rows = [
             row
-            for row in _pending(conn, subject)
+            for row in pending[subject]
             if _row_key(subject, row) not in held
-            and (subject != "grants" or str(row["audience_id"]) in live_ids)
+            and stopped.get(_stop_key(_key(subject, row))[0])
+            != _stop_key(_key(subject, row))[1]
         ]
         for labelled_by, grouped in _grouped(subject, rows).items():
             for start in range(0, len(grouped), settings.batch_size):
@@ -792,14 +854,39 @@ def _submit_agent_task(
         findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
     if findings:
         if task.failures >= agent_tasks.RETRIES:
+            settings = _settings() or product_settings.AudienceLabellingSettings()
+            detail = "; ".join(finding.problem for finding in findings)
+            reason = "An agent's decisions were refused too often."
+            if detail and len(reason) + len(detail) + 1 <= 500:
+                reason = f"{reason} {detail}"
+            conn = store.substrate_connection()
+            stopped = 0
+            with store.transaction(conn):
+                for key in _batch_attempt_keys(batch):
+                    item_id, inputs = _stop_key(key)
+                    stopped += automation_stops.fail(
+                        conn,
+                        "audience_review",
+                        item_id,
+                        inputs,
+                        reason,
+                        retries=settings.decision_retries,
+                        now=datetime.now(UTC),
+                    )
+            message = (
+                "Refused too often; the grants remain pending."
+                if isinstance(batch, AgentBatch)
+                else "Refused too often; the audience decisions remain for a person."
+            )
+            if stopped:
+                message += (
+                    f" {stopped} items stop until their statement or label changes "
+                    "or an admin retries them."
+                )
             return agent_tasks.closed(
                 drafts,
                 task,
-                (
-                    "Refused too often; the grants remain pending."
-                    if isinstance(batch, AgentBatch)
-                    else "Refused too often; the audience decisions remain for a person."
-                ),
+                message,
                 failed=True,
                 findings=findings,
             )
@@ -818,15 +905,38 @@ def _submit_agent_task(
         live=audiences.live(),
         check_claimant=True,
     )
+    conn = store.substrate_connection()
+    with store.transaction(conn):
+        automation_stops.clear(
+            conn,
+            "audience_review",
+            [_stop_key(key)[0] for key in _batch_attempt_keys(batch)],
+        )
     return agent_tasks.closed(drafts, task, _closed_message(batch, applied))
 
 
 AGENT_TASK = agent_tasks.Handler(submit=_submit_agent_task, queue=_queue_agent_tasks)
 
 
-def _record_failures(keys: set[AttemptKey]) -> None:
-    for key in keys:
-        _failed_attempts[key] = _failed_attempts.get(key, 0) + 1
+def _record_failures(
+    conn: sqlite3.Connection,
+    keys: set[AttemptKey],
+    reason: str,
+    retries: int,
+) -> None:
+    now = datetime.now(UTC)
+    with store.transaction(conn):
+        for key in keys:
+            item_id, inputs = _stop_key(key)
+            automation_stops.fail(
+                conn,
+                "audience_review",
+                item_id,
+                inputs,
+                reason,
+                retries=retries,
+                now=now,
+            )
 
 
 def _model_proposals(
@@ -865,6 +975,7 @@ def _run_subject(
     config: ai.ModelConfig,
     selected: model_settings.ModelSnapshot,
     call: Call,
+    retries: int,
 ) -> int:
     keys = {_key(subject, row) for row in rows}
     try:
@@ -877,8 +988,13 @@ def _run_subject(
                     _statement_task(conn, subject, rows, live), config
                 )
                 review = statement_review
-    except Exception:
-        _record_failures(keys)
+    except Exception as exc:
+        _record_failures(
+            conn,
+            keys,
+            f"The AI review failed: {exc}"[:500],
+            retries,
+        )
         logger.warning("audience %s review batch failed", subject, exc_info=True)
         return 0
 
@@ -893,9 +1009,13 @@ def _run_subject(
         live=live,
         check_claimant=False,
     )
-    for key in keys - failed:
-        _failed_attempts.pop(key, None)
-    _record_failures(failed)
+    with store.transaction(conn):
+        automation_stops.clear(
+            conn,
+            "audience_review",
+            [_stop_key(key)[0] for key in keys - failed],
+        )
+    _record_failures(conn, failed, "The AI gave no valid decision.", retries)
     return applied.confirmed + applied.rejected
 
 
@@ -925,11 +1045,15 @@ def review_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
     current_keys = {
         _key(subject, row) for subject, rows in pending.items() for row in rows
     }
-    for key in set(_failed_attempts) - current_keys:
-        del _failed_attempts[key]
+    with store.transaction(conn):
+        automation_stops.prune(conn, "audience_review", _stop_inputs(current_keys))
+    stopped = automation_stops.stopped(conn, "audience_review")
     batches = {
         subject: [
-            row for row in rows if _failed_attempts.get(_key(subject, row), 0) < 3
+            row
+            for row in rows
+            if stopped.get(_stop_key(_key(subject, row))[0])
+            != _stop_key(_key(subject, row))[1]
         ][: settings.batch_size]
         for subject, rows in pending.items()
     }
@@ -946,7 +1070,16 @@ def review_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
         max_retries=settings.max_retries,
     )
     return sum(
-        _run_subject(conn, subject, rows, live, config, selected, call)
+        _run_subject(
+            conn,
+            subject,
+            rows,
+            live,
+            config,
+            selected,
+            call,
+            settings.decision_retries,
+        )
         for subject, rows in batches.items()
         if rows
     )

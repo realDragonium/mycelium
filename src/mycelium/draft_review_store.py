@@ -163,6 +163,8 @@ class ReviewRun(BaseModel):
     parts: list[PartReview] = Field(default_factory=list)
     attempt: int = 1
     retries: int = 0
+    #: Reviews in a row started automatically after refreshed alias suggestions.
+    refreshes: int = 0
     previous_failure: str | None = None
     answers: list[Answer] = Field(default_factory=list)
     application: Application = "unapplied"

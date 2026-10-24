@@ -13,10 +13,12 @@ from mycelium import (
     drafts_store,
     embed,
     model_settings,
+    product_settings,
     server,
     store,
 )
 from mycelium.server import runtime
+from product_settings_helpers import set_product
 from review_helpers import correction
 from settings_helpers import set_review_controls
 from test_reviewed_application import _app, _principal
@@ -391,6 +393,67 @@ def test_agent_refreshes_stale_alias_names_and_reviews_again(agent):
     accepted = alias_suggestions.list_entries("all")[0].suggestion
     assert [event.action for event in accepted.history] == ["refreshed", "accepted"]
     assert all(event.actor_id == agent for event in accepted.history)
+
+
+def test_agent_stops_after_the_refreshed_review_limit(agent):
+    set_review_controls(alias_decisions=True)
+    set_product(product_settings.ReviewSettings(refresh_reviews=0))
+    entity_id = server.upsert_entity(
+        name="Workspace exports", description="Downloadable workspace archives"
+    )["entity_id"]
+    with store.transaction(server._db()):
+        statement_id = store.create_statement(
+            server._db(), "state", "Workspace exports (WE) include invoices"
+        )
+    suggestion = alias_suggestions.prepare(
+        server._db(),
+        alias_suggestions.Proposal(
+            entity_id=entity_id,
+            alias="WE",
+            quote="Workspace exports (WE)",
+            reason="The abbreviation is explicitly defined.",
+            ambiguity="",
+            statement_id=statement_id,
+        ),
+        "Workspace exports (WE) include invoices",
+    )
+    server.upsert_name(text="Export archive", entity_id=entity_id)
+    conn = server._drafts_db()
+    with store.transaction(conn):
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None, title="Export alias"
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind=alias_suggestions.KIND,
+            payload=suggestion.model_dump(mode="json"),
+            created_by="drafter-1",
+        )
+        drafts_store.set_submitted(conn, draft_id)
+    [operation] = drafts_store.list_ops(conn, draft_id)
+    decision = {
+        "operation_ref": operation["id"],
+        "decision": "accept",
+        "quote": "Workspace exports (WE)",
+        "reason": "The source explicitly defines the abbreviation.",
+    }
+    draft_review_runs.on_submitted(draft_id)
+    first_run_id = server.get_draft(draft_id)["review_assessment"]["run_id"]
+
+    [task] = _claim(agent).tasks
+    submitted = _submit(agent, task.id, "good", alias_decisions=[decision])
+
+    note = (
+        "Stopped reviewing again after 0 refreshed reviews; "
+        "a person starts the review again."
+    )
+    assert submitted.status == "accepted"
+    assert note in submitted.message
+    run = server.get_draft(draft_id)["review_assessment"]
+    assert run["run_id"] == first_run_id
+    assert note in run["detail"]
+    assert _claim(agent).tasks == []
 
 
 def test_held_corrections_wait_in_the_backlog_for_an_agent(agent):

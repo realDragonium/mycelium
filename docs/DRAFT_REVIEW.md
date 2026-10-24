@@ -119,7 +119,10 @@ reason. A suggestion whose source text changed since is rejected as the
 reviewer ("The supporting statement changed since the suggestion; scan the
 current statement."), so a new alias scan judges the current text. One whose
 concept names changed but whose source did not is refreshed against the
-current names, and the draft is reviewed again. A draft of
+current names, and the draft is reviewed again, at most **Reviews again
+after refreshed aliases** times in a row (`refresh_reviews`, default 2). At
+the limit the run notes that it stopped and the draft waits in the review
+backlog for an admin to start its review again. A draft of
 only suggestions then closes as it does after a person's last decision. In
 `review-only`, or with the setting off, the assessment stays advisory and
 every suggestion waits for a person.
@@ -268,8 +271,11 @@ grounded answer is recorded as `model:<model>`'s, with the quoted statements
 and evidence as its evidence, and the draft is reviewed again with it. When the
 sources do not settle the questions, or a quote does not check out, nothing is
 recorded, the run notes why, and the question stays open for a curation agent
-or a person. The model answers a draft at most twice; its tokens count as
-draft review. In the web app the questions and an answer form sit at the top of the
+or a person. After its first answer the model answers again at most
+**AI answer retries per draft** times in a row (**Settings → Limits → Draft
+review**, `answer_retries`, default 2); then the run notes "Stopped AI answers
+after N; the questions wait for a person." A person's answer starts the count
+again. Its tokens count as draft review. In the web app the questions and an answer form sit at the top of the
 draft; such drafts sort first under Drafts and are counted on Home. The reviewer gets no new tools for this.
 
 ## Corrections

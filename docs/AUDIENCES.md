@@ -162,8 +162,9 @@ grants** is on), a second AI decides waiting grants in place of a curator:
 - With Audience labelling on a server model, the labelling pass sends a batch
   of waiting grants to the audience-labelling model with a reviewer's brief:
   the audiences, each statement with its concepts and the labeller's reason.
-  A grant the model leaves out is tried again, up to three times, then left
-  for a curator.
+  A grant the model leaves out, or a batch that fails, is tried again up to
+  **Retries of a failed AI audience decision** times (`decision_retries`,
+  default 2), then left for a curator; see [Stopped decisions](#stopped-decisions).
 - With Audience labelling set to External agent, waiting grants are queued as
   [`audience_review`](AGENT_TASKS.md#kinds) tasks, one batch per labeller. The
   agent that labelled a batch is not offered it, and a submission deciding a
@@ -219,10 +220,23 @@ lists that otherwise wait for a curator:
 
 It runs on the same model or agents as grant review, one decision per
 statement with a reason. On a server model a statement it leaves out is tried
-again up to three times for the same text. On an External agent the batches
+again up to `decision_retries` times for the same text. On an External agent the batches
 are `audience_review` tasks; the curator who set a label, or the labeller of a
 kept grant, is not given it. A statement edited again, or relabelled, since it
 was offered is skipped. Curators can still decide both lists themselves.
+
+### Stopped decisions
+
+Each failure is remembered per item (a grant, an edited curator label or a
+kept grant) with the statement text and label it was for, also across
+restarts. On a server model a failure is a failed call or an item the model
+left out or decided invalidly; on an External agent it is a task closed as
+failed after its submissions were refused too often, whose result then says
+how many items stopped. After `decision_retries` further failures the item
+stops: it is not sent to the model or queued for agents again, it is listed
+under **Stopped automations** on [Knowledge health](KNOWLEDGE_HEALTH.md#stopped-automations)
+with the reason, and it waits for a curator. It is tried again when its
+statement or label changes, or when an admin retries it there.
 
 ## Media
 

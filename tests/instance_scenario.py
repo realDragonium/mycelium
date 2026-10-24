@@ -198,6 +198,14 @@ def _substrate(server) -> dict[str, str]:
             "FROM statements WHERE id = ?",
             (f'["{ids["expiry"]}"]', ids["submit"]),
         )
+    if _has_table(db, "automation_stops"):
+        db.execute(
+            "INSERT INTO automation_stops VALUES "
+            "('connect', ?, 'A user submits the Login form.', 3, 1, "
+            "'The connect run did not inspect the statement.', "
+            "'2026-08-03T00:00:00Z')",
+            (ids["submit"],),
+        )
     if _has_table(db, "reviewed_draft_applications"):
         db.execute(
             "INSERT INTO reviewed_draft_applications VALUES "

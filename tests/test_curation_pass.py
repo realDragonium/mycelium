@@ -17,6 +17,7 @@ from mycelium import (
     server,
     store,
 )
+from mycelium.ingest.schema import NothingToIngest
 from mycelium.server import curation as server_curation
 from mycelium.server import runtime, startup
 from settings_helpers import save_model
@@ -667,7 +668,12 @@ def test_automatic_connect_reuses_the_connect_loop(configured):
     )["statement_id"]
     _settings(connect_automatically=True)
     reached = []
-    result = object()
+    result = NothingToIngest(
+        reason="No link was needed.",
+        trace={
+            "candidate_ledger": [{"candidate": statement_id, "classification": "new"}]
+        },
+    )
     configured.setattr(
         curation_pass,
         "run_connect",
@@ -684,6 +690,59 @@ def test_automatic_connect_reuses_the_connect_loop(configured):
     curation_pass.curation_pass(call=_fake(curation_pass.Decisions(), []))
 
     assert reached == [[statement_id], result]
+
+
+def test_automatic_connect_stops_after_failures_and_an_edit_retries(configured):
+    statement_id = server.upsert_statement(
+        "rule", "An invoice export includes paid invoices.", []
+    )["statement_id"]
+    _settings(connect_automatically=True, connect_retries=1)
+    calls = 0
+
+    def fail_connect(targets, **kwargs):
+        nonlocal calls
+        calls += 1
+        raise RuntimeError("provider unavailable")
+
+    configured.setattr(curation_pass, "run_connect", fail_connect)
+
+    for _ in range(3):
+        curation_pass.curation_pass(call=_fake(curation_pass.Decisions(), []))
+
+    assert calls == 2
+    [stopped] = curation_pass.automation_stops.stops(runtime._db())
+    assert (stopped.item_id, stopped.failures) == (statement_id, 2)
+
+    store.update_statement_text(
+        runtime._db(),
+        statement_id,
+        "Invoice exports include paid invoices and receipts.",
+    )
+    runtime._db().commit()
+    curation_pass.curation_pass(call=_fake(curation_pass.Decisions(), []))
+    assert calls == 3
+
+
+def test_automatic_connect_stops_a_target_the_run_did_not_inspect(configured):
+    statement_id = server.upsert_statement(
+        "rule", "Workspace exports include invoices.", []
+    )["statement_id"]
+    _settings(connect_automatically=True, connect_retries=0)
+    configured.setattr(
+        curation_pass,
+        "run_connect",
+        lambda targets, **kwargs: NothingToIngest(
+            reason="The run ended before classification.", trace={}
+        ),
+    )
+
+    curation_pass.curation_pass(call=_fake(curation_pass.Decisions(), []))
+
+    [stopped] = curation_pass.automation_stops.stops(runtime._db())
+    assert stopped.item_id == statement_id
+    assert stopped.reason == (
+        "The connect run ended (nothing_to_ingest) without looking at it."
+    )
 
 
 def test_external_connect_does_nothing(configured):

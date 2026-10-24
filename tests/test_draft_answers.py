@@ -9,11 +9,13 @@ from mycelium import (
     draft_review_runs,
     draft_review_settings,
     embed,
+    product_settings,
     server,
     store,
 )
 from mycelium.draft_review_store import Answer, Assessment, ReviewRun
 from mycelium.server import runtime
+from product_settings_helpers import set_product
 from settings_helpers import save_model, set_review_controls
 from test_reviewed_application import _principal
 
@@ -227,8 +229,94 @@ def test_setting_off_makes_no_answer_call(answer_server, monkeypatch):
     )
 
 
-@pytest.mark.parametrize("provider,model_answers", [("agent", 0), ("openai", 2)])
-def test_external_runs_and_two_model_answers_skip_the_attempt(provider, model_answers):
+def test_answer_retry_limit_stops_before_a_second_model_call(
+    answer_server, monkeypatch
+):
+    set_product(product_settings.ReviewSettings(answer_retries=0))
+    calls = 0
+
+    def answer(task, config):
+        nonlocal calls
+        calls += 1
+        return (
+            draft_answers.AnswerAttempt(
+                answerable=True,
+                answer="Yes. The workspace export runs daily.",
+                sources=[
+                    draft_answers.Source(
+                        statement_id="",
+                        quote="workspace export schedule was verified as daily",
+                    )
+                ],
+                reason="The draft evidence settles the question.",
+            ),
+            ai.Usage(),
+        )
+
+    monkeypatch.setattr(
+        draft_review_runs, "RUNNER", lambda context: _assessment("needs_context")
+    )
+    monkeypatch.setattr(draft_answers, "_call", answer)
+    draft_id, _ = _draft()
+    draft_review_runs.wait_all()
+
+    run = server.get_draft(draft_id)["review_assessment"]
+    assert calls == 1
+    assert run["application"] == "needs_human"
+    assert (
+        "Stopped AI answers after 1; the questions wait for a person." in run["detail"]
+    )
+
+
+def test_person_answer_resets_the_model_answer_count(answer_server, monkeypatch):
+    set_product(product_settings.ReviewSettings(answer_retries=0))
+    calls = 0
+
+    def answer(task, config):
+        nonlocal calls
+        calls += 1
+        return (
+            draft_answers.AnswerAttempt(
+                answerable=True,
+                answer="Yes. The workspace export runs daily.",
+                sources=[
+                    draft_answers.Source(
+                        statement_id="",
+                        quote="workspace export schedule was verified as daily",
+                    )
+                ],
+                reason="The draft evidence settles the question.",
+            ),
+            ai.Usage(),
+        )
+
+    monkeypatch.setattr(
+        draft_review_runs, "RUNNER", lambda context: _assessment("needs_context")
+    )
+    monkeypatch.setattr(draft_answers, "_call", answer)
+    draft_id, _ = _draft()
+    draft_review_runs.wait_all()
+    waiting = ReviewRun.model_validate(server.get_draft(draft_id)["review_assessment"])
+
+    draft_review_runs.answer(
+        draft_id,
+        waiting.run_id,
+        "The export schedule is still daily.",
+        auth.Principal(id="curator-1", name="Curator", role="writer", type="human"),
+    )
+    draft_review_runs.wait_all()
+
+    run = server.get_draft(draft_id)["review_assessment"]
+    assert calls == 2
+    assert [answer["answered_by"] for answer in run["answers"]] == [
+        "model:gpt-fixture",
+        "curator-1",
+        "model:gpt-fixture",
+    ]
+
+
+@pytest.mark.parametrize("provider,model_answers", [("agent", 0), ("openai", 3)])
+def test_external_runs_and_model_answer_limit_skip_the_attempt(provider, model_answers):
     run = ReviewRun(
         run_id="drv_answer",
         draft_id="drf_123456789abc",
@@ -259,5 +347,14 @@ def test_external_runs_and_two_model_answers_skip_the_attempt(provider, model_an
         called = True
         raise AssertionError("answer model must not be called")
 
-    assert draft_answers.attempt(run, {}, settings, call=answer) is None
+    assert (
+        draft_answers.attempt(
+            run,
+            {},
+            settings,
+            product_settings.ReviewSettings(),
+            call=answer,
+        )
+        is None
+    )
     assert called is False

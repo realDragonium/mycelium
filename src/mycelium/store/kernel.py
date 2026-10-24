@@ -522,6 +522,20 @@ CREATE TABLE IF NOT EXISTS curation_claims (
     expires_at TEXT NOT NULL
 );
 
+-- Automatic work that reached its saved retry limit. Inputs make the stop
+-- obsolete when the underlying item changes.
+CREATE TABLE IF NOT EXISTS automation_stops (
+    kind       TEXT NOT NULL
+               CHECK (kind IN ('audience_review', 'connect', 'gap_follow_up')),
+    item_id    TEXT NOT NULL,
+    inputs     TEXT NOT NULL,
+    failures   INTEGER NOT NULL,
+    stopped    INTEGER NOT NULL DEFAULT 0,
+    reason     TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (kind, item_id)
+);
+
 -- Durable dirty-queue for asynchronous mention recompute. Statement
 -- upsert derives mentions synchronously (hot path stays consistent); a
 -- name/alias/entity change instead enqueues work here, drained by the

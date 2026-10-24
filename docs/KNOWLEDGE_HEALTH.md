@@ -120,7 +120,11 @@ review-and-apply, applies it (a merge only under an admin reviewer); with review
 the model leaves undecided, or decides with something the server cannot check
 (a statement it was not given, an operation outside the fixed set), is released
 `skipped`: outside agents can still claim it, and the pass does not try it
-again until it changes. The pass does nothing while Connecting statements runs
+again until it changes. A connect run that fails, or ends without looking at
+a statement it took, counts a failure for that statement; after **Retries of
+a statement after a failed connect run** further failures (`connect_retries`,
+default 2) the statement stops (see [Stopped automations](#stopped-automations))
+until its text changes. The pass does nothing while Connecting statements runs
 on an External agent or has no credentials; its calls are metered as the
 connect pass.
 
@@ -281,3 +285,29 @@ why. An admin can release an agent's
 claims on a list (`POST /api/knowledge-health/claims/free` with `kind` and
 `claimed_by`) when the agent stopped; no outcome is recorded, so the items
 are offered again.
+
+### Rejected proposal chains
+
+A rejected draft files a gap about it, and acting on that gap proposes another
+draft, which can be rejected again. So that curation and review do not loop,
+a gap about a draft is not offered to the AI curation pass or to outside
+agents once its chain holds more than **Retries after a curation proposal is
+rejected** (`follow_up_retries`, default 2) earlier rejected curation
+proposals: the draft it is about was proposed for a gap about another
+rejected draft, and so on. Such a gap stays open for a person and is listed
+under Stopped automations. An admin's retry lets that one gap be offered once
+more; if its proposal is rejected too, the new gap stops again.
+
+Other outcomes already keep an item from being offered again while its text
+is unchanged: a proposal (whatever became of its draft), a pair recorded as
+distinct, a gap closed as not applicable, and an item the agent skipped.
+
+### Stopped automations
+
+Knowledge health lists the items automatic work stopped retrying: connect
+pass statements, [audience decisions](AUDIENCES.md#stopped-decisions) and gap
+follow-ups, each with the reason, the failures and when it stopped. Nothing
+retries them automatically until their inputs change (the statement text, the
+label, the gap). An admin's **Retry** (`POST /api/knowledge-health/stopped/retry`
+with `kind` and `item_id`) offers the item to its automation again with a
+fresh count.

@@ -3,11 +3,11 @@
 // nothing reaches.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { draftFate } from './ingest';
-import { EmptyState, KindTag, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
+import { Card, EmptyState, KindTag, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
 import { Link, type Route } from './router';
 import {
   errorMessage, getReviewMode, isStatementFilter, knowledgeHealth,
-  type ConnectLimits, type ConnectResult, type CurationSummary, type EntityFilter, type HealthCounts, type HealthEntity,
+  type AutomationKind, type AutomationStop, type ConnectLimits, type ConnectResult, type CurationSummary, type EntityFilter, type HealthCounts, type HealthEntity,
   type HealthList, type HealthStatement, type StatementFilter,
 } from './api';
 import { dataOf, useAsync } from './use-async';
@@ -189,6 +189,39 @@ function AgentWork({ work, isAdmin, onChange }: { work: CurationSummary[]; isAdm
   );
 }
 
+const STOP_KIND: Record<AutomationKind, string> = {
+  audience_review: 'Audience decision',
+  connect: 'Connect pass',
+  gap_follow_up: 'Gap follow-up',
+};
+
+function StoppedAutomations({ items, isAdmin, onChange }: { items: AutomationStop[]; isAdmin: boolean; onChange: () => void }) {
+  const [error, setError] = useState('');
+  const retry = async (item: AutomationStop) => {
+    setError('');
+    try { await knowledgeHealth.retryStopped(item.kind, item.item_id); onChange(); } catch (e) { setError(errorMessage(e, 'Could not retry the automation.')); }
+  };
+  return (
+    <Card title="Stopped automations" className="health-agents">
+      <p>These items reached their retry limit. They remain stopped until their inputs change or an admin retries them.</p>
+      <table className="tbl">
+        <thead><tr><th>Automation</th><th>Item</th><th>Reason</th><th>Failures</th><th>Stopped</th>{isAdmin && <th />}</tr></thead>
+        <tbody>{items.map(item => (
+          <tr key={`${item.kind}:${item.item_id}`}>
+            <td>{STOP_KIND[item.kind]}</td>
+            <td className="mono">{item.item_id}</td>
+            <td>{item.reason}</td>
+            <td>{item.failures}</td>
+            <td>{new Date(item.updated_at).toLocaleString()}</td>
+            {isAdmin && <td><button className="btn sm" onClick={() => { void retry(item); }}>Retry</button></td>}
+          </tr>
+        ))}</tbody>
+      </table>
+      {error && <Notice tone="error">{error}</Notice>}
+    </Card>
+  );
+}
+
 function StatementRows({ which, limits, canConnect, onDone }: { which: StatementFilter; limits: ConnectLimits | null; canConnect: boolean; onDone: () => void }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const { state, reload, update } = useAsync(useCallback(() => knowledgeHealth.statements(which), [which]));
@@ -309,6 +342,7 @@ export function KnowledgeHealthScreen({ list }: { list: HealthList | null }) {
           ? <ConnectPanel limits={view.connect} onDone={reload} />
           : <Notice tone="warn">Connecting statements is unavailable: {view.connect_error}</Notice>)}
         <AgentWork work={view.curation} isAdmin={me?.role === 'admin'} onChange={reload} />
+        {!!view.stopped.length && <StoppedAutomations items={view.stopped} isAdmin={me?.role === 'admin'} onChange={reload} />}
       </>}
     </main>
   );

@@ -21,7 +21,6 @@ from .server.draft_review import DraftReviewInspection
 
 logger = logging.getLogger(__name__)
 
-MAX_MODEL_ANSWERS = 2
 MAX_STATEMENTS = 40
 MAX_STATEMENT_TEXT = 1_000
 MAX_REVIEW_EVIDENCE = 12_000
@@ -263,6 +262,28 @@ def _note(run: draft_review_store.ReviewRun, reason: str) -> None:
         draft_review_store.save(conn, run)
 
 
+def _stop(run: draft_review_store.ReviewRun, count: int) -> None:
+    conn = drafts_store.connection()
+    with store.transaction(conn):
+        latest = draft_review_store.latest(conn, run.draft_id)
+        if latest is None or latest.run_id != run.run_id:
+            return
+        note = f"Stopped AI answers after {count}; the questions wait for a person."
+        if note in (run.detail or ""):
+            return
+        run.detail = f"{run.detail} {note}" if run.detail else note
+        draft_review_store.save(conn, run)
+
+
+def _model_answer_count(run: draft_review_store.ReviewRun) -> int:
+    count = 0
+    for answer in reversed(run.answers):
+        if not answer.answered_by.startswith("model:"):
+            break
+        count += 1
+    return count
+
+
 def attempt(
     run: draft_review_store.ReviewRun,
     inspection: DraftReviewInspection,
@@ -279,15 +300,17 @@ def attempt(
         or run.application != "needs_human"
         or not run.model
         or run.provider not in ("claude", "openai")
-        or sum(answer.answered_by.startswith("model:") for answer in run.answers)
-        >= MAX_MODEL_ANSWERS
     ):
         return None
     try:
+        limits = limits or product_settings.get(product_settings.ReviewSettings)
+        model_answers = _model_answer_count(run)
+        if model_answers >= 1 + limits.answer_retries:
+            _stop(run, model_answers)
+            return None
         prompt, statements, review_evidence, operation_evidence = _context(
             run, inspection
         )
-        limits = limits or product_settings.get(product_settings.ReviewSettings)
         config = ai.ModelConfig(
             provider=run.provider,
             model=run.model,

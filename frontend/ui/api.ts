@@ -460,7 +460,9 @@ export interface CurationSummary {
   kind: CurationKind; claims: CurationHolder[]; attempted: number;
   outcomes: Partial<Record<'looked' | 'proposed' | 'no_link' | 'skipped' | 'answered' | 'resolved' | 'not_applicable', number>>;
 }
-export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[]; uncovered_by_profile: Record<string, number> }
+export type AutomationKind = 'audience_review' | 'connect' | 'gap_follow_up';
+export interface AutomationStop { kind: AutomationKind; item_id: string; failures: number; reason: string; updated_at: string }
+export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[]; uncovered_by_profile: Record<string, number>; stopped: AutomationStop[] }
 export interface HealthStatement {
   id: string; kind: string; text: string; links: number; mentions: string[];
   label_error: string | null; in_pending_draft: boolean; settled_at: string | null;
@@ -484,4 +486,6 @@ export const knowledgeHealth = {
   connect: (statementIds: string[]) => postJSON<ConnectResult>('/connect-statements', { statement_ids: statementIds }),
   freeClaims: (kind: CurationKind, claimedBy: string) =>
     postJSON<{ freed: number }>('/api/knowledge-health/claims/free', { kind, claimed_by: claimedBy }),
+  retryStopped: (kind: AutomationKind, itemId: string) =>
+    postJSON<{ retried: boolean }>('/api/knowledge-health/stopped/retry', { kind, item_id: itemId }),
 };

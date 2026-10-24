@@ -159,6 +159,10 @@ loop would try again:
 
 When the last retry is used, the run is recorded as nothing written, the plan
 fails, a plan review's items wait for a person, or the statements' labelling failure is counted, as for a server model.
+A failed `audience_review` task counts a failure for each of its items; an item
+past **Retries of a failed AI audience decision** is not queued again until its
+statement or label changes or an admin retries it, and the task's result says
+how many items stopped ([Audiences](AUDIENCES.md#stopped-decisions)).
 
 ## Review
 

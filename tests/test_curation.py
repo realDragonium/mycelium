@@ -9,6 +9,7 @@ import pytest
 
 from mycelium import (
     agent_tasks,
+    automation_stops,
     curation,
     drafts_store,
     knowledge_health,
@@ -52,9 +53,24 @@ def drafts():
     return conn
 
 
-def _claim(conn, drafts, kind="isolated", *, who="agent-1", limit=5, now=NOW):
+def _claim(
+    conn,
+    drafts,
+    kind="isolated",
+    *,
+    who="agent-1",
+    limit=5,
+    now=NOW,
+    follow_up_retries=None,
+):
     chosen, renewed, _ = curation.claim(
-        conn, drafts, kind, limit=limit, claimant=who, now=now
+        conn,
+        drafts,
+        kind,
+        limit=limit,
+        claimant=who,
+        now=now,
+        follow_up_retries=follow_up_retries,
     )
     return [c.id for c in chosen], renewed
 
@@ -142,6 +158,53 @@ def test_a_proposed_gap_waits_on_its_draft(conn, drafts):
     assert store.get_knowledge_gap(conn, gap)["draft_id"] == draft
     later = NOW + timedelta(days=1)
     assert _claim(conn, drafts, "gap", now=later)[0] == []
+
+
+def test_rejected_proposal_chain_stops_until_an_admin_retries(conn, drafts):
+    previous_draft = "drf_initial"
+    for number in range(3):
+        gap_id = store.create_knowledge_gap(
+            conn, f"Clarify invoice export behavior {number}.", draft_id=previous_draft
+        )
+        next_draft = f"drf_follow_up_{number}"
+        conn.execute(
+            "INSERT INTO curation_attempts "
+            "(item_id, text, neighbours, attempted_at, attempted_by, outcome, draft_id) "
+            "SELECT id, text, '[]', ?, 'agent-1', 'proposed', ? "
+            "FROM knowledge_gaps WHERE id = ?",
+            (timestamps.of(NOW + timedelta(minutes=number)), next_draft, gap_id),
+        )
+        previous_draft = next_draft
+    current = store.create_knowledge_gap(
+        conn, "Clarify the final invoice export behavior.", draft_id=previous_draft
+    )
+
+    assert _claim(conn, drafts, "gap", follow_up_retries=2)[0] == []
+    [stopped] = automation_stops.stops(conn)
+    assert (stopped.item_id, stopped.failures) == (current, 3)
+    assert "3 curation proposals" in stopped.reason
+
+    assert automation_stops.retry(conn, "gap_follow_up", current)
+    claimed = _claim(
+        conn,
+        drafts,
+        "gap",
+        who="agent-2",
+        follow_up_retries=2,
+    )[0]
+    assert claimed == [current]
+
+    curation.release(conn, claimed, "skipped", claimant="agent-2", now=NOW)
+    assert (
+        _claim(
+            conn,
+            drafts,
+            "gap",
+            who="agent-3",
+            follow_up_retries=2,
+        )[0]
+        == []
+    )
 
 
 def _waiting_for_answer(drafts, *, changed=False):
@@ -598,13 +661,40 @@ def test_health_shows_holders_and_only_an_admin_frees_them(app, role):
         server.claim_curation_work("isolated")
     finally:
         auth.current_principal.reset(token)
+    with store.transaction(runtime._db()):
+        automation_stops.stop(
+            runtime._db(),
+            "connect",
+            "stm_stopped",
+            "Exports include invoices.",
+            "The connect run failed.",
+            failures=3,
+            now=NOW,
+        )
     headers = {"Authorization": f"Bearer {raw}"}
 
     view = app.get("/api/knowledge-health", headers=headers).json()
     assert view["curation"][0]["claims"][0]["name"] == "Code agent"
+    assert view["stopped"] == [
+        {
+            "kind": "connect",
+            "item_id": "stm_stopped",
+            "failures": 3,
+            "reason": "The connect run failed.",
+            "updated_at": timestamps.of(NOW),
+        }
+    ]
     freed = app.post(
         "/api/knowledge-health/claims/free",
         json={"kind": "isolated", "claimed_by": agent},
         headers=headers,
     )
     assert freed.status_code == (200 if role == "admin" else 403)
+    retried = app.post(
+        "/api/knowledge-health/stopped/retry",
+        json={"kind": "connect", "item_id": "stm_stopped"},
+        headers=headers,
+    )
+    assert retried.status_code == (200 if role == "admin" else 403)
+    if role == "admin":
+        assert retried.json() == {"retried": True}

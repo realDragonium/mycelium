@@ -25,7 +25,7 @@ from typing import Literal, get_args
 
 from pydantic import BaseModel
 
-from . import knowledge_health, store, timestamps
+from . import automation_stops, knowledge_health, store, timestamps
 from .store.gaps import set_knowledge_gap_status
 
 Kind = Literal[
@@ -183,6 +183,7 @@ def claim(
     pairs: Sequence[DuplicateCandidate] = (),
     exclude_skipped_by: str | None = None,
     draft_gaps_only: bool = False,
+    follow_up_retries: int | None = None,
 ) -> tuple[list[Candidate], list[str], str]:
     """Lease up to `limit` free items of `kind` to `claimant` and extend the
     lease on the items of that kind they already hold.
@@ -191,6 +192,12 @@ def claim(
     owns the transaction."""
     stamp = timestamps.of(now)
     expires = timestamps.of(now + LEASE)
+    if follow_up_retries is not None:
+        conn.execute(
+            "DELETE FROM automation_stops WHERE kind = 'gap_follow_up' "
+            "AND NOT EXISTS (SELECT 1 FROM knowledge_gaps g WHERE g.id = item_id "
+            f"AND g.text = inputs AND {_OPEN_GAP})"
+        )
     conn.execute("DELETE FROM curation_claims WHERE expires_at <= ?", (stamp,))
     renewed = [
         str(r[0])
@@ -213,7 +220,19 @@ def claim(
         pairs=pairs,
         exclude_skipped_by=exclude_skipped_by,
         draft_gaps_only=draft_gaps_only,
+        follow_up_retries=follow_up_retries,
+        at=now,
     )
+    if follow_up_retries is not None and kind in ("rephrase", "gap"):
+        automation_stops.clear(
+            conn,
+            "gap_follow_up",
+            [
+                item.id
+                for item in chosen
+                if automation_stops.retried(conn, "gap_follow_up", item.id, item.text)
+            ],
+        )
     conn.executemany(
         "INSERT INTO curation_claims "
         "(item_id, kind, neighbours, claimed_by, claimed_at, expires_at) "
@@ -233,6 +252,8 @@ def _candidates(
     pairs: Sequence[DuplicateCandidate],
     exclude_skipped_by: str | None,
     draft_gaps_only: bool,
+    follow_up_retries: int | None,
+    at: datetime,
 ) -> list[Candidate]:
     """The first `limit` items of `kind`, in id order, that nobody holds, no
     attempt has settled, and no undecided draft already covers."""
@@ -287,10 +308,40 @@ def _candidates(
         )
     params = _params(now, waiting_for_answer(drafts) if kind == "question" else ())
     chosen: list[sqlite3.Row] = []
+    stopped = (
+        automation_stops.stopped(conn, "gap_follow_up")
+        if follow_up_retries is not None and kind in ("rephrase", "gap")
+        else {}
+    )
     after = ""
     while len(chosen) < limit:
         rows = conn.execute(sql, {**params, "after": after, "chunk": _CHUNK}).fetchall()
         for row in rows:
+            item_id = str(row["id"])
+            text = str(row["text"])
+            if stopped.get(item_id) == text:
+                continue
+            if (
+                follow_up_retries is not None
+                and kind in ("rephrase", "gap")
+                and row["draft_id"] is not None
+            ):
+                hops = _follow_up_hops(conn, str(row["draft_id"]))
+                if hops > follow_up_retries and not automation_stops.retried(
+                    conn, "gap_follow_up", item_id, text
+                ):
+                    automation_stops.stop(
+                        conn,
+                        "gap_follow_up",
+                        item_id,
+                        text,
+                        f"{hops} curation proposals in a row were rejected; "
+                        "a person decides this gap.",
+                        failures=hops,
+                        now=at,
+                    )
+                    stopped[item_id] = text
+                    continue
             covered = row["id"] if kind in _STATEMENT_KINDS else row["draft_id"]
             if covered not in pending and not _skipped_by(
                 conn, str(row["id"]), str(row["text"]), exclude_skipped_by
@@ -309,6 +360,31 @@ def _candidates(
         )
         for r in chosen
     ]
+
+
+def _follow_up_hops(conn: sqlite3.Connection, draft_id: str) -> int:
+    hops = 0
+    seen: set[str] = set()
+    current = draft_id
+    while current not in seen:
+        seen.add(current)
+        attempt = conn.execute(
+            "SELECT item_id FROM curation_attempts "
+            "WHERE draft_id = ? AND outcome = 'proposed' "
+            "ORDER BY attempted_at DESC LIMIT 1",
+            (current,),
+        ).fetchone()
+        if attempt is None:
+            break
+        hops += 1
+        gap = conn.execute(
+            "SELECT draft_id FROM knowledge_gaps WHERE id = ?",
+            (str(attempt["item_id"]),),
+        ).fetchone()
+        if gap is None or gap["draft_id"] is None:
+            break
+        current = str(gap["draft_id"])
+    return hops
 
 
 def _pending_payloads(drafts: sqlite3.Connection) -> list[dict[str, object]]:
