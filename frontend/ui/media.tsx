@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type FormEvent } from 'react';
 import { AudienceIdentity, type AudienceRef, type AudiencesResponse } from './audiences';
 import {
-  errorMessage, getJSON, isScoped, media, type MediaAttachment, type MediaDetails, type MediaFilter,
+  errorMessage, getJSON, media, type MediaAttachment, type MediaDetails, type MediaFilter,
   type MediaTargetKind, type MediaView,
 } from './api';
 import { Card, EmptyState, LoadError, Loading, Notice, PageHeader, formatDate, useMe } from './lib';
@@ -35,7 +35,7 @@ const detailsBody = (draft: DetailsDraft): MediaDetails => ({
   captured_at: draft.captured_at || null,
 });
 
-const canEditMedia = (me: ReturnType<typeof useMe>) => !!me && !isScoped(me) && (me.role === 'writer' || me.role === 'admin');
+const canEditMedia = (me: ReturnType<typeof useMe>) => !!me && (me.role === 'writer' || me.role === 'admin');
 
 function DetailsFields({ value, onChange, file }: {
   value: DetailsDraft; onChange: (value: DetailsDraft) => void; file?: { required: boolean; onChange: (file: File | null) => void };

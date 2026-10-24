@@ -45,7 +45,7 @@ this session.
 ## Connection
 
 `list_drafts` is advertised only to a real writer or admin. On a drafter,
-reader or asker connection you cannot see the queue: say so and stop.
+reader connection you cannot see the queue: say so and stop.
 
 `request_draft_review` is not on MCP. It is an HTTP tool route with the same
 arguments as JSON, and it needs a real writer or admin token:

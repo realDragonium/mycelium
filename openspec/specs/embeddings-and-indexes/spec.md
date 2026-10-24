@@ -197,7 +197,7 @@ A statement or name without a vector SHALL NOT appear in vector-ranked results, 
 While the embedding provider cannot embed a query, `search_statements` and `search_entities` SHALL fall back to keyword or name-substring matching marked `retrieval: "keyword"`, so Ask and documentation runs keep working with weaker retrieval, whereas `discover_facts` MUST report the error. `find_duplicates` compares only stored vectors and SHALL keep working. Fallback ranking is specified in the `search-and-ask` capability.
 
 #### Scenario: Ask during an outage
-- **WHEN** the provider is down and an asker calls `ask`
+- **WHEN** the provider is down and a reader calls `ask`
 - **THEN** the run retrieves through keyword fallback and returns an answer rather than an error
 
 #### Scenario: Duplicate audit during an outage
@@ -212,8 +212,8 @@ After embedding a new or changed statement, `upsert_statement`, `upsert_statemen
 - **THEN** the response's `near_duplicates` includes the existing statement with its score
 
 ### Requirement: Audience-restricted vector ranking
-For a caller scoped to an audience, statement vector searches SHALL rank only the statements that audience may see, so a top-k result is the k nearest visible statements rather than what survives filtering of a global top-k. Visibility is defined by the `audiences` capability.
+Inside a documentation run's audience boundary, statement vector searches SHALL rank only the statements that audience may see, so a top-k result is the k nearest visible statements rather than what survives filtering of a global top-k. Visibility is defined by the `audiences` capability.
 
 #### Scenario: Hidden near neighbours
-- **WHEN** the 10 statements nearest a query are hidden from a scoped reader and the reader searches with `limit: 5`
-- **THEN** the reader receives the 5 nearest statements visible to their audience
+- **WHEN** the 10 statements nearest a query are hidden from an external documentation run and the run searches with `limit: 5`
+- **THEN** the run receives the 5 nearest statements visible to its audience

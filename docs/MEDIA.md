@@ -2,9 +2,8 @@
 
 Screenshots, GIFs and short recordings attach to statements and concepts, and
 documentation runs place them in the documents they write. Each item has its
-own audience label, so an image never reaches a reader, token or document run
-whose audience may not see it, even when the statement it illustrates is
-visible.
+own audience label, so an image never reaches a document whose audience may
+not see it, even when the statement it illustrates is visible.
 
 ## Items
 
@@ -57,8 +56,6 @@ sent.
 `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none';
 sandbox`, `Content-Disposition: inline; filename="<id>.<ext>"`, and an ETag.
 The browser therefore never treats the bytes as a page from the app's origin.
-A caller scoped to an audience gets 404 for media that audience may not see,
-so it learns nothing about internal media.
 
 ## Audience labels
 
@@ -107,12 +104,11 @@ attached to that page), edit alt text, caption and source details, replace the
 file, label it, and detach it. **Curate → Media** is the library, filtered by
 unattached, no alt text, unlabelled and old; there a writer also attaches an
 item to a statement or concept by id, and an admin deletes it. Readers see
-what their audience allows.
+every item.
 
 ## Agents (MCP)
 
-- `list_media` lists what is attached to one statement or concept, filtered by
-  the caller's audience.
+- `list_media` lists what is attached to one statement or concept.
 - `create_media_upload` returns a single-use upload link for an image or
   recording the agent captured. The agent POSTs the bytes there and cites the
   returned `media_id` as `{"kind": "media", "media_id": …, "claim": …}` evidence
@@ -145,9 +141,8 @@ alt text that does not say what the image shows or an image that does not fit
 its text, and exposure for alt text or a caption that reveals what the
 audience must not get.
 
-The document view renders a `media:` image from Mycelium's content route, so
-each reader's own audience check applies; any other image in a document is
-shown as its alt text. Publishing to GitHub commits each image beside the
+The document view renders a `media:` image from Mycelium's content route; any
+other image in a document is shown as its alt text. Publishing to GitHub commits each image beside the
 Markdown as `<file stem>-media/<id>-v<version>.<ext>` and links it by that
 relative path; reading the published copy maps the links back. Publishing
 refuses a document placing media that was deleted or that its audience may no

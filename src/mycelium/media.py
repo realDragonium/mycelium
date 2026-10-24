@@ -200,21 +200,12 @@ def _require(media_id: str) -> sqlite3.Row:
     return row
 
 
-def for_target(
-    kind: TargetKind, target_id: str, audience: audiences.Audience | None
-) -> list[MediaView]:
-    """The media attached to one statement or concept that the audience may
-    see. The caller has checked that the audience may see the target."""
+def for_target(kind: TargetKind, target_id: str) -> list[MediaView]:
+    """The media attached to one statement or concept."""
     conn = _conn()
     ids = media_store.attached_to(conn, kind, [target_id]).get(target_id, [])
     rows = {row["id"]: row for row in media_store.get_many(conn, ids)}
-    return views(
-        [
-            rows[item]
-            for item in ids
-            if item in rows and visible_to(rows[item], audience)
-        ]
-    )
+    return views([rows[item] for item in ids if item in rows])
 
 
 def library(show: LibraryFilter = "all", limit: int = 200) -> list[MediaView]:
@@ -252,15 +243,12 @@ def counts() -> Counts:
     )
 
 
-def content(
-    media_id: str, audience: audiences.Audience | None
-) -> tuple[sqlite3.Row, bytes]:
-    """The item and its bytes, refused as missing when the audience may not
-    see it, so a scoped caller learns nothing about internal media."""
+def content(media_id: str) -> tuple[sqlite3.Row, bytes]:
+    """The item and its bytes."""
     conn = _conn()
     row = media_store.get(conn, media_id)
     data = media_store.blobs.get(conn, media_id) if row is not None else None
-    if row is None or data is None or not visible_to(row, audience):
+    if row is None or data is None:
         raise LookupError(media_id)
     return row, data
 

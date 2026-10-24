@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .. import auth, hosts, principal_audience, request_timing, store
+from .. import auth, hosts, request_timing, store
 from ..server import runtime
 
 # Resolves a `Principal` for every request and stashes it on
@@ -62,18 +62,6 @@ _AUTH_EXEMPT_PATHS = {
     "/authorize",
     "/authorize/decide",
 }
-
-
-def _asker_may_reach(path: str) -> bool:
-    """An asker may call `ask` and nothing else that reads the substrate.
-
-    Tool routes enforce that through their role gate, but the `/api/*` routes
-    behind the web UI mostly check only that someone is signed in. So askers
-    are kept off `/api/*` here, except for their own account and tokens, and
-    a route added later is closed to them until someone decides otherwise."""
-    if not path.startswith("/api/") or _is_exempt(path):
-        return True
-    return path == "/api/me" or path.startswith("/api/me/")
 
 
 def _session_secret() -> str:
@@ -223,31 +211,6 @@ class AuthMiddleware:
             rejection = JSONResponse(
                 status_code=403,
                 content={"detail": "cross-origin request refused"},
-            )
-            await rejection(scope, receive, send)
-            return
-        if principal is not None and principal.role == "asker":
-            if not _asker_may_reach(request.url.path):
-                rejection = JSONResponse(
-                    status_code=403,
-                    content={"detail": "the asker role can only call ask"},
-                )
-                await rejection(scope, receive, send)
-                return
-        if (
-            principal is not None
-            and principal.audience_id is not None
-            and not principal_audience.may_reach(
-                request.method,
-                request.url.path,
-                exempt=_is_exempt(request.url.path),
-            )
-        ):
-            rejection = JSONResponse(
-                status_code=403,
-                content={
-                    "detail": "not available to a credential scoped to an audience"
-                },
             )
             await rejection(scope, receive, send)
             return

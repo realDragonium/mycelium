@@ -74,7 +74,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from . import docs_store, documentation_archive, migrations, store
+from . import auth, docs_store, documentation_archive, migrations, store
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,21 @@ _LEGACY_KINDS: frozenset[str] = frozenset(
 # are ordinary drafts and restore as usual.
 _LEGACY_SECTION_TABLES: dict[str, frozenset[str]] = {
     "drafts.jsonl": frozenset({"research_runs"})
+}
+# Columns removed from section tables that older archives still carry: the
+# audience users and tokens were scoped to before audiences only bounded
+# documentation. The importer drops them, so a scoped principal restores
+# unscoped.
+_LEGACY_SECTION_COLUMNS: dict[tuple[str, str], frozenset[str]] = {
+    ("auth.jsonl", "users"): frozenset({"audience_id"}),
+    ("auth.jsonl", "mcp_tokens"): frozenset({"audience_id"}),
+}
+# Role columns that older archives may fill with the retired `asker` role,
+# which restores as reader.
+_ROLE_COLUMNS: dict[tuple[str, str], str] = {
+    ("auth.jsonl", "users"): "role",
+    ("auth.jsonl", "mcp_tokens"): "scope",
+    ("auth.jsonl", "invites"): "role",
 }
 _LEGACY_MODEL_ACTIONS: frozenset[str] = frozenset({"research"})
 _LEGACY_PRODUCT_SECTIONS: frozenset[str] = frozenset({"research", "sources"})
@@ -883,7 +898,7 @@ def _prepare_section(
         return None
     rows: dict[str, list[dict[str, Any]]] = {table: [] for table in section.tables}
     legacy = _LEGACY_SECTION_TABLES.get(section.member, frozenset())
-    legacy_skipped = 0
+    legacy_skipped = unscoped = askers = 0
     with path.open(encoding="utf-8") as fp:
         for line in fp:
             if not line.strip():
@@ -897,12 +912,31 @@ def _prepare_section(
                 continue
             if table not in rows:
                 raise ValueError(f"unknown record kind in {section.member}: {table!r}")
+            for column in _LEGACY_SECTION_COLUMNS.get((section.member, table), ()):
+                if row.pop(column, None) is not None:
+                    unscoped += 1
+            role_column = _ROLE_COLUMNS.get((section.member, table))
+            if role_column and row.get(role_column) == auth.RETIRED_ASKER:
+                row[role_column] = "reader"
+                askers += 1
             rows[table].append(_decode_blobs(row))
     if legacy_skipped:
         logger.info(
             "skipped %d record(s) of removed tables from %s",
             legacy_skipped,
             section.member,
+        )
+    if unscoped:
+        logger.warning(
+            "restored %d user(s) or token(s) scoped to an audience unscoped; "
+            "audiences no longer limit what a principal reads",
+            unscoped,
+        )
+    if askers:
+        logger.warning(
+            "restored %d user(s), token(s) or invite(s) with the deprecated "
+            "asker role as reader",
+            askers,
         )
     with closing(_connect_auxiliary(":memory:")) as conn:
         section.migrate(conn)

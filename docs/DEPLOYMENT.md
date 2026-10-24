@@ -142,7 +142,7 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | --- | --- | --- |
 | `MYCELIUM_ALLOWED_EMAIL_DOMAINS` | unset (any domain) | Comma-separated email domains. When set, only people whose email is in one of them can log in or use a session or token; invites to other domains are refused. Exact match, no subdomains; service accounts are exempt. See [Restricting access to your email domains](USERS.md#restricting-access-to-your-email-domains). |
 | `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, each must also be allowed or the server refuses to start. |
-| `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
+| `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. The retired `asker` is read as `reader`, with a deprecation warning; any other unknown role disables just-in-time provisioning. |
 | `EMBED_TIMEOUT_S` | `30` | Seconds before one embedding request fails instead of hanging. A failed request is retried twice with backoff. |
 | `MYCELIUM_SLOW_REQUEST_MS` | `2000` | A request or background job that takes at least this long, fails, or whose client leaves before the response ends logs one `MYCELIUM_SLOW_REQUEST` line with its route and where the time went. The `503`s answered while the server is starting are not logged. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
@@ -495,8 +495,8 @@ Confirm external grants** is on, which is the default.
    the audience labelling instructions (**Settings → Prompts**), click
    **Relabel AI labels**, and review a new sample.
 
-Until a grant is confirmed, external documents, plans and scoped tokens do
-not see the statement.
+Until a grant is confirmed, external documents and plans do not see the
+statement.
 
 ---
 
@@ -775,6 +775,18 @@ left: the `research_runs` table in `mycelium-drafts.db`, and the research
 instructions, model selection, limits, sources and concurrency limit in
 `mycelium-prompts.db`. Drafts that research runs created are ordinary drafts
 and stay. Importing an older archive skips the same data.
+
+The first start of a build where audiences no longer scope principals drops
+`audience_id` from the users, MCP tokens and OAuth codes in
+`mycelium-auth.db`. A user or token that was scoped to an audience now reads
+what its role allows, and each one is logged as a warning naming its id and
+former audience. Importing an older archive drops the column the same way. A
+code-only rollback adds the column back empty, so every principal stays
+unscoped.
+
+The same start turns the retired `asker` role into `reader` on users, MCP
+tokens (OAuth grants included) and invites, logging how many rows of each
+changed. Importing an older archive does the same, with a deprecation warning.
 
 ---
 

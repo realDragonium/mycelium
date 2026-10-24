@@ -155,21 +155,6 @@ The system SHALL run the connect pass on the model selected for the `connect` ac
 - **WHEN** the monthly budget is spent with background pausing on and a caller requests a connect run
 - **THEN** the call is refused with the pause reason and no draft is created
 
-### Requirement: Curation claim
-The system SHALL provide `claim_curation_work(kind, limit=5)`, advertised over MCP, for callers with at least the drafter role and no audience scope, leasing up to `limit` (0 to 20) items of `kind` (`isolated`, `unnamed`, `rephrase` or `gap`) for 30 minutes and returning `kind`, `items`, `renewed`, `expires_at` and `link_types` (the link vocabulary with each type's description and direction).
-
-#### Scenario: Agent claims isolated statements
-- **WHEN** a drafter calls `claim_curation_work("isolated", limit=3)`
-- **THEN** up to three isolated statements are leased to it for 30 minutes
-
-#### Scenario: Scoped token tries to claim
-- **WHEN** a token scoped to an audience calls `claim_curation_work`
-- **THEN** the call is refused
-
-#### Scenario: Reader tries to claim
-- **WHEN** a reader calls `claim_curation_work`
-- **THEN** the call is refused with a role error
-
 ### Requirement: Curation item shape
 The system SHALL give each claimed item `id` (the statement id for `isolated` and `unnamed`, the gap id for `rephrase` and `gap`), `kind`, `text` (the statement's or the gap's), `statement` (`id`, `kind`, `text` and `concepts` as `{id, name}`, or null for a gap about no statement) and `neighbours`: up to five nearest statements as `{id, kind, text, score}`, excluding the item's own statement.
 
@@ -367,3 +352,14 @@ The system SHALL let a real writer or administrator dismiss a concept pair as no
 #### Scenario: Dismissed pair after a merge
 - **WHEN** a dismissed pair's concept is merged into a third concept
 - **THEN** the dismissal no longer exists
+
+### Requirement: Claiming curation work
+The system SHALL provide `claim_curation_work(kind, limit=5)`, advertised over MCP, for callers with at least the drafter role, leasing up to `limit` (0 to 20) items of `kind` (`isolated`, `unnamed`, `rephrase` or `gap`) for 30 minutes and returning `kind`, `items`, `renewed`, `expires_at` and `link_types` (the link vocabulary with each type's description and direction).
+
+#### Scenario: Agent claims isolated statements
+- **WHEN** a drafter calls `claim_curation_work("isolated", limit=3)`
+- **THEN** up to three isolated statements are leased to it for 30 minutes
+
+#### Scenario: Reader tries to claim
+- **WHEN** a reader calls `claim_curation_work`
+- **THEN** the call is refused with a role error

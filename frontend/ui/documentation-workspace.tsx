@@ -1,7 +1,7 @@
 import React from 'react';
-import { errorMessage, getJSON, HttpError, isScoped, postJSON } from './api';
+import { errorMessage, getJSON, HttpError, postJSON } from './api';
 import { substrate } from './data';
-import { PageHeader, useMe } from './lib';
+import { PageHeader } from './lib';
 import { Link } from './router';
 import { AudienceIdentity, type AudienceRef } from './audiences';
 
@@ -681,7 +681,7 @@ function DocumentationUpdates() {
   </section>;
 }
 
-function FullDocumentationWorkspace() {
+function DocumentationWorkspace() {
   const [route, setRoute] = React.useState(docRoute);
   const [options, setOptions] = React.useState<DocumentationOptions | null>(null);
   const [documents, setDocuments] = React.useState<DocumentationSummary[]>([]);
@@ -734,49 +734,6 @@ function FullDocumentationWorkspace() {
       {route.tab === 'runs' && <>{route.run && <DocumentationRun key={route.run} id={route.run} onCompleted={update} options={options} onStarted={started} />}<section className="docw-panel"><div className="docw-actions"><h2>Recent generation runs</h2><button onClick={update}>Refresh</button></div>{!runs.length ? <p>No runs yet.</p> : <div className="docw-list">{runs.map(run => <button key={run.id} onClick={() => docNavigate({ run: run.id })}><strong>{run.prompt}</strong><span>{docStatus(run)} · {run.provider} · {docDate(run.created_at)}</span>{run.summary && <span>{docActive(run) && run.summary.activity ? run.summary.activity + ' · ' : ''}{docRunLine(run.summary)}</span>}</button>)}</div>}</section></>}
     </>}
   </main>;
-}
-
-function ScopedDocumentationWorkspace() {
-  const [route, setRoute] = React.useState(docRoute);
-  const [documents, setDocuments] = React.useState<DocumentationSummary[] | null>(null);
-  const [document, setDocument] = React.useState<DocumentationDocument | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
-  const [refresh, setRefresh] = React.useState(0);
-  const [search, setSearch] = React.useState('');
-  React.useEffect(() => {
-    const change = () => setRoute(docRoute());
-    window.addEventListener('hashchange', change);
-    return () => window.removeEventListener('hashchange', change);
-  }, []);
-  React.useEffect(() => {
-    const controller = new AbortController();
-    Promise.all([
-      docGet<{ documents: DocumentationSummary[] }>('documents', controller.signal),
-      route.document ? docGet<DocumentationDocument>(`documents/${encodeURIComponent(route.document)}`, controller.signal) : Promise.resolve(null),
-    ]).then(([library, selected]) => {
-      if (!controller.signal.aborted) { setDocuments(library.documents); setDocument(selected); setError(null); }
-    }).catch(cause => { if (!controller.signal.aborted) setError(errorMessage(cause)); });
-    return () => controller.abort();
-  }, [refresh, route.document]);
-  const filtered = (documents || []).filter(item => [item.title, item.guideline_set, item.document_type].join(' ').toLowerCase().includes(search.toLowerCase()));
-  const selected = document?.id === route.document ? document : null;
-  return <main className="page docw"><PageHeader eyebrow="Explore" title="Documents" blurb="Read documents available to this audience." />
-    {error && <p role="alert">{error} <button onClick={() => setRefresh(value => value + 1)}>Reload documentation</button></p>}
-    {route.document ? !selected ? !error && <p role="status">Loading document…</p> : <section className="docw-panel">
-      <div className="docw-actions"><button onClick={() => docNavigate({ tab: 'library' })}>← All documents</button><button onClick={() => setRefresh(value => value + 1)}>Refresh</button></div>
-      <h2>{selected.title}</h2><p className="docw-meta">{selected.guideline_set} · {selected.document_type}{selected.audience && <> · <AudienceIdentity audience={selected.audience} /></>} · revision {selected.current_revision}{selected.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: selected.anchor_entity_id }}>{docEntityName(selected.anchor_entity_id)}</Link></>}</p>
-      <article className="docw-prose" dangerouslySetInnerHTML={{ __html: selected.body_html }} />
-      <details><summary>Sources</summary><DocumentationSources ids={selected.statement_ids || []} /></details>
-    </section> : <section className="docw-panel">
-      <div className="docw-actions"><h2>Saved documents</h2><button onClick={() => setRefresh(value => value + 1)}>Refresh</button></div>
-      <label>Find a document<input type="search" value={search} onChange={event => setSearch(event.target.value)} placeholder="Title, profile, or template" /></label>
-      {!documents ? !error && <p role="status">Loading documents…</p> : !documents.length ? <p>No documents are available.</p> : !filtered.length ? <p>No documents match this search.</p> : <div className="docw-list">{filtered.map(item => <button key={item.id} onClick={() => docNavigate({ document: item.id })}><strong>{item.title}</strong><span>{item.guideline_set} · {item.document_type}{item.audience && <> · <AudienceIdentity audience={item.audience} /></>} · revision {item.current_revision}</span><span>Updated {docDate(item.updated_at)}</span></button>)}</div>}
-    </section>}
-  </main>;
-}
-
-function DocumentationWorkspace() {
-  return isScoped(useMe()) ? <ScopedDocumentationWorkspace /> : <FullDocumentationWorkspace />;
 }
 
 export { DocumentationWorkspace, loadDocumentUpdates, UPDATES_SEEN_EVENT };

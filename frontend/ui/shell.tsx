@@ -23,7 +23,7 @@ import { SettingsScreen } from './settings';
 import { usd, type Budget } from './ai-usage';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, LoadError, Loading, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
-import { getJSON, getServerInfo, isScoped, type KnowledgeGap, type Me } from './api';
+import { getJSON, getServerInfo, type KnowledgeGap, type Me } from './api';
 import { ensureSubstrate, loadSubstrate, substrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
 import { dataOf, useAsync, useOnSettingsSaved, useRefreshWhileVisible } from './use-async';
@@ -32,17 +32,7 @@ import { useSetup } from './setup';
 /* ---------------- Sidebar ---------------- */
 interface NavItem { label: string; icon: IconName; to: Route; views: View[]; badge?: number; badgeTone?: 'warn' }
 
-function navGroups(activeDrafts: number, openGaps: number, documentUpdates: number, scoped: boolean): { title: string | null; items: NavItem[] }[] {
-  if (scoped) return [
-    { title: null, items: [{ label: 'Home', icon: 'home', to: { view: 'home' }, views: ['home'] }] },
-    { title: 'Explore', items: [
-      { label: 'Browse', icon: 'table', to: { view: 'browse' }, views: ['browse', 'statement', 'entity'] },
-      { label: 'Statement graph', icon: 'graph', to: { view: 'graph', focus: null, all: false }, views: ['graph'] },
-      { label: 'Entity map', icon: 'hub', to: { view: 'entities', focus: null, all: false }, views: ['entities'] },
-      { label: 'Documents', icon: 'doc', to: { view: 'documentation' }, views: ['documentation'] },
-      { label: 'Glossary', icon: 'book', to: { view: 'glossary' }, views: ['glossary'] },
-    ] },
-  ];
+function navGroups(activeDrafts: number, openGaps: number, documentUpdates: number): { title: string | null; items: NavItem[] }[] {
   return [
     { title: null, items: [{ label: 'Home', icon: 'home', to: { view: 'home' }, views: ['home'] }] },
     { title: 'Explore', items: [
@@ -79,20 +69,16 @@ const loadCounts = () => Promise.all([
 function Sidebar({ me, open, onClose }: { me: Me | null; open: boolean; onClose: () => void }) {
   const { route } = useRouter();
   const { prefs, setPref } = usePrefs();
-  const scoped = isScoped(me);
-  const audienceRetired = !!me?.audience_id && !me.audience;
   // Recount on every navigation: cheap, and it keeps the badges honest
   // after a screen submits a draft or resolves a gap.
-  const loadVisibleCounts = useCallback(() => !me || scoped ? Promise.resolve({ drafts: 0, gaps: 0, documentUpdates: 0 }) : loadCounts(), [me, scoped]);
-  const { state: counts, reload } = useAsync(loadVisibleCounts);
+  const { state: counts, reload } = useAsync(loadCounts);
   useEffect(() => {
-    if (!me || scoped) return;
     window.addEventListener('hashchange', reload);
     window.addEventListener(UPDATES_SEEN_EVENT, reload);
     return () => { window.removeEventListener('hashchange', reload); window.removeEventListener(UPDATES_SEEN_EVENT, reload); };
-  }, [me, reload, scoped]);
+  }, [reload]);
   const ready = counts.status === 'ready' ? counts.data : null;
-  const groups = audienceRetired ? [] : navGroups(ready?.drafts ?? 0, ready?.gaps ?? 0, ready?.documentUpdates ?? 0, !me || scoped);
+  const groups = navGroups(ready?.drafts ?? 0, ready?.gaps ?? 0, ready?.documentUpdates ?? 0);
   const item = (it: NavItem) => (
     <li key={it.label}>
       <Link to={it.to} className={`side-link${it.views.includes(route.view) ? ' on' : ''}`} onNavigate={onClose}>
@@ -122,7 +108,7 @@ function Sidebar({ me, open, onClose }: { me: Me | null; open: boolean; onClose:
         </ul>
         <div className="side-user">
           {me && <Link to={{ view: 'settings', section: 'account' }} className="side-me" onNavigate={onClose} title="Account and tokens">
-            <span className="me-name">{me.name}</span><span className={`role-badge ${me.role}`}>{me.role}</span>{me.audience_id && <span className={`audience-badge${me.audience ? ` ${me.audience.scope}` : ''}`}>{me.audience?.name || me.audience_id}</span>}
+            <span className="me-name">{me.name}</span><span className={`role-badge ${me.role}`}>{me.role}</span>
           </Link>}
           <button className="icon-btn" onClick={() => setPref('theme', prefs.theme === 'dark' ? 'light' : 'dark')}
             title={`Switch to ${prefs.theme === 'dark' ? 'light' : 'dark'} theme`} aria-label="Toggle theme">
@@ -281,11 +267,6 @@ export function App({ me }: { me: Me }) {
   const [ingestNonce, setIngestNonce] = useState(0);
   const goIngest = useCallback(() => { setIngestNonce(n => n + 1); router.go({ view: 'ingest' }); }, [router]);
   const [navOpen, setNavOpen] = useState(false);
-  const audienceRetired = !!me.audience_id && !me.audience;
-  const retiredRouteAllowed = route.view === 'settings' && (route.section === 'account' || route.section === 'appearance');
-  useEffect(() => {
-    if (audienceRetired && !retiredRouteAllowed) router.go({ view: 'settings', section: 'account' });
-  }, [audienceRetired, retiredRouteAllowed, router]);
 
   return (
     <RouterCtx.Provider value={router}>
@@ -296,15 +277,15 @@ export function App({ me }: { me: Me }) {
               <Sidebar me={me} open={navOpen} onClose={() => setNavOpen(false)} />
               {navOpen && <div className="side-scrim" onClick={() => setNavOpen(false)} />}
               <div className="main-col">
-                {!isScoped(me) && <ServerBanners />}
+                <ServerBanners />
                 {me.role === 'admin' && <><BudgetBanner /><BlockedWorkBanner /></>}
                 <header className="topbar">
                   <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Open navigation"><I.menu /></button>
                   {route.view !== 'home' ? <CommandBar /> : <div className="topbar-spacer" />}
-                  {!isScoped(me) && <button className="ingest-btn" onClick={goIngest}><I.ingest width="15" height="15" />Ingest</button>}
+                  <button className="ingest-btn" onClick={goIngest}><I.ingest width="15" height="15" />Ingest</button>
                 </header>
                 <ErrorBoundary key={routeToHash(route)}>
-                  {!audienceRetired || retiredRouteAllowed ? <Screen route={route} ingestNonce={ingestNonce} refresh={refresh} /> : <main className="page"><Loading what="your account" /></main>}
+                  <Screen route={route} ingestNonce={ingestNonce} refresh={refresh} />
                 </ErrorBoundary>
               </div>
             </div>

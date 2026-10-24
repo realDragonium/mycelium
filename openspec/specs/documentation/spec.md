@@ -327,13 +327,6 @@ The system SHALL list documents newest first without bodies through `list_genera
 - **WHEN** a published document gets a new internal revision
 - **THEN** its `delivery_status` is `changes_pending`
 
-### Requirement: Scoped readers see only their documents
-The system SHALL show a principal scoped to an audience only documents written for that audience or one at least as restricted whose cited statements it may all still see, treat any other document as not found, and give it freshness status without the changes' statement text (see the `audiences` capability).
-
-#### Scenario: External token reads an internal document
-- **WHEN** a token scoped to an external audience requests a document written for an internal audience
-- **THEN** the request fails as document not found
-
 ### Requirement: Maintenance policy per profile
 The system SHALL act on out-of-date documents according to their profile's `maintenance` policy: `manual` does nothing, `propose` adds a high-priority `update` item to the profile's plan briefed with the changes, and `auto-revise` starts a revision briefed with the changes; each out-of-date revision is acted on at most once, and a background sweep runs every 60 seconds and keeps its decisions across restarts.
 

@@ -13,8 +13,8 @@ would, and a refusal comes back as findings for you to fix.
 
 ## Connect
 
-Use a token with the **writer** or **admin** role. A drafter, reader or
-audience-scoped token is refused: what you submit is saved as the server's
+Use a token with the **writer** or **admin** role. A drafter or reader token
+is refused: what you submit is saved as the server's
 own output, not drafted for review. `claim_agent_task` in your tool list means
 the token can claim.
 

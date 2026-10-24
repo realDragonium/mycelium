@@ -5,8 +5,7 @@ string, so the server needs no multipart parser; the body is read up to the
 configured cap and no further. Changing media needs a real writer, as a
 curator's audience label does; deleting it needs an admin. The bytes are
 served only as one of the sniffed media types, sandboxed and never sniffed
-by the browser, and a caller scoped to an audience gets only media that
-audience may see.
+by the browser.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from .. import media, media_formats, principal_audience
+from .. import media, media_formats
 from ..media_store import TargetKind
 from ..request_timing import TimedRoute
 from .access import _enforce_role, _require_admin, _require_principal
@@ -200,9 +199,8 @@ def detach_media_http(
 
 @router.get("/api/media/{media_id}/content")
 def media_content_http(media_id: str, request: Request) -> Response:
-    principal = _require_principal(request)
     try:
-        row, data = media.content(media_id, principal_audience.audience_of(principal))
+        row, data = media.content(media_id)
     except LookupError:
         return JSONResponse(status_code=404, content={"detail": "media not found"})
     etag = f'"{row["sha256"]}"'

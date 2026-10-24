@@ -313,7 +313,6 @@ def history_feed(
     ops: set[str],
     kinds: set[str],
     query: str,
-    visible_only: bool = False,
 ) -> tuple[list[sqlite3.Row], int]:
     """Page over the attached transactional audit log, newest first.
 
@@ -331,10 +330,6 @@ def history_feed(
     `target_id`, and `limit`/`offset` are pre-clamped. Ordering is by the
     monotonic `event_id` so equal timestamps keep a stable order.
 
-    `visible_only` keeps only events about a statement, entity or name that
-    exists in the live tables now. Inside an audience boundary those
-    resolve to its views, so it keeps what the audience may see.
-
     Returns `(rows, total)` where each row carries `event_id`, `at`, `op`,
     `target_kind`, `target_id`, `actor`, `before_json`, and `after_json`.
     """
@@ -349,12 +344,6 @@ def history_feed(
     if query:
         where_parts.append(r"LOWER(target_id) LIKE ? ESCAPE '\'")
         params.append(f"%{_like_escape(query.lower())}%")
-    if visible_only:
-        where_parts.append(
-            "((target_kind = 'statement' AND target_id IN (SELECT id FROM statements))"
-            " OR (target_kind = 'entity' AND target_id IN (SELECT id FROM entities))"
-            " OR (target_kind = 'name' AND target_id IN (SELECT id FROM names)))"
-        )
     where_sql = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     total_row = conn.execute(

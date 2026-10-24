@@ -168,29 +168,20 @@ def app(tmp_path, monkeypatch):
         yield client
 
 
-def _as(role, audience_id=None):
+def _as(role):
     from mycelium import auth
 
     return auth.current_principal.set(
-        auth.Principal(
-            id=f"{role}-1",
-            name=role,
-            role=role,
-            type="human",
-            audience_id=audience_id,
-        )
+        auth.Principal(id=f"{role}-1", name=role, role=role, type="human")
     )
 
 
-@pytest.mark.parametrize(
-    ("role", "audience_id"), [("reader", None), ("writer", "aud_customers")]
-)
-def test_only_unscoped_drafters_and_up_claim_work(app, role, audience_id):
-    from mycelium import auth, principal_audience, server
+def test_a_reader_cannot_claim_work(app):
+    from mycelium import auth, server
 
-    token = _as(role, audience_id)
+    token = _as("reader")
     try:
-        with pytest.raises((auth.RoleRequired, principal_audience.Unavailable)):
+        with pytest.raises(auth.RoleRequired):
             server.claim_curation_work("isolated")
     finally:
         auth.current_principal.reset(token)

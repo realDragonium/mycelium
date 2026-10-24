@@ -3,7 +3,7 @@ give a server model (see `mycelium.agent_tasks`).
 
 Writers and admins claim tasks: the same real role that may request
 documentation, so an agent can do no more than its token could already ask
-the server to do. Drafters, readers and audience-scoped tokens cannot.
+the server to do. Drafters and readers cannot.
 """
 
 from __future__ import annotations

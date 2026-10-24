@@ -19,7 +19,7 @@ Read your tool list:
 
 - `upsert_statements` present and `list_drafts` **absent** → drafter. Proceed.
 - `list_drafts` present → writer or admin (including a local server with authentication off). **Stop.** Writes would land live. Ask the operator for a drafter token (**Settings → Account & tokens**, scope `drafter`; see `docs/USERS.md`).
-- No `upsert_statements` → reader or asker. Stop and say so.
+- No `upsert_statements` → reader. Stop and say so.
 
 Then call `list_my_drafts()`. A drafter has **one open draft per account** (per MCP session when the client keeps one), and every write joins it. If an open draft already holds unrelated operations, stop and ask the operator whether to submit it first. For the same reason, parallel runs on different domains need separate drafter accounts.
 

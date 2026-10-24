@@ -198,12 +198,66 @@ def test_migrate_on_fresh_db_has_no_role_check(tmp_path):
     assert "CHECK (role IN" not in sql  # role is free-form TEXT
 
 
+def test_migrate_unscopes_principals_and_logs_each(caplog):
+    from mycelium import auth_store
+
+    conn = _seed_old_db(Path(":memory:"))
+    for table in ("users", "mcp_tokens", "oauth_codes"):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN audience_id TEXT")
+    conn.execute("UPDATE users SET audience_id = 'external' WHERE id = 'u2'")
+    conn.execute("UPDATE mcp_tokens SET audience_id = 'external' WHERE id = 't1'")
+
+    with caplog.at_level("WARNING", logger="mycelium.auth"):
+        auth_store.migrate(conn)
+
+    for table in ("users", "mcp_tokens", "oauth_codes"):
+        columns = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        assert "audience_id" not in columns
+    assert [r["id"] for r in conn.execute("SELECT id FROM users ORDER BY id")] == [
+        "u1",
+        "u2",
+    ]
+    assert [r.getMessage().split()[:2] for r in caplog.records] == [
+        ["users", "u2"],
+        ["mcp_tokens", "t1"],
+    ]
+
+
+def test_migrate_turns_askers_into_readers_and_logs_the_count(caplog):
+    from mycelium import auth_store
+
+    conn = _seed_old_db(Path(":memory:"))
+    auth_store.migrate(conn)
+    conn.execute("UPDATE users SET role = 'asker' WHERE id = 'u2'")
+    conn.execute(
+        "INSERT INTO mcp_tokens (id, user_id, name, prefix, hash, scope, created_at, "
+        "client_id) VALUES ('t2', 'u2', 'oauth', 'def456', 'sha2', 'asker', "
+        "'2026-01-02', 'c1')"
+    )
+    conn.execute("UPDATE invites SET role = 'asker'")
+
+    with caplog.at_level("WARNING", logger="mycelium.auth"):
+        auth_store.migrate(conn)
+
+    assert conn.execute("SELECT role FROM users WHERE id = 'u2'").fetchone()[0] == (
+        "reader"
+    )
+    assert conn.execute("SELECT scope FROM mcp_tokens WHERE id = 't2'").fetchone()[
+        0
+    ] == ("reader")
+    assert conn.execute("SELECT role FROM invites").fetchone()[0] == "reader"
+    assert [r.getMessage() for r in caplog.records] == [
+        "1 users with the retired asker role now have reader",
+        "1 mcp_tokens with the retired asker role now have reader",
+        "1 invites with the retired asker role now have reader",
+    ]
+
+
 @pytest.mark.parametrize("table", ["users", "mcp_tokens", "invites"])
 def test_failed_copy_rolls_back_rebuild_and_can_be_retried(table):
     from mycelium import auth_store
 
     conn = _seed_old_db(Path(":memory:"))
-    auth_store._add_audience_columns(conn)
     conn.execute("PRAGMA foreign_keys = ON")
     before_sql = conn.execute(
         "SELECT sql FROM sqlite_master WHERE name = ?", (table,)

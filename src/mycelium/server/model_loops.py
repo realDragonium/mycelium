@@ -34,7 +34,7 @@ ASK_EXTERNAL = (
 )
 
 
-@tool(role="asker")
+@tool(role="reader")
 def ask(
     question: str,
     depth: Literal["standard", "quick"] = "standard",
@@ -76,10 +76,9 @@ def ask(
     While Ask is set to External agent the server runs no model: the tool is
     left out of `tools/list` and a call is refused with `ASK_EXTERNAL`.
     """
-    from .. import audience_scope, model_settings, principal_audience
+    from .. import model_settings
     from ..ask import AskConfig, run_ask
     from ..ask.config import for_depth
-    from ..ask.substrate import InProcessSubstrate
 
     if model_settings.get("ask").external_agent:
         raise AskIsExternal(ASK_EXTERNAL)
@@ -88,17 +87,7 @@ def ask(
         config = replace(
             config, trace_log_path=str(_context().data_dir / "ask_trace.jsonl")
         )
-    # A scoped caller's whole loop reads one snapshot of what its audience
-    # may see, so no answer or citation can rest on anything else.
-    scope = principal_audience.current_scope()
-    substrate = (
-        None
-        if scope is None
-        else audience_scope.ScopedSubstrate(InProcessSubstrate(), scope)
-    )
-    result = run_ask(
-        question, config=config, substrate=substrate, scoped=scope is not None
-    )
+    result = run_ask(question, config=config)
     if verbose:
         return result.model_dump()
     if result.outcome == "answered":

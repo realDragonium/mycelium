@@ -202,7 +202,7 @@ def _register(func: Callable[..., Any]) -> None:
 
     # GET only for reads: a browser sends GET with the session cookie from
     # any site that links or embeds the URL.
-    readable = required in ("asker", "reader")
+    readable = required == "reader"
     if readable and not sig.parameters:
         router.get(path, name=func.__name__)(_make_get_handler(func, required))
         return

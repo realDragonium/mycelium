@@ -11,9 +11,7 @@ answers, with the same read tools the server's loop uses. This skill is that
 loop written down. It is also the way to answer when you need every claim
 cited, whichever way Ask is set.
 
-You need a connection with the `reader` role or higher. An `asker`
-connection has only `ask`, so it has nothing to research with while Ask is
-external: tell the user to ask an admin for a reader token.
+Any connection can research: every role reads the whole knowledge base.
 
 ## 1. Recon: map the question
 
@@ -105,11 +103,3 @@ phrased it badly. Try one other wording, then treat it as absent.
 
 Then call `report_knowledge_gap(text=…)` once per distinct missing fact, as
 described in mycelium-knowledge-source.
-
-## On an audience-scoped connection
-
-A scoped connection reads only what its audience may see, so something you
-cannot find may still exist. Say "that is not available here" rather than
-"the knowledge base does not say" or "it does not exist", and do not suggest
-that anything is hidden. A scoped connection cannot report gaps; pass them
-to the user instead.

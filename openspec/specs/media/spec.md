@@ -115,11 +115,11 @@ The system SHALL give each item its own audience label, set by a real writer or 
 - **THEN** the item is unlabelled and only internal audiences may see it
 
 ### Requirement: Media label is independent of what it illustrates
-The system MUST check media only against its own label wherever it leaves the server, so a statement visible to an audience never widens the visibility of media attached to it.
+The system MUST check media only against its own label wherever it reaches a documentation run or a document, so a statement visible to an audience never widens the visibility of media attached to it.
 
 #### Scenario: Internal screenshot on an external statement
 - **WHEN** an unlabelled screenshot is attached to a statement labelled for the external `customers` audience
-- **THEN** a token scoped to `customers` neither lists nor fetches the screenshot
+- **THEN** a documentation run for `customers` is not offered the screenshot
 
 ### Requirement: Replaced content flags the label
 The system SHALL flag a labelled item with `content_changed_at` when its bytes are replaced, keeping the label, and clear the flag when a writer confirms the label through `POST /api/media/{id}/audiences/confirm` or sets a new one.
@@ -134,13 +134,6 @@ The system SHALL serve an item's bytes through `GET /api/media/{id}/content` to 
 #### Scenario: Revalidating a cached image
 - **WHEN** a browser requests content with the current ETag in `If-None-Match`
 - **THEN** the response is 304 with no body
-
-### Requirement: Scoped callers learn nothing about hidden media
-The system MUST answer 404 to a principal scoped to an audience that requests content of media that audience may not see, the same as for media that does not exist; scoped principals may fetch media content and call `list_media` but not the media library or item routes.
-
-#### Scenario: External token fetches internal media
-- **WHEN** a token scoped to an external audience requests the content of an unlabelled item
-- **THEN** the response is 404 `media not found`
 
 ### Requirement: Listing media for a statement or concept
 The system SHALL expose `list_media(statement_id?, entity_id?)`, advertised over MCP, which requires exactly one id, refuses a statement or concept that does not exist or the caller may not see, and returns the attached items the caller's audience may see with details, label, attachments, `stale` reasons and `url`.

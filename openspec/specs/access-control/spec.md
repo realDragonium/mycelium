@@ -45,7 +45,7 @@ Every request SHALL carry one principal, and substrate writes made during the re
 - **THEN** the statement's `created_by` is the service account's user id
 
 ### Requirement: Roles
-The system SHALL recognise the roles `asker`, `reader`, `drafter`, `writer` and `admin`, ranked in that order. A tool's required role SHALL follow its name unless the tool declares one: names starting `delete_` or `merge_` require admin, names starting `list_`, `get_`, `search_`, `grep_`, `discover_` or `find_` require reader, and every other tool requires writer. `ask` SHALL require only asker and `report_knowledge_gap` only reader.
+The system SHALL recognise the roles `reader`, `drafter`, `writer` and `admin`, ranked in that order, with `reader` the minimum: every account reads every statement. A tool's required role SHALL follow its name unless the tool declares one: names starting `delete_` or `merge_` require admin, names starting `list_`, `get_`, `search_`, `grep_`, `discover_` or `find_` require reader, and every other tool requires writer. `ask` and `report_knowledge_gap` SHALL require only reader.
 
 #### Scenario: Reader calls a write tool
 - **WHEN** a reader calls `upsert_statement`
@@ -54,6 +54,10 @@ The system SHALL recognise the roles `asker`, `reader`, `drafter`, `writer` and 
 #### Scenario: Writer calls an admin tool
 - **WHEN** a writer calls `delete_statement`
 - **THEN** the call is refused with 403
+
+#### Scenario: Reader opens the web app
+- **WHEN** a reader requests `GET /api/data` or `GET /api/history`
+- **THEN** the response is 200
 
 ### Requirement: Drafter role redirects writes
 A drafter SHALL pass the role gate of every writer and admin tool, with its write, delete and merge calls queued onto a draft instead of changing the substrate (see the `drafts-and-review` capability). Tools that declare a real role requirement (draft approval and curation, documentation runs, label decisions) SHALL NOT admit a drafter.
@@ -66,23 +70,12 @@ A drafter SHALL pass the role gate of every writer and admin tool, with its writ
 - **WHEN** a drafter calls `request_documentation`
 - **THEN** the call is refused with 403 requiring a real writer role
 
-### Requirement: Asker role
-An asker SHALL be able to call `ask` and nothing else that reads the substrate. With an asker principal, every `/api/*` route except `/api/me`, `/api/me/*` and exempt paths SHALL answer 403 "the asker role can only call ask", including routes added later.
-
-#### Scenario: Asker reads the graph
-- **WHEN** an asker requests `GET /api/data`
-- **THEN** the response is 403
-
-#### Scenario: Asker manages its tokens
-- **WHEN** an asker requests `GET /api/me/tokens`
-- **THEN** its tokens are listed
-
 ### Requirement: One rule for both transports
 The HTTP tool routes and MCP tool calls SHALL apply the same role gate for each tool, and `tools/list` SHALL show a caller only the tools that gate lets it call. Without a principal (local stdio) the full list SHALL be shown.
 
 #### Scenario: Listed tools per role
 - **WHEN** callers of each role send `tools/list` to `/mcp`
-- **THEN** an asker sees only `ask`, a reader 19 tools, a drafter 39 (not `list_drafts`, `request_documentation` or `revise_document`), a writer 39 (not `delete_statement`, `merge_statements` or `merge_entities`) and an admin all 42 advertised tools
+- **THEN** a reader sees 19 tools, a drafter 39 (not `list_drafts`, `request_documentation` or `revise_document`), a writer 39 (not `delete_statement`, `merge_statements` or `merge_entities`) and an admin all 42 advertised tools
 
 #### Scenario: Both MCP protocol revisions
 - **WHEN** a reader lists tools once with a 2026-07-28 request and once through a 2025-era session
@@ -157,11 +150,15 @@ An admin SHALL create invites with `POST /api/admin/invites` (`email` 3 to 254 c
 - **THEN** the invite stays pending and the login is refused
 
 ### Requirement: Just-in-time provisioning
-When a login's verified email domain is listed in `MYCELIUM_JIT_DOMAINS` (comma-separated, case-insensitive, a leading `@` tolerated) and no bootstrap or invite matches, the system SHALL create the user with `MYCELIUM_JIT_DEFAULT_ROLE` (default `reader`). An unknown role name SHALL disable JIT provisioning rather than guess.
+When a login's verified email domain is listed in `MYCELIUM_JIT_DOMAINS` (comma-separated, case-insensitive, a leading `@` tolerated) and no bootstrap or invite matches, the system SHALL create the user with `MYCELIUM_JIT_DEFAULT_ROLE` (default `reader`). The retired role `asker` SHALL be read as `reader` with a deprecation warning; any other unknown role name SHALL disable JIT provisioning rather than guess.
 
 #### Scenario: Unknown default role
 - **WHEN** `MYCELIUM_JIT_DEFAULT_ROLE=superuser` and a login comes from a JIT domain
 - **THEN** no user is created and the login is refused with 403
+
+#### Scenario: Retired default role
+- **WHEN** `MYCELIUM_JIT_DEFAULT_ROLE=asker` and a login comes from a JIT domain
+- **THEN** the user is created as a reader and a deprecation warning is logged
 
 ### Requirement: Email domain policy
 When `MYCELIUM_ALLOWED_EMAIL_DOMAINS` is set (comma-separated, exact case-insensitive match, no subdomains) and authentication is on, the system SHALL admit a human only with an email in an allowed domain: every OIDC login needs a verified email in one, and every session, token, consent, code exchange and refresh SHALL be judged by the user's stored email. A human without an email SHALL be blocked; service accounts SHALL be exempt. With authentication off the setting has no effect.
@@ -189,14 +186,14 @@ Creating an invite for an address outside the allowed domains SHALL be refused w
 - **THEN** their session is cleared and they are sent to the issuer's logout, which returns them to `/auth/login`
 
 ### Requirement: Current principal
-`GET /api/me` SHALL return the caller's `id`, `name`, `role` (after token and audience clamping), `type` (`human` or `service`), `synthetic`, `auth_enabled`, `audience_id` and `audience` (`id`, `name`, `scope`, or null).
+`GET /api/me` SHALL return the caller's `id`, `name`, `role` (after token clamping), `type` (`human` or `service`), `synthetic` and `auth_enabled`.
 
 #### Scenario: Reader-scoped token of an admin
 - **WHEN** an admin calls `/api/me` with a token minted with scope `reader`
 - **THEN** the response has `role: "reader"`
 
 ### Requirement: User management
-Every `/api/admin/*` endpoint SHALL require the admin role (403 "admin role required" otherwise). `GET /api/admin/users` SHALL list users oldest first. `POST /api/admin/users` SHALL create a user (`name` 1 to 120 characters, `role` default `writer`, `type` default `service`); a `human` user MUST have an email (400 otherwise). `PATCH /api/admin/users/{user_id}` SHALL change `role`, `status` (`active` or `suspended`, else 400), `name` and `audience_id` (404 for an unknown user).
+Every `/api/admin/*` endpoint SHALL require the admin role (403 "admin role required" otherwise). `GET /api/admin/users` SHALL list users oldest first. `POST /api/admin/users` SHALL create a user (`name` 1 to 120 characters, `role` default `writer`, `type` default `service`); a `human` user MUST have an email (400 otherwise). `PATCH /api/admin/users/{user_id}` SHALL change `role`, `status` (`active` or `suspended`, else 400) and `name` (404 for an unknown user).
 
 #### Scenario: Create a service account
 - **WHEN** an admin posts `{"name": "ci-export-bot", "role": "writer"}` to `/api/admin/users`
@@ -245,7 +242,7 @@ A token's effective role SHALL be the lower of its scope and its owner's current
 - **THEN** the token acts as writer on its next request
 
 ### Requirement: Personal token management
-Every principal SHALL manage their own tokens: `GET /api/me/tokens` lists them newest first, revoked ones included; `POST /api/me/tokens` mints one (`name` 1 to 80 characters, `scope` default `writer`, capped at the caller's role; only an admin MAY pass `audience_id`, 403 otherwise); `DELETE /api/me/tokens/{token_id}` revokes one, answering 404 for a token unknown or owned by someone else. Personal tokens SHALL never expire.
+Every principal SHALL manage their own tokens: `GET /api/me/tokens` lists them newest first, revoked ones included; `POST /api/me/tokens` mints one (`name` 1 to 80 characters, `scope` default `writer`, capped at the caller's role); `DELETE /api/me/tokens/{token_id}` revokes one, answering 404 for a token unknown or owned by someone else. Personal tokens SHALL never expire.
 
 #### Scenario: Revoking another user's token
 - **WHEN** a writer deletes `/api/me/tokens/{id}` for a token owned by someone else
@@ -256,14 +253,14 @@ Every principal SHALL manage their own tokens: `GET /api/me/tokens` lists them n
 - **THEN** the token is owned by the `local-admin` user
 
 ### Requirement: Token listing fields
-Each listed token SHALL show `id`, `name`, `prefix`, `scope`, `created_at`, `last_used_at`, `revoked_at`, `oauth` (whether an OAuth client holds it) and `audience_id`, and never its secret or hash.
+Each listed token SHALL show `id`, `name`, `prefix`, `scope`, `created_at`, `last_used_at`, `revoked_at` and `oauth` (whether an OAuth client holds it), and never its secret or hash.
 
 #### Scenario: OAuth connection in the list
 - **WHEN** a user has connected a desktop client through OAuth
 - **THEN** their token list has one entry for it with `oauth: true`
 
 ### Requirement: Admin token management
-An admin SHALL list any user's tokens (`GET /api/admin/users/{user_id}/tokens`), revoke any token idempotently (`DELETE /api/admin/tokens/{token_id}`) and set or clear any token's audience, personal or OAuth (`PATCH /api/admin/tokens/{token_id}`; 404 for an unknown token). An OAuth grant SHALL keep its audience across refreshes.
+An admin SHALL list any user's tokens (`GET /api/admin/users/{user_id}/tokens`) and revoke any token idempotently (`DELETE /api/admin/tokens/{token_id}`).
 
 #### Scenario: Revoke twice
 - **WHEN** an admin revokes the same token twice
@@ -337,14 +334,14 @@ An authorization request's `redirect_uri` SHALL match one of the client's redire
 - **THEN** `/authorize` answers 400
 
 ### Requirement: Authorization request and consent
-`GET /authorize` SHALL require `response_type=code`, a `code_challenge`, `code_challenge_method=S256`, a known client and an allowed redirect URI (400 otherwise). Without a signed-in user it SHALL redirect to `/auth/login` with the authorize URL as `next`. Otherwise it SHALL record the request and show a consent page naming the client, the user and role, the redirect host and the access granted, warning on a loopback redirect, and offering an unscoped admin an audience choice.
+`GET /authorize` SHALL require `response_type=code`, a `code_challenge`, `code_challenge_method=S256`, a known client and an allowed redirect URI (400 otherwise). Without a signed-in user it SHALL redirect to `/auth/login` with the authorize URL as `next`. Otherwise it SHALL record the request and show a consent page naming the client, the user and role, the redirect host and the access granted, warning on a loopback redirect.
 
 #### Scenario: Not signed in
 - **WHEN** an anonymous browser opens a valid `/authorize` URL
 - **THEN** it is redirected to `/auth/login?next=<the authorize URL>`
 
 ### Requirement: Consent decisions
-`POST /authorize/decide` SHALL take only the consent id, the decision and an optional audience; every OAuth parameter SHALL come from the recorded request, and the client and redirect SHALL be re-validated. A consent SHALL be answerable once, only by the user it was shown to, within 600 seconds; otherwise the response is 400 `invalid_request`. Only an admin MAY choose an audience (403 otherwise), and a scoped user's own audience SHALL bind the grant.
+`POST /authorize/decide` SHALL take only the consent id and the decision; every OAuth parameter SHALL come from the recorded request, and the client and redirect SHALL be re-validated. A consent SHALL be answerable once, only by the user it was shown to, within 600 seconds; otherwise the response is 400 `invalid_request`.
 
 #### Scenario: Submitted OAuth parameters are ignored
 - **WHEN** an approval is submitted with extra `client_id` and `redirect_uri` fields naming another client
@@ -376,7 +373,7 @@ A `resource` parameter SHALL name this server: the issuer or its `/mcp` endpoint
 - **THEN** the second exchange fails with `invalid_grant` "code already used"
 
 ### Requirement: Token response
-A successful exchange SHALL create a token named `OAuth: <client name>` whose scope is the user's current role and whose audience is the grant's, and answer with `access_token`, `token_type: "Bearer"`, `expires_in`, `refresh_token` and `scope`, with `Cache-Control: no-store`.
+A successful exchange SHALL create a token named `OAuth: <client name>` whose scope is the user's current role, and answer with `access_token`, `token_type: "Bearer"`, `expires_in`, `refresh_token` and `scope`, with `Cache-Control: no-store`.
 
 #### Scenario: Writer connects a client
 - **WHEN** a writer completes the flow
@@ -402,3 +399,10 @@ Each OAuth grant SHALL be one token row owned by the consenting user, listed amo
 #### Scenario: Revoke an OAuth connection
 - **WHEN** a user revokes their `OAuth: Desktop client` token
 - **THEN** the client's access token and refresh token no longer work
+
+### Requirement: Retired asker role
+The auth store SHALL turn the retired `asker` role into `reader` on users, tokens (OAuth grants included) and invites when it starts, logging how many rows of each changed, and a restored backup SHALL read `asker` as `reader`, logging a deprecation warning.
+
+#### Scenario: Upgrading an instance with an asker token
+- **WHEN** an instance holding a token with scope `asker` starts on this build
+- **THEN** the token has scope `reader` and reads every statement

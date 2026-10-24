@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 
-from .. import auth, media, principal_audience, store
+from .. import auth, media, store
 from .registry import tool
 from .runtime import _db
 
@@ -16,20 +16,18 @@ def list_media(
 ) -> list[media.MediaView]:
     """List the screenshots and recordings attached to one statement or one
     concept (give exactly one id), with alt text, caption, origin, audience
-    label and `url` to fetch the bytes over HTTP. A credential scoped to an
-    audience sees only media that audience may see, on statements it may see.
+    label and `url` to fetch the bytes over HTTP.
     """
     if (statement_id is None) == (entity_id is None):
         raise ValueError("Give exactly one of statement_id or entity_id.")
-    audience = principal_audience.audience_of(auth.current_principal.get())
     if statement_id is not None:
         if store.get_statement(_db(), statement_id) is None:
             raise ValueError(f"Statement {statement_id} does not exist.")
-        return media.for_target("statement", statement_id, audience)
+        return media.for_target("statement", statement_id)
     assert entity_id is not None
     if store.get_entity_by_id(_db(), entity_id) is None:
         raise ValueError(f"Concept {entity_id} does not exist.")
-    return media.for_target("entity", entity_id, audience)
+    return media.for_target("entity", entity_id)
 
 
 @tool

@@ -2,8 +2,10 @@
 
 An audience is who a document is written for. Each writing profile writes for
 exactly one audience, and a documentation run reads only the statements that
-audience may see. A user or token scoped to an audience reads through the
-same boundary; see [Scoped users and tokens](#scoped-users-and-tokens).
+audience may see. Audiences are a documentation concept only: they decide what
+a writing profile's documents and plans may draw on, never what a person or
+token may read. Users, tokens and OAuth connections read what their role
+allows.
 
 ## Audiences
 
@@ -101,8 +103,8 @@ text (whose AI label is dropped) and relabelling. Grants to internal
 audiences, and external grants the statement already had, apply at once; an
 external audience the AI no longer grants is withdrawn at once.
 
-A waiting grant grants nothing: documentation runs, planning, scoped Ask and
-MCP, and every visibility count treat the statement as hidden from that
+A waiting grant grants nothing: documentation runs, planning and every
+visibility count treat the statement as hidden from that
 audience, and from external audiences that see it only by including it, until
 a curator confirms. Confirmation applies per granted audience: confirming
 external non-technical shows the statement to external technical too. So that
@@ -184,7 +186,7 @@ the same rules: unlabelled media is internal only, an item is visible to the
 audiences its label grants and every audience that includes one of them, and
 replacing a labelled item's file flags the label to confirm. A media label is
 a curator's decision, so none of its grants waits for confirmation. An image
-is shown to a reader, token or run only when its own label allows that
+is offered to a documentation run only when its own label allows the run's
 audience, whatever the label of the statement it is attached to. See [Media](MEDIA.md#audience-labels).
 
 ## What a documentation run sees
@@ -221,33 +223,3 @@ is out of date with the reason "no longer visible to this audience", and its
 revision is briefed to drop what rested on it, so an external document does
 not keep knowledge that has become internal. The same holds for an image the
 document places.
-
-## Scoped users and tokens
-
-An admin can scope a user, an MCP token or an OAuth connection to an audience
-(see [Managing users](USERS.md#scoping-to-an-audience)). Without an audience a
-principal has its role's full access. A scoped principal reads exactly what a
-documentation run for that audience reads, and nothing else:
-
-- Its role is clamped to reader. Writes, drafts, gap reports and admin actions
-  are refused whatever its role.
-- It may call only the read tools (the ones Ask and documentation runs use,
-  plus `ask`, `list_generated_documents`, `get_generated_document` and
-  `list_media`) and a short list of read routes: `/api/me` and its own tokens,
-  `/api/data`, `/api/substrate-counts`, `/api/entity-positions`, `/api/history`,
-  the document library and media content (`/api/media/<id>/content`, 404 for
-  media its audience may not see). Every other route and tool answers 403, including any
-  added later until it is added to the allowlist in `principal_audience`.
-- Each read runs inside the boundary above. Ask runs its whole loop inside it,
-  so it neither reads nor cites a statement the audience may not see.
-- It may read a generated document written for its audience, or for an
-  audience at least as restricted: an external reader never gets a document
-  written for an internal audience, and every statement the writing audience
-  may see must be visible to it. Every statement the document cites must also
-  still be visible. The out-of-date reasons, which quote changed statements,
-  are left out.
-- History lists only events on statements, concepts and names it may see now,
-  without their before and after values.
-
-A principal scoped to an audience that is later retired reads nothing until an
-admin rescopes it.

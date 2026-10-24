@@ -43,26 +43,27 @@ from typing import Literal
 
 from .require import require
 
-Role = Literal["asker", "reader", "drafter", "writer", "admin"]
+Role = Literal["reader", "drafter", "writer", "admin"]
 UserType = Literal["human", "service"]
-Scope = Literal["asker", "reader", "drafter", "writer", "admin"]
+Scope = Literal["reader", "drafter", "writer", "admin"]
 
 # Ordering used both to clamp a token's scope against its owner's role
 # and to compare a principal's role against a tool's required role.
 # Lower-privilege scopes are always allowed; never widen. Drafter sits
 # between reader and writer: a drafter can call every write/delete/merge
 # tool, but the call body redirects to a draft instead of mutating the
-# substrate (see `server.tool` wrapper). Asker sits below reader: it can
-# reach only the single tool that requires the `asker` role (`ask`) and
-# none of the broader read primitives — every higher role outranks it
-# and so keeps `ask` too.
+# substrate (see `server.tool` wrapper). Reader is the minimum: every
+# account reads every statement.
 _ROLE_RANK: dict[str, int] = {
-    "asker": 0,
-    "reader": 1,
-    "drafter": 2,
-    "writer": 3,
-    "admin": 4,
+    "reader": 0,
+    "drafter": 1,
+    "writer": 2,
+    "admin": 3,
 }
+
+#: The role below reader that could only call `ask`. Older backups and
+#: settings may still name it; it reads as reader.
+RETIRED_ASKER = "asker"
 
 LOCAL_ADMIN_ID = "local-admin"
 TOKEN_PREFIX = "myc"
@@ -79,10 +80,6 @@ class Principal:
     is disabled. Handlers that record attribution should still write
     `id` to `created_by` — having `local-admin` show up in audit fields
     is the honest answer when no real user is signed in.
-
-    `audience_id` scopes the principal to one documentation audience: it
-    reads only what that audience may see (`principal_audience`) and its
-    role is clamped to reader at resolution, so it can never write.
     """
 
     id: str
@@ -90,7 +87,6 @@ class Principal:
     role: Role
     type: UserType
     synthetic: bool = False
-    audience_id: str | None = None
 
     @property
     def is_admin(self) -> bool:
@@ -318,16 +314,6 @@ def _clamp_scope(scope: str, role: str) -> Role:
     return role  # type: ignore[return-value]
 
 
-def _scoped(
-    *, id: str, name: str, role: Role, type: UserType, audience_id: str | None
-) -> Principal:
-    """A principal, its role clamped to reader when it has an audience: a
-    scoped principal reads and never writes, whatever its stored role."""
-    if audience_id is not None:
-        role = _clamp_scope("reader", role)
-    return Principal(id=id, name=name, role=role, type=type, audience_id=audience_id)
-
-
 def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
     """Look up a bearer token and return the authenticated principal.
     Returns None when the token is unknown, revoked, expired, or its owner
@@ -336,9 +322,7 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
     row = conn.execute(
         """
         SELECT t.id AS token_id, t.scope, t.revoked_at, t.expires_at,
-               t.audience_id AS token_audience_id,
-               u.id AS user_id, u.name, u.role, u.type, u.status, u.email,
-               u.audience_id AS user_audience_id
+               u.id AS user_id, u.name, u.role, u.type, u.status, u.email
         FROM mcp_tokens t
         JOIN users u ON u.id = t.user_id
         WHERE t.hash = ?
@@ -362,13 +346,11 @@ def resolve_token(conn: sqlite3.Connection, raw_token: str) -> Principal | None:
             f"token of user {row['user_id']}", row["email"], "email domain not allowed"
         )
         return None
-    # A scoped user's audience binds every token they hold.
-    return _scoped(
+    return Principal(
         id=row["user_id"],
         name=row["name"],
         role=_clamp_scope(row["scope"], row["role"]),
         type=row["type"],
-        audience_id=row["user_audience_id"] or row["token_audience_id"],
     )
 
 
@@ -409,8 +391,7 @@ def resolve_session_user(
     if not user_id:
         return None
     row = conn.execute(
-        "SELECT id, name, role, type, status, email, audience_id FROM users "
-        "WHERE id = ?",
+        "SELECT id, name, role, type, status, email FROM users WHERE id = ?",
         (user_id,),
     ).fetchone()
     if row is None or row["status"] != "active":
@@ -420,13 +401,7 @@ def resolve_session_user(
             f"user {row['id']}", row["email"], "email domain not allowed"
         )
         return None
-    return _scoped(
-        id=row["id"],
-        name=row["name"],
-        role=row["role"],
-        type=row["type"],
-        audience_id=row["audience_id"],
-    )
+    return Principal(id=row["id"], name=row["name"], role=row["role"], type=row["type"])
 
 
 # --- user / token writes --------------------------------------------------
@@ -477,7 +452,6 @@ def issue_token(
     user_id: str,
     name: str,
     scope: Scope,
-    audience_id: str | None = None,
 ) -> tuple[str, str]:
     """Mint and persist a new MCP token. Returns `(raw_token, token_id)`.
     The raw token is the one-time secret to show the user; the token_id
@@ -493,10 +467,10 @@ def issue_token(
     conn.execute(
         """
         INSERT INTO mcp_tokens
-            (id, user_id, name, prefix, hash, scope, created_at, audience_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, user_id, name, prefix, hash, scope, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-        (token_id, user_id, name, prefix, h, scope, _now(), audience_id),
+        (token_id, user_id, name, prefix, h, scope, _now()),
     )
     return raw, token_id
 
@@ -527,8 +501,7 @@ def owner_id_for(principal: Principal) -> str:
 
 
 _TOKEN_COLUMNS = (
-    "id, user_id, name, prefix, scope, created_at, last_used_at, revoked_at, "
-    "client_id, audience_id"
+    "id, user_id, name, prefix, scope, created_at, last_used_at, revoked_at, client_id"
 )
 
 
@@ -573,22 +546,13 @@ def mint_own_token(
     principal: Principal,
     name: str,
     scope: Scope,
-    audience_id: str | None = None,
 ) -> tuple[str, sqlite3.Row]:
     """Mint a token owned by the calling principal, capping `scope` at the
-    principal's current role. A scoped principal's token keeps its audience,
-    so a scoped token cannot mint its way out. Returns `(raw_token,
-    token_row)` — the raw secret to show once plus the persisted row for
+    principal's current role. Returns `(raw_token, token_row)` — the raw secret to show once plus the persisted row for
     serialization."""
     capped = _clamp_scope(scope, principal.role)
     owner_id = _ensure_local_admin_row(conn) if principal.synthetic else principal.id
-    raw, token_id = issue_token(
-        conn,
-        user_id=owner_id,
-        name=name,
-        scope=capped,
-        audience_id=principal.audience_id or audience_id,
-    )
+    raw, token_id = issue_token(conn, user_id=owner_id, name=name, scope=capped)
     row = require(get_token(conn, token_id), "token just issued")
     return raw, row
 
@@ -611,7 +575,6 @@ def mint_token_for_user(
     user_id: str,
     name: str,
     scope: Scope,
-    audience_id: str | None = None,
 ) -> tuple[str, sqlite3.Row]:
     """Admin path: mint a token for any user, capping `scope` at that user's
     role. Raises `LookupError` (→ 404) when the user is unknown. Returns
@@ -620,29 +583,13 @@ def mint_token_for_user(
     if user is None:
         raise LookupError("user not found")
     capped = _clamp_scope(scope, user["role"])
-    raw, token_id = issue_token(
-        conn, user_id=user_id, name=name, scope=capped, audience_id=audience_id
-    )
+    raw, token_id = issue_token(conn, user_id=user_id, name=name, scope=capped)
     row = require(get_token(conn, token_id), "token just issued")
     return raw, row
 
 
-def set_token_audience(
-    conn: sqlite3.Connection, token_id: str, audience_id: str | None
-) -> sqlite3.Row:
-    """Scope a token to an audience, or clear its scope with None. Raises
-    `LookupError` (→ 404) for an unknown token."""
-    if get_token(conn, token_id) is None:
-        raise LookupError("token not found")
-    conn.execute(
-        "UPDATE mcp_tokens SET audience_id = ? WHERE id = ?", (audience_id, token_id)
-    )
-    return require(get_token(conn, token_id), "token just updated")
-
-
 _USER_COLUMNS = (
-    "id, type, email, name, role, status, oidc_issuer, created_at, "
-    "last_login_at, audience_id"
+    "id, type, email, name, role, status, oidc_issuer, created_at, last_login_at"
 )
 
 
@@ -658,30 +605,6 @@ def get_user(conn: sqlite3.Connection, user_id: str) -> sqlite3.Row | None:
     return conn.execute(
         f"SELECT {_USER_COLUMNS} FROM users WHERE id = ?", (user_id,)
     ).fetchone()
-
-
-def set_user_audience(
-    conn: sqlite3.Connection, user_id: str, audience_id: str | None
-) -> sqlite3.Row:
-    """Scope a user, and so every token they hold, to an audience; None
-    restores full access by role. Raises `LookupError` for an unknown user,
-    and refuses to scope the last active admin, whose scoped session could
-    no longer administer anything."""
-    row = conn.execute("SELECT id, role FROM users WHERE id = ?", (user_id,)).fetchone()
-    if row is None:
-        raise LookupError("user not found")
-    if audience_id is not None and row["role"] == "admin":
-        n_admins = conn.execute(
-            "SELECT COUNT(*) AS n FROM users WHERE role = 'admin' "
-            "AND status = 'active' AND audience_id IS NULL AND id != ?",
-            (user_id,),
-        ).fetchone()["n"]
-        if n_admins == 0:
-            raise ValueError("cannot scope the last admin to an audience")
-    conn.execute(
-        "UPDATE users SET audience_id = ? WHERE id = ?", (audience_id, user_id)
-    )
-    return require(get_user(conn, user_id), "user just updated")
 
 
 def update_user(
@@ -785,10 +708,16 @@ def _jit_default_role() -> Role | None:
     defaulting to `reader`. Returns None for an unknown role name so the
     caller refuses to provision rather than guess a privilege level."""
     role = (os.environ.get("MYCELIUM_JIT_DEFAULT_ROLE") or "reader").strip().lower()
+    if role == RETIRED_ASKER:
+        logging.getLogger("mycelium.auth").warning(
+            "MYCELIUM_JIT_DEFAULT_ROLE=asker is deprecated and grants reader; "
+            "set it to reader"
+        )
+        return "reader"
     if not is_valid_role(role):
         logging.getLogger("mycelium.auth").error(
             "MYCELIUM_JIT_DEFAULT_ROLE=%r is not a valid role — refusing JIT "
-            "provisioning. Valid roles: asker, reader, drafter, writer, admin",
+            "provisioning. Valid roles: reader, drafter, writer, admin",
             role,
         )
         return None

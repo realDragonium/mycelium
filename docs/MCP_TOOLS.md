@@ -11,17 +11,13 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. An asker sees only `ask`, and a reader sees 19 tools. A drafter sees 40
+can invoke. The minimum role is reader: a reader sees 19 tools. A drafter sees 40
 because their writes are queued on a draft, but they do not see `list_drafts`,
 `request_documentation`, `revise_document` or the tools that claim and do
 agent tasks. A writer sees 44 and does not see the admin-only
 `delete_statement`, `merge_statements` or `merge_entities`. An admin sees all
 47. While Ask is set to External agent, `ask` is listed to no one, so each
-count is one lower and an asker sees no tools.
-
-A principal scoped to an audience is a reader whatever its role, and sees only
-the read tools in `principal_audience.TOOLS`; see
-[Scoped users and tokens](AUDIENCES.md#scoped-users-and-tokens).
+count is one lower.
 
 ## Over MCP
 
@@ -44,7 +40,7 @@ decision, and the rest runs in-process.
 | `list_link_types` | Lists the statement link vocabulary and its direction rules, which writers need. |
 | `list_statement_kinds` | Lists the statement kind vocabulary. |
 | `list_entity_link_types` | Lists the entity link vocabulary that appears in `get_entity`. |
-| `ask` | Runs the server's answer loop. It is the only tool an `asker` sees. Hidden while Ask is set to External agent. |
+| `ask` | Runs the server's answer loop. Hidden while Ask is set to External agent. |
 | `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. While Ingest is set to External agent it queues the work for an outside agent instead. |
 | `upsert_entity` | Creates or describes the entity a statement names. |
 | `upsert_name` | Adds an alias so mentions resolve. |
@@ -65,7 +61,7 @@ decision, and the rest runs in-process.
 | `list_drafts` | Lists the review queue across creators. An AI curator lists and investigates drafts, and a person approves or rejects them in the UI. This tool is the agent's side of that split, and only real writers and admins see it. |
 | `set_draft_review_evidence` | Lets the draft creator give the reviewer evidence that only the creator has. |
 | `set_operation_evidence` | Lets the draft creator back one operation with what they checked in the product: code, UI or doc location, an excerpt and the claim it shows. The reviewer accepts a link a concrete code excerpt supports, and judges one without evidence more strictly. |
-| `list_media` | Lists the screenshots and recordings attached to a statement or concept, with alt text, caption and the URL of the bytes, filtered by the caller's audience. An agent checks what is already illustrated before uploading. |
+| `list_media` | Lists the screenshots and recordings attached to a statement or concept, with alt text, caption and the URL of the bytes. An agent checks what is already illustrated before uploading. |
 | `create_media_upload` | Returns a single-use upload link for a screenshot or recording an agent captured; the agent cites the resulting `media_id` as `media` evidence on a draft operation. See [Uploading media](#uploading-media). |
 | `claim_curation_work` | Hands an agent working in the product's code a batch of knowledge-health work (isolated or unnamed statements, rephrase requests, open gaps) on a 30-minute lease, with each item's concepts, nearest statements and the link vocabulary. Only that agent can tell from the code whether two statements relate. See [Curation work for outside agents](KNOWLEDGE_HEALTH.md#curation-work-for-outside-agents). |
 | `release_curation_work` | Records what came of claimed items (`proposed` with the draft, `no_link` with a reason, or `skipped`) in the memory the connect pass shares, so they are not offered again until they change. |

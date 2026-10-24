@@ -33,8 +33,7 @@ server runs no model for it: `ask` is left out of `tools/list` and a call to
 it (over MCP or `POST /ask`) is refused with a message naming the
 `mycelium-research` skill, which teaches the agent the Ask loop's research
 and answering rules. The web app hides Ask (its mode in the command bar
-and "Ask about this"); Find stays. An `asker` token, which has only `ask`,
-can do nothing while Ask is external; give such callers a reader token.
+and "Ask about this"); Find stays.
 
 The `mycelium-agent-tasks` skill (`skills/`) walks an agent through the
 workflow.
@@ -45,8 +44,7 @@ The agent needs a **writer** or **admin** token. That is the role that may
 already ask the server for documentation, so an agent can do no more than its
 token could request. Drafters cannot claim: a drafter's writes go to a draft
 for review, but an agent's document, plan or labels are saved as a server
-model's would be. Readers, askers and tokens scoped to an audience cannot
-claim either.
+model's would be. Readers cannot claim either.
 
 ## Kinds
 

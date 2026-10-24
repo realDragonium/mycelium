@@ -109,6 +109,15 @@ DROPPED_COLUMNS: dict[tuple[str, str, str], str] = {
     ("mycelium.db", "link_type_aliases", "embedding"): (
         "v15 removes alias embeddings; only the connect pipeline read them"
     ),
+    ("mycelium-auth.db", "users", "audience_id"): (
+        "audiences no longer scope principals; the auth store drops the column"
+    ),
+    ("mycelium-auth.db", "mcp_tokens", "audience_id"): (
+        "audiences no longer scope principals; the auth store drops the column"
+    ),
+    ("mycelium-auth.db", "oauth_codes", "audience_id"): (
+        "audiences no longer scope principals; the auth store drops the column"
+    ),
 }
 
 
