@@ -457,7 +457,7 @@ export interface CurationSummary {
   kind: CurationKind; claims: CurationHolder[]; attempted: number;
   outcomes: Partial<Record<'looked' | 'proposed' | 'no_link' | 'skipped', number>>;
 }
-export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[] }
+export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[]; uncovered_by_profile: Record<string, number> }
 export interface HealthStatement {
   id: string; kind: string; text: string; links: number; mentions: string[];
   label_error: string | null; in_pending_draft: boolean; settled_at: string | null;
