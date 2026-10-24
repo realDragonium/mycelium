@@ -76,8 +76,11 @@ first. Run one job per drafter account at a time.
 **Leases.** `claim_curation_work(kind, limit=0)` renews every item of that
 kind you hold without claiming more; do it when `expires_at` is near. If
 you must stop early, release what you hold as `skipped` rather than letting
-the lease run out. Releasing an item whose lease ran out is refused;
-`renewed` in a `limit=0` claim lists what you still hold.
+the lease run out. An item whose lease ran out can still be released
+until any agent's next claim clears expired leases (or an admin frees your
+claims); after that its release is refused as not held by you, and it may
+be someone else's. `renewed` in a `limit=0` claim lists what you still
+hold.
 
 ## Deciding an item
 
