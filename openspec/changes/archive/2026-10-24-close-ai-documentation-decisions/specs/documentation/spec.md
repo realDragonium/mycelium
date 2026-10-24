@@ -111,7 +111,7 @@ The system SHALL, from the 60-second maintenance sweep, have an AI reviewer deci
 - **THEN** its items stay proposed, marked as not reviewed with the reason, and are not reviewed again automatically
 
 #### Scenario: Review that fails under AI recovery
-- **WHEN** every review of an `ai`-recovery profile's items fails with `retry_attempts` at 2
+- **WHEN** every review of an `ai`-recovery profile's items fails with `plan_review_retries` at 2
 - **THEN** the items are reviewed three times and then stay proposed for a person, showing how often the review failed
 
 ### Requirement: Publishing a document
@@ -149,10 +149,10 @@ The system SHALL, from the 60-second maintenance sweep, publish once each finish
 
 #### Scenario: Publication that fails under AI recovery
 - **WHEN** publishing a reviewed revision fails and the profile's recovery is `ai`
-- **THEN** the run shows the error and a later sweep publishes it again, up to `retry_attempts` times
+- **THEN** the run shows the error and a later sweep publishes it again, up to `delivery_retries` times
 
 ### Requirement: Recovering failed runs
-The system SHALL, from the 60-second maintenance sweep, retry each finished run that wrote nothing of an `ai`-recovery profile, except manual edits, as a writer's retry would, briefed with the review's notes when the review refused it, within the active-run limit. After `retry_attempts` automatic retries (default 2) the run is given up with `recovery` `gave_up` and a `recovery_note` giving the last reason; a person's retry starts the count again.
+The system SHALL, from the 60-second maintenance sweep, retry each finished run that wrote nothing of an `ai`-recovery profile, except manual edits, as a writer's retry would, briefed with the review's notes when the review refused it, within the active-run limit. After `run_retries` automatic retries (default 2) the run is given up with `recovery` `gave_up` and a `recovery_note` giving the last reason; a person's retry starts the count again.
 
 #### Scenario: Refused revision retried with notes
 - **WHEN** the review refuses an automatic revision of an `ai`-recovery profile
@@ -163,19 +163,30 @@ The system SHALL, from the 60-second maintenance sweep, retry each finished run 
 - **THEN** runs that wrote nothing before the upgrade are not retried
 
 #### Scenario: Given up after the attempts
-- **WHEN** the second automatic retry with `retry_attempts` at 2 also writes nothing
+- **WHEN** the second automatic retry with `run_retries` at 2 also writes nothing
 - **THEN** no further retry starts and the run shows `recovery` `gave_up` with the reason
 
 ### Requirement: Recovering failed planning
-The system SHALL, while a profile's recovery is `ai`, try a failed automatic plan, a failed plan review and a plan item that could not start again on later sweeps, up to `retry_attempts` times each, instead of waiting for a person; an item given up on, or whose review failed beyond those attempts, stays proposed for a person and no longer holds up automatic planning.
+The system SHALL, while a profile's recovery is `ai`, try a failed automatic plan, a failed plan review and a plan item that could not start again on later sweeps, up to `plan_retries`, `plan_review_retries` and `item_start_retries` times respectively (each 0 to 5, default 2), instead of waiting for a person; an item given up on stays proposed for a person, showing why as `given_up`, and no longer holds up automatic planning.
 
 #### Scenario: Failed automatic plan under AI recovery
-- **WHEN** every automatic plan of an `ai`-recovery profile fails with `retry_attempts` at 2
+- **WHEN** every automatic plan of an `ai`-recovery profile fails with `plan_retries` at 2
 - **THEN** three plans are made, and the plan view says automatic planning gave up until someone plans
 
 #### Scenario: Item that could not start
 - **WHEN** an automatic item of an `ai`-recovery `write` profile cannot start once
 - **THEN** it shows the reason and starts on a later sweep
+
+### Requirement: Given-up work stays given up
+The system MUST NOT start automatically again work it gave up on, or that a person or the AI reviewer dismissed, until its inputs change or a person acts: automatic plans drop a proposal matching a dismissed item ("dismissed before") or a given-up item ("given up before"), the plan view keeps showing given-up items of earlier plans with the reason, and a dismissed out-of-date update is not proposed again before the document's next revision.
+
+#### Scenario: Reviewer dismissal is not undone by automatic planning
+- **WHEN** the AI reviewer dismisses "Export invoices" and a later automatic plan proposes it again
+- **THEN** the plan drops it as dismissed before and the reviewer is not asked again
+
+#### Scenario: Given-up run until a person retries
+- **WHEN** an item's run gave up and a later automatic plan proposes the same item
+- **THEN** the plan drops it as given up before, the item shows `given_up`, and a person's retry of the run clears it
 
 ### Requirement: Planning over several calls
 The system SHALL let one plan make up to `max_calls` planning calls (default 1, at most 5) while uncovered statements no plan of the profile was offered remain; each call gets the next batch, the same overview and, as `already_proposed`, the items earlier calls kept, keeps up to `max_items` of its own, and merges an update of a document an earlier call updates into that item. The plan records its items, the statements offered, the dropped counts, the number of calls and their tokens together.

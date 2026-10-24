@@ -141,7 +141,7 @@ written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
    document), `uncovered_statements` and `uncovered` (statements the
    audience may see that no document of the profile cites), and
    `replan_hint` when enough new knowledge became visible. `recovery_note`,
-   an item's `start_error` and its `review.failures` say what failed AI work
+   an item's `given_up`, `start_error` and `review.failures` say what failed AI work
    was retried or given up, and why.
 2. To plan again, call `request_documentation_plan(guideline_set)` over MCP
    (or `POST /api/documentation/plans/{guideline_set}`): one model call (up
@@ -189,8 +189,10 @@ limits.
 
 A profile's `recovery` policy says who recovers failed AI work: `person` (the
 default) or `ai`, which retries failed plans, plan reviews, items that could
-not start, runs that wrote nothing and automatic publications up to the
-retry-attempts limit, then gives up with a reason. Report what gave up.
+not start, runs that wrote nothing and automatic publications, each up to
+its own retries limit, then gives up with a reason. Given-up work is not
+started again automatically, and automatic plans do not propose a given-up
+or dismissed item again. Report what gave up.
 
 ## Not here
 
