@@ -25,8 +25,11 @@ router = APIRouter(route_class=TimedRoute)
 class Backlog(BaseModel):
     draft_ids: list[str]
     #: The tokens reviewing them all is likely to use, from what a review
-    #: has used over the last 30 days; None without a review on record.
+    #: has used over the last 30 days; None without a review on record, or
+    #: when an external agent reviews and the server uses no tokens.
     estimated_tokens: int | None
+    #: Reviews are queued for an external agent instead of run here.
+    external_agent: bool
     job: BacklogJob | None
 
 
@@ -48,13 +51,15 @@ def draft_review_backlog(request: Request) -> Backlog:
     _require_admin(request)
     try:
         draft_ids = draft_review_runs.backlog()
+        external = review_settings.load().external_agent
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
     since = timestamps.of(datetime.now(UTC) - timedelta(days=30))
     mean = ai_usage.mean_run_tokens(drafts_store.connection(), "draft_review", since)
     return Backlog(
         draft_ids=draft_ids,
-        estimated_tokens=None if mean is None else len(draft_ids) * mean,
+        estimated_tokens=None if mean is None or external else len(draft_ids) * mean,
+        external_agent=external,
         job=draft_review_runs.backlog_job(),
     )
 

@@ -6,6 +6,7 @@ import pytest
 
 from mycelium import (
     agent_tasks,
+    ai_usage,
     auth,
     draft_review_runs,
     draft_review_store,
@@ -14,11 +15,13 @@ from mycelium import (
     model_settings,
     server,
     store,
+    timestamps,
 )
 from mycelium.server import runtime
 from review_helpers import correction
 from settings_helpers import set_review_controls
-from test_reviewed_application import _principal
+from test_ai_usage import _call
+from test_reviewed_application import _app, _principal
 
 
 @pytest.fixture
@@ -255,3 +258,29 @@ def test_a_draft_whose_reviews_fail_twice_is_rejected(agent):
         assert _submit(agent, task.id, "changes_suggested").status == "failed"
 
     assert server.get_draft(draft_id)["status"] == "rejected"
+
+
+def test_the_backlog_offer_estimates_no_tokens_for_an_external_agent(
+    tmp_path, monkeypatch
+):
+    with _app(tmp_path, monkeypatch) as client:
+        with store.transaction(drafts_store.connection()) as conn:
+            ai_usage.record(
+                conn, _call("draft_review", run_id="drv_1"), at=timestamps.now()
+            )
+        assert client.get("/api/draft-review/backlog").json()["estimated_tokens"] == 0
+        current = model_settings.get("draft_review")
+        model_settings.save(
+            "draft_review",
+            model_settings.SaveSelection(
+                provider=current.provider,
+                claude_model="",
+                openai_model="",
+                external_agent=True,
+                revision=current.revision,
+            ),
+            auth.LOCAL_ADMIN,
+        )
+
+        offer = client.get("/api/draft-review/backlog").json()
+        assert (offer["external_agent"], offer["estimated_tokens"]) == (True, None)

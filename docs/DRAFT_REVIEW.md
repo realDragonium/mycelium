@@ -311,7 +311,8 @@ While an external agent reviews, drafts held with corrections are part of the
 backlog: **Review N waiting drafts** queues a task for each, so another
 reviewer can settle them. Under **Only clean approvals** an agent that
 corrects such a draft holds it again; choose **Approvals with corrections
-too** to let agents drain them. The backlog job spends no model budget. A
+too** to let agents drain them. The backlog job uses no tokens, so the
+offer asks for no token limit and shows no estimate. A
 run waiting for an agent keeps waiting across a restart. Switching back to a
 model and asking for a rerun ends a waiting run.
 
@@ -370,9 +371,10 @@ from the creator-supplied evidence. It returns `{review: ...}` for the new
 attempt.
 
 Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...],
-estimated_tokens}`: submitted drafts the current configuration has not
+estimated_tokens, external_agent}`: submitted drafts the current configuration has not
 reached, and the tokens reviewing them is likely to use, from the average
-review run over the last 30 days (`null` without one). That is a draft with no
+review run over the last 30 days (`null` without one, or while an external
+agent reviews, which `external_agent` says). That is a draft with no
 attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question or held corrections
