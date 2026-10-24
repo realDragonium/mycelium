@@ -140,7 +140,7 @@ a stale review-settings form.
 
 ## Shared execution boundary
 
-The five workflows send tasks and an explicit model configuration through
+All eight model actions send tasks and an explicit model configuration through
 `mycelium.ai`. `turn(ToolTask, ModelConfig)` provides conversation and tool-call
 execution; `structured(StructuredTask[T], ModelConfig)` returns a validated typed
 result. Provider adapters handle credentials, wire formats, continuation data,
@@ -150,8 +150,9 @@ permissions, validation, budgets, and domain decisions.
 Provider choice is deterministic configuration. A model does not choose its own
 provider. Claude and OpenAI conversations retain their provider-specific history
 inside the adapter and cannot switch provider halfway through a run. Embeddings
-remain a separate Ollama configuration, and search indexes are not changed by
-this screen.
+remain a separate server configuration (Ollama or OpenAI; see
+[Deployment](DEPLOYMENT.md#embedding-provider)), and search indexes are not
+changed by this screen.
 
 ## AI usage and budget
 
@@ -198,12 +199,16 @@ discovery are never paused.
 
 ## Limits and repository integrations
 
-**Settings → Limits** provides independent limits for Ask, Ingest, Documentation,
-and Draft review. Output tokens, request timeouts, and retries
-apply to each provider request. The three tool loops additionally expose operation
-and run time limits and adaptive thinking; Ask exposes its existing cache switch.
+**Settings → Limits** provides independent sections for Ask, Ingest, Document
+generation, Draft review, Alias discovery, Audience labelling, Documentation
+planning, Documentation maintenance, Connecting statements, Concurrent runs, and
+Screenshots and recordings ([Media](MEDIA.md)). Output tokens, request timeouts,
+and retries apply to each provider request of the model actions. The four tool
+loops (Ask, Ingest, Document generation, Connecting statements) additionally
+expose operation and run time limits and adaptive thinking; Ask exposes its
+existing cache switch.
 Input limits and retrieval widths appear only on the actions that support them.
-Draft review is a single structured assessment, so it has no tool-operation or
+Draft review makes one structured assessment call per part, so it has no tool-operation or
 thinking control. Provider support for adaptive thinking depends on the chosen
 model.
 
