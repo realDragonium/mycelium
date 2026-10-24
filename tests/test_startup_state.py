@@ -4,13 +4,14 @@ and the copy-of-production quarantine."""
 from __future__ import annotations
 
 import logging
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import draft_review_runs, quarantine, request_timing
+from mycelium import draft_review_runs, quarantine, request_timing, tracing
 from mycelium.docgen import destinations
-from mycelium.http import create_app
+from mycelium.http import create_app, main
 from mycelium.server import startup
 from settings_helpers import set_review_controls
 from test_reviewed_application import _app
@@ -74,7 +75,7 @@ def test_a_failed_start_says_why(starting):
 
 
 def test_a_contradictory_domain_policy_refuses_to_start_before_listening(
-    monkeypatch,
+    monkeypatch, caplog
 ):
     monkeypatch.setattr(startup, "_startup", None)
     monkeypatch.setenv("MYCELIUM_AUTH", "on")
@@ -84,11 +85,43 @@ def test_a_contradictory_domain_policy_refuses_to_start_before_listening(
     failed: list[bool] = []
     app = create_app(on_startup_failure=lambda: failed.append(True))
 
-    with pytest.raises(RuntimeError, match="MYCELIUM_JIT_DOMAINS"):
-        with TestClient(app):
-            pass
+    with caplog.at_level(logging.ERROR, logger="mycelium.errors"):
+        with pytest.raises(RuntimeError, match="MYCELIUM_JIT_DOMAINS"):
+            with TestClient(app):
+                pass
     assert startup.status() is None
     assert failed == []
+    assert any(
+        record.name == "mycelium.errors"
+        and record.getMessage().startswith(tracing.ERROR_TOKEN)
+        and "where=startup" in record.getMessage()
+        and record.exc_info is not None
+        for record in caplog.records
+    )
+
+
+def test_a_start_refused_by_configuration_is_logged_as_an_error(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setenv("MYCELIUM_AUTH", "on")
+    monkeypatch.delenv("MYCELIUM_SESSION_SECRET", raising=False)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["mycelium-http"])
+    monkeypatch.setattr(tracing, "configure_logging", lambda: None)
+
+    with caplog.at_level(logging.ERROR, logger="mycelium.errors"):
+        with pytest.raises(SystemExit) as raised:
+            main()
+
+    assert raised.value.code == 1
+    assert any(
+        record.name == "mycelium.errors"
+        and record.getMessage().startswith(tracing.ERROR_TOKEN)
+        and "where=startup" in record.getMessage()
+        and "MYCELIUM_SESSION_SECRET" in record.getMessage()
+        and record.exc_info is not None
+        for record in caplog.records
+    )
 
 
 def test_startup_reports_ready_after_init(tmp_path, monkeypatch):

@@ -60,11 +60,11 @@ The system SHALL, when background startup fails, log one `MYCELIUM_ERROR` line w
 - **THEN** a `MYCELIUM_ERROR where=startup` line is logged and `mycelium-http` exits with status 1
 
 ### Requirement: Contradictory configuration refuses to start
-The system MUST refuse to start, before listening, when the email domain policy is contradictory (see the `access-control` capability).
+The system MUST refuse to start, before listening, when the email domain policy is contradictory (see the `access-control` capability); a start refused by configuration SHALL log one `MYCELIUM_ERROR` line with `where=startup` and exit with status 1.
 
 #### Scenario: Just-in-time domain not allowed
 - **WHEN** `MYCELIUM_JIT_DOMAINS` names a domain that `MYCELIUM_ALLOWED_EMAIL_DOMAINS` does not allow
-- **THEN** `mycelium-http` exits without ever listening
+- **THEN** `mycelium-http` logs a `MYCELIUM_ERROR where=startup` line and exits without ever listening
 
 ### Requirement: Interrupted work is resumed or marked on restart
 The system SHALL, on startup, admit documentation runs that a previous process left unfinished again, mark documentation plans and document maintenance it left unfinished as failed or interrupted, and SHALL log how many documentation runs were admitted again and how many failed.

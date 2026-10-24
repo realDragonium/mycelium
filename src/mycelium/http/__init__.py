@@ -126,7 +126,11 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Before listening: a contradictory policy is a configuration error
         # the operator must fix, not a slow start to wait out.
-        auth.check_domain_policy()
+        try:
+            auth.check_domain_policy()
+        except Exception as exc:
+            tracing.emit_error(where="startup", exc=exc)
+            raise
         data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
         if on_startup_failure is None:
             server.init(data_dir)
@@ -314,9 +318,13 @@ def main() -> None:
     def stop() -> None:
         listener.should_exit = True
 
-    listener = uvicorn.Server(
-        uvicorn.Config(create_app(on_startup_failure=stop), host=host, port=port)
-    )
+    try:
+        app = create_app(on_startup_failure=stop)
+    except Exception as exc:
+        tracing.emit_error(where="startup", exc=exc)
+        sys.exit(1)
+
+    listener = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
     listener.run()
     current = startup.status()
     # `started` stays False when the lifespan refused to start, as on a
