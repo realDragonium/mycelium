@@ -2120,6 +2120,7 @@ def _prepare_agent_review(
             "parts": count,
             "mode": settings.mode,
             "auto_apply": settings.auto_apply,
+            "alias_decisions": settings.alias_decisions,
             "earlier_review": _earlier_review(task),
         }
     )
