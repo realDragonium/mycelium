@@ -24,8 +24,10 @@ carries:
 - Its **attachments**: any number of statements and concepts.
 
 Size caps are in **Settings → Limits → Screenshots and recordings**: 5 MB for
-images and 20 MB for video by default. A larger upload is refused with 413
-before the rest of the body is read.
+images and 20 MB for video by default. A body larger than the larger of the
+two caps is refused with 413 before the rest of it is read. A file within that
+but over its own kind's cap, such as an 8 MB image under the defaults, is
+refused with 415 once its type is known.
 
 ### What is accepted
 
