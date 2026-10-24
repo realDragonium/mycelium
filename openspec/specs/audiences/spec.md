@@ -162,11 +162,11 @@ A failed batch SHALL leave its statements unlabelled and retry each with exponen
 - **THEN** the worker keeps labelling them, and stops draining once none it queued has attempts left
 
 ### Requirement: Labelling status survives restarts
-`GET /api/audiences/labelling` SHALL report statement, AI-label, curator-label, unlabelled, queued and failed counts, the last error, total label cost, `automatic`, `confirm_external_grants`, and the labelling provider and model. While a queued statement has attempts left it SHALL include `backfill` (`started_at`, `queued`, `labelled`, `cost_usd`), counted from the oldest waiting statement's queueing and read from the queue, so it survives restarts.
+`GET /api/audiences/labelling` SHALL report statement, AI-label, curator-label, unlabelled, queued and failed counts, the last error, the labelling tokens the usage ledger recorded, `automatic`, `confirm_external_grants`, and the labelling provider and model. While a queued statement has attempts left it SHALL include `backfill` (`started_at`, `queued`, `labelled`, `tokens`), counted from the oldest waiting statement's queueing and read from the queue, so it survives restarts.
 
 #### Scenario: Restart mid-backfill
 - **WHEN** the server restarts while a backfill has 40 statements left
-- **THEN** `GET /api/audiences/labelling` still shows the backfill with its labelled count and cost
+- **THEN** `GET /api/audiences/labelling` still shows the backfill with its labelled count and tokens
 
 ### Requirement: Curator labels
 A real writer or administrator SHALL be able to set a curator label with `PUT /api/statements/{statement_id}/audiences` (at most 50 live audience ids, reason up to 500 characters; unknown audiences refused with 400). The AI labeller SHALL never replace a curator label. `DELETE /api/statements/{statement_id}/audiences` ("Hand back to AI") SHALL remove the label and queue the statement. Drafters and readers SHALL be refused with 403.

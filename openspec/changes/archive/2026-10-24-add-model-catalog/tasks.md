@@ -3,7 +3,7 @@
 - [x] 1.1 Add the `model_catalog` product settings section with per-provider ID validation
 - [x] 1.2 Refuse removing a model an action uses, naming the actions
 - [x] 1.3 Refuse saving an action model that is not in the catalog
-- [x] 1.4 Return the catalog, with list-price status, in the model settings views
+- [x] 1.4 Return the catalog in the model settings views
 
 ## 2. No built-in models
 
@@ -17,3 +17,11 @@
 - [x] 3.1 Catalog card and model selects in AI settings and Draft review
 - [x] 3.2 Generate a document marks providers without a model
 - [x] 3.3 Update AI models, web app, draft review and MCP tools docs
+
+## 4. Tokens instead of prices
+
+- [x] 4.1 Delete the price table and every dollar estimate; record and report tokens
+- [x] 4.2 Token monthly budget, draft review cap, connect cap and backlog budget
+- [x] 4.3 Replace saved dollar limits on upgrade and restore, logging resets
+- [x] 4.4 AI usage page, settings and run screens in tokens
+- [x] 4.5 Update docs, skills and specs that mention costs

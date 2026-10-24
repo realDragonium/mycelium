@@ -1,7 +1,7 @@
 # ai-providers Specification
 
 ## Purpose
-Configure which language-model provider and model each AI action uses, keep provider credentials on the server, let people edit each action's behavioural instructions, and record, price and budget every model call.
+Configure which language-model provider and model each AI action uses, keep provider credentials on the server, let people edit each action's behavioural instructions, and record and budget the tokens of every model call.
 
 ## Requirements
 
@@ -48,16 +48,16 @@ The system MUST refuse a model selection whose selected provider has an empty mo
 - **THEN** the selection is saved
 
 ### Requirement: Model IDs belong to their provider
-The system MUST refuse a model ID that is recognisably the other provider's, and SHALL accept an unrecognised ID with a `model_warning` that its cost cannot be estimated; model IDs are limited to 200 characters.
+The system MUST refuse a model ID that is recognisably the other provider's, and SHALL accept any other ID without a warning; model IDs are limited to 200 characters.
 
 #### Scenario: Claude ID in the OpenAI field
 - **WHEN** an admin saves the catalog with `claude-sonnet-4-6` in the OpenAI list
 - **THEN** the request fails with 400 naming the ID as a Claude model ID
 
 #### Scenario: Unknown but plausible ID
-- **WHEN** an admin adds `claude-workspace-preview-9`, which is not in the price table, to the catalog and saves it as an action's Claude model
+- **WHEN** an admin adds `claude-workspace-preview-9` to the catalog and saves it as an action's Claude model
 - **THEN** the selection is saved
-- **AND** the action's `model_warning` says the model is not one this version knows and its cost cannot be estimated
+- **AND** the action's `model_warning` is null
 
 ### Requirement: Reasoning effort
 The system SHALL accept `none`, `minimal`, `low`, `medium`, `high`, `xhigh` or `max` as OpenAI reasoning effort and `low`, `medium`, `high`, `xhigh` or `max` as Claude reasoning effort, send no effort override when the effort is null ("Model default"), and treat an omitted effort field as keeping the saved value and an explicit `null` as restoring Model default.
@@ -228,7 +228,7 @@ The system SHALL bound every running model loop or model-backed background job (
 - **THEN** waiting work is woken and starts up to the new limit
 
 ### Requirement: Usage ledger
-The system SHALL record every model call, whether it succeeded or failed, as one row in the `ai_usage` table of `mycelium-drafts.db` with time, action, provider, model, input, cache-read, cache-write and output tokens, estimated cost, duration, success and, when known, the run and draft it served; a call made outside any action is recorded as `other`, and OpenAI embedding calls are recorded as `embedding`.
+The system SHALL record every model call, whether it succeeded or failed, as one row in the `ai_usage` table of `mycelium-drafts.db` with time, action, provider, model, input, cache-read, cache-write and output tokens, duration, success and, when known, the run and draft it served; a call made outside any action is recorded as `other`, and OpenAI embedding calls are recorded as `embedding`.
 
 #### Scenario: Truncated turn
 - **WHEN** an ingest turn stops at `max_tokens`
@@ -242,16 +242,15 @@ The system SHALL record every model call, whether it succeeded or failed, as one
 - **WHEN** writing the usage row fails
 - **THEN** the model call's own result is unaffected
 
-### Requirement: Cost estimates from list prices
-The system SHALL estimate each call's cost from built-in standard-tier list prices per million tokens, pricing Claude cache writes at 1.25 times the input rate, and SHALL record no cost for a model missing from the price table.
+### Requirement: Usage counted in tokens
+The system SHALL count usage in tokens, a call's total being its input, cache-read, cache-write and output tokens, and SHALL keep no prices and report no money amounts; `cost_usd` values written by earlier versions SHALL be kept and not read.
 
-#### Scenario: Unpriced model
-- **WHEN** a call is made to a model that is not in the price table
-- **THEN** its tokens are recorded with a null cost
-- **AND** the usage report counts it in `unpriced_calls`
+#### Scenario: A call's tokens
+- **WHEN** a call reports 1,000 input, 4,000 cache-read, 500 cache-write and 200 output tokens
+- **THEN** the usage report counts it as 1,500 input, 4,000 cached, 200 output and 5,700 tokens in total
 
 ### Requirement: Usage report
-The system SHALL serve an admin-only `GET /api/ai-usage?days=N`, with `days` from 1 to 366 and default 30, returning the totals (calls, failed calls, unpriced calls, tokens, cost), spend per UTC day, per action and per model, the ten most expensive runs or drafts, and this month's budget.
+The system SHALL serve an admin-only `GET /api/ai-usage?days=N`, with `days` from 1 to 366 and default 30, returning the totals (calls, failed calls, and input, cached, output and total tokens), tokens per UTC day, the same token counts per action and per model, the ten runs or drafts that used the most tokens, and this month's budget.
 
 #### Scenario: Out-of-range window
 - **WHEN** an admin requests `GET /api/ai-usage?days=400`
@@ -262,15 +261,15 @@ The system SHALL serve an admin-only `GET /api/ai-usage?days=N`, with `days` fro
 - **THEN** the request is refused with 403
 
 ### Requirement: Monthly AI budget
-The system SHALL support an `ai_budget` settings section with `monthly_limit_usd` (default 0, meaning no budget), `warn_percent` (1 to 100, default 80) and `pause_background` (default false), count spend per UTC calendar month, and report `warning` once spend reaches `warn_percent` and `paused` once spend reaches 100% with pausing on.
+The system SHALL support an `ai_budget` settings section with `monthly_limit_tokens` (default 0, meaning no budget), `warn_percent` (1 to 100, default 80) and `pause_background` (default false), count tokens per UTC calendar month, and report `warning` once usage reaches `warn_percent` and `paused` once usage reaches 100% with pausing on.
 
 #### Scenario: Budget banner
-- **WHEN** the monthly limit is $20 and $17 has been spent this month
+- **WHEN** the monthly limit is 20,000,000 tokens and 17,000,000 have been used this month
 - **THEN** `GET /api/ai-usage/budget` returns `percent` 85 and `warning` true to an admin
 - **AND** returns `null` to a non-admin
 
 #### Scenario: No budget
-- **WHEN** `monthly_limit_usd` is 0
+- **WHEN** `monthly_limit_tokens` is 0
 - **THEN** `GET /api/ai-usage/budget` returns `null`
 
 ### Requirement: Budget pauses only background actions
@@ -352,7 +351,7 @@ The system SHALL, on every start, append a release's new default as another `see
 - **AND** `GET /api/ai-instructions/ask` reports `newer_default_since` until any version is saved
 
 ### Requirement: Model catalog
-The system SHALL keep, as the `model_catalog` product settings section, an ordered list of model IDs per provider (`claude`, `openai`) that admins edit, and SHALL refuse a list that names a model twice or a model ID of the other provider. Model IDs are limited to 200 characters. `GET /api/model-settings` and the draft review settings SHALL return the catalog as `catalog`, each entry with `provider`, `model` and `priced` (whether the price table knows it).
+The system SHALL keep, as the `model_catalog` product settings section, an ordered list of model IDs per provider (`claude`, `openai`) that admins edit, and SHALL refuse a list that names a model twice or a model ID of the other provider. Model IDs are limited to 200 characters. `GET /api/model-settings` and the draft review settings SHALL return the catalog as `catalog`, each entry with `provider` and `model`.
 
 #### Scenario: Adding a model
 - **WHEN** an admin saves the `model_catalog` section with `claude` `["claude-opus-5-5"]` at the current revision
@@ -361,10 +360,6 @@ The system SHALL keep, as the `model_catalog` product settings section, an order
 #### Scenario: Stale catalog save
 - **WHEN** an admin saves the catalog with a revision that no longer matches
 - **THEN** the request fails with 409
-
-#### Scenario: Unpriced model
-- **WHEN** an admin adds `acme-large` to the OpenAI list
-- **THEN** its catalog entry has `priced` false and its calls record no cost
 
 ### Requirement: Actions choose from the catalog
 The system MUST refuse saving an action model, including the draft review model, that is not in the catalog of its provider, unless it is the model already saved.
@@ -394,3 +389,14 @@ The system SHALL, once, on the first start of an instance with saved settings bu
 #### Scenario: Action that ran on a built-in default
 - **WHEN** an instance whose `connect` action has no saved selection upgrades
 - **THEN** `connect` is saved on `claude-sonnet-4-6`, the log says so, and `claude-sonnet-4-6` is in the Claude catalog
+
+### Requirement: Upgrade replaces dollar limits
+The system SHALL, on start and on restoring an archive, replace a saved dollar limit by its token field: `ai_budget.monthly_limit_usd` by `monthly_limit_tokens`, and `max_cost_usd` by `max_draft_tokens` for draft review and by `max_run_tokens` for connect. A value still at its shipped default ($0, $1 and $0.50) SHALL take the token default; any other value SHALL become 0, meaning no limit, with a log warning naming the old amount.
+
+#### Scenario: A set monthly budget
+- **WHEN** an instance with `monthly_limit_usd` 50 upgrades
+- **THEN** `monthly_limit_tokens` is 0 and the log says the $50 budget became no limit
+
+#### Scenario: A default review cap
+- **WHEN** an instance with draft review `max_cost_usd` 1.0 upgrades
+- **THEN** `max_draft_tokens` is 300,000

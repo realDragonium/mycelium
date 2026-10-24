@@ -74,7 +74,7 @@ The system SHALL, when a statement list is requested with `to_connect=true`, ret
 - **THEN** the second is returned first
 
 ### Requirement: Connect pass availability
-The system SHALL include in the health response `connect` with `batch_size`, `max_cost_usd`, `provider`, `model` and `priced` (false when the selected model has no known price), or `connect: null` with `connect_error` explaining why the connect pass is unavailable, such as missing credentials or an unavailable model setting.
+The system SHALL include in the health response `connect` with `batch_size`, `max_run_tokens`, `provider` and `model`, or `connect: null` with `connect_error` explaining why the connect pass is unavailable, such as missing credentials or an unavailable model setting.
 
 #### Scenario: No credentials for the connect model
 - **WHEN** the connect action's provider has no credentials configured
@@ -95,7 +95,7 @@ The system MUST refuse a connect call before any model call when `statement_ids`
 - **THEN** the call is refused with `at most 5 statements per run; got 6`
 
 ### Requirement: Connect pass result
-The system SHALL answer a connect call with the same `draft_created` or `nothing_to_ingest` shape as `ingest` (see the `ingest` capability), plus `cost_usd` (null when the model has no known price) and `gaps_filed`; a created draft is submitted to the internal reviewer while review is on and otherwise stays open.
+The system SHALL answer a connect call with the same `draft_created` or `nothing_to_ingest` shape as `ingest` (see the `ingest` capability), plus `tokens` (every token the run's model calls used) and `gaps_filed`; a created draft is submitted to the internal reviewer while review is on and otherwise stays open.
 
 #### Scenario: Connect while review is on
 - **WHEN** a connect run queues links and draft review is on
@@ -142,10 +142,10 @@ The system SHALL record, for each batch statement the run reconciled (any ledger
 - **THEN** only those three are recorded as looked at
 
 ### Requirement: Connect pass limits
-The system SHALL bound each connect run by the saved connect limits: batch size (default 5), spending cap (default $0.50), operation cap (default 60), wall clock (default 300 seconds), max tokens per turn (default 32000) and per-call timeout (default 120 seconds); before each model turn it stops reading and emits when the spend so far plus a reserve for one more turn and the final emit reaches the cap. A model without a known price has no spending cap.
+The system SHALL bound each connect run by the saved connect limits: batch size (default 5), token cap (`max_run_tokens`, default 2,000,000, 0 for none), operation cap (default 60), wall clock (default 300 seconds), max tokens per turn (default 32000) and per-call timeout (default 120 seconds); before each model turn it stops reading and emits when the tokens used so far plus a reserve for one more turn and the final emit reach the cap.
 
-#### Scenario: Spending cap near
-- **WHEN** the spend so far plus the reserve reaches $0.50
+#### Scenario: Token cap near
+- **WHEN** the tokens used so far plus the reserve reach the token cap
 - **THEN** the run stops reading and forces its final emit
 
 ### Requirement: Connect pass budget and model
