@@ -607,14 +607,18 @@ def enqueue_backfill(conn: sqlite3.Connection, *, relabel_ai: bool) -> int:
 def due_batch(
     conn: sqlite3.Connection, limit: int, now: datetime | None = None
 ) -> list[sqlite3.Row]:
-    """Queued statements ready for an attempt, oldest first, with their text."""
+    """Queued statements ready for an attempt, newest first, with their text.
+
+    A backfill queues thousands of statements and takes most of an hour. A
+    statement written meanwhile goes first, so an edit does not hide it from
+    the external audiences that saw it for the rest of the backfill."""
     at = (now or datetime.now(UTC)).isoformat()
     return list(
         conn.execute(
             "SELECT s.id, s.kind, s.text, q.previous FROM audience_label_queue q "
             "JOIN statements s ON s.id = q.statement_id "
             "WHERE q.attempts < ? AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= ?) "
-            "ORDER BY q.enqueued_at, q.statement_id LIMIT ?",
+            "ORDER BY q.enqueued_at DESC, q.statement_id LIMIT ?",
             (MAX_ATTEMPTS, at, limit),
         )
     )

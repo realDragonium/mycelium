@@ -443,6 +443,15 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     assert bool(store.audience_labels.due_batch(db, 1)) == (interruption != "failure")
 
 
+def test_a_statement_written_during_a_backfill_is_labelled_before_its_backlog(db):
+    store.create_statement(db, "state", "Workspaces have owners.")
+    store.create_statement(db, "state", "Login supports SSO.")
+    db.execute("UPDATE audience_label_queue SET enqueued_at = '2026-10-23T00:00:00Z'")
+    written = store.create_statement(db, "state", "Invoices can be exported.")
+
+    assert [row["id"] for row in store.audience_labels.due_batch(db, 1)] == [written]
+
+
 # --- HTTP ----------------------------------------------------------------------
 
 
