@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import threading
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -39,6 +38,7 @@ from . import (
     request_timing,
     store,
     timestamps,
+    workers,
 )
 from .docgen import publication
 from .documentation_planning import ExistingDocument, stale_key
@@ -454,31 +454,18 @@ def _entry(row: sqlite3.Row) -> Entry:
 # --- worker --------------------------------------------------------------------
 
 SWEEP_INTERVAL_S = 60.0
-_thread: threading.Thread | None = None
-_stop = threading.Event()
+_worker = workers.Worker(
+    "document-maintenance",
+    lambda _: sweep(),
+    interval=SWEEP_INTERVAL_S,
+    session=workers.no_session,
+    delay_first=True,
+)
 
 
-def start(interval: float = SWEEP_INTERVAL_S) -> None:
-    global _thread
-    if _thread is not None and _thread.is_alive():
-        return
-    _stop.clear()
-
-    def loop() -> None:
-        while not _stop.wait(interval):
-            try:
-                sweep()
-            except Exception:  # never let the thread die on one bad sweep
-                logger.exception("document maintenance sweep failed")
-
-    _thread = threading.Thread(target=loop, name="document-maintenance", daemon=True)
-    _thread.start()
+def start() -> None:
+    _worker.start()
 
 
 def stop(timeout: float = 5.0) -> None:
-    global _thread
-    _stop.set()
-    if _thread is not None:
-        _thread.join(timeout)
-        if not _thread.is_alive():
-            _thread = None
+    _worker.stop(timeout)

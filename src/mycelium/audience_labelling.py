@@ -19,6 +19,7 @@ import logging
 import sqlite3
 import threading
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -32,6 +33,7 @@ from . import (
     request_timing,
     store,
     timestamps,
+    workers,
 )
 from .ai.pricing import price
 from .audiences import Audience
@@ -276,9 +278,7 @@ def clear_curator_label(statement_id: str) -> None:
 # --- worker --------------------------------------------------------------------
 
 POLL_INTERVAL_S = 30.0
-_thread: threading.Thread | None = None
-_wake = threading.Event()
-_stop = threading.Event()
+_worker: workers.Worker[sqlite3.Connection] | None = None
 _forced = threading.Event()
 
 
@@ -287,7 +287,8 @@ def wake(*, force: bool = False) -> None:
     an admin asked for it."""
     if force:
         _forced.set()
-    _wake.set()
+    if _worker is not None:
+        _worker.wake()
 
 
 def _automatic() -> bool:
@@ -299,41 +300,31 @@ def _automatic() -> bool:
         return False
 
 
+def labelling_pass(conn: sqlite3.Connection) -> None:
+    forced = _forced.is_set()
+    if forced or _automatic():
+        drain(conn)
+        if forced and store.audience_labels.queue_counts(conn)[0] == 0:
+            _forced.clear()
+
+
 def start(data_dir: Path | str, *, poll_interval: float = POLL_INTERVAL_S) -> None:
-    """Start the daemon worker on its own substrate connection (idempotent)."""
-    global _thread
-    if _thread is not None and _thread.is_alive():
+    """Start the worker on its own substrate connection (idempotent)."""
+    global _worker
+    if _worker is not None and _worker.running():
         return
-    db_path = Path(data_dir) / "mycelium.db"
-    history_path = Path(data_dir) / "mycelium-history.db"
-    _stop.clear()
-
-    def _run() -> None:
-        conn = store.connect(db_path, history_path=history_path)
-        while not _stop.is_set():
-            forced = _forced.is_set()
-            if forced or _automatic():
-                try:
-                    drain(conn)
-                    if forced and store.audience_labels.queue_counts(conn)[0] == 0:
-                        _forced.clear()
-                except Exception:  # never let the thread die on one bad drain
-                    logger.exception("audience labelling drain failed")
-            _wake.wait(poll_interval)
-            _wake.clear()
-
-    _thread = threading.Thread(target=_run, name="audience-labelling", daemon=True)
-    _thread.start()
+    _worker = workers.Worker(
+        "audience-labelling",
+        labelling_pass,
+        interval=poll_interval,
+        session=partial(workers.substrate_connection, Path(data_dir)),
+    )
+    _worker.start()
 
 
 def stop(timeout: float = 5.0) -> None:
-    global _thread
-    _stop.set()
-    _wake.set()
-    if _thread is not None:
-        _thread.join(timeout)
-        if not _thread.is_alive():
-            _thread = None
+    if _worker is not None:
+        _worker.stop(timeout)
 
 
 # --- status --------------------------------------------------------------------

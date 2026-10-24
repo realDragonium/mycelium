@@ -273,7 +273,7 @@ def test_without_credentials_the_worker_leaves_the_queue_untouched(
     "interruption", ["failure", "exhausted", "paused", "credentials"]
 )
 def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
-    db, prompts, tmp_path, monkeypatch, interruption
+    db, prompts, monkeypatch, interruption
 ):
     at = datetime(2026, 10, 23, tzinfo=UTC)
     monkeypatch.setattr(
@@ -315,56 +315,40 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
             "Missing credentials" if blocked and interruption == "credentials" else None
         ),
     )
-    monkeypatch.setattr(audience_labelling, "_thread", None)
-    for name in ("_stop", "_wake", "_forced"):
-        monkeypatch.setattr(audience_labelling, name, threading.Event())
-    monkeypatch.setattr(audience_labelling.store, "connect", lambda *args, **kwargs: db)
-    monkeypatch.setattr(threading.Thread, "start", lambda thread: thread.run())
+    monkeypatch.setattr(audience_labelling, "_forced", threading.Event())
     assert audience_labelling.backfill(relabel_ai=False).queued == 2
     if interruption == "exhausted":
         db.execute(
             "UPDATE audience_label_queue SET attempts = ?",
             (store.audience_labels.MAX_ATTEMPTS - 1,),
         )
-    polls = []
 
-    def poll(interval):
-        nonlocal blocked
-        polls.append(interval)
-        if len(polls) == 1:
-            assert audience_labelling._forced.is_set()
-            assert store.audience_labels.due_batch(db, 1)
-            if interruption in {"paused", "credentials"}:
-                assert store.audience_labels.queue_counts(db) == (2, 0, None)
-            else:
-                assert len(calls) == 1
-            blocked = False
-        elif len(polls) == 2:
-            # A statement waiting out its backoff keeps the backfill going.
-            assert audience_labelling._forced.is_set() == (interruption == "failure")
-            assert not store.audience_labels.due_batch(db, 1)
-            assert store.audience_labels.get_label(
-                db, second if calls[0] == first else first
-            )
-            if interruption in {"paused", "credentials"}:
-                assert _queued(db) == set()
-            else:
-                assert _queued(db) == {calls[0]}
-                assert store.audience_labels.queue_counts(db)[:2] == (
-                    (0, 1) if interruption == "exhausted" else (1, 0)
-                )
-            store.create_statement(db, "state", "Login supports SSO.")
-        else:
-            assert len(polls) == 3
-            # Only a backfill still in progress labels the new statement.
-            assert bool(store.audience_labels.due_batch(db, 1)) == (
-                interruption != "failure"
-            )
-            audience_labelling._stop.set()
+    audience_labelling.labelling_pass(db)
+    assert audience_labelling._forced.is_set()
+    assert store.audience_labels.due_batch(db, 1)
+    if interruption in {"paused", "credentials"}:
+        assert store.audience_labels.queue_counts(db) == (2, 0, None)
+    else:
+        assert len(calls) == 1
+    blocked = False
 
-    monkeypatch.setattr(audience_labelling._wake, "wait", poll)
-    audience_labelling.start(tmp_path)
-    assert len(polls) == 3
+    audience_labelling.labelling_pass(db)
+    # A statement waiting out its backoff keeps the backfill going.
+    assert audience_labelling._forced.is_set() == (interruption == "failure")
+    assert not store.audience_labels.due_batch(db, 1)
+    assert store.audience_labels.get_label(db, second if calls[0] == first else first)
+    if interruption in {"paused", "credentials"}:
+        assert _queued(db) == set()
+    else:
+        assert _queued(db) == {calls[0]}
+        assert store.audience_labels.queue_counts(db)[:2] == (
+            (0, 1) if interruption == "exhausted" else (1, 0)
+        )
+    store.create_statement(db, "state", "Login supports SSO.")
+
+    audience_labelling.labelling_pass(db)
+    # Only a backfill still in progress labels the new statement.
+    assert bool(store.audience_labels.due_batch(db, 1)) == (interruption != "failure")
 
 
 # --- HTTP ----------------------------------------------------------------------
