@@ -51,44 +51,78 @@ class SettingsModel(BaseModel):
 
 
 class RequestLimits(SettingsModel):
+    #: max_tokens per model turn, including thinking where supported.
     max_tokens: int = Field(default=8000, gt=0)
+    #: Provider retries cover 429/5xx/connection with exponential backoff;
+    #: this raises the provider's default 2 for the slow-substrate environment.
     max_retries: int = Field(default=4, ge=0)
+    #: Per-model-call timeout, seconds. Kept under the whole-run wall clock so
+    #: a single hung call can't blow the whole budget.
     request_timeout_s: float = Field(default=120.0, gt=0)
 
 
 class LoopLimits(RequestLimits):
+    #: Hard ceiling on substrate operations per run, including opening reads.
     op_cap: int = Field(default=150, gt=0)
+    #: Whole-run wall-clock budget, seconds.
     wall_clock_s: float = Field(default=1200.0, gt=0)
+    #: Adaptive thinking in the loop, where the model supports it.
     thinking: bool = True
 
 
 class AskSettings(LoopLimits):
     kind: Literal["ask"] = "ask"
+    #: Recon counts toward the substrate operation cap.
     op_cap: int = Field(default=25, gt=0)
+    #: On exhaustion, return a low-confidence partial answer rather than throw.
+    #: Transports without keepalive can drop calls that exceed their idle
+    #: window; callers with a tight window can select the quick depth ceilings.
     wall_clock_s: float = Field(default=90.0, gt=0)
     request_timeout_s: float = Field(default=75.0, gt=0)
+    #: Adaptive thinking in the retrieval loop. Default OFF: with thinking on,
+    #: each retrieval turn spent ~2x as long thinking and the run still blew the
+    #: wall-clock budget; off, the same question finishes cleanly and faster.
+    #: Haiku does not support adaptive thinking. Enable in AI settings on a
+    #: model that supports it.
     thinking: bool = False
+    #: The loop re-sends a growing conversation every turn. Prompt caching
+    #: reuses the static prefix (tools + system) and prior conversation on
+    #: turns 2..N, reducing latency and cost. Can be disabled for A/B runs.
     cache: bool = True
+    #: Per-part limit for the opening recon search, which decomposes the question.
     recon_k: int = Field(default=8, gt=0)
 
 
 class IngestSettings(LoopLimits):
     kind: Literal["ingest"] = "ingest"
-    # Adaptive thinking plus a full emit_draft outgrew 8000 in most drafts.
+    #: Adaptive thinking plus a full emit_draft outgrew 8000 in most drafts.
     max_tokens: int = Field(default=32000, gt=0)
+    #: Vocab fetch and every reconcile read count toward this cap. Ingest
+    #: reconciles per candidate, so it needs more reads than ask.
     op_cap: int = Field(default=50, gt=0)
-    # Enforced on the whole run: 120 s left one or two reading turns.
+    #: Whole run, final emit included: reading stops early enough to leave it
+    #: a third. Exhaustion forces an emit (or NothingToIngest) rather than
+    #: throwing. The former 120 s left only one or two reading turns.
     wall_clock_s: float = Field(default=300.0, gt=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
+    #: Longer input is head-truncated and a gap recorded, never silently lost.
     max_input_chars: int = Field(default=20000, gt=0)
 
 
 class DocgenSettings(LoopLimits):
     kind: Literal["docgen"] = "docgen"
+    #: A run holds a shared model-loop slot for its whole life, so this also
+    #: bounds how long it can keep that slot from ask and ingest.
     wall_clock_s: float = Field(default=900.0, gt=0)
-    # Adaptive thinking plus a whole document body outgrew 12000.
+    #: A document body is the largest single output of these loops, and
+    #: adaptive thinking shares the budget. Both together outgrew 12000.
     max_tokens: int = Field(default=32000, gt=0)
+    #: Enforced at the door by request_documentation, which refuses rather
+    #: than truncates: silently dropping the tail of a person's prompt would
+    #: generate the wrong document instead of an error they can act on.
     max_prompt_chars: int = Field(default=2000, gt=0)
+    #: Per-part limit of the opening decomposed search_statements map. Wider
+    #: than ask's recon because a document covers a topic, not a question.
     recon_k: int = Field(default=30, gt=0)
 
 

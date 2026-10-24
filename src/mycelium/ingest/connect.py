@@ -361,12 +361,9 @@ def config_from_settings() -> IngestConfig:
         model=selected.model,
         provider=selected.provider,
         reasoning_effort=selected.reasoning_effort,
-        op_cap=limits.op_cap,
-        wall_clock_s=limits.wall_clock_s,
-        max_tokens=limits.max_tokens,
-        max_retries=limits.max_retries,
-        request_timeout_s=limits.request_timeout_s,
-        thinking=limits.thinking,
+        limits=product_settings.IngestSettings.model_validate(
+            limits.model_dump(include=set(product_settings.LoopLimits.model_fields))
+        ),
         max_cost_usd=limits.max_cost_usd,
         trace_dir=str(tracing.default_trace_dir()),
     )

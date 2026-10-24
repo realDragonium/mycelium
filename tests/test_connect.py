@@ -11,6 +11,7 @@ import pytest
 from mycelium import ai
 from mycelium.ingest import DraftCreated, IngestConfig, NothingToIngest
 from mycelium.ingest.connect import Looked, Target, looked_at, run_connect
+from mycelium.product_settings import IngestSettings
 from test_ingest import (
     FakeAnthropic,
     FakeEmitter,
@@ -64,7 +65,7 @@ def _connect(ops, *, known=(), **config):
         client=client,
         substrate=FakeSubstrate({"get_statements": _statements}),
         emitter=emitter,
-        config=IngestConfig(trace_log_path=None, **config),
+        config=IngestConfig(trace_log_path=None, limits=IngestSettings(**config)),
     )
     return result, emitter, client
 

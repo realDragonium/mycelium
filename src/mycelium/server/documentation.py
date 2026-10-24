@@ -107,7 +107,7 @@ def request_documentation(
     text = prompt.strip()
     if not text:
         raise ValueError("prompt is required")
-    max_chars = DocgenConfig.from_env().max_prompt_chars
+    max_chars = DocgenConfig.from_env().limits.max_prompt_chars
     if len(text) > max_chars:
         raise ValueError(
             f"prompt is {len(text)} characters; the limit is {max_chars} "
@@ -168,7 +168,7 @@ def revise_document(
     text = prompt.strip()
     if not text and not update_sources:
         raise ValueError("prompt is required")
-    if len(text) > DocgenConfig.from_env().max_prompt_chars:
+    if len(text) > DocgenConfig.from_env().limits.max_prompt_chars:
         raise ValueError(
             "The revision instructions exceed the documentation prompt limit."
         )

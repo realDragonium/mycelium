@@ -102,7 +102,10 @@ def _stub_ingest_model(monkeypatch, entity_id):
             ),
             substrate=FakeSubstrate(),
             config=dataclasses.replace(
-                config, provider="claude", thinking=False, trace_log_path=None
+                config,
+                provider="claude",
+                limits=config.limits.model_copy(update={"thinking": False}),
+                trace_log_path=None,
             ),
         )
 
@@ -474,7 +477,10 @@ def _ingest_aliases_only(client, monkeypatch, entity_id):
             ),
             substrate=FakeSubstrate(),
             config=dataclasses.replace(
-                config, provider="claude", thinking=False, trace_log_path=None
+                config,
+                provider="claude",
+                limits=config.limits.model_copy(update={"thinking": False}),
+                trace_log_path=None,
             ),
         ),
     )

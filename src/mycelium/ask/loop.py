@@ -171,8 +171,8 @@ def _execute(
         question=question,
         model=config.model,
         provider=config.provider,
-        op_cap=config.op_cap,
-        wall_clock_s=config.wall_clock_s,
+        op_cap=config.limits.op_cap,
+        wall_clock_s=config.limits.wall_clock_s,
     )
     instructions = ai_prompts.resolve("ask")
     trace.prompts.append(instructions.reference())
@@ -238,11 +238,11 @@ def _drive(ctx: _RunContext) -> AskResult:
     stream, trace, config = ctx.stream, ctx.trace, ctx.config
     client, messages, tools = ctx.client, ctx.messages, ctx.tools
     start = ctx.start
-    max_turns = config.op_cap + _TURN_HEADROOM
+    max_turns = config.limits.op_cap + _TURN_HEADROOM
     while True:
         # Budget gates — forced finalize bypasses the floor and degrades.
         stream.check()
-        reason = check_budget(trace, config, start, max_turns)
+        reason = check_budget(trace, config.limits, start, max_turns)
         if reason:
             return _forced_finalize(reason, ctx)
 
@@ -353,7 +353,10 @@ def _run_reads(tool_uses: list[ai.ToolUse], ctx: _RunContext) -> None:
             read_results.append(_tool_result_block(tu.id, str(exc), is_error=True))
             continue
         if check_budget(
-            ctx.trace, ctx.config, ctx.start, ctx.config.op_cap + _TURN_HEADROOM
+            ctx.trace,
+            ctx.config.limits,
+            ctx.start,
+            ctx.config.limits.op_cap + _TURN_HEADROOM,
         ):
             read_results.append(
                 _tool_result_block(tu.id, "Retrieval budget exhausted", is_error=True)
@@ -491,7 +494,7 @@ def _handle_submit(tool_use: ai.ToolUse, ctx: _RunContext) -> AskResult | None:
 def _recon(
     question: str, substrate: SubstrateReader, config: AskConfig, trace: TraceBuilder
 ) -> Any:
-    args = {"query": question, "limit": config.recon_k, "decompose": True}
+    args = {"query": question, "limit": config.limits.recon_k, "decompose": True}
     try:
         with trace.span("recon"):
             recon = substrate.call("search_statements", args)
@@ -774,12 +777,12 @@ def _model_turn(
             ai.ModelConfig(
                 provider=config.provider,
                 model=config.model,
-                max_tokens=config.max_tokens,
-                request_timeout_s=config.request_timeout_s,
-                max_retries=config.max_retries,
-                thinking=config.thinking,
+                max_tokens=config.limits.max_tokens,
+                request_timeout_s=config.limits.request_timeout_s,
+                max_retries=config.limits.max_retries,
+                thinking=config.limits.thinking,
                 reasoning_effort=config.reasoning_effort,
-                cache=config.cache,
+                cache=config.limits.cache,
             ),
             client=client,
         )

@@ -14,7 +14,7 @@ against the substrate, so the op cap and wall clock are larger.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final
 
@@ -38,29 +38,9 @@ class IngestConfig:
     model: str = DEFAULT_MODEL
     provider: Provider = "claude"
     reasoning_effort: ReasoningEffort | None = None
-    #: Hard ceiling on substrate operations per call. Vocab fetch + every
-    #: reconcile read counts toward it. Higher than ask's: ingest reconciles
-    #: per-candidate, so it spends far more reads.
-    op_cap: int = 50
-    #: Whole-call wall-clock budget, seconds, the final emit included: reading
-    #: stops early enough to leave it a third. On exhaustion we degrade to a
-    #: forced emit (or NothingToIngest) rather than throwing.
-    wall_clock_s: float = 300.0
-    #: max_tokens per model turn, thinking included. Adaptive thinking plus a
-    #: full emit_draft outgrew 8000 in most drafts.
-    max_tokens: int = 32000
-    #: Provider retries cover 429/5xx/connection with exponential backoff;
-    #: this raises its default 2 for the slow-substrate environment.
-    max_retries: int = 4
-    #: Per-model-call timeout, seconds. Kept under the wall clock so a
-    #: single hung call can't blow the whole budget.
-    request_timeout_s: float = 90.0
-    #: Adaptive thinking in the loop, kept on the forced emit where the model
-    #: accepts it with a forced tool_choice.
-    thinking: bool = True
-    #: Cap on input text. Longer input is head-truncated and a gap recorded —
-    #: never silently blown past.
-    max_input_chars: int = 20000
+    limits: product_settings.IngestSettings = field(
+        default_factory=product_settings.IngestSettings
+    )
     #: Path to the reasoning doctrine injected into the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
     #: Spending cap per run, in USD. Needs a list price; without one the
@@ -86,13 +66,7 @@ class IngestConfig:
             model=selected.model,
             provider=selected.provider,
             reasoning_effort=selected.reasoning_effort,
-            op_cap=limits.op_cap,
-            wall_clock_s=limits.wall_clock_s,
-            max_tokens=limits.max_tokens,
-            max_retries=limits.max_retries,
-            request_timeout_s=limits.request_timeout_s,
-            thinking=limits.thinking,
-            max_input_chars=limits.max_input_chars,
+            limits=limits,
             doctrine_path=(
                 os.environ.get("MYCELIUM_INGEST_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH

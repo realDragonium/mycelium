@@ -703,7 +703,7 @@ def approve(item_id: str, *, decided_by: str | None) -> dict[str, object]:
     drafts = drafts_store.connection()
     row = doc_plans.claim(drafts, item_id, decided_by)
     try:
-        prompt = _brief(row, DocgenConfig.from_env().max_prompt_chars)
+        prompt = _brief(row, DocgenConfig.from_env().limits.max_prompt_chars)
         if str(row["key"]).startswith("stale:"):
             run = _bring_up_to_date(drafts, row)
         elif row["action"] == "create":

@@ -249,8 +249,8 @@ def _execute(
     trace = TraceBuilder(
         model=config.model,
         provider=config.provider,
-        op_cap=config.op_cap,
-        wall_clock_s=config.wall_clock_s,
+        op_cap=config.limits.op_cap,
+        wall_clock_s=config.limits.wall_clock_s,
         input_chars=len(task.text),
     )
     trace.notes.extend(task.notes)
@@ -265,7 +265,7 @@ def _execute(
     ]
 
     reads_after_vocab: list[str] = []  # successful read names, for the floor
-    max_turns = config.op_cap + _TURN_HEADROOM
+    max_turns = config.limits.op_cap + _TURN_HEADROOM
 
     ctx = _RunContext(
         task=task,
@@ -278,8 +278,8 @@ def _execute(
         trace=trace,
         start=start,
         reads_after_vocab=reads_after_vocab,
-        reading_until=start + config.wall_clock_s * (1 - _FINAL_TURN_SHARE),
-        deadline=start + config.wall_clock_s,
+        reading_until=start + config.limits.wall_clock_s * (1 - _FINAL_TURN_SHARE),
+        deadline=start + config.limits.wall_clock_s,
         nudged=False,
         floor_blocks=0,
         malformed_retries=0,
@@ -288,7 +288,7 @@ def _execute(
     while True:
         # ---- Budget gates first — forced finalize bypasses the floor ----
         reason = (
-            check_budget(trace, config, start, max_turns)
+            check_budget(trace, config.limits, start, max_turns)
             or ("wall_clock" if time.monotonic() >= ctx.reading_until else None)
             or _cost_reached(trace, config, _reserve(ctx, config))
         )
@@ -499,12 +499,12 @@ def _existing_statements(
 
 def _guard_input(text: str, config: IngestConfig) -> tuple[str, str | None]:
     text = text or ""
-    if len(text) <= config.max_input_chars:
+    if len(text) <= config.limits.max_input_chars:
         return text, None
-    head = text[: config.max_input_chars]
+    head = text[: config.limits.max_input_chars]
     note = (
         f"input truncated: {len(text)} chars exceeded max_input_chars="
-        f"{config.max_input_chars}; only the head was processed (tail is a gap)"
+        f"{config.limits.max_input_chars}; only the head was processed (tail is a gap)"
     )
     return head, note
 
@@ -1358,10 +1358,10 @@ def _model_turn(
         ai.ModelConfig(
             provider=config.provider,
             model=config.model,
-            max_tokens=config.max_tokens,
-            request_timeout_s=min(config.request_timeout_s, remaining),
-            max_retries=config.max_retries,
-            thinking=config.thinking,
+            max_tokens=config.limits.max_tokens,
+            request_timeout_s=min(config.limits.request_timeout_s, remaining),
+            max_retries=config.limits.max_retries,
+            thinking=config.limits.thinking,
             reasoning_effort=config.reasoning_effort,
             cache=True,
         ),

@@ -11,6 +11,7 @@ import pytest
 from mycelium import ai
 from mycelium.ask import AskConfig, run_ask
 from mycelium.ask.events import AnswerDeltas, AskCancelled, AskEvent, AskStream
+from mycelium.product_settings import AskSettings
 from test_ask import FakeSubstrate, _submit_input
 
 
@@ -484,7 +485,7 @@ def test_forced_finalize_keeps_deterministic_coverage_gaps(monkeypatch):
     result = run_ask(
         "Why?",
         substrate=FakeSubstrate({"recon": [{"id": "stm_1", "text": "x" * 25_000}]}),
-        config=AskConfig(op_cap=1, trace_dir=""),
+        config=AskConfig(limits=AskSettings(op_cap=1), trace_dir=""),
     )
     assert result.confidence == "low"
     assert any("omitted" in gap for gap in result.gaps)

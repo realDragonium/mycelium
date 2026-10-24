@@ -6,6 +6,7 @@ import pytest
 from mycelium import ai, auth, drafts_store, model_settings, prompt_store, server, store
 from mycelium import alias_suggestions as aliases
 from mycelium.ingest.draft import InProcessDraftEmitter
+from mycelium.product_settings import IngestSettings
 from mycelium.server import runtime
 from test_reviewed_application import _app
 
@@ -333,7 +334,7 @@ def test_ingest_validates_alias_quote_against_actual_input(quote, queued):
         ),
         substrate=FakeSubstrate(),
         emitter=emitter,
-        config=IngestConfig(thinking=False, trace_log_path=None),
+        config=IngestConfig(limits=IngestSettings(thinking=False), trace_log_path=None),
     )
     assert bool(emitter.queued) is queued
     if not queued:
@@ -384,7 +385,7 @@ def test_ingest_puts_alias_suggestions_in_their_own_submitted_draft(with_knowled
         ),
         substrate=FakeSubstrate(),
         emitter=emitter,
-        config=IngestConfig(thinking=False, trace_log_path=None),
+        config=IngestConfig(limits=IngestSettings(thinking=False), trace_log_path=None),
     )
     by_draft = {}
     for draft_id, kind, _ in emitter.queued:
@@ -456,7 +457,7 @@ def test_split_renumbers_references_to_the_knowledge_draft():
         ),
         substrate=FakeSubstrate(),
         emitter=emitter,
-        config=IngestConfig(thinking=False, trace_log_path=None),
+        config=IngestConfig(limits=IngestSettings(thinking=False), trace_log_path=None),
     )
 
     knowledge = [

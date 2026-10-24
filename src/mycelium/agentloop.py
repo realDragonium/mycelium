@@ -27,6 +27,7 @@ from typing import Any
 
 from .ai.pricing import Price
 from .ai.types import Usage
+from .product_settings import LoopLimits
 
 _TRACE_WRITE_LOCK = threading.Lock()
 
@@ -38,18 +39,19 @@ _TOOL_RESULT_MAX_CHARS = 20000
 # --------------------------------------------------------------------------- #
 
 
-def check_budget(trace: Any, config: Any, start: float, max_turns: int) -> str | None:
+def check_budget(
+    trace: Any, limits: LoopLimits, start: float, max_turns: int
+) -> str | None:
     """The shared budget gate: op-cap, then wall-clock, then max-turns.
 
     Returns the forced-finalize reason string (`"op_cap"` / `"wall_clock"` /
     `"turn_limit"`) when a ceiling is hit, else None. Order matters — op_cap is
     checked before the (cheaper-to-exceed) wall clock, matching every call site.
-    Duck-typed on the harness contract: `trace.op_count`, `trace.model_turns`,
-    `config.op_cap`, `config.wall_clock_s`.
+    Duck-typed on the trace: `trace.op_count`, `trace.model_turns`.
     """
-    if trace.op_count >= config.op_cap:
+    if trace.op_count >= limits.op_cap:
         return "op_cap"
-    if (time.monotonic() - start) > config.wall_clock_s:
+    if (time.monotonic() - start) > limits.wall_clock_s:
         return "wall_clock"
     if trace.model_turns >= max_turns:
         return "turn_limit"

@@ -15,6 +15,7 @@ import pytest
 from mycelium.agentloop import ids_present_in, serialize
 from mycelium.ask import Answered, AskConfig, NeedsClarification, prompts, run_ask
 from mycelium.ask.substrate import InProcessSubstrate, SubstrateError, ToolSpec
+from mycelium.product_settings import AskSettings
 
 # --------------------------------------------------------------------------- #
 # Fakes
@@ -129,7 +130,16 @@ def _run(responses, results=None, *, question="why does it retry?", **config_ove
             "search_statements": [{"id": "stm_1", "text": "retry"}],
         }
     )
-    cfg = AskConfig(thinking=True, trace_log_path=None, **config_over)
+    limits = {
+        key: config_over.pop(key)
+        for key in tuple(config_over)
+        if key in AskSettings.model_fields
+    }
+    cfg = AskConfig(
+        limits=AskSettings(**{"thinking": True, **limits}),
+        trace_log_path=None,
+        **config_over,
+    )
     result = run_ask(question, client=client, substrate=substrate, config=cfg)
     return result, client, substrate
 
@@ -348,20 +358,33 @@ def test_quick_depth_config_drops_floor_and_tightens_caps():
         for_depth,
     )
 
-    base = AskConfig()  # defaults: floor on, op_cap 25, wall_clock 45
+    base = AskConfig()
     assert for_depth(base, "standard") is base  # unchanged
 
     quick = for_depth(base, "quick")
     assert quick.enforce_floor is False
-    assert quick.op_cap == min(base.op_cap, QUICK_OP_CAP)
-    assert quick.wall_clock_s == min(base.wall_clock_s, QUICK_WALL_CLOCK_S)
-    assert quick.request_timeout_s == min(
-        base.request_timeout_s, QUICK_REQUEST_TIMEOUT_S
+    assert quick.limits.op_cap == min(base.limits.op_cap, QUICK_OP_CAP)
+    assert quick.limits.wall_clock_s == min(
+        base.limits.wall_clock_s, QUICK_WALL_CLOCK_S
+    )
+    assert quick.limits.request_timeout_s == min(
+        base.limits.request_timeout_s, QUICK_REQUEST_TIMEOUT_S
     )
     # ceilings only: an already-tighter budget still wins
-    tight = AskConfig(op_cap=3, wall_clock_s=10.0)
-    assert for_depth(tight, "quick").op_cap == 3
-    assert for_depth(tight, "quick").wall_clock_s == 10.0
+    tight = AskConfig(
+        limits=AskSettings(
+            op_cap=3,
+            wall_clock_s=10.0,
+            request_timeout_s=5.0,
+            max_tokens=123,
+            max_retries=0,
+            recon_k=2,
+            thinking=True,
+            cache=False,
+        ),
+    )
+    assert for_depth(tight, "quick").limits == tight.limits
+    assert base.limits == AskSettings()
 
 
 def test_floor_stuck_eventually_force_finalizes_rather_than_looping():

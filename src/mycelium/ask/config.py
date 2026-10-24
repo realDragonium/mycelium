@@ -15,7 +15,7 @@ in AI settings. A model missing from the list-price table gets no cost estimate.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort, pricing
@@ -40,41 +40,14 @@ class AskConfig:
     model: str = DEFAULT_MODEL
     provider: Provider = "claude"
     reasoning_effort: ReasoningEffort | None = None
-    #: Hard ceiling on substrate operations per call. Recon counts toward it.
-    op_cap: int = 25
-    #: Whole-call wall-clock budget, seconds. On exhaustion we degrade to a
-    #: low-confidence partial answer rather than throwing. Kept under the
-    #: connection window in front of us: the /mcp transport has no keepalive, so
-    #: an Ask that runs past the Cloudflare/ALB idle timeout is dropped mid-flight
-    #: and the client sees a generic error. 45s returns a fast partial instead.
-    #: The saved run time limit controls the runtime budget.
-    wall_clock_s: float = 45.0
+    limits: product_settings.AskSettings = field(
+        default_factory=product_settings.AskSettings
+    )
     #: The anti-premature-closure floor (loop.py: recon + a targeted retrieval +
     #: a concept-seeded adjacency re-search before an answer is accepted). ON by
     #: default — it's what buys thoroughness. The `quick` depth turns it OFF so a
     #: latency-boxed caller gets a fast, direct answer. See `for_depth`.
     enforce_floor: bool = True
-    #: Per-part `limit` for the step-0 recon search, which decomposes the question.
-    recon_k: int = 8
-    #: max_tokens per model turn. Comfortably above a structured answer.
-    max_tokens: int = 8000
-    #: Provider retries cover 429/5xx/connection with exponential backoff;
-    #: this raises its default 2 for the slow-substrate environment.
-    max_retries: int = 4
-    #: Per-model-call timeout, seconds. Kept under the wall clock so a
-    #: single hung call can't blow the whole budget.
-    request_timeout_s: float = 40.0
-    #: Adaptive thinking in the retrieval loop. Default OFF: with thinking on,
-    #: each retrieval turn spent ~2x as long thinking and the run still blew the
-    #: wall-clock budget; off, the same question finishes cleanly and faster.
-    #: (Also a no-op-to-error guard on Haiku, which doesn't take adaptive
-    #: thinking.) Enable in AI settings on a model that supports it.
-    thinking: bool = False
-    #: Prompt caching. The loop re-sends a growing conversation every turn; with
-    #: caching on, the static prefix (tools + system) and the conversation so far
-    #: are read from cache on turns 2..N instead of re-ingested — a large latency
-    #: and cost win on a multi-turn run. Disabled by an off-switch for A/B.
-    cache: bool = True
     #: JSONL sink for the eval-harness trace. None → resolved by the caller to
     #: a default under the data dir (see server wiring).
     trace_log_path: str | None = None
@@ -96,14 +69,7 @@ class AskConfig:
             model=selected.model,
             provider=selected.provider,
             reasoning_effort=selected.reasoning_effort,
-            op_cap=limits.op_cap,
-            wall_clock_s=limits.wall_clock_s,
-            recon_k=limits.recon_k,
-            max_tokens=limits.max_tokens,
-            max_retries=limits.max_retries,
-            request_timeout_s=limits.request_timeout_s,
-            thinking=limits.thinking,
-            cache=limits.cache,
+            limits=limits,
             trace_log_path=os.environ.get("MYCELIUM_ASK_TRACE_LOG"),
             trace_dir=(
                 os.environ.get("MYCELIUM_ASK_TRACE_DIR")
@@ -125,7 +91,13 @@ def for_depth(config: AskConfig, depth: str) -> AskConfig:
     return replace(
         config,
         enforce_floor=False,
-        op_cap=min(config.op_cap, QUICK_OP_CAP),
-        wall_clock_s=min(config.wall_clock_s, QUICK_WALL_CLOCK_S),
-        request_timeout_s=min(config.request_timeout_s, QUICK_REQUEST_TIMEOUT_S),
+        limits=config.limits.model_copy(
+            update={
+                "op_cap": min(config.limits.op_cap, QUICK_OP_CAP),
+                "wall_clock_s": min(config.limits.wall_clock_s, QUICK_WALL_CLOCK_S),
+                "request_timeout_s": min(
+                    config.limits.request_timeout_s, QUICK_REQUEST_TIMEOUT_S
+                ),
+            }
+        ),
     )
