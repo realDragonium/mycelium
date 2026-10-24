@@ -143,23 +143,25 @@ export function ActionModels() {
 
 /* ============================ automatic draft review ============================ */
 type ReviewMode = 'off' | 'review-only' | 'review-and-apply';
+type AutoApply = 'clean' | 'with_corrections';
 interface Reviewer { id: string; name: string; role: string }
 interface ReviewConfig {
-  mode: ReviewMode; application_enabled: boolean; provider: Provider; model: string; reasoning_effort?: Effort;
+  mode: ReviewMode; application_enabled: boolean; auto_apply: AutoApply; provider: Provider; model: string; reasoning_effort?: Effort;
   claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
   reviewer_id: string; revision: number | string; model_revision: number | string;
   source: string; issues: string[]; model_warning?: string | null; can_configure: boolean; providers: ProviderStatus[]; reviewers: Reviewer[];
 }
-interface ReviewForm { application_enabled: boolean; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; revision: number | string; model_revision: number | string }
+interface ReviewForm { application_enabled: boolean; auto_apply: AutoApply; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; revision: number | string; model_revision: number | string }
 
 function reviewForm(d: ReviewConfig): ReviewForm {
   return {
-    application_enabled: d.application_enabled, mode: d.mode, provider: d.provider, model: d.model,
+    application_enabled: d.application_enabled, auto_apply: d.auto_apply, mode: d.mode, provider: d.provider, model: d.model,
     reasoning_effort: (d.provider === 'claude' ? d.claude_reasoning_effort : d.openai_reasoning_effort) ?? null,
     reviewer_id: d.reviewer_id, revision: d.revision, model_revision: d.model_revision,
   };
 }
 const MODE_LABEL: Record<ReviewMode, string> = { off: 'Off', 'review-only': 'Review only', 'review-and-apply': 'Review and apply' };
+const AUTO_APPLY_LABEL: Record<AutoApply, string> = { clean: 'Only clean approvals', with_corrections: 'Approvals with corrections too' };
 
 interface BacklogJob {
   status: 'running' | 'paused' | 'finished'; budget_usd: number | null; spent_usd: number; reviewed: number; remaining: number;
@@ -291,7 +293,7 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
   return (
     <Card title="Automatic draft review" actions={<button type="button" className="btn ghost sm" onClick={reload} disabled={busy}>Reload</button>}>
       <p className="muted">
-        Now: {MODE_LABEL[settings.mode]} · {draftReviewProviderName(settings.provider)} · {settings.model || 'no model configured'} · effort {settings.reasoning_effort ?? 'model default'} · {settings.source === 'saved' ? 'saved here' : 'built-in defaults'}.
+        Now: {MODE_LABEL[settings.mode]}{settings.mode === 'review-and-apply' ? ` (${AUTO_APPLY_LABEL[settings.auto_apply].toLowerCase()})` : ''} · {draftReviewProviderName(settings.provider)} · {settings.model || 'no model configured'} · effort {settings.reasoning_effort ?? 'model default'} · {settings.source === 'saved' ? 'saved here' : 'built-in defaults'}.
         {' '}Applying accepted reviews is <b>{settings.application_enabled ? 'allowed' : 'not allowed'}</b>; that permission covers both a curator applying a review and automatic application.
       </p>
       {settings.can_configure && settings.mode !== 'off' && <BacklogOffer key={backlogCheck} />}
@@ -308,6 +310,12 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
                 <select className="input" value={form.mode} onChange={e => change({ mode: e.target.value as ReviewMode })}>
                   {(Object.keys(MODE_LABEL) as ReviewMode[]).map(m => <option key={m} value={m}>{MODE_LABEL[m]}</option>)}
                 </select>
+              </label>
+              <label className="field"><span>Apply automatically</span>
+                <select className="input" value={form.auto_apply} onChange={e => change({ auto_apply: e.target.value as AutoApply })}>
+                  {(Object.keys(AUTO_APPLY_LABEL) as AutoApply[]).map(a => <option key={a} value={a}>{AUTO_APPLY_LABEL[a]}</option>)}
+                </select>
+                <span className="hint">With only clean approvals, a draft the reviewer wants to correct waits for a curator, who applies or edits the suggested corrections.</span>
               </label>
               <ProviderSelect label="Provider" value={form.provider} onChange={p => change({
                 provider: p,

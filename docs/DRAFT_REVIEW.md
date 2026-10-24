@@ -49,10 +49,18 @@ submitting user's identity or session. Existing role checks still govern every
 correction and application, including operations that require admin privileges.
 
 `review-only` persists an advisory assessment. It never edits operations, creates
-an applyable review, or finalizes rejection. `review-and-apply` can make up to eight
-small corrections and record an authoritative review, reject the draft, or apply
-it through `apply_reviewed_draft`. The separate application gate must be enabled
+an applyable review, or finalizes rejection. `review-and-apply` can record an
+authoritative review, reject the draft, or apply it through
+`apply_reviewed_draft`. The separate application gate must be enabled
 before any automatic operation edits or final decisions occur.
+
+**Apply automatically** decides what `review-and-apply` lands unattended.
+**Only clean approvals** (`clean`, the default) applies a draft only when the
+reviewer labels it `good`, which never carries corrections. A draft the
+reviewer wants to correct (`changes_suggested`) waits for a curator with its
+corrections as a suggestion; see [Held corrections](#held-corrections).
+**Approvals with corrections too** (`with_corrections`) also applies those
+drafts after making the corrections itself.
 
 Each run captures its mode, provider, model, reviewer account, and configuration
 revision when admitted, including runs waiting for a worker. Any saved settings
@@ -154,14 +162,14 @@ entity are included only for operations that remap existing mentions:
 Internal review supports entity, statement, name, and graph-link mutations whose
 records the existing inspection contract fingerprints. Drafts containing other
 operations, including glossary or link-alias edits, are rejected without a model
-call. The model cannot append or revise those uninspected mutation families.
+call. The model cannot append or change those uninspected mutation families.
 
 In `review-and-apply` a draft waits for a person only when the reviewer asks
 one. Of a new statement and a live one that contradict each other, the newer
 wins: the draft, unless the live statement changed after the draft was
 created. The reviewer corrects the live statement and lists the
-contradiction, or, when the live one is newer, strikes or revises the draft's
-operation. Failed knowledge reads, oversized
+contradiction, or, when the live one is newer, drops, edits or strikes the
+draft's conflicting part. Failed knowledge reads, oversized
 context, API errors, refusals, and incomplete or invalid model output are
 explicit failed attempts and never authorize application. A failed attempt that
 recorded no review is run once more; if that fails too, the draft is rejected,
@@ -194,6 +202,52 @@ draft and the questions, and leaves the draft submitted. A curator answers with
 `POST /api/drafts/{id}/review/answer` and the draft is reviewed again with the
 answer. In the web app the questions and an answer form sit at the top of the
 draft; such drafts sort first under Drafts and are counted on Home. The reviewer gets no new tools for this.
+
+## Corrections
+
+A correction changes exactly one thing, and everything it does not name stays
+as submitted. Up to twelve per review, each with a reason:
+
+- `edit`: a statement's new `text` or `kind` (by its `statement` index in an
+  `upsert_statements` batch, or the whole `upsert_statement`,
+  `patch_statement` or `replace_text` operation), or an `upsert_entity`'s new
+  `description`.
+- `add_link` and `drop_link`: one link, named by `from_id`, `link_type`,
+  `to_id` and, to choose between links that differ only by condition, its
+  `when` tree. In a batch one end must be the batch's own statement, written
+  `@N`; the link goes on that statement. In `add_links` and `remove_links` it
+  is one entry of the list.
+- `drop_statement`: one statement of a batch. Later statements move up and
+  every `@N` and `@S:N` reference, conditions included, follows them. A
+  statement another operation still names cannot be dropped.
+- `strike`: a whole operation. A draft whose corrections strike every
+  operation is refused; that draft is a reject.
+- `append`: a new operation, written as a tool call.
+
+Indices and `@` references always name the draft as submitted, before any
+correction. The result is checked against the submitted draft: a correction
+set that would change, renumber or drop a statement, link or operation it does
+not name is refused, as is one that would leave an unresolved reference.
+Corrections recorded before this form (`revise`, which replaced a whole
+operation) stay readable but are no longer made or applied.
+
+## Held corrections
+
+Under **Only clean approvals**, a `changes_suggested` review ends with outcome
+`held` and changes nothing: no corrections, no authoritative review, no gap.
+The draft stays submitted, sorts first under Drafts with the questions, and
+its page shows each correction with a checkbox and, for edits, its new text,
+kind or description in an editable field. **Apply N corrections and approve**
+makes the ticked corrections, as edited, and approves the draft as the
+curator. **Approve and apply** approves it as submitted instead.
+
+`POST /api/drafts/{id}/review/accept` takes `run_id` and optionally
+`corrections`, the list to make instead of the reviewer's. It needs a real
+curator role and is refused unless that run is the draft's latest, is `held`,
+and the draft has not changed since. The corrections are validated like the
+reviewer's, made in one transaction, and the draft is then approved as by
+**Approve**; the run ends `applied`. If approval is refused after the
+corrections were made, the corrections stay and the response says so.
 
 Every automatic rejection, every contradiction resolved in an applied draft, and
 every question for a person is filed as a knowledge gap naming the draft, so a
@@ -232,7 +286,8 @@ application outcome and staleness, and the `list_drafts` tool none of it.
 - Label (`good`, `changes_suggested`, `reject`, `needs_context`), rationale,
   questions, concrete suggested corrections, resolved contradictions, and the
   attempt number (2 for the automatic rerun after a failure).
-- Application outcome (`unapplied`, `applied`, `rejected`, `needs_human`) and
+- Application outcome (`unapplied`, `applied`, `rejected`, `needs_human`,
+  `held`) and
   explanatory detail.
 - The sweep retry count, and curators' recorded answers to earlier questions.
 - The authoritative `review_id`, when automatic mode records one.
@@ -242,8 +297,8 @@ The HTTP tool mirrors are `POST /request-draft-review` and
 Submission from `POST /api/drafts/{id}/submit` also starts review.
 The browser bridge uses authenticated `GET /api/draft-review/settings` for
 effective configuration, readiness, and caller permissions. Admin-only
-`PATCH /api/draft-review/settings` accepts `mode`, `provider`, `model`,
-`reviewer_id`, the current control `revision`, and `model_revision`; a conflicting
+`PATCH /api/draft-review/settings` accepts `mode`, `auto_apply`, `provider`,
+`model`, `reviewer_id`, the current control `revision`, and `model_revision`; a conflicting
 revision returns 409. The selected model and review controls save atomically.
 `POST /api/drafts/{id}/review` with no body starts an
 explicit rerun. The latter returns `{review: ...}` and enforces the current
@@ -264,8 +319,8 @@ reached, and what reviewing them is likely to cost, from the average cost of a
 review run over the last 30 days (`null` without a priced one). That is a draft with no
 attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
-example one held by the application gate), or a question whose draft has
-changed since it was asked. Drafts containing only alias suggestions are excluded.
+example one held by the application gate), or a question or held corrections
+whose draft has changed since. Drafts containing only alias suggestions are excluded.
 It also returns `job`: the backlog review this process last started, or
 `null`.
 
@@ -291,7 +346,7 @@ available for human decisions.
 
 A run binds the submitted revision at request time. Before automatic action it
 checks that the draft, supplied evidence, affected knowledge, and retrieved
-supporting knowledge still match. Small corrections execute together in one draft
+supporting knowledge still match. Corrections execute together in one draft
 transaction using existing revision-checked correction APIs. A correction that
 introduces uninspected knowledge is refused and the batch rolls back.
 

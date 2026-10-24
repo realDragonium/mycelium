@@ -16,13 +16,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter
 
 from . import (
     ai,
     ai_prompts,
     ai_usage,
     auth,
+    draft_corrections,
     draft_review_model,
     draft_review_settings,
     draft_review_store,
@@ -37,7 +38,16 @@ from . import (
     workers,
 )
 from .ask.substrate import InProcessSubstrate, _json_schema_for
-from .draft_review_store import Answer, Assessment, Label, Mode, PartReview, ReviewRun
+from .draft_review_store import (
+    Answer,
+    Assessment,
+    Correction,
+    Label,
+    LegacyCorrection,
+    Mode,
+    PartReview,
+    ReviewRun,
+)
 
 if TYPE_CHECKING:
     from .server.draft_review import (
@@ -62,22 +72,6 @@ _OTHER_PARTS_LIMIT = 8000
 _CHARS_PER_TOKEN = 3
 _RELATED_PER_STATEMENT = 5
 _payload = TypeAdapter(dict[str, JsonValue])
-
-
-def _correction_payload(
-    correction: draft_review_store.Correction,
-) -> dict[str, JsonValue]:
-    if not correction.payload_json:
-        raise ValueError(
-            f"a {correction.action} correction needs payload_json: the "
-            "operation's complete arguments as one JSON object"
-        )
-    try:
-        return _payload.validate_json(correction.payload_json)
-    except ValidationError:
-        raise ValueError(
-            f"a {correction.action} correction's payload_json is not one JSON object"
-        ) from None
 
 
 # These mutation families have entity/statement fingerprints in draft inspection.
@@ -348,7 +342,7 @@ def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
         return True
     if run.status in {"running", "paused"}:
         return False
-    if run.application == "needs_human":
+    if run.application in ("needs_human", "held"):
         return run.stale
     if run.application != "unapplied" or run.review_id is not None:
         return False
@@ -1202,7 +1196,7 @@ def _record(run: ReviewRun, results: list[tuple[Part, Assessment]]) -> None:
         run.label = result.label
         run.rationale = result.rationale
         run.questions = result.questions
-        run.corrections = result.corrections
+        run.corrections = [*result.corrections]
         run.contradictions = result.contradictions
         run.parts = []
         return
@@ -1244,7 +1238,7 @@ def _record(run: ReviewRun, results: list[tuple[Part, Assessment]]) -> None:
             label=result.label,
             rationale=result.rationale,
             questions=result.questions,
-            corrections=result.corrections,
+            corrections=[*result.corrections],
             contradictions=result.contradictions,
         )
         for part, result in results
@@ -1331,20 +1325,15 @@ def _finish(
         if run.label == "needs_context":
             _ask_person(run, inspection, reads)
             return
+        if run.label == "changes_suggested" and settings.auto_apply == "clean":
+            run.application = "held"
+            run.detail = draft_review_store.HELD_FOR_CURATOR
+            return
         with store.transaction(drafts_store.connection()):
             _mutation_authority(run, inspection, settings)
-            for correction in run.corrections:
-                _mutation_authority(run, inspection, settings)
-                _correct(run.draft_id, correction)
+            _apply_corrections(run.draft_id, _precise(run.corrections))
             final = server.inspect_draft_review(run.draft_id)
-            if final["operation_findings"]:
-                raise ValueError(
-                    "the corrected draft still has operation findings: "
-                    + "; ".join(
-                        f"{item['operation_ref']}: {item['finding']}"
-                        for item in final["operation_findings"]
-                    )
-                )
+            _refuse_findings(final)
             _check_correction_knowledge(inspection, final, reads)
             _mutation_authority(run, inspection, settings)
             outcome: Literal["rejected", "refined", "accepted"] = (
@@ -1430,6 +1419,52 @@ def answer(
     )
 
 
+def accept_corrections(
+    draft_id: str,
+    run_id: str,
+    corrections: list[Correction] | None,
+    principal: auth.Principal,
+) -> ReviewRun:
+    """Apply the corrections a held review suggests, or a curator's edit of
+    them, and approve the draft as that curator. Nothing is changed unless
+    the corrected draft is free of operation findings."""
+    from . import server  # local import: server registers the review tools
+
+    conn = drafts_store.connection()
+    run = draft_review_store.latest(conn, draft_id)
+    if run is None or run.run_id != run_id:
+        raise ValueError("the draft has been reviewed again since; reload")
+    if run.application != "held":
+        raise ValueError("this review's corrections are not waiting for a curator")
+    if run.stale:
+        raise ValueError("the draft changed after the review; run the review again")
+    suggested = _precise(run.corrections)
+    chosen = suggested if corrections is None else corrections
+    token = auth.current_principal.set(principal)
+    try:
+        with store.write_lock():
+            inspection = server.inspect_draft_review(draft_id)
+            if inspection["draft"].get("status") != "submitted":
+                raise ValueError("only submitted drafts can be approved this way")
+            _validate_corrections(chosen, inspection)
+            with store.transaction(conn):
+                _apply_corrections(draft_id, chosen)
+                _refuse_findings(server.inspect_draft_review(draft_id))
+            run.draft_revision = drafts_store.current_revision(conn, draft_id)
+            server.approve_draft(draft_id, decided_by=principal.id)
+    finally:
+        auth.current_principal.reset(token)
+    run.application = "applied"
+    run.detail = (
+        "Approved by a curator with the reviewer's corrections."
+        if chosen == suggested
+        else f"Approved by a curator with {len(chosen)} corrections, edited "
+        "from the reviewer's suggestion."
+    )
+    _save(run)
+    return run
+
+
 def _follow_up(
     run: ReviewRun, settings: draft_review_settings.Snapshot, *, systemic: bool
 ) -> None:
@@ -1499,31 +1534,68 @@ def _report_gap(draft_id: str, text: str, *, statement_id: str | None = None) ->
         )
 
 
-def _correct(draft_id: str, correction: draft_review_store.Correction) -> None:
+def _precise(corrections: list[Correction | LegacyCorrection]) -> list[Correction]:
+    legacy = [c for c in corrections if isinstance(c, LegacyCorrection)]
+    if legacy:
+        raise ValueError(
+            "this assessment holds corrections from before precise corrections; "
+            "run the review again"
+        )
+    return [c for c in corrections if isinstance(c, Correction)]
+
+
+def _operations_of(
+    inspection: DraftReviewInspection,
+) -> list[draft_corrections.Operation]:
+    return [
+        draft_corrections.Operation(
+            ref=str(op["operation_ref"]),
+            seq=_seq(op),
+            kind=str(op["kind"]),
+            payload=_payload_of(op),
+        )
+        for op in _ops(inspection)
+    ]
+
+
+def _payload_of(op: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    return _payload.validate_python(op.get("payload"))
+
+
+def _apply_corrections(draft_id: str, corrections: list[Correction]) -> None:
+    """Write the corrected draft through the revision-checked correction
+    tools: changed payloads, then struck operations, then appended calls."""
     from . import server  # local import: server registers the review tools
 
-    revision = server.inspect_draft_review(draft_id)["draft_revision"]
-    if correction.action == "strike":
-        if (
-            not correction.operation_ref
-            or correction.payload_json
-            or correction.tool_name
-        ):
-            raise ValueError("strike requires only operation_ref")
-        server.strike_draft_operation(draft_id, correction.operation_ref, revision)
+    if not corrections:
         return
-    payload = _correction_payload(correction)
-    if correction.action == "revise":
-        if not correction.operation_ref or correction.tool_name:
-            raise ValueError("revise requires operation_ref and payload_json")
-        server.revise_draft_operation(
-            draft_id, correction.operation_ref, payload, revision
+    operations = _operations_of(server.inspect_draft_review(draft_id))
+    corrected = draft_corrections.apply(operations, corrections)
+    conn = drafts_store.connection()
+    for op in operations:
+        payload = corrected.payloads.get(op.ref)
+        if payload is not None and payload != op.payload:
+            server.revise_draft_operation(
+                draft_id, op.ref, payload, drafts_store.current_revision(conn, draft_id)
+            )
+    for ref in corrected.struck:
+        server.strike_draft_operation(
+            draft_id, ref, drafts_store.current_revision(conn, draft_id)
         )
-    else:
-        if not correction.tool_name or correction.operation_ref:
-            raise ValueError("append requires tool_name and payload_json")
+    for tool_name, payload in corrected.appended:
         server.append_draft_correction(
-            draft_id, correction.tool_name, payload, revision
+            draft_id, tool_name, payload, drafts_store.current_revision(conn, draft_id)
+        )
+
+
+def _refuse_findings(inspection: DraftReviewInspection) -> None:
+    if inspection["operation_findings"]:
+        raise ValueError(
+            "the corrected draft still has operation findings: "
+            + "; ".join(
+                f"{item['operation_ref']}: {item['finding']}"
+                for item in inspection["operation_findings"]
+            )
         )
 
 
@@ -1629,17 +1701,8 @@ def _strings(value: JsonValue) -> Iterator[str]:
 
 
 def _unresolved_reference(
-    name: str, payload: dict[str, JsonValue], ops: list[JsonValue]
+    name: str, payload: dict[str, JsonValue], batches: dict[int, int]
 ) -> str | None:
-    batches: dict[int, int] = {}
-    for op in ops:
-        if isinstance(op, dict) and op.get("kind") == "upsert_statements":
-            seq, op_payload = op.get("seq"), op.get("payload")
-            items = (
-                op_payload.get("statements") if isinstance(op_payload, dict) else None
-            )
-            if isinstance(seq, int) and isinstance(items, list):
-                batches[seq] = len(items)
     statements = payload.get("statements")
     size = len(statements) if isinstance(statements, list) else 0
     for value in _strings(payload):
@@ -1662,71 +1725,46 @@ def _unresolved_reference(
 
 
 def _validate_corrections(
-    corrections: list[draft_review_store.Correction],
-    inspection: DraftReviewInspection,
+    corrections: list[Correction], inspection: DraftReviewInspection
 ) -> None:
+    """Refuse corrections that do not fit the draft as submitted, or whose
+    corrected or appended operations would not bind to their tools."""
+    operations = _operations_of(inspection)
+    corrected = draft_corrections.apply(operations, corrections)
+    batches = {
+        op.seq: len(statements)
+        for op in operations
+        if op.kind == "upsert_statements"
+        and isinstance(
+            statements := corrected.payloads.get(op.ref, {}).get("statements"), list
+        )
+    }
+    changed = [
+        (op.kind, payload)
+        for op in operations
+        if (payload := corrected.payloads.get(op.ref)) is not None
+        and payload != op.payload
+    ]
+    for name, _ in corrected.appended:
+        if name not in REVIEWABLE_OPERATIONS:
+            raise ValueError("append correction needs a supported tool_name only")
+    for name, payload in [*changed, *corrected.appended]:
+        _check_binds(name, payload)
+        if problem := _unresolved_reference(name, payload, batches):
+            raise ValueError(problem)
+
+
+def _check_binds(name: str, payload: dict[str, JsonValue]) -> None:
     from . import server  # local import: validate registered tool contracts
     from .server import draft_review
 
-    ops = inspection["draft"].get("ops")
-    if not isinstance(ops, list):
-        raise ValueError("draft has no operation list")
-    originals = {
-        op["operation_ref"]: op
-        for op in ops
-        if isinstance(op, dict) and isinstance(op.get("operation_ref"), str)
-    }
-    struck = {c.operation_ref for c in corrections if c.action == "strike"}
-    if (
-        originals
-        and struck >= originals.keys()
-        and all(c.action == "strike" for c in corrections)
-    ):
-        raise ValueError(
-            "the corrections strike every operation, so nothing would land; "
-            "a draft that should not land is a reject"
-        )
     tools_by_name = {wrapper.__name__: wrapper for wrapper in server.TOOLS}
-    changed: set[str] = set()
-    for correction in corrections:
-        reference = correction.operation_ref
-        name: JsonValue
-        if correction.action == "append":
-            name = correction.tool_name
-            if reference is not None or not name or name not in REVIEWABLE_OPERATIONS:
-                raise ValueError("append correction needs a supported tool_name only")
-        else:
-            if (
-                reference is None
-                or reference not in originals
-                or reference in changed
-                or correction.tool_name is not None
-            ):
-                raise ValueError("correction needs an existing, unique operation_ref")
-            changed.add(reference)
-            name = originals[reference].get("kind")
-        if correction.action == "strike":
-            if correction.payload_json is not None:
-                raise ValueError("strike correction cannot carry a payload")
-            continue
-        payload = _correction_payload(correction)
-        if name not in REVIEWABLE_OPERATIONS:
-            raise ValueError(
-                "correction affects knowledge internal review cannot inspect"
-            )
-        if (
-            not isinstance(name, str)
-            or name not in server._ORIG_SIGNATURES
-            or name not in tools_by_name
-        ):
-            raise ValueError("correction names an unsupported tool")
-        signature = server._ORIG_SIGNATURES[name]
-        signature.bind(**payload)
-        for key, value in payload.items():
-            TypeAdapter(tools_by_name[name].__annotations__[key]).validate_python(
-                value, strict=True
-            )
-        if draft_review._nested_parameter_findings(name, payload):
-            raise ValueError("correction payload has unsupported nested parameters")
-        if problem := _unresolved_reference(name, payload, ops):
-            raise ValueError(problem)
+    if name not in server._ORIG_SIGNATURES or name not in tools_by_name:
+        raise ValueError("correction names an unsupported tool")
+    server._ORIG_SIGNATURES[name].bind(**payload)
+    for key, value in payload.items():
+        TypeAdapter(tools_by_name[name].__annotations__[key]).validate_python(
+            value, strict=True
+        )
+    if draft_review._nested_parameter_findings(name, payload):
+        raise ValueError("correction payload has unsupported nested parameters")

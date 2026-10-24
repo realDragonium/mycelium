@@ -16,8 +16,8 @@ from mycelium import (
     server,
     store,
 )
-from mycelium.draft_review_store import Correction
 from product_settings_helpers import set_product
+from review_helpers import correction
 from settings_helpers import save_model
 from settings_helpers import set_review_controls as _set_review_controls
 from test_internal_draft_review import (
@@ -161,14 +161,14 @@ def test_a_correction_must_name_draft_statements_the_way_they_resolve(
             "to_id": reference.format(seq=seq),
             "link_type": "requires",
         }
-        correction = Correction(
+        fix = correction(
             action="append",
             operation_ref=None,
             tool_name="add_links",
             payload_json=json.dumps({"links": [link]}),
             reason="Connect the new statement.",
         )
-        return _assessment("changes_suggested", [correction])
+        return _assessment("changes_suggested", [fix])
 
     _recording(monkeypatch, decide)
     _automatic()
@@ -237,15 +237,13 @@ def test_each_part_corrects_its_own_operations_and_they_apply_together(
 ):
     def decide(context):
         [op] = context["draft"]["ops"]
-        payload = {**op["payload"], "description": op["payload"]["name"] + " (fixed)"}
         return _assessment(
             "changes_suggested",
             [
-                Correction(
-                    action="revise",
+                correction(
+                    action="edit",
                     operation_ref=op["operation_ref"],
-                    tool_name=None,
-                    payload_json=json.dumps(payload),
+                    description=op["payload"]["name"] + " (fixed)",
                     reason="Clearer description.",
                 )
             ],
@@ -274,7 +272,7 @@ def test_a_part_cannot_correct_another_parts_operation(monkeypatch, small_parts)
         return _assessment(
             "changes_suggested",
             [
-                Correction(
+                correction(
                     action="strike",
                     operation_ref=other,
                     tool_name=None,

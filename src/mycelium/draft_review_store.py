@@ -13,9 +13,6 @@ from typing_extensions import TypedDict
 from . import ai_prompts, timestamps
 from .ai.types import ReasoningEffort
 
-Mode = Literal["off", "review-only", "review-and-apply"]
-Label = Literal["good", "changes_suggested", "reject", "needs_context"]
-
 
 class Precondition(TypedDict):
     kind: Literal["entity", "statement"]
@@ -23,13 +20,63 @@ class Precondition(TypedDict):
     fingerprint: str
 
 
+Mode = Literal["off", "review-only", "review-and-apply"]
+AutoApply = Literal["clean", "with_corrections"]
+Label = Literal["good", "changes_suggested", "reject", "needs_context"]
+Application = Literal["unapplied", "applied", "rejected", "needs_human", "held"]
+
+
+class LinkRef(BaseModel):
+    """One link, named by both ends. In an upsert_statements batch the
+    batch's own statements are "@N"."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    from_id: str = Field(min_length=1, max_length=200)
+    link_type: str = Field(min_length=1, max_length=200)
+    to_id: str = Field(min_length=1, max_length=200)
+    when_json: str | None = Field(
+        description="The link's `when` tree as a JSON object, or null for none. "
+        "drop_link needs it only to choose between links that differ by condition."
+    )
+
+
 class Correction(BaseModel):
+    """One precise change to a queued draft. Indices and @ references name
+    the draft as submitted; everything a correction does not name stays."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    action: Literal[
+        "edit", "add_link", "drop_link", "drop_statement", "strike", "append"
+    ]
+    operation_ref: str | None = Field(
+        description="The queued operation changed; null only for append."
+    )
+    statement: int | None = Field(
+        description="The 0-based index of the statement in an upsert_statements "
+        "batch, for edit and drop_statement; null otherwise."
+    )
+    text: str | None = Field(description="edit: the statement's new text.")
+    kind: str | None = Field(description="edit: the statement's new kind.")
+    description: str | None = Field(
+        description="edit of an upsert_entity: the entity's new description."
+    )
+    link: LinkRef | None = Field(description="add_link and drop_link: the link.")
+    tool_name: str | None = Field(description="append: the tool to call.")
+    payload_json: str | None = Field(
+        description="append: the tool's arguments as one JSON object."
+    )
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class LegacyCorrection(BaseModel):
+    """A correction recorded before precise corrections, kept readable."""
+
     model_config = ConfigDict(extra="forbid", strict=True)
     action: Literal["revise", "strike", "append"]
     operation_ref: str | None
     tool_name: str | None
     payload_json: str | None
-    reason: str = Field(min_length=1, max_length=2000)
+    reason: str
 
 
 class Contradiction(BaseModel):
@@ -38,12 +85,15 @@ class Contradiction(BaseModel):
     resolution: str = Field(min_length=1, max_length=2000)
 
 
+MAX_CORRECTIONS = 12
+
+
 class Assessment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     label: Label
     rationale: str = Field(min_length=1, max_length=6000)
     questions: list[str] = Field(max_length=12)
-    corrections: list[Correction] = Field(max_length=8)
+    corrections: list[Correction] = Field(max_length=MAX_CORRECTIONS)
     contradictions: list[Contradiction] = Field(max_length=8)
 
 
@@ -55,7 +105,7 @@ class PartReview(BaseModel):
     label: Label
     rationale: str
     questions: list[str] = Field(default_factory=list)
-    corrections: list[Correction] = Field(default_factory=list)
+    corrections: list[Correction | LegacyCorrection] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
 
 
@@ -90,7 +140,7 @@ class ReviewRun(BaseModel):
     label: Label | None = None
     rationale: str | None = None
     questions: list[str] = Field(default_factory=list)
-    corrections: list[Correction] = Field(default_factory=list)
+    corrections: list[Correction | LegacyCorrection] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
     #: Each part's own assessment when the draft was reviewed in parts;
     #: empty when it was reviewed whole.
@@ -99,9 +149,7 @@ class ReviewRun(BaseModel):
     retries: int = 0
     previous_failure: str | None = None
     answers: list[Answer] = Field(default_factory=list)
-    application: Literal["unapplied", "applied", "rejected", "needs_human"] = (
-        "unapplied"
-    )
+    application: Application = "unapplied"
     detail: str | None = None
     started_at: str = Field(default_factory=timestamps.now)
     finished_at: str | None = None
@@ -159,6 +207,10 @@ def save(conn: sqlite3.Connection, run: ReviewRun) -> None:
 
 
 WAITING_FOR_PERSON = "Waiting for a person to answer the reviewer's questions."
+HELD_FOR_CURATOR = (
+    "Waiting for a curator: the reviewer suggests corrections, which are "
+    "never applied automatically under the clean-approvals policy."
+)
 
 
 def new(draft_id: str, mode: Mode, revision: int) -> ReviewRun:

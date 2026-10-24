@@ -51,6 +51,7 @@ def _body(client, **changes):
             key: current[key]
             for key in (
                 "application_enabled",
+                "auto_apply",
                 "mode",
                 "provider",
                 "model",
@@ -61,6 +62,18 @@ def _body(client, **changes):
         },
         **changes,
     }
+
+
+def test_auto_apply_policy_is_saved_and_defaults_to_clean_approvals(
+    configured_app,
+):
+    client, _ = configured_app
+    assert settings.Controls().auto_apply == "clean"
+    for policy in ("clean", "with_corrections"):
+        body = _body(client, auto_apply=policy)
+        response = client.patch("/api/draft-review/settings", json=body)
+        assert response.status_code == 200, response.text
+        assert client.get("/api/draft-review/settings").json()["auto_apply"] == policy
 
 
 def test_save_persists_and_environment_cannot_override(configured_app, monkeypatch):

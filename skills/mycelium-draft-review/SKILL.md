@@ -21,17 +21,24 @@ reviewer** (`docs/DRAFT_REVIEW.md`), not instead of it.
   **Settings → Draft review**:
   - `off`: no review.
   - `review-only`: an advisory assessment. It never edits, applies or rejects.
-  - `review-and-apply`: up to eight small corrections, then it applies the
-    draft (`apply_reviewed_draft`), rejects it, or stops with questions for a
-    person. It acts only while **Allow applying accepted reviews** is on;
-    otherwise its assessment is advice.
+  - `review-and-apply`: it applies the draft (`apply_reviewed_draft`),
+    rejects it, or stops with questions for a person. It acts only while
+    **Allow applying accepted reviews** is on; otherwise its assessment is
+    advice. Under **Apply automatically: Only clean approvals** (the default)
+    it applies only `good` drafts; a draft it wants to correct is `held`
+    with up to twelve precise corrections (edit one statement, add or drop one
+    link, drop one statement, strike or append an operation) for a curator
+    to accept, edit or ignore. Under **Approvals with corrections too** it
+    makes those corrections itself and applies.
 - **You** read its assessments, start reviews that are missing, check what it
   cannot see, and recommend. You do not approve, reject or answer.
 - **The operator** approves, rejects, edits operations and answers the
-  reviewer's questions in the draft detail view (`#/drafts/<id>`).
+  reviewer's questions in the draft detail view (`#/drafts/<id>`), where
+  they also accept a held review's corrections.
 
 Approve and reject are UI decisions behind `POST /api/drafts/{draft_id}/approve`
-and `/reject`; answering is `POST /api/drafts/{draft_id}/review/answer`. Do not
+and `/reject`; answering is `POST /api/drafts/{draft_id}/review/answer`;
+accepting held corrections is `POST /api/drafts/{draft_id}/review/accept`. Do not
 call those routes unless the operator explicitly asks you to act for them in
 this session.
 
@@ -65,13 +72,17 @@ token, the operator clicks **Run review** or **Run again** on the draft.
      changed after the assessment);
    - `label` (`good`, `changes_suggested`, `reject`, `needs_context`) with
      `rationale`, `questions`, `corrections` and `contradictions`;
-   - `application` (`unapplied`, `applied`, `rejected`, `needs_human`) with
+   - `application` (`unapplied`, `applied`, `rejected`, `needs_human`,
+     `held`) with
      `detail`, and `mode`, the mode it ran under;
    - `answers`: curators' earlier answers to its questions.
 3. Sort the queue:
    - **Waiting for an answer** (`application: needs_human`). These need the
      operator most; the questions are also filed as knowledge gaps naming the
      draft.
+   - **Corrections waiting** (`application: held`): the reviewer would
+     accept the draft with its corrections. Check each correction; recommend
+     accepting all, some, or edited ones, or approving as submitted.
    - **Assessed, not applied**: `review-only` assessments, runs the
      application gate held, `reject` labels under `review-only`.
    - **Needs a review**: no assessment, `failed`, `stale`, or assessed under a
@@ -115,6 +126,8 @@ token, the operator clicks **Run review** or **Run again** on the draft.
    - **Reject** — why, and what should be re-authored.
    - **Answer** — the text the operator should give the reviewer, with
      evidence.
+   - **Accept corrections** — for a held review: which suggested corrections
+     to keep, untick or edit, each with why.
    - **Correct first** — an operation the operator should edit or remove in
      the draft detail view before approving.
    - **Review** — the assessment is missing, failed, stale or from another
