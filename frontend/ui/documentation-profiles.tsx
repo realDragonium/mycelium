@@ -195,21 +195,22 @@ const PLAN_REVIEW: Record<PlanReview, string> = {
   person: 'A person approves or dismisses each item',
   ai: 'An AI reviewer approves or dismisses each item, with a reason',
 };
-type Delivery = 'people' | 'agents';
+type Recovery = 'person' | 'ai';
+type Delivery = 'people' | 'agents' | 'auto';
 interface Profile {
   name: string; revision: string | number; guidance: string; exposure: string; templates: Template[];
   audience: string | null; effective_audience: string | null; maintenance: Maintenance; planning: Planning;
-  plan_review: PlanReview; delivery: Delivery;
+  plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string;
   retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
-interface ProfilesView extends Profiles { audiences: AudienceView[] }
-interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; delivery: Delivery }
+interface ProfilesView extends Profiles { audiences: AudienceView[]; destinations: { name: string }[] }
+interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; recovery: Recovery; delivery: Delivery; delivery_destination: string }
 
 export function DocumentationProfiles() {
   const { state, reload } = useAsync(useCallback(async (signal: AbortSignal): Promise<ProfilesView> => {
-    const [profiles, audiences] = await Promise.all([getJSON<Profiles>('/api/documentation/profiles', signal), getJSON<AudiencesResponse>('/api/audiences', signal)]);
-    return { ...profiles, audiences: audiences.audiences };
+    const [profiles, audiences, destinations] = await Promise.all([getJSON<Profiles>('/api/documentation/profiles', signal), getJSON<AudiencesResponse>('/api/audiences', signal), getJSON<{ destinations: { name: string }[] }>('/api/documentation/destinations', signal)]);
+    return { ...profiles, audiences: audiences.audiences, destinations: destinations.destinations };
   }, []));
   const [form, setForm] = useState<Profile | null>(null);
   const [original, setOriginal] = useState<Profile | null>(null);
@@ -232,7 +233,7 @@ export function DocumentationProfiles() {
   const create = (source: Profile | null) => {
     if (!discardOk()) return;
     const audience = source?.audience && data?.audiences.some(item => !item.retired && item.id === source.audience) ? source.audience : null;
-    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', delivery: source?.delivery ?? 'people' }, true);
+    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', recovery: source?.recovery ?? 'person', delivery: source?.delivery ?? 'people', delivery_destination: source?.delivery_destination ?? '' }, true);
   };
   const change = (patch: Partial<Profile>) => { setForm(f => f && { ...f, ...patch }); setMessage(null); };
   const changeTemplate = (i: number, patch: Partial<Template>) => form && change({ templates: form.templates.map((t, j) => j === i ? { ...t, ...patch } : t) });
@@ -248,7 +249,7 @@ export function DocumentationProfiles() {
   const save = (e: FormEvent) => {
     e.preventDefault();
     if (form) {
-      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience, maintenance: form.maintenance, planning: form.planning, plan_review: form.plan_review, delivery: form.delivery };
+      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience, maintenance: form.maintenance, planning: form.planning, plan_review: form.plan_review, recovery: form.recovery, delivery: form.delivery, delivery_destination: form.delivery_destination };
       void act(() => putJSON<Profile>(path(form.name), body), 'Profile saved. New runs use it.');
     }
   };
@@ -293,8 +294,17 @@ export function DocumentationProfiles() {
               <label className="field"><span>Who decides proposed plan items</span><select className="input" value={form.plan_review} onChange={e => change({ plan_review: e.target.value as PlanReview })}>
                 {(Object.keys(PLAN_REVIEW) as PlanReview[]).map(policy => <option key={policy} value={policy}>{PLAN_REVIEW[policy]}</option>)}
               </select><span className="hint">The AI reviewer is never the planner: a model call separate from the planner's, or another agent while documentation planning is set to External agent. It also decides out-of-date documents. Approved items start within the batch and active-run limits; dismissals are remembered.</span></label>
-              <label className="check"><input type="checkbox" checked={form.delivery === 'agents'} onChange={e => change({ delivery: e.target.checked ? 'agents' : 'people' })} />Agents may deliver</label>
-              <p className="hint">Lets writer and admin agents open or update this profile's GitHub pull requests over MCP (deliver_document). Merging stays with the repository.</p>
+              <label className="field"><span>When AI work fails</span><select className="input" value={form.recovery} onChange={e => change({ recovery: e.target.value as Recovery })}>
+                <option value="person">Leave it for a person</option><option value="ai">Retry automatically, then give up with a reason</option>
+              </select><span className="hint">Retries failed plans, plan reviews, items that could not start, runs the review refused (briefed with its notes) and publications, up to the retry attempts under Settings → Limits → Documentation maintenance.</span></label>
+              <label className="field"><span>Who delivers documents</span><select className="input" value={form.delivery} onChange={e => change({ delivery: e.target.value as Delivery })}>
+                <option value="people">People publish from the document</option><option value="agents">Agents may also deliver over MCP (deliver_document)</option><option value="auto">Deliver automatically after review, and agents may deliver</option>
+              </select><span className="hint">Automatic delivery opens or updates the pull request for every revision that passes review, of new documents too. Merging stays with the repository.</span></label>
+              {form.delivery === 'auto' && <label className="field"><span>Repository for documents not published before</span><select className="input" value={form.delivery_destination} onChange={e => change({ delivery_destination: e.target.value })}>
+                <option value="">None: only update documents published before</option>
+                {form.delivery_destination && !data.destinations.some(destination => destination.name === form.delivery_destination) && <option value={form.delivery_destination}>{form.delivery_destination} (not configured)</option>}
+                {data.destinations.map(destination => <option key={destination.name} value={destination.name}>{destination.name}</option>)}
+              </select></label>}
               <label className="field"><span>Writing guidance</span><textarea className="input" rows={8} value={form.guidance} onChange={e => change({ guidance: e.target.value })} /></label>
               <label className="field"><span>Disclosure rules</span><textarea className="input" rows={6} value={form.exposure} placeholder="What may be disclosed, and what must stay internal." onChange={e => change({ exposure: e.target.value })} /></label>
               <h4 className="section-label">Document templates</h4>
