@@ -12,7 +12,12 @@ import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
 /* ============================ wire shapes ============================ */
 type DraftStatus = 'open' | 'submitted' | 'approved' | 'rejected' | 'withdrawn';
-interface Correction { action: string; operation_ref?: string | null; tool_name?: string | null; reason: string; payload_json?: string | null }
+interface LinkRef { from_id: string; link_type: string; to_id: string; when_json: string | null }
+// Older assessments recorded a whole-payload `revise` with fewer fields.
+interface Correction {
+  action: string; operation_ref?: string | null; statement?: number | null; text?: string | null; kind?: string | null;
+  description?: string | null; link?: LinkRef | null; tool_name?: string | null; payload_json?: string | null; reason: string;
+}
 interface Contradiction { statement_id: string; resolution: string }
 interface Answer { run_id: string; questions: string[]; answer: string; answered_by: string; answered_at: string }
 type AssessmentLabel = 'good' | 'changes_suggested' | 'reject' | 'needs_context';
@@ -23,7 +28,7 @@ interface AssessmentPart {
 interface Assessment {
   run_id: string; status: 'running' | 'completed' | 'failed' | 'paused'; label?: string | null; stale?: boolean;
   provider?: string | null; model?: string | null; reasoning_effort?: string | null; mode?: string | null;
-  application?: 'unapplied' | 'applied' | 'rejected' | 'needs_human' | null; draft_revision?: number;
+  application?: 'unapplied' | 'applied' | 'rejected' | 'needs_human' | 'held' | null; draft_revision?: number;
   rationale?: string | null; detail?: string | null; questions: string[]; corrections: Correction[];
   contradictions?: Contradiction[]; parts?: AssessmentPart[]; answers?: Answer[]; attempt?: number; previous_failure?: string | null;
 }
@@ -32,6 +37,9 @@ interface Assessment {
 // What the drafts list carries of an assessment.
 type AssessmentSummary = Pick<Assessment, 'run_id' | 'status' | 'label' | 'stale' | 'application'>;
 export const asksPerson = (a: AssessmentSummary | null | undefined) => !!a && a.status === 'completed' && a.application === 'needs_human';
+// The reviewer would correct the draft, and the policy leaves applying the
+// corrections to a curator.
+export const heldForCurator = (a: AssessmentSummary | null | undefined) => !!a && a.status === 'completed' && a.application === 'held';
 export interface DraftSummary {
   id: string; title: string | null; status: DraftStatus; created_at: string; created_by: string | null;
   submitted_at: string | null; decided_at: string | null; op_count?: number; review_assessment: AssessmentSummary | null;
@@ -59,6 +67,7 @@ const drafts = {
   get: (id: string) => getJSON<{ draft: Draft }>(`/api/drafts/${enc(id)}`).then(r => r.draft),
   act: (id: string, action: 'submit' | 'withdraw' | 'approve' | 'reject' | 'review') => postJSON<unknown>(`/api/drafts/${enc(id)}/${action}`),
   answer: (id: string, runId: string, answer: string) => postJSON<unknown>(`/api/drafts/${enc(id)}/review/answer`, { run_id: runId, answer }),
+  accept: (id: string, runId: string, corrections: Correction[]) => postJSON<unknown>(`/api/drafts/${enc(id)}/review/accept`, { run_id: runId, corrections }),
   discardOp: (id: string, seq: number) => deleteJSON<unknown>(`/api/drafts/${enc(id)}/ops/${seq}`),
   editOp: (id: string, seq: number, payload: Payload) => patchJSON<unknown>(`/api/drafts/${enc(id)}/ops/${seq}`, { payload }),
   reviewSettings: () => getJSON<ReviewSettings>('/api/draft-review/settings'),
@@ -73,6 +82,7 @@ const LABELS: Record<string, string> = { good: 'Good', changes_suggested: 'Chang
 
 function assessmentResult(a: AssessmentSummary): string {
   if (asksPerson(a)) return 'Question for a curator';
+  if (heldForCurator(a)) return 'Corrections for a curator';
   if (a.status === 'running') return 'Running';
   if (a.status === 'paused') return 'Paused';
   if (a.status === 'failed') return 'Failed';
@@ -80,7 +90,7 @@ function assessmentResult(a: AssessmentSummary): string {
 }
 
 function AssessmentBadge({ assessment }: { assessment: AssessmentSummary }) {
-  return <span className={`review-badge${asksPerson(assessment) ? ' asks' : ''}`}>AI review: {assessmentResult(assessment)}{assessment.stale ? ' · stale' : ''}</span>;
+  return <span className={`review-badge${asksPerson(assessment) || heldForCurator(assessment) ? ' asks' : ''}`}>AI review: {assessmentResult(assessment)}{assessment.stale ? ' · stale' : ''}</span>;
 }
 
 function AssessmentPanel({ assessment }: { assessment: Assessment }) {
@@ -93,6 +103,7 @@ function AssessmentPanel({ assessment }: { assessment: Assessment }) {
         {assessment.application === 'applied' ? 'The review applied this draft.'
           : assessment.application === 'rejected' ? 'The review rejected this draft.'
           : assessment.application === 'needs_human' ? 'The reviewer is waiting for a curator to answer its questions.'
+          : assessment.application === 'held' ? 'The reviewer suggests corrections, which only a curator applies.'
           : 'Nothing was applied or rejected automatically.'}
       </p>
       {assessment.stale && <Notice tone="warn">This assessment is stale: it reviewed revision {assessment.draft_revision}, and the draft has changed since.</Notice>}
@@ -120,13 +131,24 @@ function AssessmentPanel({ assessment }: { assessment: Assessment }) {
         <h3 className="section-label">Suggested corrections</h3>
         <ul>{assessment.corrections.map((c, i) => (
           <li key={i}>
-            <b>{c.action}</b>{c.operation_ref ? ` ${c.operation_ref}` : ''}{c.tool_name ? ` · ${c.tool_name}` : ''}: {c.reason}
+            <CorrectionLine c={c} />
             {c.payload_json && <details><summary>Proposed payload</summary><pre className="code">{c.payload_json}</pre></details>}
           </li>
         ))}</ul>
       </>}
     </section>
   );
+}
+
+const linkText = (l: LinkRef) => `${l.from_id} —${l.link_type}→ ${l.to_id}${l.when_json ? ` when ${l.when_json}` : ''}`;
+
+function CorrectionLine({ c }: { c: Correction }) {
+  const target = `${c.operation_ref ?? ''}${c.statement != null ? ` statement ${c.statement}` : ''}`;
+  const change = c.action === 'edit'
+    ? [c.text != null && `text “${c.text}”`, c.kind && `kind ${c.kind}`, c.description != null && `description “${c.description}”`].filter(Boolean).join(', ')
+    : c.link ? linkText(c.link)
+    : c.tool_name ?? '';
+  return <><b>{c.action.replace('_', ' ')}</b> <span className="mono small">{target}</span>{change && <> · {change}</>}: <span className="muted">{c.reason}</span></>;
 }
 
 /* ============================ operations ============================ */
@@ -425,6 +447,53 @@ function ReviewerQuestion({ draftId, assessment, onAnswered, onMoved }: {
   );
 }
 
+/* ============================ corrections held for a curator ============================ */
+function HeldCorrections({ draftId, assessment, onApplied, onMoved }: {
+  draftId: string; assessment: Assessment; onApplied: () => void; onMoved: (message: string) => void;
+}) {
+  const [chosen, setChosen] = useState<{ on: boolean; c: Correction }[]>(() => assessment.corrections.map(c => ({ on: true, c })));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const edit = (i: number, change: Partial<Correction>) => setChosen(cs => cs.map((x, j) => j === i ? { ...x, c: { ...x.c, ...change } } : x));
+  const picked = chosen.filter(x => x.on).map(x => x.c);
+  const apply = async () => {
+    if (busy || !picked.length) return;
+    setBusy(true); setError(null);
+    try { await drafts.accept(draftId, assessment.run_id, picked); onApplied(); }
+    catch (ex) {
+      if (ex instanceof HttpError && ex.status === 400 && /reload|changed|again/.test(ex.message)) onMoved(`The corrections were not applied (${ex.message.replace(/\.$/, '')}). The draft has been reloaded to show where it stands.`);
+      else setError(errorMessage(ex, 'The corrections could not be applied.'));
+    } finally { setBusy(false); }
+  };
+  return (
+    <section className="question-card" aria-labelledby="held-corrections">
+      <div className="qc-head">
+        <span className="qc-icon"><I.interp width="18" height="18" /></span>
+        <div>
+          <h2 id="held-corrections">The reviewer suggests corrections</h2>
+          <p className="muted small">The {draftReviewProviderName(assessment.provider)} reviewer would accept this draft with these corrections. Automatic review applies only clean approvals, so nothing changes until you apply them. Untick or edit a correction first if it is wrong; Approve and apply below approves the draft without them.</p>
+        </div>
+      </div>
+      {assessment.rationale && <details className="disclosure"><summary>The reviewer's reasoning</summary><p className="pre-wrap">{assessment.rationale}</p></details>}
+      <ul className="stack-sm">{chosen.map(({ on, c }, i) => (
+        <li key={i}>
+          <label className="check"><input type="checkbox" checked={on} onChange={e => setChosen(cs => cs.map((x, j) => j === i ? { ...x, on: e.target.checked } : x))} /><span><CorrectionLine c={c} /></span></label>
+          {on && c.action === 'edit' && <div className="field-grid">
+            {c.text != null && <label className="field"><span>Text</span><textarea className="input" rows={2} value={c.text} onChange={e => edit(i, { text: e.target.value })} /></label>}
+            {c.kind != null && <label className="field"><span>Kind</span><input className="input" value={c.kind} onChange={e => edit(i, { kind: e.target.value })} /></label>}
+            {c.description != null && <label className="field"><span>Description</span><textarea className="input" rows={2} value={c.description} onChange={e => edit(i, { description: e.target.value })} /></label>}
+          </div>}
+          {on && c.payload_json && <details><summary>Proposed payload</summary><pre className="code">{c.payload_json}</pre></details>}
+        </li>
+      ))}</ul>
+      {error && <p className="form-error" role="alert">{error}</p>}
+      <div className="row gap-sm">
+        <button type="button" className="btn primary" disabled={busy || !picked.length} onClick={() => void apply()}>{busy ? 'Applying…' : `Apply ${picked.length} correction${picked.length === 1 ? '' : 's'} and approve`}</button>
+      </div>
+    </section>
+  );
+}
+
 function PastAnswers({ answers }: { answers: Answer[] }) {
   if (!answers.length) return null;
   return (
@@ -519,6 +588,10 @@ export function DraftReview({ id }: { id: string }) {
         <ReviewerQuestion draftId={id} assessment={draft.review_assessment}
           onAnswered={() => { setMoved(null); reloadDraft(); }} onMoved={m => { setMoved(m); reloadDraft(); }} />
       )}
+      {heldForCurator(draft.review_assessment) && draft.review_assessment && !draft.review_assessment.stale && draft.status === 'submitted' && (
+        <HeldCorrections key={draft.review_assessment.run_id} draftId={id} assessment={draft.review_assessment}
+          onApplied={() => { setMoved(null); reloadDraft(); }} onMoved={m => { setMoved(m); reloadDraft(); }} />
+      )}
       {!!draft.review_assessment?.answers?.length && <PastAnswers answers={draft.review_assessment.answers} />}
 
       <div className="draft-grid">
@@ -597,9 +670,10 @@ export function DraftsList() {
   }, [running, reload]);
 
   // Drafts whose reviewer is waiting on a person come first.
-  const sorted = [...(list || [])].sort((a, b) =>
-    Number(asksPerson(b.review_assessment)) - Number(asksPerson(a.review_assessment)) || Date.parse(b.created_at) - Date.parse(a.created_at));
+  const waits = (d: DraftSummary) => Number(asksPerson(d.review_assessment) || heldForCurator(d.review_assessment));
+  const sorted = [...(list || [])].sort((a, b) => waits(b) - waits(a) || Date.parse(b.created_at) - Date.parse(a.created_at));
   const questions = sorted.filter(d => d.status === 'submitted' && asksPerson(d.review_assessment)).length;
+  const held = sorted.filter(d => d.status === 'submitted' && heldForCurator(d.review_assessment)).length;
   const open = sorted.filter(d => d.status === 'open');
   const submitted = sorted.filter(d => d.status === 'submitted');
   const activeCount = open.length + submitted.length;
@@ -611,6 +685,7 @@ export function DraftsList() {
   ];
   const summary: [number, string][] = [
     [questions, 'reviewer questions for you'],
+    [held, 'reviewer corrections to accept'],
     [submitted.length, 'awaiting a decision'],
     [open.length, 'open with their authors'],
     [open.reduce((n, d) => n + (d.op_count || 0), 0), 'operations in open drafts'],
