@@ -3,8 +3,10 @@
 A documentation run turns substrate knowledge into a human-facing document. It
 is a projection, never evidence, so nothing here writes the substrate.
 `request_documentation` and `revise_document` start a background run and
-return its id; `deliver_document` hands a finished document to a configured
-destination, such as a GitHub pull request.
+return its id; `request_documentation_plan` plans which documents a writing
+profile needs; `deliver_document` hands a finished document to a configured
+destination, such as a GitHub pull request, for an agent whose profile lets
+agents deliver.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ import sqlite3
 from typing import Any, Literal
 
 from .. import store
+from ..documentation_planning import PlanSummary
 from ..require import require
 from .registry import tool
 from .runtime import _db, _drafts_db, _prompts_db
@@ -455,22 +458,69 @@ def _freshness(document_ids: list[str]) -> dict[str, dict[str, object]]:
 
 
 @tool(role="writer", real_role=True)
+def request_documentation_plan(guideline_set: str) -> PlanSummary:
+    """Plan which documents a writing profile's audience needs, as Documents
+    → Plan does: one planning call proposes documents to create and updates
+    of existing ones, placing statements no document of the profile cites.
+    It runs on the server's model or, while documentation planning is set to
+    External agent, as a `documentation_planning` task an agent claims.
+    Nothing is written until an item is approved, by a person or by the
+    profile's AI plan reviewer.
+
+    Returns the new plan: its `activity` while it runs, `outcome` once
+    finished and `agent_task` when an agent makes it. Raises when the profile
+    does not exist, has no template or audience, or a plan for it is already
+    being made."""
+    from .. import auth as _auth
+    from .. import documentation_planning
+
+    principal = _auth.current_principal.get()
+    plan_id = documentation_planning.start(
+        guideline_set,
+        created_by=principal.id if principal is not None else _auth.LOCAL_ADMIN_ID,
+    )
+    return documentation_planning.plan_summary(plan_id)
+
+
+@tool(role="writer", real_role=True)
 def deliver_document(
     document_id: str,
     destination: str,
     expected_revision: int | None = None,
 ) -> dict[str, object]:
-    """Publish a selected internal version through its GitHub review flow.
+    """Publish a selected internal version through its GitHub review flow:
+    open or update the document's pull request. Merging it stays with the
+    destination repository.
 
-    Existing documents reuse recorded repository coordinates and path. A receipt
-    belongs to the captured immutable version even when generation advances the
-    document while GitHub is processing the publication. The pull request is
-    tracked: get_generated_document reports whether it is open, merged or
-    closed. Returns {destination, path, reference, content_revision,
-    pull_request_number, revision}.
+    Only for a document whose writing profile lets agents deliver (its
+    delivery setting is `agents`); otherwise people deliver it from the web
+    app. Existing documents reuse recorded repository coordinates and path. A
+    receipt belongs to the captured immutable version even when generation
+    advances the document while GitHub is processing the publication. The
+    pull request is tracked: get_generated_document reports whether it is
+    open, merged or closed. Returns {destination, path, reference,
+    content_revision, pull_request_number, revision}.
     """
+    from .. import auth, docs_store, documentation_profiles
     from ..docgen import publication
 
+    row = docs_store.get_document(_drafts_db(), document_id)
+    if row is None:
+        raise ValueError("generated document not found")
+    profile = next(
+        (
+            item
+            for item in documentation_profiles.capture(_prompts_db()).profiles
+            if item.name == row["guideline_set"]
+        ),
+        None,
+    )
+    if profile is None or profile.delivery != "agents":
+        raise auth.RoleRequired(
+            f"Writing profile '{row['guideline_set']}' does not let agents deliver "
+            "its documents. A person can deliver it from the web app, or turn on "
+            "Agents may deliver for the profile in Settings → Documentation."
+        )
     return publication.publish(
         _drafts_db(), document_id, destination, expected_revision
     )

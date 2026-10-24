@@ -13,8 +13,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth, docs_store, drafts_store, server
-from mycelium.docgen import destinations
+from mycelium import auth, docs_store, drafts_store, guidelines, prompt_store, server
+from mycelium.docgen import destinations, publication
 from mycelium.docgen.destinations import (
     DeliveryDocument,
     DestinationConfig,
@@ -1117,14 +1117,14 @@ def test_a_failed_review_can_be_retried_against_the_existing_remote_branch(
 
     try:
         with pytest.raises(ValueError) as excinfo:
-            server.deliver_document(document_id, "knowledge-base")
+            publication.publish(conn, document_id, "knowledge-base")
         assert dict(docs_store.get_document(conn, document_id)) == before
         assert remote["branch_sha"] == DELIVERY_SHA
         assert TOKEN not in str(excinfo.value)
         assert "***" in str(excinfo.value)
         assert excinfo.value.__cause__ is None
 
-        result = server.deliver_document(document_id, "knowledge-base")
+        result = publication.publish(conn, document_id, "knowledge-base")
         stored = docs_store.serialize_document(
             docs_store.get_document(conn, document_id)
         )
@@ -1654,7 +1654,9 @@ def test_unopenable_or_wrong_repository_review_references_are_refused_without_re
     assert TOKEN not in str(excinfo.value)
 
 
-def test_the_delivery_tool_records_a_completed_delivery(tmp_path, monkeypatch):
+def test_the_delivery_tool_delivers_only_for_a_profile_that_lets_agents(
+    tmp_path, monkeypatch
+):
     from mycelium.docgen import github_destination
 
     conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
@@ -1683,6 +1685,14 @@ def test_the_delivery_tool_records_a_completed_delivery(tmp_path, monkeypatch):
     )
 
     try:
+        with pytest.raises(PermissionError, match="does not let agents deliver"):
+            server.deliver_document(document_id, "knowledge-base")
+        prompt_store.save(
+            prompt_store.connection(),
+            type=guidelines.TYPE,
+            name="kb-authoring/delivery",
+            text="agents",
+        )
         result = server.deliver_document(document_id, "knowledge-base")
         document = docs_store.serialize_document(
             docs_store.get_document(conn, document_id)
@@ -1767,7 +1777,7 @@ def test_malformed_configuration_scrubs_a_credential_from_its_name(monkeypatch):
     assert "***" in str(excinfo.value)
 
 
-def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
+def test_delivery_does_not_reflect_a_credential_used_as_destination(
     tmp_path, monkeypatch
 ):
     conn = docs_store.connect(tmp_path / "mycelium-drafts.db")
@@ -1785,7 +1795,7 @@ def test_delivery_tool_does_not_reflect_a_credential_used_as_destination(
 
     try:
         with pytest.raises(ValueError) as excinfo:
-            server.deliver_document(document_id, TOKEN)
+            publication.publish(conn, document_id, TOKEN)
     finally:
         drafts_store.reset()
         conn.close()

@@ -37,6 +37,7 @@ from .documentation import (
     list_documentation_runs,
     list_generated_documents,
     request_documentation,
+    request_documentation_plan,
     retry_documentation_run,
     revise_document,
 )
@@ -154,6 +155,7 @@ __all__ = [
     "release_agent_task",
     "get_agent_task",
     "request_documentation",
+    "request_documentation_plan",
     "retry_documentation_run",
     "revise_document",
     "list_document_revisions",

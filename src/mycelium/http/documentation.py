@@ -24,6 +24,7 @@ from .. import (
     product_settings,
     server,
 )
+from ..docgen import publication
 from ..docgen.schema import ManualDocument
 from ..request_timing import TimedRoute
 from .access import _enforce_role, _require_principal
@@ -327,7 +328,7 @@ def deliver_document_http(
     document_id: str, body: DocumentDeliveryBody, request: Request
 ) -> dict[str, object]:
     _enforce_role(request, "writer", real_role=True)
-    return server.deliver_document(document_id, **body.model_dump())
+    return publication.publish(server._drafts_db(), document_id, **body.model_dump())
 
 
 # --- documentation planning ------------------------------------------------------
