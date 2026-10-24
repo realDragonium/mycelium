@@ -59,6 +59,11 @@ DELIVERY_DESTINATION_SLOT = "delivery_destination"
 #: person (see `mycelium.document_maintenance`). A set without one leaves it.
 RECOVERY_SLOT = "recovery"
 
+#: The set-wide destinations slot: the names of the documentation
+#: destinations the set's documents may be published to, one per line. A set
+#: without one may publish to any configured destination.
+DESTINATIONS_SLOT = "destinations"
+
 #: Slots that steer every document in a set rather than naming something the
 #: set can write. Keeping the subtraction here makes another set-wide slot a
 #: one-line addition rather than another catalogue special case.
@@ -73,6 +78,7 @@ NON_TYPE_SLOTS = frozenset(
         DELIVERY_SLOT,
         DELIVERY_DESTINATION_SLOT,
         RECOVERY_SLOT,
+        DESTINATIONS_SLOT,
     }
 )
 

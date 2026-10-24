@@ -67,6 +67,7 @@ def publish(
             else expected_revision
         )
         row = docs_store.require_revision(conn, document_id, revision)
+        _check_profile_destination(str(row["guideline_set"]), destination)
         files = _media_files(conn, row)
         try:
             configured, binding = destinations.publishing_destination(row, destination)
@@ -91,6 +92,25 @@ def publish(
             pull_request_number=delivery.pull_request_number,
         )
         return {**delivery.serialize(), "revision": revision}
+
+
+def _check_profile_destination(guideline_set: str, destination: str) -> None:
+    from .. import documentation_profiles
+
+    profile = next(
+        (
+            item
+            for item in documentation_profiles.capture().profiles
+            if item.name == guideline_set
+        ),
+        None,
+    )
+    if profile is not None and not profile.may_publish_to(destination):
+        raise ValueError(
+            f"Writing profile '{guideline_set}' publishes only to "
+            + ", ".join(profile.destinations)
+            + f", not to '{destination}'."
+        )
 
 
 def _media_files(
