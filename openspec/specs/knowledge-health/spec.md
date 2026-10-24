@@ -149,7 +149,7 @@ The system SHALL bound each connect run by the saved connect limits: batch size 
 - **THEN** the run stops reading and forces its final emit
 
 ### Requirement: Connect pass budget and model
-The system SHALL run the connect pass on the model selected for the `connect` action (default Claude `claude-sonnet-4-6`) with its instructions from the saved `connect` prompt followed by a fixed contract, meter its calls as `connect`, append its trace to `connect_trace.jsonl` in the data directory, and refuse the run while the monthly AI budget pauses background actions.
+The system SHALL run the connect pass on the model selected for the `connect` action, refusing the run while that action has no model chosen, with its instructions from the saved `connect` prompt followed by a fixed contract, meter its calls as `connect`, append its trace to `connect_trace.jsonl` in the data directory, and refuse the run while the monthly AI budget pauses background actions.
 
 #### Scenario: Budget pauses background actions
 - **WHEN** the monthly budget is spent with background pausing on and a caller requests a connect run

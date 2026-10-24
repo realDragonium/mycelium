@@ -189,11 +189,11 @@ The system SHALL replace the auth, drafts, shipped-default and media tables only
 - **THEN** the media already in the data directory is kept
 
 ### Requirement: Restore never imports the environment
-The system MUST NOT import legacy environment configuration into a restored instance; settings come from the archive, and an archive without them gets built-in defaults with draft review off.
+The system MUST NOT import legacy environment configuration into a restored instance; settings come from the archive, and an archive without them restores with no models chosen and draft review off.
 
 #### Scenario: Restore on a host with legacy variables
 - **WHEN** an archive is imported on a host where `MYCELIUM_INGEST_MODEL` is set and the restored instance is started
-- **THEN** the `ingest` model comes from the archive or the built-in default, never from the variable
+- **THEN** the `ingest` model comes from the archive, or is not chosen, never from the variable
 
 ### Requirement: Restored GitHub App connections are disabled
 The system SHALL restore GitHub App connections from an archive in a disabled state.

@@ -221,16 +221,16 @@ The system SHALL read the ingest instructions from the saved prompt named `inges
 - **WHEN** an administrator saves new ingest instructions
 - **THEN** the next ingest run uses them
 
-### Requirement: Ingest model selection
-The system SHALL run ingest with the model selected for the `ingest` action (default provider Claude, model `claude-sonnet-4-6`) and its reasoning effort, as configured in the `ai-providers` capability, and attribute its model calls to `ingest`.
-
-#### Scenario: Default model
-- **WHEN** no ingest model has been saved
-- **THEN** ingest runs on `claude-sonnet-4-6`
-
 ### Requirement: Shared model-loop budget
 The system SHALL count each ingest call against the shared model-loop concurrency limit it shares with Ask, the connect pass and documentation runs (default 2 concurrent loops), on every transport.
 
 #### Scenario: Loops already running
 - **WHEN** two model loops are running under the default limit and a third caller posts to `/ingest`
 - **THEN** the third call waits for a free slot before its loop starts
+
+### Requirement: Ingest model from AI settings
+The system SHALL run ingest with the model selected for the `ingest` action and its reasoning effort, as configured in the `ai-providers` capability, refuse the run without calling a model while none is chosen, and attribute its model calls to `ingest`.
+
+#### Scenario: No model chosen
+- **WHEN** no ingest model has been saved
+- **THEN** ingest is refused with "Choose a Claude model for ingestion in AI settings." and no model is called
