@@ -22,12 +22,14 @@ reviewer account, described in [Draft review](DRAFT_REVIEW.md).
 
 ## External agent
 
-Documentation, Documentation planning and Audience labelling can be set to
-**External agent** instead of a server model. The server then queues each
+Documentation, Documentation planning, Audience labelling, Ingest, Connect
+and Alias discovery can be set to **External agent** instead of a server
+model. The server then queues each
 piece of work as a task, and an outside agent (Claude Code, Codex or another
 MCP client with a writer token) claims it, does the model's part and hands the
 result back. No provider key is needed for that work. The result passes the
-same checks a server model's output would. See [Agent tasks](AGENT_TASKS.md).
+same checks a server model's output would. Ask and Draft review always use a
+server model; see [Agent tasks](AGENT_TASKS.md#actions) for why.
 
 Documentation also has a **Review** choice. **Server reviewer** (the default)
 reviews an agent's document with the documentation provider and model set

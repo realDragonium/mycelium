@@ -9,6 +9,29 @@ needs, the audience boundary, the checks and what is saved. A deployment can
 then write documentation, plan it and label audiences with no provider key on
 the server, using the agents its people already run.
 
+## Actions
+
+| Action | External agent | |
+|---|---|---|
+| Documentation (writing and revising) | Yes | Kind `documentation` |
+| Documentation review | Yes, for documents an agent wrote | Kind `document_review`, when Review is **Another agent**. A person's manual edit is still reviewed by the server's reviewer |
+| Documentation planning | Yes | Kind `documentation_planning` |
+| Audience labelling | Yes | Kind `audience_labelling` |
+| Ingest | Yes | Kind `ingest` |
+| Connect pass | Yes | Kind `connect` |
+| Alias discovery | Yes | Kind `alias_discovery` |
+| Draft review | Not yet | Its reviewer is being reworked; it plugs in as one more kind once that lands |
+| Ask | No | See below |
+| Embeddings | No | They use the local model or an embedding API, never agents |
+
+**Ask** is interactive: the caller waits for an answer. A queued Ask would
+make it wait for some other agent to pick the question up, with no answer
+until then. A caller that has an agent of its own already has what an
+external Ask would give it: the read tools (`search_statements`,
+`get_statements` and the rest, see the `mycelium-knowledge-source` skill)
+and the audience boundary of its own token. Ask therefore always uses its
+server model.
+
 The `mycelium-agent-tasks` skill (`skills/`) walks an agent through the
 workflow.
 
@@ -29,6 +52,9 @@ claim either.
 | `document_review` | An agent's document passed its checks and Documentation's Review is **Another agent** | The review: exposure and conformance verdicts with findings |
 | `documentation_planning` | A plan is requested for a writing profile while Documentation planning is set to External agent | The proposed documents |
 | `audience_labelling` | An agent asks for labelling work while Audience labelling is set to External agent | A label for each statement in the batch |
+| `ingest` | `ingest` is called while Ingest is set to External agent | The `emit_draft` input: proposed operations, the reconcile ledger, flags and skipped duplicates |
+| `connect` | `connect_statements` is called while Connect is set to External agent | The same, for the statements in the batch |
+| `alias_discovery` | An alias scan is started while Alias discovery is set to External agent | The aliases the statements show, with their evidence |
 
 Labelling batches are made when an agent claims, from the statements due
 then, at the labelling batch size set under Limits. A statement in an open
@@ -47,14 +73,15 @@ needs a documentation model. Asking for a run with an explicit `provider`
    out goes back to the queue. Each task carries a `brief`:
    - `instructions` and `input`: the system prompt and first message a
      server model would get, built by the same code;
-   - `read_tools`: the reads it could make (documentation only);
+   - `read_tools`: the reads it could make (documentation, ingest and
+     connect);
    - `result` and `result_schema`: what to submit;
    - for documentation, the `guideline_set`, `document_type` and `audience`.
 
    `findings` hold why the last submission was refused.
-2. **Read** (documentation only). `read_for_agent_task(task_id, tool,
-   arguments)` runs one of the brief's `read_tools`. Report missing knowledge
-   with `report_knowledge_gap`.
+2. **Read** (documentation, ingest and connect). `read_for_agent_task(task_id,
+   tool, arguments)` runs one of the brief's `read_tools`. Report missing
+   knowledge with `report_knowledge_gap`.
 3. **Submit.** `submit_agent_task(task_id, result)` with the result shaped
    as `result_schema`. It returns `accepted` (saved), `refused` (with
    `findings` and `retries_left`; fix and submit again), `in_review` (another
@@ -62,6 +89,11 @@ needs a documentation model. Asking for a run with an explicit `provider`
    run or plan records why).
 4. **Or release.** `release_agent_task(task_id, reason)` gives a task back
    at once.
+
+`ingest`, `connect_statements` and an alias scan return at once with
+`waiting_for_agent` and the task id. Whoever queued the work, or an admin,
+follows it with `get_agent_task(task_id)`: its status, the findings of a
+refused submission and, once done, its `result`, such as the draft it made.
 
 ## The same boundaries as a server run
 
@@ -85,6 +117,15 @@ needs a documentation model. Asking for a run with an explicit `provider`
   audience ids that exist and a reason. New external grants wait for
   confirmation when the labelling settings ask for it, as the server labeller's
   do.
+- **Ingest and connect.** A submission goes through the loop's own emit
+  gate: the reading floor (a reconcile read, then a search around it, made
+  with `read_for_agent_task` by this claimant), the ledger and coverage
+  checks, then the same screening, validation and draft assembly. The draft
+  goes to review as a server run's does; connect also records what it looked
+  at and files its rephrase gaps.
+- **Aliases.** Evidence must quote a selected statement. Suggestions are
+  checked and kept as the model's are, in a draft made by whoever started the
+  scan; a change of names since then fails the task, as it fails a scan.
 
 ## Retries
 
@@ -97,7 +138,9 @@ loop would try again:
 | Citations, vocabulary or media | 3 |
 | Review | 1 (the document returns to its writer with the review's findings) |
 | Malformed review | 1 |
-| Malformed or invalid plan or labels | 2 |
+| Malformed or invalid plan, labels or aliases | 2 |
+| Malformed ingest or connect draft | 1 |
+| Ingest or connect reading floor or ledger | 3, then the last submission is kept as a degraded draft, as the loop's forced finalize keeps one |
 
 When the last retry is used, the run is recorded as nothing written, the plan
 fails, or the statements' labelling failure is counted, as for a server model.
@@ -128,6 +171,12 @@ failed as orphaned.
 
 ## Adding a kind
 
-A kind needs a `Kind` value in `agent_tasks`, a place that queues tasks, and a
-branch in `server/agent_tasks.py` that briefs a claimed task and checks a
-submission. Ingest, the connect pass and draft review do not have one yet.
+Every kind plugs into the queue the same way: a `Kind` value in
+`agent_tasks`, a place that queues tasks while its action is set to External
+agent, and an `agent_tasks.Handler` in the table in `server/agent_tasks.py`.
+A handler has a `submit` that checks and keeps a result, and optionally a
+`prepare` that briefs a claimed task, a `read` for kinds whose model reads
+as it works, and a `queue` for work nobody requests. Kinds whose internal
+run is one structured model call use `structured_brief`; refusals and
+closing go through `refused` and `closed`. The action is then added to
+`model_settings.AGENT_ACTIONS`.
