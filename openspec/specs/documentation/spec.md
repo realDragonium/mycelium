@@ -105,11 +105,18 @@ The system MUST refuse a documentation request whose prompt is blank or longer t
 - **THEN** the request is refused rather than truncated
 
 ### Requirement: Model choice for a run
-The system SHALL take `provider` `claude` or `openai` per request, defaulting to the saved documentation model settings (default `claude`), record the provider, model and reasoning effort on the run, and refuse the request when no model is configured for that provider or the provider is unavailable; a run never switches provider on failure. `list_documentation_models` reports the default provider and each provider's model, availability and reason.
+The system SHALL take `provider` `claude`, `openai` or `agent` per request, defaulting to the saved documentation model settings (default `claude`), record the provider, model and reasoning effort on the run, and refuse the request when no model is configured for a provider the run needs or that provider is unavailable; a run never switches provider on failure. `list_documentation_models` reports the default provider and each provider's model, availability and reason.
 
 #### Scenario: GPT selected without a model
 - **WHEN** a writer requests `provider="openai"` and no OpenAI documentation model is configured
 - **THEN** the request is refused asking to choose an OpenAI documentation model
+
+### Requirement: Agent runs
+The system SHALL have a run with provider `agent` written by an outside agent (see agent-tasks), needing a model only when the server reviews it; it is the default while documentation is set to External agent. A manual edit always uses a server provider, and `list_documentation_models` lists `agent` while documentation is set to External agent.
+
+#### Scenario: Explicit server provider while External agent is selected
+- **WHEN** documentation is set to External agent and a writer requests `provider="claude"`
+- **THEN** the run is written on the server with the Claude documentation model
 
 ### Requirement: Run concurrency and queueing
 The system SHALL run at most the saved documentation active-run limit (`documentation_runs`, default 2) at once; a run admitted beyond it is stored `queued` with a `queue_position` (1 starts next) and starts in admission order when a running one finishes. While running, a run also waits for a shared model-loop slot and stays `running` while it waits.
@@ -120,11 +127,18 @@ The system SHALL run at most the saved documentation active-run limit (`document
 - **AND** it starts when one of the running runs finishes
 
 ### Requirement: Run status derivation
-The system SHALL report each run's `status` as `queued` before it starts, `running` until it finishes, then `document_written`, `nothing_written` or `failed` from its outcome, except that a run whose written document has since been rewritten by another run reports `document_superseded` while its stored `outcome` stays `document_written` and `document_superseded` is true.
+The system SHALL report each run's `status` as `queued` before it starts, `waiting_for_agent` while an outside agent's task serves it, `running` until it finishes, then `document_written`, `nothing_written` or `failed` from its outcome, except that a run whose written document has since been rewritten by another run reports `document_superseded` while its stored `outcome` stays `document_written` and `document_superseded` is true.
 
 #### Scenario: A later run revises the document
 - **WHEN** run A wrote document D and run B later writes a new revision of D
 - **THEN** `get_documentation_run(A)` reports `status` `document_superseded` and `outcome` `document_written`
+
+### Requirement: Waiting agent runs take no run slot
+The system SHALL give a `waiting_for_agent` run no `queue_position` and not count it against the active-run limit.
+
+#### Scenario: Agent run before it is written
+- **WHEN** a run is requested with provider `agent`
+- **THEN** it reports `status` `waiting_for_agent` until the agent's document is saved or refused
 
 ### Requirement: Run listing and detail
 The system SHALL list the newest 100 runs through `list_documentation_runs` with `draft_chars` instead of draft text, and return one run through `get_documentation_run(run_id)` (MCP) or `GET /api/documentation/runs/{run_id}` including `draft_title` and `draft_body` of a refused draft, `error`, `summary`, `review_notes`, `revision_base`, the captured `profile_snapshot` and `retryable`; an unknown run id is an error (404 over HTTP).
@@ -134,11 +148,15 @@ The system SHALL list the newest 100 runs through `list_documentation_runs` with
 - **THEN** `get_documentation_run` returns the refused `draft_title` and `draft_body` beside the findings in `error`
 
 ### Requirement: Restart fails unfinished runs
-The system SHALL mark every unfinished documentation run, queued or running, as `failed` with error `orphaned by restart` when the server starts.
+The system SHALL mark every unfinished documentation run, queued or running, as `failed` with error `orphaned by restart` when the server starts, except a run waiting for an outside agent, which keeps waiting.
 
 #### Scenario: Server restarts mid-run
 - **WHEN** the server restarts while a run is running and another is queued
 - **THEN** both runs report `status` `failed` with error `orphaned by restart`
+
+#### Scenario: Server restarts while an agent run waits
+- **WHEN** the server restarts while a run is `waiting_for_agent`
+- **THEN** the run still reports `waiting_for_agent`
 
 ### Requirement: Profile snapshot at admission
 The system SHALL capture the documentation instructions, review instructions and all writing profiles at admission and record on the run the selected guidance, exposure, template, audience and their versions (`profile_revisions`, `profile_snapshot`), so edits saved while a run is queued or running do not change that run.
