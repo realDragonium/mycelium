@@ -52,7 +52,7 @@ The system MUST require a `proposed` release to name a `draft_id` created by the
 - **THEN** the release is refused
 
 ### Requirement: Release memory
-The system SHALL remember each `proposed`, `no_link`, `answered`, `resolved` or `not_applicable` release, in the same memory the connect pass uses, so the item is not offered again (to agents or as a next statement to connect) until the statement's text, a neighbour the claim offered, or a statement naming one of its concepts changes, or for a gap until its text or the statement it is about changes; a `skipped` item is offered again at once.
+The system SHALL remember each `proposed`, `no_link`, `answered`, `resolved` or `not_applicable` release, in the same memory the connect pass uses, so the item is not offered again (to agents or as a next statement to connect) until the statement's text, a neighbour the claim offered, or a statement naming one of its concepts changes, or for a gap until its text or the statement it is about changes or a person reopens a gap the release closed; a `skipped` item is offered again at once.
 
 #### Scenario: Skipped item
 - **WHEN** a drafter releases an item as `skipped`
@@ -63,7 +63,7 @@ The system SHALL remember each `proposed`, `no_link`, `answered`, `resolved` or 
 - **THEN** it is offered again
 
 ### Requirement: Curation summary
-The system SHALL include in the health response `curation`: per work kind, the current holders (`claimed_by`, the holder's display name when known, `items`, `expires_at`), `attempted` (items still on the list someone has looked at) and `outcomes` counted by `looked` (the connect pass), `proposed`, `no_link`, `skipped`, `answered`, `resolved` and `not_applicable`.
+The system SHALL include in the health response `curation`: per work kind, the current holders (`claimed_by`, the holder's display name when known, `items`, `expires_at`), `attempted` (items still on the list someone has looked at) and `outcomes` counted by `looked` (the connect pass), `proposed`, `no_link`, `skipped` and `answered`.
 
 #### Scenario: Agent holding work
 - **WHEN** a drafter holds three isolated items

@@ -146,7 +146,7 @@ const WORK: Record<CurationSummary['kind'], string> = {
   gap: 'Other open gaps',
   question: 'Reviewer questions',
 };
-const OUTCOMES = [['looked', 'looked at by the connect pass'], ['proposed', 'proposed'], ['no_link', 'no link'], ['skipped', 'skipped'], ['answered', 'answered'], ['resolved', 'resolved'], ['not_applicable', 'not applicable']] as const;
+const OUTCOMES = [['looked', 'looked at by the connect pass'], ['proposed', 'proposed'], ['no_link', 'no link'], ['skipped', 'skipped'], ['answered', 'answered']] as const;
 
 // What agents working in the product's code have claimed and made of each
 // list; an admin frees the claims of an agent that stopped.

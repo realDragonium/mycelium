@@ -207,7 +207,7 @@ since their draft is still undecided.
    are not offered again, to agents or the connect pass, until the
    statement's text, a neighbour you were offered, or a statement naming
    one of its concepts changes (for a gap: until its text or the statement
-   it is about changes). A reviewer that asks again files a new gap, which
+   it is about changes, or a person reopens a gap an agent closed). A reviewer that asks again files a new gap, which
    is a new item. `skipped` items are offered again at once. Releasing an
    item you do not hold, or with an outcome its kind does not take, is
    refused.
@@ -216,8 +216,9 @@ since their draft is still undecided.
 
 Knowledge health shows per list who holds items and how many, how many
 listed items someone has looked at, and the outcomes: looked at by the
-connect pass, proposed, no link, skipped, answered, resolved, not
-applicable. An admin can release an agent's
+connect pass, proposed, no link, skipped, answered. A gap an agent
+resolved or dismissed leaves the list; the Gaps page shows who closed it and
+why. An admin can release an agent's
 claims on a list (`POST /api/knowledge-health/claims/free` with `kind` and
 `claimed_by`) when the agent stopped; no outcome is recorded, so the items
 are offered again.
