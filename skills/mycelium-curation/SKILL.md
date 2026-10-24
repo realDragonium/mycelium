@@ -127,14 +127,19 @@ draft reviewer's questions.
    `#/gaps`). Each gap may name the statement, draft or document it
    concerns.
 2. Group them: the same missing fact reported several times, gaps a pending
-   draft already answers, gaps that are questions about a draft (answer those
-   in the draft, with `mycelium-draft-review`).
+   draft already answers, gaps that are questions about a draft (a person
+   answers those on the draft, with `mycelium-draft-review`; an agent in the
+   product's code answers them with evidence as `question` items, with
+   `mycelium-code-curation`).
 3. For each distinct fact, find the answer in the product code or docs, and
    add it with `mycelium-authoring` or propose it with `mycelium-draft`.
    Applying a draft resolves the gaps reported about it.
 4. Close the rest with `PATCH /api/knowledge-gaps/{gap_id}` and
    `{"action": "resolve"}` (answered), `"dismiss"` (not a real gap, or out of
-   scope) or `"reopen"`. Needs a real writer or admin.
+   scope) or `"reopen"`. Needs a real writer or admin. An agent working the
+   curation queue closes a gap it claimed by releasing it as `resolved` (with
+   the applied draft) or `not_applicable` (with a reason) instead; the gap
+   records the agent and the reason.
 
 Do not resolve a gap you have not filled, and do not fill one from memory:
 verify the fact first, and when you cannot, leave it open with a note to the

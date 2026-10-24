@@ -1,6 +1,6 @@
 ---
 name: mycelium-code-curation
-description: Work the Mycelium curation queue from inside a product's repository. Claims a small batch of knowledge-health work (isolated statements, statements naming no concept, rephrase requests, knowledge gaps), checks each item against the product's code, proposes links, concept names, rephrases or corrections through a drafter's draft with per-operation code evidence, submits the draft and releases every item with its outcome. Use when an agent with code access (Claude Code in the product repo, or a CI job) is asked to curate, connect or check Mycelium knowledge against the code, or to work the curation queue. Needs a drafter token. Content rules come from mycelium-authoring.
+description: Work the Mycelium curation queue from inside a product's repository. Claims a small batch of knowledge-health work (isolated statements, statements naming no concept, rephrase requests, knowledge gaps, the draft reviewer's questions for a person), checks each item against the product's code, proposes links, concept names, rephrases or corrections through a drafter's draft with per-operation code evidence, answers reviewer questions with evidence, closes gaps it settled, submits the draft and releases every item with its outcome. Use when an agent with code access (Claude Code in the product repo, or a CI job) is asked to curate, connect or check Mycelium knowledge against the code, or to work the curation queue. Needs a drafter token. Content rules come from mycelium-authoring.
 ---
 
 # Curating Mycelium from the product's code
@@ -43,7 +43,7 @@ first. Run one job per drafter account at a time.
 ## Workflow
 
 1. **Claim a small batch.** `claim_curation_work(kind, limit=3)`. `kind` is
-   `isolated`, `unnamed`, `rephrase` or `gap`. Keep the batch small enough to
+   `isolated`, `unnamed`, `rephrase`, `gap` or `question`. Keep the batch small enough to
    finish within the 30-minute lease. Each item has `id`, `text`, the
    `statement` it is about (with the concepts it names) and five
    `neighbours`; the batch has `link_types` (each type's `description`, and
@@ -71,6 +71,15 @@ first. Run one job per drafter account at a time.
      checked;
    - `skipped`, for items you did not get to. They are offered again.
 
+   A gap (`rephrase` or `gap`) you settled without a draft of yours:
+   - `resolved` and the `draft_id` of the applied draft that already closed
+     it; the gap is resolved, with you as who resolved it;
+   - `not_applicable` and a `reason`: nothing should change (the gap
+     describes behaviour that does not exist, or a duplicate of a closed
+     gap); the gap is dismissed and the Gaps page shows your reason.
+
+   A `question` is released as `answered` (see below) or `skipped`.
+
    Group items by outcome; one call per outcome.
 
 **Leases.** `claim_curation_work(kind, limit=0)` renews every item of that
@@ -90,6 +99,7 @@ hold.
 | `unnamed` | The concept the code and UI call it | `upsert_name(text, entity_id)` for wording of an existing concept; `upsert_entity(name, description)` when no concept fits and the name appears word for word in the statement |
 | `rephrase` | What the code actually does, to state one claim in the right kind | `patch_statement(id, text=...)` on the item's `statement` (the item id is the gap's) |
 | `gap` | The missing fact | The statements, links or concepts that close it (`mycelium-authoring` §8) |
+| `question` | What the code says about the reviewer's `question.questions` | An answer with evidence (below), never a draft operation |
 
 Rules:
 
@@ -109,9 +119,35 @@ Rules:
 - **`no_link` is a result.** Say what you checked: "export email is sent by
   the billing job; no neighbour describes that job".
 
+## Answering a reviewer's question
+
+A `question` item is a draft the reviewer could not settle from the
+knowledge base: `question` holds the `draft_id`, the `questions` and the
+reviewer's `rationale`. Read the draft (`get_draft(draft_id)`) and the
+statements its questions name, find the answer in the code, and release:
+
+```text
+release_curation_work([item_id], "answered",
+    answer="No. The Admin console and the workspace Settings page are separate screens with separate routes.",
+    evidence=[{"kind": "code", "path": "app/admin/routes.py", "lines": "3-9",
+               "commit": "4e1c2a9", "excerpt": "…",
+               "claim": "The console and the settings page are separate blueprints"}])
+```
+
+- Answer exactly what was asked, in a sentence or two; the reviewer
+  decides what the draft should become.
+- Evidence takes the operation-evidence shape below, one to five items. An
+  answer without evidence is refused.
+- You cannot answer a draft you created; its questions are for someone
+  else.
+- If the code does not settle it, release the item as `skipped` and say so
+  in your report; do not guess.
+
+The draft is reviewed again with your answer at once.
+
 ## Evidence
 
-Each operation takes up to five items:
+Each operation (and each answer) takes up to five items:
 
 ```json
 {"kind": "code", "path": "app/billing/exports.py", "lines": "88-97",
@@ -180,4 +216,5 @@ auth/sso.py at sign-in; no statement describes that check yet")`.
 ## Report
 
 End with the draft id, what it proposes per item, the `no_link` reasons, the
-gaps you reported and anything you released as `skipped`.
+questions you answered, the gaps you resolved or dismissed and why, the gaps
+you reported and anything you released as `skipped`.

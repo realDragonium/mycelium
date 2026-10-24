@@ -214,6 +214,10 @@ gate enabled, the run records an authoritative `needs_context` review carrying
 the questions, ends with outcome `needs_human`, files a knowledge gap naming the
 draft and the questions, and leaves the draft submitted. A curator answers with
 `POST /api/drafts/{id}/review/answer` and the draft is reviewed again with the
+answer. A curation agent working in the product's code can answer instead,
+through the curation queue's `question` items, with the evidence it checked
+([Knowledge health](KNOWLEDGE_HEALTH.md#kinds-of-work)); the draft is reviewed
+again the same way, and the reviewer gets the agent's evidence with the
 answer. In the web app the questions and an answer form sit at the top of the
 draft; such drafts sort first under Drafts and are counted on Home. The reviewer gets no new tools for this.
 
@@ -367,7 +371,8 @@ real curator role and is refused unless that attempt is the draft's latest, has
 outcome `needs_human`, and the draft has not changed since. The answer is stored
 on the review attempt with the curator's ID and carried to every later attempt
 of the draft, where the reviewer receives it as `answers_from_curators`, apart
-from the creator-supplied evidence. It returns `{review: ...}` for the new
+from the creator-supplied evidence. An agent's answer through the curation
+queue is stored the same way, with the agent's ID and its `evidence`. It returns `{review: ...}` for the new
 attempt.
 
 Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...],
