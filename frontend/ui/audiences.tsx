@@ -17,10 +17,16 @@ export interface AudienceView extends AudienceRef {
   description: string; includes: string[]; version: number; retired: boolean; default: boolean; profiles: string[];
   visible_statements: number; unlabelled_statements: number; pending_statements: number;
 }
+interface AgentTask {
+  id: string; kind: string; status: 'waiting' | 'claimed' | 'in_review' | 'done' | 'failed';
+  claimed_by: string | null; expires_at: string | null; failures: number;
+  findings: { check: string; where: string | null; problem: string }[];
+  release_reason: string | null; updated_at: string; error: string | null;
+}
 export interface AudienceStatus {
   statements: number; labelled_ai: number; labelled_curator: number; unlabelled: number; queued: number; failed: number;
   last_error: string | null; cost_usd: number; automatic: boolean; confirm_external_grants: boolean; model: string; provider: string;
-  backfill: BackfillProgress | null;
+  backfill: BackfillProgress | null; external_agent?: boolean; agent_tasks?: AgentTask[];
 }
 interface Backfill { started_at: string; queued: number }
 interface BackfillProgress extends Backfill { labelled: number; cost_usd: number }
@@ -245,7 +251,8 @@ function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: 
   };
   return <Card title="Statement labelling" actions={data.can_configure && <><button type="button" className="btn sm" disabled={busy} onClick={() => void start(false)}>Label unlabelled statements</button><button type="button" className="btn ghost sm" disabled={busy} onClick={() => void start(true)}>Relabel AI labels</button></>}>
     <div className="audience-metrics"><div><b>{status.labelled_ai}</b><span>AI-labelled</span></div><div><b>{status.labelled_curator}</b><span>Curator</span></div><div><b>{status.unlabelled}</b><span>Unlabelled</span></div><div><b>{status.queued}</b><span>Queued</span></div><div><b>{status.failed}</b><span>Failed</span></div></div>
-    <p className="hint">{status.statements} statements · {formatCost(status.cost_usd)} estimated total cost · {status.provider} / {status.model} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
+    <p className="hint">{status.statements} statements · {formatCost(status.cost_usd)} estimated total cost · {status.external_agent ? 'labelled by external agents' : `${status.provider} / ${status.model}`} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
+    {status.external_agent && !!status.agent_tasks?.length && <p className="hint">{status.agent_tasks.length} batch{status.agent_tasks.length === 1 ? '' : 'es'} with agents · {status.agent_tasks.map(task => task.status === 'claimed' && task.claimed_by ? `claimed by ${task.claimed_by}` : 'waiting').join(' · ')}</p>}
     {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements… Estimated cost since start: ${formatCost(status.backfill.cost_usd)}.` : 'Backfill finished.'}</Notice>}
     {status.last_error && <Notice tone="error">Last labelling error: {status.last_error}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}

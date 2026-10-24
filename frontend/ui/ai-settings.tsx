@@ -48,13 +48,14 @@ function saveError(e: unknown, what: string): { message: string; conflict: boole
 interface ActionSettings {
   action: string; provider: Provider; model: string; source: string; revision: number | string;
   claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
+  external_agent?: boolean; agent_review?: 'server' | 'agent'; agent_supported?: boolean;
   configuration_error?: string | null; model_warning?: string | null; providers: ProviderStatus[];
 }
 interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
 const ACTION_TITLES: Record<string, string> = { ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation', alias_discovery: 'Alias discovery', audience_labelling: 'Audience labelling', documentation_planning: 'Documentation planning', connect: 'Connecting statements' };
 
 function formOf(s: ActionSettings) {
-  return { provider: s.provider, claude_model: s.claude_model, openai_model: s.openai_model, claude_reasoning_effort: s.claude_reasoning_effort ?? null, openai_reasoning_effort: s.openai_reasoning_effort ?? null, revision: s.revision };
+  return { provider: s.provider, claude_model: s.claude_model, openai_model: s.openai_model, claude_reasoning_effort: s.claude_reasoning_effort ?? null, openai_reasoning_effort: s.openai_reasoning_effort ?? null, external_agent: s.external_agent ?? false, agent_review: s.agent_review ?? 'server', revision: s.revision };
 }
 
 const sameForm = <T,>(a: T, b: T) => JSON.stringify(a) === JSON.stringify(b);
@@ -70,6 +71,8 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
   const claude = form.provider === 'claude';
   const model = claude ? form.claude_model : form.openai_model;
   const effort = claude ? form.claude_reasoning_effort : form.openai_reasoning_effort;
+  const needsProvider = !form.external_agent || form.agent_review === 'server';
+  const showProvider = !form.external_agent || (settings.action === 'docgen' && form.agent_review === 'server');
   const available = current.providers.find(p => p.provider === form.provider);
   const accept = (value: ActionSettings) => { setCurrent(value); setForm(formOf(value)); };
   // A save elsewhere reloads the list; take its value unless this form has edits.
@@ -102,7 +105,9 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
   return (
     <Card title={title} actions={<button type="button" className="btn ghost sm" onClick={() => void reload()} disabled={busy}>Reload</button>}>
       <p className="muted">
-        Now: {draftReviewProviderName(current.provider)} · {current.model || 'no model configured'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'} · {current.source === 'saved' ? 'saved here' : 'built-in default'}
+        Now: {current.external_agent
+          ? <>External agent{settings.action === 'docgen' && <> · {current.agent_review === 'agent' ? 'reviewed by another agent' : <>reviewed by {draftReviewProviderName(current.provider)} · {current.model}</>}</>}</>
+          : <>{draftReviewProviderName(current.provider)} · {current.model || 'no model configured'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'}</>} · {current.source === 'saved' ? 'saved here' : 'built-in default'}
       </p>
       {settings.action === 'docgen' && <p className="hint">The default for new documents. Choosing another provider when generating uses that provider's saved model and effort.</p>}
       {current.configuration_error && <Notice tone="error">{current.configuration_error} Save valid settings to enable this action.</Notice>}
@@ -112,15 +117,29 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
         <form onSubmit={save}>
           <fieldset disabled={busy || conflict}>
             <div className="field-grid">
-              <ProviderSelect value={form.provider} onChange={provider => edit({ provider })} label="Provider" />
-              <label className="field"><span>Model ID</span>
-                <input className="input" required value={model} placeholder="A model ID for this provider" onChange={e => edit(claude ? { claude_model: e.target.value } : { openai_model: e.target.value })} />
-              </label>
-              <ReasoningEffortField provider={form.provider} value={effort} onChange={v => edit(claude ? { claude_reasoning_effort: v } : { openai_reasoning_effort: v })} />
+              {current.agent_supported && <label className="field"><span>Done by</span>
+                <select className="input" value={form.external_agent ? 'agent' : 'server'} onChange={e => edit({ external_agent: e.target.value === 'agent' })}>
+                  <option value="server">Server model</option><option value="agent">External agent</option>
+                </select>
+                {form.external_agent && <span className="hint">Agents with a writer token claim this work over MCP (claim_agent_task). See Agent tasks in the docs.</span>}
+              </label>}
+              {settings.action === 'docgen' && form.external_agent && <label className="field"><span>Review</span>
+                <select className="input" value={form.agent_review} onChange={e => edit({ agent_review: e.target.value === 'agent' ? 'agent' : 'server' })}>
+                  <option value="server">Server reviewer (the provider below)</option><option value="agent">Another agent</option>
+                </select>
+                <span className="hint">Another agent is never the document's writer, but two tokens of one person are not told apart.</span>
+              </label>}
+              {showProvider && <>
+                <ProviderSelect value={form.provider} onChange={provider => edit({ provider })} label="Provider" />
+                <label className="field"><span>Model ID</span>
+                  <input className="input" required value={model} placeholder="A model ID for this provider" onChange={e => edit(claude ? { claude_model: e.target.value } : { openai_model: e.target.value })} />
+                </label>
+                <ReasoningEffortField provider={form.provider} value={effort} onChange={v => edit(claude ? { claude_reasoning_effort: v } : { openai_reasoning_effort: v })} />
+              </>}
             </div>
-            <p className="hint">{available?.available ? 'Credentials for this provider are configured on the server.' : available?.reason || 'This provider has no credentials on the server.'}</p>
+            {showProvider && <p className="hint">{available?.available ? 'Credentials for this provider are configured on the server.' : available?.reason || 'This provider has no credentials on the server.'}</p>}
             <div className="row gap-sm">
-              <button type="submit" className="btn primary" disabled={!model.trim()}>{busy ? 'Saving…' : 'Save'}</button>
+              <button type="submit" className="btn primary" disabled={needsProvider && !model.trim()}>{busy ? 'Saving…' : 'Save'}</button>
               {saved && <span className="ok-text small" role="status">Saved. New runs use it.</span>}
             </div>
           </fieldset>
