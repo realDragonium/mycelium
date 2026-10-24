@@ -45,9 +45,18 @@ def resolve_draft_gaps(
     return cursor.rowcount
 
 
+#: The reason a curation agent gave when it resolved or dismissed the gap
+#: and the gap still stands as it left it.
+_CLOSING_REASON = (
+    "(SELECT c.reason FROM curation_attempts c WHERE c.item_id = knowledge_gaps.id "
+    "AND c.outcome IN ('resolved', 'not_applicable') "
+    "AND c.attempted_by = COALESCE(knowledge_gaps.resolved_by, "
+    "knowledge_gaps.dismissed_by)) AS closing_reason"
+)
 _GAP_COLUMNS = (
     "id, text, created_at, created_by, resolved_at, resolved_by, "
-    "dismissed_at, dismissed_by, draft_id, statement_id, document_id"
+    "dismissed_at, dismissed_by, draft_id, statement_id, document_id, "
+    + _CLOSING_REASON
 )
 
 _GAP_STATUS_FILTERS = {

@@ -7,7 +7,7 @@ without creating explicit entity-to-statement links.
 Ingestion can propose an alias when the supplied prose establishes equivalence,
 for example “single sign-on (SSO)”. Suggestions retain the exact quoted evidence,
 the original source text, target concept, reason, and possible ambiguity. A
-substring check verifies the quote came from the input; human review decides
+substring check verifies the quote came from the input; review decides
 whether it actually supports equivalence. Ingestion puts its suggestions in a
 separate submitted draft titled after the knowledge draft, so the knowledge can
 be reviewed and applied without waiting for the alias decisions.
@@ -39,8 +39,13 @@ are checked again before acceptance. Inspect and refresh a suggestion after a
 vocabulary change. If the supporting statement changed, reject the old suggestion
 and scan the current statement.
 
-All suggestions require human review, including when draft review is set to
-**Review and apply**. Such drafts receive advisory assessments only. Pending
+Each suggestion is decided individually. By default a person decides: the
+draft reviewer gives such drafts advisory assessments only, even in **Review
+and apply**. With **Reviewer decides alias suggestions** on (**Settings →
+Draft review**, off by default), the reviewer, on a server model or an
+external agent, accepts or rejects each suggestion with a quote from its
+source text and a reason, recorded on the decision with the reviewer as
+actor; see [Draft review](DRAFT_REVIEW.md#alias-decisions). Pending
 suggestions must be individually decided before applying, rejecting, or
 withdrawing their draft. Drafts containing only alias suggestions close after
 the final decision. Mixed drafts, which ingestion no longer produces, remain

@@ -256,7 +256,10 @@ export type GapAction = 'resolve' | 'dismiss' | 'reopen';
 export interface KnowledgeGap {
   id: string; text: string; status: GapStatus;
   created_at: string; created_by: string | null;
-  resolved_at: string | null; dismissed_at: string | null;
+  resolved_at: string | null; resolved_by: string | null;
+  dismissed_at: string | null; dismissed_by: string | null;
+  // Why a curation agent resolved or dismissed it.
+  closing_reason: string | null;
   // What the report came from, when the reporter named it.
   draft_id: string | null; statement_id: string | null; document_id: string | null;
 }
@@ -449,13 +452,13 @@ export interface HealthCounts {
 }
 // `max_run_tokens` is 0 when runs have no token cap.
 export interface ConnectLimits { batch_size: number; max_run_tokens: number; provider: string; model: string; external_agent: boolean }
-export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap';
+export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap' | 'question';
 // `name` is null once the holder is no longer a known user. Outcome `looked`
 // is the server's connect pass; the rest come from outside agents.
 export interface CurationHolder { claimed_by: string; name: string | null; items: number; expires_at: string }
 export interface CurationSummary {
   kind: CurationKind; claims: CurationHolder[]; attempted: number;
-  outcomes: Partial<Record<'looked' | 'proposed' | 'no_link' | 'skipped', number>>;
+  outcomes: Partial<Record<'looked' | 'proposed' | 'no_link' | 'skipped' | 'answered' | 'resolved' | 'not_applicable', number>>;
 }
 export interface HealthView { counts: HealthCounts; connect: ConnectLimits | null; connect_error: string | null; curation: CurationSummary[]; uncovered_by_profile: Record<string, number> }
 export interface HealthStatement {

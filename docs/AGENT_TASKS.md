@@ -17,6 +17,7 @@ the server, using the agents its people already run.
 | Documentation review | Yes, for documents an agent wrote | Kind `document_review`, when Review is **Another agent**. A person's manual edit is still reviewed by the server's reviewer |
 | Documentation planning | Yes | Kind `documentation_planning`, and `plan_review` for a profile whose plan items an AI reviewer decides |
 | Audience labelling | Yes | Kind `audience_labelling` |
+| Review of waiting external grants | Yes, for grants another agent labelled | Kind `audience_review`, when **AI reviews waiting external grants** is on; see [Audiences](AUDIENCES.md#ai-review-of-waiting-grants) |
 | Ingest | Yes | Kind `ingest` |
 | Connect pass | Yes | Kind `connect` |
 | Alias discovery | Yes | Kind `alias_discovery` |
@@ -45,8 +46,10 @@ already ask the server for documentation, so an agent can do no more than its
 token could request. Drafters cannot claim: a drafter's writes go to a draft
 for review, but an agent's document, plan or labels are saved as a server
 model's would be. Readers cannot claim either. A draft's creator is never
-given its review, nor the agent that made a plan its plan review: a claim that held such tasks back says so in `note`, and a
-submission by the creator is refused and the task goes back to the queue.
+given its review, nor the agent that made a plan its plan review, nor a
+labeller the review of its own grants: a claim that held such tasks back says
+so in `note`, and a submission by the creator is refused and the task goes
+back to the queue (a grant review skips the grants it labelled).
 
 ## Kinds
 
@@ -57,6 +60,7 @@ submission by the creator is refused and the task goes back to the queue.
 | `documentation_planning` | A plan is requested for a writing profile, by a person or by the profile's automatic planning, while Documentation planning is set to External agent | The proposed documents, placing the brief's uncovered statements in updates of existing documents or in new ones |
 | `plan_review` | A profile whose plan items an AI reviewer decides has proposed items no review decided (checked by the maintenance sweep and when an agent claims), while Documentation planning is set to External agent | A decision for every item: `approve` or `dismiss`, with a reason |
 | `audience_labelling` | An agent asks for labelling work while Audience labelling is set to External agent | A label for each statement in the batch |
+| `audience_review` | An agent asks for review work while Audience labelling is set to External agent and **AI reviews waiting external grants** is on; one batch per labeller | `decisions`: confirm or reject, with a reason, for each waiting grant in the batch |
 | `ingest` | `ingest` is called while Ingest is set to External agent | The `emit_draft` input: proposed operations, the reconcile ledger, flags and skipped duplicates |
 | `connect` | `connect_statements` is called while Connect is set to External agent | The same, for the statements in the batch |
 | `alias_discovery` | An alias scan is started while Alias discovery is set to External agent | The aliases the statements show, with their evidence |
@@ -148,7 +152,7 @@ loop would try again:
 | Citations, vocabulary or media | 3 |
 | Review | 1 (the document returns to its writer with the review's findings) |
 | Malformed review | 1 |
-| Malformed or invalid plan, plan review, labels, aliases or draft review | 2 |
+| Malformed or invalid plan, plan review, labels, grant review, aliases or draft review | 2 |
 | Malformed ingest or connect draft | 1 |
 | Ingest or connect reading floor or ledger | 3, then the last submission is kept as a degraded draft, as the loop's forced finalize keeps one |
 
@@ -173,7 +177,8 @@ review's findings.
 - **Documentation plans** show the same in `latest.agent_task`, and an open
   plan review in `review_task`.
 - **Audience labelling status** (`GET /api/audiences/labelling`) has
-  `external_agent` and the open batches in `agent_tasks`. Automatic labelling
+  `external_agent`, the open labelling batches in `agent_tasks` and the open
+  grant review batches in `review_tasks`. Automatic labelling
   does not call a model while the setting is on.
 
 Tasks live in the drafts database with documentation runs and plans. They are

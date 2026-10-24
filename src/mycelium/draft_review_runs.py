@@ -10,7 +10,7 @@ import logging
 import re
 import sqlite3
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -260,6 +260,14 @@ def _set_runner(run: ReviewRun, settings: draft_review_settings.Snapshot) -> Non
 def on_submitted(draft_id: str) -> None:
     try:
         settings = _settings()
+        conn = drafts_store.connection()
+        ops = drafts_store.list_ops(conn, draft_id)
+        if (
+            ops
+            and all(op["kind"] == drafts_store.ALIAS_SUGGESTION_KIND for op in ops)
+            and not settings.alias_decisions
+        ):
+            return
         if settings.mode != "off" and not credentials_error(settings):
             start(draft_id)
     except Exception:
@@ -347,14 +355,17 @@ def _retry_due(run: ReviewRun, now: datetime) -> bool:
 def backlog() -> list[str]:
     """Submitted drafts the current configuration has not reviewed and
     cannot reach by itself: submitted while review was off, reviewed only
-    advisorily, or failed beyond the sweep, oldest first. Alias suggestion
-    drafts await a person and are left out."""
+    advisorily, or failed beyond the sweep, oldest first. Alias-only drafts
+    are included only when the reviewer is configured to decide them."""
+    settings = _settings()
     admits = _backlog_admits()
     conn = drafts_store.connection()
     waiting = []
     for row in reversed(drafts_store.list_drafts(conn, "submitted")):
         ops = drafts_store.list_ops(conn, row["id"])
-        if all(op["kind"] == drafts_store.ALIAS_SUGGESTION_KIND for op in ops):
+        if all(op["kind"] == drafts_store.ALIAS_SUGGESTION_KIND for op in ops) and (
+            settings.mode == "off" or not settings.alias_decisions
+        ):
             continue
         if admits(draft_review_store.latest(conn, row["id"])):
             waiting.append(row["id"])
@@ -834,7 +845,7 @@ def _base(
         data["previous_attempt_failure"] = previous_failure
     if answers:
         data["answers_from_curators"] = [
-            _json_value.validate_python(item.model_dump(mode="json"))
+            _json_value.validate_python(item.model_dump(mode="json", exclude_none=True))
             for item in answers
         ]
     return data, reads
@@ -852,7 +863,8 @@ _KNOWLEDGE_SCOPE = (
     "workflow run the draft documents. "
     "answers_from_curators, when present, holds answers a curator gave "
     "to earlier review questions; only these answers come from a "
-    "curator."
+    "curator. An answer with evidence came from a curation agent that "
+    "checked the product's code, UI or docs; the evidence says what it saw."
 )
 _PART_SCOPE = (
     "The draft is too large for one review, so it is reviewed in connected "
@@ -1106,12 +1118,18 @@ def _creator(inspection: DraftReviewInspection) -> str | None:
     return creator if isinstance(creator, str) else None
 
 
-def _unsupported(inspection: DraftReviewInspection) -> str | None:
+def _unsupported(
+    inspection: DraftReviewInspection, settings: draft_review_settings.Snapshot
+) -> str | None:
     unsupported = sorted(
         {
             str(op.get("kind"))
             for op in _ops(inspection)
             if op.get("kind") not in REVIEWABLE_OPERATIONS
+            and not (
+                op.get("kind") == drafts_store.ALIAS_SUGGESTION_KIND
+                and settings.alias_decisions
+            )
         }
     )
     if not unsupported:
@@ -1127,9 +1145,57 @@ def _refusal(reason: str) -> Assessment:
         label="reject",
         rationale=reason,
         questions=[],
+        alias_decisions=[],
         corrections=[],
         contradictions=[],
     )
+
+
+def _validate_alias_decisions(
+    result: Assessment,
+    part: Part,
+    inspection: DraftReviewInspection,
+    settings: draft_review_settings.Snapshot,
+) -> None:
+    if not settings.alias_decisions:
+        return
+    from . import alias_suggestions
+
+    operations = {str(op["operation_ref"]): op for op in _ops(inspection)}
+    seen: set[str] = set()
+    for decision in result.alias_decisions:
+        ref = decision.operation_ref
+        if ref in seen:
+            raise ValueError(f"alias operation {ref} has more than one decision")
+        seen.add(ref)
+        operation = operations.get(ref)
+        if operation is None or operation.get("kind") != alias_suggestions.KIND:
+            raise ValueError(
+                f"alias decision {ref} does not name an alias_suggestion operation"
+            )
+        suggestion = alias_suggestions.Suggestion.model_validate(_payload_of(operation))
+        if suggestion.status != "pending":
+            raise ValueError(f"alias decision {ref} does not name a pending suggestion")
+        if ref not in part.refs:
+            raise ValueError(f"alias decision {ref} names an operation of another part")
+        if decision.quote not in suggestion.evidence.text:
+            raise ValueError(
+                f"alias decision {ref} quote is not in the suggestion source text"
+            )
+    if result.label == "needs_context":
+        return
+    pending = {
+        str(operation["operation_ref"])
+        for operation in part.ops
+        if operation.get("kind") == alias_suggestions.KIND
+        and alias_suggestions.Suggestion.model_validate(_payload_of(operation)).status
+        == "pending"
+    }
+    missing = sorted(pending - seen)
+    if missing:
+        raise ValueError(
+            "pending alias suggestions need exactly one decision: " + ", ".join(missing)
+        )
 
 
 def _review(
@@ -1141,7 +1207,7 @@ def _review(
 ) -> tuple[list[tuple[Part, Assessment]], list[Read]]:
     """Each part's validated assessment, and every read the parts made.
     A draft the server refuses gets one rejection and no model call."""
-    reason = _unsupported(inspection) or _stale(inspection)
+    reason = _unsupported(inspection, settings) or _stale(inspection)
     contexts: list[PartContext] = []
     if reason is None:
         try:
@@ -1165,6 +1231,7 @@ def _review(
         result = _assess(item.context, settings, limits, instructions)
         result = _without_redundant_tool_names(result, inspection)
         draft_review_model.validate_assessment(result)
+        _validate_alias_decisions(result, item.part, inspection, settings)
         outside = [
             ref
             for correction in result.corrections
@@ -1192,6 +1259,7 @@ def _record(run: ReviewRun, results: list[tuple[Part, Assessment]]) -> None:
         run.label = result.label
         run.rationale = result.rationale
         run.questions = result.questions
+        run.alias_decisions = result.alias_decisions
         run.corrections = [*result.corrections]
         run.contradictions = result.contradictions
         run.parts = []
@@ -1223,6 +1291,9 @@ def _record(run: ReviewRun, results: list[tuple[Part, Assessment]]) -> None:
         )
     )
     run.questions = [q for _, _, result in deciding for q in result.questions]
+    run.alias_decisions = [
+        decision for _, result in results for decision in result.alias_decisions
+    ]
     applies = label == "changes_suggested"
     run.corrections = [c for _, r in results for c in r.corrections] if applies else []
     run.contradictions = (
@@ -1234,6 +1305,7 @@ def _record(run: ReviewRun, results: list[tuple[Part, Assessment]]) -> None:
             label=result.label,
             rationale=result.rationale,
             questions=result.questions,
+            alias_decisions=result.alias_decisions,
             corrections=[*result.corrections],
             contradictions=result.contradictions,
         )
@@ -1259,6 +1331,50 @@ def _assess(
     )
 
 
+def _read_record_keys(read: Read) -> set[RecordKey]:
+    if read.name == "get_entity":
+        identity = read.arguments.get("id")
+        return {("entity", identity)} if isinstance(identity, str) else set()
+    if read.name == "get_statements":
+        identities = read.arguments.get("ids")
+        return (
+            {
+                ("statement", identity)
+                for identity in identities
+                if isinstance(identity, str)
+            }
+            if isinstance(identities, list)
+            else set()
+        )
+    return set()
+
+
+def _alias_record_keys(
+    inspection: DraftReviewInspection,
+) -> set[RecordKey]:
+    from .server import draft_review
+
+    knowledge = draft_review.operation_knowledge(_operations(_ops(inspection)))
+    alias_refs = {
+        str(op["operation_ref"])
+        for op in _ops(inspection)
+        if op.get("kind") == drafts_store.ALIAS_SUGGESTION_KIND
+    }
+    return {
+        key
+        for ref in alias_refs
+        for key in knowledge[ref]["targets"] | knowledge[ref]["mentioned"]
+    }
+
+
+def _without_record_reads(reads: list[Read], keys: set[RecordKey]) -> list[Read]:
+    return [
+        read
+        for read in reads
+        if not (read_keys := _read_record_keys(read)) or not read_keys <= keys
+    ]
+
+
 def _validate_snapshot(inspection: DraftReviewInspection, reads: list[Read]) -> None:
     from . import server  # local import: server registers the review tools
 
@@ -1282,13 +1398,50 @@ def _mutation_authority(
     run: ReviewRun,
     inspection: DraftReviewInspection,
     settings: draft_review_settings.Snapshot,
-) -> None:
+) -> auth.Principal:
     if run.mode != "review-and-apply" or mode() != "review-and-apply":
         raise ValueError("automatic action disabled by review mode")
     if draft_review_settings.load() != settings:
         raise ValueError("review configuration changed; rerun before automatic action")
     principal = reviewer(_creator(inspection), run.reviewer_id or "")
     auth.current_principal.set(principal)
+    return principal
+
+
+def _apply_alias_decisions(
+    run: ReviewRun, principal: auth.Principal
+) -> tuple[int, int, list[str]]:
+    from . import alias_suggestions
+
+    accepted = 0
+    rejected = 0
+    left: list[str] = []
+    for decision in run.alias_decisions:
+        try:
+            alias_suggestions.decide_as_reviewer(
+                run.draft_id,
+                decision.operation_ref,
+                decision.decision == "accept",
+                decision.quote,
+                decision.reason,
+                principal,
+            )
+        except alias_suggestions.Conflict as exc:
+            left.append(f"{decision.operation_ref} ({exc})")
+            continue
+        if decision.decision == "accept":
+            accepted += 1
+        else:
+            rejected += 1
+    return accepted, rejected, left
+
+
+def _alias_detail(accepted: int, rejected: int, left: list[str]) -> str:
+    detail = (
+        f"Alias decisions: {accepted} accepted, {rejected} rejected, "
+        f"{len(left)} left for a person."
+    )
+    return detail if not left else detail + " " + "; ".join(left)
 
 
 def _finish(
@@ -1301,12 +1454,12 @@ def _finish(
     from .server import draft_application
 
     with store.write_lock():
-        _validate_snapshot(inspection, reads)
         from . import alias_suggestions
 
-        if alias_suggestions.contains(
-            drafts_store.list_ops(drafts_store.connection(), run.draft_id)
-        ):
+        draft_ops = drafts_store.list_ops(drafts_store.connection(), run.draft_id)
+        contains_aliases = alias_suggestions.contains(draft_ops)
+        _validate_snapshot(inspection, reads)
+        if contains_aliases and not settings.alias_decisions:
             run.detail = (
                 "Advisory assessment only; alias suggestions require human review."
             )
@@ -1314,23 +1467,39 @@ def _finish(
         if run.mode != "review-and-apply" or draft_review_settings.load() != settings:
             run.detail = "Advisory assessment only; automatic action disabled by mode or changed settings."
             return
-        _mutation_authority(run, inspection, settings)
+        principal = _mutation_authority(run, inspection, settings)
         if not draft_application._reviewed_apply_enabled():
             run.detail = "Reviewed application gate is disabled; no automatic changes."
             return
         if run.label == "needs_context":
             _ask_person(run, inspection, reads)
             return
+        alias_detail: str | None = None
+        application_reads = reads
+        if contains_aliases:
+            accepted, rejected, left = _apply_alias_decisions(run, principal)
+            alias_detail = _alias_detail(accepted, rejected, left)
+            application_reads = _without_record_reads(
+                reads, _alias_record_keys(inspection)
+            )
+            alias_only = all(op["kind"] == alias_suggestions.KIND for op in draft_ops)
+            if alias_only or left:
+                if alias_only and not left:
+                    run.application = "applied" if accepted else "rejected"
+                run.detail = alias_detail
+                return
         if run.label == "changes_suggested" and settings.auto_apply == "clean":
             run.application = "held"
             run.detail = draft_review_store.HELD_FOR_CURATOR
+            if alias_detail is not None:
+                run.detail = alias_detail + " " + run.detail
             return
         with store.transaction(drafts_store.connection()):
             _mutation_authority(run, inspection, settings)
             _apply_corrections(run.draft_id, _precise(run.corrections))
             final = server.inspect_draft_review(run.draft_id)
             _refuse_findings(final)
-            _check_correction_knowledge(inspection, final, reads)
+            _check_correction_knowledge(inspection, final, application_reads)
             _mutation_authority(run, inspection, settings)
             outcome: Literal["rejected", "refined", "accepted"] = (
                 "rejected"
@@ -1344,15 +1513,19 @@ def _finish(
                 outcome,
                 run.rationale or "",
                 final["draft_revision"],
-                _supporting_preconditions(final, reads),
+                _supporting_preconditions(final, application_reads),
             )
             run.review_id = review["review_id"]
             run.draft_revision = final["draft_revision"]
-            run.knowledge_preconditions = _supporting_preconditions(final, reads)
+            run.knowledge_preconditions = _supporting_preconditions(
+                final, application_reads
+            )
             draft_review_store.save(drafts_store.connection(), run)
         if run.label == "reject":
             run.application = "rejected"
             run.detail = f"Draft rejected by {_reviewer_name(run)}."
+            if alias_detail is not None:
+                run.detail = alias_detail + " " + run.detail
             _report_gap(
                 run.draft_id,
                 f"Draft {run.draft_id} was rejected by {_reviewer_name(run)}: "
@@ -1365,6 +1538,8 @@ def _finish(
         run.detail = (
             f"Applied through reviewed application {receipt['application_id']}."
         )
+        if alias_detail is not None:
+            run.detail = alias_detail + " " + run.detail
         for contradiction in run.contradictions:
             _report_gap(
                 run.draft_id,
@@ -1402,15 +1577,23 @@ def _ask_person(
 
 
 def answer(
-    draft_id: str, run_id: str, text: str, principal: auth.Principal
+    draft_id: str,
+    run_id: str,
+    text: str,
+    principal: auth.Principal,
+    evidence: Sequence[drafts_store.Evidence] = (),
 ) -> ReviewRun:
     """Review the draft again with a curator's answer to the questions run
-    `run_id` asked."""
+    `run_id` asked, and what a curation agent checked to give it."""
     return start(
         draft_id,
         rerun=True,
         answer=Answer(
-            run_id=run_id, questions=[], answer=text.strip(), answered_by=principal.id
+            run_id=run_id,
+            questions=[],
+            answer=text.strip(),
+            answered_by=principal.id,
+            evidence=list(evidence),
         ),
     )
 
@@ -1851,6 +2034,7 @@ def _earlier_review(task: agent_tasks.Task) -> JsonValue:
                 "label",
                 "rationale",
                 "questions",
+                "alias_decisions",
                 "corrections",
                 "contradictions",
                 "application",
@@ -1882,7 +2066,8 @@ def _prepare_agent_review(
             raise ValueError("draft is no longer submitted")
         if inspection["draft_revision"] != run.draft_revision:
             raise ValueError("draft changed while waiting for an agent; rerun")
-        reason = _unsupported(inspection) or _stale(inspection)
+        settings = _task_settings.validate_json(str(task.state["settings"]))
+        reason = _unsupported(inspection, settings) or _stale(inspection)
         contexts: list[PartContext] = []
         if reason is None:
             try:
@@ -1909,7 +2094,6 @@ def _prepare_agent_review(
     for item in contexts:
         for read in item.reads:
             reads.setdefault(json.dumps([read.name, read.arguments]), read)
-    settings = _task_settings.validate_json(str(task.state["settings"]))
     count = len(contexts)
     brief = agent_tasks.structured_brief(
         instructions=draft_review_model.build_system_prompt(
@@ -1936,6 +2120,7 @@ def _prepare_agent_review(
             "parts": count,
             "mode": settings.mode,
             "auto_apply": settings.auto_apply,
+            "alias_decisions": settings.alias_decisions,
             "earlier_review": _earlier_review(task),
         }
     )
@@ -2036,6 +2221,7 @@ def _submit_agent_review(
             assessment = _without_redundant_tool_names(assessment, inspection)
             try:
                 draft_review_model.validate_assessment(assessment)
+                _validate_alias_decisions(assessment, part, inspection, settings)
                 outside = [
                     ref
                     for correction in assessment.corrections

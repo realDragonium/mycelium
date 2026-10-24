@@ -65,6 +65,7 @@ def set_review_controls(
     mode: Mode | None = None,
     reviewer_id: str | None = None,
     application_enabled: bool | None = None,
+    alias_decisions: bool | None = None,
     auto_apply: AutoApply | None = None,
 ) -> None:
     db = prompt_store.connection()
@@ -75,6 +76,9 @@ def set_review_controls(
         application_enabled=current.application_enabled
         if application_enabled is None
         else application_enabled,
+        alias_decisions=current.alias_decisions
+        if alias_decisions is None
+        else alias_decisions,
         auto_apply=current.auto_apply if auto_apply is None else auto_apply,
     )
     with store.write_lock(), prompt_store._writing(db):

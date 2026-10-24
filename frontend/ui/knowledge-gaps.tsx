@@ -15,13 +15,14 @@ const FILTERS: ReadonlyArray<{ id: GapStatus | 'all'; label: string }> = [
 
 function GapCard({ gap, busy, canWrite, onAction }: { gap: KnowledgeGap; busy: boolean; canWrite: boolean; onAction: (id: string, action: GapAction) => void }) {
   const changedAt = gap.resolved_at || gap.dismissed_at;
+  const changedBy = gap.resolved_by || gap.dismissed_by;
   return (
     <li className={`card gap-card ${gap.status}`}>
       <div className="gap-body">
         <p>{gap.text}</p>
         <div className="meta-row">
           <span>Reported <time dateTime={gap.created_at}>{formatDate(gap.created_at)}</time>{gap.created_by ? ` by ${gap.created_by.slice(0, 8)}` : ''}</span>
-          {changedAt && <span>{gap.status} <time dateTime={changedAt}>{formatDate(changedAt)}</time></span>}
+          {changedAt && <span>{gap.status} <time dateTime={changedAt}>{formatDate(changedAt)}</time>{changedBy ? ` by ${changedBy.slice(0, 8)}` : ''}{gap.closing_reason ? `: ${gap.closing_reason}` : ''}</span>}
           <span className="mono">{gap.id}</span>
           {gap.statement_id && <Link to={{ view: 'statement', id: gap.statement_id }}>Statement {gap.statement_id.slice(0, 12)}</Link>}
           {gap.draft_id && <Link to={{ view: 'draft', id: gap.draft_id }}>Draft {gap.draft_id.slice(0, 12)}</Link>}

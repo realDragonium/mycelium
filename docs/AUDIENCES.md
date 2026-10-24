@@ -153,6 +153,29 @@ rejection lets maintenance act.
 Turning the switch off applies the AI's external grants at once again. Grants
 already waiting stay waiting until a curator decides them.
 
+### AI review of waiting grants
+
+With **AI reviews waiting external grants** on (**Settings → Limits →
+Audience labelling**, off by default, and only while **Confirm external
+grants** is on), a second AI decides waiting grants in place of a curator:
+
+- With Audience labelling on a server model, the labelling pass sends a batch
+  of waiting grants to the audience-labelling model with a reviewer's brief:
+  the audiences, each statement with its concepts and the labeller's reason.
+  A grant the model leaves out is tried again, up to three times, then left
+  for a curator.
+- With Audience labelling set to External agent, waiting grants are queued as
+  [`audience_review`](AGENT_TASKS.md#kinds) tasks, one batch per labeller. The
+  agent that labelled a batch is not offered it, and a submission deciding a
+  grant it labelled is skipped.
+
+Each decision is confirm or reject, with a reason. It goes through the same
+path as a curator's: the label records who decided (the agent, or
+`model:<model>` for the server) and the reason, and a rejection makes the
+label a curator label without that audience whose reason quotes the reviewer
+and the labeller. A grant whose statement or label changed since it was
+queued is skipped. Curators can still decide any grant still waiting.
+
 ### Edits to confirmed statements
 
 An edit drops the AI label, so the statement is visible to internal audiences

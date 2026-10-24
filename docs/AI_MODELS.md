@@ -59,7 +59,7 @@ agent always differs from the writing principal, but two tokens of one person
 or one agent setup are not told apart; choose it only when your review agents
 are run separately from your writing agents.
 
-Alias discovery has independent model, reasoning effort, token, timeout, retry, and input-size settings. Ingestion proposes aliases within its existing run using the ingestion model. All alias suggestions require an individual human decision; the draft review automation mode cannot accept, reject, or alter them. See [Alias suggestions](ALIAS_SUGGESTIONS.md).
+Alias discovery has independent model, reasoning effort, token, timeout, retry, and input-size settings. Ingestion proposes aliases within its existing run using the ingestion model. Each alias suggestion needs an individual decision, by a person unless the draft reviewer is set to decide alias suggestions; it never alters them. See [Alias suggestions](ALIAS_SUGGESTIONS.md).
 
 Saving takes effect for new runs without restarting the service. Existing runs
 keep their admitted model selection. Changing either the draft-review controls

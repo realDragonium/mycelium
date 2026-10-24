@@ -195,6 +195,7 @@ def test_draft_review_uses_saved_behavior_with_fixed_contract(
             label="good",
             rationale="Supported",
             questions=[],
+            alias_decisions=[],
             corrections=[],
             contradictions=[],
         )

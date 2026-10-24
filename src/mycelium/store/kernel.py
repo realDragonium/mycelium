@@ -505,7 +505,8 @@ CREATE TABLE IF NOT EXISTS curation_attempts (
     attempted_at TEXT NOT NULL,
     attempted_by TEXT,
     outcome      TEXT NOT NULL
-        CHECK (outcome IN ('looked', 'proposed', 'no_link', 'skipped')),
+        CHECK (outcome IN ('looked', 'proposed', 'no_link', 'skipped',
+                           'answered', 'resolved', 'not_applicable')),
     reason       TEXT,
     draft_id     TEXT
 );

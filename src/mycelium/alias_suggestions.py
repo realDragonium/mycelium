@@ -56,6 +56,8 @@ class Decision(BaseModel):
     entity_id: str
     actor_id: str
     at: str
+    quote: str | None = None
+    reason: str | None = None
 
 
 class Suggestion(BaseModel):
@@ -435,7 +437,7 @@ def _keep(
                 )
             drafts_store.set_submitted(drafts, draft_id)
         draft = require(drafts_store.get_draft(drafts, draft_id), "created alias draft")
-        return ScanResult(
+        kept = ScanResult(
             prompt=prompt,
             suggestions=[
                 _entry(conn, draft, op)
@@ -443,6 +445,10 @@ def _keep(
             ],
             skipped=skipped,
         )
+    from . import draft_review_runs
+
+    draft_review_runs.on_submitted(draft_id)
+    return kept
 
 
 # --- outside agents -------------------------------------------------------------
@@ -551,7 +557,13 @@ def _require_human(principal: auth.Principal) -> None:
 
 
 def _accept(
-    draft_id: str, operation_ref: str, suggestion: Suggestion, principal: auth.Principal
+    draft_id: str,
+    operation_ref: str,
+    suggestion: Suggestion,
+    principal: auth.Principal,
+    *,
+    quote: str | None = None,
+    reason: str | None = None,
 ) -> Decision:
     from . import server  # local import: reuse persisted substrate writes
     from .server import indexes  # local import: index persistence and recovery markers
@@ -582,6 +594,8 @@ def _accept(
         entity_id=suggestion.proposal.entity_id,
         actor_id=principal.id,
         at=timestamps.now(),
+        quote=quote,
+        reason=reason,
     )
     accepted = Acceptance(
         operation_ref=operation_ref,
@@ -661,10 +675,20 @@ def _review_change(
     suggestion: Suggestion,
     request: ReviewRequest,
     principal: auth.Principal,
+    *,
+    quote: str | None = None,
+    reason: str | None = None,
 ) -> Suggestion:
 
     if request.action == "accept":
-        decision = _accept(draft_id, operation_ref, suggestion, principal)
+        decision = _accept(
+            draft_id,
+            operation_ref,
+            suggestion,
+            principal,
+            quote=quote,
+            reason=reason,
+        )
         return suggestion.model_copy(
             update={"status": "accepted", "history": [*suggestion.history, decision]}
         )
@@ -674,6 +698,8 @@ def _review_change(
             entity_id=suggestion.proposal.entity_id,
             actor_id=principal.id,
             at=timestamps.now(),
+            quote=quote,
+            reason=reason,
         )
         return suggestion.model_copy(
             update={"status": "rejected", "history": [*suggestion.history, decision]}
@@ -709,6 +735,65 @@ def _review_change(
             "history": [*suggestion.history, decision],
         }
     )
+
+
+def decide_as_reviewer(
+    draft_id: str,
+    operation_ref: str,
+    accept: bool,
+    quote: str,
+    reason: str,
+    principal: auth.Principal,
+) -> Decision:
+    if not auth.principal_has_real_role(principal, "writer"):
+        raise auth.RoleRequired("A real writer or administrator must review aliases.")
+    conn, drafts = store.substrate_connection(), drafts_store.connection()
+    with store.write_lock():
+        draft = drafts_store.get_draft(drafts, draft_id)
+        if draft is None:
+            raise ValueError("Draft not found.")
+        if draft["created_by"] == principal.id:
+            raise auth.RoleRequired("A draft creator cannot review their own aliases.")
+        drafts_store._check_no_active_application(drafts, draft_id)
+        if drafts_store.status_for(draft) != "submitted":
+            raise Conflict("This draft is already decided.")
+        op = drafts.execute(
+            "SELECT * FROM draft_ops WHERE draft_id = ? AND id = ? AND kind = ?",
+            (draft_id, operation_ref, KIND),
+        ).fetchone()
+        if op is None:
+            raise ValueError("Alias suggestion not found.")
+        suggestion = Suggestion.model_validate_json(op["payload_json"])
+        if suggestion.status != "pending":
+            raise Conflict("This alias suggestion is already decided.")
+        if quote not in suggestion.evidence.text:
+            raise ValueError(
+                "The decision quote must occur in the suggestion source text."
+            )
+        if suggestion.vocabulary_revision != proposal_revision(
+            conn, suggestion.proposal
+        ) or not _source_current(conn, suggestion):
+            raise Conflict("Names or source evidence changed; a person must review it.")
+        updated = _review_change(
+            draft_id,
+            operation_ref,
+            suggestion,
+            ReviewRequest(
+                action="accept" if accept else "reject",
+                expected_revision=int(draft["revision"]),
+            ),
+            principal,
+            quote=quote,
+            reason=reason,
+        )
+        decision = updated.history[-1]
+        with store.transaction(drafts):
+            drafts.execute(
+                "UPDATE draft_ops SET payload_json = ? WHERE id = ?",
+                (updated.model_dump_json(), operation_ref),
+            )
+            _close_finished_alias_draft(drafts, draft_id, principal.id)
+        return decision
 
 
 def _close_finished_alias_draft(

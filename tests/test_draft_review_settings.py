@@ -71,6 +71,7 @@ def _body(client, **changes):
             key: current[key]
             for key in (
                 "application_enabled",
+                "alias_decisions",
                 "auto_apply",
                 "mode",
                 "provider",
@@ -82,6 +83,28 @@ def _body(client, **changes):
         },
         **changes,
     }
+
+
+def test_alias_decisions_default_off_for_saved_json_without_field():
+    assert (
+        settings.Controls.model_validate_json(
+            '{"mode":"off","reviewer_id":"","application_enabled":false,"auto_apply":"clean"}'
+        ).alias_decisions
+        is False
+    )
+
+
+def test_alias_decisions_round_trip(configured_app):
+    client, _ = configured_app
+    assert client.get("/api/draft-review/settings").json()["alias_decisions"] is False
+
+    response = client.patch(
+        "/api/draft-review/settings", json=_body(client, alias_decisions=True)
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["alias_decisions"] is True
+    assert settings.load().alias_decisions is True
 
 
 def test_auto_apply_policy_is_saved_and_defaults_to_clean_approvals(

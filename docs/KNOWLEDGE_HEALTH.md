@@ -114,9 +114,15 @@ audience cannot claim work.
 | `unnamed` | A statement naming no concept | Which existing concept it names (an alias), or a new concept it names word for word |
 | `rephrase` | An open knowledge gap the connect pass filed, asking for a statement to be rephrased | A rephrasing of the statement |
 | `gap` | Any other open knowledge gap | The statements, links or concepts that close it |
+| `question` | A question the [draft reviewer](DRAFT_REVIEW.md) asked a person (`needs_context`) | The answer, with the evidence that settles it |
 
 An item's id is the statement's id for `isolated` and `unnamed`, and the
-gap's id for `rephrase` and `gap`.
+gap's id for `rephrase`, `gap` and `question`. A `question` item is the
+newest open gap about a submitted draft whose latest review waits for a
+person and that has not changed since; it also carries `question`: the
+`draft_id`, the draft's title, the `run_id` of the review that asked, its
+`questions` and its rationale. These gaps are not offered as `gap` items,
+since their draft is still undecided.
 
 ### Workflow
 
@@ -176,17 +182,43 @@ gap's id for `rephrase` and `gap`.
      and nothing should change;
    - `skipped`: you did not get to them.
 
-   `proposed` and `no_link` items are not offered again, to agents or the
-   connect pass, until the statement's text, a neighbour you were offered,
-   or a statement naming one of its concepts changes (for a gap: until its
-   text or the statement it is about changes). `skipped` items are offered
-   again at once. Releasing an item you do not hold is refused.
+   For gaps (`rephrase` and `gap`), an agent can also close a gap it
+   settled, as a curator would on the Gaps page:
+   - `resolved` with the `draft_id` of an applied draft (anyone's) that
+     closed it: the gap is resolved and tied to that draft;
+   - `not_applicable` with a `reason` (at most 300 characters): nothing
+     should change, and the gap is dismissed.
+
+   The gap records the agent as who resolved or dismissed it and when, as
+   it records a person; the Gaps page shows the agent's reason beside it.
+
+   A `question` item is released as `answered` (one item per call) with
+   `answer` (at most 6,000 characters) and `evidence`: one to five items in
+   the shape `set_operation_evidence` takes (code, UI, doc or media). An
+   answer without evidence is refused, and so is an answer from the draft's
+   creator. The answer is recorded on the review as a curator's answer is,
+   with the agent as `answered_by` and its evidence, and the draft is
+   reviewed again with it exactly as after a person's answer
+   ([Draft review](DRAFT_REVIEW.md#evidence-and-scope)). The question's gap
+   stays open until the draft is applied. A `question` item takes only
+   `answered` or `skipped`.
+
+   `proposed`, `no_link`, `answered`, `resolved` and `not_applicable` items
+   are not offered again, to agents or the connect pass, until the
+   statement's text, a neighbour you were offered, or a statement naming
+   one of its concepts changes (for a gap: until its text or the statement
+   it is about changes, or a person reopens a gap an agent closed). A reviewer that asks again files a new gap, which
+   is a new item. `skipped` items are offered again at once. Releasing an
+   item you do not hold, or with an outcome its kind does not take, is
+   refused.
 
 ### Watching and unblocking
 
 Knowledge health shows per list who holds items and how many, how many
 listed items someone has looked at, and the outcomes: looked at by the
-connect pass, proposed, no link, skipped. An admin can release an agent's
+connect pass, proposed, no link, skipped, answered. A gap an agent
+resolved or dismissed leaves the list; the Gaps page shows who closed it and
+why. An admin can release an agent's
 claims on a list (`POST /api/knowledge-health/claims/free` with `kind` and
 `claimed_by`) when the agent stopped; no outcome is recorded, so the items
 are offered again.

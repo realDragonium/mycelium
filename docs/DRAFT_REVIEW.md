@@ -6,8 +6,9 @@ Review starts on submission from MCP or the web app. It works for
 all drafts; PR provenance is optional. While review is on, `ingest` (over MCP,
 HTTP, and the web app) submits its drafts itself; with review off those drafts
 stay open for curation. Alias
-suggestions from ingestion go to a separate draft that awaits individual human
-decisions and is not sent to the reviewer.
+suggestions from ingestion go to a separate draft that awaits individual
+decisions: a person's, or the reviewer's while **Reviewer decides alias
+suggestions** is on (see [Alias decisions](#alias-decisions)).
 
 Enabling the feature does not sweep the existing backlog. An administrator can
 list it with `GET /api/draft-review/backlog` and review it, oldest first, with
@@ -61,6 +62,10 @@ accepted reviews** (`application_enabled`), must be enabled before any automatic
 operation edits, questions or final decisions occur; it also governs a curator's
 `apply_reviewed_draft`, but not **Approve**.
 
+**Reviewer decides alias suggestions** (`alias_decisions`, off by default)
+lets the reviewer decide alias suggestions; see
+[Alias decisions](#alias-decisions).
+
 **Apply automatically** decides what `review-and-apply` lands unattended.
 **Only clean approvals** (`clean`, the default) applies a draft only when the
 reviewer labels it `good`, which never carries corrections. A draft the
@@ -86,6 +91,28 @@ form reports the error and allows an administrator to save an explicit repair;
 saving off does not depend on credentials or a valid reviewer. Backup refuses
 to omit unreadable instance settings; restore validates the required settings
 section before replacing an existing instance. Older archives without settings restore with no model chosen and automation off. Restore never imports the target environment.
+
+### Alias decisions
+
+While **Reviewer decides alias suggestions** is on, a draft holding only alias
+suggestions is reviewed on submission and counts in the backlog like any
+other, and the reviewer (on a server model or an
+[external agent](#external-agent)) returns `alias_decisions`: for each pending
+`alias_suggestion` operation, `accept` or `reject`, a `quote` copied from the
+suggestion's source text that supports the decision, and a `reason`. Every
+pending suggestion needs exactly one decision unless the label is
+`needs_context`; a missing, duplicated or foreign decision, or a quote the
+source text does not contain, fails the model's attempt or refuses the
+agent's submission with findings.
+
+In `review-and-apply`, with the application gate on, the decisions are made
+through the suggestion's own accept and reject path, as the reviewer account
+(or agent) and never as the draft's creator, and recorded with the quote and
+reason. A suggestion whose concept names or source text changed since stays
+pending for a person, and the rest of the draft waits with it. A draft of
+only suggestions then closes as it does after a person's last decision. In
+`review-only`, or with the setting off, the assessment stays advisory and
+every suggestion waits for a person.
 
 ## Evidence and scope
 
@@ -214,6 +241,10 @@ gate enabled, the run records an authoritative `needs_context` review carrying
 the questions, ends with outcome `needs_human`, files a knowledge gap naming the
 draft and the questions, and leaves the draft submitted. A curator answers with
 `POST /api/drafts/{id}/review/answer` and the draft is reviewed again with the
+answer. A curation agent working in the product's code can answer instead,
+through the curation queue's `question` items, with the evidence it checked
+([Knowledge health](KNOWLEDGE_HEALTH.md#kinds-of-work)); the draft is reviewed
+again the same way, and the reviewer gets the agent's evidence with the
 answer. In the web app the questions and an answer form sit at the top of the
 draft; such drafts sort first under Drafts and are counted on Home. The reviewer gets no new tools for this.
 
@@ -290,7 +321,8 @@ the nearest live statements, the link types, curators' answers and any
 earlier failure. A draft reviewed in parts has one context per part in
 `input`, each headed `=== PART i OF n ===`, and `parts` says how many.
 `earlier_review` holds the draft's previous review, with its suggested
-corrections, and `mode` and `auto_apply` say what the verdict will do. A draft
+corrections, `mode` and `auto_apply` say what the verdict will do, and
+`alias_decisions` whether it decides the draft's alias suggestions. A draft
 the server refuses before any review (unsupported operations, newer
 knowledge, too large) gets an advisory rejection instead of a brief; a person
 decides on it.
@@ -354,7 +386,7 @@ Submission from `POST /api/drafts/{id}/submit` also starts review.
 The browser bridge uses authenticated `GET /api/draft-review/settings` for
 effective configuration, readiness, and caller permissions. Admin-only
 `PATCH /api/draft-review/settings` accepts `mode`, `auto_apply`,
-`application_enabled`, `provider`, `model`, an optional `reasoning_effort`
+`application_enabled`, `alias_decisions`, `provider`, `model`, an optional `reasoning_effort`
 (omitted keeps the effort saved for that provider), `reviewer_id`, the current
 control `revision`, and `model_revision`; a conflicting revision returns 409. The selected model and review controls save atomically.
 `POST /api/drafts/{id}/review` with no body starts an
@@ -367,7 +399,8 @@ real curator role and is refused unless that attempt is the draft's latest, has
 outcome `needs_human`, and the draft has not changed since. The answer is stored
 on the review attempt with the curator's ID and carried to every later attempt
 of the draft, where the reviewer receives it as `answers_from_curators`, apart
-from the creator-supplied evidence. It returns `{review: ...}` for the new
+from the creator-supplied evidence. An agent's answer through the curation
+queue is stored the same way, with the agent's ID and its `evidence`. It returns `{review: ...}` for the new
 attempt.
 
 Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...],
@@ -376,7 +409,8 @@ reached, and whether an external agent reviews them. That is a draft with no
 attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question or held corrections
-whose draft has changed since. Drafts containing only alias suggestions are excluded.
+whose draft has changed since. Drafts containing only alias suggestions are excluded unless the reviewer
+decides alias suggestions.
 It also returns `job`: the backlog review this process last started, or
 `null`.
 

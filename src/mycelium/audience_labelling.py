@@ -38,6 +38,7 @@ from . import (
     agent_tasks,
     ai,
     ai_prompts,
+    audience_review,
     audiences,
     model_settings,
     product_settings,
@@ -631,9 +632,23 @@ def _confirming() -> bool:
         return True
 
 
-def labelling_pass(conn: sqlite3.Connection) -> None:
+def _ai_reviewing() -> bool:
+    try:
+        return product_settings.get(
+            product_settings.AudienceLabellingSettings
+        ).ai_grant_review
+    except Exception:  # noqa: BLE001 — unreadable settings review nothing
+        return False
+
+
+def labelling_pass(
+    conn: sqlite3.Connection,
+    *,
+    review_call: audience_review.Call = audience_review._call,
+) -> None:
     if _automatic() or store.audience_labels.backfill_requested(conn):
         drain(conn)
+    audience_review.review_batch(conn, call=review_call)
 
 
 def start(data_dir: Path | str, *, poll_interval: float = POLL_INTERVAL_S) -> None:
@@ -676,12 +691,15 @@ class Status(BaseModel):
     tokens: int
     automatic: bool
     confirm_external_grants: bool
+    ai_grant_review: bool
     model: str
     provider: str
     #: Statements are labelled by outside agents (`AGENT_TASK`).
     external_agent: bool = False
     #: The batches agents are labelling.
     agent_tasks: list[AgentTaskView] = []
+    #: The batches agents are reviewing.
+    review_tasks: list[AgentTaskView] = []
     backfill: BackfillProgress | None = None
 
 
@@ -711,6 +729,7 @@ def status(conn: sqlite3.Connection) -> Status:
         tokens=ai_usage.action_tokens(ledger, "audience_labelling"),
         automatic=_automatic(),
         confirm_external_grants=_confirming(),
+        ai_grant_review=_ai_reviewing(),
         model=selected.model,
         provider=selected.provider,
         external_agent=selected.external_agent,
@@ -718,6 +737,12 @@ def status(conn: sqlite3.Connection) -> Status:
             agent_tasks.view(task)
             for task in agent_tasks.open_tasks(
                 drafts_store.connection(), "audience_labelling"
+            )
+        ],
+        review_tasks=[
+            agent_tasks.view(task)
+            for task in agent_tasks.open_tasks(
+                drafts_store.connection(), "audience_review"
             )
         ],
         backfill=BackfillProgress(

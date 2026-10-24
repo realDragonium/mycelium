@@ -160,6 +160,8 @@ class AudienceLabellingSettings(RequestLimits):
     #: An AI grant that would newly show a statement to an external audience
     #: waits for a curator. Off applies it at once.
     confirm_external_grants: bool = True
+    #: Have a second AI review grants waiting for external confirmation.
+    ai_grant_review: bool = False
     #: Pending grants one review sample draws per external audience.
     sample_size: int = Field(default=50, gt=0, le=500)
     #: Below this sample precision the review suggests relabelling instead

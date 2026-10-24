@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 
 from . import ai_prompts, timestamps
 from .ai.types import ReasoningEffort
+from .drafts_store import MAX_EVIDENCE, Evidence
 
 
 class Precondition(TypedDict):
@@ -85,6 +86,14 @@ class Contradiction(BaseModel):
     resolution: str = Field(min_length=1, max_length=2000)
 
 
+class AliasDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    operation_ref: str
+    decision: Literal["accept", "reject"]
+    quote: str = Field(min_length=1, max_length=4000)
+    reason: str = Field(min_length=1, max_length=2000)
+
+
 MAX_CORRECTIONS = 12
 
 
@@ -93,6 +102,7 @@ class Assessment(BaseModel):
     label: Label
     rationale: str = Field(min_length=1, max_length=6000)
     questions: list[str] = Field(max_length=12)
+    alias_decisions: list[AliasDecision] = Field(max_length=30)
     corrections: list[Correction] = Field(max_length=MAX_CORRECTIONS)
     contradictions: list[Contradiction] = Field(max_length=8)
 
@@ -105,6 +115,7 @@ class PartReview(BaseModel):
     label: Label
     rationale: str
     questions: list[str] = Field(default_factory=list)
+    alias_decisions: list[AliasDecision] = Field(default_factory=list)
     corrections: list[Correction | LegacyCorrection] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
 
@@ -118,6 +129,8 @@ class Answer(BaseModel):
     answer: str = Field(min_length=1, max_length=6000)
     answered_by: str
     answered_at: str = Field(default_factory=timestamps.now)
+    #: What a curation agent checked in the product; a person's answer has none.
+    evidence: list[Evidence] = Field(default_factory=list, max_length=MAX_EVIDENCE)
 
 
 class ReviewRun(BaseModel):
@@ -142,6 +155,7 @@ class ReviewRun(BaseModel):
     label: Label | None = None
     rationale: str | None = None
     questions: list[str] = Field(default_factory=list)
+    alias_decisions: list[AliasDecision] = Field(default_factory=list)
     corrections: list[Correction | LegacyCorrection] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
     #: Each part's own assessment when the draft was reviewed in parts;

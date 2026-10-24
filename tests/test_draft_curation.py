@@ -171,6 +171,7 @@ def _asks_then_approves(monkeypatch):
                 label="needs_context",
                 rationale="The draft may duplicate a live concept.",
                 questions=[QUESTION],
+                alias_decisions=[],
                 corrections=[],
                 contradictions=[],
             )
@@ -239,6 +240,75 @@ def test_answer_reviews_the_draft_again_with_it(curated_app, monkeypatch):
     assert draft["status"] == "approved"
     assert draft["review_assessment"]["application"] == "applied"
     assert "Admin console" in _entity_names()
+
+
+def _agent(role):
+    with store.transaction(runtime._auth_db()):
+        agent = auth.create_user(
+            runtime._auth_db(), name="Code agent", role=role, type="service"
+        )
+    return auth.Principal(id=agent, name="Code agent", role=role, type="service")
+
+
+EVIDENCE = {
+    "kind": "code",
+    "path": "app/admin/routes.py",
+    "lines": "3-9",
+    "excerpt": "admin = Blueprint('admin')\nsettings = Blueprint('settings')",
+    "claim": "The Admin console and the Settings page are separate screens.",
+}
+
+
+def test_a_curation_agent_answers_a_question_with_evidence(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    _automatic()
+    contexts = _asks_then_approves(monkeypatch)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+    agent = _agent("drafter")
+
+    token = auth.current_principal.set(agent)
+    try:
+        [item] = server.claim_curation_work("question")["items"]
+        assert item["question"]["questions"] == [QUESTION]
+        assert item["question"]["draft_id"] == draft_id
+        with pytest.raises(ValueError, match="needs evidence"):
+            server.release_curation_work([item["id"]], "answered", answer="No.")
+        server.release_curation_work(
+            [item["id"]],
+            "answered",
+            answer="No, they are separate screens.",
+            evidence=[EVIDENCE],
+        )
+    finally:
+        auth.current_principal.reset(token)
+    draft_review_runs.wait_all()
+
+    [answer] = contexts[1]["answers_from_curators"]
+    assert answer["answered_by"] == agent.id
+    assert answer["evidence"] == [EVIDENCE]
+    assert server.get_draft(draft_id)["status"] == "approved"
+
+
+def test_the_drafts_creator_cannot_answer_its_reviewer(curated_app, monkeypatch):
+    client, entity_id = curated_app
+    _automatic()
+    _asks_then_approves(monkeypatch)
+    draft_id = _ingested_draft(client, monkeypatch, entity_id)
+    creator = _agent("drafter")
+    with store.transaction(server._drafts_db()):
+        server._drafts_db().execute(
+            "UPDATE drafts SET created_by = ? WHERE id = ?", (creator.id, draft_id)
+        )
+
+    token = auth.current_principal.set(creator)
+    try:
+        [item] = server.claim_curation_work("question")["items"]
+        with pytest.raises(ValueError, match="you created this draft"):
+            server.release_curation_work(
+                [item["id"]], "answered", answer="No.", evidence=[EVIDENCE]
+            )
+    finally:
+        auth.current_principal.reset(token)
 
 
 def test_applying_the_answered_draft_resolves_its_question_gap(

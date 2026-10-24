@@ -27,7 +27,7 @@ interface AgentTask {
 export interface AudienceStatus {
   statements: number; labelled_ai: number; labelled_curator: number; unlabelled: number; queued: number; failed: number;
   last_error: string | null; tokens: number; automatic: boolean; confirm_external_grants: boolean; model: string; provider: string;
-  backfill: BackfillProgress | null; external_agent?: boolean; agent_tasks?: AgentTask[];
+  backfill: BackfillProgress | null; external_agent?: boolean; agent_tasks?: AgentTask[]; review_tasks?: AgentTask[];
 }
 interface Backfill { started_at: string; queued: number }
 interface BackfillProgress extends Backfill { labelled: number; tokens: number }
@@ -253,6 +253,7 @@ function LabellingCard({ data, onReload }: { data: AudiencesResponse; onReload: 
     <div className="audience-metrics"><div><b>{status.labelled_ai}</b><span>AI-labelled</span></div><div><b>{status.labelled_curator}</b><span>Curator</span></div><div><b>{status.unlabelled}</b><span>Unlabelled</span></div><div><b>{status.queued}</b><span>Queued</span></div><div><b>{status.failed}</b><span>Failed</span></div></div>
     <p className="hint">{status.statements} statements · {tokens(status.tokens)} tokens used · {status.external_agent ? 'labelled by external agents' : `${status.provider} / ${status.model}`} · Automatic labelling is <b>{status.automatic ? 'on' : 'off'}</b>. <Link to={{ view: 'settings', section: 'limits' }}>Change it under Limits.</Link></p>
     {status.external_agent && !!status.agent_tasks?.length && <p className="hint">{status.agent_tasks.length} batch{status.agent_tasks.length === 1 ? '' : 'es'} with agents · {status.agent_tasks.map(task => task.status === 'claimed' && task.claimed_by ? `claimed by ${task.claimed_by}` : 'waiting').join(' · ')}</p>}
+    {!!status.review_tasks?.length && <p className="hint">{status.review_tasks.length} grant review batch{status.review_tasks.length === 1 ? '' : 'es'} with agents · {status.review_tasks.map(task => task.status === 'claimed' && task.claimed_by ? `claimed by ${task.claimed_by}` : 'waiting').join(' · ')}</p>}
     {status.backfill && <Notice tone={running ? 'info' : 'success'}>{running ? `Labelling ${status.backfill.labelled} of ${status.backfill.queued} queued statements… ${tokens(status.backfill.tokens)} tokens used since start.` : 'Backfill finished.'}</Notice>}
     {status.last_error && <Notice tone="error">Last labelling error: {status.last_error}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
