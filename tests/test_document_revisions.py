@@ -19,6 +19,7 @@ from mycelium import (
     prompt_store,
     server,
 )
+from mycelium.docgen import publication
 from mycelium.docgen.destinations import (
     Delivery,
     DeliveryDocument,
@@ -265,7 +266,9 @@ def test_publication_tracks_actual_revision_after_concurrent_generation_and_sett
         )
 
     monkeypatch.setattr(destinations, "deliver_document", deliver)
-    result = server.deliver_document(document_id, "docs", expected_revision=1)
+    result = publication.publish(
+        server._drafts_db(), document_id, "docs", expected_revision=1
+    )
     assert result["revision"] == 1
     current = server.get_generated_document(document_id)
     assert (
@@ -280,7 +283,7 @@ def test_publication_tracks_actual_revision_after_concurrent_generation_and_sett
         (settings.model_copy(update={"destinations": ()}).model_dump_json(),),
     )
     prompt_store.connection().commit()
-    server.deliver_document(document_id, "docs", expected_revision=2)
+    publication.publish(server._drafts_db(), document_id, "docs", expected_revision=2)
     assert destinations.destination_coordinates(calls[1][0]) == {
         "host": "github.com",
         "owner": "team",
@@ -290,7 +293,9 @@ def test_publication_tracks_actual_revision_after_concurrent_generation_and_sett
     assert calls[1][1].delivered_path == "docs/policy.md"
     assert server.get_generated_document(document_id)["delivery_status"] == "published"
     with pytest.raises(docs_store.RevisionConflict):
-        server.deliver_document(document_id, "docs", expected_revision=1)
+        publication.publish(
+            server._drafts_db(), document_id, "docs", expected_revision=1
+        )
     assert len(calls) == 2
 
 
@@ -317,9 +322,11 @@ def test_failed_publication_can_retry_and_binding_host_drift_is_rejected(
 
     monkeypatch.setattr(destinations, "deliver_document", deliver)
     with pytest.raises(ValueError, match="Simulated GitHub failure"):
-        server.deliver_document(document_id, "docs", expected_revision=1)
+        publication.publish(
+            server._drafts_db(), document_id, "docs", expected_revision=1
+        )
     assert server.get_generated_document(document_id)["body"] == "First body"
-    server.deliver_document(document_id, "docs", expected_revision=1)
+    publication.publish(server._drafts_db(), document_id, "docs", expected_revision=1)
     row = docs_store.get_document(db, document_id)
     monkeypatch.setenv(
         "MYCELIUM_GITHUB_CREDENTIALS",
@@ -333,7 +340,9 @@ def test_failed_publication_can_retry_and_binding_host_drift_is_rejected(
         ),
     )
     with pytest.raises(ValueError, match="authorized"):
-        server.deliver_document(document_id, "docs", expected_revision=1)
+        publication.publish(
+            server._drafts_db(), document_id, "docs", expected_revision=1
+        )
     assert calls == 2
 
 
@@ -370,7 +379,9 @@ def test_two_publications_cannot_complete_out_of_revision_order(
         try:
             if revision == 2:
                 second_started.set()
-            server.deliver_document(document_id, "docs", expected_revision=revision)
+            publication.publish(
+                server._drafts_db(), document_id, "docs", expected_revision=revision
+            )
         except Exception as exc:
             errors.append(exc)
 

@@ -25,6 +25,13 @@ Maintenance = Literal["manual", "propose", "auto-revise"]
 #: cited by none of its documents: nothing until someone plans, a plan whose
 #: items wait for approval, or a plan whose items start their runs.
 Planning = Literal["off", "propose", "write"]
+#: Who decides the profile's proposed plan items: a person, or an AI reviewer
+#: other than the planner that approves or dismisses each with a reason (see
+#: `mycelium.documentation_plan_review`).
+PlanReview = Literal["person", "ai"]
+#: Who may deliver the profile's documents: people in the web app, or also
+#: agents over MCP (`deliver_document`).
+Delivery = Literal["people", "agents"]
 
 
 class Conflict(errors.Conflict):
@@ -53,8 +60,8 @@ class Template(Model):
         value = _part(value)
         if value in guidelines.NON_TYPE_SLOTS:
             raise ValueError(
-                "guidance, exposure, audience, maintenance and planning are "
-                "reserved names."
+                "guidance, exposure, audience, maintenance, planning, "
+                "plan_review and delivery are reserved names."
             )
         return value
 
@@ -74,6 +81,8 @@ class ProfileBody(Model):
     audience: str | None = None
     maintenance: Maintenance = "manual"
     planning: Planning = "off"
+    plan_review: PlanReview = "person"
+    delivery: Delivery = "people"
     templates: tuple[Template, ...] = ()
 
     @model_validator(mode="after")
@@ -163,6 +172,8 @@ class ProfileSnapshot:
     audience: PromptRevision | None = None
     maintenance: Maintenance = "manual"
     planning: Planning = "off"
+    plan_review: PlanReview = "person"
+    delivery: Delivery = "people"
 
 
 @dataclass(frozen=True)
@@ -261,6 +272,8 @@ def capture(conn: sqlite3.Connection | None = None) -> CatalogueSnapshot:
                 slots.get(guidelines.AUDIENCE_SLOT),
                 maintenance(slots.get(guidelines.MAINTENANCE_SLOT)),
                 planning(slots.get(guidelines.PLANNING_SLOT)),
+                plan_review(slots.get(guidelines.PLAN_REVIEW_SLOT)),
+                delivery(slots.get(guidelines.DELIVERY_SLOT)),
             )
             for name, slots in sorted(grouped.items())
         ),
@@ -279,6 +292,27 @@ def planning(slot: PromptRevision | str | None) -> Planning:
     """The stored policy; an unknown text plans by hand."""
     text = (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
     return cast(Planning, text) if text in get_args(Planning) else "off"
+
+
+def plan_review(slot: PromptRevision | str | None) -> PlanReview:
+    """The stored reviewer; an unknown text leaves review to a person."""
+    text = (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
+    return cast(PlanReview, text) if text in get_args(PlanReview) else "person"
+
+
+def delivery(slot: PromptRevision | str | None) -> Delivery:
+    """The stored policy; an unknown text lets only people deliver."""
+    text = (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
+    return cast(Delivery, text) if text in get_args(Delivery) else "people"
+
+
+#: Policy slots and the texts each may hold.
+_POLICIES: dict[str, tuple[str, object]] = {
+    guidelines.MAINTENANCE_SLOT: ("Maintenance", Maintenance),
+    guidelines.PLANNING_SLOT: ("Planning", Planning),
+    guidelines.PLAN_REVIEW_SLOT: ("Plan review", PlanReview),
+    guidelines.DELIVERY_SLOT: ("Delivery", Delivery),
+}
 
 
 def _revision(rows: list[sqlite3.Row]) -> str:
@@ -339,6 +373,8 @@ def _profile(
         audience=chosen,
         maintenance=maintenance(live.get(guidelines.MAINTENANCE_SLOT)),
         planning=planning(live.get(guidelines.PLANNING_SLOT)),
+        plan_review=plan_review(live.get(guidelines.PLAN_REVIEW_SLOT)),
+        delivery=delivery(live.get(guidelines.DELIVERY_SLOT)),
         effective_audience=effective.id if effective else None,
         templates=tuple(templates),
         retired=bool(rows) and not live,
@@ -457,10 +493,14 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
             _authorize(principal, "admin")
         # Going back to manual rewrites the slot rather than retiring it, so
         # it needs no more than the writer who turned automation on.
-        if request.maintenance != "manual" or guidelines.MAINTENANCE_SLOT in live:
-            desired[guidelines.MAINTENANCE_SLOT] = request.maintenance
-        if request.planning != "off" or guidelines.PLANNING_SLOT in live:
-            desired[guidelines.PLANNING_SLOT] = request.planning
+        for slot, value, default in (
+            (guidelines.MAINTENANCE_SLOT, request.maintenance, "manual"),
+            (guidelines.PLANNING_SLOT, request.planning, "off"),
+            (guidelines.PLAN_REVIEW_SLOT, request.plan_review, "person"),
+            (guidelines.DELIVERY_SLOT, request.delivery, "people"),
+        ):
+            if value != default or slot in live:
+                desired[slot] = value
         if live.keys() - desired.keys():
             _authorize(principal, "admin")
             _protect_default(conn, name, desired)
@@ -519,8 +559,8 @@ def validate_key(type: str, name: str) -> tuple[str, str]:
         if not separator:
             raise ValueError(
                 "Guideline names must use profile/template, profile/guidance, "
-                "profile/exposure, profile/audience, profile/maintenance or "
-                "profile/planning."
+                "profile/exposure, profile/audience, profile/maintenance, "
+                "profile/planning, profile/plan_review or profile/delivery."
             )
         _part(profile)
         _part(slot)
@@ -556,21 +596,10 @@ def save_text(
         _authorize(principal, "admin")
         if text.strip() not in {item.id for item in audiences.live()}:
             raise ValueError(f"Audience {text.strip()!r} is not live.")
-    if (
-        type == guidelines.TYPE
-        and name.partition("/")[2] == guidelines.MAINTENANCE_SLOT
-        and text.strip() not in get_args(Maintenance)
-    ):
+    policy = _POLICIES.get(name.partition("/")[2]) if type == guidelines.TYPE else None
+    if policy is not None and text.strip() not in get_args(policy[1]):
         raise ValueError(
-            "Maintenance must be one of: " + ", ".join(get_args(Maintenance)) + "."
-        )
-    if (
-        type == guidelines.TYPE
-        and name.partition("/")[2] == guidelines.PLANNING_SLOT
-        and text.strip() not in get_args(Planning)
-    ):
-        raise ValueError(
-            "Planning must be one of: " + ", ".join(get_args(Planning)) + "."
+            f"{policy[0]} must be one of: " + ", ".join(get_args(policy[1])) + "."
         )
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):

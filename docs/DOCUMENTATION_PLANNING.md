@@ -2,7 +2,10 @@
 
 Open **Documents → Plan**, choose a writing profile and select **Plan
 documentation**. The planner proposes which documents the profile's audience
-needs; nothing is written until you approve an item.
+needs; nothing is written until you, or the profile's
+[AI reviewer](#reviewing-by-ai), approve an item. An agent with a writer or
+admin token starts the same plan over MCP with
+`request_documentation_plan(guideline_set)`.
 
 ## What the planner reads
 
@@ -92,6 +95,35 @@ Re-planning is manual unless the profile's planning policy says otherwise.
 When enough statements have become visible to the audience since the last
 plan (written after it, or for an external audience labelled after it), the
 page says so.
+
+## Reviewing by AI
+
+A profile's **Who decides proposed plan items** setting (its editor under
+**Settings → Documentation**, beside the planning policy) is a person by
+default, also for profiles saved before it existed. Set to an AI reviewer,
+the maintenance sweep has a reviewer decide every proposed item of the
+profile's plan: the planner's items and the update items for out-of-date
+documents. Out-of-date documents of a `manual` profile are then proposed to
+the reviewer as update items, as under `propose`, rather than waiting in
+**Out-of-date documents**.
+
+The reviewer approves or dismisses each item with a reason, which the item
+shows. A dismissal is remembered for the profile like a person's. An approved
+item starts its run as a person's approval would, within the batch-approval
+and active-run limits; the rest start on later sweeps. With a reviewer, the
+`write` planning policy no longer approves every item of an automatic plan:
+only those the reviewer approved start. A person can still decide any item
+the reviewer has not.
+
+The reviewer is never the planner. It runs where the documentation planning
+action does ([AI models](AI_MODELS.md)): one model call, separate from the
+planner's, with the planning model, limits and token accounting, or, while
+planning is set to External agent, a `plan_review` task
+([Agent tasks](AGENT_TASKS.md)) that the agent who made the plan cannot
+claim. The reviewer reads the audience description, the profile's templates
+and documents, and each item with the statements it draws on that the
+audience may see. A review that fails, or an agent's that is refused too
+often, marks its items "not reviewed" for a person and is not retried.
 
 ## Planning by itself
 

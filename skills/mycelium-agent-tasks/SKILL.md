@@ -1,6 +1,6 @@
 ---
 name: mycelium-agent-tasks
-description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, labels statements' audiences, turns ingested text or unconnected statements into a draft, finds concept aliases, or reviews a submitted draft (approve, approve with corrections, reject or ask a person), submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect, discover aliases or review drafts for a server that has no provider key. Needs a real writer or admin token.
+description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, approves or dismisses another agent's plan items, labels statements' audiences, turns ingested text or unconnected statements into a draft, finds concept aliases, or reviews a submitted draft (approve, approve with corrections, reject or ask a person), submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect, discover aliases or review drafts for a server that has no provider key. Needs a real writer or admin token.
 ---
 
 # Working Mycelium's agent task queue
@@ -23,7 +23,7 @@ the token can claim.
 
 1. **Claim one task.** `claim_agent_task(kind, limit=1)`. `kind` is
    `documentation`, `document_review`, `documentation_planning`,
-   `audience_labelling`, `ingest`, `connect`, `alias_discovery` or
+   `plan_review`, `audience_labelling`, `ingest`, `connect`, `alias_discovery` or
    `draft_review`. An empty `tasks` list means nothing is waiting; `note`
    says when waiting reviews were held back because they are your own work.
    You hold the task for 30 minutes (`expires_at`); calling
@@ -82,6 +82,16 @@ opening), or group it with related ones in a `create`. Cite only the
 statements and templates the brief lists. Items that name what the audience
 may not see, templates the profile lacks or documents it does not own are
 dropped.
+
+**`plan_review`.** Decide every item in `brief.input`: `approve` starts
+writing or revising that document, `dismiss` is remembered so it is not
+proposed again. You are never offered the review of a plan you made. Approve
+what a reader of the audience needs, its statements support and nothing
+already covers; dismiss duplicates, documents for another audience and
+thinly supported ones. An `out_of_date` item updates a document whose cited
+statements changed. Submit `{"decisions": [...]}` with `item_id`, `decision`
+and a one- or two-sentence `reason` per item, each item once. A missing,
+repeated or unknown item is refused.
 
 **`audience_labelling`.** Label every statement in `brief.input` exactly
 once, with audience ids from the brief and a reason. The server applies them

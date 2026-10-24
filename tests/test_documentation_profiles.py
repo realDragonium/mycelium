@@ -422,14 +422,19 @@ def test_a_retired_audience_leaves_its_profiles_not_ready(db):
     assert profiles.capture(db).audience("partners") is None
 
 
-def test_a_writer_sets_the_maintenance_and_planning_policies_and_turns_them_off(db):
+def test_a_writer_sets_the_automation_policies_and_turns_them_off(db):
     first = save()
-    assert first.maintenance == "manual"
+    assert (first.maintenance, first.plan_review, first.delivery) == (
+        "manual",
+        "person",
+        "people",
+    )
 
     def with_policy(
         revision: str,
         policy: profiles.Maintenance,
         planning: profiles.Planning = "off",
+        **automation: str,
     ):
         return profiles.save(
             "internal",
@@ -442,6 +447,7 @@ def test_a_writer_sets_the_maintenance_and_planning_policies_and_turns_them_off(
                 templates=(
                     profiles.Template(name="reference", text="Write a reference."),
                 ),
+                **automation,
             ),
             principal("writer"),
         )
@@ -454,7 +460,15 @@ def test_a_writer_sets_the_maintenance_and_planning_policies_and_turns_them_off(
     assert (planned.maintenance, planned.planning) == ("manual", "write")
     assert profiles.capture(db).profiles[0].planning == "write"
     assert profiles.capture(db).catalogue() == {"internal": ["reference"]}
-    assert with_policy(planned.revision, "manual").planning == "off"
+    reviewed = with_policy(
+        planned.revision, "manual", plan_review="ai", delivery="agents"
+    )
+    assert (reviewed.plan_review, reviewed.delivery) == ("ai", "agents")
+    snapshot = profiles.capture(db).profiles[0]
+    assert (snapshot.plan_review, snapshot.delivery) == ("ai", "agents")
+    assert profiles.capture(db).catalogue() == {"internal": ["reference"]}
+    off = with_policy(reviewed.revision, "manual")
+    assert (off.planning, off.plan_review, off.delivery) == ("off", "person", "people")
     with pytest.raises(ValueError, match="Maintenance must be one of"):
         profiles.save_text(
             guidelines.TYPE, "internal/maintenance", "always", principal("writer")
@@ -462,4 +476,8 @@ def test_a_writer_sets_the_maintenance_and_planning_policies_and_turns_them_off(
     with pytest.raises(ValueError, match="Planning must be one of"):
         profiles.save_text(
             guidelines.TYPE, "internal/planning", "always", principal("writer")
+        )
+    with pytest.raises(ValueError, match="Delivery must be one of"):
+        profiles.save_text(
+            guidelines.TYPE, "internal/delivery", "always", principal("writer")
         )

@@ -39,11 +39,29 @@ MAINTENANCE_SLOT = "maintenance"
 #: `mycelium.document_maintenance`). A set without one is planned by hand.
 PLANNING_SLOT = "planning"
 
+#: The set-wide plan review slot: who decides the set's proposed plan items,
+#: a person or an AI reviewer (see `mycelium.documentation_plan_review`). A
+#: set without one leaves them to a person.
+PLAN_REVIEW_SLOT = "plan_review"
+
+#: The set-wide delivery slot: whether agents may deliver the set's
+#: documents over MCP (`deliver_document`). A set without one is delivered
+#: by people only.
+DELIVERY_SLOT = "delivery"
+
 #: Slots that steer every document in a set rather than naming something the
 #: set can write. Keeping the subtraction here makes another set-wide slot a
 #: one-line addition rather than another catalogue special case.
 NON_TYPE_SLOTS = frozenset(
-    {GUIDANCE_SLOT, EXPOSURE_SLOT, AUDIENCE_SLOT, MAINTENANCE_SLOT, PLANNING_SLOT}
+    {
+        GUIDANCE_SLOT,
+        EXPOSURE_SLOT,
+        AUDIENCE_SLOT,
+        MAINTENANCE_SLOT,
+        PLANNING_SLOT,
+        PLAN_REVIEW_SLOT,
+        DELIVERY_SLOT,
+    }
 )
 
 #: The one set that ships. A second set is data — added through the tools,

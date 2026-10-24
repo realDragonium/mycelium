@@ -480,3 +480,198 @@ def test_an_agent_plans_a_profile_and_its_proposal_is_kept_as_a_models(client):
     plan = client.get("/api/documentation/plans/public").json()
     assert plan["latest"]["outcome"] == "planned"
     assert [item["title"] for item in plan["items"]] == ["Export invoices"]
+
+
+# --- AI plan review ---------------------------------------------------------------
+
+
+def _reviewed_by_ai() -> None:
+    from mycelium import guidelines, prompt_store
+
+    prompt_store.save(
+        prompt_store.connection(),
+        type=guidelines.TYPE,
+        name="public/plan_review",
+        text="ai",
+    )
+
+
+def _two_items(client, monkeypatch) -> list[dict]:
+    from mycelium import server
+
+    conn = server._db()
+    with store.transaction(conn):
+        sid = store.create_statement(conn, "capability", "admins can export invoices")
+    return _plan(
+        client,
+        monkeypatch,
+        _item(statement_ids=[sid]),
+        _item(title="Invoice limits", statement_ids=[sid]),
+    )["items"]
+
+
+def test_an_ai_reviewer_approves_and_dismisses_with_reasons(client, monkeypatch):
+    from mycelium import documentation_plan_review, documentation_profiles, server
+
+    _profile()
+    _reviewed_by_ai()
+    first, second = _two_items(client, monkeypatch)
+    prompts: list[str] = []
+
+    def review(task, config):
+        prompts.append(task.prompt)
+        verdicts = documentation_plan_review.Verdicts(
+            decisions=[
+                {"item_id": first["id"], "decision": "approve", "reason": "Needed."},
+                {"item_id": second["id"], "decision": "dismiss", "reason": "Thin."},
+            ]
+        )
+        return verdicts, ai.Usage(input_tokens=10, output_tokens=5)
+
+    monkeypatch.setattr(documentation_plan_review, "_call", review)
+    documentation_plan_review.sweep(documentation_profiles.capture())
+    documentation_plan_review.wait_all()
+    doc_runs.wait_all()
+
+    assert "admins can export invoices" in prompts[0]
+    items = client.get("/api/documentation/plans/public").json()["items"]
+    assert [
+        (item["state"], item["review"]["decision"], item["review"]["reason"])
+        for item in items
+    ] == [("approved", "approve", "Needed."), ("dismissed", "dismiss", "Thin.")]
+    assert items[0]["run"]["status"] == "document_written"
+    drafts = server._drafts_db()
+    assert [row["key"] for row in doc_plans.dismissed(drafts, "public")] == [
+        doc_plans.get_item(drafts, second["id"])["key"]
+    ]
+    # Decided items are not reviewed again.
+    documentation_plan_review.sweep(documentation_profiles.capture())
+    documentation_plan_review.wait_all()
+    assert len(prompts) == 1
+
+
+def test_a_failed_review_leaves_the_items_for_a_person(client, monkeypatch):
+    from mycelium import documentation_plan_review, documentation_profiles
+
+    _profile()
+    _reviewed_by_ai()
+    first, _second = _two_items(client, monkeypatch)
+    calls: list[str] = []
+
+    def review(task, config):
+        calls.append(task.prompt)
+        verdicts = documentation_plan_review.Verdicts(
+            decisions=[
+                {"item_id": first["id"], "decision": "approve", "reason": "Needed."}
+            ]
+        )
+        return verdicts, ai.Usage()
+
+    monkeypatch.setattr(documentation_plan_review, "_call", review)
+    for _ in range(2):
+        documentation_plan_review.sweep(documentation_profiles.capture())
+        documentation_plan_review.wait_all()
+
+    items = client.get("/api/documentation/plans/public").json()["items"]
+    assert [(item["state"], item["review"]["decision"]) for item in items] == [
+        ("proposed", None),
+        ("proposed", None),
+    ]
+    assert "not decided" in items[0]["review"]["reason"]
+    assert len(calls) == 1
+
+
+def _external(client, action: str) -> None:
+    selected = next(
+        entry
+        for entry in client.get("/api/model-settings").json()["actions"]
+        if entry["action"] == action
+    )
+    saved = client.patch(
+        f"/api/model-settings/{action}",
+        json={
+            **{
+                key: selected[key]
+                for key in (
+                    "provider",
+                    "claude_model",
+                    "openai_model",
+                    "claude_reasoning_effort",
+                    "openai_reasoning_effort",
+                    "revision",
+                )
+            },
+            "external_agent": True,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+
+
+def _as(principal_id: str):
+    from mycelium import auth
+
+    return auth.current_principal.set(
+        auth.Principal(id=principal_id, name=principal_id, role="writer", type="human")
+    )
+
+
+def test_an_agent_reviews_another_agents_plan_over_the_task_queue(client):
+    from mycelium import auth, server
+
+    _profile()
+    _reviewed_by_ai()
+    _external(client, "documentation_planning")
+    conn = server._db()
+    with store.transaction(conn):
+        sid = store.create_statement(conn, "capability", "admins can export invoices")
+
+    planner = _as("planner")
+    try:
+        requested = server.request_documentation_plan("public")
+        assert requested.agent_task is not None
+        [task] = server.claim_agent_task("documentation_planning").tasks
+        proposal = [
+            json.loads(_item(title=title, statement_ids=[sid]).model_dump_json())
+            for title in ("Export invoices", "Invoice limits")
+        ]
+        assert server.submit_agent_task(task.id, {"items": proposal}).status == (
+            "accepted"
+        )
+        own = server.claim_agent_task("plan_review")
+        assert own.tasks == [] and own.note and "a plan you made" in own.note
+    finally:
+        auth.current_principal.reset(planner)
+
+    reviewer = _as("reviewer")
+    try:
+        [review] = server.claim_agent_task("plan_review").tasks
+        first, second = (
+            item["item_id"] for item in json.loads(str(review.brief["input"]))["items"]
+        )
+        partial = {
+            "decisions": [
+                {"item_id": first, "decision": "approve", "reason": "Needed."}
+            ]
+        }
+        refused = server.submit_agent_task(review.id, partial)
+        assert [f.where for f in refused.findings] == [second]
+        done = server.submit_agent_task(
+            review.id,
+            {
+                "decisions": [
+                    *partial["decisions"],
+                    {"item_id": second, "decision": "dismiss", "reason": "Duplicate."},
+                ]
+            },
+        )
+    finally:
+        auth.current_principal.reset(reviewer)
+    doc_runs.wait_all()
+
+    assert done.status == "accepted", done.message
+    items = client.get("/api/documentation/plans/public").json()["items"]
+    assert [(item["state"], item["review"]["reviewer"]) for item in items] == [
+        ("approved", "reviewer"),
+        ("dismissed", "reviewer"),
+    ]
+    assert items[0]["run"]["status"] == "document_written"

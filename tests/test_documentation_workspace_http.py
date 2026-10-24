@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth, docs_store, drafts_store, server
+from mycelium.docgen import publication
 from mycelium.docgen.publication import BothSidesEdited
 from mycelium.http import create_app
 from mycelium.http.authentication import AuthMiddleware
@@ -93,11 +94,10 @@ def test_revision_actions_require_real_writer_and_surface_errors(
         calls.append(kwargs)
         raise error("Document changed. Reload it before continuing.")
 
-    monkeypatch.setattr(
-        server,
-        "revise_document" if action == "revisions" else "deliver_document",
-        conflict,
-    )
+    if action == "revisions":
+        monkeypatch.setattr(server, "revise_document", conflict)
+    else:
+        monkeypatch.setattr(publication, "publish", conflict)
     response = client.post(
         f"/api/documentation/documents/{document}/{action}", json=payload
     )

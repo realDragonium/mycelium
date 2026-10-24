@@ -25,7 +25,8 @@ import sqlite3
 import threading
 from collections import Counter
 from collections.abc import Callable, Iterable, Set
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -1143,7 +1144,8 @@ def plan_automatically(
 ) -> list[str]:
     """For each profile whose planning policy is not `off`, start a plan
     once enough statements no document cites were offered to no plan, and
-    under `write` start the runs of the items an automatic plan proposed.
+    under `write` start the runs of the items an automatic plan proposed,
+    unless an AI reviewer decides the profile's items.
     A profile whose latest plan still waits on a decision or a run, or whose
     last automatic plan failed, waits for that. Returns the ids of the runs
     it started."""
@@ -1163,7 +1165,11 @@ def plan_automatically(
             continue
         planned_row = doc_plans.latest_planned(drafts, profile.name)
         if planned_row is not None:
-            if profile.planning == "write" and planned_row["automatic"]:
+            if (
+                profile.planning == "write"
+                and planned_row["automatic"]
+                and profile.plan_review == "person"
+            ):
                 started += _start_items(drafts, planned_row, limits.approve_batch)
             if _waiting(drafts, str(planned_row["id"])):
                 continue
@@ -1210,15 +1216,21 @@ def _fresh_uncovered(
 
 
 def _start_items(
-    drafts: sqlite3.Connection, plan: sqlite3.Row, batch: int
+    drafts: sqlite3.Connection, plan: sqlite3.Row, batch: int, *, reviewed: bool = False
 ) -> list[str]:
-    """Approve an automatic plan's proposed items in order, within the batch
-    and active-run limits. An item that cannot start is noted on the plan
-    and left proposed for a person."""
+    """Approve a plan's proposed items in order, within the batch and
+    active-run limits; `reviewed` approves only those the AI reviewer
+    approved. An item that cannot start is noted on the plan and left
+    proposed for a person."""
     if model_settings.credentials_error("docgen") is not None:
         return []
     summary = json.loads(plan["summary"]) if plan["summary"] else {}
     not_started = summary.get("not_started", {})
+    approved = {
+        item_id
+        for item_id, review in doc_plans.reviews(plan).items()
+        if review.decision == "approve"
+    }
     max_active = product_settings.get(
         product_settings.ConcurrencySettings
     ).documentation_runs
@@ -1226,10 +1238,19 @@ def _start_items(
     for row in doc_plans.items(drafts, str(plan["id"])):
         if len(started) >= batch or docs_store.count_active(drafts) >= max_active:
             break
-        if row["state"] != "proposed" or str(row["id"]) in not_started:
+        if (
+            row["state"] != "proposed"
+            or str(row["id"]) in not_started
+            or (reviewed and str(row["id"]) not in approved)
+        ):
             continue
         try:
-            run = approve(str(row["id"]), decided_by=None)
+            run = approve(
+                str(row["id"]),
+                decided_by=doc_plans.reviews(plan)[str(row["id"])].reviewer
+                if reviewed
+                else None,
+            )
         except Exception as exc:
             logger.warning("could not start plan item %s", row["id"], exc_info=True)
             doc_plans.record_start_failure(
@@ -1252,6 +1273,15 @@ class RunState(BaseModel):
     review_notes: bool = False
 
 
+class ItemReview(BaseModel):
+    #: None when the review failed and the item waits for a person.
+    decision: Literal["approve", "dismiss"] | None
+    reason: str
+    #: The agent that reviewed it; None for the server's model.
+    reviewer: str | None
+    at: str
+
+
 class PlanItem(BaseModel):
     id: str
     action: doc_plans.Action
@@ -1268,6 +1298,8 @@ class PlanItem(BaseModel):
     #: Proposed by the maintenance worker because cited statements changed,
     #: rather than by the planner.
     maintenance: bool = False
+    #: The AI reviewer's decision, when the profile's items are reviewed.
+    review: ItemReview | None = None
 
 
 class StatementChange(BaseModel):
@@ -1335,6 +1367,9 @@ class PlanView(BaseModel):
     uncovered: list[UncoveredStatement]
     dismissed_statements: int
     planning: documentation_profiles.Planning
+    plan_review: documentation_profiles.PlanReview
+    #: The open task an outside agent reviews the items through, when one is.
+    review_task: agent_tasks.View | None = None
     visible_statements: int
     new_since_plan: int | None
     replan_hint: bool
@@ -1364,6 +1399,14 @@ def _summary(row: sqlite3.Row, drafts: sqlite3.Connection) -> PlanSummary:
         if (task := agent_tasks.latest_for(drafts, str(row["id"]))) is None
         else agent_tasks.view(task),
     )
+
+
+def plan_summary(plan_id: str) -> PlanSummary:
+    drafts = drafts_store.connection()
+    row = doc_plans.get_plan(drafts, plan_id)
+    if row is None:
+        raise LookupError(f"documentation plan not found: {plan_id}")
+    return _summary(row, drafts)
 
 
 def _coverage_and_recency(
@@ -1464,6 +1507,11 @@ def view(guideline_set: str) -> PlanView:
     anchored = {document.anchor_entity_id for document in documents}
     items = doc_plans.items(drafts, str(planned_row["id"])) if planned_row else []
     maintained = _maintenance_items(drafts, guideline_set, documents)
+    reviewed = {
+        item_id: review
+        for shown in doc_plans.current_plans(drafts, guideline_set)
+        for item_id, review in doc_plans.reviews(shown).items()
+    }
     return PlanView(
         guideline_set=guideline_set,
         audience=AudienceRef(
@@ -1476,9 +1524,11 @@ def view(guideline_set: str) -> PlanView:
         unavailable=unavailable,
         latest=_summary(latest, drafts) if latest is not None else None,
         items=[
-            *(_item(drafts, row, counts) for row in items),
+            *(_item(drafts, row, counts, reviewed) for row in items),
             *(
-                _item(drafts, row, counts).model_copy(update={"maintenance": True})
+                _item(drafts, row, counts, reviewed).model_copy(
+                    update={"maintenance": True}
+                )
                 for row in maintained
             ),
         ],
@@ -1517,6 +1567,18 @@ def view(guideline_set: str) -> PlanView:
         planning=next(
             (p.planning for p in snapshot.profiles if p.name == guideline_set), "off"
         ),
+        plan_review=next(
+            (p.plan_review for p in snapshot.profiles if p.name == guideline_set),
+            "person",
+        ),
+        review_task=next(
+            (
+                agent_tasks.view(task)
+                for task in agent_tasks.open_tasks(drafts, "plan_review")
+                if task.state.get("guideline_set") == guideline_set
+            ),
+            None,
+        ),
         visible_statements=visible,
         new_since_plan=recent,
         replan_hint=recent is not None and recent >= limits.replan_hint_statements,
@@ -1549,7 +1611,10 @@ def _maintenance_items(
 
 
 def _item(
-    drafts: sqlite3.Connection, row: sqlite3.Row, counts: dict[str, tuple[str, int]]
+    drafts: sqlite3.Connection,
+    row: sqlite3.Row,
+    counts: dict[str, tuple[str, int]],
+    reviewed: dict[str, doc_plans.Review],
 ) -> PlanItem:
     run = docs_store.get_run(drafts, str(row["run_id"])) if row["run_id"] else None
     anchor = row["anchor_entity_id"]
@@ -1565,6 +1630,9 @@ def _item(
         priority=row["priority"],
         statement_ids=json.loads(row["statement_ids"]),
         state=str(row["state"]),
+        review=ItemReview(**asdict(review))
+        if (review := reviewed.get(str(row["id"]))) is not None
+        else None,
         run=RunState(
             id=str(run["id"]),
             status=docs_store.status_for(run),
