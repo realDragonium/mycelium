@@ -7,6 +7,8 @@ import json
 import pytest
 
 from mycelium import (
+    ai,
+    ai_usage,
     auth,
     draft_review_runs,
     drafts_store,
@@ -350,3 +352,65 @@ def _waiting(*names):
         _submitted(_entity(name), created_at=f"2000-01-0{day}T00:00:00.000Z")
         for day, name in enumerate(names, start=1)
     ]
+
+
+def test_the_backlog_is_reviewed_oldest_first_and_pauses_on_request(monkeypatch):
+    reviewed = []
+
+    def decide(context):
+        reviewed.append(context["draft"]["id"])
+        if len(reviewed) == 1:
+            draft_review_runs.pause_backlog()
+        return _assessment()
+
+    _recording(monkeypatch, decide)
+    drafts = _waiting("Workspace", "Invoice", "Export")
+    _automatic()
+
+    draft_review_runs.review_backlog()
+    draft_review_runs.wait_backlog()
+    paused = draft_review_runs.backlog_job()
+    draft_review_runs.resume_backlog()
+    draft_review_runs.wait_backlog()
+
+    assert paused is not None
+    assert (paused.status, paused.reviewed, paused.remaining) == ("paused", 1, 3)
+    assert "administrator" in (paused.detail or "")
+    assert reviewed == drafts
+    finished = draft_review_runs.backlog_job()
+    assert finished is not None
+    assert (finished.status, finished.reviewed) == ("finished", 3)
+
+
+def test_the_backlog_review_stops_at_its_budget(monkeypatch):
+    def decide(context):
+        with store.transaction(drafts_store.connection()):
+            ai_usage.record(
+                drafts_store.connection(),
+                ai.usage.Call(
+                    action="draft_review",
+                    provider="openai",
+                    model="gpt-fixture",
+                    usage=ai.Usage(),
+                    cost_usd=1.0,
+                    duration_ms=1,
+                    ok=True,
+                    run_id="drv_fixture",
+                    draft_id=context["draft"]["id"],
+                ),
+            )
+        return _assessment()
+
+    _recording(monkeypatch, decide)
+    oldest, *rest = _waiting("Workspace", "Invoice", "Export")
+    _automatic()
+
+    draft_review_runs.review_backlog(budget_usd=1.5)
+    draft_review_runs.wait_backlog()
+
+    job = draft_review_runs.backlog_job()
+    assert job is not None
+    assert (job.status, job.reviewed, job.spent_usd) == ("paused", 1, 1.0)
+    assert "backlog budget" in (job.detail or "")
+    assert server.get_draft(oldest)["status"] == "approved"
+    assert [server.get_draft(item)["status"] for item in rest] == ["submitted"] * 2

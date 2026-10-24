@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextvars
+import functools
 import itertools
 import json
 import logging
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, JsonValue, TypeAdapter, ValidationError
 
 from . import (
     ai,
@@ -328,12 +329,12 @@ def _retry_due(run: ReviewRun, now: datetime) -> bool:
 def backlog() -> list[str]:
     """Submitted drafts the current configuration has not reviewed and
     cannot reach by itself: submitted while review was off, reviewed only
-    advisorily, or failed beyond the sweep. Alias suggestion drafts await
-    a person and are left out."""
+    advisorily, or failed beyond the sweep, oldest first. Alias suggestion
+    drafts await a person and are left out."""
     current = mode()
     conn = drafts_store.connection()
     waiting = []
-    for row in drafts_store.list_drafts(conn, "submitted"):
+    for row in reversed(drafts_store.list_drafts(conn, "submitted")):
         ops = drafts_store.list_ops(conn, row["id"])
         if all(op["kind"] == drafts_store.ALIAS_SUGGESTION_KIND for op in ops):
             continue
@@ -356,28 +357,181 @@ def _in_backlog(run: ReviewRun | None, current: Mode) -> bool:
     return run.stale or run.mode != current or current == "review-and-apply"
 
 
-def review_backlog() -> list[str]:
-    """Start a review of every draft in the backlog. Returns their ids."""
-    settings = _settings()
-    current = settings.mode
-    if current == "off":
-        raise ValueError("internal draft review is off")
-    if reason := credentials_error(settings):
+class BacklogJob(BaseModel):
+    """An admin's review of the backlog, one draft at a time, oldest first.
+    It lives in this process: a restart ends it, and starting it again
+    picks up the drafts still waiting."""
+
+    status: Literal["running", "paused", "finished"] = "running"
+    #: The most the job may spend; None leaves only the monthly AI budget.
+    budget_usd: float | None = None
+    spent_usd: float = 0.0
+    reviewed: int = 0
+    remaining: int = 0
+    detail: str | None = None
+    started_at: str = Field(default_factory=timestamps.now)
+    finished_at: str | None = None
+
+
+_backlog_lock = threading.Lock()
+_backlog_job: BacklogJob | None = None
+_backlog_attempted: set[str] = set()
+_backlog_thread: threading.Thread | None = None
+
+
+def backlog_job() -> BacklogJob | None:
+    with _backlog_lock:
+        return None if _backlog_job is None else _backlog_job.model_copy()
+
+
+def review_backlog(budget_usd: float | None = None) -> BacklogJob:
+    """Start reviewing the backlog oldest first, stopping before a draft
+    whose likely cost would pass `budget_usd`."""
+    global _backlog_job
+    if reason := _backlog_unavailable():
         raise ValueError(reason)
-    started = []
-    for draft_id in backlog():
+    with _backlog_lock:
+        if _backlog_job is not None and _backlog_job.status != "finished":
+            raise ValueError("a backlog review is already started; resume it")
+        _backlog_job = BacklogJob(budget_usd=budget_usd, remaining=len(backlog()))
+        _backlog_attempted.clear()
+        _drain_in_background()
+        return _backlog_job.model_copy()
+
+
+def pause_backlog() -> BacklogJob:
+    with _backlog_lock:
+        if _backlog_job is None or _backlog_job.status != "running":
+            raise ValueError("no backlog review is running")
+        _backlog_job.status = "paused"
+        _backlog_job.detail = "Paused by an administrator after the draft under review."
+        return _backlog_job.model_copy()
+
+
+def resume_backlog() -> BacklogJob:
+    if reason := _backlog_unavailable():
+        raise ValueError(reason)
+    with _backlog_lock:
+        if _backlog_job is None or _backlog_job.status != "paused":
+            raise ValueError("no backlog review is paused")
+        _backlog_job.status = "running"
+        _backlog_job.detail = None
+        _drain_in_background()
+        return _backlog_job.model_copy()
+
+
+def forget_backlog_job() -> None:
+    """A job belongs to the runtime that started it; a thread still running
+    for an earlier one stops at its next draft."""
+    global _backlog_job
+    with _backlog_lock:
+        _backlog_job = None
+        _backlog_attempted.clear()
+
+
+def wait_backlog(timeout: float = 10) -> None:
+    thread = _backlog_thread
+    if thread is not None:
+        thread.join(timeout)
+
+
+def _backlog_unavailable() -> str | None:
+    settings = _settings()
+    if settings.mode == "off":
+        return "internal draft review is off"
+    return credentials_error(settings)
+
+
+def _drain_in_background() -> None:
+    """Called holding _backlog_lock; a thread still finishing its draft
+    after a pause carries on instead of a second one starting."""
+    global _backlog_thread
+    if _backlog_thread is not None and _backlog_thread.is_alive():
+        return
+    _backlog_thread = threading.Thread(
+        target=_drain, name="draft-review-backlog", daemon=True
+    )
+    _backlog_thread.start()
+
+
+def _drain() -> None:
+    while (draft_id := _next_backlog_draft()) is not None:
+        since = timestamps.now()
         try:
             start(
                 draft_id,
                 rerun=True,
-                admit=lambda latest: _in_backlog(latest, current),
+                admit=functools.partial(_in_backlog, current=mode()),
             )
-            started.append(draft_id)
         except NotAdmitted:
             continue
         except Exception:
             logger.exception("could not start review of %s", draft_id)
-    return started
+            continue
+        _wait_for(draft_id)
+        cost = ai_usage.draft_cost(
+            drafts_store.connection(), "draft_review", draft_id, since
+        )
+        with _backlog_lock:
+            assert _backlog_job is not None  # set before the thread starts
+            _backlog_job.reviewed += 1
+            _backlog_job.spent_usd += cost
+
+
+def _next_backlog_draft() -> str | None:
+    """The oldest waiting draft this job has not tried, or None once the
+    job pauses or finishes."""
+    waiting = [item for item in backlog() if item not in _backlog_attempted]
+    hold = _backlog_unavailable() or _backlog_spent()
+    with _backlog_lock:
+        job = _backlog_job
+        if job is None or job.status != "running":
+            return None
+        job.remaining = len(waiting)
+        if not waiting:
+            job.status = "finished"
+            job.detail = "No waiting draft is left."
+            job.finished_at = timestamps.now()
+            return None
+        if hold:
+            job.status = "paused"
+            job.detail = hold
+            return None
+        _backlog_attempted.add(waiting[0])
+        return waiting[0]
+
+
+def _backlog_spent() -> str | None:
+    conn = drafts_store.connection()
+    budget = product_settings.get(product_settings.AIBudgetSettings)
+    if reason := ai_usage.paused_reason(conn, "draft_review", budget):
+        return reason
+    with _backlog_lock:
+        job = _backlog_job
+        if job is None or job.budget_usd is None:
+            return None
+        spent, limit = job.spent_usd, job.budget_usd
+    since = timestamps.of(datetime.now(UTC) - timedelta(days=30))
+    next_draft = ai_usage.mean_run_cost(conn, "draft_review", since) or 0.0
+    if spent + next_draft <= limit:
+        return None
+    return (
+        f"Stopped at the backlog budget: about ${spent:.2f} of ${limit:g} spent, "
+        f"and the next draft likely costs ${next_draft:.2f}. Resume to go on."
+    )
+
+
+def _wait_for(draft_id: str) -> None:
+    """Until the draft's review, including its automatic rerun, is done."""
+    conn = drafts_store.connection()
+    while (run := draft_review_store.latest(conn, draft_id)) is not None:
+        future = _futures.get(run.run_id)
+        if run.status != "running" or future is None:
+            return
+        try:
+            future.result()
+        except Exception:
+            logger.exception("review of %s failed", draft_id)
 
 
 _sweeper = workers.Worker(

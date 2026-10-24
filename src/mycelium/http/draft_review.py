@@ -1,8 +1,8 @@
 """The internal draft reviewer: running it on a draft, answering its questions,
 and reviewing the backlog it has not reached.
 
-Running and answering need a real writer (`_enforce_curator`); the backlog is
-admin-only.
+Running and answering need a real writer (`_enforce_curator`); the backlog and
+its review job are admin-only.
 """
 
 from __future__ import annotations
@@ -10,10 +10,11 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, Field, JsonValue
 
 from .. import draft_review_settings as review_settings
 from .. import server
+from ..draft_review_runs import BacklogJob
 from ..request_timing import TimedRoute
 from .access import _enforce_curator, _require_admin
 
@@ -25,12 +26,22 @@ class Backlog(BaseModel):
     #: What reviewing them all is likely to cost, from what a review has
     #: cost over the last 30 days; None without a priced review on record.
     estimated_cost_usd: float | None
+    job: BacklogJob | None
+
+
+class BacklogStart(BaseModel):
+    budget_usd: float | None = Field(default=None, gt=0)
+
+
+class BacklogJobBody(BaseModel):
+    job: BacklogJob
 
 
 @router.get("/api/draft-review/backlog")
 def draft_review_backlog(request: Request) -> Backlog:
-    """Submitted drafts the current review configuration has not reached, to
-    offer reviewing them once when review is switched on."""
+    """Submitted drafts the current review configuration has not reached,
+    oldest first, to offer reviewing them once when review is switched on,
+    with the backlog review this process last started."""
     from .. import ai_usage, draft_review_runs, drafts_store, timestamps
 
     _require_admin(request)
@@ -43,17 +54,41 @@ def draft_review_backlog(request: Request) -> Backlog:
     return Backlog(
         draft_ids=draft_ids,
         estimated_cost_usd=None if mean is None else len(draft_ids) * mean,
+        job=draft_review_runs.backlog_job(),
     )
 
 
 @router.post("/api/draft-review/backlog")
-def review_draft_backlog(request: Request) -> dict[str, list[str]]:
-    """Start reviewing every draft in the backlog; returns their ids."""
+def review_draft_backlog(
+    request: Request, body: BacklogStart | None = None
+) -> BacklogJobBody:
+    """Start reviewing the backlog oldest first, one draft at a time."""
+    from .. import draft_review_runs
+
+    _require_admin(request)
+    budget = None if body is None else body.budget_usd
+    try:
+        return BacklogJobBody(job=draft_review_runs.review_backlog(budget))
+    except review_settings.Unavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from None
+
+
+@router.post("/api/draft-review/backlog/pause")
+def pause_draft_backlog(request: Request) -> BacklogJobBody:
+    """Stop the backlog review after the draft under review."""
+    from .. import draft_review_runs
+
+    _require_admin(request)
+    return BacklogJobBody(job=draft_review_runs.pause_backlog())
+
+
+@router.post("/api/draft-review/backlog/resume")
+def resume_draft_backlog(request: Request) -> BacklogJobBody:
     from .. import draft_review_runs
 
     _require_admin(request)
     try:
-        return {"draft_ids": draft_review_runs.review_backlog()}
+        return BacklogJobBody(job=draft_review_runs.resume_backlog())
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
 
