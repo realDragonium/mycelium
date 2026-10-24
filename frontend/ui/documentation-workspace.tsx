@@ -33,7 +33,7 @@ interface DocumentationRun {
 interface RunSummary {
   activity: string | null; turns: number; duration_s: number;
   tokens: { input: number; cache_read: number; cache_creation: number; output: number };
-  cost_usd: number | null; statements_retrieved: number; statements_cited: number; gaps_filed: number;
+  statements_retrieved: number; statements_cited: number; gaps_filed: number;
   cited_statement_ids?: string[];
   review_findings?: ReviewNote[];
 }
@@ -74,7 +74,7 @@ interface PlanItem {
 }
 interface PlanSummary {
   id: string; created_at: string; finished_at: string | null; outcome: 'planned' | 'failed' | null; error: string | null; activity: string | null;
-  provider: string | null; model: string | null; cost_usd: number | null; proposed: number | null; dropped: Record<string, number>; agent_task?: AgentTask | null;
+  provider: string | null; model: string | null; tokens: number | null; proposed: number | null; dropped: Record<string, number>; agent_task?: AgentTask | null;
 }
 interface DocumentationPlan {
   guideline_set: string; audience: AudienceRef | null; unavailable: string | null; latest: PlanSummary | null; items: PlanItem[];
@@ -126,8 +126,8 @@ const docEntityName = (id: string) => substrate.data.entities.find(entity => ent
 const docDate = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : 'Not recorded';
 const docTokens = (count: number) => count >= 1000 ? `${(count / 1000).toFixed(count >= 100_000 ? 0 : 1)}k` : String(count);
 const docDuration = (seconds: number) => seconds >= 60 ? `${Math.floor(seconds / 60)} min ${Math.round(seconds % 60)} s` : `${Math.round(seconds)} s`;
-const docCost = (summary: RunSummary) => summary.cost_usd === null ? 'cost not estimated' : `about $${summary.cost_usd.toFixed(2)}`;
-const docRunLine = (summary: RunSummary) => `${summary.turns} turns · ${docDuration(summary.duration_s)} · ${docCost(summary)} · ${summary.statements_cited} of ${summary.statements_retrieved} retrieved statements cited`;
+const docTotalTokens = ({ tokens }: RunSummary) => tokens.input + tokens.cache_read + tokens.cache_creation + tokens.output;
+const docRunLine = (summary: RunSummary) => `${summary.turns} turns · ${docDuration(summary.duration_s)} · ${docTokens(docTotalTokens(summary))} tokens · ${summary.statements_cited} of ${summary.statements_retrieved} retrieved statements cited`;
 
 function agentRunStatus(task: AgentTask) {
   if (task.status === 'waiting') return <>Waiting for an agent to claim it.{task.release_reason && <> Last released: {task.release_reason}.</>}</>;
@@ -157,7 +157,6 @@ function DocumentationRunSummary({ summary }: { summary: RunSummary }) {
   return <dl className="docw-summary">
     <div><dt>Turns</dt><dd>{summary.turns}</dd></div>
     <div><dt>Duration</dt><dd>{docDuration(summary.duration_s)}</dd></div>
-    <div><dt>Estimated cost</dt><dd>{summary.cost_usd === null ? 'Not estimated for this model' : `$${summary.cost_usd.toFixed(2)}`}</dd></div>
     <div><dt>Input tokens</dt><dd>{docTokens(tokens.input + tokens.cache_read + tokens.cache_creation)} ({docTokens(tokens.cache_read)} from cache)</dd></div>
     <div><dt>Output tokens</dt><dd>{docTokens(tokens.output)}</dd></div>
     <div><dt>Statements</dt><dd>{summary.statements_cited} cited of {summary.statements_retrieved} retrieved</dd></div>
@@ -549,7 +548,7 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
         <button type="button" disabled={!canAct || active || !!plan.unavailable} onClick={() => act(() => docPost('plans/' + encodeURIComponent(selected), {}))}>{active ? 'Planning…' : latest ? 'Plan again' : 'Plan documentation'}</button>
         {latest?.finished_at && (latest.provider === 'agent'
           ? <span className="docw-meta">Last plan made by an external agent</span>
-          : latest.cost_usd !== null && <span className="docw-meta">Last plan cost about ${latest.cost_usd.toFixed(2)} · {latest.model}</span>)}
+          : latest.tokens !== null && <span className="docw-meta">Last plan used {docTokens(latest.tokens)} tokens · {latest.model}</span>)}
       </div>}
       {active && latest && <p role="status">{latest.agent_task ? agentPlanStatus(latest.agent_task) : <>{latest.activity || 'Planning'}… started {docDate(latest.created_at)}.</>} You can leave this screen; the plan keeps running.</p>}
       {plan?.replan_hint && <p role="status">{plan.new_since_plan} statements became visible to this audience since the last plan. Plan again to consider them.</p>}

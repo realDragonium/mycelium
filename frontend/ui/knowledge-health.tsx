@@ -11,6 +11,7 @@ import {
   type HealthList, type HealthStatement, type StatementFilter,
 } from './api';
 import { dataOf, useAsync } from './use-async';
+import { tokens } from './ai-usage';
 
 const LISTS: Record<HealthList, { title: string; blurb: string; empty: string }> = {
   isolated: { title: 'Isolated statements', blurb: 'No link leads to or from these statements or holds only when they do, so Ask, documentation and the planner only reach them by search.', empty: 'Every statement has a link.' },
@@ -38,7 +39,6 @@ function tiles(c: HealthCounts): Tile[] {
   ];
 }
 
-const usd = (n: number) => `$${n < 0.1 ? n.toFixed(3) : n.toFixed(2)}`;
 
 type Run =
   | { phase: 'idle' }
@@ -78,7 +78,7 @@ function RunStatus({ run }: { run: Run }) {
   if (run.phase === 'error') return <Notice tone="error">{run.message}</Notice>;
   const { result } = run;
   if (result.outcome === 'waiting_for_agent') return <Notice>Queued for an outside agent (task {result.agent_task}). Its draft appears in Drafts when the agent submits it.</Notice>;
-  const cost = result.cost_usd === null ? 'cost unknown for this model' : `cost ${usd(result.cost_usd)}`;
+  const cost = `${tokens(result.tokens)} tokens`;
   const gaps = result.gaps_filed?.length || 0;
   const filed = gaps ? <>; asked for {gaps} statement{gaps === 1 ? '' : 's'} to be rephrased in <Link to={{ view: 'gaps' }}>Knowledge gaps</Link></> : null;
   if (result.outcome === 'nothing_to_ingest') return <Notice tone="warn">No connections proposed ({result.reason || 'nothing found'}); {cost}{filed}.</Notice>;
@@ -129,7 +129,7 @@ function ConnectPanel({ limits, onDone }: { limits: ConnectLimits; onDone: () =>
       <p className="hint">
         {limits.external_agent
           ? `Runs are queued for an outside agent; at most ${limits.batch_size} statements a run.`
-          : <>{limits.model} · at most {limits.batch_size} statements a run · {limits.priced ? `stops at ${usd(limits.max_cost_usd)} a run` : 'no known price for this model, so cost is not shown and the spending cap cannot apply'}.</>}
+          : <>{limits.model} · at most {limits.batch_size} statements a run · {limits.max_run_tokens ? `stops at ${tokens(limits.max_run_tokens)} tokens a run` : 'no token cap'}.</>}
         {' '}Statements in a pending draft, and those it already looked at, are skipped until they or the statements around them change. <Link to={{ view: 'settings', section: 'limits' }}>Limits</Link> · <Link to={{ view: 'settings', section: 'models' }}>Model</Link>
       </p>
       {empty && <Notice>No {scope === 'isolated' ? 'isolated statements' : 'statements naming no concept'} left that the AI has not already looked at.</Notice>}
