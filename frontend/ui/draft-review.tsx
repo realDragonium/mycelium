@@ -15,12 +15,17 @@ type DraftStatus = 'open' | 'submitted' | 'approved' | 'rejected' | 'withdrawn';
 interface Correction { action: string; operation_ref?: string | null; tool_name?: string | null; reason: string; payload_json?: string | null }
 interface Contradiction { statement_id: string; resolution: string }
 interface Answer { run_id: string; questions: string[]; answer: string; answered_by: string; answered_at: string }
+type AssessmentLabel = 'good' | 'changes_suggested' | 'reject' | 'needs_context';
+interface AssessmentPart {
+  operation_refs: string[]; label: AssessmentLabel; rationale: string; questions: string[];
+  corrections: Correction[]; contradictions: Contradiction[];
+}
 interface Assessment {
   run_id: string; status: 'running' | 'completed' | 'failed' | 'paused'; label?: string | null; stale?: boolean;
   provider?: string | null; model?: string | null; reasoning_effort?: string | null; mode?: string | null;
   application?: 'unapplied' | 'applied' | 'rejected' | 'needs_human' | null; draft_revision?: number;
   rationale?: string | null; detail?: string | null; questions: string[]; corrections: Correction[];
-  contradictions?: Contradiction[]; answers?: Answer[]; attempt?: number; previous_failure?: string | null;
+  contradictions?: Contradiction[]; parts?: AssessmentPart[]; answers?: Answer[]; attempt?: number; previous_failure?: string | null;
 }
 // The reviewer stopped to ask a person rather than reject: the draft waits
 // until a curator answers, then the reviewer runs again with the answer.
@@ -38,7 +43,8 @@ interface Evidence {
   excerpt: string; claim: string;
 }
 interface DraftOp { seq: number; kind: string; payload: Payload; provenance: { source?: string } | null; evidence: Evidence[] }
-type Draft = Omit<DraftSummary, 'review_assessment'> & { ops: DraftOp[]; review_assessment: Assessment | null };
+interface DraftSource { repository: string; pull_request: number; merged_commit: string; workflow_run_id: number; workflow_run_attempt: number }
+type Draft = Omit<DraftSummary, 'review_assessment'> & { ops: DraftOp[]; review_assessment: Assessment | null; source: DraftSource | null };
 // Statements the server refused while applying a draft by hand; nothing was applied.
 interface RejectedStatement { seq: number; kind: string; text: string | null; reasons: string[] }
 const rejectionsOf = (e: unknown): RejectedStatement[] => {
@@ -91,6 +97,18 @@ function AssessmentPanel({ assessment }: { assessment: Assessment }) {
       </p>
       {assessment.stale && <Notice tone="warn">This assessment is stale: it reviewed revision {assessment.draft_revision}, and the draft has changed since.</Notice>}
       {assessment.rationale && <p className="pre-wrap">{assessment.rationale}</p>}
+      {assessment.parts && assessment.parts.length > 1 && <>
+        <h3 className="section-label">Reviewed in {assessment.parts.length} parts</h3>
+        <div className="stack-sm">{assessment.parts.map((part, i) => (
+          <div key={i}>
+            <div><b>Part {i + 1}</b> · {LABELS[part.label]} · {part.operation_refs.length} operation{part.operation_refs.length === 1 ? '' : 's'}</div>
+            {part.rationale && <p className="pre-wrap">{part.rationale}</p>}
+            {part.questions.length > 0 && <><div className="section-label">Questions</div><ul>{part.questions.map((q, j) => <li key={j}>{q}</li>)}</ul></>}
+            {part.corrections.length > 0 && <p className="muted small">{part.corrections.length} correction{part.corrections.length === 1 ? '' : 's'}</p>}
+            <details><summary>Operations</summary><ul className="mono small">{part.operation_refs.map(ref => <li key={ref}>{ref}</li>)}</ul></details>
+          </div>
+        ))}</div>
+      </>}
       {assessment.detail && <p className="pre-wrap">{assessment.detail}</p>}
       {assessment.questions.length > 0 && !asksPerson(assessment) && <><h3 className="section-label">Questions</h3><ul>{assessment.questions.map((q, i) => <li key={i}>{q}</li>)}</ul></>}
       {!!assessment.contradictions?.length && <>
@@ -476,6 +494,8 @@ export function DraftReview({ id }: { id: string }) {
   ops.forEach(o => { counts[categoryOf(o)]++; });
   const shown = ops.filter(o => filter === 'all' || categoryOf(o) === filter);
   const canRunReview = draft.status === 'submitted' && !!settings?.can_review && settings.mode !== 'off' && !running;
+  const source = draft.source;
+  const sourceRepositoryPath = source?.repository.split('/').map(segment => encodeURIComponent(segment)).join('/');
 
   return (
     <main className="page">
@@ -483,6 +503,7 @@ export function DraftReview({ id }: { id: string }) {
         title={draft.title || draft.id}
         blurb={<span className="mono small">{draft.id} · {ops.length} operation{ops.length === 1 ? '' : 's'} · created {formatDate(draft.created_at)}{draft.created_by ? ` by ${draft.created_by.slice(0, 8)}` : ''}</span>}
         actions={<span className={`status-badge ${draft.status}`}>{draft.status}</span>} />
+      {source && <p className="muted small">From pull request <a href={`https://github.com/${sourceRepositoryPath}/pull/${source.pull_request}`} target="_blank" rel="noreferrer">{source.repository}#{source.pull_request}</a> · merge commit <code>{source.merged_commit.slice(0, 7)}</code> · <a href={`https://github.com/${sourceRepositoryPath}/actions/runs/${source.workflow_run_id}/attempts/${source.workflow_run_attempt}`} target="_blank" rel="noreferrer">workflow run</a></p>}
 
       {draft.status === 'submitted' && <Notice>Submitted {relTime(draft.submitted_at)}. Nothing has reached the knowledge base yet: a curator approves or rejects it.</Notice>}
       {draft.status === 'approved' && <Notice tone="success">Approved {relTime(draft.decided_at)}. The operations were applied to the knowledge base.</Notice>}

@@ -17,31 +17,50 @@ live statements and the link type glossary:
   reuse it. Strike the duplicate and re-point its links to the live statement.
   Mirror pairs (low/high, enable/disable) are distinct claims, not duplicates.
 - Contradictions: a new statement that says otherwise than a live one. The
-  draft is newer and wins. Unless the draft already updates or removes the live
-  statement, append a correction that does (patch_statement, replace_text or
-  delete_statement), and list it under contradictions with the live statement id
-  and what you changed.
+  newer claim wins. The draft is newer unless the live statement's updated_at
+  is later than the draft's created_at. When the draft is newer and does not
+  already update or remove the live statement, append a correction that does
+  (patch_statement, replace_text or delete_statement), and list it under
+  contradictions with the live statement id and what you changed. When the live
+  statement is newer, strike or revise the draft's conflicting operation instead.
 - Links: each link type must exist and fit its glossary meaning and direction;
-  every linked id and `when` leaf must resolve. Append add_links to a supplied
-  live statement the new knowledge plainly belongs next to but is not linked to.
+  every linked id and `when` leaf must resolve. Inside one upsert_statements
+  batch, "@N" names that batch's statement N, counting from 0; in any other
+  operation, "@S:N" names statement N of the batch operation whose seq is S.
+  Both resolve when the draft is applied, so neither is missing, and "@3" in a
+  batch is a different statement from the one at index 2. Append add_links to a
+  supplied live statement the new knowledge plainly belongs next to but is not
+  linked to.
 - Evidence: an operation's `evidence` is what the producer checked in the
-  product (code, UI or docs): where, an excerpt, and the claim it shows. A link
-  whose type and direction a concrete code excerpt supports can be accepted on
-  that basis, even when the statement texts alone would not settle it. Judge a
-  link without evidence more strictly: keep it only when the statement texts
-  plainly support its type and direction, otherwise strike it.
+  product (code, UI or docs): where, an excerpt, and the claim it shows. Use it
+  to settle what the texts alone leave open: which of two similar live
+  statements a change is about, whether a change replaces a live claim or adds
+  to it, and a link's type and direction. A link whose type and direction a
+  concrete code excerpt supports can be accepted on that basis. Judge a link
+  without evidence more strictly, but a link is the producer's claim about how
+  the product behaves: keep it when the statement texts are consistent with it,
+  retype or reverse it when they show the relation under another type or
+  direction, and strike it only when they contradict it. A draft that removes a
+  link and adds one in its place is replacing it; keep both. Evidence whose
+  claim does not match its operation supports nothing.
+- Provenance: draft.source, when present, names the merged pull request, merge
+  commit and workflow run the draft documents, and the draft should stay within
+  what that change is about. Evidence citing the merge commit shows the merged
+  code. A draft without source is judged the same way; never ask for it.
 - Entities: no case or spelling variant of a live entity, and no description
   overwritten with a worse one.
-- operation_findings are problems the server will refuse to apply, such as a
-  statement text that breaks a phrasing rule. Fix each one: rephrase the text as
-  the finding recommends with a revise, or strike the operation.
-- Operation findings: the draft cannot be applied while any remain. Fix a
-  phrasing finding by revising the statement text as its recommendation says;
-  revise or strike the operation behind any other finding.
+- Operation findings: operation_findings are problems the server will refuse
+  to apply, and the draft cannot be applied while any remain. Fix a phrasing
+  finding by revising the statement text as its recommendation says; revise or
+  strike the operation behind any other finding. A revised text is checked by
+  the same rules, so restructure it rather than swap a word for a synonym:
+  "each", "every" and "any" are refused like "all", and a condition moves to
+  a `when` tree instead of being reworded inside the text.
 Corrections may revise or strike an existing operation_ref, or append a
 supported tool call. Use each operation_ref in at most one correction: a revise
 replaces that operation's whole payload, so to change several statements in one
-batch, revise the batch once with all its statements. payload_json is the JSON object of that tool's arguments;
+batch, revise the batch once with all its statements, copying every statement
+you do not mean to change exactly, with its links, incoming_links and when. payload_json is the JSON object of that tool's arguments;
 use null for irrelevant correction fields. A changes_suggested assessment
 certifies the complete corrected draft, not just individual edits. Reject only a
 draft that cannot be made to fit with at most eight corrections.

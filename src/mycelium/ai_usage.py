@@ -261,6 +261,18 @@ def mean_run_cost(conn: sqlite3.Connection, action: str, since: str) -> float | 
     return None if row[0] is None else float(row[0])
 
 
+def draft_cost(
+    conn: sqlite3.Connection, action: str, draft_id: str, since: str
+) -> float:
+    """What `action` has spent on one draft since `since`."""
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0) FROM ai_usage "
+        "WHERE action = ? AND draft_id = ? AND at >= ?",
+        (action, draft_id, since),
+    ).fetchone()
+    return float(row[0])
+
+
 def budget(
     conn: sqlite3.Connection,
     settings: product_settings.AIBudgetSettings,

@@ -25,7 +25,7 @@ Then call `list_my_drafts()`. A drafter has **one open draft per account** (per 
 
 **Substrate reads:** `search_statements`, `grep_statements`, `get_statements`, `discover_facts`, `list_entities`, `search_entities`, `get_entity`, `list_link_types`, `list_entity_link_types`, `list_statement_kinds`, `list_statements`.
 
-**Draft writes (queued, never live):** `upsert_entity`, `upsert_name`, `upsert_statements`, `add_links`, `add_entity_links`, `patch_statement`; then `set_draft_review_evidence` and `submit_draft`. `upsert_name` and `add_entity_links` take entity ids, and a queued `upsert_entity` returns none, so they can only target entities that already exist (see "Writing the draft"). `discard_draft_op` removes a queued operation while the draft is open; `get_draft` shows it.
+**Draft writes (queued, never live):** `upsert_entity`, `upsert_name`, `upsert_statements`, `add_links`, `add_entity_links`, `patch_statement`; then `set_operation_evidence`, `set_draft_review_evidence`, `attach_draft_source` (CI only) and `submit_draft`. `upsert_name` and `add_entity_links` take entity ids, and a queued `upsert_entity` returns none, so they can only target entities that already exist (see "Writing the draft"). `discard_draft_op` removes a queued operation while the draft is open; `get_draft` shows it.
 
 **Files / shell:** read-only. Nothing is written to disk.
 
@@ -395,8 +395,12 @@ Queue the operations in dependency order. Each call returns a receipt (`draft_id
 4. **Entity ↔ entity links between existing entities** — `add_entity_links`.
 5. **Text updates** to existing statements — `patch_statement`.
 6. `get_draft(draft_id)` and read the queued operations back against the plan. Remove a wrong one with `discard_draft_op` and queue it again.
-7. **Give the reviewer your evidence**: `set_draft_review_evidence(draft_id, evidence, expected_revision=<the draft's current revision>)`. The reviewer trusts you on what the product does and never sees the code, so this is where the code goes: the Context, the `file:line` evidence for non-obvious claims and anchor links, why each `exists`/`near` discover match was kept or reused, and the remaining Uncertainties. Plain text, at most 30,000 characters.
-8. `submit_draft(draft_id)`. Don't change the evidence after submitting: it raises the draft's revision, makes the assessment stale, and blocks a curator from answering the reviewer until it runs again.
+7. **Attach the evidence behind each operation**: `set_operation_evidence(draft_id, operation_ref, evidence, expected_revision)` for every operation whose claim, reuse or link is not plain from its text. Each item names where you checked (`kind`, `path` and `lines`, or a `url`), a short `excerpt` and the one-line `claim` it shows. The reviewer uses it to decide which of two similar live statements a change is about, whether it replaces a live claim or adds to it, and whether a link's type and direction hold; it strikes a link that has neither evidence nor plain support in the texts.
+8. **Give the reviewer the context**: `set_draft_review_evidence(draft_id, evidence, expected_revision=<the draft's current revision>)`. The reviewer trusts you on what the product does and never sees the code, so this is where the rest goes: the Context, why each `exists`/`near` discover match was kept or reused, and the remaining Uncertainties. Plain text, at most 30,000 characters.
+9. **In CI, attach the provenance**: `attach_draft_source(draft_id, source, expected_revision)` with the repository, pull request number, merge commit and workflow run id and attempt. The reviewer checks that the draft stays within that change, and the UI links the pull request. A source belongs to one draft.
+10. `submit_draft(draft_id)` last. Don't change the draft, its evidence or its source after submitting: that raises its revision, makes the assessment stale, and blocks a curator from answering the reviewer until it runs again.
+
+Keep a draft to one domain. A draft is applied all or nothing, so one wrong domain holds back the others with it. A large draft is reviewed in connected parts, but a draft whose review could cost more than the admin's per-draft cap is refused unreviewed and has to be split.
 
 ## After submitting
 
@@ -412,10 +416,11 @@ admin chose under **Settings → Draft review**:
 
 The reviewer trusts you on what the product does and judges only how the
 draft fits the existing knowledge: duplicates, contradictions, link type and
-direction, missing links to live neighbours, entity variants. A new statement
-that contradicts a live one wins: the reviewer corrects the live statement and
-lists the contradiction. It never sees the code; your evidence is all it has
-on that.
+direction, missing links to live neighbours, entity variants. Of two
+contradicting claims the newer wins: usually the draft, so the reviewer
+corrects the live statement and lists the contradiction; but a live statement
+changed after the draft was created wins over it. It never sees the code; your
+evidence is all it has on that.
 
 Follow it with `get_draft(draft_id)` and read `review_assessment`: `status`
 (`running`, `completed`, `failed`), `stale`, `label` (`good`,
@@ -431,7 +436,9 @@ minute or two; poll sparingly.
   answer.
 - `application: rejected`, or a `reject` label — read the rationale. Fix the
   plan and author a new draft; you cannot add or change operations on a
-  submitted draft.
+  submitted draft. A draft reviewed in parts names the part that decided, and
+  a draft that would overwrite a record changed after it was created is
+  refused without a review: author it again against the current knowledge.
 - `review-only`, or `unapplied` under `review-and-apply` (the application gate
   is off) — the draft waits for a curator; report the assessment.
 - `status: failed` — failed attempts are retried by a sweep for about two and
