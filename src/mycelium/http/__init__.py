@@ -17,6 +17,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import anyio
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import APIRouter, FastAPI, Request
@@ -142,11 +143,14 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
         # without this every `/mcp` call fails with "Task group is not
         # initialized". `MYCELIUM_DISABLE_MCP_HTTP=1` serves the REST mirror
         # and /api/* without the `/mcp` endpoint.
-        if os.environ.get("MYCELIUM_DISABLE_MCP_HTTP") == "1":
-            yield
-            return
-        async with session_manager.run():
-            yield
+        try:
+            if os.environ.get("MYCELIUM_DISABLE_MCP_HTTP") == "1":
+                yield
+            else:
+                async with session_manager.run():
+                    yield
+        finally:
+            await anyio.to_thread.run_sync(startup.stop_workers)
 
     app = FastAPI(title="Mycelium", lifespan=lifespan)
 

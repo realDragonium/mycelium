@@ -356,3 +356,21 @@ def _init(data_dir: Path) -> None:
         draft_review_runs.start_sweeper()
     if os.environ.get("MYCELIUM_DISABLE_MAINTENANCE_WORKER") != "1":
         document_maintenance.start()
+
+
+def stop_workers() -> None:
+    """Stop the background workers `init` started. Each stop is a no-op for a
+    worker that never ran."""
+    from .. import (
+        audience_labelling,
+        document_maintenance,
+        draft_review_runs,
+        embedding_worker,
+        mention_worker,
+    )
+
+    mention_worker.stop()
+    embedding_worker.stop()
+    audience_labelling.stop()
+    draft_review_runs.stop_sweeper()
+    document_maintenance.stop()
