@@ -22,6 +22,7 @@ Action = Literal[
     "alias_discovery",
     "audience_labelling",
     "documentation_planning",
+    "plan_review",
     "connect",
 ]
 ACTIONS: tuple[Action, ...] = (
@@ -33,6 +34,7 @@ ACTIONS: tuple[Action, ...] = (
     "alias_discovery",
     "audience_labelling",
     "documentation_planning",
+    "plan_review",
     "connect",
 )
 TITLES: dict[Action, str] = {
@@ -44,6 +46,7 @@ TITLES: dict[Action, str] = {
     "alias_discovery": "Alias discovery",
     "audience_labelling": "Audience labelling",
     "documentation_planning": "Documentation planning",
+    "plan_review": "Documentation plan review",
     "connect": "Connecting statements",
 }
 
@@ -79,6 +82,8 @@ def default_text(action: Action) -> str:
         from .audience_labelling import DEFAULT_INSTRUCTIONS
     elif action == "documentation_planning":
         from .documentation_planning import DEFAULT_INSTRUCTIONS
+    elif action == "plan_review":
+        from .documentation_plan_review import DEFAULT_INSTRUCTIONS
     elif action == "connect":
         from .ingest.connect import DEFAULT_INSTRUCTIONS
     else:
@@ -217,6 +222,8 @@ def preview(action: Action, text: str) -> str:
         from .audience_labelling import build_system_prompt
     elif action == "documentation_planning":
         from .documentation_planning import build_system_prompt
+    elif action == "plan_review":
+        from .documentation_plan_review import build_system_prompt
     elif action == "connect":
         from .ingest.connect import build_system_prompt
     else:

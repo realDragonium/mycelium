@@ -231,6 +231,7 @@ MCP_TOOLS = frozenset(
         "get_generated_document",
         "revise_document",
         "request_documentation_plan",
+        "get_documentation_plan",
         "deliver_document",
     }
 )
