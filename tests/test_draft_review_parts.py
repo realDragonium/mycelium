@@ -145,6 +145,47 @@ def test_connected_operations_are_reviewed_together(monkeypatch, small_parts):
     ]
 
 
+@pytest.mark.parametrize(
+    ("reference", "problem"),
+    [("@0", "outside a batch"), ("@{seq}:1", "names no statement"), ("@{seq}:0", None)],
+)
+def test_a_correction_must_name_draft_statements_the_way_they_resolve(
+    monkeypatch, reference, problem
+):
+    live = _supporting_statement()
+
+    def decide(context):
+        seq = context["draft"]["ops"][0]["seq"]
+        link = {
+            "from_id": live,
+            "to_id": reference.format(seq=seq),
+            "link_type": "requires",
+        }
+        correction = Correction(
+            action="append",
+            operation_ref=None,
+            tool_name="add_links",
+            payload_json=json.dumps({"links": [link]}),
+            reason="Connect the new statement.",
+        )
+        return _assessment("changes_suggested", [correction])
+
+    _recording(monkeypatch, decide)
+    _automatic()
+    draft_id = _submitted(
+        (
+            "upsert_statements",
+            {"statements": [{"kind": "state", "text": "An invoice is issued."}]},
+        )
+    )
+    result = _result(draft_id)
+    if problem is None:
+        assert result["application"] == "applied"
+    else:
+        assert result["status"] == "failed"
+        assert problem in result["detail"]
+
+
 def test_a_small_draft_is_reviewed_whole(monkeypatch):
     contexts = _recording(monkeypatch)
     _set_review_controls(mode="review-only")

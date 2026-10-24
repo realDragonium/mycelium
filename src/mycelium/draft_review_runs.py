@@ -1617,6 +1617,50 @@ def _without_redundant_tool_names(
     return result.model_copy(update={"corrections": corrections})
 
 
+def _strings(value: JsonValue) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+
+
+def _unresolved_reference(
+    name: str, payload: dict[str, JsonValue], ops: list[JsonValue]
+) -> str | None:
+    batches: dict[int, int] = {}
+    for op in ops:
+        if isinstance(op, dict) and op.get("kind") == "upsert_statements":
+            seq, op_payload = op.get("seq"), op.get("payload")
+            items = (
+                op_payload.get("statements") if isinstance(op_payload, dict) else None
+            )
+            if isinstance(seq, int) and isinstance(items, list):
+                batches[seq] = len(items)
+    statements = payload.get("statements")
+    size = len(statements) if isinstance(statements, list) else 0
+    for value in _strings(payload):
+        if sibling := re.fullmatch(r"@(\d+)", value):
+            if name != "upsert_statements":
+                return (
+                    f"{value} names a statement of the same upsert_statements "
+                    "batch; outside a batch write @<seq>:<index>"
+                )
+            if int(sibling[1]) >= size:
+                return f"{value} is past the end of its batch"
+        elif other := re.fullmatch(r"@(\d+):(\d+)", value):
+            seq, index = int(other[1]), int(other[2])
+            if index >= batches.get(seq, 0):
+                return (
+                    f"{value} names no statement: the draft has no "
+                    f"upsert_statements operation at seq {seq} with that index"
+                )
+    return None
+
+
 def _validate_corrections(
     corrections: list[draft_review_store.Correction],
     inspection: DraftReviewInspection,
@@ -1674,3 +1718,5 @@ def _validate_corrections(
             )
         if draft_review._nested_parameter_findings(name, payload):
             raise ValueError("correction payload has unsupported nested parameters")
+        if problem := _unresolved_reference(name, payload, ops):
+            raise ValueError(problem)
