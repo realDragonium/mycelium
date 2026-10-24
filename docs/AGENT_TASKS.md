@@ -21,16 +21,20 @@ the server, using the agents its people already run.
 | Connect pass | Yes | Kind `connect` |
 | Alias discovery | Yes | Kind `alias_discovery` |
 | Draft review | Not yet | Its reviewer is being reworked; it plugs in as one more kind once that lands |
-| Ask | No | See below |
+| Ask | Yes, as the caller's own agent | No task kind; see below |
 | Embeddings | No | They use the local model or an embedding API, never agents |
 
-**Ask** is interactive: the caller waits for an answer. A queued Ask would
-make it wait for some other agent to pick the question up, with no answer
-until then. A caller that has an agent of its own already has what an
-external Ask would give it: the read tools (`search_statements`,
-`get_statements` and the rest, see the `mycelium-knowledge-source` skill)
-and the audience boundary of its own token. Ask therefore always uses its
-server model.
+**Ask** is interactive: the caller waits for an answer, so a queued Ask
+would wait for some other agent to pick the question up. A caller that has
+an agent of its own already has what an external Ask needs: the read tools
+(`search_statements`, `get_statements` and the rest) and the audience
+boundary of its own token. So External agent for Ask queues nothing. The
+server runs no model for it: `ask` is left out of `tools/list` and a call to
+it (over MCP or `POST /ask`) is refused with a message naming the
+`mycelium-research` skill, which teaches the agent the Ask loop's research
+and answering rules. The web app hides Ask (its mode in the command bar
+and "Ask about this"); Find stays. An `asker` token, which has only `ask`,
+can do nothing while Ask is external; give such callers a reader token.
 
 The `mycelium-agent-tasks` skill (`skills/`) walks an agent through the
 workflow.

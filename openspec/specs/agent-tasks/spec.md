@@ -1,15 +1,15 @@
 # agent-tasks Specification
 
 ## Purpose
-Let outside agents (coding agents with a writer token) do the model work of documentation, documentation planning, audience labelling, ingest, the connect pass and alias discovery instead of a server model, inside the same boundaries and checks a server run keeps.
+Let outside agents do the model work of an action set to External agent instead of a server model: documentation, documentation planning, audience labelling, ingest, the connect pass and alias discovery as queued tasks for a writer's agent, inside the same boundaries and checks a server run keeps, and Ask as the caller's own agent's research.
 
 ## Requirements
 
 ### Requirement: External agent for an action
-The system SHALL let an admin set `docgen`, `documentation_planning`, `audience_labelling`, `ingest`, `connect` or `alias_discovery` to External agent (`external_agent: true` on `PATCH /api/model-settings/{action}`), after which its model work is queued as agent tasks instead of calling a provider; other actions MUST refuse it. `GET /api/model-settings` reports `external_agent`, `agent_review` and `agent_supported` per action.
+The system SHALL let an admin set `docgen`, `documentation_planning`, `audience_labelling`, `ingest`, `connect`, `alias_discovery` or `ask` to External agent (`external_agent: true` on `PATCH /api/model-settings/{action}`), after which its model work is queued as agent tasks, or for `ask` done by the caller's own agent, instead of calling a provider; other actions MUST refuse it. `GET /api/model-settings` reports `external_agent`, `agent_review` and `agent_supported` per action.
 
 #### Scenario: Unsupported action
-- **WHEN** an admin saves `external_agent: true` for `ask`
+- **WHEN** an admin saves `external_agent: true` for `draft_review`
 - **THEN** the request is refused saying the action cannot be done by an external agent
 
 #### Scenario: Documentation set to External agent
@@ -149,9 +149,9 @@ The system SHALL let whoever queued a task, or an admin, call `get_agent_task(ta
 - **WHEN** the writer who called `ingest` asks for its task after an agent's draft was accepted
 - **THEN** the task is `done` and its `result` names the created draft
 
-### Requirement: Actions that keep a server model
-The system SHALL keep Ask and draft review on a server model: Ask is interactive, and a caller with its own agent already has the read tools, so a queued answer would only add waiting. Embeddings never use agents.
+### Requirement: Draft review and embeddings keep their model
+The system SHALL keep draft review on a server model until its reviewer has an agent task handler, and SHALL never use agents for embeddings. Ask MUST NOT be queued as an agent task.
 
-#### Scenario: Ask cannot be set to External agent
-- **WHEN** an admin saves `external_agent: true` for `ask`
+#### Scenario: Draft review cannot be set to External agent
+- **WHEN** an admin saves `external_agent: true` for `draft_review`
 - **THEN** the request is refused

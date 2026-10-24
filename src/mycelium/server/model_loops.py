@@ -10,6 +10,8 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
+from mcp.server.mcpserver.exceptions import ToolError
+
 from .drafts import _auto_submit
 from .registry import tool
 from .runtime import _context, _db
@@ -17,6 +19,19 @@ from .runtime import _context, _db
 if TYPE_CHECKING:
     from ..ingest.connect import Target
     from ..ingest.schema import IngestResult
+
+
+class AskIsExternal(ToolError, ValueError):
+    """Ask runs no model while it is set to External agent. A `ToolError`
+    so MCP clients see the message, a `ValueError` so HTTP answers 400."""
+
+
+ASK_EXTERNAL = (
+    "Ask is set to External agent on this server, so it runs no model. "
+    "Research the question yourself with the read tools (search_statements, "
+    "get_statements, grep_statements, search_entities, get_entity) and answer "
+    "with the statement ids you used, as the mycelium-research skill describes."
+)
 
 
 @tool(role="asker")
@@ -57,12 +72,17 @@ def ask(
     The call runs a multi-second reasoning loop bounded by an operation cap and
     a wall-clock budget; on exhaustion it degrades to a low-confidence partial
     answer rather than raising.
+
+    While Ask is set to External agent the server runs no model: the tool is
+    left out of `tools/list` and a call is refused with `ASK_EXTERNAL`.
     """
-    from .. import audience_scope, principal_audience
+    from .. import audience_scope, model_settings, principal_audience
     from ..ask import AskConfig, run_ask
     from ..ask.config import for_depth
     from ..ask.substrate import InProcessSubstrate
 
+    if model_settings.get("ask").external_agent:
+        raise AskIsExternal(ASK_EXTERNAL)
     config = for_depth(AskConfig.from_env(), depth)
     if config.trace_log_path is None:
         config = replace(

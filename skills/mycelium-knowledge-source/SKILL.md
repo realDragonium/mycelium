@@ -62,6 +62,10 @@ calls; a quick answer can miss unlinked knowledge, so read its confidence.
 `ask` costs a model run on the server; for a fact you can look up directly,
 prefer the reads.
 
+When Ask is set to **External agent**, the server runs no model for it: `ask`
+is missing from `tools/list` and refuses a call. Research the question
+yourself with the reads, as mycelium-research describes.
+
 **`search_statements`** is semantic retrieval with alias boosting. Useful
 arguments: `limit` (at most 100), `min_score`, `kind`, `mentions=[entity
 names]` to restrict to a concept, and `depth=1` or `2` with `direction` to

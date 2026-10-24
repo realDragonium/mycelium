@@ -82,6 +82,7 @@ def test_every_skill_is_found():
         "mycelium-draft-review",
         "mycelium-guide-authoring",
         "mycelium-knowledge-source",
+        "mycelium-research",
     }
 
 

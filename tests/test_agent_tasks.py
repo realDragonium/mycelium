@@ -265,6 +265,7 @@ def test_only_agent_capable_actions_take_an_external_agent(client):  # noqa: F81
     current = client.get("/api/model-settings", headers=admin).json()
     supported = {a["action"] for a in current["actions"] if a["agent_supported"]}
     assert supported == {
+        "ask",
         "docgen",
         "documentation_planning",
         "audience_labelling",
@@ -273,9 +274,48 @@ def test_only_agent_capable_actions_take_an_external_agent(client):  # noqa: F81
         "alias_discovery",
     }
     with pytest.raises(AssertionError, match="cannot be done by an external agent"):
-        _select_agent(client, admin, "ask")
+        _select_agent(client, admin, "draft_review")
     with pytest.raises(AssertionError, match="Only documentation has an agent review"):
         _select_agent(client, admin, "audience_labelling", agent_review="agent")
+
+
+def test_an_external_ask_runs_no_model_and_is_not_offered(client):  # noqa: F811
+    import asyncio
+    from types import SimpleNamespace
+
+    from mcp.types import ListToolsResult
+
+    from mycelium import auth
+    from mycelium.server import mcp, registry
+
+    admin = _bearer("admin")
+    _select_agent(client, admin, "ask")
+
+    r = client.post(
+        "/ask", headers=_bearer("reader"), json={"question": "How do exports work?"}
+    )
+    assert r.status_code == 400
+    assert "mycelium-research skill" in r.text
+
+    async def listed() -> set[str]:
+        async def unfiltered(_ctx):
+            tools = ListToolsResult(tools=await mcp.list_tools())
+            return tools.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+        result = await registry._RoleFilteredTools()(
+            SimpleNamespace(method="tools/list"), unfiltered
+        )
+        return {t["name"] for t in result["tools"]}
+
+    token = auth.current_principal.set(
+        auth.Principal(id="r", name="r", role="reader", type="human")
+    )
+    try:
+        reader = asyncio.run(listed())
+    finally:
+        auth.current_principal.reset(token)
+    assert "ask" not in reader and "search_statements" in reader
+    assert "ask" not in asyncio.run(listed())
 
 
 # --- audience labelling --------------------------------------------------------

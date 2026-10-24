@@ -101,8 +101,9 @@ class _RoleFilteredTools:
     the middleware chain runs, so what arrives here is that dict, not a
     `ListToolsResult`.
 
-    Skipped when no principal is set (stdio / local-admin mode); the full
-    list goes out, which is what local single-user installs want.
+    The role check is skipped when no principal is set (stdio / local-admin
+    mode), which is what local single-user installs want; `_hidden_tools`
+    still applies there.
 
     The listed surface is per-role, which is why `cache_hints` must never
     mark `tools/list` `scope="public"`: a shared cache entry would hand one
@@ -117,9 +118,15 @@ class _RoleFilteredTools:
         if ctx.method != "tools/list" or not isinstance(result, dict):
             return result
 
+        hidden = _hidden_tools()
         principal = _auth.current_principal.get()
         if principal is None:
-            return result
+            return {
+                **result,
+                "tools": [
+                    t for t in result.get("tools", ()) if t["name"] not in hidden
+                ],
+            }
 
         # Resolve each tool's gate through the wrapper registered in
         # `TOOLS`, so `@tool(role=..., real_role=...)` overrides are
@@ -128,6 +135,8 @@ class _RoleFilteredTools:
         wrappers_by_name = {w.__name__: w for w in TOOLS}
 
         def _invocable(name: str) -> bool:
+            if name in hidden:
+                return False
             w = wrappers_by_name.get(name)
             required = getattr(
                 w, "_mycelium_required_role", None
@@ -143,6 +152,18 @@ class _RoleFilteredTools:
 
         kept = [t for t in result.get("tools", ()) if _invocable(t["name"])]
         return {**result, "tools": kept}
+
+
+def _hidden_tools() -> frozenset[str]:
+    """Tools no caller is offered right now: `ask` while Ask is set to
+    External agent, since it then refuses to run a model."""
+    from .. import model_settings
+
+    try:
+        external = model_settings.get("ask").external_agent
+    except model_settings.Unavailable:
+        return frozenset()
+    return frozenset({"ask"}) if external else frozenset()
 
 
 # Appended, so it runs inside the SDK's own built-in middleware.

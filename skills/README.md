@@ -7,6 +7,7 @@ when to use it; Claude loads it when a task matches, or you invoke it as
 | Skill | Use it to | Needs |
 |---|---|---|
 | `mycelium-knowledge-source` | Answer product questions from the knowledge base, cite the statements an answer rests on, report what is missing | Any connection |
+| `mycelium-research` | Research a question with the read tools and answer it with cited statements; how to answer when Ask is set to External agent | Reader |
 | `mycelium-authoring` | Write descriptive knowledge: what the product does and what holds, as statements, links and concepts | Writer, or drafter for drafts |
 | `mycelium-guide-authoring` | Write how-to guides and troubleshooting trees (procedures, actions, checks, causes); load with `mycelium-authoring` | Writer, or drafter for drafts |
 | `mycelium-draft` | Research a domain in a codebase and propose it as a submitted draft for the internal reviewer | Drafter token |

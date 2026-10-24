@@ -34,9 +34,12 @@ ACTIONS: tuple[Action, ...] = (
     "documentation_planning",
     "connect",
 )
-#: Actions whose work an outside agent may do instead of a server model.
+#: Actions whose work an outside agent may do instead of a server model. For
+#: Ask that agent is the caller itself: the `ask` tool runs no model and the
+#: caller researches with the read tools.
 AGENT_ACTIONS: frozenset[Action] = frozenset(
     {
+        "ask",
         "docgen",
         "documentation_planning",
         "audience_labelling",
