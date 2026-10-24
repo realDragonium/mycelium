@@ -55,6 +55,17 @@ jobs:
             uv run pytest -q -n0 "tests/$f.py"
           done
 
+  specs:
+    runs-on: ubuntu-latest
+    env:
+      OPENSPEC_TELEMETRY: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npx -y @fission-ai/openspec@1.15.0 validate --all --strict --no-interactive
+
   # The browser apps are built from frontend/ into src/mycelium/webui/, which is
   # committed so the Python package runs without Node. Rebuilding must reproduce
   # it exactly, or the committed bundles are stale.
