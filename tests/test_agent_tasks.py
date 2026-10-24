@@ -264,7 +264,14 @@ def test_only_agent_capable_actions_take_an_external_agent(client):  # noqa: F81
     admin = _bearer("admin")
     current = client.get("/api/model-settings", headers=admin).json()
     supported = {a["action"] for a in current["actions"] if a["agent_supported"]}
-    assert supported == {"docgen", "documentation_planning", "audience_labelling"}
+    assert supported == {
+        "docgen",
+        "documentation_planning",
+        "audience_labelling",
+        "ingest",
+        "connect",
+        "alias_discovery",
+    }
     with pytest.raises(AssertionError, match="cannot be done by an external agent"):
         _select_agent(client, admin, "ask")
     with pytest.raises(AssertionError, match="Only documentation has an agent review"):
@@ -322,3 +329,186 @@ def test_an_agent_labels_statements_only_with_audiences_that_exist(client):  # n
     status = client.get("/api/audiences/labelling", headers=admin).json()
     assert status["external_agent"] is True
     assert status["agent_tasks"] == []
+
+
+# --- ingest, connect and alias discovery ---------------------------------------
+
+
+def _read(http, headers, task: str, tool: str, **arguments) -> dict:
+    return _call(
+        http,
+        headers,
+        "read_for_agent_task",
+        task_id=task,
+        tool=tool,
+        arguments=arguments,
+    )
+
+
+def _reconcile(http, headers, task: str) -> None:
+    """The reads ingest's floor asks for: reconcile, then search around."""
+    _read(http, headers, task, "search_statements", query="workspace export")
+    _read(http, headers, task, "search_statements", query="CSV download")
+
+
+def _row(candidate: str, classification: str, matched: list[str]) -> dict:
+    return {
+        "candidate": candidate,
+        "classification": classification,
+        "matched_against": matched,
+        "link_candidates_considered": matched,
+        "note": "",
+    }
+
+
+def test_an_agent_ingests_text_through_the_loops_floor(client):  # noqa: F811
+    import json
+
+    admin = _bearer("admin")
+    public, _hidden, _entity = _corpus(client, admin)
+    _select_agent(client, admin, "ingest")
+    requester, agent = _bearer("writer"), _bearer("writer")
+
+    queued = _call(
+        client, requester, "ingest", text="A workspace export can be scheduled."
+    )
+    assert queued["outcome"] == "waiting_for_agent"
+    [task] = _call(client, agent, "claim_agent_task", kind="ingest")["tasks"]
+    assert task["id"] == queued["agent_task"]
+    assert "A workspace export can be scheduled." in task["brief"]["input"]
+    assert "emit_draft" not in {t["name"] for t in task["brief"]["read_tools"]}
+    emit = {
+        "ops": [
+            {
+                "op": "upsert_statement",
+                "payload_json": json.dumps(
+                    {
+                        "kind": "capability",
+                        "text": "a workspace export can be scheduled",
+                        "links": [],
+                    }
+                ),
+                "rationale": "new",
+                "targets_existing": [public],
+            }
+        ],
+        "ledger": [_row("a workspace export can be scheduled", "new", [public])],
+        "flagged": [],
+        "skipped_duplicates": [],
+    }
+
+    unread = _call(client, agent, "submit_agent_task", task_id=task["id"], result=emit)
+    assert unread["status"] == "refused"
+    assert unread["findings"][0]["check"] == "floor"
+
+    _reconcile(client, agent, task["id"])
+    done = _call(client, agent, "submit_agent_task", task_id=task["id"], result=emit)
+    assert done["status"] == "accepted", done
+    followed = _call(client, requester, "get_agent_task", task_id=task["id"])
+    assert followed["status"] == "done"
+    assert followed["result"]["outcome"] == "draft_created"
+    draft = client.get(
+        f"/api/drafts/{followed['result']['draft_id']}", headers=admin
+    ).json()
+    assert "a workspace export can be scheduled" in json.dumps(draft)
+    stranger = client.post(
+        "/get-agent-task", headers=_bearer("drafter"), json={"task_id": task["id"]}
+    )
+    assert stranger.status_code != 200
+
+
+def test_an_agent_connect_pass_records_what_it_looked_at(client):  # noqa: F811
+    from mycelium.server import runtime
+
+    admin = _bearer("admin")
+    _public, hidden, _entity = _corpus(client, admin)
+    lone = _call(
+        client,
+        admin,
+        "upsert_statement",
+        kind="state",
+        text="An invoice lists every workspace seat.",
+        links=[],
+        allow_phrasing_violations=True,
+    )["statement_id"]
+    _select_agent(client, admin, "connect")
+    writer = _bearer("writer")
+
+    def offered() -> set[str]:
+        page = client.get(
+            "/api/knowledge-health/statements/isolated?to_connect=true", headers=admin
+        ).json()
+        return {item["id"] for item in page["items"]}
+
+    assert lone in offered()
+    queued = _call(client, writer, "connect_statements", statement_ids=[lone])
+    assert queued["outcome"] == "waiting_for_agent"
+    assert lone not in offered()
+    [task] = _call(client, writer, "claim_agent_task", kind="connect")["tasks"]
+    assert lone in task["brief"]["input"]
+    _reconcile(client, writer, task["id"])
+    done = _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=task["id"],
+        result={
+            "ops": [],
+            "ledger": [_row(lone, "duplicate", [hidden])],
+            "flagged": [],
+            "skipped_duplicates": [],
+        },
+    )
+    assert done["status"] == "accepted", done
+    looked = runtime._db().execute(
+        "SELECT neighbours FROM curation_attempts WHERE item_id = ?", (lone,)
+    )
+    assert [row[0] for row in looked] == [f'["{hidden}"]']
+
+
+def test_an_agent_alias_scan_keeps_only_evidence_from_the_selection(client):  # noqa: F811
+    admin = _bearer("admin")
+    public, hidden, entity = _corpus(client, admin)
+    _select_agent(client, admin, "alias_discovery")
+    writer = _bearer("writer")
+
+    r = client.post(
+        "/api/alias-suggestions/scan", headers=writer, json={"statement_ids": [public]}
+    )
+    assert r.status_code == 200, r.text
+    queued = r.json()
+    assert queued["suggestions"] == [] and queued["agent_task"]
+    [task] = _call(client, writer, "claim_agent_task", kind="alias_discovery")["tasks"]
+    assert SECRET not in task["brief"]["input"].split('"concepts"')[0]
+
+    def proposal(statement_id: str) -> dict:
+        return {
+            "suggestions": [
+                {
+                    "entity_id": entity,
+                    "alias": "CSV file",
+                    "quote": "downloads as a CSV file",
+                    "reason": "Names the export by its file.",
+                    "ambiguity": "",
+                    "statement_id": statement_id,
+                }
+            ]
+        }
+
+    outside = _call(
+        client,
+        writer,
+        "submit_agent_task",
+        task_id=task["id"],
+        result=proposal(hidden),
+    )
+    assert outside["status"] == "refused"
+    assert outside["findings"][0]["check"] == "evidence"
+    kept = _call(
+        client, writer, "submit_agent_task", task_id=task["id"], result=proposal(public)
+    )
+    assert kept["status"] == "accepted", kept
+    pending = client.get("/api/alias-suggestions", headers=admin).json()
+    [entry] = pending["suggestions"]
+    assert entry["suggestion"]["model"].startswith("agent:")
+    assert entry["suggestion"]["proposal"]["alias"] == "CSV file"

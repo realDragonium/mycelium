@@ -9,10 +9,11 @@ checks the internal run's output does, or releases the task with a reason.
 A submission that fails a check comes back with findings, and the agent may
 try again a bounded number of times, which each kind decides.
 
-Each kind owns its brief, its reads and its checks (`docgen.external`,
-`documentation_planning`, `audience_labelling`); this module only keeps the
-queue. Tasks live in the drafts database beside the documentation runs and
-plans most of them complete.
+Each kind plugs into the queue with a `Handler`: how a claimed task is
+briefed, what it may read and how a submission is checked and kept. The
+handlers live with the action they serve; `server.agent_tasks` holds the
+table of them. Tasks live in the drafts database beside the documentation
+runs, plans and drafts they complete.
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Literal, get_args
+from typing import Literal, TypedDict, get_args
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
@@ -32,11 +35,17 @@ Kind = Literal[
     "document_review",
     "documentation_planning",
     "audience_labelling",
+    "ingest",
+    "connect",
+    "alias_discovery",
 ]
 KINDS: tuple[Kind, ...] = get_args(Kind)
 Status = Literal["waiting", "claimed", "in_review", "done", "failed"]
 LEASE = timedelta(minutes=30)
 MAX_BATCH = 5
+#: Refused submissions an agent may follow with another, for kinds whose
+#: internal run makes one model call and so has no retry count of its own.
+RETRIES = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_tasks (
@@ -50,6 +59,7 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     findings          TEXT NOT NULL DEFAULT '[]',
     failures          INTEGER NOT NULL DEFAULT 0,
     excluded_claimant TEXT,
+    requested_by      TEXT,
     claimed_by        TEXT,
     expires_at        TEXT,
     submitted_by      TEXT,
@@ -57,7 +67,8 @@ CREATE TABLE IF NOT EXISTS agent_tasks (
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
     finished_at       TEXT,
-    error             TEXT
+    error             TEXT,
+    result            TEXT
 );
 CREATE INDEX IF NOT EXISTS agent_tasks_open
     ON agent_tasks (kind, created_at) WHERE finished_at IS NULL;
@@ -88,7 +99,7 @@ _findings = TypeAdapter(list[Finding])
 class Task(BaseModel):
     id: str
     kind: Kind
-    #: The documentation run or plan the task completes; None for labelling.
+    #: The documentation run or plan the task completes, when there is one.
     subject_id: str | None
     status: Status
     #: What the agent is given; None until the first claim prepares it.
@@ -101,6 +112,8 @@ class Task(BaseModel):
     failures: int
     #: A principal that may not claim the task: a review's writer.
     excluded_claimant: str | None
+    #: Who asked for the work, when someone did; they may follow it.
+    requested_by: str | None
     claimed_by: str | None
     expires_at: str | None
     submitted_by: str | None
@@ -109,6 +122,8 @@ class Task(BaseModel):
     updated_at: str
     finished_at: str | None
     error: str | None
+    #: What the finished work produced, such as the draft it created.
+    result: dict[str, JsonValue] | None
 
 
 class View(BaseModel):
@@ -124,6 +139,7 @@ class View(BaseModel):
     release_reason: str | None
     updated_at: str
     error: str | None
+    result: dict[str, JsonValue] | None = None
 
 
 def _task(row: sqlite3.Row) -> Task:
@@ -137,6 +153,7 @@ def _task(row: sqlite3.Row) -> Task:
         findings=_findings.validate_json(row["findings"]),
         failures=row["failures"],
         excluded_claimant=row["excluded_claimant"],
+        requested_by=row["requested_by"],
         claimed_by=row["claimed_by"],
         expires_at=row["expires_at"],
         submitted_by=row["submitted_by"],
@@ -145,6 +162,7 @@ def _task(row: sqlite3.Row) -> Task:
         updated_at=row["updated_at"],
         finished_at=row["finished_at"],
         error=row["error"],
+        result=None if row["result"] is None else _state.validate_json(row["result"]),
     )
 
 
@@ -170,7 +188,7 @@ VIEW_SQL = (
     "'claimed_by', t.claimed_by, 'expires_at', t.expires_at, "
     "'failures', t.failures, 'findings', json(t.findings), "
     "'release_reason', t.release_reason, 'updated_at', t.updated_at, "
-    "'error', t.error) FROM agent_tasks AS t WHERE t.subject_id = {subject} "
+    "'error', t.error, 'result', json(t.result)) FROM agent_tasks AS t WHERE t.subject_id = {subject} "
     "ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1)"
 )
 
@@ -187,14 +205,15 @@ def create(
     state: dict[str, JsonValue],
     brief: dict[str, JsonValue] | None = None,
     excluded_claimant: str | None = None,
+    requested_by: str | None = None,
 ) -> str:
     """Queue a task."""
     task_id = "agt_" + uuid.uuid4().hex[:16]
     now = timestamps.now()
     conn.execute(
         "INSERT INTO agent_tasks (id, kind, subject_id, status, brief, state, "
-        "excluded_claimant, created_at, updated_at) "
-        "VALUES (?, ?, ?, 'waiting', ?, ?, ?, ?, ?)",
+        "excluded_claimant, requested_by, created_at, updated_at) "
+        "VALUES (?, ?, ?, 'waiting', ?, ?, ?, ?, ?, ?)",
         (
             task_id,
             kind,
@@ -202,6 +221,7 @@ def create(
             None if brief is None else json.dumps(brief),
             json.dumps(state),
             excluded_claimant,
+            requested_by,
             now,
             now,
         ),
@@ -375,13 +395,21 @@ def finish(
     status: Literal["done", "failed"],
     *,
     error: str | None = None,
+    result: dict[str, JsonValue] | None = None,
 ) -> None:
     now = timestamps.now()
     conn.execute(
         "UPDATE agent_tasks SET status = ?, claimed_by = NULL, expires_at = NULL, "
-        "error = ?, finished_at = ?, updated_at = ? "
+        "error = ?, result = ?, finished_at = ?, updated_at = ? "
         "WHERE id = ? AND finished_at IS NULL",
-        (status, error, now, now, task_id),
+        (
+            status,
+            error,
+            None if result is None else json.dumps(result),
+            now,
+            now,
+            task_id,
+        ),
     )
     conn.commit()
 
@@ -412,3 +440,90 @@ PROTOCOL = (
     "findings; fix them and submit again. Give the task back with "
     "release_agent_task when you cannot finish it."
 )
+
+
+class ReadResult(TypedDict):
+    #: The result exactly as the internal model would see it, truncated
+    #: where it would be.
+    content: str
+    error: bool
+
+
+@dataclass(frozen=True)
+class Handler:
+    """How one kind of task plugs into the queue."""
+
+    #: Check and keep a held task's result: (task, claimant, result).
+    submit: Callable[[Task, str, dict[str, JsonValue]], Submitted]
+    #: Ready a just-claimed task, such as building its brief on the first
+    #: claim; None when the work closed instead. Without one the task is
+    #: handed out as queued.
+    prepare: Callable[[Task, str], Task | None] | None = None
+    #: Run one of the brief's `read_tools`: (task, tool, arguments). Kinds
+    #: without one carry their whole input in the brief.
+    read: Callable[[Task, str, dict[str, JsonValue]], ReadResult] | None = None
+    #: Queue up to n tasks of due work when an agent asks for some, for kinds
+    #: whose work nobody requests.
+    queue: Callable[[int], object] | None = None
+
+
+_json: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+
+
+def structured_brief(
+    *, instructions: str, input: str, result: str, schema: type[BaseModel]
+) -> dict[str, JsonValue]:
+    """The brief of a kind whose internal run is one structured model call:
+    its system prompt, its prompt and the output type it would return."""
+    return {
+        "protocol": PROTOCOL,
+        "instructions": instructions,
+        "input": input,
+        "read_tools": [],
+        "result": result,
+        "result_schema": _json.validate_python(schema.model_json_schema()),
+    }
+
+
+def refused(
+    conn: sqlite3.Connection,
+    task: Task,
+    findings: list[Finding],
+    retries_left: int,
+    *,
+    state: dict[str, JsonValue] | None = None,
+) -> Submitted:
+    """Keep nothing from a submission and tell the agent why."""
+    save(conn, task.id, state=state, findings=findings, failures=task.failures + 1)
+    return Submitted(
+        task_id=task.id,
+        status="refused",
+        findings=findings,
+        retries_left=retries_left,
+        message="Not kept. Fix the findings and submit again.",
+    )
+
+
+def closed(
+    conn: sqlite3.Connection,
+    task: Task,
+    message: str,
+    *,
+    failed: bool = False,
+    findings: Sequence[Finding] = (),
+    result: dict[str, JsonValue] | None = None,
+) -> Submitted:
+    """Finish a task: its work was kept, or it failed with `message`."""
+    finish(
+        conn,
+        task.id,
+        "failed" if failed else "done",
+        error=message if failed else None,
+        result=result,
+    )
+    return Submitted(
+        task_id=task.id,
+        status="failed" if failed else "accepted",
+        findings=list(findings),
+        message=message,
+    )

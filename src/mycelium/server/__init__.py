@@ -12,6 +12,7 @@ from __future__ import annotations
 from .admission import limiter_for, model_loop_slot
 from .agent_tasks import (
     claim_agent_task,
+    get_agent_task,
     read_for_agent_task,
     release_agent_task,
     submit_agent_task,
@@ -151,6 +152,7 @@ __all__ = [
     "read_for_agent_task",
     "submit_agent_task",
     "release_agent_task",
+    "get_agent_task",
     "request_documentation",
     "retry_documentation_run",
     "revise_document",

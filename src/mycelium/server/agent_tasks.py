@@ -15,8 +15,7 @@ from pydantic import BaseModel, Field, JsonValue
 
 from .. import agent_tasks
 from .. import auth as _auth
-from ..agent_tasks import Kind, Submitted, Task
-from ..docgen import external
+from ..agent_tasks import Handler, Kind, ReadResult, Submitted, View
 from .registry import tool
 from .runtime import _drafts_db
 
@@ -24,7 +23,7 @@ from .runtime import _drafts_db
 class ClaimedTask(BaseModel):
     id: str
     kind: Kind
-    #: The documentation run or plan the task completes.
+    #: The documentation run or plan the task completes, when there is one.
     subject_id: str | None
     #: What the work needs: `protocol`, `instructions`, `input`,
     #: `read_tools`, `result` and `result_schema`, plus what the kind adds.
@@ -52,14 +51,23 @@ def _claimant() -> str:
     return principal.id if principal is not None else _auth.LOCAL_ADMIN_ID
 
 
-def _prepare(task: Task, claimant: str) -> Task | None:
-    from .. import documentation_planning
+def _handler(kind: Kind) -> Handler:
+    """The action each kind of task does the model's part of. Draft review
+    has none yet: its reviewer is being reworked, and gets one after."""
+    from .. import alias_suggestions, audience_labelling, documentation_planning
+    from ..docgen import external as documentation
+    from ..ingest import external as ingest
 
-    if task.kind == "documentation":
-        return external.prepare(task, claimant)
-    if task.kind == "documentation_planning":
-        return documentation_planning.prepare_agent_task(task)
-    return task
+    handlers: dict[Kind, Handler] = {
+        "documentation": documentation.WRITING,
+        "document_review": documentation.REVIEW,
+        "documentation_planning": documentation_planning.AGENT_TASK,
+        "audience_labelling": audience_labelling.AGENT_TASK,
+        "ingest": ingest.HANDLER,
+        "connect": ingest.HANDLER,
+        "alias_discovery": alias_suggestions.AGENT_TASK,
+    }
+    return handlers[kind]
 
 
 @tool(role="writer", real_role=True)
@@ -72,8 +80,11 @@ def claim_agent_task(
 
     `kind`: `documentation` (write or revise a document), `document_review`
     (review a document another agent wrote; never your own),
-    `documentation_planning` (propose a writing profile's documents) or
-    `audience_labelling` (decide which audiences may see statements).
+    `documentation_planning` (propose a writing profile's documents),
+    `audience_labelling` (decide which audiences may see statements),
+    `ingest` (turn text into a draft of knowledge), `connect` (propose links
+    and concept mentions for unconnected statements) or `alias_discovery`
+    (find new names of concepts in statements).
     Oldest tasks come first. Each carries a `brief`: `instructions` and
     `input` are what the server's model would be given, `read_tools` the
     reads it could make (call them with `read_for_agent_task`) and
@@ -84,11 +95,10 @@ def claim_agent_task(
     (`limit=0` only renews). A task whose lease runs out goes back to the
     queue; `release_agent_task` gives one back at once.
     """
-    from .. import audience_labelling
-
     claimant = _claimant()
-    if kind == "audience_labelling" and limit:
-        audience_labelling.queue_agent_tasks(limit)
+    handler = _handler(kind)
+    if handler.queue is not None and limit:
+        handler.queue(limit)
     chosen, renewed, expires = agent_tasks.claim(
         _drafts_db(), kind, claimant=claimant, limit=limit, now=datetime.now(UTC)
     )
@@ -102,7 +112,12 @@ def claim_agent_task(
             failures=ready.failures,
         )
         for task in chosen
-        if (ready := _prepare(task, claimant)) is not None
+        if (
+            ready := task
+            if handler.prepare is None
+            else handler.prepare(task, claimant)
+        )
+        is not None
     ]
     return TaskBatch(kind=kind, tasks=tasks, renewed=renewed, expires_at=expires)
 
@@ -110,17 +125,19 @@ def claim_agent_task(
 @tool(role="writer", real_role=True)
 def read_for_agent_task(
     task_id: str, tool: str, arguments: dict[str, JsonValue] | None = None
-) -> external.ReadResult:
-    """Run one of a documentation task's `read_tools` for it, inside the
-    audience boundary the task writes for: what that audience may not see
-    is not there. Only statements a read returned to you may be cited when
-    you submit. `content` is the result as the server's model would get it,
-    truncated where it would be.
+) -> ReadResult:
+    """Run one of a task's `read_tools` for it. Only these reads count as
+    read for the task: a document may cite only statements they returned,
+    and ingest's reading floor counts them. A documentation task's reads run
+    inside the audience boundary it writes for: what that audience may not
+    see is not there. `content` is the result as the server's model would
+    get it, truncated where it would be.
     """
     task = agent_tasks.held(_drafts_db(), task_id, _claimant())
-    if task.kind != "documentation":
+    read = _handler(task.kind).read
+    if read is None:
         raise ValueError(f"a {task.kind} task has no reads; its brief holds its input")
-    return external.read(task, tool, arguments or {})
+    return read(task, tool, arguments or {})
 
 
 @tool(role="writer", real_role=True)
@@ -131,17 +148,9 @@ def submit_agent_task(task_id: str, result: dict[str, JsonValue]) -> Submitted:
     submit again. `in_review` means another agent reviews the document
     next; `failed` closes the task.
     """
-    from .. import audience_labelling, documentation_planning
-
     claimant = _claimant()
     task = agent_tasks.held(_drafts_db(), task_id, claimant)
-    if task.kind == "documentation":
-        return external.submit(task, claimant, result)
-    if task.kind == "document_review":
-        return external.submit_review(task, result)
-    if task.kind == "documentation_planning":
-        return documentation_planning.submit_agent_task(task, result)
-    return audience_labelling.submit_agent_task(task, claimant, result)
+    return _handler(task.kind).submit(task, claimant, result)
 
 
 @tool(role="writer", real_role=True)
@@ -155,3 +164,21 @@ def release_agent_task(
         _drafts_db(), task.id, "waiting", release_reason=reason.strip()
     )
     return Released(task_id=task.id, status="waiting")
+
+
+@tool(role="writer")
+def get_agent_task(task_id: str) -> View:
+    """Follow work you queued for an outside agent, such as an `ingest` or
+    `connect_statements` call that returned `waiting_for_agent`: its status,
+    the findings of a refused submission and, once done, its `result` (the
+    draft it made). Only the caller who queued it, or an admin, may.
+    """
+    principal = _auth.current_principal.get()
+    task = agent_tasks.get(_drafts_db(), task_id)
+    if task is None or (
+        principal is not None
+        and principal.id != task.requested_by
+        and not principal.is_admin
+    ):
+        raise ValueError(f"agent task '{task_id}' does not exist")
+    return agent_tasks.view(task)

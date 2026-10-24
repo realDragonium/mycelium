@@ -36,7 +36,14 @@ ACTIONS: tuple[Action, ...] = (
 )
 #: Actions whose work an outside agent may do instead of a server model.
 AGENT_ACTIONS: frozenset[Action] = frozenset(
-    {"docgen", "documentation_planning", "audience_labelling"}
+    {
+        "docgen",
+        "documentation_planning",
+        "audience_labelling",
+        "ingest",
+        "connect",
+        "alias_discovery",
+    }
 )
 #: Who reviews a document an outside agent wrote: the server's reviewer on
 #: the action's provider, or an agent other than the writer.
@@ -77,10 +84,12 @@ class Selection(BaseModel):
     def reasoning_effort(self) -> ReasoningEffort | None:
         return self.effort_for(self.provider)
 
-    @property
-    def needs_provider(self) -> bool:
-        """Whether the action calls `provider` at all."""
-        return not self.external_agent or self.agent_review == "server"
+    def needs_provider(self, action: Action) -> bool:
+        """Whether `action` calls `provider` at all: only documentation's
+        server reviewer does while an agent does the work."""
+        return not self.external_agent or (
+            action == "docgen" and self.agent_review == "server"
+        )
 
 
 class ModelSnapshot(Selection):
@@ -251,7 +260,7 @@ def credentials_error(action: Action) -> str | None:
         selected = get(action)
     except Unavailable as exc:
         return str(exc)
-    if not selected.needs_provider:
+    if not selected.needs_provider(action):
         return None
     return provider_availability(selected.provider).reason
 
@@ -335,7 +344,7 @@ def save(
     selected_model = (
         request.claude_model if request.provider == "claude" else request.openai_model
     )
-    if not selected_model and request.needs_provider:
+    if not selected_model and request.needs_provider(action):
         raise ValueError("Choose a model ID for the selected provider.")
     check_model_id("claude", request.claude_model)
     check_model_id("openai", request.openai_model)

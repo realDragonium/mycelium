@@ -6,12 +6,17 @@ Each runs their loop inside the call, under the shared model-loop budget (see
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from .drafts import _auto_submit
 from .registry import tool
 from .runtime import _context, _db
+
+if TYPE_CHECKING:
+    from ..ingest.connect import Target
+    from ..ingest.schema import IngestResult
 
 
 @tool(role="asker")
@@ -109,13 +114,18 @@ def ingest(text: str) -> dict[str, Any]:
         `skipped_duplicates`, and `trace`.
       * `nothing_to_ingest` — a `reason` (all duplicates / nothing extractable /
         degraded) and `trace`.
+      * `waiting_for_agent` — while ingest is set to External agent: the
+        loop's work is queued for an outside agent as `agent_task`, and
+        `get_agent_task` shows the draft it makes.
 
     The call runs a multi-second reasoning loop bounded by an operation cap and
     a wall-clock budget; on exhaustion it degrades to a forced emit (or
     `nothing_to_ingest`) rather than raising.
     """
-    from ..ingest import IngestConfig, run_ingest
+    from ..ingest import IngestConfig, external, run_ingest
 
+    if external.external("ingest"):
+        return external.queue("ingest", external.LoopState(text=text), _requester())
     config = IngestConfig.from_env()
     if config.trace_log_path is None:
         config = replace(
@@ -148,10 +158,12 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
     for statements too badly phrased to connect. The statements it looked at
     are not offered to "connect next" again until they or the statements
     around them change. Refused while the monthly AI budget pauses
-    background actions.
+    background actions. While connect is set to External agent the run is
+    queued for an outside agent (`waiting_for_agent`, as for `ingest`).
     """
-    from .. import ai, knowledge_health, model_settings, product_settings, store
-    from ..ingest.connect import config_from_settings, looked_at, run_connect
+    from .. import ai, knowledge_health, model_settings, product_settings
+    from ..ingest import external
+    from ..ingest.connect import config_from_settings, run_connect
 
     if reason := model_settings.credentials_error("connect"):
         raise ValueError(reason)
@@ -164,18 +176,40 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
             f"at most {limits.batch_size} statements per run; got {len(ids)}"
         )
     targets = knowledge_health.targets(_db(), ids)
+    if external.external("connect"):
+        return external.queue(
+            "connect", external.LoopState(statement_ids=ids), _requester()
+        )
     config = replace(
         config_from_settings(),
         trace_log_path=str(_context().data_dir / "connect_trace.jsonl"),
     )
     try:
-        result = run_connect(
-            targets,
-            known_name=lambda name: store.get_name_by_text(_db(), name) is not None,
-            config=config,
-        )
+        result = run_connect(targets, known_name=_known_name, config=config)
     except ai.usage.Paused as exc:
         raise ValueError(str(exc)) from exc
+    return connected(result, targets)
+
+
+def _requester() -> str | None:
+    from .. import auth
+
+    principal = auth.current_principal.get()
+    return None if principal is None else principal.id
+
+
+def _known_name(name: str) -> bool:
+    from .. import store
+
+    return store.get_name_by_text(_db(), name) is not None
+
+
+def connected(result: IngestResult, targets: Sequence[Target]) -> dict[str, Any]:
+    """Record what a connect run looked at, file rephrase gaps and submit its
+    draft; the response the connect pass returns."""
+    from .. import knowledge_health, store
+    from ..ingest.connect import looked_at
+
     looked = looked_at(result.trace, targets)
     with store.transaction(_db()):
         knowledge_health.record_attempts(

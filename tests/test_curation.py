@@ -7,7 +7,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mycelium import curation, drafts_store, knowledge_health, store, timestamps
+from mycelium import (
+    agent_tasks,
+    curation,
+    drafts_store,
+    knowledge_health,
+    store,
+    timestamps,
+)
 
 # Now rather than a fixed date: "connect next" filters claims by the clock.
 NOW = datetime.now(UTC)
@@ -41,6 +48,7 @@ def drafts():
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     drafts_store.migrate(conn)
+    agent_tasks.migrate(conn)
     return conn
 
 

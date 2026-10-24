@@ -675,8 +675,6 @@ def plan(
 
 _threads: dict[str, threading.Thread] = {}
 _start_lock = threading.Lock()
-#: Refused submissions an agent may follow with another.
-AGENT_RETRIES = 2
 WAITING_FOR_AGENT = "Waiting for an agent"
 
 
@@ -738,7 +736,9 @@ def _agent_target(task: agent_tasks.Task) -> Target:
     return target(guideline_set, documentation_profiles.capture())
 
 
-def prepare_agent_task(task: agent_tasks.Task) -> agent_tasks.Task | None:
+def _prepare_agent_task(
+    task: agent_tasks.Task, _claimant: str
+) -> agent_tasks.Task | None:
     """Brief a just-claimed planning task with the planner's input, read
     through the profile's audience boundary when it is first claimed. None
     when the profile can no longer be planned; the plan records why."""
@@ -759,20 +759,18 @@ def prepare_agent_task(task: agent_tasks.Task) -> agent_tasks.Task | None:
     agent_tasks.save(
         drafts,
         task.id,
-        brief={
-            "protocol": agent_tasks.PROTOCOL,
-            "instructions": inputs.task.system,
-            "input": inputs.task.prompt,
-            "read_tools": [],
-            "result": "The documents to propose, most valuable first.",
-            "result_schema": _json.validate_python(Proposal.model_json_schema()),
-        },
+        brief=agent_tasks.structured_brief(
+            instructions=inputs.task.system,
+            input=inputs.task.prompt,
+            result="The documents to propose, most valuable first.",
+            schema=Proposal,
+        ),
     )
     return agent_tasks.get(drafts, task.id)
 
 
-def submit_agent_task(
-    task: agent_tasks.Task, result: dict[str, JsonValue]
+def _submit_agent_task(
+    task: agent_tasks.Task, _claimant: str, result: dict[str, JsonValue]
 ) -> agent_tasks.Submitted:
     """Keep an agent's proposal as a model's is kept: only items naming what
     the audience may see, templates the profile has and documents it owns
@@ -783,39 +781,35 @@ def submit_agent_task(
     try:
         proposal = Proposal.model_validate(result)
     except ValidationError as exc:
-        failures = task.failures + 1
         findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
-        if failures > AGENT_RETRIES:
+        if task.failures >= agent_tasks.RETRIES:
             doc_plans.finish_plan(
                 drafts, plan_id, error="The agent's proposal was malformed."
             )
-            agent_tasks.finish(drafts, task.id, "failed", error="malformed proposal")
-            return agent_tasks.Submitted(
-                task_id=task.id,
-                status="failed",
+            return agent_tasks.closed(
+                drafts,
+                task,
+                "Refused too often; the plan failed.",
+                failed=True,
                 findings=findings,
-                message="Refused too often; the plan failed.",
             )
-        agent_tasks.save(drafts, task.id, findings=findings, failures=failures)
-        return agent_tasks.Submitted(
-            task_id=task.id,
-            status="refused",
-            findings=findings,
-            retries_left=AGENT_RETRIES - failures + 1,
-            message="Not kept. Fix the findings and submit again.",
+        return agent_tasks.refused(
+            drafts, task, findings, agent_tasks.RETRIES - task.failures
         )
     planned = _agent_target(task)
     limits = product_settings.get(product_settings.DocumentationPlanningSettings)
     inputs = _inputs(drafts, store.substrate_connection(), planned, limits)
     kept = _keep(drafts, plan_id, planned, inputs, proposal, agent=task.claimed_by)
-    agent_tasks.finish(drafts, task.id, "done")
     dropped = ", ".join(f"{count} {why}" for why, count in kept.dropped.items())
-    return agent_tasks.Submitted(
-        task_id=task.id,
-        status="accepted",
-        message=f"Kept {len(kept.items)} of {len(proposal.items)} items"
+    return agent_tasks.closed(
+        drafts,
+        task,
+        f"Kept {len(kept.items)} of {len(proposal.items)} items"
         + (f"; dropped: {dropped}." if dropped else "."),
     )
+
+
+AGENT_TASK = agent_tasks.Handler(prepare=_prepare_agent_task, submit=_submit_agent_task)
 
 
 def wait_all(timeout: float = 10.0) -> None:

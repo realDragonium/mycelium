@@ -25,7 +25,7 @@ import dataclasses
 import sqlite3
 import time
 from collections.abc import Sequence
-from typing import Literal, TypedDict
+from typing import Literal
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
@@ -37,7 +37,7 @@ from .. import (
     documentation_profiles,
     media,
 )
-from ..agent_tasks import Finding, Submitted, Task
+from ..agent_tasks import Finding, ReadResult, Submitted, Task
 from ..ask.substrate import InProcessSubstrate
 from ..model_settings import AgentReview
 from . import loop, prompts
@@ -113,13 +113,6 @@ class ReviewState(BaseModel):
     check_exposure: bool
     cited_statements: dict[str, str] | None
     malformed: int = 0
-
-
-class ReadResult(TypedDict):
-    #: The result exactly as the internal writer would see it, truncated
-    #: where it would be; ids past the cut were not read.
-    content: str
-    error: bool
 
 
 def _dump(model: BaseModel) -> dict[str, JsonValue]:
@@ -445,19 +438,8 @@ def _refused(
 ) -> Submitted:
     from .. import drafts_store
 
-    agent_tasks.save(
-        drafts_store.connection(),
-        task.id,
-        state=_dump(state),
-        findings=findings,
-        failures=task.failures + 1,
-    )
-    return Submitted(
-        task_id=task.id,
-        status="refused",
-        findings=findings,
-        retries_left=retries_left,
-        message="Not recorded. Fix the findings and submit again.",
+    return agent_tasks.refused(
+        drafts_store.connection(), task, findings, retries_left, state=_dump(state)
     )
 
 
@@ -478,17 +460,15 @@ def _close(
         revision_target=request.target,
         anchor_entity_id=request.anchor_entity_id,
     )
-    conn = drafts_store.connection()
     reason = result.reason if isinstance(result, NothingWritten) else None
-    agent_tasks.finish(conn, task.id, "failed" if failed else "done", error=reason)
-    return Submitted(
-        task_id=task.id,
-        status="failed" if failed else "accepted",
+    return agent_tasks.closed(
+        drafts_store.connection(),
+        task,
+        reason or "The document was reviewed and saved; see get_documentation_run.",
+        failed=failed,
         findings=_review_findings(result.review)
         if isinstance(result, NothingWritten) and result.review is not None
         else [],
-        message=reason
-        or "The document was reviewed and saved; see get_documentation_run.",
     )
 
 
@@ -562,7 +542,9 @@ def _queue_review(
     )
 
 
-def submit_review(task: Task, result: dict[str, JsonValue]) -> Submitted:
+def submit_review(
+    task: Task, _claimant: str, result: dict[str, JsonValue]
+) -> Submitted:
     """Take an agent's review of a held document, as the loop takes its
     reviewer's `record_review`."""
     from .. import drafts_store
@@ -595,20 +577,12 @@ def submit_review(task: Task, result: dict[str, JsonValue]) -> Submitted:
                 failed=True,
             )
             return outcome.model_copy(update={"task_id": task.id})
-        findings = [Finding(check="shape", problem=str(exc))]
-        agent_tasks.save(
+        return agent_tasks.refused(
             conn,
-            task.id,
+            task,
+            [Finding(check="shape", problem=str(exc))],
+            loop._MAX_MALFORMED_RETRIES - review.malformed + 1,
             state=_dump(review),
-            findings=findings,
-            failures=task.failures + 1,
-        )
-        return Submitted(
-            task_id=task.id,
-            status="refused",
-            findings=findings,
-            retries_left=loop._MAX_MALFORMED_RETRIES - review.malformed + 1,
-            message="The review was malformed. Fix it and submit again.",
         )
     record = ReviewRecord(
         exposure=exposure,
@@ -642,3 +616,7 @@ def submit_review(task: Task, result: dict[str, JsonValue]) -> Submitted:
         message=message,
         findings=outcome.findings,
     )
+
+
+WRITING = agent_tasks.Handler(prepare=prepare, read=read, submit=submit)
+REVIEW = agent_tasks.Handler(submit=submit_review)

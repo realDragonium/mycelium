@@ -229,9 +229,11 @@ def to_connect(
 ) -> StatementPage:
     """The statements matching `which` the connect pass should take next,
     likeliest to connect first. Leaves out what it should not be offered
-    again: statements an undecided draft covers, settled attempts and items
-    an agent holds."""
-    pending = pending_statement_ids(drafts)
+    again: statements an undecided draft covers, settled attempts, items
+    an agent holds and statements a connect task waits on."""
+    from .ingest import external
+
+    pending = pending_statement_ids(drafts) | external.connecting(drafts)
     rows = conn.execute(
         f"SELECT s.id, s.kind, s.text FROM statements s "
         f"WHERE {STATEMENT_WHERE[which]} AND NOT {SETTLED} AND NOT {CLAIMED} "

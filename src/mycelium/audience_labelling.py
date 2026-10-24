@@ -319,9 +319,6 @@ def _carried(
 
 # --- outside agents -------------------------------------------------------------
 
-#: Refused submissions an agent may follow with another.
-AGENT_RETRIES = 2
-
 
 class AgentBatch(BaseModel):
     """A labelling task's statements, by the text the agent was given."""
@@ -336,7 +333,7 @@ def _external() -> bool:
         return False
 
 
-def queue_agent_tasks(limit: int) -> int:
+def _queue_agent_tasks(limit: int) -> int:
     """Queue up to `limit` batches of due statements no open task holds, for
     outside agents, while labelling is set to External agent. A batch is
     made when an agent asks for work, so it holds what is due then."""
@@ -367,14 +364,12 @@ def queue_agent_tasks(limit: int) -> int:
             drafts,
             "audience_labelling",
             subject_id=None,
-            brief={
-                "protocol": agent_tasks.PROTOCOL,
-                "instructions": task.system,
-                "input": task.prompt,
-                "read_tools": [],
-                "result": "One label per supplied statement_id.",
-                "result_schema": _json.validate_python(Labelling.model_json_schema()),
-            },
+            brief=agent_tasks.structured_brief(
+                instructions=task.system,
+                input=task.prompt,
+                result="One label per supplied statement_id.",
+                schema=Labelling,
+            ),
             state=_json.validate_python(batch.model_dump()),
         )
         held.update(batch.texts)
@@ -426,7 +421,7 @@ def _labels_problems(
     return findings
 
 
-def submit_agent_task(
+def _submit_agent_task(
     task: agent_tasks.Task, claimant: str, result: dict[str, JsonValue]
 ) -> agent_tasks.Submitted:
     """Store an agent's labels as the internal labeller's are stored, once
@@ -443,26 +438,20 @@ def submit_agent_task(
     except ValidationError as exc:
         findings = [agent_tasks.Finding(check="shape", problem=str(exc))]
     if findings:
-        failures = task.failures + 1
-        if failures > AGENT_RETRIES:
+        if task.failures >= agent_tasks.RETRIES:
             with store.transaction(conn):
                 store.audience_labels.record_failure(
                     conn, list(batch.texts), "An agent's labels were refused."
                 )
-            agent_tasks.finish(drafts, task.id, "failed", error="labels refused")
-            return agent_tasks.Submitted(
-                task_id=task.id,
-                status="failed",
+            return agent_tasks.closed(
+                drafts,
+                task,
+                "Refused too often; the statements wait to be labelled again.",
+                failed=True,
                 findings=findings,
-                message="Refused too often; the statements wait to be labelled again.",
             )
-        agent_tasks.save(drafts, task.id, findings=findings, failures=failures)
-        return agent_tasks.Submitted(
-            task_id=task.id,
-            status="refused",
-            findings=findings,
-            retries_left=AGENT_RETRIES - failures + 1,
-            message="Not stored. Fix the findings and submit again.",
+        return agent_tasks.refused(
+            drafts, task, findings, agent_tasks.RETRIES - task.failures
         )
     limits = product_settings.get(product_settings.AudienceLabellingSettings)
     labelled = _apply(
@@ -478,13 +467,15 @@ def submit_agent_task(
         share=None,
         confirm_external_grants=limits.confirm_external_grants,
     )
-    agent_tasks.finish(drafts, task.id, "done")
-    return agent_tasks.Submitted(
-        task_id=task.id,
-        status="accepted",
-        message=f"Labelled {labelled} of {len(batch.texts)} statements; a "
+    return agent_tasks.closed(
+        drafts,
+        task,
+        f"Labelled {labelled} of {len(batch.texts)} statements; a "
         "statement edited meanwhile stays queued.",
     )
+
+
+AGENT_TASK = agent_tasks.Handler(submit=_submit_agent_task, queue=_queue_agent_tasks)
 
 
 def _queued(conn: sqlite3.Connection, ids: list[str]) -> list[sqlite3.Row]:
@@ -662,7 +653,7 @@ class Status(BaseModel):
     confirm_external_grants: bool
     model: str
     provider: str
-    #: Statements are labelled by outside agents (`queue_agent_tasks`).
+    #: Statements are labelled by outside agents (`AGENT_TASK`).
     external_agent: bool = False
     #: The batches agents are labelling.
     agent_tasks: list[AgentTaskView] = []

@@ -208,6 +208,7 @@ MCP_TOOLS = frozenset(
         "read_for_agent_task",
         "submit_agent_task",
         "release_agent_task",
+        "get_agent_task",
         # Documentation
         "request_documentation",
         "get_documentation_run",
