@@ -695,8 +695,10 @@ def _execute_run(
                 matched_document_id=matched_document_id,
                 summary=summary,
             )
-            _threads.pop(run_id, None)
+            # Start the next run before leaving `_threads`, so `wait_all`
+            # never sees an empty set while queued runs are still to start.
             _start_waiting(conn)
+            _threads.pop(run_id, None)
         except Exception:  # noqa: BLE001
             logger.exception("could not finalize documentation run %s", run_id)
         finally:
