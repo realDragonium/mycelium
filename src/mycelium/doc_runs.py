@@ -49,6 +49,7 @@ from .docgen import publication
 from .docgen.config import DocgenConfig
 from .docgen.schema import (
     CurrentDocument,
+    DocgenResult,
     ExistingDocument,
     ManualDocument,
     ReviewCheck,
@@ -76,7 +77,7 @@ def start_run(
     document_type: str | None,
     created_by: str | None,
     conn: sqlite3.Connection,
-    provider: Provider | None = None,
+    provider: Provider | Literal["agent"] | None = None,
     runner: Callable[..., Any] | None = None,
     target_document_id: str | None = None,
     expected_revision: int | None = None,
@@ -91,19 +92,33 @@ def start_run(
     even when an unpublished internal revision would otherwise refuse it.
     `review_notes` brief the writer, and only the writer, with what an earlier
     review found.
+
+    `provider="agent"`, or no provider while documentation is set to External
+    agent, queues the run for an outside agent (`docgen.external`) instead
+    of starting a worker. A manual edit is always checked by a server model.
     """
     # Explicit argument wins; the module-level RUNNER hook only fills in when
     # no runner is passed (tests monkeypatch RUNNER, HTTP callers pass none).
     selected_runner = runner or RUNNER or _default_runner
-    config = DocgenConfig.from_env(provider=provider)
+    selection = model_settings.get("docgen")
+    if provider == "agent" and manual_document is not None:
+        raise ValueError(
+            "A manual edit is checked by a server model; choose Claude or OpenAI."
+        )
+    agent = provider == "agent" or (
+        provider is None and manual_document is None and selection.external_agent
+    )
+    review = selection.agent_review if agent else "server"
+    config = DocgenConfig.from_env(provider=None if provider == "agent" else provider)
     instructions = ai_prompts.resolve("docgen", default_path=config.doctrine_path)
     review_instructions = ai_prompts.resolve("document_review")
-    if not config.model:
-        raise ValueError(
-            f"Choose a {config.provider} documentation model in AI settings."
-        )
-    if reason := model_settings.provider_availability(config.provider).reason:
-        raise ValueError(reason)
+    if review == "server":
+        if not config.model:
+            raise ValueError(
+                f"Choose a {config.provider} documentation model in AI settings."
+            )
+        if reason := model_settings.provider_availability(config.provider).reason:
+            raise ValueError(reason)
     max_active = _max_active()
     from . import documentation_profiles
 
@@ -127,6 +142,10 @@ def start_run(
     writer_anchor = anchor_entity_id or (
         _document_anchor(conn, target.document.id) if target is not None else None
     )
+    if agent:
+        guideline_set, document_type = _agent_pair(
+            profiles, guideline_set, document_type
+        )
 
     with _spawn_lock:
         run_id = docs_store.create_run(
@@ -135,9 +154,9 @@ def start_run(
             guideline_set=guideline_set,
             document_type=document_type,
             created_by=created_by,
-            provider=config.provider,
-            model=config.model,
-            reasoning_effort=config.reasoning_effort,
+            provider="agent" if agent else config.provider,
+            model=config.model if review == "server" else None,
+            reasoning_effort=config.reasoning_effort if review == "server" else None,
             target_document_id=None if target is None else target.document.id,
             target_revision=None if target is None else target.revision,
             anchor_entity_id=anchor_entity_id,
@@ -173,7 +192,28 @@ def start_run(
                     (manual_document.title, manual_document.body, run_id),
                 )
                 conn.commit()
-            if _waiting or docs_store.count_active(conn) >= max_active:
+            if agent:
+                from .docgen import external
+
+                assert guideline_set is not None and document_type is not None
+                external.queue(
+                    conn,
+                    external.Request(
+                        run_id=run_id,
+                        prompt=prompt,
+                        guideline_set=guideline_set,
+                        document_type=document_type,
+                        anchor_entity_id=anchor_entity_id,
+                        writer_anchor=writer_anchor,
+                        target=target,
+                        review_notes=list(review_notes),
+                        review=review,
+                        provider=config.provider,
+                        model=config.model,
+                        reasoning_effort=config.reasoning_effort,
+                    ),
+                )
+            elif _waiting or docs_store.count_active(conn) >= max_active:
                 _waiting[run_id] = launch
             else:
                 launch(conn)
@@ -181,6 +221,75 @@ def start_run(
             _fail_start(conn, run_id, exc, manual_document)
             raise
         return run_id
+
+
+def _agent_pair(
+    profiles: CatalogueSnapshot | None,
+    guideline_set: str | None,
+    document_type: str | None,
+) -> tuple[str, str]:
+    """The template an agent's run writes against. An internal run may let
+    its model choose; an agent is briefed with one template, so the request
+    must leave only one."""
+    from . import guidelines
+    from .docgen import loop as docgen_loop
+
+    catalogue = (
+        profiles.catalogue()
+        if profiles is not None
+        else guidelines.catalogue(prompt_store.connection())
+    )
+    if guideline_set is not None and guideline_set not in catalogue:
+        raise ValueError(f"unknown guideline set '{guideline_set}'")
+    pairs = [
+        (name, kind)
+        for name, kinds in docgen_loop._narrow(
+            catalogue, guideline_set, document_type
+        ).items()
+        for kind in kinds
+    ]
+    if len(pairs) != 1:
+        raise ValueError(
+            "An external agent writes against one template: choose the "
+            "guideline set and document type."
+        )
+    return pairs[0]
+
+
+def record_result(
+    run_id: str,
+    result: DocgenResult,
+    *,
+    prompt: str,
+    guideline_set: str,
+    document_type: str,
+    revision_target: RevisionTarget | None,
+    anchor_entity_id: str | None,
+) -> None:
+    """Record an outside agent's finished run exactly as a worker records an
+    internal run's result."""
+    from . import drafts_store
+
+    conn = drafts_store.connection()
+    db_path = _db_path(conn)
+    if not db_path:
+        _in_memory_conns[run_id] = conn
+    _execute_run(
+        run_id,
+        prompt,
+        guideline_set,
+        document_type,
+        db_path,
+        lambda *_args, **_kwargs: result,
+        revision_target=revision_target,
+        anchor_entity_id=anchor_entity_id,
+    )
+
+
+def _db_path(conn: sqlite3.Connection) -> str:
+    rows = conn.execute("PRAGMA database_list").fetchall()
+    main = next((row for row in rows if row["name"] == "main"), None)
+    return main["file"] if main is not None else ""
 
 
 def _max_active() -> int:
@@ -222,9 +331,7 @@ def _launch(
     """Count the run against the bound and start its worker. Called with
     `_spawn_lock` held."""
     docs_store.mark_started(conn, run_id)
-    rows = conn.execute("PRAGMA database_list").fetchall()
-    main = next((row for row in rows if row["name"] == "main"), None)
-    db_path = main["file"] if main is not None else ""
+    db_path = _db_path(conn)
 
     # Tests and occasional embedded use can run against :memory:. In
     # that case there is no file path for the worker to reopen, so

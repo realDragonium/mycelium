@@ -203,6 +203,11 @@ MCP_TOOLS = frozenset(
         # Curation queue
         "claim_curation_work",
         "release_curation_work",
+        # Agent tasks
+        "claim_agent_task",
+        "read_for_agent_task",
+        "submit_agent_task",
+        "release_agent_task",
         # Documentation
         "request_documentation",
         "get_documentation_run",

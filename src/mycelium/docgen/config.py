@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, TypedDict
+from typing import Final, Literal, TypedDict
 
 from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort, pricing
@@ -48,7 +48,7 @@ def resolve_provider(value: str | None = None) -> Provider:
 
 
 class ModelChoice(TypedDict):
-    provider: Provider
+    provider: Provider | Literal["agent"]
     label: str
     model: str | None
     reasoning_effort: ReasoningEffort | None
@@ -77,6 +77,17 @@ def model_choices() -> list[ModelChoice]:
                 "reasoning_effort": config.reasoning_effort,
                 "available": reason is None,
                 "reason": reason,
+            }
+        )
+    if model_settings.get("docgen").external_agent:
+        choices.append(
+            {
+                "provider": "agent",
+                "label": "External agent",
+                "model": None,
+                "reasoning_effort": None,
+                "available": True,
+                "reason": None,
             }
         )
     return choices
