@@ -71,6 +71,8 @@ CREATE TABLE IF NOT EXISTS documentation_plan_dismissals (
 """
 
 Action = Literal["create", "update"]
+#: The provider of a plan an outside agent makes; a restart leaves it waiting.
+AGENT = "agent"
 Priority = Literal["high", "medium", "low"]
 
 
@@ -344,10 +346,12 @@ def dismissed(conn: sqlite3.Connection, guideline_set: str) -> list[sqlite3.Row]
 
 
 def mark_orphaned(conn: sqlite3.Connection) -> int:
-    """At startup no planning thread exists, so every unfinished plan failed."""
+    """At startup no planning thread exists, so every unfinished plan failed,
+    except those an outside agent is making."""
     with conn:
         return conn.execute(
             "UPDATE documentation_plans SET finished_at = ?, outcome = 'failed', "
-            "error = 'orphaned by restart', activity = NULL WHERE finished_at IS NULL",
+            "error = 'orphaned by restart', activity = NULL "
+            "WHERE finished_at IS NULL AND provider IS NOT 'agent'",
             (timestamps.now(),),
         ).rowcount

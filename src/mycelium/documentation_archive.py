@@ -25,7 +25,9 @@ _VERSION_2_TABLES = (
     "documentation_plan_items",
     "documentation_plan_dismissals",
 )
-TABLES = (*_VERSION_2_TABLES, "document_maintenance")
+_VERSION_3_TABLES = (*_VERSION_2_TABLES, "document_maintenance")
+#: Work outside agents still owe the runs and plans above.
+TABLES = (*_VERSION_3_TABLES, "agent_tasks")
 
 
 class Archive(BaseModel):
@@ -36,7 +38,7 @@ class Archive(BaseModel):
 
 def write(conn: sqlite3.Connection, staging: Path) -> dict[str, int]:
     archive = Archive(
-        version=3,
+        version=4,
         tables={
             table: [
                 dict(row)
@@ -60,7 +62,8 @@ def prepare(staging: Path, *, required: bool) -> Path | None:
     expected = {
         1: _VERSION_1_TABLES,
         2: _VERSION_2_TABLES,
-        3: TABLES,
+        3: _VERSION_3_TABLES,
+        4: TABLES,
     }.get(archive.version)
     if expected is None or set(archive.tables) != set(expected):
         raise ValueError("unsupported documentation archive version or tables")
