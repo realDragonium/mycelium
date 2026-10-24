@@ -796,6 +796,72 @@ def decide_as_reviewer(
         return decision
 
 
+def resolve_stale_as_reviewer(
+    draft_id: str,
+    operation_ref: str,
+    principal: auth.Principal,
+) -> Literal["rejected", "refreshed"]:
+    """Reject changed source evidence or refresh changed names for a reviewer."""
+    if not auth.principal_has_real_role(principal, "writer"):
+        raise auth.RoleRequired("A real writer or administrator must review aliases.")
+    conn, drafts = store.substrate_connection(), drafts_store.connection()
+    with store.write_lock():
+        draft = drafts_store.get_draft(drafts, draft_id)
+        if draft is None:
+            raise ValueError("Draft not found.")
+        if draft["created_by"] == principal.id:
+            raise auth.RoleRequired("A draft creator cannot review their own aliases.")
+        drafts_store._check_no_active_application(drafts, draft_id)
+        if drafts_store.status_for(draft) != "submitted":
+            raise Conflict("This draft is already decided.")
+        op = drafts.execute(
+            "SELECT * FROM draft_ops WHERE draft_id = ? AND id = ? AND kind = ?",
+            (draft_id, operation_ref, KIND),
+        ).fetchone()
+        if op is None:
+            raise ValueError("Alias suggestion not found.")
+        suggestion = Suggestion.model_validate_json(op["payload_json"])
+        if suggestion.status != "pending":
+            raise Conflict("This alias suggestion is already decided.")
+        if not _source_current(conn, suggestion):
+            action: Literal["rejected", "refreshed"] = "rejected"
+            updated = _review_change(
+                draft_id,
+                operation_ref,
+                suggestion,
+                ReviewRequest(
+                    action="reject", expected_revision=int(draft["revision"])
+                ),
+                principal,
+                reason=(
+                    "The supporting statement changed since the suggestion; "
+                    "scan the current statement."
+                ),
+            )
+        elif suggestion.vocabulary_revision != proposal_revision(
+            conn, suggestion.proposal
+        ):
+            action = "refreshed"
+            updated = _review_change(
+                draft_id,
+                operation_ref,
+                suggestion,
+                ReviewRequest(
+                    action="refresh", expected_revision=int(draft["revision"])
+                ),
+                principal,
+            )
+        else:
+            raise Conflict("The alias suggestion is current; review it again.")
+        with store.transaction(drafts):
+            drafts.execute(
+                "UPDATE draft_ops SET payload_json = ? WHERE id = ?",
+                (updated.model_dump_json(), operation_ref),
+            )
+            _close_finished_alias_draft(drafts, draft_id, principal.id)
+        return action
+
+
 def _close_finished_alias_draft(
     conn: sqlite3.Connection, draft_id: str, actor_id: str
 ) -> None:

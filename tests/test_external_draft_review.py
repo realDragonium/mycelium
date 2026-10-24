@@ -71,6 +71,24 @@ def _draft():
         auth.current_principal.reset(token)
 
 
+def _unsupported_draft():
+    conn = server._drafts_db()
+    with store.transaction(conn):
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None, title="Unsupported change"
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind="flag",
+            payload={"message": "A person should inspect this item."},
+            created_by="drafter-1",
+        )
+        drafts_store.set_submitted(conn, draft_id)
+    draft_review_runs.on_submitted(draft_id)
+    return draft_id
+
+
 def _claim(principal_id):
     token = _as(principal_id)
     try:
@@ -180,6 +198,53 @@ def test_review_only_leaves_the_decision_to_a_person(agent):
     assert drafts_store.list_reviews(server._drafts_db(), draft_id) == []
 
 
+def test_server_refusal_rejects_the_draft_when_enabled(agent):
+    set_review_controls(reject_refused=True)
+    draft_id = _unsupported_draft()
+    run = draft_review_store.latest(server._drafts_db(), draft_id)
+    assert run is not None
+
+    assert _claim(agent).tasks == []
+
+    result = server.get_draft(draft_id)
+    review = result["review_assessment"]
+    assert result["status"] == "rejected", json.dumps(review)
+    assert (review["status"], review["application"], review["reviewer_id"]) == (
+        "completed",
+        "rejected",
+        agent,
+    )
+    [recorded] = drafts_store.list_reviews(server._drafts_db(), draft_id)
+    assert (recorded["outcome"], recorded["reviewed_by"]) == ("rejected", agent)
+    assert any(draft_id in gap and "cannot inspect" in gap for gap in _gaps())
+    task = agent_tasks.latest_for(server._drafts_db(), run.run_id)
+    assert task is not None
+    assert task.status == "done"
+    assert task.result == {
+        "refused": review["rationale"],
+        "application": "rejected",
+    }
+
+
+def test_server_refusal_stays_advisory_when_disabled(agent):
+    draft_id = _unsupported_draft()
+    run = draft_review_store.latest(server._drafts_db(), draft_id)
+    assert run is not None
+
+    assert _claim(agent).tasks == []
+
+    result = server.get_draft(draft_id)
+    review = result["review_assessment"]
+    assert result["status"] == "submitted"
+    assert (review["status"], review["application"]) == ("completed", "unapplied")
+    assert "person decides" in review["detail"]
+    assert drafts_store.list_reviews(server._drafts_db(), draft_id) == []
+    task = agent_tasks.latest_for(server._drafts_db(), run.run_id)
+    assert task is not None
+    assert task.status == "done"
+    assert task.result == {"refused": review["rationale"]}
+
+
 def test_a_drafter_is_never_given_its_own_draft(agent):
     _draft()
     creator = auth.Principal(id="drafter-1", name="d", role="writer", type="human")
@@ -262,6 +327,70 @@ def test_alias_quote_outside_source_is_refused_with_findings(agent):
     assert "quote is not in" in refused.findings[0].problem
     assert server.get_draft(draft_id)["review_assessment"]["status"] == "running"
     assert alias_suggestions.list_entries()[0].suggestion.status == "pending"
+
+
+def test_agent_refreshes_stale_alias_names_and_reviews_again(agent):
+    set_review_controls(alias_decisions=True)
+    entity_id = server.upsert_entity(
+        name="Workspace exports", description="Downloadable workspace archives"
+    )["entity_id"]
+    with store.transaction(server._db()):
+        statement_id = store.create_statement(
+            server._db(), "state", "Workspace exports (WE) include invoices"
+        )
+    suggestion = alias_suggestions.prepare(
+        server._db(),
+        alias_suggestions.Proposal(
+            entity_id=entity_id,
+            alias="WE",
+            quote="Workspace exports (WE)",
+            reason="The abbreviation is explicitly defined.",
+            ambiguity="",
+            statement_id=statement_id,
+        ),
+        "Workspace exports (WE) include invoices",
+    )
+    server.upsert_name(text="Export archive", entity_id=entity_id)
+    conn = server._drafts_db()
+    with store.transaction(conn):
+        draft_id = drafts_store.create_draft(
+            conn, created_by="drafter-1", session_id=None, title="Export alias"
+        )
+        drafts_store.add_op(
+            conn,
+            draft_id=draft_id,
+            kind=alias_suggestions.KIND,
+            payload=suggestion.model_dump(mode="json"),
+            created_by="drafter-1",
+        )
+        drafts_store.set_submitted(conn, draft_id)
+    [operation] = drafts_store.list_ops(conn, draft_id)
+    decision = {
+        "operation_ref": operation["id"],
+        "decision": "accept",
+        "quote": "Workspace exports (WE)",
+        "reason": "The source explicitly defines the abbreviation.",
+    }
+    draft_review_runs.on_submitted(draft_id)
+
+    [first] = _claim(agent).tasks
+    assert (
+        _submit(agent, first.id, "good", alias_decisions=[decision]).status
+        == "accepted"
+    )
+    assert server.get_draft(draft_id)["status"] == "submitted"
+    pending = alias_suggestions.list_entries()[0].suggestion
+    assert [event.action for event in pending.history] == ["refreshed"]
+
+    [second] = _claim(agent).tasks
+    assert (
+        _submit(agent, second.id, "good", alias_decisions=[decision]).status
+        == "accepted"
+    )
+    assert server.get_draft(draft_id)["status"] == "approved"
+    accepted = alias_suggestions.list_entries("all")[0].suggestion
+    assert [event.action for event in accepted.history] == ["refreshed", "accepted"]
+    assert all(event.actor_id == agent for event in accepted.history)
 
 
 def test_held_corrections_wait_in_the_backlog_for_an_agent(agent):
