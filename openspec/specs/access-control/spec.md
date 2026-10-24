@@ -45,7 +45,7 @@ Every request SHALL carry one principal, and substrate writes made during the re
 - **THEN** the statement's `created_by` is the service account's user id
 
 ### Requirement: Roles
-The system SHALL recognise the roles `asker`, `reader`, `drafter`, `writer` and `admin`, ranked in that order. A tool's required role SHALL follow its name unless the tool declares one: names starting `delete_` or `merge_` require admin, names starting `list_`, `get_`, `search_`, `grep_`, `discover_` or `find_` require reader, and every other tool requires writer. `ask` SHALL require only asker and `report_knowledge_gap` only reader.
+The system SHALL recognise the roles `reader`, `drafter`, `writer` and `admin`, ranked in that order, with `reader` the minimum: every account reads every statement. A tool's required role SHALL follow its name unless the tool declares one: names starting `delete_` or `merge_` require admin, names starting `list_`, `get_`, `search_`, `grep_`, `discover_` or `find_` require reader, and every other tool requires writer. `ask` and `report_knowledge_gap` SHALL require only reader.
 
 #### Scenario: Reader calls a write tool
 - **WHEN** a reader calls `upsert_statement`
@@ -54,6 +54,10 @@ The system SHALL recognise the roles `asker`, `reader`, `drafter`, `writer` and 
 #### Scenario: Writer calls an admin tool
 - **WHEN** a writer calls `delete_statement`
 - **THEN** the call is refused with 403
+
+#### Scenario: Reader opens the web app
+- **WHEN** a reader requests `GET /api/data` or `GET /api/history`
+- **THEN** the response is 200
 
 ### Requirement: Drafter role redirects writes
 A drafter SHALL pass the role gate of every writer and admin tool, with its write, delete and merge calls queued onto a draft instead of changing the substrate (see the `drafts-and-review` capability). Tools that declare a real role requirement (draft approval and curation, documentation runs, label decisions) SHALL NOT admit a drafter.
@@ -66,23 +70,12 @@ A drafter SHALL pass the role gate of every writer and admin tool, with its writ
 - **WHEN** a drafter calls `request_documentation`
 - **THEN** the call is refused with 403 requiring a real writer role
 
-### Requirement: Asker role
-An asker SHALL be able to call `ask` and nothing else that reads the substrate. With an asker principal, every `/api/*` route except `/api/me`, `/api/me/*` and exempt paths SHALL answer 403 "the asker role can only call ask", including routes added later.
-
-#### Scenario: Asker reads the graph
-- **WHEN** an asker requests `GET /api/data`
-- **THEN** the response is 403
-
-#### Scenario: Asker manages its tokens
-- **WHEN** an asker requests `GET /api/me/tokens`
-- **THEN** its tokens are listed
-
 ### Requirement: One rule for both transports
 The HTTP tool routes and MCP tool calls SHALL apply the same role gate for each tool, and `tools/list` SHALL show a caller only the tools that gate lets it call. Without a principal (local stdio) the full list SHALL be shown.
 
 #### Scenario: Listed tools per role
 - **WHEN** callers of each role send `tools/list` to `/mcp`
-- **THEN** an asker sees only `ask`, a reader 19 tools, a drafter 39 (not `list_drafts`, `request_documentation` or `revise_document`), a writer 39 (not `delete_statement`, `merge_statements` or `merge_entities`) and an admin all 42 advertised tools
+- **THEN** a reader sees 19 tools, a drafter 39 (not `list_drafts`, `request_documentation` or `revise_document`), a writer 39 (not `delete_statement`, `merge_statements` or `merge_entities`) and an admin all 42 advertised tools
 
 #### Scenario: Both MCP protocol revisions
 - **WHEN** a reader lists tools once with a 2026-07-28 request and once through a 2025-era session
@@ -157,11 +150,15 @@ An admin SHALL create invites with `POST /api/admin/invites` (`email` 3 to 254 c
 - **THEN** the invite stays pending and the login is refused
 
 ### Requirement: Just-in-time provisioning
-When a login's verified email domain is listed in `MYCELIUM_JIT_DOMAINS` (comma-separated, case-insensitive, a leading `@` tolerated) and no bootstrap or invite matches, the system SHALL create the user with `MYCELIUM_JIT_DEFAULT_ROLE` (default `reader`). An unknown role name SHALL disable JIT provisioning rather than guess.
+When a login's verified email domain is listed in `MYCELIUM_JIT_DOMAINS` (comma-separated, case-insensitive, a leading `@` tolerated) and no bootstrap or invite matches, the system SHALL create the user with `MYCELIUM_JIT_DEFAULT_ROLE` (default `reader`). The retired role `asker` SHALL be read as `reader` with a deprecation warning; any other unknown role name SHALL disable JIT provisioning rather than guess.
 
 #### Scenario: Unknown default role
 - **WHEN** `MYCELIUM_JIT_DEFAULT_ROLE=superuser` and a login comes from a JIT domain
 - **THEN** no user is created and the login is refused with 403
+
+#### Scenario: Retired default role
+- **WHEN** `MYCELIUM_JIT_DEFAULT_ROLE=asker` and a login comes from a JIT domain
+- **THEN** the user is created as a reader and a deprecation warning is logged
 
 ### Requirement: Email domain policy
 When `MYCELIUM_ALLOWED_EMAIL_DOMAINS` is set (comma-separated, exact case-insensitive match, no subdomains) and authentication is on, the system SHALL admit a human only with an email in an allowed domain: every OIDC login needs a verified email in one, and every session, token, consent, code exchange and refresh SHALL be judged by the user's stored email. A human without an email SHALL be blocked; service accounts SHALL be exempt. With authentication off the setting has no effect.
@@ -402,3 +399,10 @@ Each OAuth grant SHALL be one token row owned by the consenting user, listed amo
 #### Scenario: Revoke an OAuth connection
 - **WHEN** a user revokes their `OAuth: Desktop client` token
 - **THEN** the client's access token and refresh token no longer work
+
+### Requirement: Retired asker role
+The auth store SHALL turn the retired `asker` role into `reader` on users, tokens (OAuth grants included) and invites when it starts, logging how many rows of each changed, and a restored backup SHALL read `asker` as `reader`, logging a deprecation warning.
+
+#### Scenario: Upgrading an instance with an asker token
+- **WHEN** an instance holding a token with scope `asker` starts on this build
+- **THEN** the token has scope `reader` and reads every statement

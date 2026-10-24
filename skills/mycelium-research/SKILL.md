@@ -11,9 +11,7 @@ answers, with the same read tools the server's loop uses. This skill is that
 loop written down. It is also the way to answer when you need every claim
 cited, whichever way Ask is set.
 
-You need a connection with the `reader` role or higher. An `asker`
-connection has only `ask`, so it has nothing to research with while Ask is
-external: tell the user to ask an admin for a reader token.
+Any connection can research: every role reads the whole knowledge base.
 
 ## 1. Recon: map the question
 

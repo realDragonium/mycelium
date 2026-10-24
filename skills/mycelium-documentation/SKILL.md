@@ -16,7 +16,7 @@ code or from memory: a missing fact is a knowledge gap to fill first.
 ## Before you start
 
 - Starting runs (`request_documentation`, `revise_document`) needs a **real**
-  writer or admin. A drafter, reader or asker sees neither; say so and stop.
+  writer or admin. A drafter or reader sees neither; say so and stop.
   Readers can still follow runs and read documents.
 - Several steps below are HTTP routes, not MCP tools. Call them with the same
   base URL and a bearer token for a real writer

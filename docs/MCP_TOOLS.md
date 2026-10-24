@@ -11,13 +11,13 @@ The list lives in `server.MCP_TOOLS`. `tests/test_mcp_surface.py` keeps this fil
 that set, and the registered tools in agreement.
 
 Role filtering still applies: `tools/list` shows a caller only the tools their role
-can invoke. An asker sees only `ask`, and a reader sees 19 tools. A drafter sees 40
+can invoke. The minimum role is reader: a reader sees 19 tools. A drafter sees 40
 because their writes are queued on a draft, but they do not see `list_drafts`,
 `request_documentation`, `revise_document` or the tools that claim and do
 agent tasks. A writer sees 44 and does not see the admin-only
 `delete_statement`, `merge_statements` or `merge_entities`. An admin sees all
 47. While Ask is set to External agent, `ask` is listed to no one, so each
-count is one lower and an asker sees no tools.
+count is one lower.
 
 ## Over MCP
 
@@ -40,7 +40,7 @@ decision, and the rest runs in-process.
 | `list_link_types` | Lists the statement link vocabulary and its direction rules, which writers need. |
 | `list_statement_kinds` | Lists the statement kind vocabulary. |
 | `list_entity_link_types` | Lists the entity link vocabulary that appears in `get_entity`. |
-| `ask` | Runs the server's answer loop. It is the only tool an `asker` sees. Hidden while Ask is set to External agent. |
+| `ask` | Runs the server's answer loop. Hidden while Ask is set to External agent. |
 | `ingest` | Turns prose into a reviewable draft, submitted at once while internal draft review is on. While Ingest is set to External agent it queues the work for an outside agent instead. |
 | `upsert_entity` | Creates or describes the entity a statement names. |
 | `upsert_name` | Adds an alias so mentions resolve. |

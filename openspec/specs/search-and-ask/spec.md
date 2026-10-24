@@ -329,17 +329,17 @@ The system SHALL serve `GET /api/graph/neighbourhood?focus=<id>`, returning the 
 - **THEN** the response is 404
 
 ### Requirement: Ask tool and compact result
-The system SHALL provide the tool `ask(question, depth="standard", verbose=False)`, the only tool the `asker` role reaches, that answers from the knowledge base and by default returns `{outcome: "answered", answer, confidence}`, with `confidence` one of `high`, `medium` or `low`, or `{outcome: "needs_clarification", question}`.
+The system SHALL provide the tool `ask(question, depth="standard", verbose=False)` that answers from the knowledge base and by default returns `{outcome: "answered", answer, confidence}`, with `confidence` one of `high`, `medium` or `low`, or `{outcome: "needs_clarification", question}`.
 
 #### Scenario: Default answer
-- **WHEN** an asker calls `ask` with "Who can export invoices?"
+- **WHEN** a reader calls `ask` with "Who can export invoices?"
 - **THEN** the response has exactly `outcome`, `answer` and `confidence`
 
 ### Requirement: Ask verbose result
 With `verbose: true`, `ask` SHALL return the full result: for an answer, also `interpretation` (`as_asked`, `resolved_to`, `reframed`, `reframe_reason`), `gaps`, `provenance` and `trace`; for a clarification, also `candidates` (`[{interpretation, would_pull}]`), `known_so_far` and `trace`. Verbosity MUST change only the response, not retrieval or reasoning.
 
 #### Scenario: Verbose answer
-- **WHEN** an asker calls `ask` with `verbose: true`
+- **WHEN** a reader calls `ask` with `verbose: true`
 - **THEN** the response also holds `interpretation`, `gaps`, `provenance` and `trace`
 
 ### Requirement: Ask never raises for retrieval or closure reasons
@@ -392,7 +392,7 @@ An adjacency re-search SHALL be a `search_statements` call whose `adjacency_sour
 At `depth: "quick"` the system SHALL drop the evidence floor, accepting the first well-formed `submit_answer`, and cap the run at the lower of the saved limits and 8 operations, 25 seconds wall clock and 20 seconds per model request.
 
 #### Scenario: Quick answer after one read
-- **WHEN** an asker calls `ask` with `depth: "quick"` and the model submits after recon and one read
+- **WHEN** a reader calls `ask` with `depth: "quick"` and the model submits after recon and one read
 - **THEN** the answer is accepted without an adjacency re-search
 
 ### Requirement: Ask budgets

@@ -169,7 +169,7 @@ A failed batch SHALL leave its statements unlabelled and retry each with exponen
 - **THEN** `GET /api/audiences/labelling` still shows the backfill with its labelled count and cost
 
 ### Requirement: Curator labels
-A real writer or administrator SHALL be able to set a curator label with `PUT /api/statements/{statement_id}/audiences` (at most 50 live audience ids, reason up to 500 characters; unknown audiences refused with 400). The AI labeller SHALL never replace a curator label. `DELETE /api/statements/{statement_id}/audiences` ("Hand back to AI") SHALL remove the label and queue the statement. Drafters, readers and askers SHALL be refused with 403.
+A real writer or administrator SHALL be able to set a curator label with `PUT /api/statements/{statement_id}/audiences` (at most 50 live audience ids, reason up to 500 characters; unknown audiences refused with 400). The AI labeller SHALL never replace a curator label. `DELETE /api/statements/{statement_id}/audiences` ("Hand back to AI") SHALL remove the label and queue the statement. Drafters and readers SHALL be refused with 403.
 
 #### Scenario: AI does not overwrite a curator
 - **WHEN** a curator labels a statement for internal audiences only and a relabel backfill runs

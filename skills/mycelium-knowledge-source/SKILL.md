@@ -33,7 +33,6 @@ shows only what you may call:
 
 | Role | Sees |
 |---|---|
-| `asker` | `ask` only |
 | `reader` | `ask`, the read tools, `report_knowledge_gap` |
 | `drafter`, `writer`, `admin` | reads plus authoring (see the authoring and draft skills) |
 
