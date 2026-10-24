@@ -51,7 +51,7 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | | Appearance | `#/settings/appearance` | Theme, density and answer typeface, saved in this browser |
 | Instance | Set up Mycelium | `#/settings/setup` | Admins: the setup checklist (see below) |
 | People | Members & invites | `#/settings/members` | Admins: roles, suspension, invites, service accounts and their tokens |
-| AI | Models | `#/settings/models` | Provider, model and reasoning effort per action |
+| AI | Models | `#/settings/models` | The model catalog (which models can be chosen, per provider); provider, model and reasoning effort per action |
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
 | | Draft review | `#/settings/review` | Automatic review mode, reviewer, model, whether reviews may apply and whether only clean approvals apply automatically; review the backlog oldest first, with an optional spending limit, pause and resume |
 | | Limits | `#/settings/limits` | Token, time and operation budgets per action; concurrent runs; the quiet period and daily cap for automatic document revisions |
@@ -64,9 +64,11 @@ applies. A save in any settings section reloads the other settings shown on
 the page and the banners, so a value saved in one card shows in the next
 without a page reload. A card with unsaved edits keeps them.
 
-Model ID fields are checked against their provider: a Claude field refuses an
-OpenAI model ID and the other way round. An ID this version does not know is
-saved with a warning, because its cost cannot be estimated.
+Model fields are choices from the model catalog on **Settings → Models**. The
+catalog checks IDs against their provider: the Claude list refuses an OpenAI
+model ID and the other way round. An ID this version has no list price for is
+marked, because its cost cannot be estimated. A model an action uses cannot
+be removed until the action is moved to another one.
 
 ### Setup checklist
 

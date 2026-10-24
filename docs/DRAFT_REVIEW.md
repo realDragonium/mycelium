@@ -21,7 +21,7 @@ A curator can explicitly review an existing submitted draft.
 
 Administrators configure review in **Settings → Draft review**, also linked
 from Drafts. It configures this action independently of
-Ask, Ingest, and Documentation. Choose the mode, provider, model ID, reasoning
+Ask, Ingest, and Documentation. Choose the mode, provider, model (from the [model catalog](AI_MODELS.md#model-catalog)), reasoning
 effort (empty uses the model's default), independent reviewer account, and
 whether **Allow applying accepted reviews** (`application_enabled`) is on, then
 save. Changes take effect for new submissions and explicit reruns
@@ -82,7 +82,7 @@ settings disable review instead of reviving environment defaults. The settings
 form reports the error and allows an administrator to save an explicit repair;
 saving off does not depend on credentials or a valid reviewer. Backup refuses
 to omit unreadable instance settings; restore validates the required settings
-section before replacing an existing instance. Older archives without settings receive built-in defaults with automation off. Restore never imports the target environment.
+section before replacing an existing instance. Older archives without settings restore with no model chosen and automation off. Restore never imports the target environment.
 
 ## Evidence and scope
 

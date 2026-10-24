@@ -1,8 +1,8 @@
 # AI model configuration
 
 Administrators configure Mycelium's language-model actions in **Settings → Models**
-(see [the web app](WEB_APP.md)). Each action has its own default provider and
-model:
+(see [the web app](WEB_APP.md)). Each action has its own provider and a model
+chosen from the instance's [model catalog](#model-catalog):
 
 - Ask: answer questions from existing knowledge.
 - Ingest: extract proposed knowledge changes from supplied material.
@@ -17,8 +17,28 @@ Choose Claude or OpenAI GPT independently for each action. Each action remembers
 one model ID and reasoning effort per provider, so switching providers preserves the other provider’s settings.
 The documentation generation screen can still override the default provider for
 a particular document; it uses that action's configured model and effort for the chosen
-provider. Draft review also has its own off/advisory/automatic mode and independent
+provider, and offers only a provider that has a model chosen (the other shows
+disabled, with the reason). Draft review also has its own off/advisory/automatic mode and independent
 reviewer account, described in [Draft review](DRAFT_REVIEW.md).
+
+## Model catalog
+
+The **Model catalog** card at the top of **Settings → Models** lists, per
+provider, the model IDs an action may run on. Admins add, remove and reorder
+them; every model field, including Draft review's, is a choice from the
+chosen provider's list. The catalog is the `model_catalog` section of the
+revisioned product settings, so a stale save returns 409.
+
+There is no built-in model. An action runs on a provider only once a model is
+saved for it; until then it reports "Choose a Claude model for document
+generation in AI settings." (or the action and provider in question) instead
+of calling a model. Removing a model an action still uses is refused, naming
+the actions. Documentation counts both of its models, because the generation
+screen can pick either provider.
+
+Costs come from the list prices in `mycelium.ai.pricing`. A catalog model
+without a list price is marked in the card; its calls record tokens but no
+cost.
 
 ## External agent
 
@@ -103,13 +123,12 @@ model. Without them, the review sweeper, the audience labeller and automatic
 document revision leave their queues untouched, and admins see one banner
 naming each waiting worker instead of a stream of failed runs.
 
-A model ID must belong to its provider: saving an OpenAI ID in a Claude field,
-or the reverse, is refused. IDs this version does not know are accepted with a
-warning, since their cost cannot be estimated.
+A model ID must belong to its provider: adding an OpenAI ID to the Claude list,
+or the reverse, is refused. IDs this version does not know are accepted, with
+their cost unknown.
 
-A fresh instance starts every action on Claude with its built-in Claude model,
-except Draft review, which starts on OpenAI with no model selected. OpenAI model
-IDs have no implicit default. Each action’s provider and both model IDs come
+A fresh instance starts every action on Claude, and Draft review on OpenAI,
+with no model chosen and an empty catalog. Each action’s provider and both model IDs come
 entirely from saved settings; no environment variable selects or overrides them.
 Instances that predate saved settings imported their environment once; see
 [Upgrading from pre-settings versions](#upgrading-from-pre-settings-versions).
@@ -125,13 +144,17 @@ an invalid action, reports the configuration error, and presents blank fields
 for an administrator to repair with an explicit save. Other actions remain
 editable. Database-level failures still require operator repair. Backup refuses to omit
 unreadable instance configuration, and restore validates required settings
-sections before replacing the target. Older archives without settings receive built-in defaults, with automation off; restore never imports the target environment.
+sections before replacing the target. Older archives without settings restore with no models chosen and automation off; restore never imports the target environment.
 
 Authenticated `GET /api/model-settings` returns every action, their effective
 provider, selected model, remembered model IDs, source, and revision. Admin-only
 `PATCH /api/model-settings/{action}` accepts `provider`, `claude_model`,
 `openai_model`, optional `claude_reasoning_effort` and `openai_reasoning_effort`, and the current `revision`. Omitted effort fields preserve saved values; explicit `null` restores Model default. Concurrent or stale saves return 409
-and require reloading. Model settings contain no credentials.
+and require reloading. A model not in the provider's catalog is refused, unless
+it is the one already saved. The response includes `catalog`: each catalog
+model with its provider and whether it has a list price. The catalog itself is
+read and saved through `GET`/`PATCH /api/product-settings` as the
+`model_catalog` section. Model settings contain no credentials.
 
 Draft review's combined settings endpoint saves its controls and selected model
 in one transaction. It accepts `reasoning_effort` for the selected provider, with the same omission/null behavior. Its request requires both the control `revision` and
@@ -280,6 +303,14 @@ independently. Backup includes product sections and imported credential
 references in `product-settings.json`, validates them before restore, and
 refuses to silently omit corrupt saved configuration. Tokens remain outside the
 archive.
+
+## Upgrading to the model catalog
+
+Earlier versions fell back to a built-in Claude model for an action without
+one saved. The first start of a version with the model catalog saves that
+model explicitly for each such action and logs it, so no action changes the
+model it runs on. It then seeds the catalog with every model the actions and
+Draft review have saved, including models imported from the environment.
 
 ## Upgrading from pre-settings versions
 
