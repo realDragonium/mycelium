@@ -481,13 +481,16 @@ CREATE TABLE IF NOT EXISTS statement_audience_labels (
 -- batch backs off by `next_attempt_at`; past the attempt limit a row waits
 -- for the next backfill. `previous` holds the AI label an edit dropped and
 -- the text it judged (JSON), so the relabel starts from it.
+-- `backfill` marks rows an admin's backfill queued, which the worker drains
+-- even with automatic labelling off.
 CREATE TABLE IF NOT EXISTS audience_label_queue (
     statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
     enqueued_at     TEXT NOT NULL,
     attempts        INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
     last_error      TEXT,
-    previous        TEXT
+    previous        TEXT,
+    backfill        INTEGER NOT NULL DEFAULT 0
 );
 
 -- The last time a statement or knowledge gap was looked at, by the connect

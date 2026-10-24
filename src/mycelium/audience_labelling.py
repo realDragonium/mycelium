@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import threading
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -523,7 +522,7 @@ def backfill(*, relabel_ai: bool) -> Backfill:
     with store.transaction(conn):
         queued = store.audience_labels.enqueue_backfill(conn, relabel_ai=relabel_ai)
         started_at = store.audience_labels.queue_started_at(conn) or timestamps.now()
-    wake(force=True)
+    wake()
     return Backfill(started_at=started_at, queued=queued)
 
 
@@ -575,14 +574,10 @@ def clear_curator_label(statement_id: str) -> None:
 
 POLL_INTERVAL_S = 30.0
 _worker: workers.Worker[sqlite3.Connection] | None = None
-_forced = threading.Event()
 
 
-def wake(*, force: bool = False) -> None:
-    """Drain now. `force` drains even with automatic labelling off, because
-    an admin asked for it."""
-    if force:
-        _forced.set()
+def wake() -> None:
+    """Drain now."""
     if _worker is not None:
         _worker.wake()
 
@@ -606,11 +601,8 @@ def _confirming() -> bool:
 
 
 def labelling_pass(conn: sqlite3.Connection) -> None:
-    forced = _forced.is_set()
-    if forced or _automatic():
+    if _automatic() or store.audience_labels.backfill_requested(conn):
         drain(conn)
-        if forced and store.audience_labels.queue_counts(conn)[0] == 0:
-            _forced.clear()
 
 
 def start(data_dir: Path | str, *, poll_interval: float = POLL_INTERVAL_S) -> None:

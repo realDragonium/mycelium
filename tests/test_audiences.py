@@ -4,7 +4,6 @@ the hard read boundary a documentation run sees."""
 from __future__ import annotations
 
 import json
-import threading
 from datetime import UTC, datetime
 from functools import partial
 
@@ -407,7 +406,6 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
             "Missing credentials" if blocked and interruption == "credentials" else None
         ),
     )
-    monkeypatch.setattr(audience_labelling, "_forced", threading.Event())
     assert audience_labelling.backfill(relabel_ai=False).queued == 2
     if interruption == "exhausted":
         db.execute(
@@ -416,7 +414,7 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
         )
 
     audience_labelling.labelling_pass(db)
-    assert audience_labelling._forced.is_set()
+    assert store.audience_labels.backfill_requested(db)
     assert store.audience_labels.due_batch(db, 1)
     if interruption in {"paused", "credentials"}:
         assert store.audience_labels.queue_counts(db) == (2, 0, None)
@@ -426,7 +424,7 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
 
     audience_labelling.labelling_pass(db)
     # A statement waiting out its backoff keeps the backfill going.
-    assert audience_labelling._forced.is_set() == (interruption == "failure")
+    assert store.audience_labels.backfill_requested(db) == (interruption == "failure")
     assert not store.audience_labels.due_batch(db, 1)
     assert store.audience_labels.get_label(db, second if calls[0] == first else first)
     if interruption in {"paused", "credentials"}:
@@ -441,6 +439,42 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     audience_labelling.labelling_pass(db)
     # Only a backfill still in progress labels the new statement.
     assert bool(store.audience_labels.due_batch(db, 1)) == (interruption != "failure")
+
+
+def test_a_backfill_started_with_automatic_labelling_off_resumes_after_a_restart(
+    db, prompts, monkeypatch
+):
+    set_product(product_settings.AudienceLabellingSettings(automatic=False))
+    first = store.create_statement(db, "state", "Workspaces have owners.")
+    second = store.create_statement(db, "state", "Invoices can be exported.")
+    with store.transaction(db):
+        store.audience_labels.enqueue_backfill(db, relabel_ai=False)
+    third = store.create_statement(db, "state", "Login supports SSO.")
+    call, _ = _answer(
+        (first, [EXTERNAL.id]),
+        (second, [EXTERNAL.id]),
+        (third, [EXTERNAL.id]),
+    )
+    drain = audience_labelling.drain
+    monkeypatch.setattr(
+        audience_labelling, "drain", lambda conn: drain(conn, call=call)
+    )
+    monkeypatch.setattr(
+        audience_labelling.model_settings, "credentials_error", lambda action: None
+    )
+    assert store.audience_labels.backfill_requested(db)
+
+    audience_labelling.labelling_pass(db)
+
+    assert [
+        store.audience_labels.get_label(db, statement_id) is not None
+        for statement_id in (first, second, third)
+    ] == [True, True, True]
+    assert not store.audience_labels.backfill_requested(db)
+
+    later = store.create_statement(db, "state", "Exports include headers.")
+    audience_labelling.labelling_pass(db)
+    assert store.audience_labels.is_queued(db, later)
 
 
 def test_a_statement_written_during_a_backfill_is_labelled_before_its_backlog(db):
