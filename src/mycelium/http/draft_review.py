@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, JsonValue
 from .. import draft_review_settings as review_settings
 from .. import server
 from ..draft_review_runs import BacklogJob
+from ..draft_review_store import Correction
 from ..request_timing import TimedRoute
 from .access import _enforce_curator, _require_admin
 
@@ -120,4 +121,38 @@ def answer_draft_review_http(
         run = draft_review_runs.answer(draft_id, body.run_id, body.answer, principal)
     except ValidationError as exc:
         raise ValueError("answer must be 1 to 6000 characters") from exc
+    return {"review": run.model_dump(mode="json")}
+
+
+class DraftReviewAcceptBody(BaseModel):
+    run_id: str
+    #: The corrections to apply; the reviewer's own when omitted.
+    corrections: list[Correction] | None = None
+
+
+@router.post("/api/drafts/{draft_id}/review/accept")
+def accept_draft_review_http(
+    draft_id: str, body: DraftReviewAcceptBody, request: Request
+) -> dict[str, dict[str, JsonValue]]:
+    """Approve a draft the reviewer held, with its suggested corrections or
+    the curator's edit of them."""
+    from .. import draft_review_runs, drafts_store
+
+    principal = _enforce_curator(request, action="approving a reviewed draft")
+    try:
+        run = draft_review_runs.accept_corrections(
+            draft_id, body.run_id, body.corrections, principal
+        )
+    except drafts_store.ActiveApplicationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except server.DraftOpsRejectedError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "The corrections were applied to the draft, but "
+                "approving it was refused: fix or discard the refused "
+                "statements, then approve again.",
+                "rejections": exc.rejections,
+            },
+        ) from exc
     return {"review": run.model_dump(mode="json")}

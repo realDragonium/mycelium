@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from . import auth, model_settings, prompt_store, store
 from .ai import Provider
 from .ai.types import CLAUDE_EFFORT, ClaudeEffort, ReasoningEffort
-from .draft_review_store import Mode
+from .draft_review_store import AutoApply, Mode
 
 # Conflict and Unavailable are part of this module's interface; callers catch them.
 from .model_settings import Conflict as Conflict
@@ -33,6 +33,9 @@ class Controls(BaseModel):
     mode: Mode = "off"
     reviewer_id: str = Field(default="", max_length=200)
     application_enabled: bool = False
+    #: What review-and-apply applies unattended: only drafts the reviewer
+    #: approves without corrections, or also those it corrects.
+    auto_apply: AutoApply = "clean"
 
 
 class ControlSnapshot(Controls):
@@ -210,6 +213,7 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         mode=request.mode,
         reviewer_id=request.reviewer_id,
         application_enabled=request.application_enabled,
+        auto_apply=request.auto_apply,
     )
     if desired.mode != "off":
         issues = configuration_issues(request)
@@ -252,12 +256,7 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
             ),
         )
         unchanged = (
-            Controls(
-                mode=current.mode,
-                reviewer_id=current.reviewer_id,
-                application_enabled=current.application_enabled,
-            )
-            == desired
+            Controls(**current.model_dump(exclude={"revision", "source"})) == desired
         )
         if controls_error or not unchanged or current.source != "saved":
             db.execute(

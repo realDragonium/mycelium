@@ -14,7 +14,7 @@ product behaviour and do not reject a claim for lacking it. Judge how the draft
 fits the existing knowledge, which is supplied with each new statement's closest
 live statements and the link type glossary:
 - Duplicates: a new statement that makes the same claim as a live one should
-  reuse it. Strike the duplicate and re-point its links to the live statement.
+  reuse it. Drop the duplicate and re-point its links to the live statement.
   Mirror pairs (low/high, enable/disable) are distinct claims, not duplicates.
 - Contradictions: a new statement that says otherwise than a live one. The
   newer claim wins. The draft is newer unless the live statement's updated_at
@@ -22,7 +22,7 @@ live statements and the link type glossary:
   already update or remove the live statement, append a correction that does
   (patch_statement, replace_text or delete_statement), and list it under
   contradictions with the live statement id and what you changed. When the live
-  statement is newer, strike or revise the draft's conflicting operation instead.
+  statement is newer, drop, edit or strike the draft's conflicting part instead.
 - Links: each link type must exist and fit its glossary meaning and direction;
   every linked id and `when` leaf must resolve. Inside one upsert_statements
   batch, "@N" names that batch's statement N, counting from 0; in any other
@@ -51,19 +51,32 @@ live statements and the link type glossary:
   overwritten with a worse one.
 - Operation findings: operation_findings are problems the server will refuse
   to apply, and the draft cannot be applied while any remain. Fix a phrasing
-  finding by revising the statement text as its recommendation says; revise or
-  strike the operation behind any other finding. A revised text is checked by
-  the same rules, so restructure it rather than swap a word for a synonym:
+  finding by editing the statement text as its recommendation says; correct
+  or strike the operation behind any other finding. An edited text is checked
+  by the same rules, so restructure it rather than swap a word for a synonym:
   "each", "every" and "any" are refused like "all", and a condition moves to
   a `when` tree instead of being reworded inside the text.
-Corrections may revise or strike an existing operation_ref, or append a
-supported tool call. Use each operation_ref in at most one correction: a revise
-replaces that operation's whole payload, so to change several statements in one
-batch, revise the batch once with all its statements, copying every statement
-you do not mean to change exactly, with its links, incoming_links and when. payload_json is the JSON object of that tool's arguments;
-use null for irrelevant correction fields. A changes_suggested assessment
-certifies the complete corrected draft, not just individual edits. Reject only a
-draft that cannot be made to fit with at most eight corrections.
+Each correction changes exactly one thing and leaves everything else in the
+draft as submitted:
+- edit: set the text or kind of one statement (operation_ref, plus statement,
+  its index, for an upsert_statements batch), or the description of an
+  upsert_entity.
+- add_link / drop_link: one link of an upsert_statements batch or of an
+  add_links or remove_links operation, named by from_id, link_type and to_id.
+  In a batch, name its own statements "@N"; one end must be one of them. To
+  retype, reverse or re-point a link, drop it and add the new one.
+- drop_statement: remove statement N from a batch. The server renumbers the
+  batch and rewrites every reference, so all other statements and links keep
+  their targets. A statement still named by a link or `when` cannot be
+  dropped: drop or re-point those links too.
+- strike: remove a whole operation.
+- append: add a supported tool call; payload_json is the JSON object of that
+  tool's arguments.
+Statement indices and @ references in corrections always name the draft as
+submitted, before any correction. Use null for fields a correction does not
+take. A changes_suggested assessment certifies the complete corrected draft,
+not just individual edits. Reject only a draft that cannot be made to fit with
+at most twelve corrections.
 Ask a person (needs_context) only when the supplied knowledge cannot settle how
 the draft fits and a person's answer would, such as whether a new concept is
 the same thing as a live one. Ask the specific question that settles it. Never propose

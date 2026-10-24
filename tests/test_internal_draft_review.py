@@ -19,9 +19,10 @@ from mycelium import (
     store,
     timestamps,
 )
-from mycelium.draft_review_store import Assessment, Correction
+from mycelium.draft_review_store import Assessment
 from mycelium.server import draft_review, runtime
 from product_settings_helpers import set_product
+from review_helpers import correction
 from settings_helpers import save_model
 from settings_helpers import set_review_controls as _set_review_controls
 from test_reviewed_application import _app, _principal
@@ -54,7 +55,7 @@ def running_app(tmp_path, monkeypatch):
             reviewer = auth.create_user(
                 runtime._auth_db(), name="Reviewer", role="writer", type="service"
             )
-        _set_review_controls(reviewer_id=reviewer)
+        _set_review_controls(reviewer_id=reviewer, auto_apply="with_corrections")
         _set_review_model("gpt-fixture")
         yield client, reviewer
         draft_review_runs.wait_all()
@@ -69,7 +70,7 @@ def review_server(tmp_path, monkeypatch):
         reviewer = auth.create_user(
             runtime._auth_db(), name="Reviewer", role="writer", type="service"
         )
-    _set_review_controls(reviewer_id=reviewer)
+    _set_review_controls(reviewer_id=reviewer, auto_apply="with_corrections")
     _set_review_model("gpt-fixture")
     yield
     draft_review_runs.wait_all()
@@ -115,7 +116,7 @@ def test_review_only_is_advisory(running_app, monkeypatch, label):
     _set_review_controls(mode="review-only")
     corrections = (
         [
-            Correction(
+            correction(
                 action="append",
                 operation_ref=None,
                 tool_name="upsert_entity",
@@ -272,17 +273,16 @@ def test_automatic_outcomes(running_app, monkeypatch, label):
 def test_corrections_apply_as_exact_reviewed_revision(running_app, monkeypatch):
     draft_id = _draft()
     draft = server.get_draft(draft_id)
-    correction = Correction(
-        action="revise",
+    fix = correction(
+        action="edit",
         operation_ref=draft["ops"][0]["operation_ref"],
-        tool_name=None,
-        payload_json='{"name":"Review subject","description":"Corrected fact"}',
+        description="Corrected fact",
         reason="Use the corrected supplied description.",
     )
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction]),
+        lambda context: _assessment("changes_suggested", [fix]),
     )
     _set_review_controls(mode="review-and-apply")
     _set_review_controls(application_enabled=True)
@@ -295,20 +295,20 @@ def test_corrections_apply_as_exact_reviewed_revision(running_app, monkeypatch):
     assert server.list_entities()["entities"][0]["description"] == "Corrected fact"
 
 
-def test_revise_naming_its_own_operation_tool_still_applies(running_app, monkeypatch):
+def test_edit_naming_its_own_operation_tool_still_applies(running_app, monkeypatch):
     draft_id = _draft()
     op = server.get_draft(draft_id)["ops"][0]
-    correction = Correction(
-        action="revise",
+    fix = correction(
+        action="edit",
         operation_ref=op["operation_ref"],
         tool_name=op["kind"],
-        payload_json='{"name":"Review subject","description":"Corrected fact"}',
+        description="Corrected fact",
         reason="Use the corrected supplied description.",
     )
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction]),
+        lambda context: _assessment("changes_suggested", [fix]),
     )
     _set_review_controls(mode="review-and-apply")
     _set_review_controls(application_enabled=True)
@@ -321,7 +321,7 @@ def test_correction_leaving_a_phrasing_finding_fails_naming_it(
     running_app, monkeypatch
 ):
     draft_id = _draft()
-    correction = Correction(
+    fix = correction(
         action="append",
         operation_ref=None,
         tool_name="upsert_statement",
@@ -334,7 +334,7 @@ def test_correction_leaving_a_phrasing_finding_fails_naming_it(
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction]),
+        lambda context: _assessment("changes_suggested", [fix]),
     )
     _set_review_controls(mode="review-and-apply")
     _set_review_controls(application_enabled=True)
@@ -527,14 +527,13 @@ def test_failed_correction_batch_rolls_back_all_edits(running_app, monkeypatch):
     draft_id = _draft()
     before = server.get_draft(draft_id)
     corrections = [
-        Correction(
-            action="revise",
+        correction(
+            action="edit",
             operation_ref=before["ops"][0]["operation_ref"],
-            tool_name=None,
-            payload_json='{"name":"Edited","description":"Changed description"}',
+            description="Changed description",
             reason="Correction.",
         ),
-        Correction(
+        correction(
             action="append",
             operation_ref=None,
             tool_name="patch_statement",
@@ -727,17 +726,16 @@ def test_interrupted_final_status_recovers_committed_outcome(
 
 def test_invalid_advisory_correction_is_failed_without_label(running_app, monkeypatch):
     draft_id = _draft()
-    correction = Correction(
-        action="revise",
+    fix = correction(
+        action="edit",
         operation_ref="op_nonexistent",
-        tool_name=None,
-        payload_json='{"name":"Unsupported"}',
+        description="Unsupported",
         reason="An invalid model reference.",
     )
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction]),
+        lambda context: _assessment("changes_suggested", [fix]),
     )
     _set_review_controls(mode="review-only")
     _request(draft_id)
@@ -753,7 +751,7 @@ def test_correction_without_an_object_payload_says_so(
     running_app, monkeypatch, payload_json
 ):
     draft_id = _draft()
-    correction = Correction(
+    fix = correction(
         action="append",
         operation_ref=None,
         tool_name="upsert_statement",
@@ -763,7 +761,7 @@ def test_correction_without_an_object_payload_says_so(
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction]),
+        lambda context: _assessment("changes_suggested", [fix]),
     )
     _set_review_controls(mode="review-only")
     _request(draft_id)
@@ -777,7 +775,7 @@ def test_corrections_striking_every_operation_are_not_an_accepted_draft(
     running_app, monkeypatch
 ):
     draft_id = _draft()
-    strike = Correction(
+    strike = correction(
         action="strike",
         operation_ref=server.get_draft(draft_id)["ops"][0]["operation_ref"],
         tool_name=None,
@@ -809,7 +807,7 @@ def test_advisory_statement_correction_validates_link_spec(
     running_app, monkeypatch, links, valid
 ):
     draft_id = _draft()
-    correction = Correction(
+    fix = correction(
         action="append",
         operation_ref=None,
         tool_name="upsert_statement",
@@ -821,7 +819,7 @@ def test_advisory_statement_correction_validates_link_spec(
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction]),
+        lambda context: _assessment("changes_suggested", [fix]),
     )
     _set_review_controls(mode="review-only")
     _request(draft_id)
@@ -837,17 +835,16 @@ def test_configuration_downgrade_during_corrections_rolls_back(
 ):
     draft_id = _draft()
     before = server.get_draft(draft_id)
-    correction = Correction(
-        action="revise",
+    fix = correction(
+        action="edit",
         operation_ref=before["ops"][0]["operation_ref"],
-        tool_name=None,
-        payload_json='{"name":"Review subject","description":"Corrected fact"}',
+        description="Corrected fact",
         reason="Correct supplied fact.",
     )
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction]),
+        lambda context: _assessment("changes_suggested", [fix]),
     )
     original = server.revise_draft_operation
 
@@ -929,14 +926,14 @@ def test_struck_entity_remains_an_authoritative_support_precondition(
     draft_id = _draft()
     draft = server.get_draft(draft_id)
     corrections = [
-        Correction(
+        correction(
             action="strike",
             operation_ref=draft["ops"][0]["operation_ref"],
             tool_name=None,
             payload_json=None,
             reason="Keep the existing entity.",
         ),
-        Correction(
+        correction(
             action="append",
             operation_ref=None,
             tool_name="upsert_entity",
@@ -988,7 +985,7 @@ def test_uninspected_glossary_cannot_be_automatically_overwritten(
         auth.current_principal.reset(token)
     draft_id = _draft(submit=False)
     if as_correction:
-        correction = Correction(
+        fix = correction(
             action="append",
             operation_ref=None,
             tool_name="upsert_link_type",
@@ -998,7 +995,7 @@ def test_uninspected_glossary_cannot_be_automatically_overwritten(
         monkeypatch.setattr(
             draft_review_runs,
             "RUNNER",
-            lambda context: _assessment("changes_suggested", [correction]),
+            lambda context: _assessment("changes_suggested", [fix]),
         )
     else:
         token = _principal("drafter")
@@ -1037,7 +1034,7 @@ def _automatic():
 
 def test_resolved_contradiction_is_filed_as_gap_after_apply(running_app, monkeypatch):
     statement_id = _supporting_statement()
-    correction = Correction(
+    fix = correction(
         action="append",
         operation_ref=None,
         tool_name="replace_text",
@@ -1052,7 +1049,7 @@ def test_resolved_contradiction_is_filed_as_gap_after_apply(running_app, monkeyp
     monkeypatch.setattr(
         draft_review_runs,
         "RUNNER",
-        lambda context: _assessment("changes_suggested", [correction], [contradiction]),
+        lambda context: _assessment("changes_suggested", [fix], [contradiction]),
     )
     _automatic()
     draft_id = _draft()
@@ -1302,3 +1299,94 @@ def test_operation_evidence_reaches_the_reviewer(running_app, monkeypatch):
     (op,) = json.loads(context)["draft"]["ops"]
     assert op["evidence"][0]["excerpt"] == "class Invoice(Model):"
     assert "each operation's evidence" in json.loads(context)["knowledge_scope"]
+
+
+def _held_draft(monkeypatch, description="Corrected fact"):
+    _automatic()
+    _set_review_controls(auto_apply="clean")
+
+    def model(context):
+        [op] = json.loads(context)["draft"]["ops"]
+        fix = correction(
+            "edit", operation_ref=op["operation_ref"], description=description
+        )
+        return _assessment("changes_suggested", [fix])
+
+    monkeypatch.setattr(draft_review_runs, "RUNNER", model)
+    return _draft()
+
+
+def test_clean_policy_holds_a_corrected_draft_for_a_curator(running_app, monkeypatch):
+    draft_id = _held_draft(monkeypatch)
+    before = server.get_draft(draft_id)
+
+    result = _result(draft_id)
+
+    assert result["status"] == "completed"
+    assert result["application"] == "held"
+    assert len(result["corrections"]) == 1
+    after = server.get_draft(draft_id)
+    assert after["status"] == "submitted"
+    assert after["ops"] == before["ops"]
+    assert drafts_store.list_reviews(server._drafts_db(), draft_id) == []
+    assert draft_id not in draft_review_runs.backlog()
+
+
+def test_clean_policy_applies_a_clean_approval(running_app, monkeypatch):
+    _automatic()
+    _set_review_controls(auto_apply="clean")
+    draft_id = _draft()
+    assert _result(draft_id)["application"] == "applied"
+    assert server.get_draft(draft_id)["status"] == "approved"
+
+
+def test_curator_accepts_the_suggested_corrections(running_app, monkeypatch):
+    client, _ = running_app
+    draft_id = _held_draft(monkeypatch)
+    run_id = _result(draft_id)["run_id"]
+
+    response = client.post(
+        f"/api/drafts/{draft_id}/review/accept", json={"run_id": run_id}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["review"]["application"] == "applied"
+    draft = server.get_draft(draft_id)
+    assert draft["status"] == "approved"
+    assert draft["review_assessment"]["stale"] is False
+    assert server.list_entities()["entities"][0]["description"] == "Corrected fact"
+
+
+def test_curator_applies_an_edited_suggestion(running_app, monkeypatch):
+    client, _ = running_app
+    draft_id = _held_draft(monkeypatch)
+    held = _result(draft_id)
+    edited = {**held["corrections"][0], "description": "Curator's wording"}
+
+    response = client.post(
+        f"/api/drafts/{draft_id}/review/accept",
+        json={"run_id": held["run_id"], "corrections": [edited]},
+    )
+
+    assert response.status_code == 200, response.text
+    assert "edited" in response.json()["review"]["detail"]
+    assert server.list_entities()["entities"][0]["description"] == "Curator's wording"
+
+
+def test_accepting_needs_the_current_held_review(running_app, monkeypatch):
+    client, _ = running_app
+    draft_id = _held_draft(monkeypatch)
+    run_id = _result(draft_id)["run_id"]
+    url = f"/api/drafts/{draft_id}/review/accept"
+
+    older = client.post(url, json={"run_id": "drv_older"})
+    assert older.status_code == 400
+    assert "reviewed again" in older.json()["detail"]
+    with store.transaction(server._drafts_db()):
+        server._drafts_db().execute(
+            "UPDATE drafts SET revision = revision + 1 WHERE id = ?", (draft_id,)
+        )
+    stale = client.post(url, json={"run_id": run_id})
+    assert stale.status_code == 400
+    assert "changed after the review" in stale.json()["detail"]
+    assert server.get_draft(draft_id)["status"] == "submitted"

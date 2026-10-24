@@ -2,7 +2,7 @@
 
 from mycelium import auth, draft_review_settings, model_settings, prompt_store, store
 from mycelium.ai import Provider
-from mycelium.draft_review_store import Mode
+from mycelium.draft_review_store import AutoApply, Mode
 
 
 def save_model(
@@ -34,6 +34,7 @@ def set_review_controls(
     mode: Mode | None = None,
     reviewer_id: str | None = None,
     application_enabled: bool | None = None,
+    auto_apply: AutoApply | None = None,
 ) -> None:
     db = prompt_store.connection()
     current = draft_review_settings.load_controls(db)
@@ -43,6 +44,7 @@ def set_review_controls(
         application_enabled=current.application_enabled
         if application_enabled is None
         else application_enabled,
+        auto_apply=current.auto_apply if auto_apply is None else auto_apply,
     )
     with store.write_lock(), prompt_store._writing(db):
         db.execute(
