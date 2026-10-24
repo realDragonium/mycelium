@@ -131,6 +131,10 @@ class ReviewSettings(RequestLimits):
     max_tokens: int = Field(default=6000, gt=0)
     max_retries: int = Field(default=0, ge=0)
     request_timeout_s: float = Field(default=90.0, gt=0)
+    #: Most one draft's review may cost, estimated before any model call
+    #: from its parts' context and max_tokens; a costlier draft is refused.
+    #: An unpriced model has no cap.
+    max_cost_usd: float = Field(default=1.0, gt=0)
 
 
 class AliasDiscoverySettings(RequestLimits):

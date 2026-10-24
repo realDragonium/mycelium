@@ -14,6 +14,7 @@ from . import ai_prompts, timestamps
 from .ai.types import ReasoningEffort
 
 Mode = Literal["off", "review-only", "review-and-apply"]
+Label = Literal["good", "changes_suggested", "reject", "needs_context"]
 
 
 class Precondition(TypedDict):
@@ -39,11 +40,23 @@ class Contradiction(BaseModel):
 
 class Assessment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
-    label: Literal["good", "changes_suggested", "reject", "needs_context"]
+    label: Label
     rationale: str = Field(min_length=1, max_length=6000)
     questions: list[str] = Field(max_length=12)
     corrections: list[Correction] = Field(max_length=8)
     contradictions: list[Contradiction] = Field(max_length=8)
+
+
+class PartReview(BaseModel):
+    """The assessment of one connected part of a draft reviewed in parts."""
+
+    model_config = ConfigDict(extra="forbid")
+    operation_refs: list[str]
+    label: Label
+    rationale: str
+    questions: list[str] = Field(default_factory=list)
+    corrections: list[Correction] = Field(default_factory=list)
+    contradictions: list[Contradiction] = Field(default_factory=list)
 
 
 class Answer(BaseModel):
@@ -74,11 +87,14 @@ class ReviewRun(BaseModel):
     review_id: str | None = None
     stale: bool = False
     knowledge_preconditions: list[Precondition] = Field(default_factory=list)
-    label: Literal["good", "changes_suggested", "reject", "needs_context"] | None = None
+    label: Label | None = None
     rationale: str | None = None
     questions: list[str] = Field(default_factory=list)
     corrections: list[Correction] = Field(default_factory=list)
     contradictions: list[Contradiction] = Field(default_factory=list)
+    #: Each part's own assessment when the draft was reviewed in parts;
+    #: empty when it was reviewed whole.
+    parts: list[PartReview] = Field(default_factory=list)
     attempt: int = 1
     retries: int = 0
     previous_failure: str | None = None

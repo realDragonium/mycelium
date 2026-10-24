@@ -6,14 +6,16 @@ import contextvars
 import itertools
 import json
 import logging
+import re
+import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from . import (
     ai,
@@ -24,6 +26,7 @@ from . import (
     draft_review_settings,
     draft_review_store,
     drafts_store,
+    mentions,
     model_settings,
     product_settings,
     quarantine,
@@ -33,10 +36,15 @@ from . import (
     workers,
 )
 from .ask.substrate import InProcessSubstrate, _json_schema_for
-from .draft_review_store import Answer, Assessment, Mode, ReviewRun
+from .draft_review_store import Answer, Assessment, Label, Mode, PartReview, ReviewRun
 
 if TYPE_CHECKING:
-    from .server.draft_review import DraftReviewInspection
+    from .server.draft_review import (
+        DraftReviewInspection,
+        Operation,
+        OperationKnowledge,
+        RecordKey,
+    )
 
 logger = logging.getLogger(__name__)
 RUNNER: Callable[[str], Assessment] | None = None
@@ -45,8 +53,32 @@ _futures: dict[str, Future[None]] = {}
 _spawn_lock = threading.Lock()
 _json_value: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 _CONTEXT_LIMIT = 90000
+# A part's own operations and records fill at most this much of its context,
+# leaving the rest for the closest live statements.
+_PART_BASE_LIMIT = _CONTEXT_LIMIT * 3 // 5
+_OTHER_PARTS_LIMIT = 8000
+# Fewer characters per token than usual text, so the estimate errs high.
+_CHARS_PER_TOKEN = 3
 _RELATED_PER_STATEMENT = 5
 _payload = TypeAdapter(dict[str, JsonValue])
+
+
+def _correction_payload(
+    correction: draft_review_store.Correction,
+) -> dict[str, JsonValue]:
+    if not correction.payload_json:
+        raise ValueError(
+            f"a {correction.action} correction needs payload_json: the "
+            "operation's complete arguments as one JSON object"
+        )
+    try:
+        return _payload.validate_json(correction.payload_json)
+    except ValidationError:
+        raise ValueError(
+            f"a {correction.action} correction's payload_json is not one JSON object"
+        ) from None
+
+
 # These mutation families have entity/statement fingerprints in draft inspection.
 REVIEWABLE_OPERATIONS = frozenset(
     {
@@ -400,52 +432,246 @@ def _read(reader: InProcessSubstrate, name: str, args: dict[str, JsonValue]) -> 
     return Read(name, args, result)
 
 
-def _context(
+@dataclass(frozen=True)
+class Part:
+    """Connected operations reviewed together, with the records they touch."""
+
+    ops: list[dict[str, JsonValue]]
+    records: list[draft_review_store.Precondition]
+
+    @property
+    def refs(self) -> set[str]:
+        return {str(op["operation_ref"]) for op in self.ops}
+
+
+@dataclass(frozen=True)
+class PartContext:
+    part: Part
+    context: str
+    reads: list[Read]
+
+
+class Refused(ValueError):
+    """The draft cannot be reviewed as submitted; the server rejects it
+    without a model call."""
+
+
+def _ops(inspection: DraftReviewInspection) -> list[dict[str, JsonValue]]:
+    ops = inspection["draft"].get("ops")
+    if not isinstance(ops, list):
+        raise ValueError("draft has no operation list")
+    return [op for op in ops if isinstance(op, dict)]
+
+
+def _operations(ops: list[dict[str, JsonValue]]) -> list[Operation]:
+    return [
+        (
+            str(op["operation_ref"]),
+            str(op["kind"]),
+            _payload.validate_python(op["payload"]),
+        )
+        for op in ops
+    ]
+
+
+def _whole(inspection: DraftReviewInspection) -> Part:
+    return Part(_ops(inspection), list(inspection["knowledge_preconditions"]))
+
+
+def _components(inspection: DraftReviewInspection) -> list[Part]:
+    """The draft's operations grouped so that operations naming the same
+    record, referring to each other's results (`@seq:index`), or naming an
+    entity the draft creates stay together. Records an operation only
+    mentions are context for it, not a reason to group."""
+    from .server import draft_review  # local import: loads the server package
+
+    ops = _ops(inspection)
+    knowledge = draft_review.operation_knowledge(_operations(ops))
+    parent = {str(op["operation_ref"]): str(op["operation_ref"]) for op in ops}
+
+    def find(ref: str) -> str:
+        while parent[ref] != ref:
+            parent[ref] = parent[parent[ref]]
+            ref = parent[ref]
+        return ref
+
+    for a, b in _ties(ops, knowledge):
+        parent[find(a)] = find(b)
+    preconditions = {
+        (item["kind"], item["id"]): item
+        for item in inspection["knowledge_preconditions"]
+    }
+    groups: dict[str, list[dict[str, JsonValue]]] = {}
+    for op in ops:
+        groups.setdefault(find(str(op["operation_ref"])), []).append(op)
+    parts = []
+    for members in groups.values():
+        keys: set[RecordKey] = set()
+        for op in members:
+            item = knowledge[str(op["operation_ref"])]
+            keys |= item["targets"] | item["mentioned"]
+        parts.append(
+            Part(
+                members,
+                [preconditions[key] for key in sorted(keys) if key in preconditions],
+            )
+        )
+    return parts
+
+
+def _ties(
+    ops: list[dict[str, JsonValue]], knowledge: dict[str, OperationKnowledge]
+) -> Iterator[tuple[str, str]]:
+    """Pairs of operations that must be reviewed together."""
+    owner: dict[RecordKey, str] = {}
+    by_seq = {op.get("seq"): str(op["operation_ref"]) for op in ops}
+    created: dict[str, str] = {}
+    for op in ops:
+        ref = str(op["operation_ref"])
+        for key in knowledge[ref]["targets"]:
+            yield ref, owner.setdefault(key, ref)
+        payload = op.get("payload")
+        for seq in re.findall(r'"@(\d+):\d+"', json.dumps(payload)):
+            if (producer := by_seq.get(int(seq))) is not None:
+                yield ref, producer
+        name = payload.get("name") if isinstance(payload, dict) else None
+        targets = knowledge[ref]["targets"]
+        if op.get("kind") == "upsert_entity" and isinstance(name, str):
+            if not any(kind == "entity" for kind, _ in targets):
+                created[name] = ref
+    for op in ops:
+        for text in _statement_texts([op]):
+            for name, creator in created.items():
+                if mentions.text_contains_name(text, name):
+                    yield str(op["operation_ref"]), creator
+
+
+def _seq(op: dict[str, JsonValue]) -> int:
+    seq = op.get("seq")
+    return seq if isinstance(seq, int) else 0
+
+
+def _merge(parts: list[Part]) -> Part:
+    ops = sorted(
+        (op for part in parts for op in part.ops),
+        key=_seq,
+    )
+    records = {
+        (item["kind"], item["id"]): item for part in parts for item in part.records
+    }
+    return Part(ops, [records[key] for key in sorted(records)])
+
+
+def _split(
     inspection: DraftReviewInspection,
     previous_failure: str | None = None,
     answers: list[Answer] | None = None,
-) -> tuple[str, list[Read]]:
+) -> list[Part]:
+    """The parts to review: the whole draft when its operations and records
+    fit one context with room for related knowledge, otherwise connected
+    operations packed together up to that size."""
+    reader = InProcessSubstrate()
+    whole = _whole(inspection)
+    if (
+        _size(_base(reader, inspection, whole, previous_failure, answers)[0])
+        <= _PART_BASE_LIMIT
+    ):
+        return [whole]
+    parts: list[Part] = []
+    for component in _components(inspection):
+        if parts:
+            merged = _merge([parts[-1], component])
+            data, _ = _base(reader, inspection, merged, previous_failure, answers)
+            if _size(data) <= _PART_BASE_LIMIT:
+                parts[-1] = merged
+                continue
+        parts.append(component)
+    return parts
+
+
+def _size(data: dict[str, JsonValue]) -> int:
+    return len(json.dumps(data, ensure_ascii=False))
+
+
+def _record_read(
+    reader: InProcessSubstrate, item: draft_review_store.Precondition
+) -> Read:
+    if item["kind"] == "entity":
+        return _read(reader, "get_entity", {"id": item["id"]})
+    return _read(reader, "get_statements", {"ids": [item["id"]]})
+
+
+def _summary(ops: list[dict[str, JsonValue]]) -> list[JsonValue]:
+    """What the operations outside a part add, for reference, within
+    _OTHER_PARTS_LIMIT characters."""
+    out: list[JsonValue] = []
+    used = 0
+    for op in ops:
+        payload = op.get("payload")
+        texts: list[JsonValue] = list(_statement_texts([op]))
+        if isinstance(payload, dict) and isinstance(name := payload.get("name"), str):
+            texts.append(name)
+        item: dict[str, JsonValue] = {
+            "operation_ref": op.get("operation_ref"),
+            "kind": op.get("kind"),
+            "texts": texts,
+        }
+        used += len(json.dumps(item, ensure_ascii=False))
+        if used > _OTHER_PARTS_LIMIT:
+            out.append({"omitted_operations": len(ops) - len(out)})
+            break
+        out.append(item)
+    return out
+
+
+def _base(
+    reader: InProcessSubstrate,
+    inspection: DraftReviewInspection,
+    part: Part,
+    previous_failure: str | None,
+    answers: list[Answer] | None,
+    position: tuple[int, int] = (1, 1),
+) -> tuple[dict[str, JsonValue], list[Read]]:
     from . import server  # local import: server registers the review tools
 
     draft = dict(inspection["draft"])
     draft.pop("review_assessment", None)
-    preconditions = inspection["knowledge_preconditions"]
-    if len(preconditions) > 30:
-        raise ValueError(
-            "draft affects more than 30 knowledge records; narrow the draft"
-        )
-    reader = InProcessSubstrate()
-    reads = []
-    for item in preconditions:
-        args: dict[str, JsonValue] = (
-            {"id": item["id"]} if item["kind"] == "entity" else {"ids": [item["id"]]}
-        )
-        name = "get_entity" if item["kind"] == "entity" else "get_statements"
-        reads.append(_read(reader, name, args))
-    schemas = {
+    refs = part.refs
+    draft["ops"] = list(part.ops)
+    reads = [_record_read(reader, item) for item in part.records]
+    schemas: dict[str, JsonValue] = {
         tool.__name__: _json_schema_for(tool)
         for tool in server.TOOLS
         if tool.__name__ in REVIEWABLE_OPERATIONS
     }
     existing_knowledge: list[JsonValue] = [read.result for read in reads]
-    data = {
+    findings: list[JsonValue] = [
+        {
+            "operation_ref": item["operation_ref"],
+            "kind": item["kind"],
+            "finding": item["finding"],
+        }
+        for item in inspection["operation_findings"]
+        if item["operation_ref"] in refs
+    ]
+    data: dict[str, JsonValue] = {
         "draft": draft,
-        "operation_findings": inspection["operation_findings"],
+        "operation_findings": findings,
         "existing_knowledge": existing_knowledge,
         "link_types": _read(reader, "list_link_types", {}).result,
         "correction_tool_schemas": schemas,
-        "knowledge_scope": (
-            "existing_knowledge holds the records the draft touches, followed by "
-            "the closest live statements to each new statement, best matches "
-            "first. Supplied evidence, when present, comes from the producer: "
-            "review_evidence for the whole draft, and each operation's "
-            "evidence for that operation, citing what the producer checked in "
-            "the product's code, UI or docs. "
-            "answers_from_curators, when present, holds answers a curator gave "
-            "to earlier review questions; only these answers come from a "
-            "curator."
-        ),
+        "knowledge_scope": _KNOWLEDGE_SCOPE,
     }
+    index, count = position
+    if count > 1:
+        data["review_part"] = {
+            "part": index,
+            "of": count,
+            "scope": _PART_SCOPE,
+            "other_parts": _summary(
+                [op for op in _ops(inspection) if op["operation_ref"] not in refs]
+            ),
+        }
     if previous_failure:
         data["previous_attempt_failure"] = previous_failure
     if answers:
@@ -453,23 +679,177 @@ def _context(
             _json_value.validate_python(item.model_dump(mode="json"))
             for item in answers
         ]
-    if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
-        raise ValueError(
-            f"review context exceeds {_CONTEXT_LIMIT} characters; narrow the draft"
+    return data, reads
+
+
+_KNOWLEDGE_SCOPE = (
+    "existing_knowledge holds the records the draft touches, followed by "
+    "the closest live statements to each new statement, best matches "
+    "first. Each live record carries created_at and updated_at; the "
+    "draft's created_at says when it was written. Supplied evidence, when "
+    "present, comes from the producer: review_evidence for the whole "
+    "draft, and each operation's evidence for that operation, citing what "
+    "the producer checked in the product's code, UI or docs. draft.source, "
+    "when present, names the merged pull request, merge commit and "
+    "workflow run the draft documents. "
+    "answers_from_curators, when present, holds answers a curator gave "
+    "to earlier review questions; only these answers come from a "
+    "curator."
+)
+_PART_SCOPE = (
+    "The draft is too large for one review, so it is reviewed in connected "
+    "parts, each in its own context. Assess and correct only the operations "
+    "in draft.ops. other_parts lists what the rest of the draft adds; it is "
+    "reviewed separately, so do not correct it, do not treat it as missing "
+    "and do not add it again. The draft is applied only if every part is "
+    "accepted."
+)
+
+
+def _context(
+    inspection: DraftReviewInspection,
+    previous_failure: str | None = None,
+    answers: list[Answer] | None = None,
+    part: Part | None = None,
+    position: tuple[int, int] = (1, 1),
+) -> tuple[str, list[Read]]:
+    reader = InProcessSubstrate()
+    part = part or _whole(inspection)
+    data, reads = _base(reader, inspection, part, previous_failure, answers, position)
+    existing_knowledge = data["existing_knowledge"]
+    assert isinstance(existing_knowledge, list)  # built by _base
+    if _size(data) > _CONTEXT_LIMIT:
+        raise Refused(
+            "Operations "
+            + ", ".join(sorted(part.refs))
+            + " depend on each other and need more than the "
+            f"{_CONTEXT_LIMIT} characters one review may read; split them "
+            "into smaller drafts."
         )
-    seen = {item["id"] for item in preconditions}
+    seen = {item["id"] for item in part.records}
+    draft = data["draft"]
+    assert isinstance(draft, dict)  # built by _base
     for statement_id in _related_statement_ids(reader, draft):
         if statement_id in seen:
             continue
         seen.add(statement_id)
         read = _read(reader, "get_statements", {"ids": [statement_id]})
         existing_knowledge.append(read.result)
-        if len(json.dumps(data, ensure_ascii=False)) > _CONTEXT_LIMIT:
+        if _size(data) > _CONTEXT_LIMIT:
             existing_knowledge.pop()
             break
         reads.append(read)
-    context = json.dumps(data, ensure_ascii=False)
-    return context, reads
+    return json.dumps(data, ensure_ascii=False), reads
+
+
+def _part_contexts(
+    inspection: DraftReviewInspection,
+    previous_failure: str | None = None,
+    answers: list[Answer] | None = None,
+) -> list[PartContext]:
+    parts = _split(inspection, previous_failure, answers)
+    out = []
+    for index, part in enumerate(parts, start=1):
+        context, reads = _context(
+            inspection, previous_failure, answers, part, (index, len(parts))
+        )
+        out.append(PartContext(part, context, reads))
+    return out
+
+
+def _stale(inspection: DraftReviewInspection) -> str | None:
+    """Why the draft must not be applied over the knowledge it changes: a
+    record it overwrites now says something written after its operation was,
+    by a direct edit or by a newer draft applied since. A change an older
+    draft wrote, even if applied later, is not newer knowledge."""
+    from .server import draft_review  # local import: loads the server package
+
+    conn = store.substrate_connection()
+    for op in _ops(inspection):
+        ref, kind, payload = _operations([op])[0]
+        written = op.get("created_at")
+        if not isinstance(written, str):
+            continue
+        for record_kind, identity in draft_review.overwritten_records(kind, payload):
+            row = (
+                store.get_statement(conn, identity)
+                if record_kind == "statement"
+                else store.get_entity_by_id(conn, identity)
+            )
+            if row is None:
+                return (
+                    f"Operation {ref} changes {record_kind} {identity}, which no "
+                    "longer exists; the draft was written against older knowledge."
+                )
+            if _unchanged_by(kind, payload, row):
+                continue
+            authored = _authored((record_kind, identity), row)
+            if authored is not None and authored > written:
+                return (
+                    f"Operation {ref} was written at {written}, but {record_kind} "
+                    f"{identity} now holds a change written at {authored}. "
+                    "Applying the draft could overwrite that newer knowledge; "
+                    "submit the change again against the current knowledge."
+                )
+    return None
+
+
+def _unchanged_by(kind: str, payload: dict[str, JsonValue], row: sqlite3.Row) -> bool:
+    """Whether the operation would leave the record as it is."""
+    if kind == "upsert_entity":
+        description: str | None = row["description"]
+        return payload.get("description") == description
+    if kind in ("replace_text", "patch_statement"):
+        return payload.get("text") in (None, row["text"]) and payload.get("kind") in (
+            None,
+            row["kind"],
+        )
+    return False
+
+
+def _authored(key: RecordKey, row: sqlite3.Row) -> str | None:
+    """When the record's current content was written: the operation time of
+    the applied draft that last changed it, or the change itself."""
+    from .server import draft_review  # local import: loads the server package
+
+    changed = row["updated_at"] or row["created_at"]
+    if not isinstance(changed, str):
+        return None
+    conn = drafts_store.connection()
+    applied = conn.execute(
+        "SELECT id FROM drafts WHERE decision = 'approved' AND decided_at >= ? "
+        "ORDER BY decided_at",
+        (changed,),
+    ).fetchall()
+    for draft in applied:
+        for op in drafts_store.list_ops(conn, draft["id"]):
+            if op["kind"] not in REVIEWABLE_OPERATIONS:
+                continue
+            payload = _payload.validate_json(op["payload_json"])
+            if key in draft_review.overwritten_records(op["kind"], payload):
+                return str(op["created_at"])
+    return changed
+
+
+def _estimated_cost(
+    contexts: list[PartContext],
+    settings: draft_review_settings.Snapshot,
+    limits: product_settings.ReviewSettings,
+    instructions: ai_prompts.Snapshot,
+) -> float | None:
+    price = ai.pricing.price(settings.provider, settings.model)
+    if price is None:
+        return None
+    system = len(draft_review_model.build_system_prompt(instructions.text))
+    return sum(
+        price.cost_usd(
+            ai.Usage(
+                input_tokens=(system + len(item.context)) // _CHARS_PER_TOKEN,
+                output_tokens=limits.max_tokens,
+            )
+        )
+        for item in contexts
+    )
 
 
 def _related_statement_ids(
@@ -544,18 +924,19 @@ def _execute(
                 "draft_review", run_id=run.run_id, draft_id=run.draft_id
             ),
         ):
-            context, reads = _context(inspection, run.previous_failure, run.answers)
             instructions = instructions or ai_prompts.resolve("draft_review")
             run.prompt = instructions.reference()
-            result = _assess(context, inspection, settings, limits, instructions)
-        result = _without_redundant_tool_names(result, inspection)
-        draft_review_model.validate_assessment(result)
-        _validate_corrections(result, inspection)
-        run.label = result.label
-        run.rationale = result.rationale
-        run.questions = result.questions
-        run.corrections = result.corrections
-        run.contradictions = result.contradictions
+            results, reads = _review(
+                run,
+                inspection,
+                settings,
+                limits or product_settings.get(product_settings.ReviewSettings),
+                instructions,
+            )
+        _validate_corrections(
+            [c for _, result in results for c in result.corrections], inspection
+        )
+        _record(run, results)
         run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
         _finish(run, inspection, settings, reads)
         run.status = "completed"
@@ -581,32 +962,147 @@ def _creator(inspection: DraftReviewInspection) -> str | None:
     return creator if isinstance(creator, str) else None
 
 
+def _unsupported(inspection: DraftReviewInspection) -> str | None:
+    unsupported = sorted(
+        {
+            str(op.get("kind"))
+            for op in _ops(inspection)
+            if op.get("kind") not in REVIEWABLE_OPERATIONS
+        }
+    )
+    if not unsupported:
+        return None
+    return (
+        "Internal review cannot inspect the knowledge these operations "
+        "affect: " + ", ".join(unsupported) + "."
+    )
+
+
+def _refusal(reason: str) -> Assessment:
+    return Assessment(
+        label="reject",
+        rationale=reason,
+        questions=[],
+        corrections=[],
+        contradictions=[],
+    )
+
+
+def _review(
+    run: ReviewRun,
+    inspection: DraftReviewInspection,
+    settings: draft_review_settings.Snapshot,
+    limits: product_settings.ReviewSettings,
+    instructions: ai_prompts.Snapshot,
+) -> tuple[list[tuple[Part, Assessment]], list[Read]]:
+    """Each part's validated assessment, and every read the parts made.
+    A draft the server refuses gets one rejection and no model call."""
+    reason = _unsupported(inspection) or _stale(inspection)
+    contexts: list[PartContext] = []
+    if reason is None:
+        try:
+            contexts = _part_contexts(inspection, run.previous_failure, run.answers)
+        except Refused as exc:
+            reason = str(exc)
+    if reason is None:
+        cost = _estimated_cost(contexts, settings, limits, instructions)
+        if cost is not None and cost > limits.max_cost_usd:
+            reason = (
+                f"Reviewing this draft could cost up to ${cost:.2f} in "
+                f"{len(contexts)} parts, above the ${limits.max_cost_usd:g} a "
+                "draft review may cost (Settings › Product › Draft review). "
+                "Split it into smaller drafts."
+            )
+    if reason is not None:
+        return [(_whole(inspection), _refusal(reason))], []
+    results = []
+    every = {str(op["operation_ref"]) for op in _ops(inspection)}
+    for item in contexts:
+        result = _assess(item.context, settings, limits, instructions)
+        result = _without_redundant_tool_names(result, inspection)
+        draft_review_model.validate_assessment(result)
+        outside = [
+            ref
+            for correction in result.corrections
+            if (ref := correction.operation_ref) in every - item.part.refs
+        ]
+        if outside:
+            raise ValueError(
+                "a part's correction names an operation of another part: "
+                + ", ".join(outside)
+            )
+        results.append((item.part, result))
+    reads: dict[str, Read] = {}
+    for item in contexts:
+        for read in item.reads:
+            reads.setdefault(json.dumps([read.name, read.arguments]), read)
+    return results, list(reads.values())
+
+
+def _record(run: ReviewRun, results: list[tuple[Part, Assessment]]) -> None:
+    """Combine the parts: any rejection rejects the draft with its parts'
+    reasons, otherwise any question holds it, otherwise every part's
+    corrections and contradictions apply together."""
+    if len(results) == 1:
+        [(_, result)] = results
+        run.label = result.label
+        run.rationale = result.rationale
+        run.questions = result.questions
+        run.corrections = result.corrections
+        run.contradictions = result.contradictions
+        run.parts = []
+        return
+    labels = [result.label for _, result in results]
+    label: Label = (
+        "reject"
+        if "reject" in labels
+        else "needs_context"
+        if "needs_context" in labels
+        else "changes_suggested"
+        if any(result.corrections for _, result in results)
+        else "good"
+    )
+    deciding = [
+        (index, part, result)
+        for index, (part, result) in enumerate(results, start=1)
+        if result.label == label
+    ]
+    run.label = label
+    run.rationale = (
+        f"All {len(results)} parts of the draft fit; each part's assessment "
+        "is listed with it."
+        if label in ("good", "changes_suggested")
+        else "\n\n".join(
+            f"Part {index} of {len(results)} ({len(part.ops)} operations): "
+            f"{result.rationale}"
+            for index, part, result in deciding
+        )
+    )
+    run.questions = [q for _, _, result in deciding for q in result.questions]
+    applies = label == "changes_suggested"
+    run.corrections = [c for _, r in results for c in r.corrections] if applies else []
+    run.contradictions = (
+        [c for _, r in results for c in r.contradictions] if applies else []
+    )
+    run.parts = [
+        PartReview(
+            operation_refs=[str(op["operation_ref"]) for op in part.ops],
+            label=result.label,
+            rationale=result.rationale,
+            questions=result.questions,
+            corrections=result.corrections,
+            contradictions=result.contradictions,
+        )
+        for part, result in results
+    ]
+
+
 def _assess(
     context: str,
-    inspection: DraftReviewInspection,
     settings: draft_review_settings.Snapshot,
     limits: product_settings.ReviewSettings | None = None,
     instructions: ai_prompts.Snapshot | None = None,
 ) -> Assessment:
-    ops = inspection["draft"].get("ops")
-    if not isinstance(ops, list):
-        raise ValueError("draft has no operation list")
-    unsupported = sorted(
-        {
-            str(op.get("kind"))
-            for op in ops
-            if isinstance(op, dict) and op.get("kind") not in REVIEWABLE_OPERATIONS
-        }
-    )
-    if unsupported:
-        return Assessment(
-            label="reject",
-            rationale="Internal review cannot inspect the knowledge these operations "
-            "affect: " + ", ".join(unsupported) + ".",
-            questions=[],
-            corrections=[],
-            contradictions=[],
-        )
     if RUNNER is not None:
         return RUNNER(context)
     return draft_review_model.assess(
@@ -862,7 +1358,7 @@ def _correct(draft_id: str, correction: draft_review_store.Correction) -> None:
             raise ValueError("strike requires only operation_ref")
         server.strike_draft_operation(draft_id, correction.operation_ref, revision)
         return
-    payload = _payload.validate_json(correction.payload_json or "")
+    payload = _correction_payload(correction)
     if correction.action == "revise":
         if not correction.operation_ref or correction.tool_name:
             raise ValueError("revise requires operation_ref and payload_json")
@@ -968,7 +1464,8 @@ def _without_redundant_tool_names(
 
 
 def _validate_corrections(
-    result: Assessment, inspection: DraftReviewInspection
+    corrections: list[draft_review_store.Correction],
+    inspection: DraftReviewInspection,
 ) -> None:
     from . import server  # local import: validate registered tool contracts
     from .server import draft_review
@@ -983,7 +1480,7 @@ def _validate_corrections(
     }
     tools_by_name = {wrapper.__name__: wrapper for wrapper in server.TOOLS}
     changed: set[str] = set()
-    for correction in result.corrections:
+    for correction in corrections:
         reference = correction.operation_ref
         name: JsonValue
         if correction.action == "append":
@@ -1004,7 +1501,7 @@ def _validate_corrections(
             if correction.payload_json is not None:
                 raise ValueError("strike correction cannot carry a payload")
             continue
-        payload = _payload.validate_json(correction.payload_json or "")
+        payload = _correction_payload(correction)
         if name not in REVIEWABLE_OPERATIONS:
             raise ValueError(
                 "correction affects knowledge internal review cannot inspect"

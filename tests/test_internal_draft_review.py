@@ -748,6 +748,31 @@ def test_invalid_advisory_correction_is_failed_without_label(running_app, monkey
     assert len(server.get_draft(draft_id)["ops"]) == 1
 
 
+@pytest.mark.parametrize("payload_json", ["", "[1]"])
+def test_correction_without_an_object_payload_says_so(
+    running_app, monkeypatch, payload_json
+):
+    draft_id = _draft()
+    correction = Correction(
+        action="append",
+        operation_ref=None,
+        tool_name="upsert_statement",
+        payload_json=payload_json,
+        reason="A payload the model left out.",
+    )
+    monkeypatch.setattr(
+        draft_review_runs,
+        "RUNNER",
+        lambda context: _assessment("changes_suggested", [correction]),
+    )
+    _set_review_controls(mode="review-only")
+    _request(draft_id)
+    result = _result(draft_id)
+    assert result["status"] == "failed"
+    assert "append correction" in result["detail"]
+    assert "payload_json" in result["detail"]
+
+
 @pytest.mark.parametrize(
     ("links", "valid"),
     [

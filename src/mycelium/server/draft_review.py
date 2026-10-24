@@ -122,10 +122,9 @@ def _name_owner_ids(name_ids: set[str]) -> set[str]:
     return owners
 
 
-def _named_entity_ids(
-    kind: str, payload: dict[str, Any], all_names: list[sqlite3.Row]
+def _mentioned_entity_ids(
+    payload: dict[str, Any], all_names: list[sqlite3.Row]
 ) -> set[str]:
-    entity_ids: set[str] = set()
     texts: list[str] = []
     if isinstance(payload.get("text"), str):
         texts.append(payload["text"])
@@ -134,9 +133,14 @@ def _named_entity_ids(
         for item in payload.get("statements", [])
         if isinstance(item, dict) and isinstance(item.get("text"), str)
     )
-    for name_row in all_names:
-        if any(mentions.text_contains_name(text, name_row["text"]) for text in texts):
-            entity_ids.add(name_row["entity_id"])
+    return {
+        name_row["entity_id"]
+        for name_row in all_names
+        if any(mentions.text_contains_name(text, name_row["text"]) for text in texts)
+    }
+
+
+def _upserted_entity_ids(kind: str, payload: dict[str, Any]) -> set[str]:
     names: list[str] = []
     if kind == "upsert_entity" and isinstance(payload.get("name"), str):
         names.append(payload["name"])
@@ -146,6 +150,7 @@ def _named_entity_ids(
             for item in payload.get("entities", [])
             if isinstance(item, dict) and isinstance(item.get("name"), str)
         )
+    entity_ids: set[str] = set()
     for name in names:
         row = store.get_name_by_text(_db(), name)
         if row is not None:
@@ -153,26 +158,95 @@ def _named_entity_ids(
     return entity_ids
 
 
+RecordKey = tuple[Literal["entity", "statement"], str]
+
+
+class OperationKnowledge(TypedDict):
+    #: Records the operation names by id, by an entity name it upserts, or
+    #: whose mentions it remaps.
+    targets: set[RecordKey]
+    #: Live entities its statement texts mention.
+    mentioned: set[RecordKey]
+
+
+Operation = tuple[str, str, dict[str, Any]]
+"""An operation's ref, kind and payload."""
+
+
+def _rows(ops: list[sqlite3.Row]) -> list[Operation]:
+    return [(op["id"], op["kind"], _json.loads(op["payload_json"])) for op in ops]
+
+
+def operation_knowledge(ops: list[Operation]) -> dict[str, OperationKnowledge]:
+    """The live records each operation touches, by operation_ref."""
+    all_names = store.list_all_names(_db())
+    out: dict[str, OperationKnowledge] = {}
+    for ref, kind, payload in ops:
+        entities, statements, names = _payload_knowledge_ids(payload)
+        targeted = (
+            entities | _name_owner_ids(names) | _upserted_entity_ids(kind, payload)
+        )
+        if kind in _MENTION_REMAPPING_OPERATIONS:
+            for entity_id in targeted:
+                for name_row in store.get_names_by_entity(_db(), entity_id):
+                    statements.update(
+                        store.statements_mentioning_name(_db(), name_row["id"])
+                    )
+        targets: set[RecordKey] = {("entity", item) for item in targeted}
+        targets |= {("statement", item) for item in statements}
+        out[ref] = {
+            "targets": targets,
+            "mentioned": {
+                ("entity", item) for item in _mentioned_entity_ids(payload, all_names)
+            }
+            - targets,
+        }
+    return out
+
+
+# Operations that replace or remove what a live record says, as opposed to
+# adding to it.
+_OVERWRITING_OPERATIONS = frozenset(
+    {
+        "patch_statement",
+        "replace_text",
+        "delete_statement",
+        "merge_statements",
+        "upsert_entity",
+        "upsert_entities",
+        "merge_entities",
+        "delete_entity",
+        "delete_name",
+        "move_name",
+        "rename_name",
+    }
+)
+
+
+def overwritten_records(kind: str, payload: dict[str, Any]) -> set[RecordKey]:
+    """The live records an operation replaces or removes the content of."""
+    if kind == "upsert_statement":
+        identity = payload.get("id")
+        return (
+            {("statement", identity)}
+            if isinstance(identity, str) and identity.startswith("stm_")
+            else set()
+        )
+    if kind not in _OVERWRITING_OPERATIONS:
+        return set()
+    entities, statements, names = _payload_knowledge_ids(payload)
+    entities |= _name_owner_ids(names) | _upserted_entity_ids(kind, payload)
+    return {("entity", item) for item in entities} | {
+        ("statement", item) for item in statements
+    }
+
+
 def _knowledge_preconditions(ops: list[sqlite3.Row]) -> list[KnowledgePrecondition]:
     entity_ids: set[str] = set()
-    remapped_entity_ids: set[str] = set()
     statement_ids: set[str] = set()
-    all_names = store.list_all_names(_db())
-    for op in ops:
-        payload = _json.loads(op["payload_json"])
-        entities, statements, names = _payload_knowledge_ids(payload)
-        targeted = entities | _name_owner_ids(names)
-        entity_ids.update(targeted)
-        entity_ids.update(_named_entity_ids(op["kind"], payload, all_names))
-        statement_ids.update(statements)
-        if op["kind"] in _MENTION_REMAPPING_OPERATIONS:
-            remapped_entity_ids.update(targeted)
-
-    for entity_id in remapped_entity_ids:
-        for name_row in store.get_names_by_entity(_db(), entity_id):
-            statement_ids.update(
-                store.statements_mentioning_name(_db(), name_row["id"])
-            )
+    for knowledge in operation_knowledge(_rows(ops)).values():
+        for kind, identity in knowledge["targets"] | knowledge["mentioned"]:
+            (entity_ids if kind == "entity" else statement_ids).add(identity)
 
     out: list[KnowledgePrecondition] = []
     for entity_id in sorted(entity_ids):
