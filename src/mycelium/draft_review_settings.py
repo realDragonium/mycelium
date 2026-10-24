@@ -224,6 +224,9 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         application_enabled=request.application_enabled,
         auto_apply=request.auto_apply,
     )
+    if "external_agent" not in request.model_fields_set:
+        saved, _ = model_settings.editable("draft_review")
+        request = request.model_copy(update={"external_agent": saved.external_agent})
     if desired.mode != "off":
         issues = configuration_issues(request)
         if issues:
@@ -251,9 +254,7 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
             "draft_review",
             model_settings.SaveSelection(
                 provider=request.provider,
-                external_agent=request.external_agent
-                if "external_agent" in request.model_fields_set
-                else models.external_agent,
+                external_agent=request.external_agent,
                 claude_reasoning_effort=claude_effort,
                 openai_reasoning_effort=effort
                 if request.provider == "openai"

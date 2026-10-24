@@ -228,7 +228,8 @@ def test_a_waiting_review_survives_a_restart(agent):
     assert server.get_draft(draft_id)["review_assessment"]["status"] == "running"
 
 
-def test_the_review_form_saves_external_agent_with_no_model_or_reviewer(agent):
+def test_review_settings_keep_the_external_agent_with_no_model_or_reviewer(agent):
+    """A request that leaves `external_agent` out keeps the saved runner."""
     from mycelium import draft_review_settings
 
     current = draft_review_settings.load()
@@ -238,7 +239,6 @@ def test_the_review_form_saves_external_agent_with_no_model_or_reviewer(agent):
             provider="openai",
             model="",
             reviewer_id="",
-            external_agent=True,
             revision=current.revision,
             model_revision=current.model_revision,
         ),
