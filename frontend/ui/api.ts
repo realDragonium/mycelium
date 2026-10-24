@@ -92,6 +92,28 @@ export const uploadRaw = <T>(method: 'POST' | 'PUT', path: string, body: Blob, s
 
 export const enc = encodeURIComponent;
 
+/* -------------------------- model settings --------------------------- */
+export type Provider = 'claude' | 'openai';
+export type Effort = string | null;
+export interface ProviderStatus { provider: Provider; available: boolean; reason?: string | null }
+export interface ActionSettings {
+  action: string; provider: Provider; model: string; source: string; revision: number | string;
+  claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
+  external_agent?: boolean; agent_review?: 'server' | 'agent'; agent_supported?: boolean;
+  configuration_error?: string | null; model_warning?: string | null; providers: ProviderStatus[];
+}
+export interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
+
+export async function getAskExternal(signal?: AbortSignal): Promise<boolean> {
+  try {
+    const settings = await getJSON<ModelSettings>('/api/model-settings', signal);
+    return settings.actions.some(action => action.action === 'ask' && action.external_agent === true);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    return false;
+  }
+}
+
 /* ------------------------------ identity ------------------------------ */
 export type Role = 'reader' | 'drafter' | 'writer' | 'admin';
 export interface Me {

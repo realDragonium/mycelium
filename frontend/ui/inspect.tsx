@@ -1,6 +1,6 @@
 // Statement and entity detail: where provenance links and graph clicks land.
 import { Fragment, useCallback, useState, type FormEvent, type MouseEvent } from 'react';
-import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LoadError, Loading, Notice, PageHeader, formatDate, useDataCtx, useMe } from './lib';
+import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LoadError, Loading, Notice, PageHeader, formatDate, useAskExternal, useDataCtx, useMe } from './lib';
 import { Link, useRouter } from './router';
 import { deleteJSON, enc, errorMessage, getJSON, isScoped, putJSON, upsertEntity, upsertName } from './api';
 import { substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Statement, type SubstrateIndex, type When } from './data';
@@ -392,6 +392,7 @@ function StatementAudiences({ id }: { id: string }) {
 
 export function StatementDetail({ id }: { id: string }) {
   const { go } = useRouter();
+  const askExternal = useAskExternal();
   const scoped = isScoped(useMe());
   const [edits, setEdits] = useState(0);
   const idx = substrate.index;
@@ -411,7 +412,7 @@ export function StatementDetail({ id }: { id: string }) {
         actions={<>
           <CopyId id={s.id} />
           <Link to={{ view: 'graph', focus: s.id, all: false }} className="btn ghost sm"><I.graph width="14" height="14" />View in graph</Link>
-          <button className="btn sm ask" onClick={() => go({ view: 'ask', query: `Explain: ${s.title}` })}><I.ask width="14" height="14" />Ask about this</button>
+          {askExternal !== true && <button className="btn sm ask" onClick={() => go({ view: 'ask', query: `Explain: ${s.title}` })}><I.ask width="14" height="14" />Ask about this</button>}
         </>} />
 
       <div className="inspect-grid">

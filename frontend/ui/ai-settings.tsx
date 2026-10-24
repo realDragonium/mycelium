@@ -1,13 +1,9 @@
 // Model choice per AI action, and the automatic draft review.
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Card, LoadError, Loading, Notice } from './lib';
-import { HttpError, errorMessage, getJSON, patchJSON, postJSON } from './api';
+import { HttpError, errorMessage, getJSON, patchJSON, postJSON, type ActionSettings, type Effort, type ModelSettings, type Provider, type ProviderStatus } from './api';
 import { usd } from './ai-usage';
 import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
-
-type Provider = 'claude' | 'openai';
-type Effort = string | null;
-interface ProviderStatus { provider: Provider; available: boolean; reason?: string | null }
 
 export function draftReviewProviderName(provider: string | null | undefined): string {
   return provider === 'claude' ? 'Claude' : provider === 'openai' ? 'GPT (OpenAI)' : 'Unknown provider';
@@ -32,7 +28,7 @@ function ReasoningEffortField({ provider, value, onChange, label = 'Reasoning ef
 const ProviderSelect = ({ value, onChange, label }: { value: Provider; onChange: (p: Provider) => void; label: string }) => (
   <label className="field"><span>{label}</span>
     <select className="input" value={value} onChange={e => onChange(e.target.value === 'openai' ? 'openai' : 'claude')}>
-      <option value="claude">Claude (Anthropic)</option><option value="openai">GPT (OpenAI)</option>
+      <option value="claude">Claude</option><option value="openai">OpenAI</option>
     </select>
   </label>
 );
@@ -45,14 +41,21 @@ function saveError(e: unknown, what: string): { message: string; conflict: boole
 }
 
 /* ============================ per-action models ============================ */
-interface ActionSettings {
-  action: string; provider: Provider; model: string; source: string; revision: number | string;
-  claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
-  external_agent?: boolean; agent_review?: 'server' | 'agent'; agent_supported?: boolean;
-  configuration_error?: string | null; model_warning?: string | null; providers: ProviderStatus[];
-}
-interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
 const ACTION_TITLES: Record<string, string> = { ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation', alias_discovery: 'Alias discovery', audience_labelling: 'Audience labelling', documentation_planning: 'Documentation planning', connect: 'Connecting statements' };
+type ActionRunner = Provider | 'external';
+
+const actionProviderName = (provider: Provider): string => provider === 'claude' ? 'Claude' : 'OpenAI';
+
+function ActionRunnerSelect({ value, agentSupported, hint, onChange }: { value: ActionRunner; agentSupported: boolean; hint?: string; onChange: (value: ActionRunner) => void }) {
+  return (
+    <label className="field"><span>Runs on</span>
+      <select className="input" value={value} onChange={e => onChange(e.target.value === 'external' ? 'external' : e.target.value === 'openai' ? 'openai' : 'claude')}>
+        <option value="claude">Claude</option><option value="openai">OpenAI</option>{agentSupported && <option value="external">External agent</option>}
+      </select>
+      {hint && <span className="hint">{hint}</span>}
+    </label>
+  );
+}
 
 function formOf(s: ActionSettings) {
   return { provider: s.provider, claude_model: s.claude_model, openai_model: s.openai_model, claude_reasoning_effort: s.claude_reasoning_effort ?? null, openai_reasoning_effort: s.openai_reasoning_effort ?? null, external_agent: s.external_agent ?? false, agent_review: s.agent_review ?? 'server', revision: s.revision };
@@ -71,7 +74,7 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
   const claude = form.provider === 'claude';
   const model = claude ? form.claude_model : form.openai_model;
   const effort = claude ? form.claude_reasoning_effort : form.openai_reasoning_effort;
-  const needsProvider = !form.external_agent || form.agent_review === 'server';
+  const needsProvider = !form.external_agent || (settings.action === 'docgen' && form.agent_review === 'server');
   const showProvider = !form.external_agent || (settings.action === 'docgen' && form.agent_review === 'server');
   const available = current.providers.find(p => p.provider === form.provider);
   const accept = (value: ActionSettings) => { setCurrent(value); setForm(formOf(value)); };
@@ -105,9 +108,9 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
   return (
     <Card title={title} actions={<button type="button" className="btn ghost sm" onClick={() => void reload()} disabled={busy}>Reload</button>}>
       <p className="muted">
-        Now: {current.external_agent
-          ? <>External agent{settings.action === 'docgen' && <> · {current.agent_review === 'agent' ? 'reviewed by another agent' : <>reviewed by {draftReviewProviderName(current.provider)} · {current.model}</>}</>}</>
-          : <>{draftReviewProviderName(current.provider)} · {current.model || 'no model configured'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'}</>} · {current.source === 'saved' ? 'saved here' : 'built-in default'}
+        Now: Runs on {current.external_agent
+          ? <>External agent{settings.action === 'docgen' && <> · {current.agent_review === 'agent' ? 'reviewed by another agent' : <>reviewed by {actionProviderName(current.provider)} · {current.model}</>}</>}</>
+          : <>{actionProviderName(current.provider)} · {current.model || 'no model configured'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'}</>} · {current.source === 'saved' ? 'saved here' : 'built-in default'}
       </p>
       {settings.action === 'docgen' && <p className="hint">The default for new documents. Choosing another provider when generating uses that provider's saved model and effort.</p>}
       {current.configuration_error && <Notice tone="error">{current.configuration_error} Save valid settings to enable this action.</Notice>}
@@ -117,12 +120,9 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
         <form onSubmit={save}>
           <fieldset disabled={busy || conflict}>
             <div className="field-grid">
-              {current.agent_supported && <label className="field"><span>Done by</span>
-                <select className="input" value={form.external_agent ? 'agent' : 'server'} onChange={e => edit({ external_agent: e.target.value === 'agent' })}>
-                  <option value="server">Server model</option><option value="agent">External agent</option>
-                </select>
-                {form.external_agent && <span className="hint">Agents with a writer token claim this work over MCP (claim_agent_task). See Agent tasks in the docs.</span>}
-              </label>}
+              <ActionRunnerSelect value={form.external_agent ? 'external' : form.provider} agentSupported={current.agent_supported === true} hint={form.external_agent ? settings.action === 'ask'
+                  ? 'Ask runs no model on the server. People ask their own agent, connected over MCP, which researches with the read tools (mycelium-research skill). Ask is hidden in this web app and from the MCP tool list.'
+                  : 'Agents with a writer token claim this work over MCP (claim_agent_task). See Agent tasks in the docs.' : undefined} onChange={value => edit(value === 'external' ? { external_agent: true } : { provider: value, external_agent: false })} />
               {settings.action === 'docgen' && form.external_agent && <label className="field"><span>Review</span>
                 <select className="input" value={form.agent_review} onChange={e => edit({ agent_review: e.target.value === 'agent' ? 'agent' : 'server' })}>
                   <option value="server">Server reviewer (the provider below)</option><option value="agent">Another agent</option>
@@ -130,7 +130,7 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
                 <span className="hint">Another agent is never the document's writer, but two tokens of one person are not told apart.</span>
               </label>}
               {showProvider && <>
-                <ProviderSelect value={form.provider} onChange={provider => edit({ provider })} label="Provider" />
+                {form.external_agent && <ProviderSelect value={form.provider} onChange={provider => edit({ provider })} label="Reviewer provider" />}
                 <label className="field"><span>Model ID</span>
                   <input className="input" required value={model} placeholder="A model ID for this provider" onChange={e => edit(claude ? { claude_model: e.target.value } : { openai_model: e.target.value })} />
                 </label>
@@ -154,9 +154,22 @@ export function ActionModels() {
   useOnSettingsSaved(reload);
   const data = dataOf(state);
   if (!data) return state.status === 'error' ? <LoadError error={state.error} what="model settings" onRetry={reload} /> : <Loading what="model settings" />;
+  const actions = data.actions.filter(a => a.action !== 'draft_review');
   return <>
-    <p className="muted">Each action picks its provider and model independently. Saved choices apply to new runs. API credentials stay on the server; model access is checked when a run starts. The draft reviewer's model is under Draft review.</p>
-    {data.actions.filter(a => a.action !== 'draft_review').map(a => <ActionModelSettings key={a.action} settings={a} canConfigure={data.can_configure} />)}
+    <p className="muted">Each action runs independently on Claude, OpenAI or an External agent. Changing one action does not change the others. Saved choices apply to new runs. API credentials stay on the server; model access is checked when a run starts. The draft reviewer's model is under Draft review.</p>
+    <Card title="Overview"><table className="tbl compact">
+        <thead><tr><th>Action</th><th>Runs on</th><th>Model</th></tr></thead>
+        <tbody>{actions.map(action => (
+          <tr key={action.action}>
+            <td>{ACTION_TITLES[action.action] || action.action}</td>
+            <td>{action.external_agent ? 'External agent' : actionProviderName(action.provider)}</td>
+            <td>{action.external_agent
+              ? action.action === 'docgen' && action.agent_review === 'server' ? <>reviewed by {actionProviderName(action.provider)} · {action.model}</> : '—'
+              : action.model}</td>
+          </tr>
+        ))}</tbody>
+      </table></Card>
+    {actions.map(a => <ActionModelSettings key={a.action} settings={a} canConfigure={data.can_configure} />)}
   </>;
 }
 

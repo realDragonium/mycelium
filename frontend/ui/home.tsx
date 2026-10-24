@@ -2,7 +2,7 @@
 // is waiting for a person.
 import { useCallback } from 'react';
 import { CommandBar } from './command-bar';
-import { I, useGoIngest, useMe } from './lib';
+import { I, useAskExternal, useGoIngest, useMe } from './lib';
 import { Link } from './router';
 import { getJSON, getSubstrateCounts, isScoped, type KnowledgeGap } from './api';
 import { asksPerson, type DraftSummary } from './draft-review';
@@ -17,6 +17,7 @@ const loadQueue = (scoped: boolean) => scoped ? Promise.resolve(null) : Promise.
 
 export function HomeScreen() {
   const scoped = isScoped(useMe());
+  const askExternal = useAskExternal();
   const goIngest = useGoIngest();
   const queue = useAsync(useCallback(() => loadQueue(scoped), [scoped])).state;
   const counts = useAsync(getSubstrateCounts).state;
@@ -39,7 +40,9 @@ export function HomeScreen() {
         <h1 className="home-title">Interrogate a substrate<br />built to be <em>read by machines</em>.</h1>
         <p className="home-blurb">
           Knowledge enters through <b>ingest</b> or connected agents, and waits as a draft until someone approves it.
-          Read it back two ways: <b>Ask</b> for a reasoned answer with its gaps and provenance, or <b>Find</b> for raw, scored matches you judge.
+          {askExternal === true
+            ? <> <b>Find</b> returns raw, scored matches for you to judge.</>
+            : <> Read it back two ways: <b>Ask</b> for a reasoned answer with its gaps and provenance, or <b>Find</b> for raw, scored matches you judge.</>}
         </p>
       </div>
 
@@ -47,11 +50,11 @@ export function HomeScreen() {
 
       <HomeSetup />
 
-      <div className="tier-cards">
-        <div className="tier-card ask">
+      <div className={`tier-cards${askExternal === true ? ' find-only' : ''}`}>
+        {askExternal !== true && <div className="tier-card ask">
           <div className="tc-head"><span className="tc-dot" /><span className="tc-name">Ask</span><span className="tc-kind">agentic · slow</span></div>
           <p>A reasoning loop returns one answer with confidence, the interpretation it used, explicit gaps, provenance and a trace.</p>
-        </div>
+        </div>}
         <div className="tier-card find">
           <div className="tc-head"><span className="tc-dot" /><span className="tc-name">Find</span><span className="tc-kind">deterministic · fast</span></div>
           <p>Semantic, grep and survey return raw statements with relevance scores. Nothing is hidden; the long tail is shown, faded.</p>

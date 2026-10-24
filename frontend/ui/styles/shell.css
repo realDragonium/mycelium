@@ -57,6 +57,7 @@
 /* ---------- command bar ---------- */
 .cmd-wrap { position: relative; }
 .cmd { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: stretch; border: 1px solid var(--line-strong); border-radius: var(--r-lg); background: var(--bg-1); overflow: hidden; transition: border-color 0.15s, box-shadow 0.15s; }
+.cmd.find-only { grid-template-columns: minmax(0, 1fr) auto; }
 .cmd[data-intent="ask"] { border-color: var(--bio-line); }
 .cmd[data-intent="find"] { border-color: var(--cyan-line); }
 .cmd-toggle { display: flex; align-items: stretch; padding: 4px; gap: 3px; border-right: 1px solid var(--line-soft); background: var(--bg-2); }
