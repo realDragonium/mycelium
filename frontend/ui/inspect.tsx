@@ -4,7 +4,7 @@ import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LoadError, L
 import { Link, useRouter } from './router';
 import { deleteJSON, enc, errorMessage, getJSON, isScoped, putJSON, upsertEntity, upsertName } from './api';
 import { substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Statement, type SubstrateIndex, type When } from './data';
-import { AudienceIdentity, TextChangedActions, type AudienceLabel, type AudienceRef } from './audiences';
+import { AudienceIdentity, PendingGrantActions, TextChangedActions, type AudienceLabel, type AudienceRef } from './audiences';
 import { useAsync } from './use-async';
 import { MediaPanel } from './media';
 
@@ -342,7 +342,7 @@ function CopyId({ id }: { id: string }) {
   return <button className="btn ghost sm" onClick={() => { void navigator.clipboard?.writeText(id); setCopied(true); }}>{copied ? 'Copied' : 'Copy id'}</button>;
 }
 
-interface StatementAudience extends AudienceRef { visible: boolean }
+interface StatementAudience extends AudienceRef { visible: boolean; pending: boolean }
 interface StatementAudienceData {
   statement_id: string; label: AudienceLabel | null; queued: boolean; audiences: StatementAudience[]; can_curate: boolean;
 }
@@ -381,8 +381,11 @@ function StatementAudiences({ id }: { id: string }) {
       {data.queued && <Notice>Queued for labelling.</Notice>}
       {!label ? <Notice tone="warn">Unlabelled: internal audiences only.</Notice> : <p className="audience-label-summary"><b>{label.source === 'ai' ? `AI${label.model ? ` · ${label.model}` : ''}` : `Curator${label.labelled_by ? ` · ${label.labelled_by}` : ''}`}</b> · {formatDate(label.labelled_at)}<br />{label.reason}</p>}
       {label?.text_changed_at && <Notice tone="warn">Text changed since decision ({formatDate(label.text_changed_at)}). The curator label still applies until a curator confirms it or hands it back to AI.{data.can_curate && <TextChangedActions statementId={data.statement_id} onDone={reload} />}</Notice>}
-      <div className="statement-audience-list">{data.audiences.map(audience => <div key={audience.id}><AudienceIdentity audience={audience} /><span className={`audience-visible ${audience.visible ? 'yes' : 'no'}`}>{audience.visible ? 'Visible' : 'Hidden'}</span></div>)}</div>
-      {data.can_curate && <AudienceCuration key={`${label?.labelled_at || 'none'}:${data.queued}`} data={data} onSaved={value => update(() => value)} />}
+      {label?.narrowed && <Notice tone="warn"><span>Narrowed after an edit: no longer visible to {label.narrowed.lost.map(lost => data.audiences.find(audience => audience.id === lost)?.name || lost).join(', ')}. {label.narrowed.reason}</span></Notice>}
+      <div className="statement-audience-list">{data.audiences.map(audience => <div key={audience.id}><AudienceIdentity audience={audience} />{audience.pending
+        ? <span className="row gap-sm"><span className="audience-visible pending">Waiting for confirmation</span>{data.can_curate && <PendingGrantActions audienceId={audience.id} statementIds={[data.statement_id]} onDone={reload} />}</span>
+        : <span className={`audience-visible ${audience.visible ? 'yes' : 'no'}`}>{audience.visible ? 'Visible' : 'Hidden'}</span>}</div>)}</div>
+      {data.can_curate && <AudienceCuration key={`${label?.labelled_at || 'none'}:${data.queued}:${label?.pending.join(',') || ''}`} data={data} onSaved={value => update(() => value)} />}
     </>; })()}
   </section>;
 }

@@ -23,7 +23,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence, Set
 from dataclasses import asdict, dataclass
 from typing import Literal
 
-from . import media, media_store, store
+from . import audiences, media, media_store, store
 
 #: How many changes a revision brief spells out before summarising the rest.
 _BRIEF_CHANGES = 10
@@ -129,7 +129,9 @@ def assess_media(
         if row is None:
             changes.append(MediaChange(media_id, "deleted", ""))
         elif cited.audience is not None and not store.audience_labels.grants(
-            media_store.label(row), *cited.audience
+            media_store.label(row),
+            audiences.sees_of(cited.audience[0]),
+            cited.audience[1],
         ):
             changes.append(MediaChange(media_id, "no_longer_visible", row["alt_text"]))
         elif str(row["content_updated_at"]) > cited.written_at:
@@ -181,8 +183,9 @@ def for_documents(
                         if sid in current
                     }
                 )
+                audience_id, internal = audience
                 visible[audience] = store.audience_labels.visible_among(
-                    conn, *audience, existing
+                    conn, audiences.sees_of(audience_id), internal, existing
                 )
         if survivors:
             current.update(store.get_statement_texts(conn, survivors))

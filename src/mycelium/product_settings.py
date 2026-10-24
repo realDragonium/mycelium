@@ -112,6 +112,14 @@ class AudienceLabellingSettings(RequestLimits):
     #: Label new and changed statements in the background. A backfill runs
     #: either way, since an admin starts it.
     automatic: bool = True
+    #: An AI grant that would newly show a statement to an external audience
+    #: waits for a curator. Off applies it at once.
+    confirm_external_grants: bool = True
+    #: Pending grants one review sample draws per external audience.
+    sample_size: int = Field(default=50, gt=0, le=500)
+    #: Below this sample precision the review suggests relabelling instead
+    #: of accepting the rest.
+    min_sample_precision_percent: int = Field(default=90, ge=0, le=100)
     batch_size: int = Field(default=25, gt=0, le=100)
     max_tokens: int = Field(default=6000, gt=0)
     max_retries: int = Field(default=2, ge=0)

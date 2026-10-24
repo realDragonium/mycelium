@@ -437,7 +437,9 @@ CPU that took about a minute for 4,000 statements.
    descriptions, then click **Label unlabelled statements**. Until labelling has run, every
    statement is visible to internal audiences only, so external documents and
    plans have nothing to draw on. With a small model, labelling took about 11
-   minutes and $0.10 per 1,000 statements.
+   minutes and $0.10 per 1,000 statements. The external grants it makes then
+   wait for confirmation; see
+   [Confirming external grants](#upgrading-to-schema-v25-confirming-external-grants).
 2. **Settings → Documentation:** choose an audience for each writing profile.
    Profiles without one write for the internal technical audience.
 3. **Settings → Models:** choose models for the new actions (audience
@@ -445,6 +447,46 @@ CPU that took about a minute for 4,000 statements.
    holds a model of that provider.
 4. **Documents:** revisions written before this upgrade record no citations,
    so they show as "unknown" rather than out of date until they are revised.
+
+### Upgrading to schema v25: confirming external grants
+
+v25 adds columns to the statement audience labels (the external grants
+waiting for a curator, the curator's decisions on AI grants, why a relabel
+after an edit narrowed a label, and the confirmed grants an edit kept for a
+spot check) and the previous label to the labelling queue.
+Grants already in force stay in force; nothing becomes hidden on upgrade.
+
+On startup the seeded audiences get their includes (external technical and
+internal non-technical include external non-technical; internal technical
+includes the other three), unless an administrator saved them since. This
+widens visibility at once: external technical now sees every statement granted
+to external non-technical. Check **Settings → Audiences** before the start of
+documentation runs if that is not wanted. If the audience labelling
+instructions were customised in **Settings → Prompts**, compare them with the
+new default, which names only the most restricted audiences a statement fits
+and keeps an edited statement's audiences. From this
+build on, an AI grant that would newly show a statement to an external
+audience waits for a curator while **Settings → Limits → Audience labelling →
+Confirm external grants** is on, which is the default.
+
+**After the start**, as an administrator:
+
+1. **Settings → Audiences:** click **Label unlabelled statements** (or
+   **Relabel AI labels** when the AI labels are older than the current
+   audience descriptions). On an instance that was never labelled, expect
+   several hundred grants under **Waiting for confirmation**.
+2. For each external audience, click **Review a sample**. Confirm or reject
+   every sampled grant; the card shows the sample's precision.
+3. If the precision is at or above the warning threshold (90% by default,
+   **Settings → Limits**), click **Accept the rest**. Every remaining grant is
+   confirmed and records that it was accepted after a sample of that size and
+   precision; the sample's rejections stay rejected.
+4. If it is below, do not accept the rest: sharpen the audience description or
+   the audience labelling instructions (**Settings → Prompts**), click
+   **Relabel AI labels**, and review a new sample.
+
+Until a grant is confirmed, external documents, plans and scoped tokens do
+not see the statement.
 
 ---
 

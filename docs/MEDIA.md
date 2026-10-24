@@ -66,9 +66,12 @@ rules in [Audiences](AUDIENCES.md#labels):
 
 - An unlabelled item is visible to internal audiences only. Uploads start
   unlabelled.
+- A labelled item is visible to the audiences it grants and to every audience
+  that includes one of them.
 - Replacing the file of a labelled item keeps the label but flags it **content
   changed since decision**; **Confirm** keeps it as decided now.
-- Only real writers and admins label; there is no AI labeller for media.
+- Only real writers and admins label; there is no AI labeller for media, so
+  no media grant waits for confirmation.
 
 The label of the statement an image is attached to does not widen the image's
 own: an image is visible only to the audiences its own label allows, however

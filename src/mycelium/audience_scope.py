@@ -51,7 +51,7 @@ def active() -> Scope | None:
 def capture(conn: sqlite3.Connection, audience: Audience) -> Scope:
     """Snapshot what `audience` may see. Held for the whole run, so the
     citation gate and every read agree even while labels change."""
-    ids = store.visible_statement_ids(conn, audience.id, audience.internal)
+    ids = store.visible_statement_ids(conn, audience.sees, audience.internal)
     vectors = frozenset(
         int(row["vector_id"])
         for row in conn.execute(

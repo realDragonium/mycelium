@@ -107,7 +107,7 @@ def update_statement(
         (kind, text, _now(), kernel.get_actor(), statement_id),
     )
     if before is not None and before["text"] != text:
-        audience_labels.text_changed(conn, statement_id)
+        audience_labels.text_changed(conn, statement_id, str(before["text"]))
     _record(
         conn,
         "update",
@@ -128,7 +128,7 @@ def update_statement_text(
         (text, _now(), kernel.get_actor(), statement_id),
     )
     if before is not None and before["text"] != text:
-        audience_labels.text_changed(conn, statement_id)
+        audience_labels.text_changed(conn, statement_id, str(before["text"]))
     _record(
         conn,
         "update",

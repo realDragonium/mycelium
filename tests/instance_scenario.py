@@ -133,6 +133,58 @@ def _substrate(server) -> dict[str, str]:
                 "'2026-08-02T00:00:00Z' WHERE statement_id = ?",
                 (ids["expiry"],),
             )
+        if "pending" in labels:
+            db.execute(
+                "INSERT INTO statement_audience_labels (statement_id, audiences, "
+                "source, reason, model, cost_usd, labelled_at, labelled_by, pending, "
+                'decisions) VALUES (?, \'["internal-technical", '
+                "\"external-technical\"]', 'ai', 'Users see this.', 'scenario-model', "
+                "0.0001, '2026-08-01T00:00:00Z', NULL, "
+                '\'["external-non-technical"]\', \'{"external-technical": '
+                '{"at": "2026-08-02T00:00:00Z", "by": "curator", '
+                '"decision": "confirmed"}}\')',
+                (ids["submit"],),
+            )
+        if "narrowed" in labels:
+            db.execute(
+                "UPDATE statement_audience_labels SET narrowed = ? "
+                "WHERE statement_id = ?",
+                (
+                    '{"previous": ["external-non-technical"], '
+                    '"lost": ["external-non-technical"], '
+                    '"reason": "The new text names an internal service."}',
+                    ids["submit"],
+                ),
+            )
+        if "kept_on_edit" in labels:
+            db.execute(
+                "UPDATE statement_audience_labels SET kept_on_edit = ? "
+                "WHERE statement_id = ?",
+                (
+                    '{"audiences": ["external-technical"], '
+                    '"old_text": "A user submits the sign-in form.", '
+                    '"at": "2026-08-03T00:00:00Z"}',
+                    ids["submit"],
+                ),
+            )
+        queue = {
+            row[1] for row in db.execute("PRAGMA table_info(audience_label_queue)")
+        }
+        if "previous" in queue:
+            db.execute(
+                "INSERT INTO audience_label_queue (statement_id, enqueued_at, "
+                "previous) VALUES (?, '2026-08-03T00:00:00Z', ?) "
+                "ON CONFLICT (statement_id) DO UPDATE SET previous = excluded.previous",
+                (
+                    ids["locked"],
+                    '{"text": "The account is disabled.", '
+                    '"audiences": ["external-non-technical"], '
+                    '"reason": "Users see this.", '
+                    '"confirmed": {"external-non-technical": {"decision": '
+                    '"confirmed", "by": "curator", "at": "2026-08-02T00:00:00Z"}}, '
+                    '"confirmed_text": "The account is disabled."}',
+                ),
+            )
     if _has_table(db, "curation_attempts"):
         db.execute(
             "INSERT INTO curation_attempts SELECT id, text, ?, "

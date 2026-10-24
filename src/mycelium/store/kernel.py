@@ -451,6 +451,14 @@ CREATE TABLE IF NOT EXISTS entity_duplicate_dismissals (
 -- An AI label is dropped when the statement's text changes; a curator label
 -- stays until a curator clears it, and the AI never overwrites it. A text
 -- change stamps `text_changed_at` on a curator label until it is decided again.
+-- `pending` is a JSON array of external audiences the AI granted that could
+-- not see the statement before; they grant nothing until a curator confirms.
+-- `decisions` is a JSON object of the curator's confirmations and rejections
+-- of AI grants, keyed by audience id.
+-- `narrowed` records an edit's relabel that took the statement away from
+-- audiences that saw it: from which label, which audiences, and why.
+-- `kept_on_edit` marks confirmed external grants an edit's relabel kept in
+-- force, with the text they were confirmed for, until a curator looks.
 CREATE TABLE IF NOT EXISTS statement_audience_labels (
     statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
     audiences       TEXT NOT NULL,
@@ -460,20 +468,26 @@ CREATE TABLE IF NOT EXISTS statement_audience_labels (
     cost_usd        REAL,
     labelled_at     TEXT NOT NULL,
     labelled_by     TEXT,
-    text_changed_at TEXT
+    text_changed_at TEXT,
+    pending         TEXT,
+    decisions       TEXT,
+    narrowed        TEXT,
+    kept_on_edit    TEXT
 );
 
 -- Statements waiting for the audience labelling worker. A new statement or a
 -- text change enqueues in the same transaction; existing statements reach it
 -- only through an explicit backfill, which is what spends money. A failed
 -- batch backs off by `next_attempt_at`; past the attempt limit a row waits
--- for the next backfill.
+-- for the next backfill. `previous` holds the AI label an edit dropped and
+-- the text it judged (JSON), so the relabel starts from it.
 CREATE TABLE IF NOT EXISTS audience_label_queue (
     statement_id    TEXT PRIMARY KEY REFERENCES statements(id) ON DELETE CASCADE,
     enqueued_at     TEXT NOT NULL,
     attempts        INTEGER NOT NULL DEFAULT 0,
     next_attempt_at TEXT,
-    last_error      TEXT
+    last_error      TEXT,
+    previous        TEXT
 );
 
 -- The last time a statement or knowledge gap was looked at, by the connect

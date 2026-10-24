@@ -3,15 +3,21 @@
 An audience is instance configuration, stored as versioned `audience` rows in
 the prompt store, so every edit keeps history and a retirement is a tombstone.
 The row name is the audience's immutable id; the text holds its name, whether
-it is internal or external, and the description the labeller and the writer
-read. Statement labels (in the substrate) reference the id.
+it is internal or external, the description the labeller and the writer
+read, and the audiences it includes. Statement labels (in the substrate)
+reference the id.
+
+An audience that includes another may see everything that one may see, so a
+statement is visible to an audience when its label grants the audience or
+any audience it includes, transitively. The labeller then only names the
+most restricted audiences a statement fits.
 """
 
 from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -33,6 +39,8 @@ class AudienceBody(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     scope: Scope
     description: str = Field(min_length=1, max_length=4000)
+    #: Audiences this one may see everything of.
+    includes: list[str] = Field(default_factory=list, max_length=50)
 
 
 @dataclass(frozen=True)
@@ -42,10 +50,19 @@ class Audience:
     scope: Scope
     description: str
     version: int
+    includes: tuple[str, ...] = ()
+    #: Every live audience it includes, directly or through another; filled
+    #: by `live`.
+    reach: tuple[str, ...] = ()
 
     @property
     def internal(self) -> bool:
         return self.scope == "internal"
+
+    @property
+    def sees(self) -> frozenset[str]:
+        """The audience ids whose grants this audience may see."""
+        return frozenset((self.id, *self.reach))
 
 
 SEEDS: tuple[tuple[str, AudienceBody], ...] = (
@@ -61,6 +78,11 @@ SEEDS: tuple[tuple[str, AudienceBody], ...] = (
                 "failure modes, limits and workarounds. Nothing is withheld "
                 "from them: every statement may be shown to this audience."
             ),
+            includes=[
+                "internal-non-technical",
+                "external-technical",
+                "external-non-technical",
+            ],
         ),
     ),
     (
@@ -75,6 +97,7 @@ SEEDS: tuple[tuple[str, AudienceBody], ...] = (
                 "processes run, in plain language. They do not need code, "
                 "internal component names, data models or infrastructure detail."
             ),
+            includes=["external-non-technical"],
         ),
     ),
     (
@@ -92,6 +115,7 @@ SEEDS: tuple[tuple[str, AudienceBody], ...] = (
                 "infrastructure, internal processes, unreleased work, security "
                 "internals, or anything about other customers."
             ),
+            includes=["external-non-technical"],
         ),
     ),
     (
@@ -123,19 +147,64 @@ def _parse(row: sqlite3.Row) -> Audience | None:
         scope=body.scope,
         description=body.description,
         version=int(row["version"]),
+        includes=tuple(body.includes),
     )
+
+
+def _reach(audience_id: str, includes: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    found: list[str] = []
+    stack = list(includes.get(audience_id, ()))
+    while stack:
+        item = stack.pop()
+        if item in found or item == audience_id or item not in includes:
+            continue
+        found.append(item)
+        stack.extend(includes[item])
+    return tuple(sorted(found))
 
 
 def live(conn: sqlite3.Connection | None = None) -> tuple[Audience, ...]:
     """Every live, well-formed audience, internal first, then by name."""
     db = conn if conn is not None else prompt_store.connection()
-    parsed = (_parse(row) for row in prompt_store.list_current(db, TYPE))
+    parsed = [
+        item
+        for item in (_parse(row) for row in prompt_store.list_current(db, TYPE))
+        if item is not None
+    ]
+    includes = {item.id: item.includes for item in parsed}
     return tuple(
         sorted(
-            (item for item in parsed if item is not None),
+            (replace(item, reach=_reach(item.id, includes)) for item in parsed),
             key=lambda item: (not item.internal, item.name.casefold()),
         )
     )
+
+
+def graph(current: tuple[Audience, ...] | None = None) -> store.audience_labels.Graph:
+    """The live includes as the label store reads them."""
+    found = current if current is not None else live()
+    return store.audience_labels.Graph(
+        sees={item.id: item.sees for item in found},
+        internal=frozenset(item.id for item in found if item.internal),
+    )
+
+
+def sees_of(
+    audience_id: str, current: tuple[Audience, ...] | None = None
+) -> frozenset[str]:
+    """The audience ids whose grants `audience_id` may see, by the live
+    includes; only itself when it is not live or no prompts store is open."""
+    if current is None and not prompt_store.is_configured():
+        return frozenset((audience_id,))
+    found = next(
+        (
+            item
+            for item in (current if current is not None else live())
+            if item.id == audience_id
+        ),
+        None,
+    )
+    return found.sees if found is not None else frozenset((audience_id,))
 
 
 def default(audiences: tuple[Audience, ...]) -> Audience | None:
@@ -160,6 +229,7 @@ def seed(conn: sqlite3.Connection) -> None:
         if conn.execute(
             "SELECT 1 FROM prompt_texts WHERE type = ? LIMIT 1", (TYPE,)
         ).fetchone():
+            _seed_includes(conn)
             return
         for audience_id, body in SEEDS:
             prompt_store._append(
@@ -172,6 +242,27 @@ def seed(conn: sqlite3.Connection) -> None:
             )
 
 
+def _seed_includes(conn: sqlite3.Connection) -> None:
+    """Give the seeded audiences their includes once, on instances seeded
+    before audiences could include each other. A text without the field was
+    written before then; a saved one always carries it."""
+    current = {item.id for item in live(conn)}
+    for audience_id, seeded in SEEDS:
+        history = prompt_store.history(conn, TYPE, audience_id)
+        if not history or history[0]["deleted"] or '"includes"' in history[0]["text"]:
+            continue
+        body = AudienceBody.model_validate_json(history[0]["text"])
+        body.includes = [item for item in seeded.includes if item in current]
+        prompt_store._append(
+            conn,
+            type=TYPE,
+            name=audience_id,
+            text=body.model_dump_json(),
+            deleted=0,
+            created_by="seed",
+        )
+
+
 # --- views and edits ---------------------------------------------------------
 
 
@@ -181,11 +272,14 @@ class AudienceView(BaseModel):
     scope: Scope
     description: str
     version: int
+    includes: list[str]
     retired: bool
     default: bool
     profiles: list[str]
     visible_statements: int
     unlabelled_statements: int
+    #: AI grants to this audience waiting for a curator.
+    pending_statements: int
 
 
 class AudiencesView(BaseModel):
@@ -193,6 +287,7 @@ class AudiencesView(BaseModel):
     can_configure: bool
     statements: int
     unlabelled: int
+    pending: int
 
 
 class SaveAudience(AudienceBody):
@@ -259,6 +354,9 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
             "(SELECT 1 FROM statement_audience_labels l WHERE l.statement_id = s.id)"
         ).fetchone()[0]
     )
+    from .grant_confirmation import pending_counts
+
+    pending = pending_counts(substrate)
     views: list[AudienceView] = []
     for audience in current:
         views.append(
@@ -268,6 +366,7 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
                 scope=audience.scope,
                 description=audience.description,
                 version=audience.version,
+                includes=list(audience.includes),
                 retired=False,
                 default=fallback is not None and audience.id == fallback.id,
                 profiles=sorted(
@@ -277,10 +376,11 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
                 ),
                 visible_statements=len(
                     store.visible_statement_ids(
-                        substrate, audience.id, audience.internal
+                        substrate, audience.sees, audience.internal
                     )
                 ),
                 unlabelled_statements=unlabelled,
+                pending_statements=pending.get(audience.id, 0),
             )
         )
     for audience_id, row in sorted(rows.items()):
@@ -299,11 +399,13 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
                 scope=previous.scope,
                 description=previous.description,
                 version=int(row["version"]),
+                includes=list(previous.includes),
                 retired=True,
                 default=False,
                 profiles=[],
                 visible_statements=0,
                 unlabelled_statements=unlabelled,
+                pending_statements=0,
             )
         )
     return AudiencesView(
@@ -311,6 +413,7 @@ def view(principal: auth.Principal, substrate: sqlite3.Connection) -> AudiencesV
         can_configure=principal.is_admin,
         statements=total,
         unlabelled=unlabelled,
+        pending=sum(pending.get(item.id, 0) for item in current),
     )
 
 
@@ -325,6 +428,7 @@ def create(request: CreateAudience, principal: auth.Principal) -> Audience:
                 "choose another id or restore it."
             )
         _check_unique_name(conn, request.name, audience_id)
+        _check_includes(conn, audience_id, request)
         row = prompt_store._append(
             conn,
             type=TYPE,
@@ -357,6 +461,7 @@ def save(
         if current is not None and current.internal and body.scope == "external":
             _protect_last_internal(conn, audience_id)
         _check_unique_name(conn, body.name, audience_id)
+        _check_includes(conn, audience_id, body)
         if current is not None and history[0]["text"] == body.model_dump_json():
             return current
         row = prompt_store._append(
@@ -419,3 +524,30 @@ def _check_unique_name(conn: sqlite3.Connection, name: str, audience_id: str) ->
         for item in live(conn)
     ):
         raise Conflict(f"Another audience is already called {name!r}.")
+
+
+def _check_includes(
+    conn: sqlite3.Connection, audience_id: str, body: AudienceBody
+) -> None:
+    """Includes name other live audiences, an external audience never
+    includes an internal one, and no audience includes itself through others."""
+    others = {item.id: item for item in live(conn) if item.id != audience_id}
+    unknown = sorted(set(body.includes) - others.keys())
+    if unknown:
+        raise ValueError(
+            "Unknown or retired audiences to include: " + ", ".join(unknown)
+        )
+    scopes = {key: item.scope for key, item in others.items()}
+    scopes[audience_id] = body.scope
+    includes = {key: item.includes for key, item in others.items()}
+    includes[audience_id] = tuple(body.includes)
+    for key, included in includes.items():
+        if scopes[key] == "external" and any(
+            scopes[item] == "internal" for item in included if item in scopes
+        ):
+            raise ValueError(
+                "An external audience cannot include an internal one: it would "
+                "see internal statements."
+            )
+    if any(audience_id in _reach(item, includes) for item in body.includes):
+        raise ValueError("These includes would make the audience include itself.")
