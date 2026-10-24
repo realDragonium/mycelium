@@ -1,7 +1,7 @@
 // Model choice per AI action, and the automatic draft review.
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Card, LoadError, Loading, Notice } from './lib';
-import { HttpError, errorMessage, getJSON, patchJSON, postJSON, type ActionSettings, type Effort, type ModelSettings, type Provider, type ProviderStatus } from './api';
+import { HttpError, errorMessage, getJSON, patchJSON, postJSON, type ActionSettings, type CatalogModel, type Effort, type ModelSettings, type Provider, type ProviderStatus } from './api';
 import { usd } from './ai-usage';
 import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
@@ -33,6 +33,23 @@ const ProviderSelect = ({ value, onChange, label }: { value: Provider; onChange:
   </label>
 );
 
+// Every model choice picks from the admin's catalog. A saved model the catalog no longer lists stays selected until changed.
+function ModelSelect({ provider, value, catalog, required, onChange }: {
+  provider: Provider; value: string; catalog: CatalogModel[]; required?: boolean; onChange: (model: string) => void;
+}) {
+  const offered = catalog.filter(m => m.provider === provider).map(m => m.model);
+  return (
+    <label className="field"><span>Model</span>
+      <select className="input" value={value} required={required} onChange={e => onChange(e.target.value)}>
+        <option value="">Choose a model</option>
+        {value && !offered.includes(value) && <option value={value}>{value} (not in the catalog)</option>}
+        {offered.map(m => <option key={m} value={m}>{m}</option>)}
+      </select>
+      {offered.length === 0 && <span className="hint">Add a {actionProviderName(provider)} model to the model catalog first.</span>}
+    </label>
+  );
+}
+
 // Settings saves are optimistic-locked by revision: a 409 means someone else
 // saved first, and the form must be reloaded before it can save again.
 function saveError(e: unknown, what: string): { message: string; conflict: boolean } {
@@ -57,13 +74,104 @@ function ActionRunnerSelect({ value, agentSupported, hint, onChange }: { value: 
   );
 }
 
+/* ============================ model catalog ============================ */
+interface CatalogSettings { kind: 'model_catalog'; claude: string[]; openai: string[] }
+interface CatalogSection { settings: CatalogSettings; revision: number | string; configuration_error?: string | null }
+
+const loadCatalog = async (): Promise<CatalogSection> => {
+  const data = await getJSON<{ sections: { settings: { kind: string }; revision: number | string; configuration_error?: string | null }[] }>('/api/product-settings');
+  const section = data.sections.find((s): s is CatalogSection => s.settings.kind === 'model_catalog');
+  if (!section) throw new Error('The model catalog is unavailable.');
+  return section;
+};
+
+// The models every picker offers, per provider in the admin's order. Saved as one product-settings section, so a stale
+// revision answers 409; removing a model an action uses is refused by the server, naming the actions.
+function ModelCatalog({ catalog, canConfigure }: { catalog: CatalogModel[]; canConfigure: boolean }) {
+  const { state, reload } = useAsync(useCallback(() => loadCatalog(), []));
+  const section = dataOf(state);
+  const [form, setForm] = useState<CatalogSettings | null>(null);
+  const [adding, setAdding] = useState<Record<Provider, string>>({ claude: '', openai: '' });
+  const [error, setError] = useState<string | null>(null);
+  const [conflict, setConflict] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [seen, setSeen] = useState(section);
+  if (section !== seen) { setSeen(section); if (section && (!form || sameForm(form, seen?.settings))) setForm(section.settings); }
+  if (!section || !form) return state.status === 'error' ? <LoadError error={state.error} what="the model catalog" onRetry={reload} /> : <Loading what="the model catalog" />;
+
+  const change = (provider: Provider, models: string[]) => { setForm({ ...form, [provider]: models }); setSaved(false); };
+  const move = (provider: Provider, index: number, by: number) => {
+    const models = [...form[provider]];
+    [models[index], models[index + by]] = [models[index + by], models[index]];
+    change(provider, models);
+  };
+  const add = (provider: Provider) => {
+    const model = adding[provider].trim();
+    if (!model || form[provider].includes(model)) return;
+    change(provider, [...form[provider], model]);
+    setAdding(a => ({ ...a, [provider]: '' }));
+  };
+  const save = async (e: FormEvent) => {
+    e.preventDefault(); setBusy(true); setError(null); setSaved(false);
+    try {
+      const value = await patchJSON<CatalogSection>('/api/product-settings', { revision: section.revision, settings: form });
+      setForm(value.settings); setSeen(value); setSaved(true); reload();
+    } catch (ex) { const r = saveError(ex, 'the model catalog'); setError(r.message); setConflict(r.conflict); }
+    finally { setBusy(false); }
+  };
+  const unpriced = new Set(catalog.filter(m => !m.priced).map(m => `${m.provider}:${m.model}`));
+
+  return (
+    <Card title="Model catalog" actions={<button type="button" className="btn ghost sm" onClick={() => { setForm(null); setConflict(false); setError(null); reload(); }} disabled={busy}>Reload</button>}>
+      <p className="muted">The models every action and the draft reviewer can choose from. The first model of a provider is listed first.</p>
+      {section.configuration_error && <Notice tone="error">{section.configuration_error}</Notice>}
+      {error && <Notice tone="error">{error}</Notice>}
+      <form onSubmit={save}>
+        <fieldset disabled={busy || conflict || !canConfigure}>
+          <div className="field-grid">
+            {(['claude', 'openai'] as const).map(provider => (
+              <div key={provider} className="stack-sm">
+                <b>{actionProviderName(provider)}</b>
+                {form[provider].length === 0 && <p className="hint">No {actionProviderName(provider)} models yet.</p>}
+                <ul className="stack-sm">{form[provider].map((model, index) => (
+                  <li key={model} className="row gap-sm">
+                    <code className="grow">{model}</code>
+                    {unpriced.has(`${provider}:${model}`) && <span className="hint">no list price; cost not recorded</span>}
+                    {canConfigure && <>
+                      <button type="button" className="btn ghost sm" aria-label={`Move ${model} up`} disabled={index === 0} onClick={() => move(provider, index, -1)}>↑</button>
+                      <button type="button" className="btn ghost sm" aria-label={`Move ${model} down`} disabled={index === form[provider].length - 1} onClick={() => move(provider, index, 1)}>↓</button>
+                      <button type="button" className="btn ghost sm" aria-label={`Remove ${model}`} onClick={() => change(provider, form[provider].filter(m => m !== model))}>Remove</button>
+                    </>}
+                  </li>
+                ))}</ul>
+                {canConfigure && <div className="row gap-sm">
+                  <input className="input grow" aria-label={`Add a ${actionProviderName(provider)} model ID`} placeholder="Model ID" maxLength={200} value={adding[provider]}
+                    onChange={e => setAdding(a => ({ ...a, [provider]: e.target.value }))}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(provider); } }} />
+                  <button type="button" className="btn sm" onClick={() => add(provider)} disabled={!adding[provider].trim()}>Add</button>
+                </div>}
+              </div>
+            ))}
+          </div>
+          {canConfigure && <div className="row gap-sm">
+            <button type="submit" className="btn primary" disabled={sameForm(form, section.settings)}>{busy ? 'Saving…' : 'Save catalog'}</button>
+            {saved && <span className="ok-text small" role="status">Saved.</span>}
+          </div>}
+        </fieldset>
+      </form>
+      {!canConfigure && <p className="hint">Only administrators can change the catalog.</p>}
+    </Card>
+  );
+}
+
 function formOf(s: ActionSettings) {
   return { provider: s.provider, claude_model: s.claude_model, openai_model: s.openai_model, claude_reasoning_effort: s.claude_reasoning_effort ?? null, openai_reasoning_effort: s.openai_reasoning_effort ?? null, external_agent: s.external_agent ?? false, agent_review: s.agent_review ?? 'server', revision: s.revision };
 }
 
 const sameForm = <T,>(a: T, b: T) => JSON.stringify(a) === JSON.stringify(b);
 
-function ActionModelSettings({ settings, canConfigure }: { settings: ActionSettings; canConfigure: boolean }) {
+function ActionModelSettings({ settings, catalog, canConfigure }: { settings: ActionSettings; catalog: CatalogModel[]; canConfigure: boolean }) {
   const [current, setCurrent] = useState(settings);
   const [form, setForm] = useState(() => formOf(settings));
   const [error, setError] = useState<string | null>(null);
@@ -99,7 +207,7 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
   const save = async (e: FormEvent) => {
     e.preventDefault(); setBusy(true); setError(null); setSaved(false);
     try {
-      accept(await patchJSON<ActionSettings>(`/api/model-settings/${settings.action}`, { ...form, claude_model: form.claude_model.trim(), openai_model: form.openai_model.trim() }));
+      accept(await patchJSON<ActionSettings>(`/api/model-settings/${settings.action}`, form));
       setSaved(true);
     } catch (ex) { const r = saveError(ex, `the ${title.toLowerCase()} model`); setError(r.message); setConflict(r.conflict); }
     finally { setBusy(false); }
@@ -110,7 +218,7 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
       <p className="muted">
         Now: Runs on {current.external_agent
           ? <>External agent{settings.action === 'docgen' && <> · {current.agent_review === 'agent' ? 'reviewed by another agent' : <>reviewed by {actionProviderName(current.provider)} · {current.model}</>}</>}</>
-          : <>{actionProviderName(current.provider)} · {current.model || 'no model configured'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'}</>} · {current.source === 'saved' ? 'saved here' : 'built-in default'}
+          : <>{actionProviderName(current.provider)} · {current.model || 'no model chosen'} · effort {(current.provider === 'claude' ? current.claude_reasoning_effort : current.openai_reasoning_effort) ?? 'model default'}</>}
       </p>
       {settings.action === 'docgen' && <p className="hint">The default for new documents. Choosing another provider when generating uses that provider's saved model and effort.</p>}
       {current.configuration_error && <Notice tone="error">{current.configuration_error} Save valid settings to enable this action.</Notice>}
@@ -131,15 +239,13 @@ function ActionModelSettings({ settings, canConfigure }: { settings: ActionSetti
               </label>}
               {showProvider && <>
                 {form.external_agent && <ProviderSelect value={form.provider} onChange={provider => edit({ provider })} label="Reviewer provider" />}
-                <label className="field"><span>Model ID</span>
-                  <input className="input" required value={model} placeholder="A model ID for this provider" onChange={e => edit(claude ? { claude_model: e.target.value } : { openai_model: e.target.value })} />
-                </label>
+                <ModelSelect provider={form.provider} value={model} catalog={catalog} required onChange={m => edit(claude ? { claude_model: m } : { openai_model: m })} />
                 <ReasoningEffortField provider={form.provider} value={effort} onChange={v => edit(claude ? { claude_reasoning_effort: v } : { openai_reasoning_effort: v })} />
               </>}
             </div>
             {showProvider && <p className="hint">{available?.available ? 'Credentials for this provider are configured on the server.' : available?.reason || 'This provider has no credentials on the server.'}</p>}
             <div className="row gap-sm">
-              <button type="submit" className="btn primary" disabled={needsProvider && !model.trim()}>{busy ? 'Saving…' : 'Save'}</button>
+              <button type="submit" className="btn primary" disabled={needsProvider && !model}>{busy ? 'Saving…' : 'Save'}</button>
               {saved && <span className="ok-text small" role="status">Saved. New runs use it.</span>}
             </div>
           </fieldset>
@@ -157,6 +263,7 @@ export function ActionModels() {
   const actions = data.actions.filter(a => a.action !== 'draft_review');
   return <>
     <p className="muted">Each action runs independently on Claude, OpenAI or an External agent. Changing one action does not change the others. Saved choices apply to new runs. API credentials stay on the server; model access is checked when a run starts. The draft reviewer's model is under Draft review.</p>
+    <ModelCatalog catalog={data.catalog} canConfigure={data.can_configure} />
     <Card title="Overview"><table className="tbl compact">
         <thead><tr><th>Action</th><th>Runs on</th><th>Model</th></tr></thead>
         <tbody>{actions.map(action => (
@@ -165,11 +272,11 @@ export function ActionModels() {
             <td>{action.external_agent ? 'External agent' : actionProviderName(action.provider)}</td>
             <td>{action.external_agent
               ? action.action === 'docgen' && action.agent_review === 'server' ? <>reviewed by {actionProviderName(action.provider)} · {action.model}</> : '—'
-              : action.model}</td>
+              : action.model || 'none chosen'}</td>
           </tr>
         ))}</tbody>
       </table></Card>
-    {actions.map(a => <ActionModelSettings key={a.action} settings={a} canConfigure={data.can_configure} />)}
+    {actions.map(a => <ActionModelSettings key={a.action} settings={a} catalog={data.catalog} canConfigure={data.can_configure} />)}
   </>;
 }
 
@@ -182,6 +289,7 @@ interface ReviewConfig {
   claude_model: string; openai_model: string; claude_reasoning_effort?: Effort; openai_reasoning_effort?: Effort;
   reviewer_id: string; revision: number | string; model_revision: number | string;
   source: string; issues: string[]; model_warning?: string | null; can_configure: boolean; providers: ProviderStatus[]; reviewers: Reviewer[];
+  catalog: CatalogModel[];
 }
 interface ReviewForm { application_enabled: boolean; auto_apply: AutoApply; mode: ReviewMode; provider: Provider; model: string; reasoning_effort: Effort; reviewer_id: string; revision: number | string; model_revision: number | string }
 
@@ -303,12 +411,12 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
 
   const provider = settings.providers.find(p => p.provider === form.provider);
   const reviewerExists = reviewers.some(r => r.id === form.reviewer_id);
-  const incomplete = form.mode !== 'off' && (!form.model.trim() || !reviewerExists || !provider?.available);
+  const incomplete = form.mode !== 'off' && (!form.model || !reviewerExists || !provider?.available);
 
   const save = async (e: FormEvent) => {
     e.preventDefault(); setBusy(true); setError(null); setSaved(false);
     try {
-      const value = await patchJSON<ReviewConfig>('/api/draft-review/settings', { ...form, model: form.model.trim() });
+      const value = await patchJSON<ReviewConfig>('/api/draft-review/settings', form);
       setSettings(value); setForm(reviewForm(value)); setSaved(true); setBacklogCheck(n => n + 1);
     } catch (ex) { const r = saveError(ex, 'the review settings'); setError(r.message); setConflict(r.conflict); }
     finally { setBusy(false); }
@@ -325,7 +433,7 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
   return (
     <Card title="Automatic draft review" actions={<button type="button" className="btn ghost sm" onClick={reload} disabled={busy}>Reload</button>}>
       <p className="muted">
-        Now: {MODE_LABEL[settings.mode]}{settings.mode === 'review-and-apply' ? ` (${AUTO_APPLY_LABEL[settings.auto_apply].toLowerCase()})` : ''} · {draftReviewProviderName(settings.provider)} · {settings.model || 'no model configured'} · effort {settings.reasoning_effort ?? 'model default'} · {settings.source === 'saved' ? 'saved here' : 'built-in defaults'}.
+        Now: {MODE_LABEL[settings.mode]}{settings.mode === 'review-and-apply' ? ` (${AUTO_APPLY_LABEL[settings.auto_apply].toLowerCase()})` : ''} · {draftReviewProviderName(settings.provider)} · {settings.model || 'no model chosen'} · effort {settings.reasoning_effort ?? 'model default'}.
         {' '}Applying accepted reviews is <b>{settings.application_enabled ? 'allowed' : 'not allowed'}</b>; that permission covers both a curator applying a review and automatic application.
       </p>
       {settings.can_configure && settings.mode !== 'off' && <BacklogOffer key={backlogCheck} />}
@@ -354,9 +462,7 @@ function DraftReviewForm({ initial, onReload }: { initial: ReviewConfig; onReloa
                 model: p === 'claude' ? settings.claude_model : settings.openai_model,
                 reasoning_effort: (p === 'claude' ? settings.claude_reasoning_effort : settings.openai_reasoning_effort) ?? null,
               })} />
-              <label className="field"><span>Model ID</span>
-                <input className="input" value={form.model} placeholder="A model ID for this provider" required={form.mode !== 'off'} onChange={e => change({ model: e.target.value })} />
-              </label>
+              <ModelSelect provider={form.provider} value={form.model} catalog={settings.catalog} required={form.mode !== 'off'} onChange={model => change({ model })} />
               <ReasoningEffortField provider={form.provider} value={form.reasoning_effort} onChange={v => change({ reasoning_effort: v })} />
               <label className="field"><span>Reviewer account</span>
                 <select className="input" value={form.reviewer_id} required={form.mode !== 'off'} onChange={e => change({ reviewer_id: e.target.value })}>

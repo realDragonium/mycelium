@@ -102,7 +102,9 @@ export interface ActionSettings {
   external_agent?: boolean; agent_review?: 'server' | 'agent'; agent_supported?: boolean;
   configuration_error?: string | null; model_warning?: string | null; providers: ProviderStatus[];
 }
-export interface ModelSettings { can_configure: boolean; actions: ActionSettings[] }
+// A model an admin made selectable; `priced` says whether its runs get a cost estimate.
+export interface CatalogModel { provider: Provider; model: string; priced: boolean }
+export interface ModelSettings { can_configure: boolean; actions: ActionSettings[]; catalog: CatalogModel[] }
 
 export async function getAskExternal(signal?: AbortSignal): Promise<boolean> {
   try {

@@ -7,7 +7,7 @@ import { AudienceIdentity, type AudienceRef } from './audiences';
 
 interface DocumentationRoute { tab: string; document: string | null; revision: string | null; run: string | null; profile: string | null }
 interface DocumentationModelOption {
-  provider: string; label: string; model: string | null; reasoning_effort: string | null; available: boolean;
+  provider: string; label: string; model: string | null; reasoning_effort: string | null; available: boolean; reason: string | null;
 }
 interface DocumentationOptions {
   default_provider: string;
@@ -170,7 +170,7 @@ function DocumentationModel({ options, value, onChange, disabled, filter }: {
   filter?: (model: DocumentationModelOption) => boolean;
 }) {
   return <label>Model for this run<select value={value} onChange={event => onChange(event.target.value)} disabled={disabled}>
-    {options.models.filter(model => !filter || filter(model)).map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.provider === 'agent' ? model.label : `${model.label} · ${model.model} · ${model.reasoning_effort ?? 'Model default'} effort${model.available ? '' : ' (unavailable)'}`}</option>)}
+    {options.models.filter(model => !filter || filter(model)).map(model => <option key={model.provider} value={model.provider} disabled={!model.available}>{model.provider === 'agent' ? model.label : model.model ? `${model.label} · ${model.model} · ${model.reasoning_effort ?? 'Model default'} effort${model.available ? '' : ' (unavailable)'}` : `${model.label} · no model chosen`}</option>)}
   </select></label>;
 }
 
@@ -230,7 +230,7 @@ function DocumentationGenerator({ options, document, documents = [], onStarted }
       <button type="submit" disabled={!allowed || !prompt.trim()}>{busy ? 'Starting…' : document || anchored ? 'Generate next revision' : 'Generate document'}</button>
     </fieldset>
     {!options.can_generate && <p>Writer or admin access is required to generate and publish documents.</p>}
-    {!selected?.available && <p>The selected provider needs server credentials before it can run.</p>}
+    {!selected?.available && <p>{selected?.reason || 'The selected provider needs server credentials before it can run.'}</p>}
     {error && <p role="alert">{error}</p>}
     {bothEdited && <div className="docw-actions"><button type="button" disabled={busy} onClick={event => submit(event, true)}>Start from the published copy on GitHub</button></div>}
     {bothEdited && document && <p>The new revision starts from the GitHub text; revision {document.current_revision} stays in the history.</p>}
