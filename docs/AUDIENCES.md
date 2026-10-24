@@ -30,10 +30,12 @@ whose saved text predates the field.
 Where a profile's documents are published is the profile's own setting: it
 can name the destinations it publishes to, so documents for an internal
 audience never reach an external site ([GitHub
-publication](DOCUMENTATION_MODELS.md#github-publication)). The starters
-**Help center** and **Internal guide** are written for external
-non-technical and internal non-technical readers ([Guideline
-sets](GUIDELINE_SETS.md#starters)).
+publication](DOCUMENTATION_MODELS.md#github-publication)). The [profile
+examples](profile-examples/) include a help center for external
+non-technical readers and an internal guide for internal non-technical ones.
+
+What an audience may not get belongs in its description: the labeller, the
+writer and the reviewer read it, and no rule in the code adds to it.
 
 A profile without a chosen audience writes for the default: internal technical
 while it exists, otherwise the first internal audience. Only an administrator

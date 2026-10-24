@@ -75,13 +75,6 @@ The system SHALL keep every version of a profile text and of the editable loop i
 - **WHEN** a caller saves a text that is neither a `guideline-set` row nor a loop instruction doctrine through these routes
 - **THEN** the save is refused
 
-### Requirement: Starter profile seeding
-The system SHALL, at startup, insert the packaged `kb-authoring` profile (guidance, exposure and the `tutorial`, `how-to`, `reference`, `explanation` and `troubleshooting` templates) only when no `guideline-set` row has ever been stored; saved edits and retirements take precedence on later starts, and a starter file that cannot be read leaves no partial profile and does not stop the server from starting.
-
-#### Scenario: Restart after retiring a starter template
-- **WHEN** an admin retired `kb-authoring/tutorial` and the server restarts
-- **THEN** `kb-authoring/tutorial` stays retired
-
 ### Requirement: Requesting a documentation run
 The system SHALL expose `request_documentation(prompt, guideline_set?, document_type?, provider?, anchor_entity_id?)`, advertised over MCP and mirrored as `POST /api/documentation/runs`, which admits a background run and returns its run row immediately with `status` `running` or `queued`.
 
@@ -597,24 +590,34 @@ The system MUST start the runs of items the reviewer approved only within `appro
 - **WHEN** the reviewer approves three items with `approve_batch` at 2
 - **THEN** two runs start at once and the third on a later sweep
 
-### Requirement: Starter profiles
-The system SHALL package three starters, `kb-authoring` (knowledge base), `help-center` (for `external-non-technical`) and `internal-guide` (for `internal-non-technical`), each with guidance, disclosure rules and templates, and guidance that names no profile row, file or path and asks the writer no question.
+### Requirement: No packaged profiles
+The system SHALL ship no writing profile and no profile text: a fresh instance SHALL have no profile until one is saved, and SHALL leave every stored profile, including one seeded by an earlier build, unchanged on start.
 
-#### Scenario: Starter templates
-- **WHEN** an editor lists the starters
-- **THEN** `kb-authoring` offers `tutorial`, `how-to`, `reference`, `explanation` and `troubleshooting`, `help-center` offers `how-to`, `troubleshooting` and `explanation`, and `internal-guide` offers `reference`, `explanation`, `how-to` and `troubleshooting`
+#### Scenario: Fresh instance
+- **WHEN** the server starts on a data directory with no prompt texts
+- **THEN** `list_writing_profiles` returns no profiles
 
-#### Scenario: Starters are not seeded
-- **WHEN** a fresh instance starts
-- **THEN** only `kb-authoring` is stored, and `help-center` and `internal-guide` are offered as starters only
+### Requirement: Default profile name without a profile
+The system SHALL accept a documentation settings save that keeps the stored default profile name when no profile has that name, and MUST refuse one that changes it to a name no live profile has.
 
-### Requirement: Using a starter
-The system SHALL return the starters, with their title, description, audience and texts, from `GET /api/documentation/starters` to any authenticated caller, storing nothing; a profile made from or reset to a starter SHALL be saved through the profile save, under its roles and revision check.
+#### Scenario: Destinations before any profile
+- **WHEN** an admin on a fresh instance saves a destination and keeps the default `kb-authoring`
+- **THEN** the settings are saved
 
-#### Scenario: Creating a profile from a starter
-- **WHEN** a writer chooses New from starter, Internal guide, and saves the profile as `internal-guide`
-- **THEN** profile `internal-guide` writes for `internal-non-technical` with the starter's guidance, disclosure rules and four templates
+### Requirement: Writing profiles over MCP
+The system SHALL advertise `list_writing_profiles`, `get_writing_profile`, `save_writing_profile`, `retire_writing_profile` and `restore_writing_profile` over MCP. Saves, retirements and restores SHALL go through the profile editor's validation, role rules and revision check, and MUST need a real role: writer to save, admin to retire or restore.
 
-#### Scenario: Resetting a profile to a starter
-- **WHEN** an admin resets profile `kb-authoring` to the Help center starter and saves
-- **THEN** its guidance, disclosure rules and templates become the starter's, templates the starter lacks are retired, and its audience, policies and destinations are unchanged
+#### Scenario: Stale save over MCP
+- **WHEN** a writer calls `save_writing_profile` with a `revision` older than the stored profile's
+- **THEN** the save is refused as a conflict and nothing is written
+
+#### Scenario: Writer changes the audience over MCP
+- **WHEN** a writer calls `save_writing_profile` for an existing profile with a different `audience`
+- **THEN** the save is refused for lacking the admin role
+
+### Requirement: Restoring a retired profile
+The system SHALL restore a retired profile, given its current `revision`, to the texts each slot held when the profile was retired, leaving retired the slots removed before then, and MUST refuse a profile that is not retired.
+
+#### Scenario: Template removed before retirement
+- **WHEN** an admin removes the `reference` template of profile `help`, retires `help` and then restores it
+- **THEN** `help` has its other templates back and `reference` stays retired

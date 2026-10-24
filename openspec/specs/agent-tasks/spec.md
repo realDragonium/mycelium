@@ -210,3 +210,10 @@ The system MUST never offer an `audience_review` task to the agent that labelled
 #### Scenario: A labeller claims the review of its grants
 - **WHEN** the only waiting grants were labelled by agent A and A claims `audience_review`
 - **THEN** A gets no task and a `note` saying the waiting task holds grants it labelled
+
+### Requirement: Documentation briefs carry the profile
+The system SHALL include in every `documentation`, `document_review`, `documentation_planning` and `plan_review` brief a `profile` with the writing profile's name, revision, audience (id, name, scope and description), guidance, disclosure rules, templates (only the chosen one for a document), maintenance, planning, plan review and delivery policies and destinations.
+
+#### Scenario: Review brief
+- **WHEN** an agent claims a `document_review` task for a profile writing for `external-technical`
+- **THEN** its brief's `profile` holds that profile's guidance, disclosure rules, the document's template and the audience's description

@@ -4,9 +4,17 @@ A **guideline set** is the writing guidance a documentation-generation run
 follows: one set-wide instruction text, one set-wide exposure boundary, plus
 one template per document type it can produce. Sets live in the prompt-text
 store (`prompt_store`, its own `mycelium-prompts.db`) as ordinary rows, so
-adding, editing or replacing one is a save in the web app or an HTTP request —
-never a code change and never a redeploy. No tool writes prompt texts: the
-tools only read them (`get_prompt_text`, `list_prompt_texts`) and retire them
+adding, editing or replacing one is a save in the web app, over MCP or an
+HTTP request — never a code change and never a redeploy. No profile ships with
+the package: a fresh instance has none until an administrator or writer
+creates one. The [profile examples](profile-examples/) are texts to paste,
+not profiles the server loads.
+
+Over MCP, `list_writing_profiles`, `get_writing_profile`,
+`save_writing_profile`, `retire_writing_profile` and
+`restore_writing_profile` do what the editor does, with the same validation,
+roles and revision check ([MCP tools](MCP_TOOLS.md)). The generic prompt-text
+tools read rows (`get_prompt_text`, `list_prompt_texts`) and retire one
 (`retire_prompt_text`).
 
 Open **Settings → Documentation → Writing profiles & templates** to create, edit,
@@ -104,94 +112,53 @@ that is not configured, or a type that set has no template for, is refused at
 the door by `request_documentation` instead of failing minutes later inside a
 background run.
 
-## Starters
+## Example profiles
 
-Three starters ship, each a directory under `src/mycelium/guidelines/`
-listed in `guidelines.STARTERS`:
+[`docs/profile-examples/`](profile-examples/) holds three product-neutral
+examples to copy into a new profile:
 
-| Starter | Written for | Templates |
+| Example | Written for | Templates |
 |---|---|---|
-| `kb-authoring` (Knowledge base) | the profile's audience, default internal | `tutorial`, `how-to`, `reference`, `explanation`, `troubleshooting` |
-| `help-center` (Help center) | external non-technical: people using the product | `how-to`, `troubleshooting`, `explanation` |
-| `internal-guide` (Internal guide) | internal non-technical: support, sales, customer success | `reference`, `explanation`, `how-to`, `troubleshooting` |
+| [Knowledge base](profile-examples/knowledge-base.md) | the profile's audience, default internal | `tutorial`, `how-to`, `reference`, `explanation`, `troubleshooting` |
+| [Help center](profile-examples/help-center.md) | external non-technical: people using the product | `how-to`, `troubleshooting`, `explanation` |
+| [Internal guide](profile-examples/internal-guide.md) | internal non-technical: support, sales, customer success | `reference`, `explanation`, `how-to`, `troubleshooting` |
 
-The help center writes short, task-oriented articles: the common path, limits
-stated plainly where the reader meets them, no internals and few edge cases.
-The internal guide writes the fuller picture a colleague needs to answer a
-customer: conditions beside the behaviour they govern, exact limits, edge
-cases, and who can change what. Each has its own disclosure rules, matching
-its audience: the help center withholds internal process and commercial
-detail, the internal guide permits it and withholds technical internals.
+The server never reads them. Their guidance is written for the server-side
+writer: the run already gathers, files gaps and emits, so an example says
+what the document contains, how it reads and how long it is, and never asks
+the reader a question, names a file or path, or walks through tool calls.
 
-In **Settings → Documentation**, **New from starter…** opens a new profile
-filled with a starter's guidance, disclosure rules and templates, writing for
-the starter's audience; nothing is stored until it is saved, under any name.
-An administrator can **Reset to starter…** an existing profile: its guidance,
-disclosure rules and templates are replaced in the editor, its audience,
-policies and destinations stay, and saving appends new versions (templates
-the starter does not have are retired, which is why it is an administrator's
-action). `GET /api/documentation/starters` returns the starters' texts.
+Earlier builds seeded a `kb-authoring` profile on first start. An instance
+that has it keeps it as saved data; nothing in the package refers to its
+texts any more. The documentation setting's default profile is still named
+`kb-authoring`, and a fresh instance keeps that name as its default until an
+administrator chooses a profile that exists.
 
-Starter guidance is written for the server-side writer: the run already
-gathers, files gaps and emits, so a starter says what the document contains,
-how it reads and how long it is, and never asks the reader a question, names
-a file or path, or walks through tool calls. It names no row either, since a
-starter can be saved under any profile name.
+## Which profile a run writes against
 
-## Sets that exist
+Everything about what to write for whom — guidance, disclosure rules,
+templates, the audience and its description — comes from the profile and its
+audience. The code holds only the writer's mechanics: how a run gathers and
+cites, the output schema and the review checks. An agent working a
+documentation task gets the whole profile in its brief (`profile`), and
+the skills tell it to follow that profile, so they carry no writing advice of
+their own.
 
-Only `kb-authoring` is seeded.
-
-**`kb-authoring`** — seven rows, and the set a fresh instance starts with. Its sources are
-under `src/mycelium/guidelines/kb-authoring/`: one file for set-wide guidance,
-one for the exposure boundary, and the files under `templates/` for `tutorial`,
-`how-to`, `reference`, `explanation` and `troubleshooting`. Substrate-first:
-it instructs the writer to flag facts the substrate does not support rather
-than invent them.
-
-The files sit inside the package because that is what a deployment gets. The
-wheel carries `src/mycelium/` and the image copies it, the same way the loop
-doctrines travel, so startup can seed the set with no checkout and nothing for
-an operator to run. An instance with an empty store has nothing to generate
-against, and that is not a state worth supporting.
-
-The guidance is written for a generation run, whose only handle on the set is
-the store — so it reaches for no file and carries no skill frontmatter. The `mycelium-documentation` skill in
-`skills/` does not read it at all: it asks the server for a run through
-`request_documentation`, so a skill-requested document follows whatever set the
-instance has configured.
-
-Startup inserts the starter profile atomically only when no guideline-set
-history exists. Saved edits and retirement tombstones take precedence, including
-after backup restoration; redeploying does not synchronize template files into
-saved profiles. A missing starter file leaves no partial profile and does not
-prevent the server from starting.
-
-The optional checkout script `scripts/seed_guideline_sets.py` remains an explicit
-import tool. Running it can overwrite UI edits with new versions; it is not part
-of startup or the normal editing workflow.
-
-**`internal-doc`** — four rows, a deliberately minimal set for terse
-internal notes. It exists to prove that a variant needs no code: it was added
-entirely through the profile editor and its HTTP routes and has no source files, no seeding at
-startup and no entry anywhere in `src/`.
-
-Its `exposure` row is where the two sets are most visibly different, which is
-the argument for the slot being a row rather than a constant. `kb-authoring`
-writes for a reader who may be outside the company, so internal hostnames,
-service names, ticket ids, staff names and unreleased work all stay out.
-`internal-doc` writes for staff, so all of those may be stated; what it
-withholds is the narrower set that is secret whoever is reading — live
-credentials, personal data about an identifiable person, and material a third
-party gave us in confidence. A reviewer would reach opposite verdicts on the
-same paragraph depending on which set the run resolved, which is exactly what
-a set-wide slot is for.
+**`internal-doc`** (in the tests) is a deliberately minimal set for terse
+internal notes: guidance, disclosure rules, a `how-to` and a `reference`
+template, saved through the profile editor's routes. Its `exposure` row is
+where it differs most from a public profile: it may state internal hostnames,
+service names, ticket ids, staff names and unreleased work, and withholds only
+what is secret whoever is reading — live credentials, personal data about an
+identifiable person, and material a third party gave us in confidence. A
+reviewer would reach opposite verdicts on the same paragraph depending on
+which profile the run resolved, which is exactly what a set-wide slot is for.
 
 ## Adding a variant set
 
 Save the rows. That is the whole procedure: create the profile in
-**Settings → Documentation**, or save it in one request with
-`PUT /api/documentation/profiles/<set>`, whose body carries the guidance,
+**Settings → Documentation**, with `save_writing_profile` over MCP, or in one
+request with `PUT /api/documentation/profiles/<set>`, whose body carries the guidance,
 exposure, audience and templates (`internal-doc` has guidance, exposure, a
 `how-to` and a `reference` template).
 
@@ -206,12 +173,13 @@ Editing a row appends a version (`PUT /api/documentation/prompts`;
 `GET /api/documentation/prompts/history` shows the history and
 `POST /api/documentation/prompts/restore` brings an earlier one back).
 Withdrawing one is
-`retire_prompt_text`, which hides the name and keeps its past. Bundled templates
-can also be retired, subject to the configured default reference.
+`retire_prompt_text`, which hides the name and keeps its past, subject to the
+configured default reference. `retire_writing_profile` retires a whole
+profile, and `restore_writing_profile` brings it back with the texts it held
+when it was retired. A profile retired by an earlier build is restored text by
+text from its history.
 
 Saved profiles survive deployments and are included in instance backups.
-Source files are needed only for the packaged initial examples, not for profiles
-authored in the UI or over HTTP.
 
 The Documents screen also offers a per-run Claude/GPT choice.
 See [Documentation models](DOCUMENTATION_MODELS.md) for server configuration and
