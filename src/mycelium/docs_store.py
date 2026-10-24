@@ -131,7 +131,43 @@ def migrate(conn: sqlite3.Connection) -> None:
     from . import document_maintenance  # local import: it builds on this module
 
     document_maintenance.migrate(conn)
+    _add_run_automation(conn)
     conn.commit()
+
+
+def _add_run_automation(conn: sqlite3.Connection) -> None:
+    """What the maintenance sweep decided about a finished run: whether it
+    was retried (and which run it retries) and whether it was published.
+    Runs finished before this are marked decided, so turning on automatic
+    retry or delivery acts only on runs that finish afterwards; an automatic
+    revision still waiting for its publication keeps waiting."""
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(documentation_runs)")
+    }
+    if "recovery" in columns:
+        return
+    for name, definition in (
+        ("retry_of", "TEXT"),
+        ("attempt", "INTEGER NOT NULL DEFAULT 0"),
+        ("recovery", "TEXT CHECK (recovery IN ('none', 'retried', 'gave_up'))"),
+        ("recovery_note", "TEXT"),
+        (
+            "delivery",
+            "TEXT CHECK (delivery IN ('none', 'publishing', 'published', 'failed'))",
+        ),
+        ("delivery_error", "TEXT"),
+        ("delivery_attempts", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        conn.execute(f"ALTER TABLE documentation_runs ADD COLUMN {name} {definition}")
+    conn.execute(
+        "UPDATE documentation_runs SET recovery = 'none', delivery = 'none' "
+        "WHERE finished_at IS NOT NULL AND id NOT IN (SELECT run_id FROM "
+        "document_maintenance WHERE run_id IS NOT NULL AND delivery IS NULL)"
+    )
+    conn.execute(
+        "UPDATE documentation_runs SET recovery = 'none' "
+        "WHERE finished_at IS NOT NULL AND recovery IS NULL"
+    )
 
 
 DOCUMENT_REVISIONS_SCHEMA = """
@@ -642,6 +678,8 @@ def create_run(
     anchor_entity_id: str | None = None,
     revision_base: str | None = None,
     review_notes: Sequence[Mapping[str, object]] = (),
+    retry_of: str | None = None,
+    attempt: int = 0,
 ) -> str:
     run_id = "drn_" + _uuid.uuid4().hex[:12]
     with conn:
@@ -654,8 +692,8 @@ def create_run(
             require_revision(conn, target_document_id, target_revision)
         conn.execute(
             "INSERT INTO documentation_runs "
-            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision, anchor_entity_id, revision_base, review_notes) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(id, prompt, guideline_set, document_type, created_at, created_by, provider, model, reasoning_effort, target_document_id, target_revision, anchor_entity_id, revision_base, review_notes, retry_of, attempt) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 prompt,
@@ -671,9 +709,30 @@ def create_run(
                 anchor_entity_id,
                 revision_base,
                 json.dumps(list(review_notes)) if review_notes else None,
+                retry_of,
+                attempt,
             ),
         )
     return run_id
+
+
+def follow_retry(conn: sqlite3.Connection, run_id: str, retry_id: str) -> None:
+    """Point what followed a run that wrote nothing, its plan item or its
+    automatic revision, at the run retrying it."""
+    with conn:
+        conn.execute(
+            "UPDATE documentation_runs SET recovery = 'retried' "
+            "WHERE id = ? AND recovery IS NULL",
+            (run_id,),
+        )
+        conn.execute(
+            "UPDATE documentation_plan_items SET run_id = ? WHERE run_id = ?",
+            (retry_id, run_id),
+        )
+        conn.execute(
+            "UPDATE document_maintenance SET run_id = ? WHERE run_id = ?",
+            (retry_id, run_id),
+        )
 
 
 def readmit_run(
@@ -926,6 +985,12 @@ def serialize_run(row: sqlite3.Row) -> dict:
         "draft_chars": len(row["draft_body"] or ""),
         "summary": None if row["summary"] is None else json.loads(row["summary"]),
         "review_notes": json.loads(row["review_notes"]) if row["review_notes"] else [],
+        "retry_of": row["retry_of"],
+        "attempt": row["attempt"],
+        "recovery": row["recovery"],
+        "recovery_note": row["recovery_note"],
+        "delivery": row["delivery"],
+        "delivery_error": row["delivery_error"],
         "agent_task": None
         if (task := agent_tasks.parse_view(row["agent_task"])) is None
         else task.model_dump(),

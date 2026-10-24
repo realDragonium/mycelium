@@ -388,3 +388,18 @@ def test_upgrade_keeps_every_action_on_its_model_and_seeds_the_catalog(
     assert (
         "Audience labelling" in caplog.text and "Connecting statements" in caplog.text
     )
+
+
+def test_runs_finished_before_the_upgrade_are_not_retried_or_published(tmp_path):
+    """Turning on automatic recovery or delivery acts only on runs that
+    finish afterwards."""
+    fixture = next(f for f in FIXTURES if f.name == "v27-gap-outcomes")
+    data_dir = tmp_path / "data"
+    _load(fixture, data_dir)
+
+    _start(data_dir)
+
+    with closing(sqlite3.connect(data_dir / "mycelium-drafts.db")) as conn:
+        assert conn.execute(
+            "SELECT DISTINCT recovery, delivery, attempt FROM documentation_runs"
+        ).fetchall() == [("none", "none", 0)]
