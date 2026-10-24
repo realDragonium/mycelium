@@ -29,9 +29,15 @@ Planning = Literal["off", "propose", "write"]
 #: other than the planner that approves or dismisses each with a reason (see
 #: `mycelium.documentation_plan_review`).
 PlanReview = Literal["person", "ai"]
-#: Who may deliver the profile's documents: people in the web app, or also
-#: agents over MCP (`deliver_document`).
-Delivery = Literal["people", "agents"]
+#: Who may deliver the profile's documents: people in the web app, also
+#: agents over MCP (`deliver_document`), or also the server itself, which
+#: publishes every revision that passed review (see
+#: `mycelium.document_maintenance`).
+Delivery = Literal["people", "agents", "auto"]
+#: Who recovers the profile's AI work that failed (a plan, a plan review, a
+#: run the review refused, an item that could not start, a publication): a
+#: person, or the maintenance sweep retrying within bounded attempts.
+Recovery = Literal["person", "ai"]
 
 
 class Conflict(errors.Conflict):
@@ -61,7 +67,8 @@ class Template(Model):
         if value in guidelines.NON_TYPE_SLOTS:
             raise ValueError(
                 "guidance, exposure, audience, maintenance, planning, "
-                "plan_review and delivery are reserved names."
+                "plan_review, delivery, delivery_destination and recovery are "
+                "reserved names."
             )
         return value
 
@@ -83,6 +90,10 @@ class ProfileBody(Model):
     planning: Planning = "off"
     plan_review: PlanReview = "person"
     delivery: Delivery = "people"
+    #: The destination `auto` delivery publishes a never-published document
+    #: to; blank delivers only documents published before.
+    delivery_destination: str = Field(default="", max_length=200)
+    recovery: Recovery = "person"
     templates: tuple[Template, ...] = ()
 
     @model_validator(mode="after")
@@ -174,6 +185,8 @@ class ProfileSnapshot:
     planning: Planning = "off"
     plan_review: PlanReview = "person"
     delivery: Delivery = "people"
+    delivery_destination: str = ""
+    recovery: Recovery = "person"
 
 
 @dataclass(frozen=True)
@@ -274,6 +287,8 @@ def capture(conn: sqlite3.Connection | None = None) -> CatalogueSnapshot:
                 planning(slots.get(guidelines.PLANNING_SLOT)),
                 plan_review(slots.get(guidelines.PLAN_REVIEW_SLOT)),
                 delivery(slots.get(guidelines.DELIVERY_SLOT)),
+                _text(slots.get(guidelines.DELIVERY_DESTINATION_SLOT)),
+                recovery(slots.get(guidelines.RECOVERY_SLOT)),
             )
             for name, slots in sorted(grouped.items())
         ),
@@ -306,12 +321,23 @@ def delivery(slot: PromptRevision | str | None) -> Delivery:
     return cast(Delivery, text) if text in get_args(Delivery) else "people"
 
 
+def recovery(slot: PromptRevision | str | None) -> Recovery:
+    """The stored policy; an unknown text leaves failed work to a person."""
+    text = _text(slot)
+    return cast(Recovery, text) if text in get_args(Recovery) else "person"
+
+
+def _text(slot: PromptRevision | str | None) -> str:
+    return (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
+
+
 #: Policy slots and the texts each may hold.
 _POLICIES: dict[str, tuple[str, object]] = {
     guidelines.MAINTENANCE_SLOT: ("Maintenance", Maintenance),
     guidelines.PLANNING_SLOT: ("Planning", Planning),
     guidelines.PLAN_REVIEW_SLOT: ("Plan review", PlanReview),
     guidelines.DELIVERY_SLOT: ("Delivery", Delivery),
+    guidelines.RECOVERY_SLOT: ("Recovery", Recovery),
 }
 
 
@@ -375,6 +401,8 @@ def _profile(
         planning=planning(live.get(guidelines.PLANNING_SLOT)),
         plan_review=plan_review(live.get(guidelines.PLAN_REVIEW_SLOT)),
         delivery=delivery(live.get(guidelines.DELIVERY_SLOT)),
+        delivery_destination=_text(live.get(guidelines.DELIVERY_DESTINATION_SLOT)),
+        recovery=recovery(live.get(guidelines.RECOVERY_SLOT)),
         effective_audience=effective.id if effective else None,
         templates=tuple(templates),
         retired=bool(rows) and not live,
@@ -456,6 +484,16 @@ def _protect_default(
         )
 
 
+def _check_destination(name: str) -> None:
+    if not name:
+        return
+    from . import product_settings
+
+    configured = product_settings.get(product_settings.DocumentationSettings)
+    if name not in {item.name for item in configured.destinations}:
+        raise ValueError(f"Destination {name!r} is not configured.")
+
+
 def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
     _authorize(principal)
     _part(name)
@@ -470,6 +508,7 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
         raise ValueError(
             "Add guidance or a template to create a profile; use Retire to remove one."
         )
+    _check_destination(request.delivery_destination.strip())
     conn = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(conn):
         rows = [
@@ -498,6 +537,12 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
             (guidelines.PLANNING_SLOT, request.planning, "off"),
             (guidelines.PLAN_REVIEW_SLOT, request.plan_review, "person"),
             (guidelines.DELIVERY_SLOT, request.delivery, "people"),
+            (
+                guidelines.DELIVERY_DESTINATION_SLOT,
+                request.delivery_destination.strip(),
+                "",
+            ),
+            (guidelines.RECOVERY_SLOT, request.recovery, "person"),
         ):
             if value != default or slot in live:
                 desired[slot] = value
@@ -560,7 +605,8 @@ def validate_key(type: str, name: str) -> tuple[str, str]:
             raise ValueError(
                 "Guideline names must use profile/template, profile/guidance, "
                 "profile/exposure, profile/audience, profile/maintenance, "
-                "profile/planning, profile/plan_review or profile/delivery."
+                "profile/planning, profile/plan_review, profile/delivery, "
+                "profile/delivery_destination or profile/recovery."
             )
         _part(profile)
         _part(slot)
