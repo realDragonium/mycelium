@@ -9,10 +9,12 @@ suggestions from ingestion go to a separate draft that awaits individual human
 decisions and is not sent to the reviewer.
 
 Enabling the feature does not sweep the existing backlog. An administrator can
-list it with `GET /api/draft-review/backlog` and review it once with
+list it with `GET /api/draft-review/backlog` and review it, oldest first, with
 `POST /api/draft-review/backlog`; see [Inspecting and rerunning](#inspecting-and-rerunning).
 In the web app, **Settings → Draft review** offers **Review N waiting drafts**,
-with the estimated cost, whenever review is on and the backlog is not empty.
+with the estimated cost and an optional spending limit, whenever review is on
+and the backlog is not empty, and shows the review's progress with **Pause**
+and **Resume**.
 A curator can explicitly review an existing submitted draft.
 
 ## Configuration
@@ -96,7 +98,11 @@ type and direction a concrete code excerpt supports can be accepted on that
 basis; a link without evidence is kept only when the statement texts plainly
 support it. The Drafts screen shows each operation's evidence.
 
-PR source metadata remains available through `attach_draft_source`, but a PR URL,
+`attach_draft_source` records the merged pull request the draft documents:
+repository, PR number, merge commit, and workflow run id and attempt. The
+reviewer sees it as `draft.source` and checks that the draft stays within what
+that change is about; a draft without one is judged the same way. The Drafts
+screen links the pull request, the merge commit and the workflow run. A PR URL,
 commit hash, or workflow run ID does not supply the source contents. Attaching
 metadata or either kind of evidence after a review starts makes that assessment stale; request
 an explicit rerun after the draft is ready.
@@ -108,8 +114,34 @@ descriptions. It receives draft operations, supplied evidence, affected
 knowledge, the link type glossary, and the five closest live statements to each
 new or changed statement, added best matches first until the context is full.
 It makes one fresh structured-output model call, with no author conversation and
-no external investigation tools. Bounds are 30 affected knowledge records, 90,000
-context characters, 6,000 output tokens, and a 90-second HTTP timeout. Two workers
+no external investigation tools. Bounds are 90,000 context characters, 6,000
+output tokens, and a 90-second HTTP timeout per call.
+
+A draft too large for one call is reviewed in parts. Its operations are split
+into connected parts: operations that change the same record, refer to each
+other's new statements with `@` references, or name an entity another
+operation creates belong together. Each part gets its own call, with its
+operations, their affected knowledge and nearest live statements, and a short
+summary of the other parts. A single connected part too large for the context
+is refused with a reason. Every part must agree for anything to land: a part
+that rejects rejects the draft with that part's rationale, a part with a
+question makes the draft wait with it, and each part's corrections are
+applied together with the others'. The draft keeps one assessment, whose
+`parts` lists each part's label, rationale, questions, corrections and
+operations; the Drafts screen shows them under **Reviewed in N parts**.
+
+Before any call the reviewer estimates the review's cost from the context
+size, the output bound and the model's price, and refuses a draft that could
+cost more than **Settings → Product → Draft review → Spending cap per run**
+(US$1 by default), naming the estimate and asking for smaller drafts. A model
+without a known price has no cap.
+
+A draft that would overwrite a record changed after the draft was created is
+refused without a call, so an old draft never lands over newer knowledge.
+A record counts as changed when a direct edit or another applied draft
+created after this one wrote it; an operation that leaves the record as it is
+does not count. Of two pending drafts on the same record, whichever applies
+first makes the other one refused when it is older. Two workers
 process accepted runs, sharing the existing model-loop capacity with other tasks.
 A submission burst waits for those workers; duplicate requests for the same draft
 return its current run. No repository checkout or GitHub access is required.
@@ -125,8 +157,11 @@ operations, including glossary or link-alias edits, are rejected without a model
 call. The model cannot append or revise those uninspected mutation families.
 
 In `review-and-apply` a draft waits for a person only when the reviewer asks
-one. A new statement that contradicts a live one wins: the reviewer corrects the
-live statement and lists the contradiction. Failed knowledge reads, oversized
+one. Of a new statement and a live one that contradict each other, the newer
+wins: the draft, unless the live statement changed after the draft was
+created. The reviewer corrects the live statement and lists the
+contradiction, or, when the live one is newer, strikes or revises the draft's
+operation. Failed knowledge reads, oversized
 context, API errors, refusals, and incomplete or invalid model output are
 explicit failed attempts and never authorize application. A failed attempt that
 recorded no review is run once more; if that fails too, the draft is rejected,
@@ -231,8 +266,21 @@ attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question whose draft has
 changed since it was asked. Drafts containing only alias suggestions are excluded.
-`POST /api/draft-review/backlog` starts a review of each and returns their IDs.
-The list is available while review is off; starting the reviews is refused.
+It also returns `job`: the backlog review this process last started, or
+`null`.
+
+`POST /api/draft-review/backlog`, with an optional `{budget_usd}`, starts that
+review and returns `{job}`. It reviews one draft at a time, oldest first, each
+draft at most once per job, and before each draft stops when the job's
+spending plus the average run cost would pass `budget_usd`, or when the
+monthly AI budget is reached. The job reports `status` (`running`, `paused`,
+`finished`), `spent_usd`, `reviewed`, `remaining` and a `detail` saying why it
+stopped. `POST /api/draft-review/backlog/pause` stops it after the draft under
+review, and `POST /api/draft-review/backlog/resume` continues it. Starting
+again while a job is unfinished is refused. The job lives in the server
+process: a restart ends it, and starting again picks up the drafts still
+waiting. Stale drafts in the backlog are refused as described above. The list
+is available while review is off; starting the reviews is refused.
 
 In `review-only`, an advisory `reject` label leaves the draft submitted. Suggested corrections are
 validated without execution before they are published. Draft edits make the old
