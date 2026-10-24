@@ -20,6 +20,7 @@ from mycelium import (
 )
 from mycelium.documentation_planning import Proposal, ProposedItem
 from product_settings_helpers import set_product
+from settings_helpers import assume_configured_models
 
 
 @pytest.fixture
@@ -27,6 +28,7 @@ def client(tmp_path, monkeypatch):
     from test_prompt_texts import _app
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+    assume_configured_models(monkeypatch)
     prompts: list[str] = []
 
     def runner(prompt, *, guideline_set, document_type):
