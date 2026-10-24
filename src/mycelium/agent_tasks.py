@@ -38,6 +38,7 @@ Kind = Literal[
     "ingest",
     "connect",
     "alias_discovery",
+    "draft_review",
 ]
 KINDS: tuple[Kind, ...] = get_args(Kind)
 Status = Literal["waiting", "claimed", "in_review", "done", "failed"]
@@ -319,6 +320,16 @@ def claim(
         )
     chosen = [task for task_id in ids if (task := get(conn, task_id)) is not None]
     return chosen, renewed, expires
+
+
+def withheld(conn: sqlite3.Connection, kind: Kind, claimant: str) -> int:
+    """Waiting tasks of `kind` that may not go to `claimant`: its own work."""
+    row = conn.execute(
+        "SELECT COUNT(*) FROM agent_tasks WHERE status = 'waiting' AND kind = ? "
+        "AND excluded_claimant = ?",
+        (kind, claimant),
+    ).fetchone()
+    return int(row[0])
 
 
 class NotHeld(PermissionError):

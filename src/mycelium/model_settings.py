@@ -44,6 +44,7 @@ AGENT_ACTIONS: frozenset[Action] = frozenset(
     {
         "ask",
         "docgen",
+        "draft_review",
         "documentation_planning",
         "audience_labelling",
         "ingest",

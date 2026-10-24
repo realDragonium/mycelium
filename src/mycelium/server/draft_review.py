@@ -14,9 +14,10 @@ import hashlib
 import json as _json
 import re
 import sqlite3
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
 
 from pydantic import JsonValue
+from typing_extensions import TypedDict
 
 from .. import mentions, phrasing, store
 from .draft_queue import _MUTATION_PREFIXES

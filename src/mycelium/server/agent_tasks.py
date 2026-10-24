@@ -39,6 +39,8 @@ class TaskBatch(BaseModel):
     #: Tasks of this kind you already held, whose lease this call extended.
     renewed: list[str]
     expires_at: str
+    #: Why waiting tasks were not offered to you, when some were not.
+    note: str | None = None
 
 
 class Released(BaseModel):
@@ -52,9 +54,13 @@ def _claimant() -> str:
 
 
 def _handler(kind: Kind) -> Handler:
-    """The action each kind of task does the model's part of. Draft review
-    has none yet: its reviewer is being reworked, and gets one after."""
-    from .. import alias_suggestions, audience_labelling, documentation_planning
+    """The action each kind of task does the model's part of."""
+    from .. import (
+        alias_suggestions,
+        audience_labelling,
+        documentation_planning,
+        draft_review_runs,
+    )
     from ..docgen import external as documentation
     from ..ingest import external as ingest
 
@@ -66,6 +72,7 @@ def _handler(kind: Kind) -> Handler:
         "ingest": ingest.HANDLER,
         "connect": ingest.HANDLER,
         "alias_discovery": alias_suggestions.AGENT_TASK,
+        "draft_review": draft_review_runs.AGENT_TASK,
     }
     return handlers[kind]
 
@@ -83,8 +90,9 @@ def claim_agent_task(
     `documentation_planning` (propose a writing profile's documents),
     `audience_labelling` (decide which audiences may see statements),
     `ingest` (turn text into a draft of knowledge), `connect` (propose links
-    and concept mentions for unconnected statements) or `alias_discovery`
-    (find new names of concepts in statements).
+    and concept mentions for unconnected statements), `alias_discovery`
+    (find new names of concepts in statements) or `draft_review` (approve,
+    correct, reject or ask about a submitted draft; never one you created).
     Oldest tasks come first. Each carries a `brief`: `instructions` and
     `input` are what the server's model would be given, `read_tools` the
     reads it could make (call them with `read_for_agent_task`) and
@@ -119,7 +127,18 @@ def claim_agent_task(
         )
         is not None
     ]
-    return TaskBatch(kind=kind, tasks=tasks, renewed=renewed, expires_at=expires)
+    withheld = agent_tasks.withheld(_drafts_db(), kind, claimant)
+    return TaskBatch(
+        kind=kind,
+        tasks=tasks,
+        renewed=renewed,
+        expires_at=expires,
+        note=f"{withheld} waiting {kind} task{'s are' if withheld > 1 else ' is'} "
+        "your own work, a draft you created or a document you wrote, and "
+        "only another agent may review it."
+        if withheld
+        else None,
+    )
 
 
 @tool(role="writer", real_role=True)

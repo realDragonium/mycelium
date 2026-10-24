@@ -160,14 +160,15 @@ def _init(data_dir: Path) -> None:
     media_store.configure(data_dir / media_store.DB_NAME)
     media_store.migrate(media_store.connection())
     ai_usage.install(data_dir / "mycelium-drafts.db")
-    from .. import draft_review_runs, draft_review_store
+    from .. import agent_tasks, draft_review_runs, draft_review_store
 
+    docs_store.migrate(_drafts_db())
     draft_review_store.mark_orphaned(
         _drafts_db(),
         lambda application_id: substrate_application_result(application_id) is not None,
+        agent_tasks.open_subjects(_drafts_db()),
     )
     draft_review_runs.forget_backlog_job()
-    docs_store.migrate(_drafts_db())
     from ..docgen import destinations
 
     destinations.bind_legacy_deliveries(_drafts_db())
