@@ -202,6 +202,28 @@ A further edit or relabel takes the statement off the list, unless that
 relabel keeps a confirmed grant again; the list then still shows the text the
 grant was last confirmed for.
 
+### AI decisions on edited labels
+
+With **AI decides edited curator labels and kept grants** on (**Settings →
+Limits → Audience labelling**, off by default), the grant reviewer of
+[AI review of waiting grants](#ai-review-of-waiting-grants) also decides two
+lists that otherwise wait for a curator:
+
+- A curator label whose statement text changed: **confirm** keeps the label
+  for the new text, recorded as the reviewer's; **reject** hands the statement
+  back to the AI labeller, as **Hand back to AI** does.
+- A statement in **Recently edited external statements**: **confirm**
+  confirms the kept grants for the new text, with the reviewer's reason;
+  **reject** narrows them, as a curator's **Narrow** does, with a reason that
+  names the reviewer.
+
+It runs on the same model or agents as grant review, one decision per
+statement with a reason. On a server model a statement it leaves out is tried
+again up to three times for the same text. On an External agent the batches
+are `audience_review` tasks; the curator who set a label, or the labeller of a
+kept grant, is not given it. A statement edited again, or relabelled, since it
+was offered is skipped. Curators can still decide both lists themselves.
+
 ## Media
 
 Screenshots and recordings carry their own label, decided by a curator, with

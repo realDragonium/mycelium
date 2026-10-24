@@ -1,6 +1,6 @@
 ---
 name: mycelium-agent-tasks
-description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, approves or dismisses another agent's plan items, labels statements' audiences, confirms or rejects another labeller's waiting external grants, turns ingested text or unconnected statements into a draft, finds concept aliases, or reviews a submitted draft (approve, approve with corrections, reject or ask a person), submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect, discover aliases or review drafts for a server that has no provider key. Needs a real writer or admin token.
+description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, approves or dismisses another agent's plan items, labels statements' audiences, confirms or rejects another labeller's waiting external grants, edited curator labels and kept grants, turns ingested text or unconnected statements into a draft, finds concept aliases, or reviews a submitted draft (approve, approve with corrections, reject or ask a person), submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect, discover aliases or review drafts for a server that has no provider key. Needs a real writer or admin token.
 ---
 
 # Working Mycelium's agent task queue
@@ -106,6 +106,14 @@ a short reason (at most 500 characters): it is recorded on the label as a
 curator's decision would be. Decide every pair exactly once. You are never
 given grants you labelled.
 
+An `audience_review` brief can instead hold `curator_labels` (curator labels
+whose statement was edited: `confirm` keeps the audiences for the new text,
+`reject` hands the statement back to the AI labeller) or `kept_grants`
+(confirmed external grants an edit's relabel kept: compare `old_text` with
+`text`; `confirm` only when every listed audience still allows the new text,
+otherwise `reject`, which withdraws them). Decide each `statement_id` once,
+with a reason; leave out one you cannot judge, so another reviewer can.
+
 **`ingest` and `connect`.** Follow `brief.instructions` as the ingest or
 connect model would: reconcile every candidate with reads, search around it,
 then submit the `emit_draft` input. Each op's `payload_json` is a JSON string.
@@ -147,8 +155,8 @@ part: for every pending `alias_suggestion` operation in it, `accept` only when
 the suggestion's source text establishes that the alias names the concept,
 otherwise `reject`, each with a `quote` copied exactly from that source text
 and a short `reason`. Every pending suggestion needs one decision unless you
-ask a person (`needs_context`). A suggestion whose names or source changed
-since stays for a person.
+ask a person (`needs_context`). A suggestion whose source changed since is rejected
+for a fresh scan, and one whose names changed is refreshed and reviewed again.
 
 `brief.earlier_review` is the previous review, with its corrections when it
 was held for a curator: check them, keep the right ones and drop the wrong

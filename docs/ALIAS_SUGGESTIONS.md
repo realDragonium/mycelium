@@ -45,7 +45,10 @@ and apply**. With **Reviewer decides alias suggestions** on (**Settings →
 Draft review**, off by default), the reviewer, on a server model or an
 external agent, accepts or rejects each suggestion with a quote from its
 source text and a reason, recorded on the decision with the reviewer as
-actor; see [Draft review](DRAFT_REVIEW.md#alias-decisions). Pending
+actor; see [Draft review](DRAFT_REVIEW.md#alias-decisions). In **Review and
+apply**, the reviewer also settles a suggestion that went stale: it rejects one
+whose supporting statement changed, and refreshes one whose names changed and
+reviews the draft again. Pending
 suggestions must be individually decided before applying, rejecting, or
 withdrawing their draft. Drafts containing only alias suggestions close after
 the final decision. Mixed drafts, which ingestion no longer produces, remain

@@ -18,6 +18,7 @@ the server, using the agents its people already run.
 | Documentation planning | Yes | Kind `documentation_planning`, and `plan_review` for a profile whose plan items an AI reviewer decides |
 | Audience labelling | Yes | Kind `audience_labelling` |
 | Review of waiting external grants | Yes, for grants another agent labelled | Kind `audience_review`, when **AI reviews waiting external grants** is on; see [Audiences](AUDIENCES.md#ai-review-of-waiting-grants) |
+| Edited curator labels and kept grants | Yes, for labels another account set | Kind `audience_review`, when **AI decides edited curator labels and kept grants** is on; see [Audiences](AUDIENCES.md#ai-decisions-on-edited-labels) |
 | Ingest | Yes | Kind `ingest` |
 | Connect pass | Yes | Kind `connect` |
 | Alias discovery | Yes | Kind `alias_discovery` |
@@ -60,7 +61,7 @@ back to the queue (a grant review skips the grants it labelled).
 | `documentation_planning` | A plan is requested for a writing profile, by a person or by the profile's automatic planning, while Documentation planning is set to External agent | The proposed documents, placing the brief's uncovered statements in updates of existing documents or in new ones |
 | `plan_review` | A profile whose plan items an AI reviewer decides has proposed items no review decided (checked by the maintenance sweep and when an agent claims), while Documentation planning is set to External agent | A decision for every item: `approve` or `dismiss`, with a reason |
 | `audience_labelling` | An agent asks for labelling work while Audience labelling is set to External agent | A label for each statement in the batch |
-| `audience_review` | An agent asks for review work while Audience labelling is set to External agent and **AI reviews waiting external grants** is on; one batch per labeller | `decisions`: confirm or reject, with a reason, for each waiting grant in the batch |
+| `audience_review` | An agent asks for review work while Audience labelling is set to External agent and **AI reviews waiting external grants** or **AI decides edited curator labels and kept grants** is on; one batch per labeller (or curator) and subject | `decisions`: confirm or reject, with a reason, for each waiting grant (`statement_id` and `audience_id`), or for each statement of an edited-label or kept-grant batch (`statement_id`) |
 | `ingest` | `ingest` is called while Ingest is set to External agent | The `emit_draft` input: proposed operations, the reconcile ledger, flags and skipped duplicates |
 | `connect` | `connect_statements` is called while Connect is set to External agent | The same, for the statements in the batch |
 | `alias_discovery` | An alias scan is started while Alias discovery is set to External agent | The aliases the statements show, with their evidence |

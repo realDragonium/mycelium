@@ -117,6 +117,14 @@ each pair:
 Merges cannot be undone. List the merges you intend with both sides' text
 and get the operator's go before running them.
 
+Without an admin, work duplicates through the curation queue instead
+(`claim_curation_work("duplicate")`, with `mycelium-code-curation`): a drafter
+queues the merge on its draft for the reviewer, or releases the pair
+`not_applicable`, which records it as distinct (a concept pair is dismissed in
+Names & aliases as the agent). With **AI decides duplicate candidates** on,
+the server's curation pass does the same on the connect model
+(`docs/KNOWLEDGE_HEALTH.md`, AI curation pass).
+
 ## Knowledge gaps
 
 Gaps are facts someone needed and did not find: reported by readers and

@@ -66,6 +66,13 @@ operation edits, questions or final decisions occur; it also governs a curator's
 lets the reviewer decide alias suggestions; see
 [Alias decisions](#alias-decisions).
 
+**AI answers the reviewer's questions from the knowledge base**
+(`answer_questions`, off by default) lets the draft-review model try to answer
+its own questions; see [Questions for a person](#evidence-and-scope).
+**Reject drafts the server refuses before review** (`reject_refused`, off by
+default) makes such refusals final under an
+[external agent](#external-agent).
+
 **Apply automatically** decides what `review-and-apply` lands unattended.
 **Only clean approvals** (`clean`, the default) applies a draft only when the
 reviewer labels it `good`, which never carries corrections. A draft the
@@ -108,8 +115,11 @@ agent's submission with findings.
 In `review-and-apply`, with the application gate on, the decisions are made
 through the suggestion's own accept and reject path, as the reviewer account
 (or agent) and never as the draft's creator, and recorded with the quote and
-reason. A suggestion whose concept names or source text changed since stays
-pending for a person, and the rest of the draft waits with it. A draft of
+reason. A suggestion whose source text changed since is rejected as the
+reviewer ("The supporting statement changed since the suggestion; scan the
+current statement."), so a new alias scan judges the current text. One whose
+concept names changed but whose source did not is refreshed against the
+current names, and the draft is reviewed again. A draft of
 only suggestions then closes as it does after a person's last decision. In
 `review-only`, or with the setting off, the assessment stays advisory and
 every suggestion waits for a person.
@@ -133,7 +143,8 @@ set_operation_evidence(draft_id, operation_ref, evidence, expected_revision)
 `operation_ref` is in the receipt of the queued write and in `get_draft`.
 Each of up to five items has a `kind` (`code`, `ui`, `doc`, `media` or
 `other`), a location (a repository-relative `path` with optional `lines` such
-as `40-52` and `commit`, or a `url`), an `excerpt` of at most 1,500 characters
+as `40-52` and `commit`, a `url`, a knowledge-base `statement_id`, or the
+`draft_id` of a draft whose review evidence the excerpt quotes), an `excerpt` of at most 1,500 characters
 and a one-line `claim` of at most 200 saying what it shows. A `media` item
 names a `media_id` from `create_media_upload` instead of a location; an empty
 excerpt is filled with the media's alt text and caption, and applying the
@@ -245,7 +256,20 @@ answer. A curation agent working in the product's code can answer instead,
 through the curation queue's `question` items, with the evidence it checked
 ([Knowledge health](KNOWLEDGE_HEALTH.md#kinds-of-work)); the draft is reviewed
 again the same way, and the reviewer gets the agent's evidence with the
-answer. In the web app the questions and an answer form sit at the top of the
+answer.
+
+With **AI answers the reviewer's questions** on and review running on a
+server model, the server first makes one answer attempt with the draft-review
+model, from the draft, its operations and evidence, the statements the review
+relied on and statements it finds for each question. The model must say
+whether those sources settle every question and quote them; the server checks
+that every quote is in the statement it names or in the draft's evidence. A
+grounded answer is recorded as `model:<model>`'s, with the quoted statements
+and evidence as its evidence, and the draft is reviewed again with it. When the
+sources do not settle the questions, or a quote does not check out, nothing is
+recorded, the run notes why, and the question stays open for a curation agent
+or a person. The model answers a draft at most twice; its tokens count as
+draft review. In the web app the questions and an answer form sit at the top of the
 draft; such drafts sort first under Drafts and are counted on Home. The reviewer gets no new tools for this.
 
 ## Corrections
@@ -324,7 +348,12 @@ earlier failure. A draft reviewed in parts has one context per part in
 corrections, `mode` and `auto_apply` say what the verdict will do, and
 `alias_decisions` whether it decides the draft's alias suggestions. A draft
 the server refuses before any review (unsupported operations, newer
-knowledge, too large) gets an advisory rejection instead of a brief; a person
+knowledge, too large) gets no brief. With **Reject drafts the server refuses
+before review** on, in `review-and-apply` with the application gate on, the
+agent that claimed the task rejects it with the refusal as the rationale, which
+files a rejection gap as any rejection does (a curation agent or the
+[AI curation pass](KNOWLEDGE_HEALTH.md#ai-curation-pass) can then propose a
+split or rebased draft). Otherwise the rejection is advisory and a person
 decides on it.
 
 The agent submits `{parts: [...]}`, one assessment per part in the internal
