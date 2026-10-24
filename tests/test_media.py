@@ -312,3 +312,38 @@ def test_media_is_old_by_age_or_by_product_version():
         "older than 30 days",
         "captured against 1.4; the product is at 2.0",
     ]
+
+
+def test_media_reaches_the_audiences_that_include_its_label(client):
+    admin = _bearer("admin")
+    statement = _statement(client, admin, "A project archive can be restored.")
+    r = client.put(
+        f"/api/statements/{statement}/audiences",
+        headers=admin,
+        json={"audiences": ["external-non-technical"], "reason": "public"},
+    )
+    assert r.status_code == 200, r.text
+    general, technical = (
+        _upload(client, admin, statement, media_samples.png()) for _ in range(2)
+    )
+    for item, audience in (
+        (general, "external-non-technical"),
+        (technical, "external-technical"),
+    ):
+        r = client.put(
+            f"/api/media/{item['id']}/audiences",
+            headers=admin,
+            json={"audiences": [audience]},
+        )
+        assert r.status_code == 200, r.text
+
+    def served(audience: str) -> list[int]:
+        reader = _bearer("reader", audience)
+        return [
+            client.get(str(item["url"]), headers=reader).status_code
+            for item in (general, technical)
+        ]
+
+    # External technical includes external non-technical, not the reverse.
+    assert served("external-technical") == [200, 200]
+    assert served("external-non-technical") == [200, 404]
