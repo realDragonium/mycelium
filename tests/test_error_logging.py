@@ -33,6 +33,40 @@ def _app_with_handlers() -> FastAPI:
     return app
 
 
+def test_configured_logging_drops_httpx_per_request_lines(caplog):
+    loggers = [
+        logging.getLogger(name)
+        for name in (
+            "mycelium",
+            "mycelium.trace",
+            "mycelium.errors",
+            "httpx",
+        )
+    ]
+    states = [
+        (logger, logger.handlers[:], logger.level, logger.propagate)
+        for logger in loggers
+    ]
+
+    try:
+        tracing.configure_logging()
+        with caplog.at_level(logging.DEBUG):
+            httpx_logger = logging.getLogger("httpx")
+            httpx_logger.info(
+                'HTTP Request: POST http://localhost:11434/api/embeddings "HTTP/1.1 200 OK"'
+            )
+            httpx_logger.warning("retrying")
+
+        assert [
+            record.getMessage() for record in caplog.records if record.name == "httpx"
+        ] == ["retrying"]
+    finally:
+        for logger, handlers, level, propagate in states:
+            logger.setLevel(level)
+            logger.handlers[:] = handlers
+            logger.propagate = propagate
+
+
 def test_unhandled_error_returns_500_and_logs_token(caplog):
     client = TestClient(_app_with_handlers(), raise_server_exceptions=False)
     with caplog.at_level(logging.ERROR, logger="mycelium.errors"):
