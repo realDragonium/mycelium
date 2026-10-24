@@ -61,7 +61,7 @@ class Template(Model):
         if value in guidelines.NON_TYPE_SLOTS:
             raise ValueError(
                 "guidance, exposure, audience, maintenance, planning, "
-                "plan_review and delivery are reserved names."
+                "plan_review, delivery and destinations are reserved names."
             )
         return value
 
@@ -83,6 +83,9 @@ class ProfileBody(Model):
     planning: Planning = "off"
     plan_review: PlanReview = "person"
     delivery: Delivery = "people"
+    #: The destinations the profile's documents may be published to; empty
+    #: allows every configured destination.
+    destinations: tuple[str, ...] = ()
     templates: tuple[Template, ...] = ()
 
     @model_validator(mode="after")
@@ -90,6 +93,15 @@ class ProfileBody(Model):
         if len({item.name for item in self.templates}) != len(self.templates):
             raise ValueError("Template names must be unique.")
         return self
+
+    @field_validator("destinations")
+    @classmethod
+    def valid_destinations(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value) or any(
+            not item.strip() or item != item.strip() or "\n" in item for item in value
+        ):
+            raise ValueError("Destination names must be unique and nonblank.")
+        return value
 
 
 class SaveProfile(ProfileBody):
@@ -174,6 +186,10 @@ class ProfileSnapshot:
     planning: Planning = "off"
     plan_review: PlanReview = "person"
     delivery: Delivery = "people"
+    destinations: tuple[str, ...] = ()
+
+    def may_publish_to(self, destination: str) -> bool:
+        return not self.destinations or destination in self.destinations
 
 
 @dataclass(frozen=True)
@@ -274,6 +290,7 @@ def capture(conn: sqlite3.Connection | None = None) -> CatalogueSnapshot:
                 planning(slots.get(guidelines.PLANNING_SLOT)),
                 plan_review(slots.get(guidelines.PLAN_REVIEW_SLOT)),
                 delivery(slots.get(guidelines.DELIVERY_SLOT)),
+                destinations(slots.get(guidelines.DESTINATIONS_SLOT)),
             )
             for name, slots in sorted(grouped.items())
         ),
@@ -304,6 +321,12 @@ def delivery(slot: PromptRevision | str | None) -> Delivery:
     """The stored policy; an unknown text lets only people deliver."""
     text = (slot.text if isinstance(slot, PromptRevision) else slot or "").strip()
     return cast(Delivery, text) if text in get_args(Delivery) else "people"
+
+
+def destinations(slot: PromptRevision | str | None) -> tuple[str, ...]:
+    """The stored destination names, one per line."""
+    text = slot.text if isinstance(slot, PromptRevision) else slot or ""
+    return tuple(line.strip() for line in text.splitlines() if line.strip())
 
 
 #: Policy slots and the texts each may hold.
@@ -375,6 +398,7 @@ def _profile(
         planning=planning(live.get(guidelines.PLANNING_SLOT)),
         plan_review=plan_review(live.get(guidelines.PLAN_REVIEW_SLOT)),
         delivery=delivery(live.get(guidelines.DELIVERY_SLOT)),
+        destinations=destinations(live.get(guidelines.DESTINATIONS_SLOT)),
         effective_audience=effective.id if effective else None,
         templates=tuple(templates),
         retired=bool(rows) and not live,
@@ -456,9 +480,8 @@ def _protect_default(
         )
 
 
-def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
-    _authorize(principal)
-    _part(name)
+def _texts(request: SaveProfile) -> dict[str, str]:
+    """The slots a save stores, before its policy slots."""
     desired = {item.name: item.text for item in request.templates}
     if request.guidance.strip():
         desired["guidance"] = request.guidance
@@ -466,6 +489,15 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
         desired["exposure"] = request.exposure
     if request.audience is not None:
         desired[guidelines.AUDIENCE_SLOT] = request.audience
+    if request.destinations:
+        desired[guidelines.DESTINATIONS_SLOT] = "\n".join(request.destinations)
+    return desired
+
+
+def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
+    _authorize(principal)
+    _part(name)
+    desired = _texts(request)
     if not desired:
         raise ValueError(
             "Add guidance or a template to create a profile; use Retire to remove one."
@@ -486,10 +518,12 @@ def save(name: str, request: SaveProfile, principal: auth.Principal) -> Profile:
             item.id for item in audiences.live(conn)
         }:
             raise ValueError(f"Audience {request.audience!r} is not live.")
-        if live and live.get(guidelines.AUDIENCE_SLOT) != desired.get(
-            guidelines.AUDIENCE_SLOT
+        if live and any(
+            live.get(slot) != desired.get(slot)
+            for slot in (guidelines.AUDIENCE_SLOT, guidelines.DESTINATIONS_SLOT)
         ):
-            # The audience decides what a profile's documents may disclose.
+            # The audience decides what a profile's documents may disclose,
+            # and the destinations who gets to read them.
             _authorize(principal, "admin")
         # Going back to manual rewrites the slot rather than retiring it, so
         # it needs no more than the writer who turned automation on.
@@ -560,7 +594,8 @@ def validate_key(type: str, name: str) -> tuple[str, str]:
             raise ValueError(
                 "Guideline names must use profile/template, profile/guidance, "
                 "profile/exposure, profile/audience, profile/maintenance, "
-                "profile/planning, profile/plan_review or profile/delivery."
+                "profile/planning, profile/plan_review, profile/delivery or "
+                "profile/destinations."
             )
         _part(profile)
         _part(slot)
@@ -592,8 +627,9 @@ def save_text(
     type, name = validate_key(type, name)
     if not text.strip():
         raise ValueError("Text is required.")
-    if _is_audience_slot(type, name):
+    if _is_admin_slot(type, name):
         _authorize(principal, "admin")
+    if _is_audience_slot(type, name):
         if text.strip() not in {item.id for item in audiences.live()}:
             raise ValueError(f"Audience {text.strip()!r} is not live.")
     policy = _POLICIES.get(name.partition("/")[2]) if type == guidelines.TYPE else None
@@ -676,6 +712,13 @@ def _is_audience_slot(type: str, name: str) -> bool:
     return (
         type == guidelines.TYPE and name.partition("/")[2] == guidelines.AUDIENCE_SLOT
     )
+
+
+def _is_admin_slot(type: str, name: str) -> bool:
+    return type == guidelines.TYPE and name.partition("/")[2] in {
+        guidelines.AUDIENCE_SLOT,
+        guidelines.DESTINATIONS_SLOT,
+    }
 
 
 def editable_key(type: str, name: str) -> None:

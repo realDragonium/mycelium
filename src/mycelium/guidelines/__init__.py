@@ -49,6 +49,11 @@ PLAN_REVIEW_SLOT = "plan_review"
 #: by people only.
 DELIVERY_SLOT = "delivery"
 
+#: The set-wide destinations slot: the names of the documentation
+#: destinations the set's documents may be published to, one per line. A set
+#: without one may publish to any configured destination.
+DESTINATIONS_SLOT = "destinations"
+
 #: Slots that steer every document in a set rather than naming something the
 #: set can write. Keeping the subtraction here makes another set-wide slot a
 #: one-line addition rather than another catalogue special case.
@@ -61,6 +66,7 @@ NON_TYPE_SLOTS = frozenset(
         PLANNING_SLOT,
         PLAN_REVIEW_SLOT,
         DELIVERY_SLOT,
+        DESTINATIONS_SLOT,
     }
 )
 
