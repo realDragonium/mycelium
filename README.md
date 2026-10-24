@@ -184,6 +184,22 @@ Historical annotation tables may remain in old databases but are inert. The
 current migration runner leaves them intact for compatibility, and archive
 imports skip their records rather than converting them into statements.
 
+## Specs
+
+`openspec/specs/` records Mycelium's current behaviour per capability as
+[OpenSpec](https://github.com/Fission-AI/OpenSpec) requirements with WHEN/THEN
+scenarios. A behaviour change starts as a proposal under `openspec/changes/<change>/`
+(proposal, delta specs, tasks). When the change lands, archive it so its deltas
+update the main specs:
+
+```sh
+npx @fission-ai/openspec@1.15.0 list --specs
+npx @fission-ai/openspec@1.15.0 validate --all --strict
+npx @fission-ai/openspec@1.15.0 archive <change>
+```
+
+CI runs the same validation.
+
 ## Tests
 
 ```sh

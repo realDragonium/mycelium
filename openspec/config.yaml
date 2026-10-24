@@ -1,0 +1,21 @@
+schema: spec-driven
+
+context: |
+  Purpose: Mycelium is an AI-native knowledge base. It stores atomic, typed
+  statements, the entities they name, and typed links between them, and
+  projects that accepted knowledge into audience-scoped generated documents.
+  Generated documents are outputs; they never feed back as evidence.
+  Consumers: coding and support agents over MCP or HTTP, agents curating from
+  a product's codebase, documentation agents on the server, and people using
+  the browser app. Product direction lives in project_vision.md.
+  Tech stack: Python 3.11 with uv, FastAPI HTTP and MCP from one tool
+  registry, SQLite, hnswlib indexes over Ollama or OpenAI embeddings, Claude
+  or OpenAI GPT per model-driven action, and a Vite + React + TypeScript web
+  app committed as built assets under src/mycelium/webui/.
+  The repository is public: specs, examples and fixtures use an invented SaaS
+  domain (workspaces, invoices, SSO, exports), never production data.
+
+rules:
+  specs:
+    - Describe behaviour a user, agent or operator can observe and rely on; leave out internal names.
+    - State concrete limits and defaults when they are part of the contract.
