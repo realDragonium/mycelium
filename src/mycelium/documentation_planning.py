@@ -506,6 +506,7 @@ def accept(
     document_types: Iterable[str],
     documents: list[ExistingDocument],
     dismissed: set[str],
+    given_up: Set[str] = frozenset(),
     max_items: int,
 ) -> Accepted:
     """The items worth keeping. The model proposes; only ids the audience
@@ -530,6 +531,8 @@ def accept(
             if not statement_ids
             else "dismissed before"
             if key in dismissed
+            else "given up before"
+            if key in given_up
             else "duplicates another item"
             if key in seen
             else "over the item limit"
@@ -567,6 +570,7 @@ def prompt_for(
     overview: Overview,
     documents: list[ExistingDocument],
     dismissed: list[sqlite3.Row],
+    given_up: Iterable[GivenUp] = (),
     max_items: int,
     proposed: Iterable[Item] = (),
 ) -> str:
@@ -634,7 +638,8 @@ def prompt_for(
                 str(row["title"])
                 for row in dismissed
                 if not str(row["key"]).startswith(statement_key(""))
-            ],
+            ]
+            + [item.title for item in given_up],
             **({"already_proposed": earlier} if earlier else {}),
         },
         ensure_ascii=False,
@@ -678,6 +683,7 @@ class _Inputs:
     overview: Overview
     documents: list[ExistingDocument]
     dismissed: list[sqlite3.Row]
+    given_up: dict[str, GivenUp]
     task: ai.StructuredTask[Proposal]
     max_items: int
     #: The statements no document cites, beyond the batch offered.
@@ -770,10 +776,13 @@ def _inputs(
     planned: Target,
     limits: product_settings.DocumentationPlanningSettings,
     progress: _Progress,
+    *,
+    automatic: bool,
 ) -> _Inputs:
     scope = audience_scope.capture(substrate, planned.audience)
     documents = profile_documents(drafts, lambda: substrate, planned.guideline_set)
     dismissed = doc_plans.dismissed(drafts, planned.guideline_set)
+    abandoned = given_up(drafts, planned.guideline_set) if automatic else {}
     open_statements = uncovered(
         scope.statement_ids,
         (sid for document in documents for sid in document.cited),
@@ -799,6 +808,7 @@ def _inputs(
             overview=overview,
             documents=documents,
             dismissed=dismissed,
+            given_up=abandoned.values(),
             max_items=limits.max_items,
             proposed=progress.items,
         ),
@@ -809,6 +819,7 @@ def _inputs(
         overview,
         documents,
         dismissed,
+        abandoned,
         task,
         limits.max_items,
         open_statements,
@@ -823,6 +834,7 @@ def _accept(planned: Target, inputs: _Inputs, proposal: Proposal) -> Accepted:
         document_types=[item.name for item in planned.templates],
         documents=inputs.documents,
         dismissed={str(row["key"]) for row in inputs.dismissed},
+        given_up={item.key for item in inputs.given_up.values()},
         max_items=inputs.max_items,
     )
 
@@ -866,6 +878,9 @@ def plan(
     raises: a failure lands on the plan."""
     call = call or _call
     try:
+        plan_row = doc_plans.get_plan(drafts, plan_id)
+        if plan_row is None:
+            raise LookupError(f"documentation plan not found: {plan_id}")
         limits = product_settings.get(product_settings.DocumentationPlanningSettings)
         selected = model_settings.get("documentation_planning")
         config = ai.ModelConfig(
@@ -883,7 +898,14 @@ def plan(
             doc_plans.record_activity(
                 drafts, plan_id, "Reading what the audience may see"
             )
-            inputs = _inputs(drafts, substrate, planned, limits, progress)
+            inputs = _inputs(
+                drafts,
+                substrate,
+                planned,
+                limits,
+                progress,
+                automatic=bool(plan_row["automatic"]),
+            )
             doc_plans.record_activity(drafts, plan_id, "Waiting for a model slot")
             with (
                 server.model_loop_slot(),
@@ -987,12 +1009,16 @@ def _prepare_agent_task(
     if task.brief is not None:
         return task
     try:
+        plan = doc_plans.get_plan(drafts, str(task.subject_id))
+        if plan is None:
+            raise Unavailable("This documentation plan no longer exists.")
         inputs = _inputs(
             drafts,
             store.substrate_connection(),
             _agent_target(task),
             product_settings.get(product_settings.DocumentationPlanningSettings),
             _Progress.of(task.state),
+            automatic=bool(plan["automatic"]),
         )
     except Unavailable as exc:
         doc_plans.finish_plan(drafts, str(task.subject_id), error=str(exc))
@@ -1041,7 +1067,19 @@ def _submit_agent_task(
     planned = _agent_target(task)
     limits = product_settings.get(product_settings.DocumentationPlanningSettings)
     progress = _Progress.of(task.state)
-    inputs = _inputs(drafts, store.substrate_connection(), planned, limits, progress)
+    plan_row = doc_plans.get_plan(drafts, plan_id)
+    if plan_row is None:
+        return agent_tasks.closed(
+            drafts, task, "The documentation plan no longer exists.", failed=True
+        )
+    inputs = _inputs(
+        drafts,
+        store.substrate_connection(),
+        planned,
+        limits,
+        progress,
+        automatic=bool(plan_row["automatic"]),
+    )
     kept = _accept(planned, inputs, proposal)
     progress.add(inputs, proposal, kept)
     dropped = ", ".join(f"{count} {why}" for why, count in kept.dropped.items())
@@ -1267,11 +1305,22 @@ def dismiss_stale(
 # --- planning by itself ---------------------------------------------------------
 
 
+RetryKind = Literal["plan", "plan_review", "item_start"]
+
+
+@dataclass(frozen=True)
+class GivenUp:
+    key: str
+    title: str
+    reason: str
+
+
 def recovery_retries(
-    guideline_set: str, snapshot: documentation_profiles.CatalogueSnapshot | None = None
+    guideline_set: str,
+    kind: RetryKind,
+    snapshot: documentation_profiles.CatalogueSnapshot | None = None,
 ) -> int:
-    """How often the profile's failed AI work is retried: the recovery
-    attempts while its recovery is `ai`, otherwise none."""
+    """How often this kind of failed work is retried under `ai` recovery."""
     profile = next(
         (
             item
@@ -1282,9 +1331,63 @@ def recovery_retries(
     )
     if profile is None or profile.recovery != "ai":
         return 0
-    return product_settings.get(
-        product_settings.DocumentationMaintenanceSettings
-    ).retry_attempts
+    limits = product_settings.get(product_settings.DocumentationPlanningSettings)
+    return {
+        "plan": limits.plan_retries,
+        "plan_review": limits.plan_review_retries,
+        "item_start": limits.item_start_retries,
+    }[kind]
+
+
+def given_up(
+    drafts: sqlite3.Connection,
+    guideline_set: str,
+    snapshot: documentation_profiles.CatalogueSnapshot | None = None,
+) -> dict[str, GivenUp]:
+    """The profile's plan items whose automatic recovery has ended."""
+    snapshot = snapshot or documentation_profiles.capture()
+    start_retries = recovery_retries(guideline_set, "item_start", snapshot)
+    review_retries = recovery_retries(guideline_set, "plan_review", snapshot)
+    result: dict[str, GivenUp] = {}
+    for plan in doc_plans.plans(drafts, guideline_set):
+        failures = doc_plans.start_failures(plan)
+        reviews = doc_plans.reviews(plan)
+        for row in doc_plans.items(drafts, str(plan["id"])):
+            item_id = str(row["id"])
+            reason: str | None = None
+            if row["state"] == "proposed":
+                failure = failures.get(item_id)
+                review = reviews.get(item_id)
+                if failure is not None and failure.attempts > start_retries:
+                    attempts = failure.attempts
+                    reason = (
+                        f"Gave up after {attempts} "
+                        f"attempt{'s' if attempts != 1 else ''} to start its run: "
+                        f"{failure.error}"
+                    )
+                elif (
+                    review is not None
+                    and review.decision is None
+                    and review.failures > review_retries
+                ):
+                    reason = review.reason
+            elif row["state"] == "approved" and row["run_id"]:
+                run = docs_store.get_run(drafts, str(row["run_id"]))
+                if (
+                    run is not None
+                    and run["finished_at"] is not None
+                    and run["outcome"] != "document_written"
+                    and run["recovery"] in ("none", "gave_up")
+                ):
+                    reason = run["recovery_note"] or (
+                        f"Its run wrote nothing: "
+                        f"{run['error'] or 'No reason was recorded.'}"
+                    )
+            if reason is not None:
+                result[item_id] = GivenUp(
+                    key=str(row["key"]), title=str(row["title"]), reason=str(reason)
+                )
+    return result
 
 
 def plan_automatically(
@@ -1316,7 +1419,7 @@ def plan_automatically(
             and latest["automatic"]
             and latest["outcome"] == "failed"
             and doc_plans.failed_in_a_row(drafts, profile.name)
-            > recovery_retries(profile.name, snapshot)
+            > recovery_retries(profile.name, "plan", snapshot)
         ):
             continue
         planned_row = doc_plans.latest_planned(drafts, profile.name)
@@ -1327,7 +1430,7 @@ def plan_automatically(
                 and profile.plan_review == "person"
             ):
                 started += _start_items(drafts, planned_row, limits.approve_batch)
-            if _waiting(drafts, planned_row, recovery_retries(profile.name, snapshot)):
+            if _waiting(drafts, planned_row, snapshot):
                 continue
         if _fresh_uncovered(drafts, substrate, planned) < limits.replan_hint_statements:
             continue
@@ -1342,24 +1445,26 @@ def plan_automatically(
     return started
 
 
-def _waiting(drafts: sqlite3.Connection, plan: sqlite3.Row, retries: int) -> bool:
+def _waiting(
+    drafts: sqlite3.Connection,
+    plan: sqlite3.Row,
+    snapshot: documentation_profiles.CatalogueSnapshot,
+) -> bool:
     """A plan has an item still proposed, or approved with a run that has
-    not finished. While failed work is retried (`retries`), an item it gave
-    up on, because its run could not start or its review failed, waits for
-    no one."""
-    failures = doc_plans.start_failures(plan)
-    reviews = doc_plans.reviews(plan)
+    not finished. Under AI recovery an item given up because its run could
+    not start or its review failed waits for no one; under person recovery
+    it still holds up automatic planning."""
+    abandoned = given_up(drafts, str(plan["guideline_set"]), snapshot)
+    profile = next(
+        (item for item in snapshot.profiles if item.name == plan["guideline_set"]),
+        None,
+    )
     for row in doc_plans.items(drafts, str(plan["id"])):
         item_id = str(row["id"])
-        given_up = retries > 0 and (
-            (item_id in failures and failures[item_id].attempts > retries)
-            or (
-                (review := reviews.get(item_id)) is not None
-                and review.decision is None
-                and review.failures > retries
-            )
+        stopped = (
+            profile is not None and profile.recovery == "ai" and item_id in abandoned
         )
-        if row["state"] == "proposed" and not given_up:
+        if row["state"] == "proposed" and not stopped:
             return True
         if row["state"] == "approved":
             run = docs_store.get_run(drafts, str(row["run_id"] or ""))
@@ -1394,7 +1499,7 @@ def _start_items(
     attempts last."""
     if model_settings.credentials_error("docgen") is not None:
         return []
-    retries = recovery_retries(str(plan["guideline_set"]))
+    retries = recovery_retries(str(plan["guideline_set"]), "item_start")
     not_started = {
         item_id
         for item_id, failure in doc_plans.start_failures(plan).items()
@@ -1478,6 +1583,8 @@ class PlanItem(BaseModel):
     review: ItemReview | None = None
     #: Why the sweep could not start the item's run, the last time it tried.
     start_error: str | None = None
+    #: Why automatic recovery ended for this item.
+    given_up: str | None = None
 
 
 class StatementChange(BaseModel):
@@ -1695,15 +1802,26 @@ def view(guideline_set: str) -> PlanView:
     anchored = {document.anchor_entity_id for document in documents}
     items = doc_plans.items(drafts, str(planned_row["id"])) if planned_row else []
     maintained = _maintenance_items(drafts, guideline_set, documents)
-    current = doc_plans.current_plans(drafts, guideline_set)
+    all_plans = doc_plans.plans(drafts, guideline_set)
+    abandoned = given_up(drafts, guideline_set, snapshot)
+    shown_ids = {str(row["id"]) for row in [*items, *maintained]}
+    earlier_abandoned = [
+        row
+        for plan in all_plans
+        if plan["kind"] == "model"
+        for row in doc_plans.items(drafts, str(plan["id"]))
+        if str(row["id"]) in abandoned
+        and str(row["id"]) not in shown_ids
+        and _automation_gave_up(drafts, row)
+    ]
     reviewed = {
         item_id: review
-        for shown in current
+        for shown in all_plans
         for item_id, review in doc_plans.reviews(shown).items()
     }
     failures = {
         item_id: failure.error
-        for shown in current
+        for shown in all_plans
         for item_id, failure in doc_plans.start_failures(shown).items()
     }
     profile = next((p for p in snapshot.profiles if p.name == guideline_set), None)
@@ -1719,12 +1837,19 @@ def view(guideline_set: str) -> PlanView:
         unavailable=unavailable,
         latest=_summary(latest, drafts) if latest is not None else None,
         items=[
-            *(_item(drafts, row, counts, reviewed, failures) for row in items),
             *(
-                _item(drafts, row, counts, reviewed, failures).model_copy(
+                _item(drafts, row, counts, reviewed, failures, abandoned)
+                for row in items
+            ),
+            *(
+                _item(drafts, row, counts, reviewed, failures, abandoned).model_copy(
                     update={"maintenance": True}
                 )
                 for row in maintained
+            ),
+            *(
+                _item(drafts, row, counts, reviewed, failures, abandoned)
+                for row in earlier_abandoned
             ),
         ],
         stale=[
@@ -1789,7 +1914,7 @@ def _recovery_note(
     if latest is None or not latest["automatic"] or latest["outcome"] != "failed":
         return None
     failed = doc_plans.failed_in_a_row(drafts, guideline_set)
-    retries = recovery_retries(guideline_set, snapshot)
+    retries = recovery_retries(guideline_set, "plan", snapshot)
     if not retries:
         return "Automatic planning waits until someone plans again."
     if failed > retries:
@@ -1823,12 +1948,23 @@ def _maintenance_items(
     ]
 
 
+def _automation_gave_up(drafts: sqlite3.Connection, row: sqlite3.Row) -> bool:
+    """An earlier plan's item stays on the plan page when automatic work on
+    it ended: it was never started, or its run's retries were given up.
+    Runs that simply failed under a person's recovery stay in the history."""
+    if row["state"] == "proposed":
+        return True
+    run = docs_store.get_run(drafts, str(row["run_id"] or ""))
+    return run is not None and run["recovery"] == "gave_up"
+
+
 def _item(
     drafts: sqlite3.Connection,
     row: sqlite3.Row,
     counts: dict[str, tuple[str, int]],
     reviewed: dict[str, doc_plans.Review],
     failures: dict[str, str],
+    abandoned: dict[str, GivenUp],
 ) -> PlanItem:
     run = docs_store.get_run(drafts, str(row["run_id"])) if row["run_id"] else None
     anchor = row["anchor_entity_id"]
@@ -1860,5 +1996,8 @@ def _item(
         else None,
         start_error=failures.get(str(row["id"]))
         if row["state"] == "proposed"
+        else None,
+        given_up=abandoned[str(row["id"])].reason
+        if str(row["id"]) in abandoned
         else None,
     )

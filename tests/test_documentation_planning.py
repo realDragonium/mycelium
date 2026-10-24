@@ -815,6 +815,184 @@ def test_an_item_that_could_not_start_is_tried_again(client, monkeypatch):
     assert item["run"]["status"] == "document_written"
 
 
+def test_a_plan_item_that_could_not_start_gives_up_at_its_own_limit(
+    client, monkeypatch
+):
+    from mycelium import product_settings, server
+    from product_settings_helpers import set_product
+
+    _profile()
+    _slot("planning", "write")
+    _slot("recovery", "ai")
+    set_product(
+        product_settings.DocumentationPlanningSettings(
+            item_start_retries=0, replan_hint_statements=1
+        )
+    )
+    with store.transaction(server._db()):
+        sid = store.create_statement(
+            server._db(), "capability", "admins export invoices"
+        )
+    call, _prompts = _answer(_item(statement_ids=[sid]))
+    monkeypatch.setattr(documentation_planning, "_call", call)
+    attempts: list[str] = []
+
+    def unavailable(item_id, **kwargs):
+        attempts.append(item_id)
+        raise RuntimeError("the writer is busy")
+
+    monkeypatch.setattr(documentation_planning, "approve", unavailable)
+    _sweep_plans()
+    for _ in range(3):
+        _sweep_plans()
+
+    (item,) = client.get("/api/documentation/plans/public").json()["items"]
+    assert item["state"] == "proposed"
+    assert item["given_up"].startswith("Gave up after 1 attempt to start its run")
+    assert len(attempts) == 1
+
+
+def test_an_item_the_ai_reviewer_dismissed_is_not_proposed_again_by_automatic_planning(
+    client, monkeypatch
+):
+    from mycelium import (
+        documentation_plan_review,
+        documentation_profiles,
+        product_settings,
+        server,
+    )
+    from product_settings_helpers import set_product
+
+    _profile()
+    _reviewed_by_ai()
+    _slot("planning", "propose")
+    set_product(
+        product_settings.DocumentationPlanningSettings(replan_hint_statements=1)
+    )
+    statements = _statements(1)
+    planning_calls: list[str] = []
+
+    def propose(task, config):
+        planning_calls.append(task.prompt)
+        return Proposal(items=[_item(statement_ids=statements)]), ai.Usage()
+
+    review_calls: list[str] = []
+
+    def dismiss(task, config):
+        review_calls.append(task.prompt)
+        (item,) = json.loads(task.prompt)["items"]
+        decision = {
+            "item_id": item["item_id"],
+            "decision": "dismiss",
+            "reason": "The export guide is not needed.",
+        }
+        return documentation_plan_review.Verdicts(decisions=[decision]), ai.Usage()
+
+    monkeypatch.setattr(documentation_planning, "_call", propose)
+    monkeypatch.setattr(documentation_plan_review, "_call", dismiss)
+    _sweep_plans()
+    documentation_plan_review.sweep(documentation_profiles.capture())
+    documentation_plan_review.wait_all()
+    with store.transaction(server._db()):
+        store.create_statement(
+            server._db(), "capability", "workspace exports include invoice totals"
+        )
+    _sweep_plans()
+    documentation_plan_review.sweep(documentation_profiles.capture())
+    documentation_plan_review.wait_all()
+    for _ in range(3):
+        _sweep_plans()
+
+    plan = client.get("/api/documentation/plans/public").json()
+    assert plan["latest"]["dropped"] == {"dismissed before": 1}
+    assert (len(planning_calls), len(review_calls)) == (2, 1)
+
+
+def test_an_item_whose_run_gave_up_is_not_proposed_again_until_a_person_retries(
+    client, monkeypatch
+):
+    from mycelium import document_maintenance, product_settings, server
+    from product_settings_helpers import set_product
+
+    _profile()
+    _slot("planning", "write")
+    _slot("recovery", "ai")
+    set_product(
+        product_settings.DocumentationPlanningSettings(replan_hint_statements=1)
+    )
+    set_product(product_settings.DocumentationMaintenanceSettings(run_retries=0))
+    [statement] = _statements(1)
+    call, _prompts = _answer(_item(statement_ids=[statement]))
+    monkeypatch.setattr(documentation_planning, "_call", call)
+    written = doc_runs.RUNNER
+    refusal = {
+        "outcome": "nothing_written",
+        "reason": "the document did not include export steps",
+    }
+    doc_runs.RUNNER = lambda prompt, *, guideline_set, document_type: refusal
+    _sweep_plans()
+    _sweep_plans()
+    document_maintenance.sweep()
+    (failed,) = client.get("/api/documentation/plans/public").json()["items"]
+    assert failed["given_up"].startswith("Gave up without an automatic retry")
+    with store.transaction(server._db()):
+        store.create_statement(
+            server._db(), "capability", "workspace exports include invoice dates"
+        )
+    _sweep_plans()
+
+    plan = client.get("/api/documentation/plans/public").json()
+    assert plan["latest"]["dropped"] == {"given up before": 1}
+    assert next(item for item in plan["items"] if item["id"] == failed["id"])[
+        "given_up"
+    ]
+
+    doc_runs.RUNNER = written
+    retried = client.post(
+        f"/api/documentation/plan-items/{failed['id']}/retry", json={}
+    )
+    assert retried.status_code == 200, retried.text
+    assert documentation_planning.given_up(server._drafts_db(), "public") == {}
+    doc_runs.wait_all()
+
+
+def test_a_given_up_item_stays_visible_after_a_newer_automatic_plan(
+    client, monkeypatch
+):
+    from mycelium import product_settings, server
+    from product_settings_helpers import set_product
+
+    _profile()
+    _slot("planning", "write")
+    _slot("recovery", "ai")
+    set_product(
+        product_settings.DocumentationPlanningSettings(
+            item_start_retries=0, replan_hint_statements=1
+        )
+    )
+    [statement] = _statements(1)
+    call, _prompts = _answer(_item(statement_ids=[statement]))
+    monkeypatch.setattr(documentation_planning, "_call", call)
+
+    def busy(item_id, **kwargs):
+        raise RuntimeError("writer busy")
+
+    monkeypatch.setattr(documentation_planning, "approve", busy)
+    _sweep_plans()
+    _sweep_plans()
+    first = client.get("/api/documentation/plans/public").json()["items"][0]
+    with store.transaction(server._db()):
+        store.create_statement(
+            server._db(), "capability", "workspace exports include invoice status"
+        )
+    _sweep_plans()
+
+    plan = client.get("/api/documentation/plans/public").json()
+    shown = next(item for item in plan["items"] if item["id"] == first["id"])
+    assert shown["given_up"].startswith("Gave up after 1 attempt")
+    assert plan["latest"]["dropped"] == {"given up before": 1}
+
+
 def _statements(count: int) -> list[str]:
     from mycelium import server
 

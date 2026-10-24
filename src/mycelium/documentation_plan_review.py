@@ -318,7 +318,9 @@ def start(guideline_set: str, *, call: Call | None = None) -> bool:
         rows = due(
             drafts,
             guideline_set,
-            retries=documentation_planning.recovery_retries(guideline_set),
+            retries=documentation_planning.recovery_retries(
+                guideline_set, "plan_review"
+            ),
         )
         if not rows:
             return False

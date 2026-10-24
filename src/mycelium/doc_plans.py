@@ -352,6 +352,17 @@ def current_plans(conn: sqlite3.Connection, guideline_set: str) -> list[sqlite3.
     )
 
 
+def plans(conn: sqlite3.Connection, guideline_set: str) -> list[sqlite3.Row]:
+    """All of a profile's plans, newest model plan first."""
+    return list(
+        conn.execute(
+            "SELECT * FROM documentation_plans WHERE guideline_set = ? "
+            "ORDER BY kind, created_at DESC, rowid DESC",
+            (guideline_set,),
+        )
+    )
+
+
 def maintenance_plan(conn: sqlite3.Connection, guideline_set: str) -> str | None:
     row = conn.execute(
         "SELECT id FROM documentation_plans WHERE guideline_set = ? "
