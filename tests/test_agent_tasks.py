@@ -6,15 +6,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mycelium import agent_tasks, doc_runs, docs_store, prompt_store, store, timestamps
-from mycelium.docgen import loop
-from mycelium.docgen.schema import ReviewCheck, ReviewRecord
-from test_principal_audience import (
+from audience_corpus import (
     SECRET,
     _bearer,
     _corpus,
     client,  # noqa: F401 — fixture
 )
+from mycelium import agent_tasks, doc_runs, docs_store, prompt_store, store, timestamps
+from mycelium.docgen import loop
+from mycelium.docgen.schema import ReviewCheck, ReviewRecord
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

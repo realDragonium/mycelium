@@ -121,26 +121,8 @@ ANTI-PREMATURE-CLOSURE (the failure this tool exists to prevent)
 """
 
 
-#: Added for a caller scoped to an audience. The audience rules hide what
-#: lies outside the audience, its existence included, so the answer may say
-#: neither that something does not exist nor that more exists elsewhere.
-_SCOPED_READER = """THE READER SEES PART OF THE KNOWLEDGE BASE
-- The person asking may see only part of the knowledge base, and your tools \
-read only that part. Something you cannot find may still exist.
-- Never say that a feature, concept or behaviour does not exist, is not \
-supported, is not documented, or that the knowledge base does not cover it. \
-Say instead that the information is not available here, and answer what you \
-can.
-- Do not suggest that other knowledge is hidden or restricted.
-- Write for that person: never use "substrate", statement ids or tool names \
-in `answer`.
-
-"""
-
-
-def build_system_prompt(instructions: str, *, scoped: bool = False) -> str:
-    protocol = _FIXED_PROTOCOL + (_SCOPED_READER if scoped else "")
-    return protocol + "\n\n=== BEHAVIORAL INSTRUCTIONS ===\n" + instructions
+def build_system_prompt(instructions: str) -> str:
+    return _FIXED_PROTOCOL + "\n\n=== BEHAVIORAL INSTRUCTIONS ===\n" + instructions
 
 
 def _compact_hit(hit: dict[str, Any]) -> dict[str, Any]:

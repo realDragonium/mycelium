@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from pydantic import Field as PydField
 
-from .. import audiences, auth, principal_audience, quarantine, store
+from .. import auth, quarantine, store
 from ..request_timing import TimedRoute
 from ..server import runtime
 from .access import _require_principal
@@ -32,7 +32,6 @@ def _serialize_token_row(row: sqlite3.Row) -> dict[str, Any]:
         "last_used_at": row["last_used_at"],
         "revoked_at": row["revoked_at"],
         "oauth": row["client_id"] is not None,
-        "audience_id": row["audience_id"],
     }
 
 
@@ -79,9 +78,6 @@ def get_me(request: Request) -> dict[str, Any]:
     """Return the current principal. The UI uses this to decide whether
     to show admin-only affordances and whose tokens to list."""
     p = _require_principal(request)
-    audience = next(
-        (item for item in audiences.live() if item.id == p.audience_id), None
-    )
     return {
         "id": p.id,
         "name": p.name,
@@ -89,12 +85,6 @@ def get_me(request: Request) -> dict[str, Any]:
         "type": p.type,
         "synthetic": p.synthetic,
         "auth_enabled": auth.is_enabled(),
-        # Null with `audience_id` set: the audience was retired, and every
-        # read refuses until an administrator rescopes this account.
-        "audience_id": p.audience_id,
-        "audience": None
-        if audience is None
-        else {"id": audience.id, "name": audience.name, "scope": audience.scope},
     }
 
 
@@ -112,8 +102,6 @@ def list_my_tokens(request: Request) -> dict[str, Any]:
 class CreateTokenBody(BaseModel):
     name: str = PydField(..., min_length=1, max_length=80)
     scope: auth.Scope = "writer"
-    #: Admins only: the audience the token reads as.
-    audience_id: str | None = None
 
 
 @router.post("/api/me/tokens")
@@ -126,19 +114,10 @@ def create_my_token(body: CreateTokenBody, request: Request) -> dict[str, Any]:
     it immediately; it cannot be retrieved later.
     """
     p = _require_principal(request)
-    if body.audience_id is not None and not p.is_admin:
-        raise HTTPException(
-            status_code=403, detail="only an admin can scope a token to an audience"
-        )
-    principal_audience.require_live(body.audience_id)
     conn = runtime._auth_db()
     with store.transaction(conn):
         raw, row = auth.mint_own_token(
-            conn,
-            principal=p,
-            name=body.name,
-            scope=body.scope,
-            audience_id=body.audience_id,
+            conn, principal=p, name=body.name, scope=body.scope
         )
     return {"token": raw, **_serialize_token_row(row)}
 

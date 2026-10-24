@@ -377,16 +377,10 @@ def list_generated_documents() -> dict[str, Any]:
 
     Returns {"documents": [document summaries]}; get_generated_document returns
     the body."""
-    from .. import docs_store, principal_audience
+    from .. import docs_store
 
     rows = docs_store.list_documents(_drafts_db(), limit=None)
-    scope = principal_audience.current_scope()
-    if scope is not None:
-        readable = principal_audience.readable_documents(
-            _drafts_db(), [str(row["id"]) for row in rows], scope
-        )
-        rows = [row for row in rows if row["id"] in readable]
-    stale = _freshness([str(row["id"]) for row in rows], scoped=scope is not None)
+    stale = _freshness([str(row["id"]) for row in rows])
     audiences = _document_audiences(rows)
     return {
         "documents": [
@@ -409,21 +403,16 @@ def get_generated_document(document_id: str) -> dict[str, Any]:
     was read. `stale` is as in list_generated_documents. Returns the
     serialized document row. Raises for an unknown
     document_id."""
-    from .. import docs_store, principal_audience
+    from .. import docs_store
     from ..docgen import publication
 
-    scope = principal_audience.current_scope()
-    if scope is not None and document_id not in (
-        principal_audience.readable_documents(_drafts_db(), [document_id], scope)
-    ):
-        raise ValueError(f"generated document not found: {document_id}")
     publication.refresh_pull_request(_drafts_db(), document_id)
     row = docs_store.get_document(_drafts_db(), document_id)
     if row is None:
         raise ValueError(f"generated document not found: {document_id}")
     return {
         **docs_store.serialize_document(row),
-        "stale": _freshness([document_id], scoped=scope is not None)[document_id],
+        "stale": _freshness([document_id])[document_id],
         "audience": _document_audiences([row])[document_id],
     }
 
@@ -454,17 +443,11 @@ def _document_audiences(
     return {str(row["id"]): written.get(str(row["last_run_id"])) for row in rows}
 
 
-def _freshness(
-    document_ids: list[str], *, scoped: bool = False
-) -> dict[str, dict[str, object]]:
-    """Each document's freshness. A scoped reader gets the status only: the
-    changes quote statement text, old and new, whatever its audience."""
+def _freshness(document_ids: list[str]) -> dict[str, dict[str, object]]:
     from .. import document_freshness
 
     return {
-        document_id: {**freshness.as_dict(), "changes": [], "media_changes": []}
-        if scoped
-        else freshness.as_dict()
+        document_id: freshness.as_dict()
         for document_id, freshness in document_freshness.for_documents(
             _drafts_db(), _db, document_ids
         ).items()

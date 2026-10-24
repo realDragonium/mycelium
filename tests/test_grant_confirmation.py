@@ -6,6 +6,7 @@ import random
 
 import pytest
 
+from audience_corpus import _bearer, client  # noqa: F401 — fixture
 from mycelium import (
     ai,
     audience_labelling,
@@ -17,7 +18,6 @@ from mycelium import (
 )
 from mycelium.audiences import Audience
 from product_settings_helpers import connection as product_connection
-from test_principal_audience import _bearer, client  # noqa: F401 — fixture
 
 INTERNAL = "internal-technical"
 EXTERNAL = "external-technical"
@@ -267,13 +267,12 @@ def test_a_sample_is_stratified_and_accepting_the_rest_records_its_precision(
     assert bulk["sample"] == {"size": 3, "precision": pytest.approx(0.6667)}
 
 
-def test_a_pending_statement_reaches_an_external_token_only_once_confirmed(
+def test_a_pending_statement_reaches_an_external_audience_only_once_confirmed(
     client,  # noqa: F811 — the imported fixture
 ):
     from mycelium import server
 
     admin, reader = _bearer("admin"), _bearer("reader")
-    external = _bearer("reader", EXTERNAL)
     conn = server._db()
     with store.transaction(conn):
         sid = store.create_statement(conn, "capability", "admins can export invoices")
@@ -281,12 +280,10 @@ def test_a_pending_statement_reaches_an_external_token_only_once_confirmed(
             conn, sid, [EXTERNAL], reason="r", model="m", cost_usd=None, hold={EXTERNAL}
         )
 
-    def seen() -> int:
-        return client.get("/api/substrate-counts", headers=external).json()[
-            "statements"
-        ]
+    def seen() -> bool:
+        return sid in _visible(conn, EXTERNAL)
 
-    assert seen() == 0
+    assert not seen()
     listed = client.get("/api/audiences", headers=admin).json()
     assert listed["pending"] == 1
     page = client.get(f"/api/statements/{sid}/audiences", headers=admin).json()
@@ -298,7 +295,7 @@ def test_a_pending_statement_reaches_an_external_token_only_once_confirmed(
     body = {"statement_ids": [sid], "decision": "confirm"}
     assert client.post(decide, headers=reader, json=body).status_code == 403
     assert client.post(decide, headers=admin, json=body).json() == {"decided": 1}
-    assert seen() == 1
+    assert seen()
 
 
 def _confirmed(db, text: str, granted: list[str]) -> str:

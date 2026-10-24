@@ -198,12 +198,36 @@ def test_migrate_on_fresh_db_has_no_role_check(tmp_path):
     assert "CHECK (role IN" not in sql  # role is free-form TEXT
 
 
+def test_migrate_unscopes_principals_and_logs_each(caplog):
+    from mycelium import auth_store
+
+    conn = _seed_old_db(Path(":memory:"))
+    for table in ("users", "mcp_tokens", "oauth_codes"):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN audience_id TEXT")
+    conn.execute("UPDATE users SET audience_id = 'external' WHERE id = 'u2'")
+    conn.execute("UPDATE mcp_tokens SET audience_id = 'external' WHERE id = 't1'")
+
+    with caplog.at_level("WARNING", logger="mycelium.auth"):
+        auth_store.migrate(conn)
+
+    for table in ("users", "mcp_tokens", "oauth_codes"):
+        columns = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        assert "audience_id" not in columns
+    assert [r["id"] for r in conn.execute("SELECT id FROM users ORDER BY id")] == [
+        "u1",
+        "u2",
+    ]
+    assert [r.getMessage().split()[:2] for r in caplog.records] == [
+        ["users", "u2"],
+        ["mcp_tokens", "t1"],
+    ]
+
+
 @pytest.mark.parametrize("table", ["users", "mcp_tokens", "invites"])
 def test_failed_copy_rolls_back_rebuild_and_can_be_retried(table):
     from mycelium import auth_store
 
     conn = _seed_old_db(Path(":memory:"))
-    auth_store._add_audience_columns(conn)
     conn.execute("PRAGMA foreign_keys = ON")
     before_sql = conn.execute(
         "SELECT sql FROM sqlite_master WHERE name = ?", (table,)

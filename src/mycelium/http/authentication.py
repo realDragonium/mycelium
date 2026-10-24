@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from .. import auth, hosts, principal_audience, request_timing, store
+from .. import auth, hosts, request_timing, store
 from ..server import runtime
 
 # Resolves a `Principal` for every request and stashes it on
@@ -234,23 +234,6 @@ class AuthMiddleware:
                 )
                 await rejection(scope, receive, send)
                 return
-        if (
-            principal is not None
-            and principal.audience_id is not None
-            and not principal_audience.may_reach(
-                request.method,
-                request.url.path,
-                exempt=_is_exempt(request.url.path),
-            )
-        ):
-            rejection = JSONResponse(
-                status_code=403,
-                content={
-                    "detail": "not available to a credential scoped to an audience"
-                },
-            )
-            await rejection(scope, receive, send)
-            return
         # Fall back to the synthetic admin only when auth is disabled —
         # never when auth is on but the path is exempt, so exempt paths
         # don't accidentally see a fake admin and grant write power.

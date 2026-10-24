@@ -67,7 +67,7 @@ import anyio.to_thread
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import audiences, auth, cimd, principal_audience, store
+from . import auth, cimd, store
 from .request_timing import TimedRoute
 
 router = APIRouter(tags=["oauth"], route_class=TimedRoute)
@@ -456,9 +456,6 @@ _CONSENT_HTML = """<!doctype html>
   .btn-secondary:hover {{ background: #26262a; }}
   .scope {{ font-family: ui-monospace, monospace; font-size: 12px;
             background: #1a1a1d; padding: 2px 8px; border-radius: 4px; }}
-  label {{ display: block; font-size: 13.5px; color: #8a8a93; margin: 0 0 20px; }}
-  select {{ display: block; width: 100%; margin-top: 6px; padding: 8px; font: inherit;
-            background: #1a1a1d; color: #f4f4f5; border: 1px solid #26262a; border-radius: 6px; }}
   .warn {{ border-left: 3px solid #b26a00; background: #1a1a1d; padding: 10px 14px;
            margin: 0 0 20px; font-size: 13px; color: #c5c5cb; border-radius: 0 6px 6px 0; }}
 </style>
@@ -471,12 +468,11 @@ _CONSENT_HTML = """<!doctype html>
     <span>Signed in as</span><span>{user_name} <span class="scope">{user_role}</span></span>
     <span>Client</span><span>{client_name}</span>
     <span>Redirects to</span><span class="scope">{redirect_host}</span>
-    <span>Access</span><span>{access}</span>
+    <span>Access</span><span>Read and write to the substrate (capped at your role)</span>
   </div>
   {redirect_warning}
   <form method="post" action="/authorize/decide">
     <input type="hidden" name="consent_id" value="{consent_id}" />
-    {audience_field}
     <div class="actions">
       <button type="submit" name="decision" value="deny" class="btn-secondary">Deny</button>
       <button type="submit" name="decision" value="allow" class="primary">Allow</button>
@@ -585,38 +581,8 @@ async def authorize(
         consent_id=_html_escape(consent_id),
         redirect_host=_html_escape(_redirect_host(redirect_uri)),
         redirect_warning=_localhost_warning(redirect_uri),
-        access=_html_escape(_access_text(principal)),
-        audience_field=_audience_field(principal),
     )
     return HTMLResponse(content=html)
-
-
-def _access_text(principal: auth.Principal) -> str:
-    if principal.audience_id is None:
-        return "Read and write to the substrate (capped at your role)"
-    audience = next(
-        (item for item in audiences.live() if item.id == principal.audience_id), None
-    )
-    return (
-        f"Read only what {audience.name if audience else principal.audience_id} may see"
-    )
-
-
-def _audience_field(principal: auth.Principal) -> str:
-    """An admin may scope the grant to an audience as it is minted. The
-    choice only ever narrows what the token reads, so it is safe to take
-    from the submitted form."""
-    if not principal.is_admin or principal.audience_id is not None:
-        return ""
-    options = "".join(
-        f'<option value="{_html_escape(item.id)}">{_html_escape(item.name)}</option>'
-        for item in audiences.live()
-    )
-    return (
-        '<label>Audience<select name="audience_id">'
-        '<option value="">Full access (your role)</option>'
-        f"{options}</select></label>"
-    )
 
 
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -703,7 +669,6 @@ async def authorize_decide(
     request: Request,
     consent_id: str = Form(...),
     decision: str = Form(...),
-    audience_id: str = Form(""),
 ) -> RedirectResponse:
     """Consume the consent decision.
 
@@ -783,16 +748,6 @@ async def authorize_decide(
             status_code=302,
         )
 
-    if audience_id:
-        if not principal.is_admin:
-            raise HTTPException(
-                status_code=403, detail="only an admin can scope a grant to an audience"
-            )
-        principal_audience.require_live(audience_id)
-    # A scoped principal's own audience binds the grant, so the stored code
-    # never claims more than the person consenting could see.
-    grant_audience = principal.audience_id or audience_id or None
-
     # Mint a code. TTL is short; client must exchange within
     # CODE_TTL_SECONDS or restart the flow.
     code = secrets.token_urlsafe(32)
@@ -803,9 +758,8 @@ async def authorize_decide(
         conn.execute(
             "INSERT INTO oauth_codes "
             "(code, client_id, user_id, redirect_uri, code_challenge, "
-            " code_challenge_method, scope, resource, created_at, expires_at, "
-            " audience_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " code_challenge_method, scope, resource, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 code,
                 client_id,
@@ -817,7 +771,6 @@ async def authorize_decide(
                 resource or None,
                 _now().isoformat(),
                 expires_at.isoformat(),
-                grant_audience,
             ),
         )
     return RedirectResponse(
@@ -923,8 +876,7 @@ async def token_endpoint(
         )
     row = conn.execute(
         "SELECT client_id, user_id, redirect_uri, code_challenge, "
-        "       code_challenge_method, scope, resource, expires_at, used_at, "
-        "       audience_id "
+        "       code_challenge_method, scope, resource, expires_at, used_at "
         "FROM oauth_codes WHERE code = ?",
         (code,),
     ).fetchone()
@@ -993,8 +945,8 @@ async def token_endpoint(
         conn.execute(
             "INSERT INTO mcp_tokens "
             "(id, user_id, name, prefix, hash, scope, created_at, client_id, "
-            " expires_at, audience_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 token_id,
                 user_row["id"],
@@ -1005,7 +957,6 @@ async def token_endpoint(
                 _now().isoformat(),
                 client_id,
                 (_now() + _access_token_ttl()).isoformat(),
-                row["audience_id"],
             ),
         )
         conn.execute(

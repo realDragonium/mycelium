@@ -9,7 +9,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 import media_samples
-from mycelium import auth, auth_store, drafts_store, media, media_formats, server, store
+from mycelium import (
+    audiences,
+    auth,
+    auth_store,
+    drafts_store,
+    media,
+    media_formats,
+    media_store,
+    server,
+    store,
+)
 from mycelium.server import runtime
 
 # --- formats ----------------------------------------------------------------
@@ -102,13 +112,11 @@ def client(tmp_path, monkeypatch):
         yield test_client
 
 
-def _bearer(role: str, audience_id: str | None = None) -> dict[str, str]:
+def _bearer(role: str) -> dict[str, str]:
     conn = runtime._auth_db()
     with store.transaction(conn):
         user = auth.create_user(conn, name=role, role=role, type="service")
-        raw, _ = auth.issue_token(
-            conn, user_id=user, name="t", scope=role, audience_id=audience_id
-        )
+        raw, _ = auth.issue_token(conn, user_id=user, name="t", scope=role)
     return {"Authorization": f"Bearer {raw}"}
 
 
@@ -184,35 +192,31 @@ def test_an_svg_upload_is_refused(client):
     assert r.status_code == 415
 
 
-def test_an_external_token_sees_media_only_once_labelled_for_it(client):
+def _visible_to(item: dict[str, object], audience_id: str) -> bool:
+    row = media_store.get(media._conn(), str(item["id"]))
+    assert row is not None
+    return media.visible_to(row, audiences.resolve(audience_id, audiences.live()))
+
+
+def test_a_reader_gets_media_whatever_its_audience_label(client):
     admin = _bearer("admin")
     statement = _statement(client, admin, "A workspace export downloads as CSV.")
-    r = client.put(
-        f"/api/statements/{statement}/audiences",
-        headers=admin,
-        json={"audiences": ["external-technical"], "reason": "public"},
-    )
-    assert r.status_code == 200, r.text
     item = _upload(client, admin, statement, media_samples.png())
-    external = _bearer("reader", "external-technical")
+    reader = _bearer("reader")
 
-    def seen() -> tuple[int, list[str]]:
-        content = client.get(str(item["url"]), headers=external).status_code
-        listed = client.post(
-            "/list-media", headers=external, json={"statement_id": statement}
-        )
-        assert listed.status_code == 200, listed.text
-        return content, [entry["id"] for entry in listed.json()]
-
-    assert seen() == (404, [])
+    assert client.get(str(item["url"]), headers=reader).status_code == 200
+    listed = client.post(
+        "/list-media", headers=reader, json={"statement_id": statement}
+    )
+    assert [entry["id"] for entry in listed.json()] == [item["id"]]
+    assert not _visible_to(item, "external-technical")
     r = client.put(
         f"/api/media/{item['id']}/audiences",
         headers=admin,
         json={"audiences": ["external-technical"]},
     )
     assert r.status_code == 200, r.text
-    assert seen() == (200, [item["id"]])
-    assert client.get(f"/api/media/{item['id']}", headers=external).status_code == 403
+    assert _visible_to(item, "external-technical")
 
 
 def test_an_upload_link_takes_one_file_without_sign_in(client):
@@ -337,13 +341,9 @@ def test_media_reaches_the_audiences_that_include_its_label(client):
         )
         assert r.status_code == 200, r.text
 
-    def served(audience: str) -> list[int]:
-        reader = _bearer("reader", audience)
-        return [
-            client.get(str(item["url"]), headers=reader).status_code
-            for item in (general, technical)
-        ]
+    def served(audience: str) -> list[bool]:
+        return [_visible_to(item, audience) for item in (general, technical)]
 
     # External technical includes external non-technical, not the reverse.
-    assert served("external-technical") == [200, 200]
-    assert served("external-non-technical") == [200, 404]
+    assert served("external-technical") == [True, True]
+    assert served("external-non-technical") == [True, False]
