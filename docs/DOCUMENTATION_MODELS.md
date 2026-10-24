@@ -106,7 +106,8 @@ Each writing profile has a maintenance policy, set in its editor under
   same review as any run. A document that was published is then published
   again to the same destination: that updates its open pull request, or opens a
   new one, and a person still merges it on GitHub. A document never published
-  stays internal.
+  stays internal, unless the profile delivers automatically
+  ([Delivery](#delivery)).
 
 Automatic revisions wait until the document's changed statements have been
 quiet for a while, so a burst of edits causes one revision, and each profile
@@ -120,7 +121,8 @@ checks every minute and keeps its decisions in `mycelium-drafts.db`, so a
 restart neither repeats nor forgets them: each out-of-date revision is acted
 on once. A revision the review refused, a run that failed, or one a restart
 cut off before its run was admitted is reported rather than retried; the document stays out of date for
-someone to revise. Dismissing the document in the plan also stops automatic
+someone to revise. A profile that retries failed AI work retries each of these
+within bounded attempts first ([When AI work fails](DOCUMENTATION_PLANNING.md#when-ai-work-fails)). Dismissing the document in the plan also stops automatic
 revision until its next revision.
 
 A profile also has a planning policy, beside its maintenance policy, for
@@ -155,7 +157,7 @@ Server administrators provide bindings through `MYCELIUM_GITHUB_CREDENTIALS`;
 no credential values are stored by the browser.
 
 Open a document, select its destination, and choose **Create / update GitHub PR**.
-Publication is explicit. Failures leave the internal document saved and can be
+Publication is explicit unless the profile delivers automatically ([Delivery](#delivery)). Failures leave the internal document saved and can be
 retried without another AI run. Later updates preserve the recorded repository,
 branch, credential binding and path, even if its destination settings change.
 A binding removed from the deployment must be restored before publishing there.
@@ -185,16 +187,31 @@ REST exposes `request_documentation`, `list_generated_documents`,
 `get_generated_document`, `list_document_revisions`, `get_document_revision`,
 `revise_document`, and `deliver_document`. MCP exposes `request_documentation`,
 `get_documentation_run`, `get_generated_document`, `revise_document`,
-`request_documentation_plan` and `deliver_document`; see
+`request_documentation_plan`, `get_documentation_plan` and `deliver_document`; see
 [the MCP tool manifest](MCP_TOOLS.md).
 
-`deliver_document` (over MCP or `POST /deliver-document`) is for agents: it
-is refused unless the document's writing profile has **Agents may deliver**
-on (its editor under **Settings → Documentation**; off by default, also for
-profiles saved before it existed). It then opens or updates the pull request
-as **Create / update GitHub PR** does. People publish from the document in
-the web app whatever the setting. Merging stays with the destination
-repository.
+#### Delivery
+
+A writing profile's **Who delivers documents** setting (its editor under
+**Settings → Documentation**) is `people` by default, also for profiles saved
+before it existed:
+
+- `people`: people publish from the document in the web app.
+- `agents`: also writer and admin agents, with `deliver_document` (over MCP or
+  `POST /deliver-document`), which is refused under `people`. It opens or
+  updates the pull request as **Create / update GitHub PR** does.
+- `auto`: also the maintenance sweep, which publishes every revision of the
+  profile that passed review, while it is still its document's current one:
+  plan-item documents, requests, retries and automatic revisions alike. A
+  document published before goes to its recorded destination; one never
+  published goes to the profile's **Repository for documents not published
+  before**, or stays internal when none is chosen. A publication that fails is
+  shown on the run, and retried when the profile retries failed AI work.
+
+People publish from the document whatever the setting. Merging stays with the
+destination repository; the document follows the pull request's state as
+before. Revisions finished before an upgrade to this version are not
+published by it.
 `revise_document` requires `document_id`, `expected_revision`, and either
 instructions or `update_sources=true`, which briefs the run with the cited
 statements that changed (`stale.changes` on `get_generated_document` and

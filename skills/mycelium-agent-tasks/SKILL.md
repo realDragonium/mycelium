@@ -81,7 +81,10 @@ existing document it belongs in (`existing_documents` gives each one's
 opening), or group it with related ones in a `create`. Cite only the
 statements and templates the brief lists. Items that name what the audience
 may not see, templates the profile lacks or documents it does not own are
-dropped.
+dropped. A large backlog is planned over several tasks of the same plan:
+`already_proposed`, when present, lists what earlier calls proposed; do not
+propose those again. The task's message says when another task places the
+rest.
 
 **`plan_review`.** Decide every item in `brief.input`: `approve` starts
 writing or revising that document, `dismiss` is remembered so it is not
