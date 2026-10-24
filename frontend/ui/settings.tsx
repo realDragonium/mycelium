@@ -6,12 +6,12 @@ import { AIUsage } from './ai-usage';
 import { AIInstructions, DocumentationProfiles } from './documentation-profiles';
 import { ProductSettings } from './product-settings';
 import { SetupSection } from './setup';
-import { AudienceIdentity, AudiencesSettings, type AudiencesResponse, type AudienceView } from './audiences';
+import { AudiencesSettings, type AudiencesResponse } from './audiences';
 import { Card, I, LoadError, Loading, Notice, PageHeader, useMe } from './lib';
 import { Link, type SettingsSection } from './router';
-import { deleteJSON, enc, errorMessage, getJSON, isScoped, patchJSON, postJSON, type Me, type Role } from './api';
+import { deleteJSON, enc, errorMessage, getJSON, patchJSON, postJSON, type Me, type Role } from './api';
 import { PREF_CHOICES, usePrefs, type Prefs } from './prefs';
-import { dataOf, useAsync, type Async } from './use-async';
+import { useAsync } from './use-async';
 
 const ROLES: Role[] = ['reader', 'drafter', 'writer', 'admin'];
 
@@ -43,37 +43,36 @@ const SECTIONS = GROUPS.flatMap(g => g.sections);
 
 export function SettingsScreen({ section }: { section: SettingsSection }) {
   const me = useMe();
-  const audienceLoad = useCallback((signal: AbortSignal) => me?.role === 'admin' && !isScoped(me)
+  const audienceLoad = useCallback((signal: AbortSignal) => me?.role === 'admin'
     ? getJSON<AudiencesResponse>('/api/audiences', signal).then(response => response.audiences.filter(audience => !audience.retired))
     : Promise.resolve([]), [me]);
   const audiences = useAsync(audienceLoad).state;
   const waiting = audiences.status === 'ready' ? audiences.data.reduce((total, audience) => total + audience.pending_statements, 0) : 0;
   const def = SECTIONS.find(s => s.id === section) || SECTIONS[0];
-  const groups = isScoped(me) ? GROUPS.slice(0, 1) : GROUPS;
   return (
     <main className="page settings-page">
       <PageHeader eyebrow="Settings" title={def.label} blurb={def.blurb} />
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="Settings sections">
-          {groups.map(g => (
+          {GROUPS.map(g => (
             <div key={g.title} className="sn-group">
               <div className="sn-title">{g.title}</div>
               {g.sections.map(s => <Link key={s.id} to={{ view: 'settings', section: s.id }} className={`sn-link${s.id === def.id ? ' on' : ''}`}>{s.label}{s.id === 'audiences' && waiting > 0 && <span className="sn-count" aria-label={`${waiting} grants waiting for confirmation`}>{waiting}</span>}</Link>)}
             </div>
           ))}
         </nav>
-        <div className="settings-body"><Section id={def.id} audiences={audiences} /></div>
+        <div className="settings-body"><Section id={def.id} /></div>
       </div>
     </main>
   );
 }
 
-function Section({ id, audiences }: { id: SettingsSection; audiences: Async<AudienceView[]> }) {
+function Section({ id }: { id: SettingsSection }) {
   switch (id) {
-    case 'account': return <><AccountCard /><TokensCard audiences={audiences} /></>;
+    case 'account': return <><AccountCard /><TokensCard /></>;
     case 'appearance': return <AppearanceCard />;
     case 'setup': return <SetupSection />;
-    case 'members': return <MembersSection audiences={audiences} />;
+    case 'members': return <MembersSection />;
     case 'models': return <ActionModels />;
     case 'prompts': return <AIInstructions />;
     case 'review': return <DraftReviewSettings />;
@@ -112,41 +111,27 @@ function AccountCard() {
       <dl className="kv-grid">
         <dt>Name</dt><dd>{me.name}</dd>
         <dt>Role</dt><dd><RoleBadge role={me.role} /></dd>
-        <dt>Audience</dt><dd>{me.audience ? <AudienceIdentity audience={me.audience} /> : me.audience_id || 'Full access by role'}</dd>
         <dt>Type</dt><dd>{me.type}</dd>
         <dt>Authentication</dt>
         <dd>{me.auth_enabled ? <span className="ok-text">enabled</span> : <span className="warn-text">disabled: everyone is the local admin</span>}</dd>
       </dl>
-      {me.audience_id && !me.audience && <Notice tone="warn">This account’s audience is retired. Reads remain unavailable until an administrator assigns a live audience.</Notice>}
     </Card>
   );
 }
 
 interface Token {
   id: string; name: string; prefix: string; scope: Role; created_at: string; last_used_at: string | null; revoked_at: string | null;
-  oauth: boolean; audience_id: string | null;
+  oauth: boolean;
 }
 type CreatedToken = Token & { token: string };
 
 const scopesFor = (role: Role): Role[] => ROLES.slice(0, ROLES.indexOf(role) + 1);
 
-const audienceLabel = (audienceId: string | null, audiences: AudienceView[]) => audienceId
-  ? audiences.find(audience => audience.id === audienceId)?.name || audienceId
-  : 'Full access';
-
-function AudienceSelect({ value, audiences, loaded, label, onChange }: { value: string | null; audiences: AudienceView[]; loaded: boolean; label: string; onChange: (audienceId: string | null) => void }) {
-  const missing = value && !audiences.some(audience => audience.id === value) ? value : null;
-  return <select className="input" aria-label={label} value={value || ''} onChange={event => onChange(event.target.value || null)}><option value="">Full access</option>{missing && <option value={missing}>{missing}{loaded ? ' (retired)' : ''}</option>}{audiences.map(audience => <option key={audience.id} value={audience.id}>{audience.name}</option>)}</select>;
-}
-
-function TokensCard({ audiences: audienceState }: { audiences: Async<AudienceView[]> }) {
+function TokensCard() {
   const me = useMe();
-  const audiences = dataOf(audienceState) || [];
-  const canAssignAudience = me?.role === 'admin' && !isScoped(me);
   const { state, reload } = useAsync(useCallback(() => getJSON<{ tokens: Token[] }>('/api/me/tokens').then(r => r.tokens), []));
   const [name, setName] = useState('');
   const [scope, setScope] = useState<Role>('writer');
-  const [audienceId, setAudienceId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedToken | null>(null);
@@ -157,8 +142,8 @@ function TokensCard({ audiences: audienceState }: { audiences: Async<AudienceVie
     if (!name.trim()) return;
     setBusy(true); setErr(null);
     try {
-      setCreated(await postJSON<CreatedToken>('/api/me/tokens', { name: name.trim(), scope: scopes.includes(scope) ? scope : scopes[scopes.length - 1], ...(canAssignAudience ? { audience_id: audienceId } : {}) }));
-      setName(''); setAudienceId(null); reload();
+      setCreated(await postJSON<CreatedToken>('/api/me/tokens', { name: name.trim(), scope: scopes.includes(scope) ? scope : scopes[scopes.length - 1] }));
+      setName(''); reload();
     } catch (ex) { setErr(errorMessage(ex)); }
     finally { setBusy(false); }
   };
@@ -167,31 +152,23 @@ function TokensCard({ audiences: audienceState }: { audiences: Async<AudienceVie
     try { await deleteJSON<unknown>(`/api/me/tokens/${enc(id)}`); reload(); }
     catch (ex) { setErr(errorMessage(ex)); }
   };
-  const setTokenAudience = async (id: string, nextAudienceId: string | null) => {
-    setErr(null);
-    try { await patchJSON<Token>(`/api/admin/tokens/${enc(id)}`, { audience_id: nextAudienceId }); reload(); }
-    catch (ex) { setErr(errorMessage(ex)); }
-  };
 
   return (
     <Card title="MCP tokens" actions={<a className="btn ghost sm" href="/connect"><I.plug width="14" height="14" />How to connect a client</a>}>
       <p className="muted">Bearer tokens for MCP clients such as Claude Desktop, Claude Code and CI agents, sent as <code>Authorization: Bearer myc_…</code>. Each token is revocable on its own; the secret is shown once, at creation.</p>
-      {isScoped(me) && <Notice>Tokens created here read as {me?.audience?.name || me?.audience_id}.</Notice>}
       {created && <Secret label={<>Token <b>{created.name}</b> created. Copy it now: it will not be shown again.</>} value={created.token} onDismiss={() => setCreated(null)} />}
       {err && <Notice tone="error">{err}</Notice>}
-      {canAssignAudience && audienceState.status === 'error' && <LoadError error={audienceState.error} what="audiences" />}
       {state.status === 'loading' && <Loading what="tokens" />}
       {state.status === 'error' && <LoadError error={state.error} what="tokens" onRetry={reload} />}
       {state.status === 'ready' && (state.data.length === 0
         ? <p className="muted">No tokens yet. Create one below to connect an MCP client.</p>
         : <table className="tbl compact">
-          <thead><tr><th>Name</th><th>Identifier</th><th>Scope</th><th>Audience</th><th>Created</th><th>Last used</th><th /></tr></thead>
+          <thead><tr><th>Name</th><th>Identifier</th><th>Scope</th><th>Created</th><th>Last used</th><th /></tr></thead>
           <tbody>{state.data.map(t => (
             <tr key={t.id} className={t.revoked_at ? 'revoked' : ''}>
               <td>{t.name}{t.revoked_at && <span className="muted small"> · revoked</span>}</td>
               <td className="mono">myc_{t.prefix}_…</td>
               <td><RoleBadge role={t.scope} /></td>
-              <td>{canAssignAudience && !t.revoked_at ? <AudienceSelect value={t.audience_id} audiences={audiences} loaded={audienceState.status === 'ready'} label={`Audience of ${t.name}`} onChange={value => void setTokenAudience(t.id, value)} /> : audienceLabel(t.audience_id, audiences)}</td>
               <td className="muted">{t.created_at.slice(0, 10)}</td>
               <td className="muted">{t.last_used_at ? t.last_used_at.slice(0, 10) : '—'}</td>
               <td className="num">{!t.revoked_at && <button className="btn ghost xs" onClick={() => void revoke(t.id)}>Revoke</button>}</td>
@@ -203,7 +180,6 @@ function TokensCard({ audiences: audienceState }: { audiences: Async<AudienceVie
         <select className="input" aria-label="Token scope" value={scopes.includes(scope) ? scope : scopes[scopes.length - 1]} onChange={e => setScope(e.target.value as Role)}>
           {scopes.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
-        {canAssignAudience && <AudienceSelect value={audienceId} audiences={audiences} loaded={audienceState.status === 'ready'} label="Token audience" onChange={setAudienceId} />}
         <button className="btn primary" type="submit" disabled={busy || !name.trim()}>{busy ? 'Creating…' : 'Create token'}</button>
       </form>
     </Card>
@@ -231,21 +207,20 @@ function AppearanceCard() {
 }
 
 /* ---------------- members ---------------- */
-interface User { id: string; name: string; email: string | null; type: string; role: Role; status: string; blocked_by_domain_policy: boolean; audience_id: string | null }
+interface User { id: string; name: string; email: string | null; type: string; role: Role; status: string; blocked_by_domain_policy: boolean }
 interface Invite { id: string; email: string; role: Role; created_at: string; link: string }
 
-function MembersSection({ audiences }: { audiences: Async<AudienceView[]> }) {
+function MembersSection() {
   const me = useMe();
   if (!me) return <Loading what="your account" />;
   if (me.role !== 'admin') return <Notice>Only administrators manage members. You are signed in as a {me.role}.</Notice>;
   if (!me.auth_enabled) {
     return <Notice>User management is off while authentication is disabled: everyone is the local admin. Set <code>MYCELIUM_AUTH=on</code> to invite people. A reviewer service account can still be created under <Link to={{ view: 'settings', section: 'review' }}>Draft review</Link>.</Notice>;
   }
-  return <MembersCard me={me} audienceState={audiences} />;
+  return <MembersCard me={me} />;
 }
 
-function MembersCard({ me, audienceState }: { me: Me; audienceState: Async<AudienceView[]> }) {
-  const audiences = dataOf(audienceState) || [];
+function MembersCard({ me }: { me: Me }) {
   const load = useCallback(() => Promise.all([
     getJSON<{ users: User[] }>('/api/admin/users').then(r => r.users),
     getJSON<{ invites: Invite[] }>('/api/admin/invites').then(r => r.invites),
@@ -263,14 +238,6 @@ function MembersCard({ me, audienceState }: { me: Me; audienceState: Async<Audie
     setErr(null);
     try { await action(); reload(); } catch (e) { setErr(errorMessage(e)); }
   };
-  const setUserAudience = async (user: User, audienceId: string | null) => {
-    setErr(null);
-    try {
-      await patchJSON(`/api/admin/users/${enc(user.id)}`, { audience_id: audienceId });
-      if (user.id === me.id) window.location.reload();
-      else reload();
-    } catch (e) { setErr(errorMessage(e)); }
-  };
   const createService = (e: FormEvent) => { e.preventDefault(); void act(async () => { await postJSON('/api/admin/users', { name: svcName.trim(), role: svcRole, type: 'service' }); setSvcName(''); }); };
   const invite = (e: FormEvent) => { e.preventDefault(); void act(async () => { const r = await postJSON<{ link: string }>('/api/admin/invites', { email: invEmail.trim(), role: invRole }); setInviteLink(r.link); setInvEmail(''); }); };
   const mint = (userId: string) => {
@@ -284,7 +251,6 @@ function MembersCard({ me, audienceState }: { me: Me; audienceState: Async<Audie
   return (
     <>
       {err && <Notice tone="error">{err}</Notice>}
-      {audienceState.status === 'error' && <LoadError error={audienceState.error} what="audiences" />}
       {svcToken && <Secret label={<>Token <b>{svcToken.name}</b> for the service account. Copy it now.</>} value={svcToken.token} onDismiss={() => setSvcToken(null)} />}
       {inviteLink && <Secret label="Invite link: send it to the recipient." value={inviteLink} onDismiss={() => setInviteLink(null)} />}
       <Card title="Members">
@@ -293,14 +259,13 @@ function MembersCard({ me, audienceState }: { me: Me; audienceState: Async<Audie
         {state.status === 'error' && <LoadError error={state.error} what="members" onRetry={reload} />}
         {state.status === 'ready' && (
           <table className="tbl compact">
-            <thead><tr><th>Name</th><th>Email</th><th>Type</th><th>Role</th><th>Audience</th><th>Status</th><th /></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Type</th><th>Role</th><th>Status</th><th /></tr></thead>
             <tbody>{state.data[0].map(u => (
               <tr key={u.id} className={u.status === 'active' ? '' : 'revoked'}>
                 <td>{u.name}{u.id === me.id && <span className="muted small"> · you</span>}</td>
                 <td className="muted">{u.email || '—'}</td>
                 <td>{u.type}</td>
                 <td>{roleSelect(u.role, r => void act(() => patchJSON(`/api/admin/users/${enc(u.id)}`, { role: r })), `Role of ${u.name}`)}</td>
-                <td><AudienceSelect value={u.audience_id} audiences={audiences} loaded={audienceState.status === 'ready'} label={`Audience of ${u.name}`} onChange={audienceId => void setUserAudience(u, audienceId)} /></td>
                 <td>
                   {u.status}
                   {u.blocked_by_domain_policy && <div><span className="tag warn" title="This email domain is not in MYCELIUM_ALLOWED_EMAIL_DOMAINS, so the user cannot sign in or use tokens.">blocked by domain policy</span></div>}

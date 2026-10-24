@@ -2,8 +2,8 @@
 // tables (statement kinds, statement link types, entity link types).
 // Reads from /list-statement-kinds, /list-link-types,
 // /list-entity-link-types; mutates via /upsert-* and /delete-*.
-import { errorMessage, getJSON, isScoped, postJSON } from './api';
-import { PageHeader, useMe } from './lib';
+import { errorMessage, getJSON, postJSON } from './api';
+import { PageHeader } from './lib';
 import { useState as useG, useEffect as useEG, useCallback as useCBG, useRef as useRG, type FormEvent } from 'react';
 
 type GlossaryTabId = 'kinds' | 'link_types' | 'entity_link_types';
@@ -78,7 +78,6 @@ async function fetchGlossary(endpoint: string): Promise<GlossaryEntry[]> {
 }
 
 function GlossaryScreen() {
-  const readOnly = isScoped(useMe());
   const [activeTab, setActiveTab] = useG<GlossaryTabId>('kinds');
   const tab = GLOSSARY_TABS.find(t => t.id === activeTab);
 
@@ -87,18 +86,18 @@ function GlossaryScreen() {
   return (
     <main className="page">
       <PageHeader eyebrow="Curate" title="Glossary"
-        blurb={readOnly ? 'The vocabulary the knowledge base is written in: statement kinds, statement link types and entity link types.' : 'The vocabulary the knowledge base is written in: statement kinds, statement link types and entity link types. Edit a description, or add an entry at the end of a section. Changes save immediately and are offered to every agent.'} />
+        blurb="The vocabulary the knowledge base is written in: statement kinds, statement link types and entity link types. Edit a description, or add an entry at the end of a section. Changes save immediately and are offered to every agent." />
       <nav className="tabs">
         {GLOSSARY_TABS.map(t => (
           <button key={t.id} onClick={() => setActiveTab(t.id)} className={t.id === activeTab ? 'on' : ''} aria-pressed={t.id === activeTab}>{t.label}</button>
         ))}
       </nav>
-      <GlossaryTab key={tab.id} tab={tab} readOnly={readOnly} />
+      <GlossaryTab key={tab.id} tab={tab} />
     </main>
   );
 }
 
-function GlossaryTab({ tab, readOnly }: { tab: GlossaryTab; readOnly: boolean }) {
+function GlossaryTab({ tab }: { tab: GlossaryTab }) {
   const [entries, setEntries] = useG<GlossaryEntry[]>([]);
   const [error, setError] = useG<string | null>(null);
   const [loading, setLoading] = useG(true);
@@ -144,7 +143,7 @@ function GlossaryTab({ tab, readOnly }: { tab: GlossaryTab; readOnly: boolean })
             <th>Description</th>
             {tab.hasWhenToUse && <th>When to use</th>}
             <th style={{width: 110, textAlign: 'right'}}>Usage</th>
-            {!readOnly && <th style={{width: 1}}></th>}
+            <th style={{width: 1}}></th>
           </tr>
         </thead>
         <tbody>
@@ -153,17 +152,16 @@ function GlossaryTab({ tab, readOnly }: { tab: GlossaryTab; readOnly: boolean })
               key={entryKey(tab, e)}
               tab={tab}
               entry={e}
-              readOnly={readOnly}
               onSaved={reload}
             />
           ))}
         </tbody>
       </table>
 
-      {!readOnly && <div className="gls-card">
+      <div className="gls-card">
         <h3>Add new entry</h3>
         <NewEntryForm tab={tab} onSaved={reload} />
-      </div>}
+      </div>
     </div>
   );
 }
@@ -171,11 +169,10 @@ function GlossaryTab({ tab, readOnly }: { tab: GlossaryTab; readOnly: boolean })
 interface GlossaryRowProps {
   tab: GlossaryTab;
   entry: GlossaryEntry;
-  readOnly: boolean;
   onSaved: () => void;
 }
 
-function GlossaryRow({ tab, entry, readOnly, onSaved }: GlossaryRowProps) {
+function GlossaryRow({ tab, entry, onSaved }: GlossaryRowProps) {
   const [editing, setEditing] = useG(false);
   const [description, setDescription] = useG(entry.description || '');
   const [whenToUse, setWhenToUse] = useG(entry.when_to_use || '');
@@ -284,7 +281,7 @@ function GlossaryRow({ tab, entry, readOnly, onSaved }: GlossaryRowProps) {
             : (entry.usage_count === 1 ? 'link' : 'links')}
         </span>
       </td>
-      {!readOnly && <td className="col-actions">
+      <td className="col-actions">
         <div className="gls-row-actions">
           {editing ? (
             <>
@@ -305,7 +302,7 @@ function GlossaryRow({ tab, entry, readOnly, onSaved }: GlossaryRowProps) {
             </>
           )}
         </div>
-      </td>}
+      </td>
     </tr>
   );
 }

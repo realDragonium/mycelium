@@ -1,8 +1,8 @@
 // Statement and entity detail: where provenance links and graph clicks land.
 import { Fragment, useCallback, useState, type FormEvent, type MouseEvent } from 'react';
-import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LoadError, Loading, Notice, PageHeader, formatDate, useAskExternal, useDataCtx, useMe } from './lib';
+import { EditableStatementText, EmptyState, EntityChip, I, KindTag, LoadError, Loading, Notice, PageHeader, formatDate, useAskExternal, useDataCtx } from './lib';
 import { Link, useRouter } from './router';
-import { deleteJSON, enc, errorMessage, getJSON, isScoped, putJSON, upsertEntity, upsertName } from './api';
+import { deleteJSON, enc, errorMessage, getJSON, putJSON, upsertEntity, upsertName } from './api';
 import { substrate, type Entity, type EntityLink, type Link as SubstrateLink, type Statement, type SubstrateIndex, type When } from './data';
 import { AudienceIdentity, PendingGrantActions, TextChangedActions, type AudienceLabel, type AudienceRef } from './audiences';
 import { useAsync } from './use-async';
@@ -393,7 +393,6 @@ function StatementAudiences({ id }: { id: string }) {
 export function StatementDetail({ id }: { id: string }) {
   const { go } = useRouter();
   const askExternal = useAskExternal();
-  const scoped = isScoped(useMe());
   const [edits, setEdits] = useState(0);
   const idx = substrate.index;
   const s = idx.statements[id];
@@ -432,10 +431,10 @@ export function StatementDetail({ id }: { id: string }) {
           <section className="sec">
             <div className="sec-head"><span className="sh-title">Mentions · entities</span><span className="sh-count">{mentions.length}</span></div>
             {mentions.length > 0 && <div className="chip-row">{mentions.map(e => <EntityChip key={e.id} entity={e} />)}</div>}
-            {!scoped && <AddMention />}
+            <AddMention />
           </section>
 
-          {!scoped && <StatementAudiences key={`${s.id}:${edits}`} id={s.id} />}
+          <StatementAudiences key={`${s.id}:${edits}`} id={s.id} />
 
           <MediaPanel kind="statement" id={s.id} />
 
@@ -490,7 +489,6 @@ function EntityLinks({ title, links, dir }: { title: string; links: EntityLink[]
 }
 
 export function EntityDetail({ id }: { id: string }) {
-  const scoped = isScoped(useMe());
   const idx = substrate.index;
   const e = idx.entities[id];
   if (!e) return <main className="page narrow"><EmptyState title="Entity not found" blurb={`No entity has the id ${id}. It may have been merged or deleted.`}><Link to={{ view: 'browse' }} className="btn">Browse records</Link></EmptyState></main>;
@@ -529,7 +527,7 @@ export function EntityDetail({ id }: { id: string }) {
               <EntityLinks title="outgoing" links={outLinks} dir="out" />
               <EntityLinks title="incoming" links={inLinks} dir="in" />
             </div>
-            {!scoped && <p className="hint">Add or remove entity links on the <Link to={{ view: 'entities', focus: e.id, all: false }}>entity map</Link>.</p>}
+            <p className="hint">Add or remove entity links on the <Link to={{ view: 'entities', focus: e.id, all: false }}>entity map</Link>.</p>
           </section>
           <MediaPanel kind="entity" id={e.id} />
         </div>
@@ -548,7 +546,7 @@ export function EntityDetail({ id }: { id: string }) {
           <div className="rail-sec">
             <div className="rs-label">names that resolve here</div>
             <div className="chip-row">{(idx.namesByEntity[id] || []).map(n => <span key={n.id} className="lt">{n.text}</span>)}</div>
-            {!scoped && <p className="hint"><Link to={{ view: 'names' }}>Curate names &amp; aliases</Link></p>}
+            <p className="hint"><Link to={{ view: 'names' }}>Curate names &amp; aliases</Link></p>
           </div>
         </aside>
       </div>

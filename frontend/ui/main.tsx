@@ -14,13 +14,7 @@ function Root() {
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    // Both at once: a session whose audience was retired is refused the
-    // probe but still gets the app, which sends it to account settings.
-    const probe = getSubstrateCounts().then(() => null, (error: unknown) => ({ error }));
-    Promise.all([getMe(), probe]).then(([me, refused]) => {
-      if (refused && (!me.audience_id || me.audience)) throw refused.error;
-      return me;
-    }).then(
+    Promise.all([getMe(), getSubstrateCounts()]).then(([me]) => me).then(
       me => { if (live) setBoot({ phase: 'ready', me }); },
       error => { if (live) setBoot({ phase: 'error', error }); },
     );

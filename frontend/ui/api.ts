@@ -116,12 +116,7 @@ export async function getAskExternal(signal?: AbortSignal): Promise<boolean> {
 
 /* ------------------------------ identity ------------------------------ */
 export type Role = 'reader' | 'drafter' | 'writer' | 'admin';
-export interface Me {
-  id: string; name: string; role: Role; type: string; auth_enabled: boolean;
-  audience_id: string | null;
-  audience: { id: string; name: string; scope: 'internal' | 'external' } | null;
-}
-export const isScoped = (me: Pick<Me, 'audience_id'> | null | undefined) => me?.audience_id != null;
+export interface Me { id: string; name: string; role: Role; type: string; auth_enabled: boolean }
 export const getMe = () => getJSON<Me>('/api/me');
 export interface SubstrateCounts { statements: number; entities: number; names: number; links: number; entity_links: number }
 export const getSubstrateCounts = () => getJSON<SubstrateCounts>('/api/substrate-counts');
