@@ -26,7 +26,7 @@ _SKILL_DIRS = sorted(p.parent for p in _SKILLS.glob("*/SKILL.md"))
 # Claude Code truncates description plus when_to_use at this length.
 _DESCRIPTION_LIMIT = 1536
 # Response fields that start with a tool's verb.
-_FIELDS = {"connect_error"}
+_FIELDS = {"connect_error", "read_tools"}
 
 
 def _parameters() -> dict[str, set[str]]:
@@ -73,6 +73,7 @@ def _expand(path: str) -> list[str]:
 
 def test_every_skill_is_found():
     assert {p.name for p in _SKILL_DIRS} >= {
+        "mycelium-agent-tasks",
         "mycelium-authoring",
         "mycelium-code-curation",
         "mycelium-curation",

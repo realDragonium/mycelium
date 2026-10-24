@@ -66,6 +66,10 @@ change an existing one, revise it.
 
 Poll `get_documentation_run(run_id)` until `status` is neither `queued` nor
 `running`. Runs take several minutes; poll every minute or so, not faster.
+`waiting_for_agent` means documentation is set to External agent: the run
+waits until an outside agent claims and writes it (`agent_task` shows who
+holds it), which the `mycelium-agent-tasks` skill covers. Do not poll for
+it; tell the operator.
 `summary` reports what the run is doing while it runs, then its turns,
 tokens, cost, the statements it retrieved and cited, and the gaps it filed.
 

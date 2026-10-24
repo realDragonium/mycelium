@@ -20,6 +20,23 @@ a particular document; it uses that action's configured model and effort for the
 provider. Draft review also has its own off/advisory/automatic mode and independent
 reviewer account, described in [Draft review](DRAFT_REVIEW.md).
 
+## External agent
+
+Documentation, Documentation planning and Audience labelling can be set to
+**External agent** instead of a server model. The server then queues each
+piece of work as a task, and an outside agent (Claude Code, Codex or another
+MCP client with a writer token) claims it, does the model's part and hands the
+result back. No provider key is needed for that work. The result passes the
+same checks a server model's output would. See [Agent tasks](AGENT_TASKS.md).
+
+Documentation also has a **Review** choice. **Server reviewer** (the default)
+reviews an agent's document with the documentation provider and model set
+here, so that provider still needs credentials. **Another agent** queues the
+review as a task that any writer except the document's author may claim. An
+agent always differs from the writing principal, but two tokens of one person
+or one agent setup are not told apart; choose it only when your review agents
+are run separately from your writing agents.
+
 Alias discovery has independent model, reasoning effort, token, timeout, retry, and input-size settings. Ingestion proposes aliases within its existing run using the ingestion model. All alias suggestions require an individual human decision; the draft review automation mode cannot accept, reject, or alter them. See [Alias suggestions](ALIAS_SUGGESTIONS.md).
 
 Saving takes effect for new runs without restarting the service. Existing runs

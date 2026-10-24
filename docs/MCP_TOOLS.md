@@ -1,7 +1,7 @@
 # MCP tool manifest
 
 Every MCP client receives every advertised tool schema before it asks its first
-question. Mycelium therefore advertises 42 of its 81 registered tools over MCP. Every
+question. Mycelium therefore advertises 46 of its 85 registered tools over MCP. Every
 registered tool keeps its HTTP route (`POST /<kebab-name>`, or `GET` when a read
 tool takes no arguments) and stays available to the in-process loops (Ask, Ingest,
 Documentation) and internal draft review. Removing a tool from MCP removes only
@@ -13,9 +13,9 @@ that set, and the registered tools in agreement.
 Role filtering still applies: `tools/list` shows a caller only the tools their role
 can invoke. An asker sees only `ask`, and a reader sees 19 tools. A drafter sees 39
 because their writes are queued on a draft, but they do not see `list_drafts`,
-`request_documentation` or `revise_document`. A writer sees 39 and does not see
-the admin-only `delete_statement`, `merge_statements` or `merge_entities`. An admin
-sees all 42.
+`request_documentation`, `revise_document` or the agent task tools. A writer
+sees 43 and does not see the admin-only `delete_statement`, `merge_statements`
+or `merge_entities`. An admin sees all 46.
 
 A principal scoped to an audience is a reader whatever its role, and sees only
 the read tools in `principal_audience.TOOLS`; see
@@ -71,6 +71,10 @@ decision, and the rest runs in-process.
 | `request_documentation` | Starts a documentation run. `anchor_entity_id`, with a guideline set and document type, names the entity the document is about, so a repeat request revises that document; without one, the run creates a document. |
 | `get_documentation_run` | Polls a run that `request_documentation` or `revise_document` returns. A run the review refused lists the failed findings in `summary.review_findings`; a retry briefed with them lists them in `review_notes`. `retryable` says whether the run can be started again as it was (it wrote nothing and was not a manual edit). |
 | `get_generated_document` | Reads the written document and the revision that `revise_document` needs, the state of its pull request (open, merged or closed), refreshed from GitHub at most once a minute, and `stale`: whether a statement it cites was edited, deleted or merged away since, or is no longer visible to the document's audience, with old and new text. |
+| `claim_agent_task` | Leases work an action set to External agent would otherwise give a server model (writing, reviewing or planning documentation, labelling audiences) for 30 minutes, with a brief holding the model's instructions, input and result schema. Writers and admins only. See [Agent tasks](AGENT_TASKS.md). |
+| `read_for_agent_task` | Runs a documentation task's read tools inside the audience boundary the task writes for, recording what may be cited. |
+| `submit_agent_task` | Hands in a claimed task's result, which passes the checks a server model's output would; a refusal returns findings and the retries left. |
+| `release_agent_task` | Gives a claimed task back to the queue with a reason. |
 | `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
 
 ### Uploading media
