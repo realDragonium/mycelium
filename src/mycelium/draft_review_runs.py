@@ -388,7 +388,7 @@ def _failed(run: ReviewRun, detail: str) -> None:
         drafts_store.connection(),
         run,
         lambda application_id: (
-            draft_application._substrate_application_result(application_id) is not None
+            draft_application.substrate_application_result(application_id) is not None
         ),
     )
     run.finished_at = timestamps.now()
