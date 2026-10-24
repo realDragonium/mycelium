@@ -1,7 +1,9 @@
 """Keeping generated documents up to date by themselves.
 
 The same sweep also plans for profiles whose planning policy is not `off`
-(`documentation_planning.plan_automatically`).
+(`documentation_planning.plan_automatically`), and has an AI reviewer decide
+the plan items of profiles whose plan review is `ai`
+(`documentation_plan_review`).
 
 Each writing profile has a maintenance policy (`documentation_profiles`):
 `manual` leaves an out-of-date document for someone to notice, `propose`
@@ -33,6 +35,7 @@ from . import (
     doc_runs,
     docs_store,
     document_freshness,
+    documentation_plan_review,
     documentation_planning,
     documentation_profiles,
     drafts_store,
@@ -113,7 +116,11 @@ def sweep(now: datetime | None = None) -> list[str]:
     started: list[str] = []
     for profile in snapshot.profiles:
         audience = snapshot.audience(profile.name)
-        if profile.maintenance == "manual" or audience is None:
+        # An AI reviewer decides out-of-date documents a person would
+        # otherwise notice, so they are proposed to it.
+        if audience is None or (
+            profile.maintenance == "manual" and profile.plan_review == "person"
+        ):
             continue
         dismissed = {
             str(row["key"]) for row in doc_plans.dismissed(drafts, profile.name)
@@ -131,7 +138,7 @@ def sweep(now: datetime | None = None) -> list[str]:
             row = _observe(drafts, profile.name, document, now)
             if row["action"] is not None:
                 continue
-            if profile.maintenance == "propose":
+            if profile.maintenance != "auto-revise":
                 _propose(drafts, profile.name, audience.id, document, now)
                 continue
             if (
@@ -149,6 +156,7 @@ def sweep(now: datetime | None = None) -> list[str]:
     started += documentation_planning.plan_automatically(
         drafts, store.substrate_connection(), snapshot
     )
+    started += documentation_plan_review.sweep(snapshot)
     return started
 
 

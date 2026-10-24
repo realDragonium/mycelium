@@ -11,6 +11,10 @@ policy, is marked `automatic`. Its summary lists the statements no document
 cited that it was asked to place, so automatic planning counts only those no
 plan was offered.
 
+A profile whose plan review is `ai` has an AI reviewer approve or dismiss
+each proposed item with a reason; the plan's summary keeps each decision
+under `reviews`, and an approved item stays proposed until its run can start.
+
 Besides the plans the model makes, each profile may have one standing
 `maintenance` plan holding the update items the maintenance worker proposes
 for out-of-date documents. It is never the profile's latest plan.
@@ -21,8 +25,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 from . import timestamps
@@ -246,6 +250,66 @@ def record_start_failure(
             "UPDATE documentation_plans SET summary = ? WHERE id = ?",
             (json.dumps(summary), plan_id),
         )
+
+
+@dataclass(frozen=True)
+class Review:
+    """An AI reviewer's decision on a proposed item."""
+
+    #: None when the review failed and the item waits for a person.
+    decision: Literal["approve", "dismiss"] | None
+    reason: str
+    #: The agent that reviewed it; None for the server's model.
+    reviewer: str | None
+    at: str
+
+
+def record_reviews(conn: sqlite3.Connection, reviews: Mapping[str, Review]) -> None:
+    """Keep each item's review in its plan's summary."""
+    with conn:
+        for item_id, review in reviews.items():
+            row = conn.execute(
+                "SELECT p.id, p.summary FROM documentation_plan_items i "
+                "JOIN documentation_plans p ON p.id = i.plan_id WHERE i.id = ?",
+                (item_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            summary = json.loads(row["summary"]) if row["summary"] else {}
+            summary.setdefault("reviews", {})[item_id] = asdict(review)
+            conn.execute(
+                "UPDATE documentation_plans SET summary = ? WHERE id = ?",
+                (json.dumps(summary), row["id"]),
+            )
+
+
+def reviews(plan: sqlite3.Row) -> dict[str, Review]:
+    summary = json.loads(plan["summary"]) if plan["summary"] else {}
+    return {
+        item_id: Review(**review)
+        for item_id, review in summary.get("reviews", {}).items()
+    }
+
+
+def get_plan(conn: sqlite3.Connection, plan_id: str) -> sqlite3.Row | None:
+    row: sqlite3.Row | None = conn.execute(
+        "SELECT * FROM documentation_plans WHERE id = ?", (plan_id,)
+    ).fetchone()
+    return row
+
+
+def current_plans(conn: sqlite3.Connection, guideline_set: str) -> list[sqlite3.Row]:
+    """The plans whose items the profile's plan shows: its latest finished
+    model plan and its maintenance plan."""
+    return list(
+        conn.execute(
+            "SELECT * FROM documentation_plans WHERE guideline_set = ? AND ("
+            "kind = 'maintenance' OR id = (SELECT id FROM documentation_plans "
+            "WHERE guideline_set = ? AND kind = 'model' AND outcome = 'planned' "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1)) ORDER BY kind DESC",
+            (guideline_set, guideline_set),
+        )
+    )
 
 
 def maintenance_plan(conn: sqlite3.Connection, guideline_set: str) -> str | None:

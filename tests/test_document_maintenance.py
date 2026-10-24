@@ -185,6 +185,37 @@ def test_propose_adds_one_update_item_briefed_with_the_change(client):
     assert (entry["state"], entry["waiting"]) == ("approved", False)
 
 
+def test_an_ai_reviewer_decides_out_of_date_documents_of_a_manual_profile(
+    client, monkeypatch
+):
+    from mycelium import ai, documentation_plan_review, guidelines, prompt_store
+
+    _profile(None, "external-technical")
+    prompt_store.save(
+        prompt_store.connection(),
+        type=guidelines.TYPE,
+        name="public/plan_review",
+        text="ai",
+    )
+    document, statement = _document()
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+    reviewed: list[str] = []
+
+    def review(task, config):
+        (item,) = json.loads(task.prompt)["items"]
+        reviewed.append(item["rationale"])
+        decision = {"item_id": item["item_id"], "decision": "approve", "reason": "Ok."}
+        return documentation_plan_review.Verdicts(decisions=[decision]), ai.Usage()
+
+    monkeypatch.setattr(documentation_plan_review, "_call", review)
+    _sweep(T0)
+    documentation_plan_review.wait_all()
+    _sweep(T0 + timedelta(minutes=1))
+
+    assert "Now: 'Admins can export invoices as CSV or PDF.'" in reviewed[0]
+    assert _revision(document) == 2
+
+
 def test_auto_revise_waits_for_credentials(client, monkeypatch):
     _profile("auto-revise", "external-technical")
     document, statement = _document()
