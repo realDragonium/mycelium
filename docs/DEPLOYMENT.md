@@ -144,7 +144,7 @@ settings (see [AI model configuration](AI_MODELS.md)).
 | `MYCELIUM_JIT_DOMAINS` | unset (invite-only) | Comma-separated email domains. A login whose email is in one of them gets an account without an invite. With `MYCELIUM_ALLOWED_EMAIL_DOMAINS` set, each must also be allowed or the server refuses to start. |
 | `MYCELIUM_JIT_DEFAULT_ROLE` | `reader` | Role those users receive. An unknown role disables just-in-time provisioning. |
 | `EMBED_TIMEOUT_S` | `30` | Seconds before one embedding request fails instead of hanging. A failed request is retried twice with backoff. |
-| `MYCELIUM_SLOW_REQUEST_MS` | `2000` | A request or background job that takes at least this long, fails, or whose client leaves before the response ends logs one `MYCELIUM_SLOW_REQUEST` line with its route and where the time went. |
+| `MYCELIUM_SLOW_REQUEST_MS` | `2000` | A request or background job that takes at least this long, fails, or whose client leaves before the response ends logs one `MYCELIUM_SLOW_REQUEST` line with its route and where the time went. The `503`s answered while the server is starting are not logged. |
 | `MYCELIUM_TRACE_ENABLED` | off | Start with profiling traces on; otherwise they are switched on and off at runtime through `/api/tracing`. |
 | `MYCELIUM_TRACE_DIR` | `<data dir>/traces` | Where profiling flamegraphs and metadata sidecars are written. |
 | `MYCELIUM_{ASK,INGEST,DOCGEN}_TRACE_LOG` | unset; Ask and Ingest use `<data dir>/ask_trace.jsonl` and `ingest_trace.jsonl` | JSONL file that receives one record per run. The connect pass always writes to `<data dir>/connect_trace.jsonl`. |

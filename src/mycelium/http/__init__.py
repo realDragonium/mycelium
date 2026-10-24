@@ -175,13 +175,14 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     )
     app.add_middleware(_BodyLimit, max_body_size=_max_body_bytes())
     app.add_middleware(HostAllowlistMiddleware)
+    # Inside the startup gate so its 503s aren't timed; outside every other
+    # working layer so a request's time includes theirs.
+    app.add_middleware(request_timing.RequestTimingMiddleware)
     # Outside every layer that reads a database, so nothing reaches one
     # mid-startup.
     app.add_middleware(StartupGate)
     # Outermost, so error responses from the layers inside get the headers too.
     app.add_middleware(SecurityHeadersMiddleware)
-    # Outside everything, so a request's time includes every layer's.
-    app.add_middleware(request_timing.RequestTimingMiddleware)
 
     app.router.routes.extend(_routes())
 

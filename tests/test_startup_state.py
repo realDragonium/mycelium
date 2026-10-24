@@ -3,10 +3,12 @@ and the copy-of-production quarantine."""
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import draft_review_runs, quarantine
+from mycelium import draft_review_runs, quarantine, request_timing
 from mycelium.docgen import destinations
 from mycelium.http import create_app
 from mycelium.server import startup
@@ -36,6 +38,32 @@ def test_while_starting_only_the_startup_state_answers(starting):
     page = starting.get("/ui/", headers={"accept": "text/html"})
     assert page.status_code == 503
     assert 'http-equiv="refresh"' in page.text
+
+
+def test_answers_while_starting_are_not_logged_as_slow_requests(
+    starting, monkeypatch, caplog
+):
+    monkeypatch.setenv("MYCELIUM_SLOW_REQUEST_MS", "0")
+    performance_logger = logging.getLogger("mycelium.performance")
+    performance_logger.addHandler(caplog.handler)
+    try:
+        response = starting.get("/api/server-info")
+        assert response.status_code == 503
+        assert not any(
+            request_timing.SLOW_TOKEN in record.getMessage()
+            for record in caplog.records
+        )
+
+        startup._report("ready")
+        response = starting.get("/api/server-info")
+        assert response.status_code == 200
+        assert any(
+            request_timing.SLOW_TOKEN in record.getMessage()
+            and "route=GET_/api/server-info" in record.getMessage()
+            for record in caplog.records
+        )
+    finally:
+        performance_logger.removeHandler(caplog.handler)
 
 
 def test_a_failed_start_says_why(starting):

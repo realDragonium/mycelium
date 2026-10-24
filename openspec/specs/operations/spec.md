@@ -135,7 +135,7 @@ The system SHALL time every HTTP request and each tracked background job, splitt
 - **THEN** the request is recorded as `MCP tools/call ask`
 
 ### Requirement: Slow request log
-The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the time per phase for each request or tracked background job that takes at least `MYCELIUM_SLOW_REQUEST_MS` milliseconds (default 2000), fails, or whose client disconnects before the response ends.
+The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the time per phase for each request or tracked background job that takes at least `MYCELIUM_SLOW_REQUEST_MS` milliseconds (default 2000), fails, or whose client disconnects before the response ends; the `503` answers given while the server is still starting MUST NOT be logged or counted.
 
 #### Scenario: Slow search
 - **WHEN** a search request takes 3 seconds with the default threshold
@@ -144,6 +144,10 @@ The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the tim
 #### Scenario: Client leaves
 - **WHEN** a client disconnects before a response finishes
 - **THEN** the request is logged with `disconnected=True` and not counted as failed
+
+#### Scenario: Health check while starting
+- **WHEN** a health check polls `/api/server-info` and gets `503` because startup has not finished
+- **THEN** no `MYCELIUM_SLOW_REQUEST` line is logged
 
 ### Requirement: Performance summary
 The system SHALL serve an admin-only `GET /api/admin/performance`, answered on the event loop, reporting `window_seconds` (900), `slow_request_ms`, worker-thread `limit`, `busy` and `waiting`, and per route over the last 15 minutes the count, errors, disconnects and nearest-rank p50, p95 and maximum of the total and each phase, slowest p95 first; at most 20,000 recent samples are kept.
