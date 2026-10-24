@@ -441,7 +441,12 @@ def _prepare(task: agent_tasks.Task, _claimant: str) -> agent_tasks.Task | None:
             input=brief.prompt,
             result="A decision with a reason for every item.",
             schema=Verdicts,
-        ),
+        )
+        | {
+            "profile": documentation_profiles.brief(planned.guideline_set).model_dump(
+                mode="json"
+            )
+        },
     )
     return agent_tasks.get(drafts, task.id)
 

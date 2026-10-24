@@ -884,10 +884,11 @@ def _prepare_agent_task(
     if task.brief is not None:
         return task
     try:
+        planned = _agent_target(task)
         inputs = _inputs(
             drafts,
             store.substrate_connection(),
-            _agent_target(task),
+            planned,
             product_settings.get(product_settings.DocumentationPlanningSettings),
         )
     except Unavailable as exc:
@@ -902,7 +903,12 @@ def _prepare_agent_task(
             input=inputs.task.prompt,
             result="The documents to propose, most valuable first.",
             schema=Proposal,
-        ),
+        )
+        | {
+            "profile": documentation_profiles.brief(planned.guideline_set).model_dump(
+                mode="json"
+            )
+        },
     )
     return agent_tasks.get(drafts, task.id)
 

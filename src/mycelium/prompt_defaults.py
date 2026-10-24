@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from . import prompt_store, timestamps
 
 SEED_AUTHOR = "seed"
+#: Author of a retired default kept as an instance's saved text.
+UPGRADE_AUTHOR = "upgrade"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS shipped_prompt_texts (
@@ -111,6 +113,27 @@ def sync(conn: sqlite3.Connection, type: str, name: str, default: str) -> str | 
                 created_by=SEED_AUTHOR,
             )
     return result.newer_default_since
+
+
+def keep_retired_default(
+    conn: sqlite3.Connection, type: str, name: str, retired: str
+) -> bool:
+    """Save `retired`, a default this build no longer ships, as the text of
+    (type, name) when this instance ran with it and nobody saved one, so the
+    instance keeps behaving as before. Returns whether it saved."""
+    with prompt_store._writing(conn):
+        history, seen = _state(conn, type, name)
+        if history or digest(retired) not in seen:
+            return False
+        prompt_store._append(
+            conn,
+            type=type,
+            name=name,
+            text=retired,
+            deleted=0,
+            created_by=UPGRADE_AUTHOR,
+        )
+        return True
 
 
 def newer_default_since(

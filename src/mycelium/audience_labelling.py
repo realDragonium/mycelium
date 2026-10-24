@@ -59,6 +59,31 @@ they must not get. An audience that includes others sees everything they may
 see, so name only the most restricted audiences the statement fits: a
 statement fit for an audience is seen by every audience that includes it
 without being named. Grant an audience only when the statement is something
+its description allows; when in doubt, leave it out. A statement that
+reveals anything a description says its audience must not get is not for that
+audience, even when it also mentions something that audience knows. An internal
+audience whose description says nothing is withheld fits every statement no
+more restricted audience fits. Judge the statement's own text; the concepts
+it mentions are context only. Give a short reason naming what in the
+statement decided it.
+
+An edited statement comes with its previous text and the audiences its
+previous label granted. Keep those audiences unless the edit changes what may
+be revealed: a changed number, limit, name or wording that reveals nothing
+new keeps them. When the edit makes the statement unfit for an audience that
+saw it, say in narrowing_reason what in the new text an audience may not
+learn.
+"""
+
+#: The default before audience rules moved into the audience descriptions.
+#: An instance that ran with it keeps it as saved text (see
+#: `prompt_defaults.keep_retired_default`).
+PREVIOUS_DEFAULT_INSTRUCTIONS = """Decide, for each statement, the most restricted documentation audiences that may see it.
+Each audience has a description of who the reader is, what they need and what
+they must not get. An audience that includes others sees everything they may
+see, so name only the most restricted audiences the statement fits: a
+statement fit for an audience is seen by every audience that includes it
+without being named. Grant an audience only when the statement is something
 its description allows; when in doubt, leave it out. A statement about
 internal components, infrastructure, internal processes, unreleased work,
 security internals or specific customers is never for an external audience,

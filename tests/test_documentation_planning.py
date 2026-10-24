@@ -469,6 +469,7 @@ def test_an_agent_plans_a_profile_and_its_proposal_is_kept_as_a_models(client):
 
     [task] = server.claim_agent_task("documentation_planning").tasks
     assert sid in str(task.brief)
+    assert task.brief["profile"]["name"] == "public"
     malformed = server.submit_agent_task(task.id, {"items": [{"title": "x"}]})
     assert malformed.status == "refused"
     kept = server.submit_agent_task(
@@ -645,6 +646,7 @@ def test_an_agent_reviews_another_agents_plan_over_the_task_queue(client):
     reviewer = _as("reviewer")
     try:
         [review] = server.claim_agent_task("plan_review").tasks
+        assert review.brief["profile"]["name"] == "public"
         first, second = (
             item["item_id"] for item in json.loads(str(review.brief["input"]))["items"]
         )

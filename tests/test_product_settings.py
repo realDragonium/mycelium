@@ -493,6 +493,12 @@ def test_documentation_default_must_name_existing_guidelines(db):
     assert settings.view(ADMIN).guideline_sets == ["kb-authoring"]
 
 
+def test_a_default_no_profile_has_yet_can_be_kept(db):
+    db.execute("DELETE FROM prompt_texts WHERE type = 'guideline-set'")
+    save(settings.DocumentationSettings(destinations=()))
+    assert settings.get(settings.DocumentationSettings).guideline_set == "kb-authoring"
+
+
 def test_http_concurrency_save_updates_existing_request_limiter(running_app):
 
     client, _ = running_app

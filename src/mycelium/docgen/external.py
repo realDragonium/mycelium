@@ -270,6 +270,7 @@ def _brief(ctx: loop._RunContext) -> dict[str, JsonValue]:
             "result_schema": _EMIT_SCHEMA,
             "guideline_set": ctx.guideline_set,
             "document_type": ctx.document_type,
+            "profile": _profile(ctx),
             "audience": None
             if ctx.audience is None
             else {
@@ -279,6 +280,13 @@ def _brief(ctx: loop._RunContext) -> dict[str, JsonValue]:
             },
         }
     )
+
+
+def _profile(ctx: loop._RunContext) -> JsonValue:
+    assert ctx.guideline_set is not None
+    return documentation_profiles.brief(
+        ctx.guideline_set, ctx.document_type
+    ).model_dump(mode="json")
 
 
 # --- reading -------------------------------------------------------------------
@@ -512,6 +520,7 @@ def _queue_review(
             "read_tools": [],
             "result": tool["description"],
             "result_schema": tool["input_schema"],
+            "profile": _profile(ctx),
             "writer_task": task.id,
         }
     )

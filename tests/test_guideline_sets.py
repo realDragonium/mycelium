@@ -1,47 +1,17 @@
-"""Guideline sets as prompt-text rows — the seeded set and the variant story.
+"""Guideline sets as prompt-text rows: profiles are instance data.
 
-Three layers, matching how the convention in `docs/GUIDELINE_SETS.md` is meant
-to hold.
-
-The startup tests are the deployment claim: a fresh instance boots with the
-`kb-authoring` set in its store, from files that ship inside the package, with
-no checkout and nothing run by hand. They also pin the half startup must not
-have — `save_if_absent`, so a restart never supersedes an operator's edit.
-
-The script tests drive `scripts/seed_guideline_sets.py`, which does have that
-half: it compares against the stored latest version and appends what differs.
-They pin its naming, its idempotency against the append-only store, and what
-the stored guidance may assume its reader can reach.
-
-The variant test adds a second set through the management tools and nothing
-else — no source files, no seeding, no code — which is the claim the
-convention makes about new documentation variants.
+No profile ships with the package: a fresh instance boots with none, and a
+profile exists once someone saves it through the editor or the tools.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import re
 import sqlite3
-from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
-from mycelium import auth_store, guidelines, prompt_store, server, store
+from mycelium import auth_store, prompt_store, server, store
 from mycelium.server import runtime
-
-_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "seed_guideline_sets.py"
-
-_KB_ROWS = [
-    "kb-authoring/explanation",
-    "kb-authoring/exposure",
-    "kb-authoring/guidance",
-    "kb-authoring/how-to",
-    "kb-authoring/reference",
-    "kb-authoring/troubleshooting",
-    "kb-authoring/tutorial",
-]
 
 # The second variant set, verbatim as it was saved through the tools. Four
 # rows, deliberately minimal: this is the proof that a variant is data, not
@@ -78,14 +48,6 @@ _INTERNAL_DOC = {
 }
 
 
-def _seed_script():
-    """Load the seed script by file path (`scripts/` isn't a package)."""
-    spec = importlib.util.spec_from_file_location("seed_guideline_sets", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 def _conn() -> sqlite3.Connection:
     conn = prompt_store.connect(":memory:")
     prompt_store.migrate(conn)
@@ -111,264 +73,11 @@ def _app(tmp_path, monkeypatch):
     return TestClient(create_app())
 
 
-# --- what a fresh deployment boots with -------------------------------------
-
-
-def test_startup_seeds_the_shipped_set(tmp_path, monkeypatch):
-    """The deployment claim: boot a fresh instance and the set is there. No
-    checkout, no script — the files travel inside the package, so this is
-    what an image with an empty data volume comes up holding."""
+def test_a_fresh_instance_has_no_writing_profile(tmp_path, monkeypatch):
     client = _app(tmp_path, monkeypatch)
     with client:
-        listed = server.list_prompt_texts(type="guideline-set")["prompt_texts"]
-        assert [p["name"] for p in listed] == _KB_ROWS
-        assert {p["version"] for p in listed} == {1}
-        assert {p["created_by"] for p in listed} == {"seed"}
-
-        for slot, path in guidelines.SOURCES.items():
-            stored = server.get_prompt_text("guideline-set", f"kb-authoring/{slot}")
-            assert stored["text"] == path.read_text(encoding="utf-8")
-
-
-def test_startup_leaves_an_edited_row_alone(tmp_path, monkeypatch):
-    """Startup writes with `save_if_absent`, so a restart is not a chance to
-    revert an operator. The edited row keeps its text and gains no version,
-    and the rows nobody touched gain none either."""
-    client = _app(tmp_path, monkeypatch)
-    with client:
-        prompt_store.save(
-            prompt_store.connection(),
-            type="guideline-set",
-            name="kb-authoring/how-to",
-            text="our house style",
-        )
-
-    _reset_server()
-    client = _app(tmp_path, monkeypatch)  # restart against the same data dir
-    with client:
-        edited = server.get_prompt_text("guideline-set", "kb-authoring/how-to")
-        assert edited["text"] == "our house style"
-        assert edited["version"] == 2
-
-        untouched = prompt_store.history(
-            prompt_store.connection(), "guideline-set", "kb-authoring/tutorial"
-        )
-        assert [v["version"] for v in untouched] == [1]
-
-
-def test_an_unreadable_starter_leaves_no_partial_profile(tmp_path, monkeypatch):
-    """A failed starter seed is atomic and does not prevent doctrine bootstrap."""
-    monkeypatch.setitem(
-        guidelines.SOURCES, "reference", tmp_path / "gone" / "reference.md"
-    )
-    client = _app(tmp_path, monkeypatch)
-    with client:
-        names = [
-            p["name"]
-            for p in server.list_prompt_texts(type="guideline-set")["prompt_texts"]
-        ]
-        assert names == []
-        assert [
-            p["name"] for p in server.list_prompt_texts(type="doctrine")["prompt_texts"]
-        ] == ["docgen", "ingest"]
-
-
-def test_retiring_starter_template_survives_restart(tmp_path, monkeypatch):
-    client = _app(tmp_path, monkeypatch)
-    with client:
-        assert server.retire_prompt_text("guideline-set", "kb-authoring/reference") == {
-            "retired": True
-        }
-        assert [
-            item["deleted"]
-            for item in prompt_store.history(
-                prompt_store.connection(), "guideline-set", "kb-authoring/reference"
-            )
-        ] == [True, False]
-    with _app(tmp_path, monkeypatch):
-        assert (
-            "reference"
-            not in guidelines.catalogue(runtime._prompts_db())["kb-authoring"]
-        )
-        assert [
-            item["version"]
-            for item in prompt_store.history(
-                prompt_store.connection(), "guideline-set", "kb-authoring/reference"
-            )
-        ] == [2, 1]
-
-
-def test_seed_writes_the_named_rows():
-    """Seven rows under one type, each named `<set>/<slot>` and carrying its
-    source file verbatim."""
-    seed = _seed_script()
-    conn = _conn()
-    rows = guidelines.read_rows()
-
-    assert seed.seed(conn, rows) != []
-
-    listed = prompt_store.list_current(conn, "guideline-set")
-    assert [r["name"] for r in listed] == _KB_ROWS
-    assert {r["version"] for r in listed} == {1}
-    assert {r["created_by"] for r in listed} == {"system:seed-guideline-sets"}
-
-
-def test_seeded_text_is_the_source_file():
-    """The seed is a copier: every row is its source file byte for byte, so
-    what a run reads is what a reviewer read in the diff. The guidance is
-    written for the store and has its own source, which is why the copy can
-    stay verbatim — the adaptation lives in a file, not in a transform."""
-    seed = _seed_script()
-    conn = _conn()
-    seed.seed(conn, guidelines.read_rows())
-
-    for slot, path in guidelines.SOURCES.items():
-        stored = prompt_store.latest_text(conn, "guideline-set", f"kb-authoring/{slot}")
-        assert stored == path.read_text(encoding="utf-8")
-
-    guidance = prompt_store.latest_text(conn, "guideline-set", "kb-authoring/guidance")
-    assert "Knowledge-Base Authoring from Substrate" in guidance
-    assert "> ⚠️ needs verification:" in guidance
-
-
-@pytest.mark.parametrize("starter", guidelines.STARTERS, ids=lambda s: s.name)
-def test_starter_guidance_addresses_a_run_that_has_only_the_store(starter):
-    """What the guidance may assume its reader can reach. A starter is saved
-    under whatever name its profile gets, so it names no row; it reaches for
-    no file, and carries none of the frontmatter that dispatches a local
-    skill."""
-    guidance = starter.sources()["guidance"].read_text(encoding="utf-8")
-
-    assert (
-        re.findall(r"\b[a-z-]+/(?:guidance|exposure|how-to|reference)\b", guidance)
-        == []
-    )
-    assert re.findall(r"[\w./-]+\.md", guidance) == []
-    assert ".claude" not in guidance
-
-    assert not guidance.startswith("---")
-    assert "description:" not in guidance
-    assert "Use this skill" not in guidance
-
-
-def test_every_cross_link_section_may_be_deleted():
-    """A section that links other articles is optional, and says so.
-
-    A run writing the first document into an empty knowledge base has nothing
-    to link to. Left mandatory, such a section can only be satisfied by a link
-    whose path is still a placeholder, which the same guidance forbids, so the
-    document cannot pass however it is written. Every `{path}` in a template
-    therefore sits under a heading the writer is told it may delete.
-    """
-    seed = _seed_script()
-    conn = _conn()
-    seed.seed(conn, guidelines.read_rows())
-
-    non_types = {guidelines.row_name(slot) for slot in guidelines.NON_TYPE_SLOTS}
-    templates = [
-        r
-        for r in prompt_store.list_current(conn, "guideline-set")
-        if r["name"] not in non_types
-    ]
-    assert templates, "no template rows were seeded"
-
-    for row in templates:
-        text = prompt_store.latest_text(conn, "guideline-set", row["name"])
-        sections = re.split(r"^## ", text, flags=re.M)[1:]
-        for section in sections:
-            if "{path}" not in section:
-                continue
-            heading = section.splitlines()[0].strip()
-            assert "delete this whole section" in section, (
-                f"{row['name']} section {heading!r} links other articles "
-                "but does not tell the writer it may be deleted"
-            )
-
-
-def test_reseeding_unchanged_sources_appends_nothing():
-    """The append-only store makes this the whole idempotency story: the
-    seed compares against the latest version and writes no second one."""
-    seed = _seed_script()
-    conn = _conn()
-    rows = guidelines.read_rows()
-    seed.seed(conn, rows)
-
-    assert seed.outdated(conn, rows) == []
-    assert seed.seed(conn, rows) == []
-
-    for name in _KB_ROWS:
-        assert len(prompt_store.history(conn, "guideline-set", name)) == 1
-
-
-def test_changed_source_appends_only_that_row():
-    """Idempotency is a text comparison, not a seeded-once flag — an edited
-    source still lands, and only it does."""
-    seed = _seed_script()
-    conn = _conn()
-    rows = guidelines.read_rows()
-    seed.seed(conn, rows)
-
-    rows["kb-authoring/how-to"] += "\nAlways link the matching explanation.\n"
-    assert seed.seed(conn, rows) == ["kb-authoring/how-to"]
-
-    assert (
-        prompt_store.latest(conn, "guideline-set", "kb-authoring/how-to")["version"]
-        == 2
-    )
-    assert (
-        prompt_store.latest(conn, "guideline-set", "kb-authoring/tutorial")["version"]
-        == 1
-    )
-
-
-def test_dry_run_leaves_no_database_behind(tmp_path):
-    """`--dry-run` reports; it must not be the thing that creates an
-    instance's prompts DB."""
-    seed = _seed_script()
-    db_path = tmp_path / "mycelium-prompts.db"
-    rows = guidelines.read_rows()
-
-    assert seed.pending(db_path, rows) == list(rows)
-    assert not db_path.exists()
-    assert list(tmp_path.iterdir()) == []
-
-
-def test_dry_run_does_not_write_to_an_existing_database(tmp_path):
-    """Nor may it write to one that is already there. The file is byte-for-
-    byte what it was — no appended version, and no rewritten journal mode
-    either, which an ordinary `prompt_store.connect` would have done."""
-    seed = _seed_script()
-    db_path = tmp_path / "mycelium-prompts.db"
-    rows = guidelines.read_rows()
-
-    conn = prompt_store.connect(db_path)
-    prompt_store.migrate(conn)
-    seed.seed(conn, rows)
-    conn.close()
-    before = db_path.read_bytes()
-
-    assert seed.pending(db_path, rows) == []
-    assert db_path.read_bytes() == before
-
-    reopened = prompt_store.connect(db_path)
-    assert {r["version"] for r in prompt_store.list_current(reopened)} == {1}
-    reopened.close()
-
-
-# --- the second variant set, added through the tools alone ------------------
-
-
-def test_the_two_sets_answer_the_exposure_slot_differently():
-    """Exposure is variant data, not a constant under two names: the public
-    set withholds an internal hostname while the staff set explicitly permits
-    one, without weakening the secrets that stay secret for every reader."""
-    kb_exposure = guidelines.SOURCES["exposure"].read_text(encoding="utf-8").lower()
-    internal_exposure = _INTERNAL_DOC["internal-doc/exposure"].lower()
-
-    assert "internal hostnames and ip ranges must not appear" in kb_exposure
-    assert "internal hostnames may be stated" in internal_exposure
-    assert "credentials, tokens, private keys" in kb_exposure
-    assert "live credentials, tokens, and private keys" in internal_exposure
+        assert server.list_prompt_texts(type="guideline-set")["prompt_texts"] == []
+        assert server.list_writing_profiles()["profiles"] == []
 
 
 def test_variant_set_is_added_through_prompt_routes(tmp_path, monkeypatch):
@@ -398,15 +107,15 @@ def test_variant_set_is_added_through_prompt_routes(tmp_path, monkeypatch):
 
 
 def test_sets_share_the_type_and_separate_by_prefix(tmp_path, monkeypatch):
-    """What the convention buys: one listing is the index of every set, and
-    the `<set>/` prefix is what tells them apart in it. The shipped set is
-    already there from startup — running the script over it appends nothing,
-    which is the two writes agreeing on a store neither has to fight for."""
-    seed = _seed_script()
+    """One listing is the index of every set; the `<set>/` prefix is what
+    tells them apart in it."""
     client = _app(tmp_path, monkeypatch)
     with client:
-        assert seed.seed(runtime._prompts_db(), guidelines.read_rows()) == []
-        for name, text in _INTERNAL_DOC.items():
+        public = {
+            name.replace("internal-doc/", "public-doc/"): text
+            for name, text in _INTERNAL_DOC.items()
+        }
+        for name, text in {**_INTERNAL_DOC, **public}.items():
             prompt_store.save(
                 prompt_store.connection(), type="guideline-set", name=name, text=text
             )
@@ -415,7 +124,8 @@ def test_sets_share_the_type_and_separate_by_prefix(tmp_path, monkeypatch):
             p["name"]
             for p in server.list_prompt_texts(type="guideline-set")["prompt_texts"]
         ]
-        assert names == sorted(_KB_ROWS + list(_INTERNAL_DOC))
-
-        sets = sorted({n.split("/")[0] for n in names})
-        assert sets == ["internal-doc", "kb-authoring"]
+        assert names == sorted([*_INTERNAL_DOC, *public])
+        assert sorted({n.split("/")[0] for n in names}) == [
+            "internal-doc",
+            "public-doc",
+        ]

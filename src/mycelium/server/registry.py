@@ -232,6 +232,12 @@ MCP_TOOLS = frozenset(
         "revise_document",
         "request_documentation_plan",
         "deliver_document",
+        # Writing profiles
+        "list_writing_profiles",
+        "get_writing_profile",
+        "save_writing_profile",
+        "retire_writing_profile",
+        "restore_writing_profile",
     }
 )
 

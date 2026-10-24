@@ -203,20 +203,18 @@ interface Profile {
   retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
-interface Starter { name: string; title: string; description: string; audience: string | null; guidance: string; exposure: string; templates: Template[] }
-interface ProfilesView extends Profiles { audiences: AudienceView[]; starters: Starter[]; destinations: string[] }
+interface ProfilesView extends Profiles { audiences: AudienceView[]; destinations: string[] }
 interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; delivery: Delivery; destinations: string[] }
 
 export function DocumentationProfiles() {
   const { state, reload } = useAsync(useCallback(async (signal: AbortSignal): Promise<ProfilesView> => {
-    const [profiles, audiences, starters, destinations] = await Promise.all([
+    const [profiles, audiences, destinations] = await Promise.all([
       getJSON<Profiles>('/api/documentation/profiles', signal),
       getJSON<AudiencesResponse>('/api/audiences', signal),
-      getJSON<{ starters: Starter[] }>('/api/documentation/starters', signal),
       // Destination settings that fail to load must not hide the profiles.
       getJSON<{ destinations: { name: string }[] }>('/api/documentation/destinations', signal).catch(() => ({ destinations: [] })),
     ]);
-    return { ...profiles, audiences: audiences.audiences, starters: starters.starters, destinations: destinations.destinations.map(item => item.name) };
+    return { ...profiles, audiences: audiences.audiences, destinations: destinations.destinations.map(item => item.name) };
   }, []));
   const [form, setForm] = useState<Profile | null>(null);
   const [original, setOriginal] = useState<Profile | null>(null);
@@ -241,20 +239,6 @@ export function DocumentationProfiles() {
     const audience = source?.audience && data?.audiences.some(item => !item.retired && item.id === source.audience) ? source.audience : null;
     open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', delivery: source?.delivery ?? 'people', destinations: source?.destinations ?? [] }, true);
   };
-  const liveAudience = (id: string | null) => id && data?.audiences.some(item => !item.retired && item.id === id) ? id : null;
-  const createFromStarter = (starter: Starter) => {
-    if (!discardOk() || !data) return;
-    const taken = new Set(data.profiles.map(p => p.name));
-    let name = starter.name, n = 2;
-    while (taken.has(name)) name = `${starter.name}-${n++}`;
-    open({ name, revision: '', guidance: starter.guidance, exposure: starter.exposure, templates: starter.templates.map(t => ({ ...t, isNew: true })), audience: liveAudience(starter.audience), effective_audience: null, maintenance: 'manual', planning: 'off', plan_review: 'person', delivery: 'people', destinations: [] }, true);
-  };
-  // Replaces the texts only: audience, policies and destinations are the instance's decisions, not the starter's.
-  const resetToStarter = (starter: Starter) => {
-    if (!form || !window.confirm(`Replace ${form.name}'s guidance, disclosure rules and templates with the ${starter.title} starter? Nothing is saved until you save the profile.`)) return;
-    const saved = new Set((original?.templates ?? []).map(t => t.name));
-    change({ guidance: starter.guidance, exposure: starter.exposure, templates: starter.templates.map(t => ({ ...t, isNew: !saved.has(t.name) })) });
-  };
   const toggleDestination = (name: string, on: boolean) => form && change({ destinations: on ? [...form.destinations, name] : form.destinations.filter(item => item !== name) });
   const change = (patch: Partial<Profile>) => { setForm(f => f && { ...f, ...patch }); setMessage(null); };
   const changeTemplate = (i: number, patch: Partial<Template>) => form && change({ templates: form.templates.map((t, j) => j === i ? { ...t, ...patch } : t) });
@@ -278,13 +262,7 @@ export function DocumentationProfiles() {
   const reloadProfile = () => { if (form && !creating && discardOk('Discard local edits and load the saved profile?')) void act(() => getJSON<Profile>(path(form.name)), 'Saved profile loaded.'); };
 
   return (
-    <Card title="Writing profiles & templates" actions={data?.can_write && <div className="row gap-sm">
-      {data.starters.length > 0 && <select className="input" aria-label="New profile from a starter" value="" disabled={busy} onChange={e => { const starter = data.starters.find(s => s.name === e.target.value); if (starter) createFromStarter(starter); }}>
-        <option value="">New from starter…</option>
-        {data.starters.map(s => <option key={s.name} value={s.name} title={s.description}>{s.title}</option>)}
-      </select>}
-      <button type="button" className="btn sm" disabled={busy} onClick={() => create(null)}>New profile</button>
-    </div>}>
+    <Card title="Writing profiles & templates" actions={data?.can_write && <button type="button" className="btn sm" disabled={busy} onClick={() => create(null)}>New profile</button>}>
       <p className="muted">Writing guidance, disclosure rules and document templates used when generating documents. Stored here, versioned, no deploy needed. Audience guidance does not change who can open a generated document.</p>
       {error && <Notice tone="error">{error}</Notice>}
       {message && <Notice tone="success">{message}</Notice>}
@@ -354,10 +332,6 @@ export function DocumentationProfiles() {
             <div className="row gap-sm wrap">
               {!creating && <button type="button" className="btn ghost xs" disabled={busy} onClick={reloadProfile}>Reload saved profile</button>}
               {data.can_write && <button type="button" className="btn ghost xs" disabled={busy} onClick={() => create(form)}>Duplicate profile</button>}
-              {data.can_retire && !creating && !form.retired && data.starters.length > 0 && <select className="input" aria-label="Reset to a starter" value="" disabled={busy} onChange={e => { const starter = data.starters.find(s => s.name === e.target.value); if (starter) resetToStarter(starter); }}>
-                <option value="">Reset to starter…</option>
-                {data.starters.map(s => <option key={s.name} value={s.name} title={s.description}>{s.title}</option>)}
-              </select>}
               {data.can_retire && !creating && !form.retired && <button type="button" className="btn ghost xs" disabled={busy || form.name === data.default_profile} onClick={retire}>Retire profile</button>}
             </div>
             {form.name === data.default_profile && <p className="hint">This is the default profile. Choose another default under Documentation delivery before retiring it or its last template.</p>}

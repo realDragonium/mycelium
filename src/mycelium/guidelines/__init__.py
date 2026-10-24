@@ -1,15 +1,13 @@
 """Documentation profiles use the existing guideline-set/profile-slot convention.
 
-Packaged files supply the initial examples. Once any guideline history exists,
-startup leaves it alone, including retired rows. Readers share the immutable
-profile snapshot adapter used by generation runs.
+Profiles are instance data that admins and writers create; none ships with
+the package. Readers share the immutable profile snapshot adapter used by
+generation runs.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
-from pathlib import Path
 
 #: The prompt-store `type` every row of every guideline set is stored under.
 #: See `docs/GUIDELINE_SETS.md` for the naming convention this implements.
@@ -71,70 +69,11 @@ NON_TYPE_SLOTS = frozenset(
     }
 )
 
-#: The set a fresh instance starts with, and the default profile's name.
+#: The profile documentation prefers when its settings name none.
 SET_NAME = "kb-authoring"
 
-_DIR = Path(__file__).resolve().parent
 
-
-@dataclass(frozen=True)
-class Starter:
-    """Packaged profile content an editor can start a profile from or reset
-    one to. Only `SET_NAME` is seeded; the others are offered, never stored
-    until someone saves them."""
-
-    name: str
-    title: str
-    description: str
-    #: The seeded audience the starter is written for; None writes for the
-    #: default internal audience.
-    audience: str | None
-    templates: tuple[str, ...]
-
-    def sources(self) -> dict[str, Path]:
-        """Row slot -> the file whose contents that row holds verbatim."""
-        root = _DIR / self.name
-        return {
-            "guidance": root / "guidance.md",
-            "exposure": root / "exposure.md",
-            **{name: root / "templates" / f"{name}.md" for name in self.templates},
-        }
-
-
-STARTERS: tuple[Starter, ...] = (
-    Starter(
-        SET_NAME,
-        "Knowledge base",
-        "Every Diátaxis type for the profile's audience: tutorials, how-tos, "
-        "reference, explanations and troubleshooting.",
-        None,
-        ("tutorial", "how-to", "reference", "explanation", "troubleshooting"),
-    ),
-    Starter(
-        "help-center",
-        "Help center",
-        "For people who use the product: short, task-oriented how-tos, "
-        "troubleshooting and light explanations, with limits stated plainly "
-        "and no internals.",
-        "external-non-technical",
-        ("how-to", "troubleshooting", "explanation"),
-    ),
-    Starter(
-        "internal-guide",
-        "Internal guide",
-        "For support, sales and customer success: reference, explanations, "
-        "how-tos and troubleshooting with the conditions, edge cases and "
-        "limits staff need to answer customers.",
-        "internal-non-technical",
-        ("reference", "explanation", "how-to", "troubleshooting"),
-    ),
-)
-
-#: The seeded set's row slot -> source file.
-SOURCES: dict[str, Path] = STARTERS[0].sources()
-
-
-def row_name(slot: str, set_name: str = SET_NAME) -> str:
+def row_name(slot: str, set_name: str) -> str:
     """The prompt-store name a slot is stored under: `<set>/<slot>`."""
     return f"{set_name}/{slot}"
 
@@ -153,14 +92,3 @@ def texts(
     from ..documentation_profiles import capture
 
     return capture(conn).texts(set_name, document_type)
-
-
-def read_rows() -> dict[str, str]:
-    """Every shipped row as {name: text}, each its source file verbatim.
-
-    All seven or an exception — the caller that wants a per-row failure to cost
-    only that row (startup) reads `SOURCES` itself and guards each read."""
-    return {
-        row_name(slot): path.read_text(encoding="utf-8")
-        for slot, path in SOURCES.items()
-    }

@@ -514,13 +514,21 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
     validate_secrets(request.settings)
     db = prompt_store.connection()
     with store.write_lock(), prompt_store._writing(db):
-        if isinstance(
-            request.settings, DocumentationSettings
-        ) and request.settings.guideline_set not in guidelines.catalogue(db):
-            raise ValueError("Choose an existing guideline set for documentation.")
         current = editable(request.settings, db)
         if current.revision != request.revision:
             raise Conflict("Settings changed; reload before saving.")
+        # Keeping a default no profile has yet is allowed: a fresh instance
+        # starts with one, and has no profile until someone creates it.
+        saved = editable(DocumentationSettings(), db).settings
+        saved_default = (
+            saved.guideline_set if isinstance(saved, DocumentationSettings) else None
+        )
+        if (
+            isinstance(request.settings, DocumentationSettings)
+            and request.settings.guideline_set != saved_default
+            and request.settings.guideline_set not in guidelines.catalogue(db)
+        ):
+            raise ValueError("Choose an existing guideline set for documentation.")
         if isinstance(request.settings, ModelCatalogSettings) and isinstance(
             current.settings, ModelCatalogSettings
         ):
