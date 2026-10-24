@@ -263,7 +263,7 @@ def test_a_curation_agent_answers_a_question_with_evidence(curated_app, monkeypa
     _automatic()
     contexts = _asks_then_approves(monkeypatch)
     draft_id = _ingested_draft(client, monkeypatch, entity_id)
-    agent = _agent("writer")
+    agent = _agent("drafter")
 
     token = auth.current_principal.set(agent)
     try:
@@ -288,29 +288,17 @@ def test_a_curation_agent_answers_a_question_with_evidence(curated_app, monkeypa
     assert server.get_draft(draft_id)["status"] == "approved"
 
 
-def test_only_a_real_writer_who_did_not_write_the_draft_answers(
-    curated_app, monkeypatch
-):
+def test_the_drafts_creator_cannot_answer_its_reviewer(curated_app, monkeypatch):
     client, entity_id = curated_app
     _automatic()
     _asks_then_approves(monkeypatch)
     draft_id = _ingested_draft(client, monkeypatch, entity_id)
-    creator = _agent("writer")
+    creator = _agent("drafter")
     with store.transaction(server._drafts_db()):
         server._drafts_db().execute(
             "UPDATE drafts SET created_by = ? WHERE id = ?", (creator.id, draft_id)
         )
 
-    token = auth.current_principal.set(_agent("drafter"))
-    try:
-        [item] = server.claim_curation_work("question")["items"]
-        with pytest.raises(auth.RoleRequired):
-            server.release_curation_work(
-                [item["id"]], "answered", answer="No.", evidence=[EVIDENCE]
-            )
-        server.release_curation_work([item["id"]], "skipped")
-    finally:
-        auth.current_principal.reset(token)
     token = auth.current_principal.set(creator)
     try:
         [item] = server.claim_curation_work("question")["items"]

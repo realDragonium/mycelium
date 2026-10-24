@@ -3,8 +3,9 @@ items, check them in the product's code, and release them with the outcome.
 
 Proposals go through the caller's draft, so nothing lands without review; the
 queue only decides who works on what and remembers what came of it (see
-`mycelium.curation`). Answering a reviewer's question and closing a gap are a
-curator's decisions, so they take a real writer, as they do for a person.
+`mycelium.curation`). Answering a reviewer's question and closing a gap are
+recorded as the agent's, as a person's are; an answer needs the evidence the
+agent checked, and closing a gap the draft or reason that settled it.
 """
 
 from __future__ import annotations
@@ -179,9 +180,6 @@ def claim_curation_work(
     }
 
 
-_CURATOR_OUTCOMES = frozenset({"answered", "resolved", "not_applicable"})
-
-
 @tool(role="drafter")
 def release_curation_work(
     item_ids: list[str],
@@ -201,7 +199,6 @@ def release_curation_work(
     Neither is offered again until the item or the statements around it
     change. `skipped`: you did not get to them; they are offered again.
 
-    These take a real writer or admin, as they do for a person:
     `answered` (one `question` item): your `answer` to the reviewer's
     questions with the `evidence` you checked, in `set_operation_evidence`'s
     shape (one to five items); the draft is reviewed again with it. Not for
@@ -210,13 +207,6 @@ def release_curation_work(
     change, for the `reason` you give; the gap is dismissed.
     """
     claimant = _claimant()
-    principal = _auth.current_principal.get()
-    if outcome in _CURATOR_OUTCOMES:
-        if principal is None or not _auth.principal_has_real_role(principal, "writer"):
-            raise _auth.RoleRequired(
-                f"releasing as {outcome} takes a real writer or admin, as a "
-                "person's gap decision does"
-            )
     if outcome != "answered" and (answer is not None or evidence is not None):
         raise ValueError("only an answered outcome takes an answer and evidence")
     if outcome == "proposed":
@@ -237,7 +227,9 @@ def release_curation_work(
     if outcome in ("no_link", "not_applicable") and reason is None:
         raise ValueError(f"a {outcome} outcome needs a short reason")
     if outcome == "answered":
-        assert principal is not None
+        principal = _auth.current_principal.get()
+        if principal is None:
+            raise _auth.RoleRequired("answering a reviewer takes an identified account")
         draft_id = _answer(item_ids, principal, answer, evidence)
     with store.transaction(_db()):
         released = curation.release(
