@@ -1,11 +1,12 @@
 ---
 name: mycelium-agent-tasks
-description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, labels statements' audiences, turns ingested text or unconnected statements into a draft, or finds concept aliases, submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect or discover aliases for a server that has no provider key. Needs a real writer or admin token.
+description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, labels statements' audiences, turns ingested text or unconnected statements into a draft, finds concept aliases, or reviews a submitted draft (approve, approve with corrections, reject or ask a person), submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect, discover aliases or review drafts for a server that has no provider key. Needs a real writer or admin token.
 ---
 
 # Working Mycelium's agent task queue
 
-With **External agent** selected for an action in **Settings → Models**, the
+With **External agent** selected for an action in **Settings → Models** (for
+draft review, in **Settings → Draft review**), the
 server does not call a model for it. It queues a task, and you do the
 model's part. The server still decides what the work needs, what you may
 read and what is saved: your result passes the same checks its own model's
@@ -22,7 +23,9 @@ the token can claim.
 
 1. **Claim one task.** `claim_agent_task(kind, limit=1)`. `kind` is
    `documentation`, `document_review`, `documentation_planning`,
-   `audience_labelling`, `ingest`, `connect` or `alias_discovery`. An empty `tasks` list means nothing is waiting.
+   `audience_labelling`, `ingest`, `connect`, `alias_discovery` or
+   `draft_review`. An empty `tasks` list means nothing is waiting; `note`
+   says when waiting reviews were held back because they are your own work.
    You hold the task for 30 minutes (`expires_at`); calling
    `claim_agent_task(kind, limit=0)` renews it. Each task has:
    - `brief.instructions`: the system prompt the server's model would get.
@@ -91,6 +94,38 @@ sends it to review; nothing is written live.
 **`alias_discovery`.** Propose only aliases the selected statements in
 `brief.input` show, each with a quote from its statement. Evidence from
 any other statement is refused.
+
+**`draft_review`.** You are the reviewer of the draft in `brief.input`, and
+never of one you created. `brief.instructions` is the internal reviewer's
+contract; follow it. Trust the producer on what the product does and judge
+how the draft fits the existing knowledge the input supplies: duplicates,
+contradictions, link type and direction, missing links to live neighbours,
+entity variants and the `operation_findings` the server would refuse.
+Submit `{"parts": [...]}` with one assessment per part (`brief.parts`; a
+multi-part input is headed `=== PART i OF n ===`):
+
+- `good`: the draft fits as submitted. No corrections, questions or
+  contradictions.
+- `changes_suggested`: it fits once you correct it. Correct rather than
+  reject when at most twelve precise corrections (edit, add a link,
+  drop a link, drop a statement, strike or append an operation), each changing one thing,
+  make it fit. Indices and `@` references name the draft as submitted. List a
+  live statement you correct because the draft supersedes it under
+  `contradictions`.
+- `reject`: it cannot be made to fit with twelve corrections, or it adds
+  nothing the knowledge base lacks. Say why in `rationale`; a gap is filed
+  with it.
+- `needs_context`: only when the supplied knowledge cannot settle the fit and
+  a person's answer would, such as whether a new concept is a live one under
+  another name. Ask specific `questions`; they become a knowledge gap, and the
+  draft is reviewed again with the answer.
+
+`brief.earlier_review` is the previous review, with its corrections when it
+was held for a curator: check them, keep the right ones and drop the wrong
+ones. `brief.mode` and `brief.auto_apply` say what your verdict does: in
+`review-and-apply` it is applied, rejected or held as the internal
+reviewer's would be, and in `review-only` it is advice and a person decides.
+A refusal names the label, correction or reference that failed.
 
 ## Do not
 

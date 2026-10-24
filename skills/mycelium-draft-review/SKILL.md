@@ -1,6 +1,6 @@
 ---
 name: mycelium-draft-review
-description: Work the Mycelium draft queue (submitted drf_ drafts) alongside the server's internal draft reviewer. Reads each draft's review_assessment, starts or reruns the reviewer with request_draft_review where an assessment is missing, failed or stale, checks what the reviewer cannot (product truth against the code, duplicates across queued drafts), and recommends approve, reject, answer or correct. Use when the operator wants to review, triage, drain or approve the draft queue. Needs a real writer or admin connection; approving, rejecting and answering the reviewer stay the operator's decisions, made in the Mycelium UI.
+description: Work the Mycelium draft queue (submitted drf_ drafts) alongside the server's draft reviewer. Reads each draft's review_assessment, starts or reruns the reviewer with request_draft_review where an assessment is missing, failed or stale, checks what the reviewer cannot (product truth against the code, duplicates across queued drafts), and recommends approve, reject, answer or correct. Use when the operator wants to review, triage, drain or approve the draft queue. Needs a real writer or admin connection; outside the reviewer's own authority, approving, rejecting and answering stay the operator's decisions, made in the Mycelium UI. To be the reviewer itself when draft review is set to External agent, use mycelium-agent-tasks (kind draft_review).
 ---
 
 # Mycelium draft review
@@ -8,12 +8,17 @@ description: Work the Mycelium draft queue (submitted drf_ drafts) alongside the
 Drafts are queued knowledge changes. They come from `ingest`, from drafter
 connections (CI pipelines, the `mycelium-draft` skill), from the connect pass
 on Knowledge health, and from alias suggestions. Nothing in a draft is live
-until it is applied. This skill works on top of the server's **internal
-reviewer** (`docs/DRAFT_REVIEW.md`), not instead of it.
+until it is applied. This skill works on top of the server's **draft
+reviewer** (`docs/DRAFT_REVIEW.md`), not instead of it. That reviewer is a
+server model, or, when **Settings → Draft review** runs on **External
+agent**, an outside agent that claims `draft_review` tasks with the
+`mycelium-agent-tasks` skill. An agent doing such a task is the reviewer, with
+the reviewer's authority below; this skill is the curator's assistant
+around it.
 
 ## Who does what
 
-- **The internal reviewer** runs when a draft is submitted, if review is on.
+- **The reviewer** runs when a draft is submitted, if review is on.
   It judges how the draft fits the existing knowledge: duplicates,
   contradictions, link type and direction, missing links to live neighbours,
   entity variants. It **trusts the producer on what the product does** and
@@ -59,8 +64,9 @@ curl -sX POST "$MYCELIUM_URL/request-draft-review" \
 Without `rerun` it returns the latest attempt or starts the first one; with
 `rerun=true` it starts a fresh attempt after a completed or failed one. A
 running attempt is returned as it is. It is refused while the mode is `off`.
-Each attempt is a model call the server pays for: list the drafts you intend
-to rerun and get the operator's go before starting more than a few. Without a
+Each attempt is a model call the server pays for, or with an external agent
+a task another agent must work: list the drafts you intend to rerun and get
+the operator's go before starting more than a few. Without a
 token, the operator clicks **Run review** or **Run again** on the draft.
 
 ## Phase 0 — index the queue

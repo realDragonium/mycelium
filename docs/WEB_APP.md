@@ -53,7 +53,7 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | People | Members & invites | `#/settings/members` | Admins: roles, suspension, invites, service accounts and their tokens |
 | AI | Models | `#/settings/models` | The model catalog (which models can be chosen, per provider); provider, model and reasoning effort per action |
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
-| | Draft review | `#/settings/review` | Automatic review mode, reviewer, model, whether reviews may apply and whether only clean approvals apply automatically; review the backlog oldest first, with an optional spending limit, pause and resume |
+| | Draft review | `#/settings/review` | Automatic review mode, where it runs (Claude, OpenAI or External agent), reviewer, model, whether reviews may apply and whether only clean approvals apply automatically; review the backlog oldest first, with an optional spending limit, pause and resume |
 | | Limits | `#/settings/limits` | Token, time and operation budgets per action; concurrent runs; the quiet period and daily cap for automatic document revisions |
 | | AI usage | `#/settings/usage` | Admins: tokens used in the last 7, 30 or 90 days per day, action and model, with totals and the runs that used the most linked to their run, plan or draft; the optional monthly token budget. Mycelium keeps no prices; spend is on each provider's billing dashboard. See [AI usage and budget](AI_MODELS.md#ai-usage-and-budget) |
 | Publishing | Documentation | `#/settings/documentation` | GitHub connection (disconnecting asks first), publishing destinations, writing profiles, their audience, maintenance policy and templates |
