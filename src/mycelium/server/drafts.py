@@ -253,7 +253,7 @@ def list_drafts(
     # standing to read it even where the wrapper's gate stays out of the way.
     principal = _auth.current_principal.get()
     if principal is None:
-        raise PermissionError(
+        raise _auth.RoleRequired(
             "tool 'list_drafts' requires an identified caller; "
             "use list_my_drafts to see your own drafts"
         )
