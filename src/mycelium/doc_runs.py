@@ -93,6 +93,8 @@ def start_run(
     start_from_destination: bool = False,
     review_notes: Sequence[ReviewNote] = (),
     restart_run_id: str | None = None,
+    retry_of: str | None = None,
+    attempt: int = 0,
 ) -> str:
     """Admit a run, deciding first which document it writes.
 
@@ -172,6 +174,8 @@ def start_run(
                 anchor_entity_id=anchor_entity_id,
                 revision_base=None if target is None else target.base,
                 review_notes=review_notes,
+                retry_of=retry_of,
+                attempt=attempt,
             )
         else:
             run_id = restart_run_id
