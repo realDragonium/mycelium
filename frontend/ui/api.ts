@@ -221,7 +221,8 @@ export const upsertName = (text: string, entityId: string) => postJSON<unknown>(
 // can produce two drafts.
 export type IngestResult =
   | { outcome: 'draft_created'; draft_id: string; alias_draft_id?: string | null; submitted_for_review?: boolean; ops?: unknown[] }
-  | { outcome: 'nothing_to_ingest'; reason?: string };
+  | { outcome: 'nothing_to_ingest'; reason?: string }
+  | { outcome: 'waiting_for_agent'; agent_task: string; message: string };
 
 /* ---------------------------- review mode ----------------------------- */
 // Whether drafts from ingest go straight to the AI reviewer, and
@@ -429,7 +430,7 @@ export interface HealthCounts {
 }
 // `priced` is false when the model has no known price: then neither the
 // cost nor the spending cap applies.
-export interface ConnectLimits { batch_size: number; max_cost_usd: number; provider: string; model: string; priced: boolean }
+export interface ConnectLimits { batch_size: number; max_cost_usd: number; provider: string; model: string; priced: boolean; external_agent: boolean }
 export type CurationKind = 'isolated' | 'unnamed' | 'rephrase' | 'gap';
 // `name` is null once the holder is no longer a known user. Outcome `looked`
 // is the server's connect pass; the rest come from outside agents.
@@ -445,7 +446,9 @@ export interface HealthStatement {
 }
 export interface HealthEntity { id: string; name: string | null; description: string | null }
 export interface Page<T> { items: T[]; next_after: string | null }
-export type ConnectResult = IngestResult & { cost_usd: number | null; flagged?: string[]; gaps_filed?: string[] };
+export type ConnectResult =
+  | Extract<IngestResult, { outcome: 'waiting_for_agent' }>
+  | (Exclude<IngestResult, { outcome: 'waiting_for_agent' }> & { cost_usd: number | null; flagged?: string[]; gaps_filed?: string[] });
 
 export const knowledgeHealth = {
   view: () => getJSON<HealthView>('/api/knowledge-health'),
