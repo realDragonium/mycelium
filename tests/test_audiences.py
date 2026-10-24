@@ -448,9 +448,7 @@ def test_without_credentials_the_worker_leaves_the_queue_untouched(
     assert store.audience_labels.queue_counts(db) == (1, 0, None)
 
 
-@pytest.mark.parametrize(
-    "interruption", ["failure", "exhausted", "paused", "credentials"]
-)
+@pytest.mark.parametrize("interruption", ["failure", "exhausted", "credentials"])
 def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     db, prompts, monkeypatch, interruption
 ):
@@ -478,8 +476,6 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
         sid = json.loads(task.prompt)["statements"][0]["statement_id"]
         calls.append(sid)
         if blocked:
-            if interruption == "paused":
-                raise ai.usage.Paused("Paused: monthly AI budget reached.")
             raise ai.ModelError("Provider unavailable.")
         answer, _ = _answer((sid, [EXTERNAL.id]))
         return answer(task, config)
@@ -505,7 +501,7 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     audience_labelling.labelling_pass(db)
     assert store.audience_labels.backfill_requested(db)
     assert store.audience_labels.due_batch(db, 1)
-    if interruption in {"paused", "credentials"}:
+    if interruption == "credentials":
         assert store.audience_labels.queue_counts(db) == (2, 0, None)
     else:
         assert len(calls) == 1
@@ -516,7 +512,7 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     assert store.audience_labels.backfill_requested(db) == (interruption == "failure")
     assert not store.audience_labels.due_batch(db, 1)
     assert store.audience_labels.get_label(db, second if calls[0] == first else first)
-    if interruption in {"paused", "credentials"}:
+    if interruption == "credentials":
         assert _queued(db) == set()
     else:
         assert _queued(db) == {calls[0]}

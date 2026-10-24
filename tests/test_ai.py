@@ -790,19 +790,3 @@ def test_a_recorder_failure_never_fails_the_call() -> None:
         transport=httpx.MockTransport(lambda request: _reply(request, envelope))
     ) as client:
         assert ai.turn(_task(), _config("openai"), client=client).usage.output_tokens
-
-
-def test_a_gated_action_is_refused_before_the_provider_is_called() -> None:
-    sent: list[httpx.Request] = []
-    calls: list[ai.usage.Call] = []
-    ai.usage.install(
-        calls.append, lambda action: "Paused" if action == "draft_review" else None
-    )
-    with httpx.Client(transport=httpx.MockTransport(sent.append)) as client:
-        with ai.usage.attributed("draft_review"), pytest.raises(ai.usage.Paused):
-            ai.structured(
-                ai.StructuredTask("Judge", "Evidence", Result),
-                _config("openai"),
-                client=client,
-            )
-    assert sent == [] and calls == []

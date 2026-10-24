@@ -7,10 +7,8 @@ its review job are admin-only.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, Field, JsonValue
+from pydantic import BaseModel, JsonValue
 
 from .. import draft_review_settings as review_settings
 from .. import server
@@ -24,17 +22,9 @@ router = APIRouter(route_class=TimedRoute)
 
 class Backlog(BaseModel):
     draft_ids: list[str]
-    #: The tokens reviewing them all is likely to use, from what a review
-    #: has used over the last 30 days; None without a review on record, or
-    #: when an external agent reviews and the server uses no tokens.
-    estimated_tokens: int | None
     #: Reviews are queued for an external agent instead of run here.
     external_agent: bool
     job: BacklogJob | None
-
-
-class BacklogStart(BaseModel):
-    budget_tokens: int | None = Field(default=None, gt=0)
 
 
 class BacklogJobBody(BaseModel):
@@ -46,7 +36,7 @@ def draft_review_backlog(request: Request) -> Backlog:
     """Submitted drafts the current review configuration has not reached,
     oldest first, to offer reviewing them once when review is switched on,
     with the backlog review this process last started."""
-    from .. import ai_usage, draft_review_runs, drafts_store, timestamps
+    from .. import draft_review_runs
 
     _require_admin(request)
     try:
@@ -54,27 +44,21 @@ def draft_review_backlog(request: Request) -> Backlog:
         external = review_settings.load().external_agent
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
-    since = timestamps.of(datetime.now(UTC) - timedelta(days=30))
-    mean = ai_usage.mean_run_tokens(drafts_store.connection(), "draft_review", since)
     return Backlog(
         draft_ids=draft_ids,
-        estimated_tokens=None if mean is None or external else len(draft_ids) * mean,
         external_agent=external,
         job=draft_review_runs.backlog_job(),
     )
 
 
 @router.post("/api/draft-review/backlog")
-def review_draft_backlog(
-    request: Request, body: BacklogStart | None = None
-) -> BacklogJobBody:
+def review_draft_backlog(request: Request) -> BacklogJobBody:
     """Start reviewing the backlog oldest first, one draft at a time."""
     from .. import draft_review_runs
 
     _require_admin(request)
-    budget = None if body is None else body.budget_tokens
     try:
-        return BacklogJobBody(job=draft_review_runs.review_backlog(budget))
+        return BacklogJobBody(job=draft_review_runs.review_backlog())
     except review_settings.Unavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from None
 

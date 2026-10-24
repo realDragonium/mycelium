@@ -6,7 +6,7 @@ import { Link, type SettingsSection } from './router';
 import { enc, errorMessage, getJSON, putJSON } from './api';
 import { dataOf, useAsync, useOnSettingsSaved } from './use-async';
 
-type StepId = 'credentials' | 'models' | 'audiences' | 'profile' | 'github' | 'review' | 'budget';
+type StepId = 'credentials' | 'models' | 'audiences' | 'profile' | 'github' | 'review';
 interface SetupStep {
   id: StepId; title: string; status: 'done' | 'todo' | 'dismissed'; detail: string;
   section: SettingsSection; optional: boolean;

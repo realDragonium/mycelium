@@ -14,7 +14,6 @@ from mycelium import (
     setup_checklist,
     store,
 )
-from product_settings_helpers import set_product
 from settings_helpers import save_model, set_review_controls
 from test_reviewed_application import _app
 
@@ -44,7 +43,6 @@ def test_a_fresh_instance_lists_what_is_left(client):
         "profile": "todo",
         "github": "todo",
         "review": "todo",
-        "budget": "todo",
     }
     assert "used by Ask" in steps["credentials"]["detail"]
     assert steps["models"]["detail"].startswith("Choose a model for Ask, Ingestion")
@@ -79,7 +77,6 @@ def test_steps_complete_from_saved_settings(client, monkeypatch):
 
     _profile(None, "external-technical")
     set_review_controls(mode="off")
-    set_product(product_settings.AIBudgetSettings(monthly_limit_tokens=5_000_000))
     for action in model_settings.ACTIONS:
         if action != "draft_review":
             save_model(action, claude_model="claude-sonnet-5-5")
@@ -92,16 +89,16 @@ def test_steps_complete_from_saved_settings(client, monkeypatch):
 
 
 def test_dismissed_steps_count_as_settled(client):
-    for step in ("credentials", "models", "audiences", "profile", "github", "review"):
+    for step in ("credentials", "models", "audiences", "profile", "github"):
         assert (
             client.put(f"/api/setup/steps/{step}", json={"dismissed": True}).status_code
             == 200
         )
-    view = client.put("/api/setup/steps/budget", json={"dismissed": True}).json()
+    view = client.put("/api/setup/steps/review", json={"dismissed": True}).json()
     assert view["complete"] is True
     assert {step["status"] for step in view["steps"]} == {"dismissed"}
 
-    view = client.put("/api/setup/steps/budget", json={"dismissed": False}).json()
+    view = client.put("/api/setup/steps/review", json={"dismissed": False}).json()
     assert view["complete"] is False
 
 

@@ -27,7 +27,7 @@ from .product_settings import SetupStep
 
 Status = Literal["done", "todo", "dismissed"]
 #: The settings screen each step is completed on.
-Section = Literal["models", "audiences", "documentation", "review", "usage"]
+Section = Literal["models", "audiences", "documentation", "review"]
 
 ACTION_NAMES = model_settings.ACTION_NAMES
 PROVIDER_NAMES: dict[Provider, str] = {"claude": "Claude", "openai": "OpenAI"}
@@ -166,15 +166,6 @@ def _review(controls: draft_review_settings.ControlSnapshot) -> tuple[Status, st
     return "todo", "Choose whether submitted drafts get an automatic AI review."
 
 
-def _budget(prompts: sqlite3.Connection) -> tuple[Status, str]:
-    limit = product_settings.get(
-        product_settings.AIBudgetSettings, conn=prompts
-    ).monthly_limit_tokens
-    if limit > 0:
-        return "done", f"{limit:,} tokens a month."
-    return "todo", "Set a monthly token limit to be warned before AI use runs over."
-
-
 def blocked(review_mode: str, prompts: sqlite3.Connection) -> list[Blocked]:
     """Background workers that are on but lack provider credentials. In
     quarantine none of them runs, so none is blocked."""
@@ -254,7 +245,6 @@ def view(substrate: sqlite3.Connection) -> SetupView:
             True,
         ),
         ("review", "Draft review mode", _review(controls), "review", False),
-        ("budget", "Monthly AI budget", _budget(prompts), "usage", True),
     ]
     steps = [
         Step(

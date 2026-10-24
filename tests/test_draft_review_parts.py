@@ -421,7 +421,7 @@ def test_the_backlog_is_reviewed_oldest_first_and_pauses_on_request(monkeypatch)
     assert (finished.status, finished.reviewed) == ("finished", 3)
 
 
-def test_the_backlog_review_stops_at_its_budget(monkeypatch):
+def test_the_backlog_review_runs_to_the_end_counting_its_tokens(monkeypatch):
     def decide(context):
         with store.transaction(drafts_store.connection()):
             ai_usage.record(
@@ -440,15 +440,13 @@ def test_the_backlog_review_stops_at_its_budget(monkeypatch):
         return _assessment()
 
     _recording(monkeypatch, decide)
-    oldest, *rest = _waiting("Workspace", "Invoice", "Export")
+    drafts = _waiting("Workspace", "Invoice", "Export")
     _automatic()
 
-    draft_review_runs.review_backlog(budget_tokens=1500)
+    draft_review_runs.review_backlog()
     draft_review_runs.wait_backlog()
 
     job = draft_review_runs.backlog_job()
     assert job is not None
-    assert (job.status, job.reviewed, job.used_tokens) == ("paused", 1, 1000)
-    assert "backlog budget" in (job.detail or "")
-    assert server.get_draft(oldest)["status"] == "approved"
-    assert [server.get_draft(item)["status"] for item in rest] == ["submitted"] * 2
+    assert (job.status, job.reviewed, job.used_tokens) == ("finished", 3, 3000)
+    assert [server.get_draft(item)["status"] for item in drafts] == ["approved"] * 3

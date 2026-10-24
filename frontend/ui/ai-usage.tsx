@@ -1,11 +1,10 @@
-// AI usage: the tokens each action and model used over a period, the
-// largest recent runs, and the optional monthly token budget. Mycelium keeps
-// no prices; spend is on each provider's billing dashboard.
+// AI usage: the tokens each action and model used over a period and the
+// largest recent runs. Mycelium keeps no prices and sets no budget; spend and
+// spend limits are on each provider's billing dashboard.
 import { useCallback, useState, type ReactNode } from 'react';
 import { Card, LoadError, Loading, Notice, useMe } from './lib';
 import { Link } from './router';
 import { getJSON } from './api';
-import { ProductSettings } from './product-settings';
 import { useAsync } from './use-async';
 
 interface TokenCounts { calls: number; input_tokens: number; cached_tokens: number; output_tokens: number; tokens: number }
@@ -14,8 +13,7 @@ interface Day { day: string; calls: number; tokens: number }
 interface ActionUsage extends TokenCounts { action: string }
 interface ModelUsage extends TokenCounts { provider: string; model: string }
 interface RunUsage { action: string; run_id: string | null; draft_id: string | null; calls: number; tokens: number; last_at: string }
-export interface Budget { limit_tokens: number; used_tokens: number; percent: number; warn_percent: number; warning: boolean; paused: boolean; month_start: string }
-interface UsageView { days: number; report: { since: string; totals: Totals; days: Day[]; actions: ActionUsage[]; models: ModelUsage[]; runs: RunUsage[] }; budget: Budget | null }
+interface UsageView { days: number; report: { since: string; totals: Totals; days: Day[]; actions: ActionUsage[]; models: ModelUsage[]; runs: RunUsage[] } }
 
 const PERIODS = [7, 30, 90] as const;
 export const ACTION_LABELS: Record<string, string> = {
@@ -66,7 +64,7 @@ export function AIUsage() {
   if (!me) return <Loading what="your account" />;
   if (!isAdmin) return <Notice>Only administrators can see what AI actions use.</Notice>;
 
-  return <>
+  return (
     <Card title="Token usage" actions={<>
       <select className="input" value={period} aria-label="Period" onChange={e => setPeriod(Number(e.target.value))}>
         {PERIODS.map(p => <option key={p} value={p}>Last {p} days</option>)}
@@ -77,15 +75,13 @@ export function AIUsage() {
       {state.status === 'error' && <LoadError error={state.error} what="AI usage" onRetry={reload} />}
       {state.status === 'ready' && <UsageReport view={state.data} />}
     </Card>
-    <ProductSettings kinds={['ai_budget']} />
-  </>;
+  );
 }
 
 function UsageReport({ view }: { view: UsageView }) {
-  const { report, budget } = view;
+  const { report } = view;
   const t = report.totals;
   return <>
-    {budget && <BudgetLine budget={budget} />}
     <dl className="kv-grid">
       <dt>Tokens</dt><dd><strong>{tokens(t.tokens)}</strong> · {tokens(t.input_tokens)} input · {tokens(t.cached_tokens)} cached · {tokens(t.output_tokens)} output</dd>
       <dt>Model calls</dt><dd>{t.calls}{t.failed_calls > 0 && <span className="muted"> · {t.failed_calls} failed or truncated (counted, since they used tokens)</span>}</dd>
@@ -108,7 +104,7 @@ function UsageReport({ view }: { view: UsageView }) {
         ))}</tbody>
       </table>
     )}
-    <p className="hint">Input counts uncached input and cache writes; cached counts cache reads. For what this cost, see each provider's billing dashboard. Days and months are UTC.</p>
+    <p className="hint">Input counts uncached input and cache writes; cached counts cache reads. For what this cost, and to set spend limits, see each provider's billing dashboard. Days are UTC.</p>
   </>;
 }
 
@@ -121,16 +117,5 @@ function TokenTable({ rows }: { rows: (TokenCounts & { key: string; label: React
         <tr key={r.key}><td>{r.label}</td><td className="num">{r.calls}</td><td className="num">{tokens(r.input_tokens)}</td><td className="num">{tokens(r.cached_tokens)}</td><td className="num">{tokens(r.output_tokens)}</td><td className="num">{tokens(r.tokens)}</td></tr>
       ))}</tbody>
     </table>
-  );
-}
-
-export function BudgetLine({ budget }: { budget: Budget }) {
-  const tone = budget.paused ? 'error' : budget.warning ? 'warn' : 'info';
-  return (
-    <Notice tone={tone}>
-      This month: {tokens(budget.used_tokens)} of the {tokens(budget.limit_tokens)} token budget ({budget.percent}%).
-      {budget.paused ? ' Background actions (audience labelling, draft review, connect pass) are paused until next month or until the budget is raised.'
-        : budget.warning ? ` Past the ${budget.warn_percent}% warning threshold.` : ''}
-    </Notice>
   );
 }

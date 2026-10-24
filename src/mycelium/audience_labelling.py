@@ -227,8 +227,6 @@ def label_batches(conn: sqlite3.Connection, *, call: Call = _call) -> int | None
     for chunk, future in zip(chunks, futures, strict=True):
         try:
             result, _ = future.result()
-        except ai.usage.Paused as exc:
-            first_error = first_error or exc
         except Exception as exc:
             first_error = first_error or exc
             with store.transaction(conn):
@@ -535,8 +533,6 @@ def drain(conn: sqlite3.Connection, *, call: Call = _call) -> int:
     while True:
         try:
             labelled = label_batches(conn, call=call)
-        except ai.usage.Paused:
-            return total
         except Exception:
             logger.warning("audience labelling batch failed", exc_info=True)
             return total

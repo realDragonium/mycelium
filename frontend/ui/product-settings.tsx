@@ -10,7 +10,7 @@ const TITLES: Record<string, string> = {
   ask: 'Questions (Ask)', ingest: 'Ingestion', docgen: 'Document generation',
   draft_review: 'Draft review', alias_discovery: 'Alias discovery', concurrency: 'Concurrent runs',
   documentation: 'Documentation delivery', audience_labelling: 'Audience labelling',
-  documentation_planning: 'Documentation planning', ai_budget: 'Monthly budget', documentation_maintenance: 'Documentation maintenance', connect: 'Connecting statements',
+  documentation_planning: 'Documentation planning', documentation_maintenance: 'Documentation maintenance', connect: 'Connecting statements',
   media: 'Screenshots and recordings',
 };
 
@@ -18,7 +18,7 @@ const TITLES: Record<string, string> = {
 const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   max_tokens: ['Maximum output tokens', 1, 1], max_retries: ['Request retries', 0, 1],
   request_timeout_s: ['Request timeout (seconds)', 0.1, 'any'], op_cap: ['Maximum tool operations', 1, 1],
-  wall_clock_s: ['Run time budget (seconds)', 0.1, 'any'], thinking: ['Claude extended thinking'],
+  wall_clock_s: ['Run time limit (seconds)', 0.1, 'any'], thinking: ['Claude extended thinking'],
   cache: ['Claude prompt caching'], recon_k: ['Context search results', 1, 1],
   max_input_chars: ['Maximum input characters', 1, 1],
   max_prompt_chars: ['Maximum prompt characters', 1, 1], model_loops: ['Shared AI runs', 1, 1],
@@ -29,8 +29,6 @@ const FIELDS: Record<string, [string, number?, (number | 'any')?]> = {
   max_entities: ['Concepts in the overview', 1, 1], max_capabilities: ['Key statements in the overview', 0, 1],
   max_items: ['Maximum proposed documents', 1, 1], max_uncovered: ['Uncovered statements per plan', 0, 1], coverage_min_statements: ['Coverage gap from statements', 1, 1],
   replan_hint_statements: ['Re-plan hint after new statements', 1, 1], approve_batch: ['Items per batch approval', 1, 1],
-  monthly_limit_tokens: ['Monthly budget in tokens (0 for none)', 0, 1], warn_percent: ['Warn admins at percent of budget', 1, 1],
-  pause_background: ['Pause background actions at 100%'],
   quiet_minutes: ['Quiet minutes before an automatic revision', 0, 1], revisions_per_day: ['Automatic revisions per profile per day', 0, 1],
   max_run_tokens: ['Most tokens per run (0 for no cap)', 0, 1], max_draft_tokens: ['Most tokens to review one draft (0 for no cap)', 0, 1],
   image_max_bytes: ['Largest image (bytes)', 1, 1], video_max_bytes: ['Largest video (bytes)', 1, 1],
@@ -190,8 +188,9 @@ function ProductSettingsSection({ snapshot, data, onOptions }: { snapshot: Secti
             <p className="hint">
               {kind === 'ask' && 'Quick questions keep their smaller built-in limits. Thinking and caching apply when Claude is selected. '}
               {['ingest', 'docgen'].includes(kind) && 'Extended thinking applies when Claude is selected; reasoning effort is set with each action’s model. '}
+              {kind === 'draft_review' && 'The token cap refuses a draft whose review could run away; split such a draft into smaller ones. It guards one review, not spend: set spend limits on each provider’s billing dashboard. '}
+              {kind === 'connect' && 'The token cap stops a runaway connect run. It guards one run, not spend: set spend limits on each provider’s billing dashboard. '}
               {kind === 'concurrency' ? 'Lower limits let running work finish and hold new runs until capacity frees up.'
-                : kind === 'ai_budget' ? 'A soft limit on tokens used per UTC calendar month, counting input, cache reads and writes, and output. Admins see a banner once usage passes the warning percentage. With pausing on, reaching 100% stops audience labelling, draft review and the connect pass from calling a model until the month ends or the budget is raised; Ask, ingest, documentation and alias discovery always run.'
                 : 'Saved limits apply to new runs.'}
             </p>
           </>}

@@ -281,8 +281,8 @@ SWEEP_INTERVAL_S = 60.0
 
 @request_timing.tracked("background draft review sweep")
 def sweep(now: datetime | None = None) -> list[str]:
-    """Resume budget-paused reviews and retry failed reviews after backoff.
-    Returns the draft ids started."""
+    """Resume reviews an earlier version's AI budget paused and retry failed
+    reviews after backoff. Returns the draft ids started."""
     now = now or datetime.now(UTC)
     try:
         settings = _settings()
@@ -292,11 +292,6 @@ def sweep(now: datetime | None = None) -> list[str]:
         return []
     started = []
     conn = drafts_store.connection()
-    budget = product_settings.get(product_settings.AIBudgetSettings)
-    if not settings.external_agent and ai_usage.paused_reason(
-        conn, "draft_review", budget, now
-    ):
-        return []
     for row in drafts_store.list_drafts(conn, "submitted"):
         run = draft_review_store.latest(conn, row["id"])
         if run is None or not _retry_due(run, now):
@@ -398,8 +393,6 @@ class BacklogJob(BaseModel):
     picks up the drafts still waiting."""
 
     status: Literal["running", "paused", "finished"] = "running"
-    #: The most tokens the job may use; None leaves only the monthly AI budget.
-    budget_tokens: int | None = None
     used_tokens: int = 0
     reviewed: int = 0
     remaining: int = 0
@@ -419,16 +412,16 @@ def backlog_job() -> BacklogJob | None:
         return None if _backlog_job is None else _backlog_job.model_copy()
 
 
-def review_backlog(budget_tokens: int | None = None) -> BacklogJob:
-    """Start reviewing the backlog oldest first, stopping before a draft
-    whose likely token use would pass `budget_tokens`."""
+def review_backlog() -> BacklogJob:
+    """Start reviewing the backlog oldest first, until no waiting draft is
+    left."""
     global _backlog_job
     if reason := _backlog_unavailable():
         raise ValueError(reason)
     with _backlog_lock:
         if _backlog_job is not None and _backlog_job.status != "finished":
             raise ValueError("a backlog review is already started; resume it")
-        _backlog_job = BacklogJob(budget_tokens=budget_tokens, remaining=len(backlog()))
+        _backlog_job = BacklogJob(remaining=len(backlog()))
         _backlog_attempted.clear()
         _drain_in_background()
         return _backlog_job.model_copy()
@@ -513,7 +506,7 @@ def _next_backlog_draft() -> str | None:
     """The oldest waiting draft this job has not tried, or None once the
     job pauses or finishes."""
     waiting = [item for item in backlog() if item not in _backlog_attempted]
-    hold = _backlog_unavailable() or _backlog_spent()
+    hold = _backlog_unavailable()
     with _backlog_lock:
         job = _backlog_job
         if job is None or job.status != "running":
@@ -530,28 +523,6 @@ def _next_backlog_draft() -> str | None:
             return None
         _backlog_attempted.add(waiting[0])
         return waiting[0]
-
-
-def _backlog_spent() -> str | None:
-    if _settings().external_agent:
-        return None
-    conn = drafts_store.connection()
-    budget = product_settings.get(product_settings.AIBudgetSettings)
-    if reason := ai_usage.paused_reason(conn, "draft_review", budget):
-        return reason
-    with _backlog_lock:
-        job = _backlog_job
-        if job is None or job.budget_tokens is None:
-            return None
-        used, limit = job.used_tokens, job.budget_tokens
-    since = timestamps.of(datetime.now(UTC) - timedelta(days=30))
-    next_draft = ai_usage.mean_run_tokens(conn, "draft_review", since) or 0
-    if used + next_draft <= limit:
-        return None
-    return (
-        f"Stopped at the backlog budget: {used:,} of {limit:,} tokens used, "
-        f"and the next draft likely uses about {next_draft:,}. Resume to go on."
-    )
 
 
 def _wait_for(draft_id: str) -> None:
@@ -1118,11 +1089,6 @@ def _execute(
         run.knowledge_preconditions = _supporting_preconditions(inspection, reads)
         _finish(run, inspection, settings, reads)
         run.status = "completed"
-        run.finished_at = timestamps.now()
-        _save(run)
-    except ai.usage.Paused as exc:
-        run.status = "paused"
-        run.detail = str(exc)
         run.finished_at = timestamps.now()
         _save(run)
     except Exception as exc:

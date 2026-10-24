@@ -71,7 +71,8 @@ REWRITES: dict[tuple[str, str], str] = {
         "v24 moves its rows into curation_attempts as the connect pass's looks"
     ),
     ("mycelium-prompts.db", "product_settings"): (
-        "startup lifts a saved ingest wall clock still at the old 120 s default"
+        "startup lifts a saved ingest wall clock still at the old 120 s default "
+        "and drops the removed AI budget section"
     ),
     ("mycelium-drafts.db", "research_runs"): (
         "the drafts store drops the removed research feature's run history"

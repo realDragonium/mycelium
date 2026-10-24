@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 from pydantic import ValidationError
 
-from mycelium import auth, github_connections, github_credentials, prompt_store
+from mycelium import auth, backup, github_connections, github_credentials, prompt_store
 from mycelium import product_settings as settings
 from mycelium.ask.config import AskConfig, for_depth
 from mycelium.model_capacity import Capacity
@@ -114,20 +114,6 @@ def test_an_outgrown_default_is_raised_once_from_the_old_value(db, model, field,
             2_000_000,
             False,
         ),
-        (
-            settings.AIBudgetSettings,
-            {"monthly_limit_usd": 0.0},
-            "monthly_limit_tokens",
-            0,
-            False,
-        ),
-        (
-            settings.AIBudgetSettings,
-            {"monthly_limit_usd": 50.0},
-            "monthly_limit_tokens",
-            0,
-            True,
-        ),
     ],
 )
 def test_a_saved_dollar_limit_takes_the_token_default_or_no_limit(
@@ -142,6 +128,58 @@ def test_a_saved_dollar_limit_takes_the_token_default_or_no_limit(
         settings.replace_dollar_limits(db)
     assert getattr(settings.get(model), field) == expected
     assert ("keeps no prices" in caplog.text) is logged
+
+
+@pytest.mark.parametrize(
+    ("saved", "logged"),
+    [
+        ({"monthly_limit_tokens": 0, "warn_percent": 80}, False),
+        ({"monthly_limit_tokens": 5_000_000, "pause_background": True}, True),
+        ({"monthly_limit_usd": 50.0}, True),
+    ],
+)
+def test_upgrading_drops_the_removed_ai_budget(db, caplog, saved, logged):
+    db.execute(
+        "INSERT INTO product_settings VALUES ('ai_budget', 1, ?)",
+        (json.dumps({"kind": "ai_budget"} | saved),),
+    )
+    db.execute(
+        "INSERT INTO product_settings VALUES ('setup', 1, ?)",
+        (json.dumps({"kind": "setup", "dismissed": ["budget", "github"]}),),
+    )
+    db.commit()
+    prompt_store.migrate(db)
+    assert (
+        db.execute(
+            "SELECT 1 FROM product_settings WHERE section = 'ai_budget'"
+        ).fetchone()
+        is None
+    )
+    assert settings.get(settings.SetupSettings).dismissed == ("github",)
+    assert ("removed the monthly AI budget" in caplog.text) is logged
+
+
+def test_an_archive_with_an_ai_budget_still_restores(tmp_path, caplog):
+    sections = [
+        {"kind": "ai_budget", "monthly_limit_tokens": 5_000_000},
+        {"kind": "setup", "dismissed": ["budget", "github"]},
+    ]
+    (tmp_path / "product-settings.json").write_text(
+        json.dumps(
+            {
+                "sections": [{"revision": 1, "settings": item} for item in sections],
+                "github_bindings": {},
+            }
+        )
+    )
+
+    archive = backup._archived_product_settings(tmp_path, required=True)
+
+    assert archive is not None
+    assert [item.settings for item in archive.sections] == [
+        settings.SetupSettings(dismissed=("github",))
+    ]
+    assert "removed the monthly AI budget of 5,000,000 tokens" in caplog.text
 
 
 def test_independent_cas_and_unchanged_save(db):

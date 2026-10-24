@@ -7,7 +7,7 @@ of a worker thread's own context, `attribute`). A call made outside any
 attribution is still recorded, as `other`.
 
 The package stays free of storage: the server installs a `Recorder` that
-persists calls and a `Gate` that may refuse one before it is sent.
+persists calls.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 
-from .types import IncompleteTurn, ModelConfig, ModelError, Usage
+from .types import IncompleteTurn, ModelConfig, Usage
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,24 +45,17 @@ class Call:
     draft_id: str | None
 
 
-class Paused(ModelError):
-    """The call was refused before reaching the provider."""
-
-
 Recorder = Callable[[Call], None]
-#: Returns why the action may not call a model now, or None to let it.
-Gate = Callable[[str], str | None]
 
 _attribution: ContextVar[Attribution | None] = ContextVar(
     "ai_usage_attribution", default=None
 )
 _recorder: Recorder | None = None
-_gate: Gate | None = None
 
 
-def install(recorder: Recorder | None, gate: Gate | None = None) -> None:
-    global _recorder, _gate
-    _recorder, _gate = recorder, gate
+def install(recorder: Recorder | None) -> None:
+    global _recorder
+    _recorder = recorder
 
 
 def current() -> Attribution:
@@ -113,9 +106,6 @@ def metered(config: ModelConfig) -> Iterator[Callable[[Usage], None]]:
     """Meter one call. The block reports its usage through the yielded
     callback; a failure is recorded with the usage it carried, if any."""
     who = current()
-    reason = _refusal(who.action)
-    if reason is not None:
-        raise Paused(reason)
     started = time.monotonic()
     reported: list[Usage] = []
     try:
@@ -125,16 +115,6 @@ def metered(config: ModelConfig) -> Iterator[Callable[[Usage], None]]:
         _record(config, who, used, started, ok=False)
         raise
     _record(config, who, reported[-1] if reported else Usage(), started, ok=True)
-
-
-def _refusal(action: str) -> str | None:
-    if _gate is None:
-        return None
-    try:
-        return _gate(action)
-    except Exception:  # an unreadable budget must not stop every action
-        _LOG.warning("could not check the AI budget", exc_info=True)
-        return None
 
 
 def _record(

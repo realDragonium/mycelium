@@ -275,58 +275,54 @@ def _openai_batch(texts: list[str], configured: Settings) -> list[list[float]]:
         max_tokens=1,
         request_timeout_s=configured.timeout_s,
     )
-    try:
-        with usage.attributed("embedding"), usage.metered(config) as report:
-            for attempt in range(MAX_RETRIES + 1):
+    with usage.attributed("embedding"), usage.metered(config) as report:
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = _http_client().post(
+                    "https://api.openai.com/v1/embeddings",
+                    json={
+                        "model": configured.model,
+                        "input": texts,
+                        "dimensions": vector.DIM,
+                        "encoding_format": "float",
+                    },
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=configured.timeout_s,
+                )
+            except httpx.RequestError as exc:
+                if attempt == MAX_RETRIES:
+                    raise EmbeddingError(
+                        f"OpenAI embedding request failed for {configured.model}"
+                    ) from exc
+            else:
+                transient = response.status_code in (408, 409, 429) or (
+                    response.status_code >= 500
+                )
+                if response.is_error:
+                    if transient and attempt < MAX_RETRIES:
+                        _retry_delay(attempt, response.headers.get("retry-after"))
+                        continue
+                    raise EmbeddingError(
+                        f"OpenAI embedding request failed (HTTP {response.status_code})"
+                    )
                 try:
-                    response = _http_client().post(
-                        "https://api.openai.com/v1/embeddings",
-                        json={
-                            "model": configured.model,
-                            "input": texts,
-                            "dimensions": vector.DIM,
-                            "encoding_format": "float",
-                        },
-                        headers={"Authorization": f"Bearer {key}"},
-                        timeout=configured.timeout_s,
+                    parsed = _OpenAIResponse.model_validate_json(response.content)
+                except ValidationError as exc:
+                    raise EmbeddingError(
+                        f"OpenAI returned a malformed response for {configured.model}"
+                    ) from exc
+                ordered = sorted(parsed.data, key=lambda item: item.index)
+                if [item.index for item in ordered] != list(range(len(texts))):
+                    raise EmbeddingError(
+                        f"OpenAI returned a malformed response for {configured.model}"
                     )
-                except httpx.RequestError as exc:
-                    if attempt == MAX_RETRIES:
-                        raise EmbeddingError(
-                            f"OpenAI embedding request failed for {configured.model}"
-                        ) from exc
-                else:
-                    transient = response.status_code in (408, 409, 429) or (
-                        response.status_code >= 500
-                    )
-                    if response.is_error:
-                        if transient and attempt < MAX_RETRIES:
-                            _retry_delay(attempt, response.headers.get("retry-after"))
-                            continue
-                        raise EmbeddingError(
-                            "OpenAI embedding request failed "
-                            f"(HTTP {response.status_code})"
-                        )
-                    try:
-                        parsed = _OpenAIResponse.model_validate_json(response.content)
-                    except ValidationError as exc:
-                        raise EmbeddingError(
-                            f"OpenAI returned a malformed response for {configured.model}"
-                        ) from exc
-                    ordered = sorted(parsed.data, key=lambda item: item.index)
-                    if [item.index for item in ordered] != list(range(len(texts))):
-                        raise EmbeddingError(
-                            f"OpenAI returned a malformed response for {configured.model}"
-                        )
-                    vectors = [
-                        _validate_vector(item.embedding, configured.model)
-                        for item in ordered
-                    ]
-                    report(Usage(input_tokens=parsed.usage.prompt_tokens))
-                    return vectors
-                _retry_delay(attempt)
-    except usage.Paused as exc:
-        raise EmbeddingError(f"OpenAI embeddings are paused: {exc}") from exc
+                vectors = [
+                    _validate_vector(item.embedding, configured.model)
+                    for item in ordered
+                ]
+                report(Usage(input_tokens=parsed.usage.prompt_tokens))
+                return vectors
+            _retry_delay(attempt)
     raise EmbeddingError(f"OpenAI embedding request failed for {configured.model}")
 
 

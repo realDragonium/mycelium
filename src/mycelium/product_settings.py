@@ -224,17 +224,6 @@ class ConcurrencySettings(SettingsModel):
     documentation_runs: int = Field(default=2, gt=0)
 
 
-class AIBudgetSettings(SettingsModel):
-    kind: Literal["ai_budget"] = "ai_budget"
-    #: Tokens per UTC calendar month, as `ai_usage` counts them; 0 sets no
-    #: budget.
-    monthly_limit_tokens: int = Field(default=0, ge=0)
-    warn_percent: int = Field(default=80, gt=0, le=100)
-    #: At 100%, refuse model calls from background actions until the month
-    #: ends or the budget is raised. Interactive actions are never paused.
-    pause_background: bool = False
-
-
 class MediaSettings(SettingsModel):
     """Limits and freshness for screenshots and recordings."""
 
@@ -248,9 +237,7 @@ class MediaSettings(SettingsModel):
     product_version: str = Field(default="", max_length=100)
 
 
-SetupStep = Literal[
-    "credentials", "models", "audiences", "profile", "github", "review", "budget"
-]
+SetupStep = Literal["credentials", "models", "audiences", "profile", "github", "review"]
 
 
 class SetupSettings(SettingsModel):
@@ -365,7 +352,6 @@ Section = Literal[
     "connect",
     "concurrency",
     "documentation",
-    "ai_budget",
     "setup",
     "media",
     "model_catalog",
@@ -382,7 +368,6 @@ Body = Annotated[
     | ConnectSettings
     | ConcurrencySettings
     | DocumentationSettings
-    | AIBudgetSettings
     | SetupSettings
     | MediaSettings
     | ModelCatalogSettings,
@@ -401,7 +386,6 @@ DEFAULTS: tuple[Body, ...] = (
     ConnectSettings(),
     ConcurrencySettings(),
     DocumentationSettings(),
-    AIBudgetSettings(),
     SetupSettings(),
     MediaSettings(),
     ModelCatalogSettings(),
@@ -456,7 +440,6 @@ T = TypeVar(
     | ConnectSettings
     | ConcurrencySettings
     | DocumentationSettings
-    | AIBudgetSettings
     | SetupSettings
     | MediaSettings
     | ModelCatalogSettings,
@@ -591,7 +574,6 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         AliasDiscoverySettings
         | AudienceLabellingSettings
         | DocumentationPlanningSettings
-        | AIBudgetSettings
         | DocumentationMaintenanceSettings
         | ConnectSettings
         | SetupSettings
@@ -723,7 +705,6 @@ def raise_outgrown_defaults(conn: sqlite3.Connection) -> None:
 #: Dollar limits earlier versions saved, per section: the field, its shipped
 #: default and the token field that replaced it.
 _DOLLAR_LIMITS = {
-    "ai_budget": ("monthly_limit_usd", 0.0, "monthly_limit_tokens"),
     "draft_review": ("max_cost_usd", 1.0, "max_draft_tokens"),
     "connect": ("max_cost_usd", 0.5, "max_run_tokens"),
 }
@@ -769,6 +750,68 @@ def replace_dollar_limits(conn: sqlite3.Connection) -> None:
             "WHERE section = ?",
             (json.dumps(settings), kind),
         )
+
+
+def budget_removed(settings: dict[str, object]) -> str | None:
+    """The log line for a saved `ai_budget` section that set a limit, or None.
+    Mycelium has no AI budget any more: spend limits are set in each
+    provider's console, and per-run token limits guard against runaway runs."""
+    tokens = settings.get("monthly_limit_tokens")
+    if isinstance(tokens, int) and tokens:
+        limit = f"{tokens:,} tokens"
+    elif dollars := settings.get("monthly_limit_usd"):
+        limit = f"${dollars}"
+    else:
+        return None
+    return (
+        f"removed the monthly AI budget of {limit}; set spend limits in each "
+        "provider's console instead"
+    )
+
+
+def without_budget_step(settings: dict[str, object]) -> bool:
+    """Drop the removed budget step from a saved setup section's dismissed
+    steps, in place. Returns whether it was there."""
+    dismissed = settings.get("dismissed")
+    if (
+        settings.get("kind") != "setup"
+        or not isinstance(dismissed, list)
+        or "budget" not in dismissed
+    ):
+        return False
+    settings["dismissed"] = [step for step in dismissed if step != "budget"]
+    return True
+
+
+def drop_budget(conn: sqlite3.Connection) -> None:
+    """Remove what the monthly AI budget left behind. Strict settings models
+    would otherwise refuse the leftover rows."""
+    row = conn.execute(
+        "SELECT body_json FROM product_settings WHERE section = 'ai_budget'"
+    ).fetchone()
+    if row is not None:
+        saved = _json_object(row[0])
+        if saved is not None and (note := budget_removed(saved)):
+            logger.warning("Mycelium sets no AI budget; %s", note)
+        conn.execute("DELETE FROM product_settings WHERE section = 'ai_budget'")
+    row = conn.execute(
+        "SELECT body_json FROM product_settings WHERE section = 'setup'"
+    ).fetchone()
+    setup = None if row is None else _json_object(row[0])
+    if setup is not None and without_budget_step(setup):
+        conn.execute(
+            "UPDATE product_settings SET revision = revision + 1, body_json = ? "
+            "WHERE section = 'setup'",
+            (json.dumps(setup),),
+        )
+
+
+def _json_object(text: str) -> dict[str, object] | None:
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return None  # unreadable settings stay disabled until an admin saves
+    return value if isinstance(value, dict) else None
 
 
 class ArchivedSection(SettingsModel):
