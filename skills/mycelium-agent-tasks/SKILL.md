@@ -71,10 +71,14 @@ concrete finding saying where and what is wrong. Your review is recorded
 either way; a failed one sends the document back to its writer.
 
 **`documentation_planning`.** Propose the documents the profile's audience
-needs from the overview in `brief.input`, most valuable first. Cite only the
-statements and templates the overview lists. Items that name what the
-audience may not see, templates the profile lacks or documents it does not
-own are dropped.
+needs from the overview in `brief.input`, most valuable first. Place the
+`uncovered_statements` (visible, but cited by no document of the profile)
+a reader needs: list one in the `statement_ids` of an `update` of the
+existing document it belongs in (`existing_documents` gives each one's
+opening), or group it with related ones in a `create`. Cite only the
+statements and templates the brief lists. Items that name what the audience
+may not see, templates the profile lacks or documents it does not own are
+dropped.
 
 **`audience_labelling`.** Label every statement in `brief.input` exactly
 once, with audience ids from the brief and a reason. The server applies them
