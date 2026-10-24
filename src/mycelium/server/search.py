@@ -591,13 +591,12 @@ def find_statement_connections(
 def find_duplicates(
     threshold: float | None = None,
     limit: int = 50,
-    offset: int = 0,
 ) -> list[dict[str, Any]]:
     """Audit the whole substrate for near-duplicate statement pairs.
 
     Walks every statement, queries the vector index for its closest
     neighbours, and returns pairs with cosine similarity at or above
-    `threshold`. Sorted by score descending, paged by `offset` and `limit`. Pairs
+    `threshold`. Sorted by score descending, capped at `limit`. Pairs
     are reported once (not as both `(A,B)` and `(B,A)`).
 
     The configured embedding model supplies the default (0.92 for
@@ -657,7 +656,7 @@ def find_duplicates(
             )
 
     pairs.sort(key=lambda p: p["score"], reverse=True)
-    return pairs[offset : offset + limit]
+    return pairs[:limit]
 
 
 @tool

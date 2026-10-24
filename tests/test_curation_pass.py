@@ -351,7 +351,7 @@ def test_duplicate_discovery_pages_past_settled_candidates(configured):
     configured.setattr(
         server_curation,
         "find_duplicates",
-        lambda threshold=None, limit=50, offset=0: raw[offset : offset + limit],
+        lambda threshold=None, limit=50: raw[:limit],
     )
     configured.setattr(
         server_curation,

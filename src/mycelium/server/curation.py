@@ -186,6 +186,9 @@ def _concept(
     )
 
 
+STATEMENT_AUDIT_PAIRS = 2_000
+
+
 def duplicate_candidates(
     *, limit: int = 200, exclude_skipped_by: str | None = None
 ) -> tuple[list[curation.DuplicateCandidate], dict[str, dict[str, JsonValue]]]:
@@ -195,54 +198,50 @@ def duplicate_candidates(
     scores: dict[str, float] = {}
     now = datetime.now(UTC)
     page_size = 200
-    offset = 0
-    while len(candidates) < limit:
-        raw_page = find_duplicates(limit=page_size, offset=offset)
-        parsed: dict[str, _StatementDuplicate] = {}
-        page_candidates: list[curation.DuplicateCandidate] = []
-        for raw_statement in raw_page:
-            statement_pair = _StatementDuplicate.model_validate(raw_statement)
-            a_id, b_id = sorted((statement_pair.a_id, statement_pair.b_id))
-            item_id = f"{a_id}~{b_id}"
-            text = curation.item_text(_db(), "duplicate", item_id)
-            if text is not None:
-                parsed[item_id] = statement_pair
-                page_candidates.append(curation.DuplicateCandidate(item_id, text))
-        available = curation.available_duplicate_candidates(
-            _db(),
-            _drafts_db(),
-            page_candidates,
-            limit=limit - len(candidates),
-            now=now,
-            exclude_skipped_by=exclude_skipped_by,
-        )
-        for candidate in available:
-            statement_pair = parsed[candidate.id]
-            a_id, b_id = candidate.id.split("~")
-            sides: dict[str, dict[str, JsonValue]] = {}
-            for statement_id in (a_id, b_id):
-                row = store.get_statement(_db(), statement_id)
-                if row is not None:
-                    sides[statement_id] = {
-                        "id": statement_id,
-                        "kind": str(row["kind"]),
-                        "text": str(row["text"]),
-                    }
-            if len(sides) != 2:
-                continue
-            candidates.append(candidate)
-            scores[candidate.id] = statement_pair.score
-            contexts[candidate.id] = _json.validate_python(
-                {
-                    "kind": "statement",
-                    "a": sides[a_id],
-                    "b": sides[b_id],
-                    "score": statement_pair.score,
+    # One audit walks every statement, so it runs once with a wide bound
+    # rather than once per page.
+    parsed: dict[str, _StatementDuplicate] = {}
+    statement_candidates: list[curation.DuplicateCandidate] = []
+    for raw_statement in find_duplicates(limit=STATEMENT_AUDIT_PAIRS):
+        statement_pair = _StatementDuplicate.model_validate(raw_statement)
+        a_id, b_id = sorted((statement_pair.a_id, statement_pair.b_id))
+        item_id = f"{a_id}~{b_id}"
+        text = curation.item_text(_db(), "duplicate", item_id)
+        if text is not None:
+            parsed[item_id] = statement_pair
+            statement_candidates.append(curation.DuplicateCandidate(item_id, text))
+    available = curation.available_duplicate_candidates(
+        _db(),
+        _drafts_db(),
+        statement_candidates,
+        limit=limit,
+        now=now,
+        exclude_skipped_by=exclude_skipped_by,
+    )
+    for candidate in available:
+        statement_pair = parsed[candidate.id]
+        a_id, b_id = candidate.id.split("~")
+        sides: dict[str, dict[str, JsonValue]] = {}
+        for statement_id in (a_id, b_id):
+            row = store.get_statement(_db(), statement_id)
+            if row is not None:
+                sides[statement_id] = {
+                    "id": statement_id,
+                    "kind": str(row["kind"]),
+                    "text": str(row["text"]),
                 }
-            )
-        offset += len(raw_page)
-        if len(raw_page) < page_size:
-            break
+        if len(sides) != 2:
+            continue
+        candidates.append(candidate)
+        scores[candidate.id] = statement_pair.score
+        contexts[candidate.id] = _json.validate_python(
+            {
+                "kind": "statement",
+                "a": sides[a_id],
+                "b": sides[b_id],
+                "score": statement_pair.score,
+            }
+        )
 
     concept_candidates: list[curation.DuplicateCandidate] = []
     offset = 0
