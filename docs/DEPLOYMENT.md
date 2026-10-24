@@ -405,7 +405,7 @@ up to the new build's defaults — see
 
 ### Upgrading an instance at schema v14
 
-An instance last deployed at substrate schema v14 runs ten migrations on
+An instance last deployed at substrate schema v14 runs eleven migrations on
 the first start of a current build:
 
 | Version | Change |
@@ -420,6 +420,7 @@ the first start of a current build:
 | v22 | Records when a curator label's statement text changed after the decision. |
 | v23 | Adds the connect pass's memory of the statements it looked at. |
 | v24 | Widens that memory to every curation item and adds the claims outside agents take on them. |
+| v25 | Lets an external audience grant wait for a curator's confirmation (see below). |
 
 The drafts and prompts databases upgrade themselves on the same start. The
 research feature's data is deleted, as are its settings (see
