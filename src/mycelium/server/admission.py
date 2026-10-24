@@ -17,7 +17,7 @@ import anyio
 import anyio.to_thread
 from mcp.server.mcpserver.exceptions import ToolError
 
-from .. import auth, request_timing
+from .. import agent_tasks, auth, request_timing
 from ..model_capacity import Capacity
 
 R = TypeVar("R")
@@ -104,6 +104,10 @@ def limiter_for(tool_name: str) -> anyio.CapacityLimiter | None:
     return limiter
 
 
+#: Not `PermissionError`: a filesystem one would carry a server path.
+_REFUSALS = (ValueError, auth.RoleRequired, agent_tasks.NotHeld)
+
+
 def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
     """Present `wrapper` to the MCP server as a coroutine that runs the real
     work in a worker thread, under this tool's bound.
@@ -129,10 +133,10 @@ def _offloaded(wrapper: Callable[..., Any]) -> Callable[..., Any]:
             return await _run(*args, **kwargs)
         except ToolError:
             raise
-        except (ValueError, auth.RoleRequired) as exc:
+        except _REFUSALS as exc:
             # The SDK hides the text of anything but a ToolError. These are the
-            # refusals a caller must read to correct itself; the HTTP layer
-            # reports the same ones as 4xx. Anything else stays hidden.
+            # refusals a caller must read to correct itself. Anything else
+            # stays hidden.
             raise ToolError(str(exc)) from exc
 
     async def _run(*args: Any, **kwargs: Any) -> Any:

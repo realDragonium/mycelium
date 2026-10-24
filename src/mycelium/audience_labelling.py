@@ -16,11 +16,12 @@ to an external audience waits for a curator (`grant_confirmation`).
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import sqlite3
-import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from pathlib import Path
 
@@ -102,11 +103,22 @@ Call = Callable[
     [ai.StructuredTask[Labelling], ai.ModelConfig], tuple[Labelling, ai.Usage]
 ]
 
+#: Labelling stays outside the shared model-loop budget, so a backfill never
+#: holds a slot interactive work waits for; this bounds its own concurrency.
+PARALLEL_BATCHES = 3
+
 
 def _call(
     task: ai.StructuredTask[Labelling], config: ai.ModelConfig
 ) -> tuple[Labelling, ai.Usage]:
     return ai.structured_with_usage(task, config)
+
+
+def _call_attributed(
+    call: Call, task: ai.StructuredTask[Labelling], config: ai.ModelConfig
+) -> tuple[Labelling, ai.Usage]:
+    with ai.usage.attributed("audience_labelling"):
+        return call(task, config)
 
 
 def _context(conn: sqlite3.Connection, statement_id: str) -> list[dict[str, str]]:
@@ -166,12 +178,13 @@ def _task(
     )
 
 
-def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
-    """Label one batch of due statements. Returns how many were labelled, or
-    None when nothing was due. Raises when the batch failed, after recording
-    the failure on its queue rows."""
+def label_batches(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
+    """Label up to `PARALLEL_BATCHES` batches of due statements at once.
+    Returns how many were labelled, or None when nothing was due. Stores the
+    batches that succeeded, records the failed ones on their queue rows, then
+    raises the first failure."""
     limits = product_settings.get(product_settings.AudienceLabellingSettings)
-    rows = store.audience_labels.due_batch(conn, limits.batch_size)
+    rows = store.audience_labels.due_batch(conn, limits.batch_size * PARALLEL_BATCHES)
     if not rows:
         return None
     live = audiences.live()
@@ -180,7 +193,6 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
         if not live:
             raise ValueError("No audiences are configured.")
         selected = model_settings.get("audience_labelling")
-        task = _task(conn, rows, live)
         config = ai.ModelConfig(
             provider=selected.provider,
             model=selected.model,
@@ -189,27 +201,56 @@ def label_batch(conn: sqlite3.Connection, *, call: Call = _call) -> int | None:
             request_timeout_s=limits.request_timeout_s,
             max_retries=limits.max_retries,
         )
-        from . import server  # local import: server owns the model-loop budget
-
-        with server.model_loop_slot(), ai.usage.attributed("audience_labelling"):
-            result, usage = call(task, config)
-    except ai.usage.Paused:
-        raise  # a spent budget is not this batch's failure; it stays due
+        chunks = [
+            rows[start : start + limits.batch_size]
+            for start in range(0, len(rows), limits.batch_size)
+        ]
+        tasks = [_task(conn, chunk, live) for chunk in chunks]
     except Exception as exc:
         with store.transaction(conn):
             store.audience_labels.record_failure(conn, ids, str(exc))
         raise
+
+    with ThreadPoolExecutor(max_workers=len(chunks)) as executor:
+        futures = [
+            executor.submit(
+                contextvars.copy_context().run,
+                _call_attributed,
+                call,
+                task,
+                config,
+            )
+            for task in tasks
+        ]
+
     cost = price(selected.provider, selected.model)
-    share = cost.cost_usd(usage) / len(rows) if cost is not None else None
-    return _apply(
-        conn,
-        rows,
-        result,
-        live=live,
-        model=selected.model,
-        share=share,
-        confirm_external_grants=limits.confirm_external_grants,
-    )
+    labelled = 0
+    first_error: Exception | None = None
+    for chunk, future in zip(chunks, futures, strict=True):
+        try:
+            result, usage = future.result()
+        except ai.usage.Paused as exc:
+            first_error = first_error or exc
+        except Exception as exc:
+            first_error = first_error or exc
+            with store.transaction(conn):
+                store.audience_labels.record_failure(
+                    conn, [str(row["id"]) for row in chunk], str(exc)
+                )
+        else:
+            share = cost.cost_usd(usage) / len(chunk) if cost is not None else None
+            labelled += _apply(
+                conn,
+                chunk,
+                result,
+                live=live,
+                model=selected.model,
+                share=share,
+                confirm_external_grants=limits.confirm_external_grants,
+            )
+    if first_error is not None:
+        raise first_error
+    return labelled
 
 
 def _apply(
@@ -500,7 +541,7 @@ def drain(conn: sqlite3.Connection, *, call: Call = _call) -> int:
     total = 0
     while True:
         try:
-            labelled = label_batch(conn, call=call)
+            labelled = label_batches(conn, call=call)
         except ai.usage.Paused:
             return total
         except Exception:
@@ -523,7 +564,7 @@ def backfill(*, relabel_ai: bool) -> Backfill:
     with store.transaction(conn):
         queued = store.audience_labels.enqueue_backfill(conn, relabel_ai=relabel_ai)
         started_at = store.audience_labels.queue_started_at(conn) or timestamps.now()
-    wake(force=True)
+    wake()
     return Backfill(started_at=started_at, queued=queued)
 
 
@@ -575,14 +616,10 @@ def clear_curator_label(statement_id: str) -> None:
 
 POLL_INTERVAL_S = 30.0
 _worker: workers.Worker[sqlite3.Connection] | None = None
-_forced = threading.Event()
 
 
-def wake(*, force: bool = False) -> None:
-    """Drain now. `force` drains even with automatic labelling off, because
-    an admin asked for it."""
-    if force:
-        _forced.set()
+def wake() -> None:
+    """Drain now."""
     if _worker is not None:
         _worker.wake()
 
@@ -606,11 +643,8 @@ def _confirming() -> bool:
 
 
 def labelling_pass(conn: sqlite3.Connection) -> None:
-    forced = _forced.is_set()
-    if forced or _automatic():
+    if _automatic() or store.audience_labels.backfill_requested(conn):
         drain(conn)
-        if forced and store.audience_labels.queue_counts(conn)[0] == 0:
-            _forced.clear()
 
 
 def start(data_dir: Path | str, *, poll_interval: float = POLL_INTERVAL_S) -> None:

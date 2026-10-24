@@ -676,6 +676,49 @@ def create_run(
     return run_id
 
 
+def readmit_run(
+    conn: sqlite3.Connection,
+    run_id: str,
+    *,
+    guideline_set: str | None,
+    document_type: str | None,
+    provider: str | None,
+    model: str | None,
+    reasoning_effort: str | None,
+    target_document_id: str | None,
+    target_revision: int | None,
+    revision_base: str | None,
+) -> None:
+    """Refresh an unfinished run's admission details without changing its identity."""
+    with conn:
+        if target_document_id is not None:
+            if target_revision is None:
+                raise ValueError(
+                    "target_revision is required for a document revision run"
+                )
+            conn.execute("BEGIN IMMEDIATE")
+            require_revision(conn, target_document_id, target_revision)
+        cur = conn.execute(
+            "UPDATE documentation_runs SET guideline_set = ?, document_type = ?, "
+            "provider = ?, model = ?, reasoning_effort = ?, "
+            "target_document_id = ?, target_revision = ?, revision_base = ? "
+            "WHERE id = ? AND finished_at IS NULL",
+            (
+                guideline_set,
+                document_type,
+                provider,
+                model,
+                reasoning_effort,
+                target_document_id,
+                target_revision,
+                revision_base,
+                run_id,
+            ),
+        )
+        if cur.rowcount == 0:
+            raise LookupError(f"unfinished documentation run not found: {run_id}")
+
+
 def mark_started(
     conn: sqlite3.Connection,
     run_id: str,
@@ -810,19 +853,41 @@ def count_active(conn: sqlite3.Connection) -> int:
     return int(row["n"])
 
 
-def mark_orphaned(conn: sqlite3.Connection) -> int:
-    # Called at server startup, when no worker thread can exist — so EVERY
-    # unfinished row is an orphan, including one stranded 'queued' by a crash
-    # between create_run and mark_started.
+def fail_unfinished(conn: sqlite3.Connection, error: str) -> int:
+    """Fail every unfinished server-run document generation."""
     cur = conn.execute(
         "UPDATE documentation_runs "
-        "SET finished_at = ?, outcome = 'failed', error = 'orphaned by restart', "
+        "SET finished_at = ?, outcome = 'failed', error = ?, "
         "summary = json_set(summary, '$.activity', NULL) "
         "WHERE finished_at IS NULL AND provider IS NOT 'agent'",
-        (_now(),),
+        (_now(), error),
     )
     conn.commit()
     return cur.rowcount
+
+
+def document_written_by(conn: sqlite3.Connection, run_id: str) -> str | None:
+    row = conn.execute(
+        "SELECT document_id FROM generated_document_revisions "
+        "WHERE run_id = ? ORDER BY revision DESC LIMIT 1",
+        (run_id,),
+    ).fetchone()
+    return None if row is None else str(row["document_id"])
+
+
+def reset_unfinished(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Reset unfinished server runs and return them in admission order."""
+    conn.execute(
+        "UPDATE documentation_runs SET started_at = NULL, summary = NULL "
+        "WHERE finished_at IS NULL AND provider IS NOT 'agent'"
+    )
+    conn.commit()
+    return list(
+        conn.execute(
+            "SELECT * FROM documentation_runs "
+            "WHERE finished_at IS NULL AND provider IS NOT 'agent' ORDER BY rowid"
+        ).fetchall()
+    )
 
 
 def serialize_run(row: sqlite3.Row) -> dict:

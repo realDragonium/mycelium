@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from mycelium import agent_tasks, docs_store, prompt_store, store, timestamps
+from mycelium import agent_tasks, doc_runs, docs_store, prompt_store, store, timestamps
 from mycelium.docgen import loop
 from mycelium.docgen.schema import ReviewCheck, ReviewRecord
 from test_principal_audience import (
@@ -255,7 +255,7 @@ def test_a_waiting_run_survives_a_restart(client, monkeypatch):  # noqa: F811
     _external_documentation(client, admin, monkeypatch)
     run = _request(client, _bearer("writer"))
 
-    assert docs_store.mark_orphaned(runtime._drafts_db()) == 0
+    assert doc_runs.resume_after_restart(runtime._drafts_db()) == (0, 0)
     current = _call(client, admin, "get_documentation_run", run_id=run["id"])
     assert current["status"] == "waiting_for_agent"
 

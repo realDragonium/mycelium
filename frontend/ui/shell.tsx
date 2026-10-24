@@ -26,7 +26,7 @@ import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, typ
 import { getJSON, getServerInfo, isScoped, type KnowledgeGap, type Me } from './api';
 import { ensureSubstrate, loadSubstrate, substrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
-import { useAsync, useOnSettingsSaved } from './use-async';
+import { dataOf, useAsync, useOnSettingsSaved, useRefreshWhileVisible } from './use-async';
 import { useSetup } from './setup';
 
 /* ---------------- Sidebar ---------------- */
@@ -144,18 +144,22 @@ const LOST_WITH: Record<string, string> = {
 
 // Not dismissible: the condition lasts until the files are restored and the
 // server restarts, and an operator should not have to read logs to find it.
+// Rechecked because an open tab outlives the server process it first asked;
+// the last answer stays up while a recheck is in flight or fails.
 function ServerBanners() {
-  const info = useAsync(getServerInfo).state;
-  if (info.status !== 'ready') return null;
+  const { state, reload } = useAsync(getServerInfo);
+  useRefreshWhileVisible(reload, 60_000);
+  const info = dataOf(state);
+  if (!info) return null;
   return <>
-    {info.data.quarantine && <div className="restore-banner notice warn" role="status">
+    {info.quarantine && <div className="restore-banner notice warn" role="status">
       <I.warn width="16" height="16" />
       <span>
         <strong>Quarantine.</strong> This server was started with <code>--quarantine</code>: background AI work, draft review and publishing to GitHub are off.
         Restart it without the flag once this copy is safe to act on.
       </span>
     </div>}
-    <PartialRestoreBanner missing={info.data.partial_restore} />
+    <PartialRestoreBanner missing={info.partial_restore} />
   </>;
 }
 

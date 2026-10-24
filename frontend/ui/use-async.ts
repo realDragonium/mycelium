@@ -54,3 +54,24 @@ export function useOnSettingsSaved(reload: () => void): void {
     return () => window.removeEventListener(SETTINGS_SAVED, reload);
   }, [reload]);
 }
+
+// Calls `reload` every `intervalMs` while the tab is visible, and as soon as
+// it becomes visible again or regains focus (memoize `reload`).
+export function useRefreshWhileVisible(reload: () => void, intervalMs: number): void {
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const start = () => { if (timer === undefined) timer = setInterval(reload, intervalMs); };
+    const stop = () => { clearInterval(timer); timer = undefined; };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') { reload(); start(); } else stop();
+    };
+    if (document.visibilityState === 'visible') start();
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', reload);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', reload);
+    };
+  }, [reload, intervalMs]);
+}

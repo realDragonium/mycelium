@@ -174,18 +174,12 @@ def _init(data_dir: Path) -> None:
 
     seed_prompt_texts()
 
-    orphaned_docs = docs_store.mark_orphaned(_drafts_db())
     from .. import doc_plans
 
     doc_plans.mark_orphaned(_drafts_db())
     from .. import document_maintenance
 
     document_maintenance.mark_interrupted(_drafts_db())
-    if orphaned_docs:
-        logger.warning(
-            "marked %d documentation run(s) failed: orphaned by restart",
-            orphaned_docs,
-        )
 
     # The .vec files are re-derivable from the substrate, so a backup may omit
     # them while keeping the *_vector_ids mappings in the DB. When a .vec is
@@ -246,6 +240,21 @@ def _init(data_dir: Path) -> None:
         from .. import embedding_worker
 
         embedding_worker.start()
+    from .. import doc_runs
+
+    if quarantine.active():
+        readmitted = 0
+        failed = docs_store.fail_unfinished(
+            _drafts_db(), doc_runs.QUARANTINE_RESTART_ERROR
+        )
+    else:
+        readmitted, failed = doc_runs.resume_after_restart(_drafts_db())
+    if readmitted or failed:
+        logger.warning(
+            "documentation runs interrupted by restart: re-admitted %d, failed %d",
+            readmitted,
+            failed,
+        )
     if quarantine.active():
         logger.warning(
             "quarantine: background AI workers, draft review and GitHub delivery "

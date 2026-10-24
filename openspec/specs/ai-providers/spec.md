@@ -221,7 +221,7 @@ The system MUST refuse product settings whose content contains the value of a co
 - **THEN** the request fails with "Configuration contains a credential. Use credential variable names only."
 
 ### Requirement: Shared model concurrency
-The system SHALL bound every running model loop or model-backed background job (ask, ingest, `connect_statements`, documentation runs and plans, draft reviews, audience labelling batches and alias discovery) by one shared limit, `concurrency.model_loops` (default 2), whatever transport started it.
+The system SHALL bound every running model loop or model-backed background job (ask, ingest, `connect_statements`, documentation runs and plans, draft reviews and alias discovery) by one shared limit, `concurrency.model_loops` (default 2), whatever transport started it. Audience labelling SHALL stay outside that limit and run at most three batches at once.
 
 #### Scenario: Limit reached
 - **WHEN** two `ask` calls are running with the default limit and a third arrives over HTTP or MCP

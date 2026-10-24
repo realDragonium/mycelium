@@ -21,8 +21,10 @@ A curator can explicitly review an existing submitted draft.
 
 Administrators configure review in **Settings → Draft review**, also linked
 from Drafts. It configures this action independently of
-Ask, Ingest, and Documentation. Choose the mode, provider, model ID, and independent reviewer
-account, then save. Changes take effect for new submissions and explicit reruns
+Ask, Ingest, and Documentation. Choose the mode, provider, model ID, reasoning
+effort (empty uses the model's default), independent reviewer account, and
+whether **Allow applying accepted reviews** (`application_enabled`) is on, then
+save. Changes take effect for new submissions and explicit reruns
 without restarting the server. The form can create a stored writer service
 account if none exists. Saving settings does not start any reviews.
 
@@ -33,8 +35,8 @@ Enabled modes require those prerequisites. Model IDs must support the selected
 provider's structured outputs; account access is established only by a real run.
 
 Fresh instances start with reviews and reviewed application off. The mode
-(`off`, `review-only` or `review-and-apply`), provider, model and reviewer
-account all come from saved settings; no environment variable changes them.
+(`off`, `review-only` or `review-and-apply`), provider, model, reasoning effort,
+reviewer account and application gate all come from saved settings; no environment variable changes them.
 The shared model settings remember a separate Claude and OpenAI model ID; see
 [AI model configuration](AI_MODELS.md).
 
@@ -51,8 +53,10 @@ correction and application, including operations that require admin privileges.
 `review-only` persists an advisory assessment. It never edits operations, creates
 an applyable review, or finalizes rejection. `review-and-apply` can record an
 authoritative review, reject the draft, or apply it through
-`apply_reviewed_draft`. The separate application gate must be enabled
-before any automatic operation edits or final decisions occur.
+`apply_reviewed_draft`. The separate application gate, **Allow applying
+accepted reviews** (`application_enabled`), must be enabled before any automatic
+operation edits, questions or final decisions occur; it also governs a curator's
+`apply_reviewed_draft`, but not **Approve**.
 
 **Apply automatically** decides what `review-and-apply` lands unattended.
 **Only clean approvals** (`clean`, the default) applies a draft only when the
@@ -97,10 +101,13 @@ set_operation_evidence(draft_id, operation_ref, evidence, expected_revision)
 ```
 
 `operation_ref` is in the receipt of the queued write and in `get_draft`.
-Each of up to five items has a `kind` (`code`, `ui`, `doc` or `other`), a
-location (a repository-relative `path` with optional `lines` such as `40-52`
-and `commit`, or a `url`), an `excerpt` of at most 1,500 characters and a
-one-line `claim` of at most 200 saying what it shows. An empty list removes
+Each of up to five items has a `kind` (`code`, `ui`, `doc`, `media` or
+`other`), a location (a repository-relative `path` with optional `lines` such
+as `40-52` and `commit`, or a `url`), an `excerpt` of at most 1,500 characters
+and a one-line `claim` of at most 200 saying what it shows. A `media` item
+names a `media_id` from `create_media_upload` instead of a location; an empty
+excerpt is filled with the media's alt text and caption, and applying the
+draft attaches the media to what the operation wrote (see [Media](MEDIA.md)). An empty list removes
 the operation's evidence. The reviewer sees it on the operation. A link whose
 type and direction a concrete code excerpt supports can be accepted on that
 basis; a link without evidence is kept only when the statement texts plainly
@@ -122,8 +129,9 @@ descriptions. It receives draft operations, supplied evidence, affected
 knowledge, the link type glossary, and the five closest live statements to each
 new or changed statement, added best matches first until the context is full.
 It makes one fresh structured-output model call, with no author conversation and
-no external investigation tools. Bounds are 90,000 context characters, 6,000
-output tokens, and a 90-second HTTP timeout per call.
+no external investigation tools. Bounds are 90,000 context characters and, by
+default, 6,000 output tokens, a 90-second HTTP timeout and no provider retries
+per call; the last three are in **Settings → Product → Draft review**.
 
 A draft too large for one call is reviewed in parts. Its operations are split
 into connected parts: operations that change the same record, refer to each
@@ -135,8 +143,8 @@ is refused with a reason. Every part must agree for anything to land: a part
 that rejects rejects the draft with that part's rationale, a part with a
 question makes the draft wait with it, and each part's corrections are
 applied together with the others'. The draft keeps one assessment, whose
-`parts` lists each part's label, rationale, questions, corrections and
-operations; the Drafts screen shows them under **Reviewed in N parts**.
+`parts` lists each part's label, rationale, questions, corrections,
+contradictions and operations; the Drafts screen shows them under **Reviewed in N parts**.
 
 Before any call the reviewer estimates the review's cost from the context
 size, the output bound and the model's price, and refuses a draft that could
@@ -144,8 +152,9 @@ cost more than **Settings → Product → Draft review → Spending cap per run*
 (US$1 by default), naming the estimate and asking for smaller drafts. A model
 without a known price has no cap.
 
-A draft that would overwrite a record changed after the draft was created is
-refused without a call, so an old draft never lands over newer knowledge.
+A draft that would overwrite a record changed after the draft was created, or
+one that no longer exists, is refused without a call, so an old draft never
+lands over newer knowledge.
 A record counts as changed when a direct edit or another applied draft
 created after this one wrote it; an operation that leaves the record as it is
 does not count. Of two pending drafts on the same record, whichever applies
@@ -165,23 +174,25 @@ operations, including glossary or link-alias edits, are rejected without a model
 call. The model cannot append or change those uninspected mutation families.
 
 In `review-and-apply` a draft waits for a person only when the reviewer asks
-one. Of a new statement and a live one that contradict each other, the newer
+one, or, under **Only clean approvals**, suggests corrections. Of a new statement and a live one that contradict each other, the newer
 wins: the draft, unless the live statement changed after the draft was
 created. The reviewer corrects the live statement and lists the
 contradiction, or, when the live one is newer, drops, edits or strikes the
 draft's conflicting part. Failed knowledge reads, oversized
 context, API errors, refusals, and incomplete or invalid model output are
-explicit failed attempts and never authorize application. A failed attempt that
-recorded no review is run once more; if that fails too, the draft is rejected,
-unless the failure came from the model provider, which leaves the draft
-submitted.
+explicit failed attempts and never authorize application. In
+`review-and-apply` with the application gate on, a failed attempt that recorded
+no review is run once more; if that fails too, the draft is rejected, unless
+the failure came from the model provider, which leaves the draft submitted. In
+`review-only` or with the gate off, a failed attempt is not rerun; only the
+sweep below retries it.
 
 A sweep retries submitted drafts whose latest attempt failed without recording a
-review: provider failures, an unusable reviewer account, and attempts
+review, such as provider failures, an unusable reviewer account, and attempts
 interrupted by a restart. It runs every minute while review is on and starts a
 retry 5 minutes after the failure, doubling the wait each time, at most 5
 retries per draft (about two and a half hours). Each retry is a fresh attempt
-with the usual single rerun. A curator's **Run again** or a backlog review
+with the usual single rerun where that applies. A curator's **Run again** or a backlog review
 starts the count over. Drafts with no attempt at all are left for the backlog
 review, and so are failures older than the whole retry schedule (about two
 hours and forty minutes), such as those in a restored copy of another
@@ -210,8 +221,8 @@ as submitted. Up to twelve per review, each with a reason:
 
 - `edit`: a statement's new `text` or `kind` (by its `statement` index in an
   `upsert_statements` batch, or the whole `upsert_statement`,
-  `patch_statement` or `replace_text` operation), or an `upsert_entity`'s new
-  `description`.
+  `patch_statement` or `replace_text` operation; `replace_text` takes only
+  `text`), or an `upsert_entity`'s new `description`.
 - `add_link` and `drop_link`: one link, named by `from_id`, `link_type`,
   `to_id` and, to choose between links that differ only by condition, its
   `when` tree. In a batch one end must be the batch's own statement, written
@@ -233,8 +244,8 @@ operation) stay readable but are no longer made or applied.
 
 ## Held corrections
 
-Under **Only clean approvals**, a `changes_suggested` review ends with outcome
-`held` and changes nothing: no corrections, no authoritative review, no gap.
+Under **Only clean approvals**, with the application gate on, a
+`changes_suggested` review ends with outcome `held` and changes nothing: no corrections, no authoritative review, no gap.
 The draft stays submitted, sorts first under Drafts with the questions, and
 its page shows each correction with a checkbox and, for edits, its new text,
 kind or description in an editable field. **Apply N corrections and approve**
@@ -297,9 +308,10 @@ The HTTP tool mirrors are `POST /request-draft-review` and
 Submission from `POST /api/drafts/{id}/submit` also starts review.
 The browser bridge uses authenticated `GET /api/draft-review/settings` for
 effective configuration, readiness, and caller permissions. Admin-only
-`PATCH /api/draft-review/settings` accepts `mode`, `auto_apply`, `provider`,
-`model`, `reviewer_id`, the current control `revision`, and `model_revision`; a conflicting
-revision returns 409. The selected model and review controls save atomically.
+`PATCH /api/draft-review/settings` accepts `mode`, `auto_apply`,
+`application_enabled`, `provider`, `model`, an optional `reasoning_effort`
+(omitted keeps the effort saved for that provider), `reviewer_id`, the current
+control `revision`, and `model_revision`; a conflicting revision returns 409. The selected model and review controls save atomically.
 `POST /api/drafts/{id}/review` with no body starts an
 explicit rerun. The latter returns `{review: ...}` and enforces the current
 server mode and the caller's real curator role.

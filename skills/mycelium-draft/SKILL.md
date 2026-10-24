@@ -423,7 +423,7 @@ changed after the draft was created wins over it. It never sees the code; your
 evidence is all it has on that.
 
 Follow it with `get_draft(draft_id)` and read `review_assessment`: `status`
-(`running`, `completed`, `failed`), `stale`, `label` (`good`,
+(`running`, `completed`, `failed`, `paused`), `stale`, `label` (`good`,
 `changes_suggested`, `reject`, `needs_context`), `rationale`, `questions`,
 `corrections`, `contradictions`, `application` and `detail`. A review takes a
 minute or two; poll sparingly.
@@ -439,10 +439,16 @@ minute or two; poll sparingly.
   submitted draft. A draft reviewed in parts names the part that decided, and
   a draft that would overwrite a record changed after it was created is
   refused without a review: author it again against the current knowledge.
+- `application: held` — the reviewer suggests corrections, which under
+  **Only clean approvals** only a curator applies, from the draft's detail
+  view. Report the corrections to the operator.
 - `review-only`, or `unapplied` under `review-and-apply` (the application gate
   is off) — the draft waits for a curator; report the assessment.
 - `status: failed` — failed attempts are retried by a sweep for about two and
   a half hours; a curator can start one at once with **Run again**.
+- `status: paused` — the monthly AI budget stopped the review. It is not a
+  failure: the sweep resumes it once the budget allows (a budget change or the
+  next month); tell the operator.
 - No assessment — review is off, or on without a model or reviewer account
   configured. The draft waits for a curator; tell the operator which, if you
   can tell.

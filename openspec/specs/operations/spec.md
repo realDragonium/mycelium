@@ -60,18 +60,18 @@ The system SHALL, when background startup fails, log one `MYCELIUM_ERROR` line w
 - **THEN** a `MYCELIUM_ERROR where=startup` line is logged and `mycelium-http` exits with status 1
 
 ### Requirement: Contradictory configuration refuses to start
-The system MUST refuse to start, before listening, when the email domain policy is contradictory (see the `access-control` capability).
+The system MUST refuse to start, before listening, when the email domain policy is contradictory (see the `access-control` capability); a start refused by configuration SHALL log one `MYCELIUM_ERROR` line with `where=startup` and exit with status 1.
 
 #### Scenario: Just-in-time domain not allowed
 - **WHEN** `MYCELIUM_JIT_DOMAINS` names a domain that `MYCELIUM_ALLOWED_EMAIL_DOMAINS` does not allow
-- **THEN** `mycelium-http` exits without ever listening
+- **THEN** `mycelium-http` logs a `MYCELIUM_ERROR where=startup` line and exits without ever listening
 
-### Requirement: Interrupted work is marked on restart
-The system SHALL, on startup, mark documentation runs, documentation plans and document maintenance that a previous process left unfinished as failed or interrupted, and SHALL log how many documentation runs were orphaned.
+### Requirement: Interrupted work is resumed or marked on restart
+The system SHALL, on startup, admit documentation runs that a previous process left unfinished again, mark documentation plans and document maintenance it left unfinished as failed or interrupted, and SHALL log how many documentation runs were admitted again and how many failed.
 
 #### Scenario: Restart during a documentation run
 - **WHEN** the server restarts while a documentation run is running
-- **THEN** that run is marked failed as orphaned by restart, and a warning reports the count
+- **THEN** that run starts again, and a warning reports the counts of runs admitted again and failed
 
 ### Requirement: Server info endpoint
 The system SHALL answer `GET /api/server-info` without authentication and without the host check, on the event loop rather than a worker thread, with `base_url`, `mcp_url`, `auth_enabled`, `partial_restore`, `quarantine` and `state`, exposing no secrets.
@@ -135,7 +135,7 @@ The system SHALL time every HTTP request and each tracked background job, splitt
 - **THEN** the request is recorded as `MCP tools/call ask`
 
 ### Requirement: Slow request log
-The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the time per phase for each request or tracked background job that takes at least `MYCELIUM_SLOW_REQUEST_MS` milliseconds (default 2000), fails, or whose client disconnects before the response ends.
+The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the time per phase for each request or tracked background job that takes at least `MYCELIUM_SLOW_REQUEST_MS` milliseconds (default 2000), fails, or whose client disconnects before the response ends; the `503` answers given while the server is still starting MUST NOT be logged or counted.
 
 #### Scenario: Slow search
 - **WHEN** a search request takes 3 seconds with the default threshold
@@ -144,6 +144,10 @@ The system SHALL log one `MYCELIUM_SLOW_REQUEST` line with the route and the tim
 #### Scenario: Client leaves
 - **WHEN** a client disconnects before a response finishes
 - **THEN** the request is logged with `disconnected=True` and not counted as failed
+
+#### Scenario: Health check while starting
+- **WHEN** a health check polls `/api/server-info` and gets `503` because startup has not finished
+- **THEN** no `MYCELIUM_SLOW_REQUEST` line is logged
 
 ### Requirement: Performance summary
 The system SHALL serve an admin-only `GET /api/admin/performance`, answered on the event loop, reporting `window_seconds` (900), `slow_request_ms`, worker-thread `limit`, `busy` and `waiting`, and per route over the last 15 minutes the count, errors, disconnects and nearest-rank p50, p95 and maximum of the total and each phase, slowest p95 first; at most 20,000 recent samples are kept.

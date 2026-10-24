@@ -17,6 +17,7 @@ from mycelium import (
     auth,
     product_settings,
     prompt_store,
+    server,
     store,
 )
 from mycelium.audiences import Audience
@@ -317,7 +318,7 @@ def test_a_batch_stores_known_audiences_and_retries_what_the_model_skipped(db, p
     second = store.create_statement(db, "state", "webhooks are signed")
     call, calls = _answer((first, ["external-technical", "made-up"]))
 
-    assert audience_labelling.label_batch(db, call=call) == 1
+    assert audience_labelling.label_batches(db, call=call) == 1
 
     label = store.audience_labels.get_label(db, first)
     assert store.audience_labels.label_pending(label) == ["external-technical"]
@@ -329,7 +330,7 @@ def test_a_batch_stores_known_audiences_and_retries_what_the_model_skipped(db, p
         "SELECT attempts, next_attempt_at FROM audience_label_queue"
     ).fetchone()
     assert retry["attempts"] == 1 and retry["next_attempt_at"] is not None
-    assert audience_labelling.label_batch(db, call=call) is None
+    assert audience_labelling.label_batches(db, call=call) is None
 
 
 def test_a_failed_batch_leaves_statements_unlabelled_and_backs_off(db, prompts):
@@ -339,9 +340,60 @@ def test_a_failed_batch_leaves_statements_unlabelled_and_backs_off(db, prompts):
         raise RuntimeError("provider down")
 
     with pytest.raises(RuntimeError):
-        audience_labelling.label_batch(db, call=failing)
+        audience_labelling.label_batches(db, call=failing)
     assert store.audience_labels.get_label(db, sid) is None
     assert store.audience_labels.queue_counts(db) == (1, 0, "provider down")
+
+
+def test_batches_run_concurrently_without_the_shared_model_loop_slot(
+    db, prompts, monkeypatch
+):
+    set_product(product_settings.AudienceLabellingSettings(batch_size=1))
+    statement_ids = [
+        store.create_statement(db, "state", text)
+        for text in ("exports are csv", "exports are signed", "exports expire")
+    ]
+    barrier = threading.Barrier(3, timeout=5)
+
+    def call(task, config):
+        statement_id = json.loads(task.prompt)["statements"][0]["statement_id"]
+        barrier.wait()
+        answer, _ = _answer((statement_id, [INTERNAL.id]))
+        return answer(task, config)
+
+    def shared_slot():
+        raise AssertionError("audience labelling used the shared model-loop slot")
+
+    monkeypatch.setattr(server, "model_loop_slot", shared_slot)
+
+    assert audience_labelling.label_batches(db, call=call) == 3
+    assert all(
+        store.audience_labels.get_label(db, statement_id) is not None
+        for statement_id in statement_ids
+    )
+
+
+def test_a_successful_parallel_batch_is_stored_when_another_fails(db, prompts):
+    set_product(product_settings.AudienceLabellingSettings(batch_size=1))
+    failed = store.create_statement(db, "state", "exports are csv")
+    succeeded = store.create_statement(db, "state", "exports are signed")
+
+    def call(task, config):
+        statement_id = json.loads(task.prompt)["statements"][0]["statement_id"]
+        if statement_id == failed:
+            raise RuntimeError("provider down")
+        answer, _ = _answer((statement_id, [INTERNAL.id]))
+        return answer(task, config)
+
+    with pytest.raises(RuntimeError, match="provider down"):
+        audience_labelling.label_batches(db, call=call)
+
+    assert store.audience_labels.get_label(db, succeeded) is not None
+    assert store.audience_labels.get_label(db, failed) is None
+    row = db.execute(
+        "SELECT attempts FROM audience_label_queue WHERE statement_id = ?", (failed,)
+    ).fetchone()
+    assert row["attempts"] == 1
 
 
 def test_without_credentials_the_worker_leaves_the_queue_untouched(
@@ -381,6 +433,7 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     set_product(
         product_settings.AudienceLabellingSettings(automatic=False, batch_size=1)
     )
+    monkeypatch.setattr(audience_labelling, "PARALLEL_BATCHES", 1)
     first = store.create_statement(db, "state", "Workspaces have owners.")
     second = store.create_statement(db, "state", "Invoices can be exported.")
     blocked = True
@@ -407,7 +460,6 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
             "Missing credentials" if blocked and interruption == "credentials" else None
         ),
     )
-    monkeypatch.setattr(audience_labelling, "_forced", threading.Event())
     assert audience_labelling.backfill(relabel_ai=False).queued == 2
     if interruption == "exhausted":
         db.execute(
@@ -416,7 +468,7 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
         )
 
     audience_labelling.labelling_pass(db)
-    assert audience_labelling._forced.is_set()
+    assert store.audience_labels.backfill_requested(db)
     assert store.audience_labels.due_batch(db, 1)
     if interruption in {"paused", "credentials"}:
         assert store.audience_labels.queue_counts(db) == (2, 0, None)
@@ -426,7 +478,7 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
 
     audience_labelling.labelling_pass(db)
     # A statement waiting out its backoff keeps the backfill going.
-    assert audience_labelling._forced.is_set() == (interruption == "failure")
+    assert store.audience_labels.backfill_requested(db) == (interruption == "failure")
     assert not store.audience_labels.due_batch(db, 1)
     assert store.audience_labels.get_label(db, second if calls[0] == first else first)
     if interruption in {"paused", "credentials"}:
@@ -441,6 +493,42 @@ def test_backfill_continues_on_later_polls_until_nothing_is_waiting(
     audience_labelling.labelling_pass(db)
     # Only a backfill still in progress labels the new statement.
     assert bool(store.audience_labels.due_batch(db, 1)) == (interruption != "failure")
+
+
+def test_a_backfill_started_with_automatic_labelling_off_resumes_after_a_restart(
+    db, prompts, monkeypatch
+):
+    set_product(product_settings.AudienceLabellingSettings(automatic=False))
+    first = store.create_statement(db, "state", "Workspaces have owners.")
+    second = store.create_statement(db, "state", "Invoices can be exported.")
+    with store.transaction(db):
+        store.audience_labels.enqueue_backfill(db, relabel_ai=False)
+    third = store.create_statement(db, "state", "Login supports SSO.")
+    call, _ = _answer(
+        (first, [EXTERNAL.id]),
+        (second, [EXTERNAL.id]),
+        (third, [EXTERNAL.id]),
+    )
+    drain = audience_labelling.drain
+    monkeypatch.setattr(
+        audience_labelling, "drain", lambda conn: drain(conn, call=call)
+    )
+    monkeypatch.setattr(
+        audience_labelling.model_settings, "credentials_error", lambda action: None
+    )
+    assert store.audience_labels.backfill_requested(db)
+
+    audience_labelling.labelling_pass(db)
+
+    assert [
+        store.audience_labels.get_label(db, statement_id) is not None
+        for statement_id in (first, second, third)
+    ] == [True, True, True]
+    assert not store.audience_labels.backfill_requested(db)
+
+    later = store.create_statement(db, "state", "Exports include headers.")
+    audience_labelling.labelling_pass(db)
+    assert store.audience_labels.is_queued(db, later)
 
 
 def test_a_statement_written_during_a_backfill_is_labelled_before_its_backlog(db):
@@ -538,7 +626,7 @@ def test_an_edit_keeps_the_previous_audiences_unless_the_labeller_says_why(db, p
     narrower = (sid, ["internal-non-technical"])
 
     call, prompts_sent = _answer(narrower)
-    audience_labelling.label_batch(db, call=call)
+    audience_labelling.label_batches(db, call=call)
 
     sent = json.loads(prompts_sent[0])["statements"][0]
     assert sent["previous"]["text"] == "an export holds 100 rows"
@@ -552,7 +640,7 @@ def test_an_edit_keeps_the_previous_audiences_unless_the_labeller_says_why(db, p
 
     store.update_statement_text(db, sid, "an export holds 1000 rows on the ledger")
     call, _ = _answer(narrower, narrowing="Names the internal ledger service.")
-    audience_labelling.label_batch(db, call=call)
+    audience_labelling.label_batches(db, call=call)
 
     row = labels.get_label(db, sid)
     assert row is not None

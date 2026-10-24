@@ -99,6 +99,9 @@ Banners above every screen report conditions that last until an operator acts:
   [Opening a copy of production data](DEPLOYMENT.md#opening-a-copy-of-production-data).
 - **Partial restore**: startup found databases missing beside a populated
   knowledge base.
+
+An open tab rechecks these two every minute while it is visible, and when it
+regains focus, so a server restart shows without reloading the page.
 - **AI budget** (admins): estimated spend passed the monthly budget's warning
   percentage.
 - **Background AI work is waiting** (admins): automatic draft review, audience

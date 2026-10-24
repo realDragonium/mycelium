@@ -192,11 +192,15 @@ The system SHALL extend the lease on every item of `kind` the caller still holds
 - **THEN** the item is offered to the next claimant
 
 ### Requirement: Curation release
-The system SHALL provide `release_curation_work(item_ids, outcome, draft_id?, reason?)` for the same callers, freeing the caller's held items with outcome `proposed`, `no_link` or `skipped`, and answering `released` and `outcome`. It MUST refuse the whole release, naming them, when any item is not held by the caller.
+The system SHALL provide `release_curation_work(item_ids, outcome, draft_id?, reason?)` for the same callers, freeing the caller's held items with outcome `proposed`, `no_link` or `skipped`, and answering `released` and `outcome`. It MUST refuse the whole release, naming them, when any item is not held by the caller. An expired lease SHALL still count as held until a claim of any kind clears expired leases or an admin frees the caller's claims.
 
 #### Scenario: Release of another agent's item
 - **WHEN** a drafter releases an item it does not hold
 - **THEN** the release is refused with `not held by you:` and the item id
+
+#### Scenario: Release after the lease expired
+- **WHEN** a drafter releases an item 40 minutes after claiming it and nobody has claimed curation work since
+- **THEN** the release succeeds and records the outcome
 
 ### Requirement: Release outcome rules
 The system MUST require a `proposed` release to name a `draft_id` created by the caller, require a `no_link` release to give a non-blank `reason` of at most 300 characters, and refuse a `draft_id` on a `no_link` or `skipped` release.

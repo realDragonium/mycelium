@@ -140,7 +140,7 @@ a stale review-settings form.
 
 ## Shared execution boundary
 
-The five workflows send tasks and an explicit model configuration through
+All eight model actions send tasks and an explicit model configuration through
 `mycelium.ai`. `turn(ToolTask, ModelConfig)` provides conversation and tool-call
 execution; `structured(StructuredTask[T], ModelConfig)` returns a validated typed
 result. Provider adapters handle credentials, wire formats, continuation data,
@@ -150,8 +150,9 @@ permissions, validation, budgets, and domain decisions.
 Provider choice is deterministic configuration. A model does not choose its own
 provider. Claude and OpenAI conversations retain their provider-specific history
 inside the adapter and cannot switch provider halfway through a run. Embeddings
-remain a separate Ollama configuration, and search indexes are not changed by
-this screen.
+remain a separate server configuration (Ollama or OpenAI; see
+[Deployment](DEPLOYMENT.md#embedding-provider)), and search indexes are not
+changed by this screen.
 
 ## AI usage and budget
 
@@ -198,12 +199,16 @@ discovery are never paused.
 
 ## Limits and repository integrations
 
-**Settings → Limits** provides independent limits for Ask, Ingest, Documentation,
-and Draft review. Output tokens, request timeouts, and retries
-apply to each provider request. The three tool loops additionally expose operation
-and run time limits and adaptive thinking; Ask exposes its existing cache switch.
+**Settings → Limits** provides independent sections for Ask, Ingest, Document
+generation, Draft review, Alias discovery, Audience labelling, Documentation
+planning, Documentation maintenance, Connecting statements, Concurrent runs, and
+Screenshots and recordings ([Media](MEDIA.md)). Output tokens, request timeouts,
+and retries apply to each provider request of the model actions. The four tool
+loops (Ask, Ingest, Document generation, Connecting statements) additionally
+expose operation and run time limits and adaptive thinking; Ask exposes its
+existing cache switch.
 Input limits and retrieval widths appear only on the actions that support them.
-Draft review is a single structured assessment, so it has no tool-operation or
+Draft review makes one structured assessment call per part, so it has no tool-operation or
 thinking control. Provider support for adaptive thinking depends on the chosen
 model.
 
@@ -221,11 +226,20 @@ Shared model concurrency and the documentation active-run limit are
 editable. Lowering shared concurrency lets current work finish and holds new
 work until capacity becomes available. Increasing it wakes waiting workers.
 There is one shared counting gate; changing its limit does not create a second
-pool. The active-run limit counts started unfinished runs, including
+pool. Audience labelling stays outside it and runs at most three batches at
+once, so a backfill never holds capacity Ask, Ingest or documentation runs wait
+for. The active-run limit counts started unfinished runs, including
 those waiting for shared capacity. A run admitted over it is queued, with its
 place in line (`queue_position`), and starts in admission order as running
-ones finish. The queue is held in the server process, so a restart fails
-queued runs as it fails running ones.
+ones finish. The queue is held in the server process, so on startup the
+server admits every unfinished run again in its original order: a queued run
+keeps its place and a running one starts over, keeping its run id. A run's
+only lasting effect is its final document write, so starting over repeats
+model calls but nothing else; a run that had already written its document is
+finished as written. A restarted run uses the current documentation model and
+writing profile, as **Retry** does. A run that cannot be admitted again, for
+example because its model has no key now, fails with an error saying so;
+**Retry** starts it again. In quarantine no run is started again: each fails.
 
 Documentation settings selects the default guideline set and configures named
 GitHub destinations using an owner, repository, base branch, and path template.

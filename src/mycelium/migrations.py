@@ -1116,6 +1116,19 @@ def _migration_v25_pending_external_grants(conn: sqlite3.Connection) -> None:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
 
 
+def _migration_v26_backfill_queue_rows(conn: sqlite3.Connection) -> None:
+    """Mark the rows an admin's backfill queued, so the worker keeps draining
+    them across restarts while automatic labelling is off."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(audience_label_queue)")
+    }
+    if "backfill" not in columns:
+        conn.execute(
+            "ALTER TABLE audience_label_queue "
+            "ADD COLUMN backfill INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 # Ordered registry. Tuple format: (target_version, migration_fn).
 # Migrations are applied in this order; each one bumps `user_version`
 # to its target after committing.
@@ -1145,6 +1158,7 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (23, _migration_v23_connect_attempts),
     (24, _migration_v24_curation_attempts),
     (25, _migration_v25_pending_external_grants),
+    (26, _migration_v26_backfill_queue_rows),
 ]
 
 CURRENT_VERSION: int = MIGRATIONS[-1][0]

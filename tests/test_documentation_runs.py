@@ -199,21 +199,45 @@ def test_finish_run_does_not_overwrite_finished_row(tmp_path):
     assert row["error"] is None
 
 
-def test_mark_orphaned_flips_only_unfinished(tmp_path):
+def test_reset_and_fail_unfinished_server_runs(tmp_path):
     conn = _conn(tmp_path)
-    running = docs_store.create_run(conn, prompt="running", created_by=None)
+    running = docs_store.create_run(
+        conn, prompt="document login", created_by=None, provider="claude"
+    )
     docs_store.mark_started(conn, running)
-    queued = docs_store.create_run(conn, prompt="queued", created_by=None)
-    finished = docs_store.create_run(conn, prompt="finished", created_by=None)
+    docs_store.record_progress(
+        conn, running, {"activity": "Reviewing login", "turns": 1}
+    )
+    queued = docs_store.create_run(
+        conn, prompt="document invoices", created_by=None, provider="claude"
+    )
+    agent = docs_store.create_run(
+        conn, prompt="document exports", created_by=None, provider="agent"
+    )
+    finished = docs_store.create_run(
+        conn, prompt="document billing", created_by=None, provider="claude"
+    )
     docs_store.finish_run(conn, finished, outcome="failed", error="original")
 
-    assert docs_store.mark_orphaned(conn) == 2
+    reset = docs_store.reset_unfinished(conn)
+
+    assert [row["id"] for row in reset] == [running, queued]
+    for run_id in (running, queued):
+        row = docs_store.get_run(conn, run_id)
+        assert row["started_at"] is None
+        assert row["summary"] is None
+        assert row["finished_at"] is None
+    assert docs_store.get_run(conn, agent)["finished_at"] is None
+    assert docs_store.get_run(conn, finished)["error"] == "original"
+
+    assert docs_store.fail_unfinished(conn, "restart disabled") == 2
 
     for run_id in (running, queued):
         row = docs_store.get_run(conn, run_id)
         assert row["outcome"] == "failed"
-        assert row["error"] == "orphaned by restart"
+        assert row["error"] == "restart disabled"
         assert row["finished_at"] is not None
+    assert docs_store.get_run(conn, agent)["finished_at"] is None
     row = docs_store.get_run(conn, finished)
     assert row["outcome"] == "failed"
     assert row["error"] == "original"

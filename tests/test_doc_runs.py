@@ -820,6 +820,109 @@ def test_runs_over_the_bound_wait_and_start_in_admission_order(tmp_path):
     } == {"nothing_written"}
 
 
+def test_a_restart_readmits_unfinished_runs_in_their_order(tmp_path):
+    conn = _conn(tmp_path)
+    set_product(product_settings.ConcurrencySettings(documentation_runs=1))
+    release = threading.Event()
+    started: list[str] = []
+
+    def runner(prompt, *, guideline_set, document_type):
+        started.append(prompt)
+        release.wait()
+        return {"outcome": "nothing_written", "reason": "done"}
+
+    doc_runs.RUNNER = runner
+    prompts = ["document login", "document invoices", "document exports"]
+    run_ids = [
+        docs_store.create_run(conn, prompt=prompt, created_by=None, provider="claude")
+        for prompt in prompts
+    ]
+    docs_store.mark_started(conn, run_ids[0])
+
+    assert doc_runs.resume_after_restart(conn) == (3, 0)
+    runs = [
+        docs_store.serialize_run(docs_store.get_run(conn, run_id)) for run_id in run_ids
+    ]
+    assert [run["status"] for run in runs] == ["running", "queued", "queued"]
+    assert [run["queue_position"] for run in runs[1:]] == [1, 2]
+
+    release.set()
+    doc_runs.wait_all()
+
+    assert started == prompts
+    assert len(docs_store.list_runs(conn)) == 3
+    assert all(
+        docs_store.get_run(conn, run_id)["outcome"] == "nothing_written"
+        for run_id in run_ids
+    )
+
+
+def test_a_restart_finishes_a_run_whose_document_was_written(tmp_path):
+    conn = _conn(tmp_path)
+    called = False
+
+    def runner(prompt, *, guideline_set, document_type):
+        nonlocal called
+        called = True
+        return {"outcome": "nothing_written", "reason": "done"}
+
+    doc_runs.RUNNER = runner
+    run_id = docs_store.create_run(
+        conn, prompt="document invoice exports", created_by=None, provider="claude"
+    )
+    docs_store.mark_started(conn, run_id)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="invoice-exports",
+        title="Invoice exports",
+        body="# Invoice exports\n\nExport invoices from the billing page.\n",
+        run_id=run_id,
+    )
+
+    assert doc_runs.resume_after_restart(conn) == (0, 0)
+
+    row = docs_store.get_run(conn, run_id)
+    assert row["outcome"] == "document_written"
+    assert row["document_id"] == document_id
+    assert called is False
+
+
+def test_a_run_that_cannot_be_admitted_again_fails_with_why(tmp_path):
+    conn = _conn(tmp_path)
+    document_id = docs_store.upsert_document(
+        conn,
+        slug="login",
+        title="Login",
+        body="# Login\n\nSign in with your account.\n",
+    )
+    run_id = docs_store.create_run(
+        conn,
+        prompt="revise login",
+        created_by=None,
+        provider="claude",
+        target_document_id=document_id,
+        target_revision=1,
+    )
+    docs_store.upsert_document(
+        conn,
+        slug="login",
+        title="Login",
+        body="# Login\n\nSign in and confirm your device.\n",
+        updates=document_id,
+        replacing=docs_store.body_digest("# Login\n\nSign in with your account.\n"),
+        expected_revision=1,
+    )
+
+    assert doc_runs.resume_after_restart(conn) == (0, 1)
+
+    row = docs_store.get_run(conn, run_id)
+    assert row["outcome"] == "failed"
+    assert row["error"].startswith(
+        "Interrupted by a server restart and not started again:"
+    )
+    assert row["error"].endswith("Retry starts it again.")
+
+
 def test_bound_is_db_derived(tmp_path, monkeypatch):
     """A row left running by a previous process still counts, because the
     count comes from the table and not from this process's threads."""

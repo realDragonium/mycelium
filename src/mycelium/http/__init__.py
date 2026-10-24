@@ -126,7 +126,11 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Before listening: a contradictory policy is a configuration error
         # the operator must fix, not a slow start to wait out.
-        auth.check_domain_policy()
+        try:
+            auth.check_domain_policy()
+        except Exception as exc:
+            tracing.emit_error(where="startup", exc=exc)
+            raise
         data_dir = Path(os.environ.get("MYCELIUM_DATA_DIR", "./.mycelium")).expanduser()
         if on_startup_failure is None:
             server.init(data_dir)
@@ -175,13 +179,14 @@ def create_app(*, on_startup_failure: Callable[[], None] | None = None) -> FastA
     )
     app.add_middleware(_BodyLimit, max_body_size=_max_body_bytes())
     app.add_middleware(HostAllowlistMiddleware)
+    # Inside the startup gate so its 503s aren't timed; outside every other
+    # working layer so a request's time includes theirs.
+    app.add_middleware(request_timing.RequestTimingMiddleware)
     # Outside every layer that reads a database, so nothing reaches one
     # mid-startup.
     app.add_middleware(StartupGate)
     # Outermost, so error responses from the layers inside get the headers too.
     app.add_middleware(SecurityHeadersMiddleware)
-    # Outside everything, so a request's time includes every layer's.
-    app.add_middleware(request_timing.RequestTimingMiddleware)
 
     app.router.routes.extend(_routes())
 
@@ -313,9 +318,13 @@ def main() -> None:
     def stop() -> None:
         listener.should_exit = True
 
-    listener = uvicorn.Server(
-        uvicorn.Config(create_app(on_startup_failure=stop), host=host, port=port)
-    )
+    try:
+        app = create_app(on_startup_failure=stop)
+    except Exception as exc:
+        tracing.emit_error(where="startup", exc=exc)
+        sys.exit(1)
+
+    listener = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
     listener.run()
     current = startup.status()
     # `started` stays False when the lifespan refused to start, as on a

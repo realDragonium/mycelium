@@ -16,7 +16,7 @@ import time
 import anyio
 import pytest
 
-from mycelium import auth, product_settings, server
+from mycelium import agent_tasks, auth, product_settings, server
 from mycelium.server import admission
 from product_settings_helpers import set_product
 
@@ -251,7 +251,9 @@ def test_model_loop_limiter_admits_only_its_bound_concurrently(monkeypatch):
     [
         (ValueError("text is required"), True),
         (auth.RoleRequired("writer role required"), True),
+        (agent_tasks.NotHeld("agent task is not claimed by you"), True),
         (RuntimeError("database path /secret/db"), False),
+        (PermissionError("permission denied: /secret/db"), False),
     ],
 )
 def test_only_anticipated_refusals_keep_their_text(raised, reaches_client):

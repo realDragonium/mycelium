@@ -570,6 +570,7 @@ def enqueue(
     statement_ids: Sequence[str],
     *,
     previous: Previous | None = None,
+    backfill: bool = False,
 ) -> None:
     """Queue statements for labelling, re-arming any that exhausted retries.
     A queued row keeps the first previous label: later edits before the
@@ -577,11 +578,13 @@ def enqueue(
     now = _now()
     value = json.dumps(previous) if previous is not None else None
     conn.executemany(
-        "INSERT INTO audience_label_queue (statement_id, enqueued_at, previous) "
-        "VALUES (?, ?, ?) ON CONFLICT(statement_id) DO UPDATE SET attempts = 0, "
+        "INSERT INTO audience_label_queue "
+        "(statement_id, enqueued_at, previous, backfill) VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(statement_id) DO UPDATE SET attempts = 0, "
         "next_attempt_at = NULL, last_error = NULL, "
-        "previous = COALESCE(audience_label_queue.previous, excluded.previous)",
-        [(statement_id, now, value) for statement_id in statement_ids],
+        "previous = COALESCE(audience_label_queue.previous, excluded.previous), "
+        "backfill = excluded.backfill",
+        [(statement_id, now, value, int(backfill)) for statement_id in statement_ids],
     )
 
 
@@ -600,7 +603,7 @@ def enqueue_backfill(conn: sqlite3.Connection, *, relabel_ai: bool) -> int:
             f"ON l.statement_id = s.id WHERE {condition} ORDER BY s.id"
         )
     ]
-    enqueue(conn, ids)
+    enqueue(conn, ids, backfill=True)
     return len(ids)
 
 
@@ -658,6 +661,18 @@ def queue_started_at(conn: sqlite3.Connection) -> str | None:
         (MAX_ATTEMPTS,),
     ).fetchone()
     return None if row["at"] is None else str(row["at"])
+
+
+def backfill_requested(conn: sqlite3.Connection) -> bool:
+    """Whether a queued backfill row still has attempts left."""
+    return (
+        conn.execute(
+            "SELECT 1 FROM audience_label_queue "
+            "WHERE backfill = 1 AND attempts < ? LIMIT 1",
+            (MAX_ATTEMPTS,),
+        ).fetchone()
+        is not None
+    )
 
 
 def queue_counts(conn: sqlite3.Connection) -> tuple[int, int, str | None]:

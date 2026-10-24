@@ -124,7 +124,7 @@ Every statement label SHALL record the granted audiences, its source (`ai` or `c
 - **THEN** the response has `label.source: "ai"`, the reason, the model and `can_curate: true`
 
 ### Requirement: New statements are queued for labelling
-Writing a new statement SHALL queue it for audience labelling. While automatic labelling is on (the `automatic` setting of the audience labelling limits, default on), a background worker SHALL label queued statements in batches, polling every 30 seconds and waking on demand. `MYCELIUM_DISABLE_AUDIENCE_WORKER=1` SHALL stop the worker.
+Writing a new statement SHALL queue it for audience labelling. While automatic labelling is on (the `automatic` setting of the audience labelling limits, default on), a background worker SHALL label queued statements in batches, up to three at once outside the shared model concurrency, polling every 30 seconds and waking on demand. `MYCELIUM_DISABLE_AUDIENCE_WORKER=1` SHALL stop the worker.
 
 #### Scenario: Automatic labelling
 - **WHEN** a statement is created while automatic labelling is on and the labelling model has credentials
@@ -150,12 +150,16 @@ A failed batch SHALL leave its statements unlabelled and retry each with exponen
 - **AND** `GET /api/audiences/labelling` reports the last error
 
 ### Requirement: Backfill
-`POST /api/audiences/labelling/backfill` SHALL require a real administrator, queue every unlabelled statement (and, with `relabel_ai: true`, every AI-labelled statement), never queue curator-labelled statements, and drain the queue even while automatic labelling is off until no queued statement has attempts left. It SHALL return `started_at` and `queued`.
+`POST /api/audiences/labelling/backfill` SHALL require a real administrator, queue every unlabelled statement (and, with `relabel_ai: true`, every AI-labelled statement), never queue curator-labelled statements, and drain the queue even while automatic labelling is off until no statement it queued has attempts left, also after a server restart. It SHALL return `started_at` and `queued`.
 
 #### Scenario: Relabel AI labels
 - **WHEN** an administrator starts a backfill with `relabel_ai: true`
 - **THEN** unlabelled and AI-labelled statements are queued
 - **AND** curator-labelled statements are not
+
+#### Scenario: Restart with automatic labelling off
+- **WHEN** the server restarts while a backfill started with automatic labelling off still has queued statements
+- **THEN** the worker keeps labelling them, and stops draining once none it queued has attempts left
 
 ### Requirement: Labelling status survives restarts
 `GET /api/audiences/labelling` SHALL report statement, AI-label, curator-label, unlabelled, queued and failed counts, the last error, total label cost, `automatic`, `confirm_external_grants`, and the labelling provider and model. While a queued statement has attempts left it SHALL include `backfill` (`started_at`, `queued`, `labelled`, `cost_usd`), counted from the oldest waiting statement's queueing and read from the queue, so it survives restarts.

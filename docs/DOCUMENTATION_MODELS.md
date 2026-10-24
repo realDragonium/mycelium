@@ -118,8 +118,8 @@ document's audience: until then the edit would read as the statement being
 hidden from the audience. A background sweep
 checks every minute and keeps its decisions in `mycelium-drafts.db`, so a
 restart neither repeats nor forgets them: each out-of-date revision is acted
-on once. A revision the review refused, a run that failed, or one cut off by a
-restart is reported rather than retried; the document stays out of date for
+on once. A revision the review refused, a run that failed, or one a restart
+cut off before its run was admitted is reported rather than retried; the document stays out of date for
 someone to revise. Dismissing the document in the plan also stops automatic
 revision until its next revision.
 
