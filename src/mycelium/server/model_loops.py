@@ -34,7 +34,7 @@ ASK_EXTERNAL = (
 )
 
 
-@tool(role="asker")
+@tool(role="reader")
 def ask(
     question: str,
     depth: Literal["standard", "quick"] = "standard",

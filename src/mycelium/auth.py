@@ -43,26 +43,27 @@ from typing import Literal
 
 from .require import require
 
-Role = Literal["asker", "reader", "drafter", "writer", "admin"]
+Role = Literal["reader", "drafter", "writer", "admin"]
 UserType = Literal["human", "service"]
-Scope = Literal["asker", "reader", "drafter", "writer", "admin"]
+Scope = Literal["reader", "drafter", "writer", "admin"]
 
 # Ordering used both to clamp a token's scope against its owner's role
 # and to compare a principal's role against a tool's required role.
 # Lower-privilege scopes are always allowed; never widen. Drafter sits
 # between reader and writer: a drafter can call every write/delete/merge
 # tool, but the call body redirects to a draft instead of mutating the
-# substrate (see `server.tool` wrapper). Asker sits below reader: it can
-# reach only the single tool that requires the `asker` role (`ask`) and
-# none of the broader read primitives — every higher role outranks it
-# and so keeps `ask` too.
+# substrate (see `server.tool` wrapper). Reader is the minimum: every
+# account reads every statement.
 _ROLE_RANK: dict[str, int] = {
-    "asker": 0,
-    "reader": 1,
-    "drafter": 2,
-    "writer": 3,
-    "admin": 4,
+    "reader": 0,
+    "drafter": 1,
+    "writer": 2,
+    "admin": 3,
 }
+
+#: The role below reader that could only call `ask`. Older backups and
+#: settings may still name it; it reads as reader.
+RETIRED_ASKER = "asker"
 
 LOCAL_ADMIN_ID = "local-admin"
 TOKEN_PREFIX = "myc"
@@ -707,10 +708,16 @@ def _jit_default_role() -> Role | None:
     defaulting to `reader`. Returns None for an unknown role name so the
     caller refuses to provision rather than guess a privilege level."""
     role = (os.environ.get("MYCELIUM_JIT_DEFAULT_ROLE") or "reader").strip().lower()
+    if role == RETIRED_ASKER:
+        logging.getLogger("mycelium.auth").warning(
+            "MYCELIUM_JIT_DEFAULT_ROLE=asker is deprecated and grants reader; "
+            "set it to reader"
+        )
+        return "reader"
     if not is_valid_role(role):
         logging.getLogger("mycelium.auth").error(
             "MYCELIUM_JIT_DEFAULT_ROLE=%r is not a valid role — refusing JIT "
-            "provisioning. Valid roles: asker, reader, drafter, writer, admin",
+            "provisioning. Valid roles: reader, drafter, writer, admin",
             role,
         )
         return None

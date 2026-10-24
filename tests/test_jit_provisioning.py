@@ -69,6 +69,17 @@ def test_jit_default_role_is_configurable(monkeypatch):
     assert _role_of(conn, uid) == "writer"
 
 
+def test_jit_default_role_asker_reads_as_reader(monkeypatch, caplog):
+    monkeypatch.setenv("MYCELIUM_JIT_DOMAINS", "example.com")
+    monkeypatch.setenv("MYCELIUM_JIT_DEFAULT_ROLE", "asker")
+    conn = _conn()
+    with caplog.at_level("WARNING", logger="mycelium.auth"):
+        uid = _find(conn)
+    assert uid is not None
+    assert _role_of(conn, uid) == "reader"
+    assert "deprecated" in caplog.text
+
+
 def test_jit_invalid_default_role_refuses(monkeypatch):
     monkeypatch.setenv("MYCELIUM_JIT_DOMAINS", "example.com")
     monkeypatch.setenv("MYCELIUM_JIT_DEFAULT_ROLE", "superuser")

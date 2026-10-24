@@ -221,6 +221,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_oauth_code_resource(conn)
     _drop_audience_columns(conn)
     rebuilt = _drop_role_check(conn)
+    _retire_asker_role(conn)
     if rebuilt:
         # Rebuild dropped explicit indexes along with the old table;
         # re-running the schema script restores them (all CREATE INDEX
@@ -286,6 +287,24 @@ def _expire_legacy_oauth_tokens(conn: sqlite3.Connection) -> None:
         "WHERE client_id IS NOT NULL AND expires_at IS NULL",
         ((datetime.now(UTC) + LEGACY_OAUTH_TOKEN_GRACE).isoformat(),),
     )
+
+
+def _retire_asker_role(conn: sqlite3.Connection) -> None:
+    """Turn the retired `asker` role into `reader` on users, tokens (OAuth
+    grants included) and invites: reader is now the minimum, so every
+    account reads every statement. Logs how many rows changed."""
+    for table, column in (
+        ("users", "role"),
+        ("mcp_tokens", "scope"),
+        ("invites", "role"),
+    ):
+        changed = conn.execute(
+            f"UPDATE {table} SET {column} = 'reader' WHERE {column} = 'asker'"
+        ).rowcount
+        if changed:
+            _log.warning(
+                "%d %s with the retired asker role now have reader", changed, table
+            )
 
 
 def _drop_role_check(conn: sqlite3.Connection) -> bool:

@@ -595,27 +595,30 @@ def test_scope_capped_at_creation(tmp_path, monkeypatch):
         assert names["tried-to-escalate"] == "reader"
 
 
-def test_asker_reaches_ask_and_its_own_account_but_no_substrate_reads(
-    tmp_path, monkeypatch
-):
-    """`asker` is the role for callers that may only ask. The hand-written
-    UI routes read the substrate without going through a tool's role gate,
-    so they must not answer an asker either."""
+def test_a_reader_reads_the_knowledge_base_but_cannot_write(tmp_path, monkeypatch):
+    """Reader is the minimum role: every account reads every statement, from
+    the UI routes as well as the tools, while writes stay gated."""
     monkeypatch.setenv("MYCELIUM_SESSION_SECRET", "test-secret")
     client = _app(tmp_path, monkeypatch, auth_mode="on")
     with client:
         conn = runtime._auth_db()
         with store.transaction(conn):
             uid = auth.create_user(
-                conn, name="A", role="asker", type="service", email=None
+                conn, name="R", role="reader", type="service", email=None
             )
-            raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="asker")
+            raw, _ = auth.issue_token(conn, user_id=uid, name="k", scope="reader")
         h = {"Authorization": f"Bearer {raw}"}
 
-        for path in ("/api/data", "/api/history", "/api/drafts", "/api/audiences"):
-            assert client.get(path, headers=h).status_code == 403, path
-        assert client.get("/api/me", headers=h).status_code == 200
-        assert client.get("/api/me/tokens", headers=h).status_code == 200
+        for path in ("/api/data", "/api/history", "/api/audiences", "/api/me"):
+            assert client.get(path, headers=h).status_code == 200, path
+        assert client.post("/list-statements", headers=h, json={}).status_code == 200
+        write = client.post(
+            "/upsert-statement",
+            headers=h,
+            json={"kind": "state", "text": "A workspace can be renamed.", "links": []},
+        )
+        assert write.status_code == 403
+        assert client.get("/api/admin/users", headers=h).status_code == 403
 
 
 def test_every_response_refuses_to_be_framed(tmp_path, monkeypatch):

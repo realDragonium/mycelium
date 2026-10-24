@@ -1,10 +1,8 @@
-// Entry: check this session may read the knowledge base, then mount the app.
-// The probe is the cheapest read an asker is refused, so an asker still gets
-// the sign-in card here rather than an app whose screens all fail.
+// Entry: check who this session is, then mount the app.
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './shell';
-import { errorMessage, getMe, getSubstrateCounts, isAuthError, type Me } from './api';
+import { errorMessage, getMe, isAuthError, type Me } from './api';
 import { PrefsProvider } from './prefs';
 
 type Boot = { phase: 'loading' } | { phase: 'ready'; me: Me } | { phase: 'error'; error: unknown };
@@ -14,7 +12,7 @@ function Root() {
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    Promise.all([getMe(), getSubstrateCounts()]).then(([me]) => me).then(
+    getMe().then(
       me => { if (live) setBoot({ phase: 'ready', me }); },
       error => { if (live) setBoot({ phase: 'error', error }); },
     );

@@ -247,7 +247,7 @@ def test_http_handler_passes_context_without_changing_body_schema(monkeypatch):
     monkeypatch.setattr(tool_routes, "_enforce_role", lambda *args: None)
     monkeypatch.setattr(tool_routes.server, "limiter_for", lambda name: None)
     app = FastAPI()
-    app.post("/ask")(tool_routes._make_streaming_post_handler(ask, Body, "asker"))
+    app.post("/ask")(tool_routes._make_streaming_post_handler(ask, Body, "reader"))
     with TestClient(app) as client:
         response = client.post(
             "/ask", json={"question": "Q"}, headers={"accept": "text/event-stream"}

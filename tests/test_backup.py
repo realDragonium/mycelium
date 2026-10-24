@@ -964,6 +964,31 @@ def test_import_refuses_history_columns_the_table_does_not_have(
     assert _row_count(dst, "entities") == 0
 
 
+def test_import_restores_an_asker_as_a_reader(tmp_path, caplog):
+    """`asker` was retired into `reader`; archives made before still name it."""
+    src = tmp_path / "src"
+    src.mkdir()
+    _seed_substrate(src)
+    asker = {
+        "id": "u-asker",
+        "type": "service",
+        "name": "Support bot",
+        "role": "asker",
+        "status": "active",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    tampered = _tampered_archive(tmp_path, src, "users", "auth.jsonl", asker)
+
+    dst = tmp_path / "dst"
+    with caplog.at_level("WARNING", logger=backup.logger.name):
+        backup.import_substrate(tampered, dst)
+
+    with closing(sqlite3.connect(dst / "mycelium-auth.db")) as conn:
+        role = conn.execute("SELECT role FROM users WHERE id = 'u-asker'").fetchone()
+    assert role == ("reader",)
+    assert "deprecated asker role" in caplog.text
+
+
 # --- prompt texts -----------------------------------------------------------
 
 

@@ -1331,15 +1331,11 @@ def test_a_refused_draft_is_gated_exactly_where_its_source_material_is():
     A draft is a recombination of substrate statements, so gating it above
     `get_statements` would protect nothing: the same caller can read every
     statement the draft was built from, and every document that passed review.
-    What must hold is that the role below reader cannot reach one.
     """
     required = auth.required_role_for("get_documentation_run")
     assert required == auth.required_role_for("get_statements")
     assert required == auth.required_role_for("get_generated_document")
 
-    assert not auth.principal_satisfies(
-        auth.Principal(id="t", name="t", role="asker", type="human"), required
-    )
     assert auth.principal_satisfies(
         auth.Principal(id="t", name="t", role="reader", type="human"), required
     )
