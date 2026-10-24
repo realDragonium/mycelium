@@ -25,6 +25,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from mycelium import auth_store, guidelines, prompt_store, server, store
@@ -230,22 +231,18 @@ def test_seeded_text_is_the_source_file():
     assert "> ⚠️ needs verification:" in guidance
 
 
-def test_stored_guidance_addresses_a_run_that_has_only_the_store():
-    """What the guidance may assume its reader can reach. It names each
-    template as the sibling row it is — every name resolves to a row that
-    was seeded, and every seeded template is named — reaches for no file,
-    and carries none of the frontmatter that dispatches a local skill."""
-    seed = _seed_script()
-    conn = _conn()
-    seed.seed(conn, guidelines.read_rows())
+@pytest.mark.parametrize("starter", guidelines.STARTERS, ids=lambda s: s.name)
+def test_starter_guidance_addresses_a_run_that_has_only_the_store(starter):
+    """What the guidance may assume its reader can reach. A starter is saved
+    under whatever name its profile gets, so it names no row; it reaches for
+    no file, and carries none of the frontmatter that dispatches a local
+    skill."""
+    guidance = starter.sources()["guidance"].read_text(encoding="utf-8")
 
-    guidance = prompt_store.latest_text(conn, "guideline-set", "kb-authoring/guidance")
-    seeded = {r["name"] for r in prompt_store.list_current(conn, "guideline-set")}
-
-    named = set(re.findall(r"kb-authoring/[a-z-]+", guidance))
-    non_types = {guidelines.row_name(slot) for slot in guidelines.NON_TYPE_SLOTS}
-    assert named == seeded - non_types
-
+    assert (
+        re.findall(r"\b[a-z-]+/(?:guidance|exposure|how-to|reference)\b", guidance)
+        == []
+    )
     assert re.findall(r"[\w./-]+\.md", guidance) == []
     assert ".claude" not in guidance
 

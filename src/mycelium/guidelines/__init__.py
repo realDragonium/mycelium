@@ -8,6 +8,7 @@ profile snapshot adapter used by generation runs.
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from pathlib import Path
 
 #: The prompt-store `type` every row of every guideline set is stored under.
@@ -70,26 +71,67 @@ NON_TYPE_SLOTS = frozenset(
     }
 )
 
-#: The one set that ships. A second set is data — added through the tools,
-#: with no source files and no entry here (see `internal-doc` in the doc).
+#: The set a fresh instance starts with, and the default profile's name.
 SET_NAME = "kb-authoring"
 
-_SET_DIR = Path(__file__).resolve().parent / SET_NAME
+_DIR = Path(__file__).resolve().parent
 
-#: Row slot -> the file whose contents that row holds verbatim. `guidance` and
-#: `exposure` steer the whole set; the rest are named for the document type
-#: they produce, so a run fetches exactly the template it is writing.
-#:
-#: Explicit starter contents; subsequent deployments do not add or restore slots.
-SOURCES: dict[str, Path] = {
-    "guidance": _SET_DIR / "guidance.md",
-    "exposure": _SET_DIR / "exposure.md",
-    "tutorial": _SET_DIR / "templates" / "tutorial.md",
-    "how-to": _SET_DIR / "templates" / "how-to.md",
-    "reference": _SET_DIR / "templates" / "reference.md",
-    "explanation": _SET_DIR / "templates" / "explanation.md",
-    "troubleshooting": _SET_DIR / "templates" / "troubleshooting.md",
-}
+
+@dataclass(frozen=True)
+class Starter:
+    """Packaged profile content an editor can start a profile from or reset
+    one to. Only `SET_NAME` is seeded; the others are offered, never stored
+    until someone saves them."""
+
+    name: str
+    title: str
+    description: str
+    #: The seeded audience the starter is written for; None writes for the
+    #: default internal audience.
+    audience: str | None
+    templates: tuple[str, ...]
+
+    def sources(self) -> dict[str, Path]:
+        """Row slot -> the file whose contents that row holds verbatim."""
+        root = _DIR / self.name
+        return {
+            "guidance": root / "guidance.md",
+            "exposure": root / "exposure.md",
+            **{name: root / "templates" / f"{name}.md" for name in self.templates},
+        }
+
+
+STARTERS: tuple[Starter, ...] = (
+    Starter(
+        SET_NAME,
+        "Knowledge base",
+        "Every Diátaxis type for the profile's audience: tutorials, how-tos, "
+        "reference, explanations and troubleshooting.",
+        None,
+        ("tutorial", "how-to", "reference", "explanation", "troubleshooting"),
+    ),
+    Starter(
+        "help-center",
+        "Help center",
+        "For people who use the product: short, task-oriented how-tos, "
+        "troubleshooting and light explanations, with limits stated plainly "
+        "and no internals.",
+        "external-non-technical",
+        ("how-to", "troubleshooting", "explanation"),
+    ),
+    Starter(
+        "internal-guide",
+        "Internal guide",
+        "For support, sales and customer success: reference, explanations, "
+        "how-tos and troubleshooting with the conditions, edge cases and "
+        "limits staff need to answer customers.",
+        "internal-non-technical",
+        ("reference", "explanation", "how-to", "troubleshooting"),
+    ),
+)
+
+#: The seeded set's row slot -> source file.
+SOURCES: dict[str, Path] = STARTERS[0].sources()
 
 
 def row_name(slot: str, set_name: str = SET_NAME) -> str:

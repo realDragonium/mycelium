@@ -22,6 +22,12 @@ def documentation_profiles_http(request: Request) -> documentation_profiles.Prof
     return documentation_profiles.view(_require_principal(request))
 
 
+@router.get("/api/documentation/starters")
+def documentation_starters_http(request: Request) -> dict[str, object]:
+    _require_principal(request)
+    return {"starters": documentation_profiles.starters()}
+
+
 @router.get("/api/documentation/profiles/{name}")
 def documentation_profile_http(
     name: str, request: Request

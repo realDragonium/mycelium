@@ -744,3 +744,41 @@ def seed_starters(conn: sqlite3.Connection) -> None:
                 deleted=0,
                 created_by="seed",
             )
+
+
+class Starter(Model):
+    name: str
+    title: str
+    description: str
+    audience: str | None
+    guidance: str
+    exposure: str
+    templates: tuple[Template, ...]
+
+
+def starters() -> tuple[Starter, ...]:
+    """The packaged starters an editor may create a profile from or reset
+    one to; a starter whose files cannot be read is left out."""
+    offered: list[Starter] = []
+    for starter in guidelines.STARTERS:
+        try:
+            texts = {
+                slot: path.read_text(encoding="utf-8")
+                for slot, path in starter.sources().items()
+            }
+        except OSError:
+            continue
+        offered.append(
+            Starter(
+                name=starter.name,
+                title=starter.title,
+                description=starter.description,
+                audience=starter.audience,
+                guidance=texts["guidance"],
+                exposure=texts["exposure"],
+                templates=tuple(
+                    Template(name=name, text=texts[name]) for name in starter.templates
+                ),
+            )
+        )
+    return tuple(offered)

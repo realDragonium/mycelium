@@ -9,46 +9,21 @@ a confidence marker rather than inventing it.
 
 ---
 
-## Step 1: Build a substrate knowledge map
+## Step 1: Gather the facts the type needs
 
-Query the substrate systematically before writing. The goal is to accumulate enough
-verified facts that every non-trivial section of the template can be backed by at least
-one statement.
+Gather until every non-trivial section of the template can be backed by at
+least one statement. Different types rest on different kinds of statement:
 
-### 1a. Identify entities and statements
-
-```
-search_statements(query=<topic>, min_score=0.7, depth=2)
-```
-
-Then expand into the entities the hits mention:
-
-```
-list_statements(name=<entity-name>)  # statements that mention the entity, by any alias
-get_entity(id=<entity-id>)           # its names and entity-to-entity links
-```
-
-Repeat for each entity that's central to the topic. Aim for 2–4 passes before writing.
-
-### 1b. Gather specific fact types by template
-
-Different templates need different fact shapes from the substrate:
-
-| Template | What to collect from substrate |
+| Type | What to gather |
 |---|---|
 | `tutorial` | Capability statements (what the user can do), event sequences (what happens when), state statements (what the system looks like at key points) |
-| `how-to` | Action/event sequences, state preconditions, rejection events (what blocks the task) |
-| `reference` | State statements (fields, config flags, values), rule statements (how values are computed/bounded), capability statements |
-| `explanation` | Rule statements (why things work a certain way), capability statements, temporal/provider variation states |
-| `troubleshooting` | Cause/check/action statements, rejection events, state preconditions that must hold |
+| `how-to` | Procedures and their actions, state preconditions, rejection events (what blocks the task) |
+| `reference` | State and property statements (fields, settings, values), rule statements (how values are computed or bounded), capability statements |
+| `explanation` | Rule statements (why things work a certain way), capability statements, states that vary over time or by plan |
+| `troubleshooting` | Cause, check and action statements, rejection events, state preconditions that must hold |
 
-### 1c. Check for gaps
-
-If a section of the template requires a fact you cannot find in the substrate:
-
-1. Try `grep_statements(query=<literal term>)` — semantic search may have missed it.
-2. If still absent, mark it with a confidence marker (§ Accuracy below) rather than
-   inventing the fact.
+A section the substrate cannot support is a knowledge gap, not a section to
+fill from what systems like this usually do.
 
 ---
 
@@ -75,24 +50,14 @@ Anything written without a marker must be traceable to a substrate statement.
 
 ## Step 3: Fill the template
 
-The template for each type is a sibling row of this one: same `guideline-set` type,
-named for the document type it produces.
-
-| Type | Row |
-|---|---|
-| Tutorial | `kb-authoring/tutorial` |
-| How-to | `kb-authoring/how-to` |
-| Reference | `kb-authoring/reference` |
-| Explanation | `kb-authoring/explanation` |
-| Troubleshooting | `kb-authoring/troubleshooting` |
-
-The row for the type you were given is already in front of you. Write the
-document using it as the starting point.
+The template for the type you were given is already in front of you. Write
+the document using it as the starting point.
 
 Rules that apply to all types when filling in the template:
 
-- **Audience field** — choose `external` (customers/end-users), `internal` (staff only),
-  or `both` (visible everywhere, written for the most cautious audience).
+- **Audience field** — `external` when the audience you write for is external,
+  `internal` when it is internal. The audience is fixed for the run; the field
+  records it, it does not choose it.
 - **Vocabulary** — write about the product, never about the substrate behind
   the document: no "substrate", no statement or entity ids (`stm_…`, `ent_…`),
   no tool names.

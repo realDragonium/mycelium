@@ -1,10 +1,11 @@
 # What a knowledge-base article may reveal
 
 This set writes for a reader who is not in the room and may not be in the
-company. An article's frontmatter names its audience as `external`, `internal`
-or `both`, but the boundary below holds for all three: an audience label is a
-routing hint, not a control, and a document that leaks has leaked wherever it
-was filed.
+company. The run reads only what its audience may see, and the reviewer also
+checks the article against the audience's description. The boundary below
+holds on top of both, whatever the audience: a statement the audience may see
+can still carry a detail no article should repeat, and a document that leaks
+has leaked wherever it was filed.
 
 A reviewer checks the finished article against this text. A writer who applies
 it first keeps the run's one retry for something else.

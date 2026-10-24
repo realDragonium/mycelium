@@ -199,17 +199,24 @@ type Delivery = 'people' | 'agents';
 interface Profile {
   name: string; revision: string | number; guidance: string; exposure: string; templates: Template[];
   audience: string | null; effective_audience: string | null; maintenance: Maintenance; planning: Planning;
-  plan_review: PlanReview; delivery: Delivery;
+  plan_review: PlanReview; delivery: Delivery; destinations: string[];
   retired?: boolean; ready?: boolean; issues?: string[]; retired_templates?: string[];
 }
 interface Profiles { profiles: Profile[]; default_profile: string | null; can_write: boolean; can_retire: boolean }
-interface ProfilesView extends Profiles { audiences: AudienceView[] }
-interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; delivery: Delivery }
+interface Starter { name: string; title: string; description: string; audience: string | null; guidance: string; exposure: string; templates: Template[] }
+interface ProfilesView extends Profiles { audiences: AudienceView[]; starters: Starter[]; destinations: string[] }
+interface SaveProfile { revision: string | number; guidance: string; exposure: string; templates: { name: string; text: string }[]; audience: string | null; maintenance: Maintenance; planning: Planning; plan_review: PlanReview; delivery: Delivery; destinations: string[] }
 
 export function DocumentationProfiles() {
   const { state, reload } = useAsync(useCallback(async (signal: AbortSignal): Promise<ProfilesView> => {
-    const [profiles, audiences] = await Promise.all([getJSON<Profiles>('/api/documentation/profiles', signal), getJSON<AudiencesResponse>('/api/audiences', signal)]);
-    return { ...profiles, audiences: audiences.audiences };
+    const [profiles, audiences, starters, destinations] = await Promise.all([
+      getJSON<Profiles>('/api/documentation/profiles', signal),
+      getJSON<AudiencesResponse>('/api/audiences', signal),
+      getJSON<{ starters: Starter[] }>('/api/documentation/starters', signal),
+      // Destination settings that fail to load must not hide the profiles.
+      getJSON<{ destinations: { name: string }[] }>('/api/documentation/destinations', signal).catch(() => ({ destinations: [] })),
+    ]);
+    return { ...profiles, audiences: audiences.audiences, starters: starters.starters, destinations: destinations.destinations.map(item => item.name) };
   }, []));
   const [form, setForm] = useState<Profile | null>(null);
   const [original, setOriginal] = useState<Profile | null>(null);
@@ -232,8 +239,23 @@ export function DocumentationProfiles() {
   const create = (source: Profile | null) => {
     if (!discardOk()) return;
     const audience = source?.audience && data?.audiences.some(item => !item.retired && item.id === source.audience) ? source.audience : null;
-    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', delivery: source?.delivery ?? 'people' }, true);
+    open({ name: source ? `${source.name}-copy` : '', revision: '', guidance: source?.guidance || '', exposure: source?.exposure || '', templates: source ? source.templates.map(t => ({ ...t, isNew: true })) : [], audience, effective_audience: source?.effective_audience ?? null, maintenance: source?.maintenance ?? 'manual', planning: source?.planning ?? 'off', plan_review: source?.plan_review ?? 'person', delivery: source?.delivery ?? 'people', destinations: source?.destinations ?? [] }, true);
   };
+  const liveAudience = (id: string | null) => id && data?.audiences.some(item => !item.retired && item.id === id) ? id : null;
+  const createFromStarter = (starter: Starter) => {
+    if (!discardOk() || !data) return;
+    const taken = new Set(data.profiles.map(p => p.name));
+    let name = starter.name, n = 2;
+    while (taken.has(name)) name = `${starter.name}-${n++}`;
+    open({ name, revision: '', guidance: starter.guidance, exposure: starter.exposure, templates: starter.templates.map(t => ({ ...t, isNew: true })), audience: liveAudience(starter.audience), effective_audience: null, maintenance: 'manual', planning: 'off', plan_review: 'person', delivery: 'people', destinations: [] }, true);
+  };
+  // Replaces the texts only: audience, policies and destinations are the instance's decisions, not the starter's.
+  const resetToStarter = (starter: Starter) => {
+    if (!form || !window.confirm(`Replace ${form.name}'s guidance, disclosure rules and templates with the ${starter.title} starter? Nothing is saved until you save the profile.`)) return;
+    const saved = new Set((original?.templates ?? []).map(t => t.name));
+    change({ guidance: starter.guidance, exposure: starter.exposure, templates: starter.templates.map(t => ({ ...t, isNew: !saved.has(t.name) })) });
+  };
+  const toggleDestination = (name: string, on: boolean) => form && change({ destinations: on ? [...form.destinations, name] : form.destinations.filter(item => item !== name) });
   const change = (patch: Partial<Profile>) => { setForm(f => f && { ...f, ...patch }); setMessage(null); };
   const changeTemplate = (i: number, patch: Partial<Template>) => form && change({ templates: form.templates.map((t, j) => j === i ? { ...t, ...patch } : t) });
   const duplicateTemplate = (t: Template) => form && change({ templates: [...form.templates, { name: uniqueName(form.templates, `${t.name}-copy`), text: t.text, isNew: true }] });
@@ -248,7 +270,7 @@ export function DocumentationProfiles() {
   const save = (e: FormEvent) => {
     e.preventDefault();
     if (form) {
-      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience, maintenance: form.maintenance, planning: form.planning, plan_review: form.plan_review, delivery: form.delivery };
+      const body: SaveProfile = { revision: form.revision, guidance: form.guidance, exposure: form.exposure, templates: form.templates.map(({ name, text }) => ({ name, text })), audience: form.audience, maintenance: form.maintenance, planning: form.planning, plan_review: form.plan_review, delivery: form.delivery, destinations: form.destinations };
       void act(() => putJSON<Profile>(path(form.name), body), 'Profile saved. New runs use it.');
     }
   };
@@ -256,7 +278,13 @@ export function DocumentationProfiles() {
   const reloadProfile = () => { if (form && !creating && discardOk('Discard local edits and load the saved profile?')) void act(() => getJSON<Profile>(path(form.name)), 'Saved profile loaded.'); };
 
   return (
-    <Card title="Writing profiles & templates" actions={data?.can_write && <button type="button" className="btn sm" disabled={busy} onClick={() => create(null)}>New profile</button>}>
+    <Card title="Writing profiles & templates" actions={data?.can_write && <div className="row gap-sm">
+      {data.starters.length > 0 && <select className="input" aria-label="New profile from a starter" value="" disabled={busy} onChange={e => { const starter = data.starters.find(s => s.name === e.target.value); if (starter) createFromStarter(starter); }}>
+        <option value="">New from starter…</option>
+        {data.starters.map(s => <option key={s.name} value={s.name} title={s.description}>{s.title}</option>)}
+      </select>}
+      <button type="button" className="btn sm" disabled={busy} onClick={() => create(null)}>New profile</button>
+    </div>}>
       <p className="muted">Writing guidance, disclosure rules and document templates used when generating documents. Stored here, versioned, no deploy needed. Audience guidance does not change who can open a generated document.</p>
       {error && <Notice tone="error">{error}</Notice>}
       {message && <Notice tone="success">{message}</Notice>}
@@ -295,6 +323,14 @@ export function DocumentationProfiles() {
               </select><span className="hint">The AI reviewer is never the planner: a model call separate from the planner's, or another agent while documentation planning is set to External agent. It also decides out-of-date documents. Approved items start within the batch and active-run limits; dismissals are remembered.</span></label>
               <label className="check"><input type="checkbox" checked={form.delivery === 'agents'} onChange={e => change({ delivery: e.target.checked ? 'agents' : 'people' })} />Agents may deliver</label>
               <p className="hint">Lets writer and admin agents open or update this profile's GitHub pull requests over MCP (deliver_document). Merging stays with the repository.</p>
+              <fieldset className="stack" disabled={!creating && !data.can_retire}>
+                <legend className="section-label">Publish only to</legend>
+                {data.destinations.length === 0 && form.destinations.length === 0 && <p className="hint">No destinations are configured yet; add them under Documentation delivery.</p>}
+                {[...data.destinations, ...form.destinations.filter(name => !data.destinations.includes(name))].map(name => (
+                  <label key={name} className="check"><input type="checkbox" checked={form.destinations.includes(name)} onChange={e => toggleDestination(name, e.target.checked)} />{name}{!data.destinations.includes(name) && ' (not configured)'}</label>
+                ))}
+                <p className="hint">{form.destinations.length ? 'Documents of this profile can be published only to the checked destinations, by people, agents and automatic revisions.' : 'None checked: documents of this profile can be published to any destination.'}{!creating && !data.can_retire && ' Only administrators can change where an existing profile publishes.'}</p>
+              </fieldset>
               <label className="field"><span>Writing guidance</span><textarea className="input" rows={8} value={form.guidance} onChange={e => change({ guidance: e.target.value })} /></label>
               <label className="field"><span>Disclosure rules</span><textarea className="input" rows={6} value={form.exposure} placeholder="What may be disclosed, and what must stay internal." onChange={e => change({ exposure: e.target.value })} /></label>
               <h4 className="section-label">Document templates</h4>
@@ -318,6 +354,10 @@ export function DocumentationProfiles() {
             <div className="row gap-sm wrap">
               {!creating && <button type="button" className="btn ghost xs" disabled={busy} onClick={reloadProfile}>Reload saved profile</button>}
               {data.can_write && <button type="button" className="btn ghost xs" disabled={busy} onClick={() => create(form)}>Duplicate profile</button>}
+              {data.can_retire && !creating && !form.retired && data.starters.length > 0 && <select className="input" aria-label="Reset to a starter" value="" disabled={busy} onChange={e => { const starter = data.starters.find(s => s.name === e.target.value); if (starter) resetToStarter(starter); }}>
+                <option value="">Reset to starter…</option>
+                {data.starters.map(s => <option key={s.name} value={s.name} title={s.description}>{s.title}</option>)}
+              </select>}
               {data.can_retire && !creating && !form.retired && <button type="button" className="btn ghost xs" disabled={busy || form.name === data.default_profile} onClick={retire}>Retire profile</button>}
             </div>
             {form.name === data.default_profile && <p className="hint">This is the default profile. Choose another default under Documentation delivery before retiring it or its last template.</p>}

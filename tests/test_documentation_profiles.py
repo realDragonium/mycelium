@@ -539,3 +539,19 @@ def test_publishing_refuses_a_destination_the_profile_does_not_name(db, tmp_path
         publication.publish(drafts, document, "help-site")
     assert docs_store.get_document(drafts, document)["delivery_destination"] is None
     drafts.close()
+
+
+def test_starters_offer_every_template_for_a_seeded_audience(db):
+    offered = {starter.name: starter for starter in profiles.starters()}
+    assert set(offered) == {item.name for item in guidelines.STARTERS}
+    seeded = {item.id for item in audiences.live(db)}
+    for starter in guidelines.STARTERS:
+        assert starter.audience is None or starter.audience in seeded
+        assert [t.name for t in offered[starter.name].templates] == list(
+            starter.templates
+        )
+    assert offered[guidelines.SET_NAME].templates == tuple(
+        profiles.Template(name=slot, text=path.read_text(encoding="utf-8"))
+        for slot, path in guidelines.SOURCES.items()
+        if slot not in guidelines.NON_TYPE_SLOTS
+    )
