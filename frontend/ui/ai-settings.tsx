@@ -302,10 +302,10 @@ const MODE_LABEL: Record<ReviewMode, string> = { off: 'Off', 'review-only': 'Rev
 const AUTO_APPLY_LABEL: Record<AutoApply, string> = { clean: 'Only clean approvals', with_corrections: 'Approvals with corrections too' };
 
 interface BacklogJob {
-  status: 'running' | 'paused' | 'finished'; budget_tokens: number | null; used_tokens: number; reviewed: number; remaining: number;
+  status: 'running' | 'paused' | 'finished'; used_tokens: number; reviewed: number; remaining: number;
   detail: string | null; started_at: string; finished_at: string | null;
 }
-interface Backlog { draft_ids: string[]; estimated_tokens: number | null; external_agent: boolean; job: BacklogJob | null }
+interface Backlog { draft_ids: string[]; external_agent: boolean; job: BacklogJob | null }
 
 export function DraftReviewSettings() {
   const { state, reload } = useAsync(useCallback(() => getJSON<ReviewConfig>('/api/draft-review/settings'), []));
@@ -316,11 +316,10 @@ export function DraftReviewSettings() {
 }
 
 // Drafts submitted while review was off are not reviewed retroactively. An
-// admin can run their sequential review as a pausable, budget-aware job.
+// admin can run their sequential review as a pausable job.
 function BacklogOffer() {
   const load = useCallback((signal: AbortSignal) => getJSON<Backlog>('/api/draft-review/backlog', signal), []);
   const { state, reload, update } = useAsync(load);
-  const [budget, setBudget] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const data = dataOf(state);
@@ -336,7 +335,7 @@ function BacklogOffer() {
     event.preventDefault();
     setBusy(true); setError(null);
     try {
-      const result = await postJSON<{ job: BacklogJob }>('/api/draft-review/backlog', { budget_tokens: budget === '' || data?.external_agent ? null : Number(budget) });
+      const result = await postJSON<{ job: BacklogJob }>('/api/draft-review/backlog');
       update(current => ({ ...current, job: result.job }));
     }
     catch (e) { setError(errorMessage(e)); reload(); }
@@ -361,12 +360,12 @@ function BacklogOffer() {
 
   if (!data) return null;
   const external = data.external_agent;
-  const used = external ? '' : `, ${tokens(job?.used_tokens ?? 0)} tokens used${job?.budget_tokens == null ? '' : ` of ${tokens(job.budget_tokens)}`}`;
+  const used = external ? '' : `, ${tokens(job?.used_tokens ?? 0)} tokens used`;
   const progress = job && `${job.status === 'paused' ? 'Backlog review paused' : external ? 'Queuing the backlog for an external agent, oldest first' : 'Reviewing the backlog oldest-first'}: ${job.reviewed} ${external ? 'queued' : 'reviewed'}, ${job.remaining} remaining${used}.`;
   if (job?.status === 'running') return <Notice><div className="stack-sm"><div>{progress}</div><div><button className="btn sm" disabled={busy} onClick={() => void pause()}>{busy ? 'Pausing…' : 'Pause'}</button></div>{error && <p className="form-error">{error}</p>}</div></Notice>;
   if (job?.status === 'paused') return <Notice tone="warn"><div className="stack-sm"><div>{progress}</div>{job.detail && <div>{job.detail}</div>}<div><button className="btn primary sm" disabled={busy} onClick={() => void resume()}>{busy ? 'Resuming…' : 'Resume'}</button></div>{error && <p className="form-error">{error}</p>}</div></Notice>;
 
-  const n = data.draft_ids.length, estimate = data.estimated_tokens;
+  const n = data.draft_ids.length;
   const lastResult = job?.status === 'finished' && <p className="muted small">Last backlog review: {external ? 'queued' : 'reviewed'} {job.reviewed} draft{job.reviewed === 1 ? '' : 's'}{used}.{job.detail && <> {job.detail}</>}</p>;
   if (n === 0) return lastResult || null;
   return (
@@ -375,8 +374,7 @@ function BacklogOffer() {
         {lastResult}
         <div><b>{n} submitted draft{n === 1 ? ' is' : 's are'} waiting from before review was on.</b> {n === 1 ? 'It is' : 'They are'} not reviewed automatically. Review {n === 1 ? 'it' : 'them'} now under these settings?</div>
         <form className="stack-sm" onSubmit={start}>
-          {!external && <label className="field"><span>Stop after using (tokens)</span><input className="input" type="number" min="1" step="1" value={budget} onChange={e => setBudget(e.target.value)} /></label>}
-          <div className="row gap-sm"><button type="submit" className="btn primary sm" disabled={busy}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}${estimate === null ? '' : ` (about ${tokens(estimate)} tokens)`}`}</button>{external ? <span className="hint">Each draft is queued for an external agent to claim.</span> : estimate === null && <span className="hint">Tokens not estimated: no review in the last 30 days.</span>}</div>
+          <div className="row gap-sm"><button type="submit" className="btn primary sm" disabled={busy}>{busy ? 'Starting…' : `Review ${n} waiting draft${n === 1 ? '' : 's'}`}</button>{external && <span className="hint">Each draft is queued for an external agent to claim.</span>}</div>
           {error && <p className="form-error">{error}</p>}
         </form>
       </div>

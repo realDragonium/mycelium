@@ -6,8 +6,6 @@ Runs the real loop with the fakes from `test_ingest`: no server, DB or model.
 
 from __future__ import annotations
 
-import pytest
-
 from mycelium import ai
 from mycelium.ingest import DraftCreated, IngestConfig, NothingToIngest
 from mycelium.ingest.connect import Looked, Target, looked_at, run_connect
@@ -331,18 +329,13 @@ def test_stops_reading_while_another_turn_and_the_final_emit_fit_under_the_cap()
     assert len(client.calls) == 2
 
 
-def test_its_model_calls_are_metered_as_connect_and_a_spent_budget_pauses_it():
+def test_its_model_calls_are_metered_as_connect():
     calls: list[ai.usage.Call] = []
     ai.usage.install(calls.append)
     try:
         result, _, _ = _connect(
             [_op("add_links", {"links": [_edge("stm_invoice", "stm_export")]})]
         )
-        ai.usage.install(
-            calls.append, lambda action: "Budget spent" if action == "connect" else None
-        )
-        with pytest.raises(ai.usage.Paused, match="Budget spent"):
-            _connect([])
     finally:
         ai.usage.install(None)
 

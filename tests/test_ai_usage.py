@@ -1,4 +1,4 @@
-"""The AI usage ledger: recording, reports and the monthly budget."""
+"""The AI usage ledger: recording and reports."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from mycelium import ai, ai_usage, drafts_store
-from mycelium.product_settings import AIBudgetSettings
 
 NOW = datetime(2026, 10, 23, 12, tzinfo=UTC)
 
@@ -121,46 +120,3 @@ def test_installed_metering_records_each_call_in_the_drafts_db(
     )
     assert (row["input_tokens"], row["output_tokens"]) == (1_000_000, 1000)
     assert row["cost_usd"] is None
-
-
-def test_mean_run_tokens_averages_whole_runs(conn: sqlite3.Connection) -> None:
-    since = "2026-10-01T00:00:00.000Z"
-    assert ai_usage.mean_run_tokens(conn, "draft_review", since) is None
-    for run_id in ("drv_1", "drv_1", "drv_2"):
-        ai_usage.record(conn, _call("draft_review", run_id=run_id), at="2026-10-02")
-    ai_usage.record(
-        conn, _call("draft_review", run_id="drv_0", output=9000), at="2026-09-30"
-    )
-
-    assert ai_usage.mean_run_tokens(conn, "draft_review", since) == 150
-
-
-def test_budget_counts_only_this_utc_month(conn: sqlite3.Connection) -> None:
-    ai_usage.record(conn, _call(output=5000), at="2026-09-30T23:00:00.000Z")
-    ai_usage.record(conn, _call(output=835), at="2026-10-01T00:00:00.000Z")
-    settings = AIBudgetSettings(monthly_limit_tokens=1000, warn_percent=80)
-
-    status = ai_usage.budget(conn, settings, NOW)
-
-    assert status is not None
-    assert (status.used_tokens, status.percent, status.warning, status.paused) == (
-        850,
-        85.0,
-        True,
-        False,
-    )
-    assert ai_usage.budget(conn, AIBudgetSettings(), NOW) is None
-
-
-def test_a_spent_budget_pauses_only_background_actions_when_asked(
-    conn: sqlite3.Connection,
-) -> None:
-    ai_usage.record(conn, _call(), at="2026-10-05T00:00:00.000Z")
-    pausing = AIBudgetSettings(monthly_limit_tokens=100, pause_background=True)
-
-    for action in ("audience_labelling", "draft_review", "connect"):
-        assert ai_usage.paused_reason(conn, action, pausing, NOW)
-    for action in ("ask", "ingest", "docgen", "alias_discovery", "other"):
-        assert ai_usage.paused_reason(conn, action, pausing, NOW) is None
-    warning_only = AIBudgetSettings(monthly_limit_tokens=100)
-    assert ai_usage.paused_reason(conn, "draft_review", warning_only, NOW) is None

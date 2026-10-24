@@ -114,6 +114,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     from .github_credentials import SCHEMA as CREDENTIAL_SCHEMA
     from .model_settings import SCHEMA as MODEL_SCHEMA
     from .product_settings import SCHEMA as PRODUCT_SCHEMA
+    from .product_settings import drop_budget
     from .prompt_defaults import SCHEMA as DEFAULTS_SCHEMA
 
     conn.executescript(
@@ -128,6 +129,7 @@ def migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
     with _writing(conn):
         _drop_research_settings(conn)
+        drop_budget(conn)
 
 
 def _drop_research_settings(conn: sqlite3.Connection) -> None:

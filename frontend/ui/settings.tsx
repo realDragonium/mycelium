@@ -31,8 +31,8 @@ const GROUPS: { title: string; sections: SectionDef[] }[] = [
     { id: 'models', label: 'Models', blurb: 'Which provider and model each AI action uses.' },
     { id: 'prompts', label: 'Prompts', blurb: 'The behavioural instructions each AI action follows.' },
     { id: 'review', label: 'Draft review', blurb: 'Whether submitted drafts get an automatic AI review, and whether it may apply them.' },
-    { id: 'limits', label: 'Limits', blurb: 'Token, time and concurrency budgets for each AI action.' },
-    { id: 'usage', label: 'AI usage', blurb: 'Tokens each AI action and model used, and an optional monthly token budget.' },
+    { id: 'limits', label: 'Limits', blurb: 'Token, time and concurrency limits that stop a runaway AI run.' },
+    { id: 'usage', label: 'AI usage', blurb: 'Tokens each AI action and model used. Spend and spend limits are on each provider’s billing dashboard.' },
   ] },
   { title: 'Publishing', sections: [
     { id: 'documentation', label: 'Documentation', blurb: 'Writing profiles and templates, and the GitHub repositories documents publish to.' },

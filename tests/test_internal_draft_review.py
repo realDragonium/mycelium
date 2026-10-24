@@ -1,27 +1,22 @@
 import json
 import threading
-from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 
 from mycelium import (
     ai,
-    ai_usage,
     auth,
     draft_review_model,
     draft_review_runs,
     draft_review_store,
     drafts_store,
     embed,
-    product_settings,
     server,
     store,
-    timestamps,
 )
 from mycelium.draft_review_store import Assessment
 from mycelium.server import draft_review, runtime
-from product_settings_helpers import set_product
 from review_helpers import correction
 from settings_helpers import save_model
 from settings_helpers import set_review_controls as _set_review_controls
@@ -1114,90 +1109,32 @@ def test_provider_failure_is_retried_once_and_never_rejects(running_app, monkeyp
     assert _gaps() == []
 
 
-@pytest.mark.parametrize(
-    "attempt,retries", [(1, 0), (2, draft_review_runs.MAX_RETRIES)]
-)
-def test_budget_pause_does_not_fail_rerun_or_reject(
-    review_server, monkeypatch, attempt, retries
-):
-    draft_id = _draft()
-    calls = []
-
-    def paused(context):
-        calls.append(context)
-        raise ai.usage.Paused("Paused: monthly AI budget reached.")
-
-    monkeypatch.setattr(draft_review_runs, "RUNNER", paused)
-    _automatic()
-    run = draft_review_runs.start(draft_id, attempt=attempt, retries=retries)
-    result = _result(draft_id)
-
-    assert len(calls) == 1
-    assert result["status"] == "paused"
-    assert result["detail"] == "Paused: monthly AI budget reached."
-    assert (result["attempt"], result["retries"]) == (attempt, retries)
-    assert result["application"] == "unapplied"
-    assert server.get_draft(draft_id)["status"] == "submitted"
-    assert draft_review_runs.backlog() == []
-    assert _gaps() == []
-    draft_review_store.mark_orphaned(server._drafts_db())
-    assert draft_review_store.get(server._drafts_db(), run.run_id).status == "paused"
-
-
-@pytest.mark.parametrize("resume", ["raise-budget", "disable-pausing", "new-month"])
-def test_sweep_resumes_paused_reviews_without_retry_limits(
-    review_server, monkeypatch, resume
-):
-    at = datetime(2026, 10, 1, tzinfo=UTC)
-    budget = product_settings.AIBudgetSettings(
-        monthly_limit_tokens=1000, pause_background=True
+def _budget_paused(draft_id, **fields):
+    """A review an earlier version's monthly AI budget paused."""
+    revision = int(server.get_draft(draft_id)["revision"])
+    run = draft_review_store.new(draft_id, "review-and-apply", revision)
+    run = run.model_copy(
+        update={"status": "paused", "detail": "Paused: budget reached."} | fields
     )
-    set_product(budget)
     with store.transaction(server._drafts_db()):
-        ai_usage.record(
-            server._drafts_db(),
-            ai.usage.Call(
-                action="draft_review",
-                provider="openai",
-                model="gpt-fixture",
-                usage=ai.Usage(input_tokens=1000),
-                duration_ms=1,
-                ok=True,
-                run_id=None,
-                draft_id=None,
-            ),
-            at=timestamps.of(at),
-        )
+        draft_review_store.save(server._drafts_db(), run)
+    return run
+
+
+def test_sweep_resumes_a_review_an_earlier_budget_paused(review_server, monkeypatch):
     draft_id = _draft()
-
-    def paused(context):
-        raise ai.usage.Paused("Paused: monthly AI budget reached.")
-
-    monkeypatch.setattr(draft_review_runs, "RUNNER", paused)
     _automatic()
-    monkeypatch.setattr(timestamps, "now", lambda: timestamps.of(at))
-    draft_review_runs.start(
+    paused = _budget_paused(
         draft_id,
         attempt=2,
         retries=draft_review_runs.MAX_RETRIES,
         previous_failure="Provider unavailable.",
     )
-    paused_run = _result(draft_id)
-    later = at + timedelta(days=10)
     monkeypatch.setattr(draft_review_runs, "RUNNER", lambda context: _assessment())
 
-    assert draft_review_runs.sweep(later) == []
-    assert _result(draft_id)["run_id"] == paused_run["run_id"]
-    if resume == "raise-budget":
-        set_product(budget.model_copy(update={"monthly_limit_tokens": 2000}))
-    elif resume == "disable-pausing":
-        set_product(budget.model_copy(update={"pause_background": False}))
-    else:
-        later = at.replace(month=11)
-
-    assert draft_review_runs.sweep(later) == [draft_id]
+    assert draft_review_runs.sweep() == [draft_id]
     result = _result(draft_id)
-    assert result["run_id"] != paused_run["run_id"]
+    assert result["run_id"] != paused.run_id
     assert (result["attempt"], result["retries"]) == (2, draft_review_runs.MAX_RETRIES)
     assert result["previous_failure"] == "Provider unavailable."
     assert result["application"] == "applied"
@@ -1205,14 +1142,8 @@ def test_sweep_resumes_paused_reviews_without_retry_limits(
 
 def test_sweep_does_not_resume_a_superseded_paused_run(review_server, monkeypatch):
     draft_id = _draft()
-
-    def paused(context):
-        raise ai.usage.Paused("Paused: monthly AI budget reached.")
-
-    monkeypatch.setattr(draft_review_runs, "RUNNER", paused)
     _automatic()
-    draft_review_runs.start(draft_id)
-    selected = _result(draft_id)
+    selected = _budget_paused(draft_id)
     retry_due = draft_review_runs._retry_due
     interleaved = []
 
@@ -1230,7 +1161,7 @@ def test_sweep_does_not_resume_a_superseded_paused_run(review_server, monkeypatc
     monkeypatch.setattr(draft_review_runs, "_retry_due", selection_then_manual_rerun)
 
     assert draft_review_runs.sweep() == []
-    assert interleaved == [selected["run_id"]]
+    assert interleaved == [selected.run_id]
     assert _result(draft_id)["application"] == "applied"
 
 

@@ -173,7 +173,7 @@ remain a separate server configuration (Ollama or OpenAI; see
 [Deployment](DEPLOYMENT.md#embedding-provider)), and search indexes are not
 changed by this screen.
 
-## AI usage and budget
+## AI usage
 
 `mycelium.ai` meters every `turn` and `structured` call, so no action needs its
 own accounting. Each call becomes one row in the `ai_usage` table of
@@ -191,31 +191,21 @@ rejected after the provider answered (a missing required tool call, an
 incomplete OpenAI response) are recorded with the tokens they used; a request
 that failed before the provider answered is recorded with none. The ledger
 is archived with drafts in backups: it is small, and restoring without it
-would reset the month's usage and the budget with it.
+would lose the usage history.
 
 Usage is counted in tokens. A call's total is every token the provider
 processed for it: input, cache reads, cache writes and output. Reports split
 it into input (uncached input and cache writes), cached (cache reads) and
 output. Mycelium keeps no prices, so it shows no dollar amounts; what the
-tokens cost is on each provider's billing dashboard. Rows written by earlier
-versions keep their estimated `cost_usd`, which nothing reads any more.
+tokens cost is on each provider's billing dashboard. Mycelium sets no AI
+budget either: set spend limits in dollars in each provider's console. The
+per-run token caps under **Settings → Limits** only stop a runaway run. Rows
+written by earlier versions keep their estimated `cost_usd`, which nothing
+reads any more.
 
 **Settings → AI usage** shows admins the totals, tokens per UTC day, per action
 and per model, and the recent runs that used the most tokens, linked. `GET
-/api/ai-usage?days=N` (admin, 1–366, default 30) returns the same report with
-the budget; `GET /api/ai-usage/budget` returns this month's budget state to
-admins and `null` to everyone else.
-
-The optional monthly budget is the `ai_budget` product settings section:
-`monthly_limit_tokens` (0 means none), `warn_percent` (default 80) and
-`pause_background` (default off). Tokens are counted per UTC calendar month.
-Past the warning percentage, admins see a banner. With pausing on, at 100% the
-background actions (audience labelling, draft review and the connect pass,
-which attributes its calls as `connect`) are refused before a request is sent,
-until the month ends or the budget is raised. A refused labelling batch stays
-due; a refused review run is paused with the reason and resumed by the review
-sweep once the budget allows, without using a retry. Ask, ingest, documentation, planning and alias
-discovery are never paused.
+/api/ai-usage?days=N` (admin, 1–366, default 30) returns the same report.
 
 ## Limits and repository integrations
 
@@ -230,10 +220,13 @@ existing cache switch.
 Input limits and retrieval widths appear only on the actions that support them.
 Draft review makes one structured assessment call per part, so it has no tool-operation or
 thinking control. Provider support for adaptive thinking depends on the chosen
-model.
+model. Draft review's `max_draft_tokens` (default 300,000) refuses a draft whose
+review could use more, and the connect pass's `max_run_tokens` (default
+2,000,000) stops a run that reaches it; 0 turns either off. They guard against
+a runaway run and are not spend limits.
 
-The defaults preserve the existing runtime budgets, including Ask's 90-second
-run and 75-second request budgets. Quick Ask still applies ceilings of 8
+The defaults preserve the existing runtime limits, including Ask's 90-second
+run and 75-second request limits. Quick Ask still applies ceilings of 8
 operations, 25 seconds per run, and 20 seconds per request, and disables its
 retrieval floor. Smaller saved limits remain effective. Ingest allows 32,000
 output tokens per request, thinking included, because a full draft outgrew the
@@ -284,7 +277,7 @@ settings.
 Ports, storage and trace paths, authentication, credentials, and other
 deployment configuration remain on the server.
 
-Documentation jobs capture AI budgets, the guideline preference, and
+Documentation jobs capture their run limits, the guideline preference, and
 destination coordinates used to read existing documents. Draft reviews capture
 their request limits. Subsequent settings changes affect later admissions.
 Delivery records pin their repository, host, and base branch: editing a destination
@@ -320,12 +313,20 @@ limit, with a warning in the log naming the old amount.
 
 | Old field | New field | Old default → new default |
 | --- | --- | --- |
-| `ai_budget.monthly_limit_usd` | `monthly_limit_tokens` | 0 (none) → 0 (none) |
 | `draft_review.max_cost_usd` | `max_draft_tokens` | $1 → 300,000 |
 | `connect.max_cost_usd` | `max_run_tokens` | $0.50 → 2,000,000 |
 
-A set monthly budget is therefore turned off; set it again in tokens under
-**Settings → AI usage**. Restoring an older backup applies the same rule.
+Restoring an older backup applies the same rule.
+
+## Upgrading past the AI budget
+
+Earlier versions had an optional monthly token budget (the `ai_budget`
+settings section) that warned admins and could pause background actions,
+and a token budget for a backlog review. Both are gone. The first start of
+this version drops the saved section, logging the limit when one was set,
+and the setup checklist's budget step; restoring an older backup does the
+same. A draft review the budget had paused is resumed by the review sweep.
+Set spend limits in each provider's console instead.
 
 ## Upgrading from pre-settings versions
 

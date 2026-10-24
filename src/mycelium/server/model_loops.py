@@ -169,11 +169,10 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
     run's model calls used), and `gaps_filed`: the knowledge gaps opened
     for statements too badly phrased to connect. The statements it looked at
     are not offered to "connect next" again until they or the statements
-    around them change. Refused while the monthly AI budget pauses
-    background actions. While connect is set to External agent the run is
+    around them change. While connect is set to External agent the run is
     queued for an outside agent (`waiting_for_agent`, as for `ingest`).
     """
-    from .. import ai, knowledge_health, model_settings, product_settings
+    from .. import knowledge_health, model_settings, product_settings
     from ..ingest import external
     from ..ingest.connect import config_from_settings, run_connect
 
@@ -196,10 +195,7 @@ def connect_statements(statement_ids: list[str]) -> dict[str, Any]:
         config_from_settings(),
         trace_log_path=str(_context().data_dir / "connect_trace.jsonl"),
     )
-    try:
-        result = run_connect(targets, known_name=_known_name, config=config)
-    except ai.usage.Paused as exc:
-        raise ValueError(str(exc)) from exc
+    result = run_connect(targets, known_name=_known_name, config=config)
     return connected(result, targets)
 
 

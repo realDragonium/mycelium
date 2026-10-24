@@ -1,17 +1,16 @@
-"""What the instance uses on models: the call ledger, reports and budget.
+"""What the instance uses on models: the call ledger and reports.
 
 Every model call lands here through the recorder `install` hands to
 `ai.usage`, one compact row per call, in the drafts database beside the runs
 it is attributed to. Like those runs it is operational history rather than
 substrate truth. It rides along in backups: rows are small, and a restore
-without them would reset the month's usage and silently re-arm a budget that
-had paused background work.
+without them would lose the usage history.
 
 Usage is counted in tokens: a call's total is everything the provider
 processed for it, input, cache reads, cache writes and output. Mycelium
-keeps no prices; spend is on each provider's billing dashboard. Rows written
-by earlier versions keep their `cost_usd`, which nothing reads any more.
-Days and the budget month are UTC.
+keeps no prices and sets no budget; spend and spend limits are on each
+provider's billing dashboard. Rows written by earlier versions keep their
+`cost_usd`, which nothing reads any more. Days are UTC.
 
 The recorder writes through its own autocommit connection per thread, so a
 call made while the caller holds a drafts transaction neither joins nor
@@ -26,7 +25,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from . import drafts_store, product_settings, timestamps
+from . import drafts_store, timestamps
 from .ai import usage
 from .connections import ConnectionProvider
 
@@ -50,10 +49,6 @@ CREATE TABLE IF NOT EXISTS ai_usage (
 CREATE INDEX IF NOT EXISTS ai_usage_at ON ai_usage(at);
 """
 
-#: Actions that run without a person waiting on them; the only ones a spent
-#: budget may pause. `connect` is the connect pass.
-BACKGROUND_ACTIONS = frozenset({"audience_labelling", "draft_review", "connect"})
-
 
 def migrate(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
@@ -71,7 +66,7 @@ _provider: ConnectionProvider[str] = ConnectionProvider("ai_usage", _connect)
 def install(drafts_path: Path | str) -> None:
     """Record every model call into the drafts database at `drafts_path`."""
     _provider.configure(str(drafts_path))
-    usage.install(lambda call: record(_provider.connection(), call), _gate)
+    usage.install(lambda call: record(_provider.connection(), call))
 
 
 def uninstall() -> None:
@@ -208,45 +203,6 @@ def report(conn: sqlite3.Connection, since: str, *, top_runs: int = 10) -> Repor
     )
 
 
-# --- budget --------------------------------------------------------------------
-
-
-class Budget(BaseModel):
-    limit_tokens: int
-    used_tokens: int
-    percent: float
-    warn_percent: int
-    #: Usage has reached the warning threshold.
-    warning: bool
-    #: Usage has reached the limit and background actions are paused.
-    paused: bool
-    month_start: str
-
-
-def month_start(now: datetime) -> str:
-    return timestamps.of(
-        now.astimezone(UTC).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    )
-
-
-def tokens_since(conn: sqlite3.Connection, since: str) -> int:
-    row = conn.execute(
-        f"SELECT COALESCE(SUM({_TOKENS}), 0) FROM ai_usage WHERE at >= ?", (since,)
-    ).fetchone()
-    return int(row[0])
-
-
-def mean_run_tokens(conn: sqlite3.Connection, action: str, since: str) -> int | None:
-    """The tokens one run of `action` has used on average since `since`, or
-    None when no run is on record."""
-    row = conn.execute(
-        f"SELECT AVG(tokens) FROM (SELECT SUM({_TOKENS}) AS tokens FROM ai_usage "
-        "WHERE action = ? AND at >= ? AND run_id IS NOT NULL GROUP BY run_id)",
-        (action, since),
-    ).fetchone()
-    return None if row[0] is None else round(row[0])
-
-
 def action_tokens(conn: sqlite3.Connection, action: str, since: str = "") -> int:
     """The tokens `action` has used since `since`, or ever."""
     row = conn.execute(
@@ -269,67 +225,13 @@ def draft_tokens(
     return int(row[0])
 
 
-def budget(
-    conn: sqlite3.Connection,
-    settings: product_settings.AIBudgetSettings,
-    now: datetime | None = None,
-) -> Budget | None:
-    """This month's token use against the budget, or None when no budget is
-    set."""
-    if not settings.monthly_limit_tokens:
-        return None
-    start = month_start(now or datetime.now(UTC))
-    used = tokens_since(conn, start)
-    percent = used / settings.monthly_limit_tokens * 100
-    return Budget(
-        limit_tokens=settings.monthly_limit_tokens,
-        used_tokens=used,
-        percent=round(percent, 1),
-        warn_percent=settings.warn_percent,
-        warning=percent >= settings.warn_percent,
-        paused=settings.pause_background and percent >= 100,
-        month_start=start,
-    )
-
-
-def paused_reason(
-    conn: sqlite3.Connection,
-    action: str,
-    settings: product_settings.AIBudgetSettings,
-    now: datetime | None = None,
-) -> str | None:
-    if action not in BACKGROUND_ACTIONS or not settings.pause_background:
-        return None
-    status = budget(conn, settings, now)
-    if status is None or not status.paused:
-        return None
-    return (
-        "Paused: this month's AI usage has reached the budget of "
-        f"{status.limit_tokens:,} tokens. Raise the budget or turn off pausing "
-        "in Settings › AI usage to resume."
-    )
-
-
-def _gate(action: str) -> str | None:
-    if action not in BACKGROUND_ACTIONS:
-        return None
-    settings = product_settings.get(product_settings.AIBudgetSettings)
-    return paused_reason(_provider.connection(), action, settings)
-
-
 class UsageView(BaseModel):
     days: int
     report: Report
-    budget: Budget | None
 
 
-def view(
-    conn: sqlite3.Connection,
-    settings: product_settings.AIBudgetSettings,
-    days: int,
-    now: datetime | None = None,
-) -> UsageView:
-    """The last `days` UTC days including today, and this month's budget."""
+def view(conn: sqlite3.Connection, days: int, now: datetime | None = None) -> UsageView:
+    """The last `days` UTC days including today."""
     now = now or datetime.now(UTC)
     first = now.astimezone(UTC).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -337,5 +239,4 @@ def view(
     return UsageView(
         days=days,
         report=report(conn, timestamps.of(first)),
-        budget=budget(conn, settings, now),
     )

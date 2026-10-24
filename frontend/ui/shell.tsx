@@ -20,13 +20,12 @@ import { KnowledgeHealthScreen } from './knowledge-health';
 import { MediaLibrary } from './media';
 import { NamesWorkspace } from './names-workspace';
 import { SettingsScreen } from './settings';
-import { tokens, type Budget } from './ai-usage';
 import { DataCtx, ErrorBoundary, GoIngestCtx, I, LoadError, Loading, MeCtx, type IconName } from './lib';
 import { Link, RouterCtx, routeToHash, useHashRouter, useRouter, type Route, type View } from './router';
 import { getJSON, getServerInfo, type KnowledgeGap, type Me } from './api';
 import { ensureSubstrate, loadSubstrate, substrate, substrateLoaded } from './data';
 import { usePrefs } from './prefs';
-import { dataOf, useAsync, useOnSettingsSaved, useRefreshWhileVisible } from './use-async';
+import { dataOf, useAsync, useRefreshWhileVisible } from './use-async';
 import { useSetup } from './setup';
 
 /* ---------------- Sidebar ---------------- */
@@ -164,26 +163,6 @@ function PartialRestoreBanner({ missing }: { missing: string[] }) {
   );
 }
 
-/* ---------------- AI budget ---------------- */
-// Admins only: the endpoint answers null for everyone else. Checked on page
-// load and after a settings save; spend moves slowly enough that a banner a
-// little behind it costs nothing.
-function BudgetBanner() {
-  const { state, reload } = useAsync(useCallback(() => getJSON<Budget | null>('/api/ai-usage/budget'), []));
-  useOnSettingsSaved(reload);
-  const budget = state.status === 'ready' ? state.data : null;
-  if (!budget || !budget.warning) return null;
-  return (
-    <div className={`restore-banner notice ${budget.paused ? 'error' : 'warn'}`} role="status">
-      <I.warn width="16" height="16" />
-      <span>
-        <strong>AI budget.</strong> {tokens(budget.used_tokens)} tokens used this month, {budget.percent}% of the {tokens(budget.limit_tokens)} budget.
-        {budget.paused ? ' Background actions are paused.' : ''} <Link to={{ view: 'settings', section: 'usage' }}>See AI usage</Link>
-      </span>
-    </div>
-  );
-}
-
 /* ---------------- Blocked background work ---------------- */
 // Admins only. One line per switched-on worker that lacks provider
 // credentials; the workers themselves wait quietly instead of failing.
@@ -278,7 +257,7 @@ export function App({ me }: { me: Me }) {
               {navOpen && <div className="side-scrim" onClick={() => setNavOpen(false)} />}
               <div className="main-col">
                 <ServerBanners />
-                {me.role === 'admin' && <><BudgetBanner /><BlockedWorkBanner /></>}
+                {me.role === 'admin' && <BlockedWorkBanner />}
                 <header className="topbar">
                   <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)} aria-label="Open navigation"><I.menu /></button>
                   {route.view !== 'home' ? <CommandBar /> : <div className="topbar-spacer" />}

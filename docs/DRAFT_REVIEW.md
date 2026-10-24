@@ -202,10 +202,10 @@ hours and forty minutes), such as those in a restored copy of another
 instance or from before a long outage: the sweep does not review, and possibly
 apply, them unasked.
 
-An attempt stopped by the monthly AI budget (see [AI models](AI_MODELS.md)) is
-`paused`, not failed: it uses no retry, is not rerun, and is not in the backlog.
-The sweep resumes it once the budget allows, after a budget change or when the
-month rolls over, with the attempt and retry counts it had.
+Earlier versions paused an attempt when the monthly AI budget was spent.
+Mycelium has no budget any more (see [AI models](AI_MODELS.md#ai-usage)), so
+the sweep resumes such a `paused` attempt with the attempt and retry counts it
+had; it is not in the backlog meanwhile.
 
 When the supplied knowledge cannot settle how the draft fits and a person's
 answer would, such as whether a new concept is the same as a live one, the
@@ -371,10 +371,8 @@ from the creator-supplied evidence. It returns `{review: ...}` for the new
 attempt.
 
 Admin-only `GET /api/draft-review/backlog` returns `{draft_ids: [...],
-estimated_tokens, external_agent}`: submitted drafts the current configuration has not
-reached, and the tokens reviewing them is likely to use, from the average
-review run over the last 30 days (`null` without one, or while an external
-agent reviews, which `external_agent` says). That is a draft with no
+external_agent}`: submitted drafts the current configuration has not
+reached, and whether an external agent reviews them. That is a draft with no
 attempt, a failed attempt that recorded no review, an advisory assessment
 made under another mode, any unapplied assessment in `review-and-apply` (for
 example one held by the application gate), or a question or held corrections
@@ -382,13 +380,13 @@ whose draft has changed since. Drafts containing only alias suggestions are excl
 It also returns `job`: the backlog review this process last started, or
 `null`.
 
-`POST /api/draft-review/backlog`, with an optional `{budget_tokens}`, starts that
-review and returns `{job}`. It reviews one draft at a time, oldest first, each
-draft at most once per job, and before each draft stops when the job's
-tokens plus those of an average run would pass `budget_tokens`, or when the
-monthly AI budget is reached. The job reports `status` (`running`, `paused`,
-`finished`), `budget_tokens`, `used_tokens`, `reviewed`, `remaining` and a `detail` saying why it
-stopped. `POST /api/draft-review/backlog/pause` stops it after the draft under
+`POST /api/draft-review/backlog` starts that review and returns `{job}`. It
+reviews one draft at a time, oldest first, each draft at most once per job,
+until no waiting draft is left; it has no token budget, and each review is
+bounded by `max_draft_tokens`. Before each draft it pauses if review can no
+longer run, such as when review is switched off or loses its credentials. The
+job reports `status` (`running`, `paused`, `finished`), `used_tokens`,
+`reviewed`, `remaining` and a `detail` saying why it stopped. `POST /api/draft-review/backlog/pause` stops it after the draft under
 review, and `POST /api/draft-review/backlog/resume` continues it. Starting
 again while a job is unfinished is refused. The job lives in the server
 process: a restart ends it, and starting again picks up the drafts still

@@ -328,8 +328,6 @@ def _execute(
                     force=False,
                     until=ctx.reading_until,
                 )
-        except ai.usage.Paused:
-            raise  # nothing was sent, and a forced finalize would be refused too
         except Exception as exc:  # noqa: BLE001 — terminal API error after SDK backoff
             stopped = time.monotonic() >= ctx.reading_until
             if isinstance(exc, ai.IncompleteTurn):

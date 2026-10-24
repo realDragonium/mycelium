@@ -1276,6 +1276,11 @@ def _archived_product_settings(staging: Path, required: bool) -> ProductArchive 
             if isinstance(settings, dict):
                 if settings.get("kind") in _LEGACY_PRODUCT_SECTIONS:
                     continue
+                if settings.get("kind") == "ai_budget":
+                    if note := product_settings.budget_removed(settings):
+                        logger.warning("Mycelium sets no AI budget; %s", note)
+                    continue
+                product_settings.without_budget_step(settings)
                 if settings.get("kind") == "concurrency":
                     settings.pop("research_runs", None)
                 if note := product_settings.replace_dollar_limit(settings):

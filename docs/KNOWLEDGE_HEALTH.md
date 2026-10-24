@@ -89,9 +89,7 @@ The reserve can fall short, so a run can still end slightly over the cap.
 Each run's tokens are shown with its result and written
 to `connect_trace.jsonl` in the data directory.
 
-Its model calls count towards the monthly AI budget as the connect pass, a
-background action: while the budget pauses background actions, a run is
-refused with that reason.
+Its model calls are reported on the AI usage page as the connect pass.
 
 ## Curation work for outside agents
 
