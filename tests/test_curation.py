@@ -193,6 +193,7 @@ def test_gap_outcomes_change_its_status_as_the_agent(conn, drafts):
     assert dismissed["dismissed_by"] == "agent-1"
     assert dismissed["closing_reason"] == "Exports are documented elsewhere."
     store.set_knowledge_gap_status(conn, exported, "reopen", "writer-1")
+    assert _claim(conn, drafts, "gap", who="agent-2")[0] == [exported]
     store.set_knowledge_gap_status(conn, exported, "dismiss", "writer-1")
     assert store.get_knowledge_gap(conn, exported)["closing_reason"] is None
 

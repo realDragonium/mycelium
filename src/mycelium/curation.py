@@ -70,9 +70,12 @@ _GAP_WHERE: dict[Kind, str] = {
 }
 #: An attempt still holds for gap `g`: not skipped, the gap's text unchanged
 #: and the statement it is about not written since.
+# Listed gaps are open, so a gap an agent resolved or dismissed is open again
+# only because a person reopened it; that look no longer settles it.
 _GAP_SETTLED = (
     "EXISTS (SELECT 1 FROM curation_attempts c WHERE c.item_id = g.id "
-    "AND c.outcome <> 'skipped' AND c.text = g.text "
+    "AND c.outcome NOT IN ('skipped', 'resolved', 'not_applicable') "
+    "AND c.text = g.text "
     "AND NOT EXISTS (SELECT 1 FROM statements st WHERE st.id = g.statement_id "
     "AND COALESCE(st.updated_at, st.created_at, '') > c.attempted_at))"
 )
