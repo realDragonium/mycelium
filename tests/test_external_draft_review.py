@@ -244,3 +244,14 @@ def test_the_review_form_saves_external_agent_with_no_model_or_reviewer(agent):
 
     assert (saved.external_agent, saved.mode) == (True, "review-and-apply")
     assert draft_review_settings.view(auth.LOCAL_ADMIN).ready
+
+
+def test_a_draft_whose_reviews_fail_twice_is_rejected(agent):
+    draft_id = _draft()
+    for _ in range(2):
+        [task] = _claim(agent).tasks
+        for _ in range(agent_tasks.RETRIES):
+            assert _submit(agent, task.id, "changes_suggested").status == "refused"
+        assert _submit(agent, task.id, "changes_suggested").status == "failed"
+
+    assert server.get_draft(draft_id)["status"] == "rejected"

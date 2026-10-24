@@ -2093,6 +2093,9 @@ def _submit_agent_review(
             return agent_tasks.refused(
                 conn, task, findings, agent_tasks.RETRIES - task.failures
             )
+        # The agent stands as reviewer of the failed attempt, as a model
+        # does, so a second failure can reject the draft.
+        run.reviewer_id = claimant
         _fail_agent_run(
             run, settings, f"The agent's review was refused too often: {exc}"
         )
