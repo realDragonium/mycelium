@@ -142,7 +142,7 @@ and documents, and each item with the statements it draws on that the
 audience may see. A review that fails, or an agent's that is refused too
 often, marks its items "not reviewed" for a person. When the profile retries
 failed AI work ([below](#when-ai-work-fails)), the next sweeps review those
-items again, up to the retry attempts, and then leave them for a person with
+items again, up to the plan-review retries, and then leave them for a person with
 how often the review failed.
 
 ## Planning by itself
@@ -169,22 +169,32 @@ instead.
 A profile's **When AI work fails** setting (its editor under **Settings →
 Documentation**) is `person` by default, also for profiles saved before it
 existed: failed AI work waits for a person, as described above. Set to `ai`,
-the maintenance sweep retries it, up to **Retry attempts for failed AI work**
-(Settings → Limits → Documentation maintenance; 2 by default), then gives up
-with a reason a person can read:
+the maintenance sweep retries it, each kind up to its own limit under
+**Settings → Limits** (2 retries by default; 0 gives up at the first
+failure), then gives up with a reason a person can read:
 
-| Failed work | Retried by | After the last attempt |
-|---|---|---|
-| An automatic plan | The next sweep plans again | The plan page says automatic planning gave up; it plans by itself again once someone plans |
-| A plan review | The next sweep reviews the undecided items again | The items wait for a person, with how often the review failed; they no longer hold up automatic planning |
-| A plan item whose run could not start | The next sweep starts it again | The item stays proposed with the reason; it no longer holds up automatic planning |
-| A run that wrote nothing (plan item, automatic revision, or a request) | A new run of the same request, briefed with the review's notes when the review refused it | The run shows how many automatic retries it had and the last reason |
-| An automatic revision that could not start or was cut off by a restart | The next sweep claims the revision again | The document stays out of date for someone to revise |
-| An automatic publication | The next sweep publishes again | The run shows the publication error |
+| Failed work | Limit | Retried by | After the last attempt |
+|---|---|---|---|
+| An automatic plan | Retries of a failed automatic plan (planning) | The next sweep plans again | The plan page says automatic planning gave up; it plans by itself again once someone plans |
+| A plan review | Retries of a failed plan review (planning) | The next sweep reviews the undecided items again | The items wait for a person, with how often the review failed; they no longer hold up automatic planning |
+| A plan item whose run could not start | Retries of a plan item that could not start (planning) | The next sweep starts it again | The item stays proposed with the reason; it no longer holds up automatic planning |
+| A run that wrote nothing (plan item, automatic revision, or a request) | Retries of a run that wrote nothing (maintenance) | A new run of the same request, briefed with the review's notes when the review refused it | The run shows how many automatic retries it had and the last reason |
+| An automatic revision that could not start or was cut off by a restart | Retries of an automatic revision that could not start (maintenance) | The next sweep claims the revision again | The document stays out of date for someone to revise |
+| An automatic publication | Retries of a failed automatic publication (maintenance) | The next sweep publishes again | The run shows the publication error |
 
 The plan item or automatic revision follows each retry, as it follows a
 person's **Retry**. A person's retry starts the count again. Runs that
 finished before an upgrade to this version are not retried.
+
+Work that was given up stays given up until its inputs change or a person
+acts: nothing automatic starts it again. A plan item given up on shows why
+on the plan page and in `get_documentation_plan` (`given_up`), also after a
+newer plan, until someone approves, dismisses or retries it. Automatic plans
+do not propose it again (counted as "given up before"), nor what a person or
+the AI reviewer dismissed ("dismissed before"); a person's own plan may. An
+out-of-date document whose update the reviewer dismissed is not proposed
+again until its next revision. So the automations cannot keep undoing each
+other: each decision and each failure is remembered for the next pass.
 Plans, items and dismissals live with documentation runs in
 `mycelium-drafts.db` and are included in instance backups. A plan running
 when the server restarts is marked failed.

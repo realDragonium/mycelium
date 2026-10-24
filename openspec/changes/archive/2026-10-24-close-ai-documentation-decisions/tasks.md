@@ -1,9 +1,10 @@
 ## 1. Recovery
 
-- [x] 1.1 Add the `recovery` profile setting, `person` by default, and the `retry_attempts` limit
+- [x] 1.1 Add the `recovery` profile setting, `person` by default, and a retries limit per kind of failed work
 - [x] 1.2 Retry failed automatic plans, plan reviews and plan items that could not start, then give up with a reason
 - [x] 1.3 Retry runs that wrote nothing, with the review's notes when refused, and let plan items and automatic revisions follow the retry
 - [x] 1.4 Release failed or interrupted automatic-revision claims for another attempt
+- [x] 1.5 Remember dismissed and given-up items so automatic plans skip them, and keep given-up items visible
 
 ## 2. Delivery
 

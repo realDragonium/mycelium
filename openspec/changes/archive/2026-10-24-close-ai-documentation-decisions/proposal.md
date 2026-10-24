@@ -15,9 +15,12 @@ and a statement dismissal could not be undone.
   failed automatic plans, failed plan reviews, plan items that could not
   start, runs that wrote nothing (briefed with the review's notes when the
   review refused them), automatic revisions that could not start or were
-  interrupted, and failed automatic publications, up to `retry_attempts`
-  (default 2), then gives up with a reason. Given-up items no longer hold up
-  automatic planning.
+  interrupted, and failed automatic publications, each kind up to its own
+  limit under Settings → Limits (default 2 retries), then gives up with a
+  reason. Given-up work is not started again automatically, and automatic
+  plans do not propose given-up or dismissed items again, so automations
+  cannot undo each other. Given-up items no longer hold up automatic
+  planning but stay visible with the reason.
 - `delivery` gains `auto`, and a profile gains `delivery_destination`. Under
   `auto` the sweep publishes every revision of the profile that passed review
   while it is still current: to its recorded destination, or for a document
