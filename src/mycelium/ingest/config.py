@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Final
 
 from .. import model_settings, product_settings, tracing
-from ..ai import Provider, ReasoningEffort
+from ..ai import Provider, ReasoningEffort, pricing
 
 #: Current Sonnet model id (confirmed against Anthropic's model catalog).
 DEFAULT_MODEL = "claude-sonnet-4-6"
@@ -63,10 +63,7 @@ class IngestConfig:
     max_input_chars: int = 20000
     #: Path to the reasoning doctrine injected into the system prompt.
     doctrine_path: str = _DEFAULT_DOCTRINE_PATH
-    #: Cost rates are populated only for the known default Claude model.
-    input_per_mtok: float | None = None
-    output_per_mtok: float | None = None
-    #: Spending cap per run, in USD. Needs both cost rates; without them the
+    #: Spending cap per run, in USD. Needs a list price; without one the
     #: op cap and wall clock are the only bounds.
     max_cost_usd: float | None = None
     #: JSONL sink for the trace. None → resolved by the caller to a default
@@ -76,12 +73,12 @@ class IngestConfig:
     #: dir (shared with ask/find); empty string disables file writing.
     trace_dir: str | None = None
 
+    @property
+    def price(self) -> pricing.Price | None:
+        return pricing.price(self.provider, self.model)
+
     @classmethod
     def from_env(cls) -> IngestConfig:
-        def _f(name: str, default: float) -> float:
-            v = os.environ.get(name)
-            return float(v) if v else default
-
         limits = product_settings.get(product_settings.IngestSettings)
         selected = model_settings.get("ingest")
 
@@ -99,16 +96,6 @@ class IngestConfig:
             doctrine_path=(
                 os.environ.get("MYCELIUM_INGEST_DOCTRINE_PATH")
                 or _DEFAULT_DOCTRINE_PATH
-            ),
-            input_per_mtok=(
-                _f("MYCELIUM_INGEST_INPUT_PER_MTOK", 3.0)
-                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
-                else None
-            ),
-            output_per_mtok=(
-                _f("MYCELIUM_INGEST_OUTPUT_PER_MTOK", 15.0)
-                if selected.provider == "claude" and selected.model == DEFAULT_MODEL
-                else None
             ),
             trace_log_path=os.environ.get("MYCELIUM_INGEST_TRACE_LOG"),
             trace_dir=(

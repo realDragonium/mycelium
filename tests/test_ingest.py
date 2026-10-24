@@ -18,6 +18,7 @@ import types
 
 import pytest
 
+from mycelium.ai import Usage
 from mycelium.ask.substrate import SubstrateError, ToolSpec
 from mycelium.ingest import (
     DraftCreated,
@@ -672,6 +673,44 @@ def test_op_cap_with_unresponsive_model_returns_nothing_never_raises():
     assert result.trace["degraded"] is True
     assert "could not assemble a draft" in result.reason
     assert emitter.created == []  # never a partial draft
+
+
+@pytest.mark.parametrize(
+    ("model", "cap", "read_turns", "expected_cost", "forced_finalize"),
+    [
+        ("claude-opus-5-5", 0.054, 1, 0.00278, "cost_cap"),
+        ("claude-opus-5-5", 0.058, 2, 0.00542, "cost_cap"),
+        ("claude-unlisted", 0.000001, 2, None, None),
+    ],
+)
+def test_cost_and_cap_use_the_models_list_price(
+    model: str,
+    cap: float,
+    read_turns: int,
+    expected_cost: float | None,
+    forced_finalize: str | None,
+) -> None:
+    # Opus cache reads cost 5% of input. At $0.058, that discount leaves
+    # room for a second read and the emit reserve; a 10% rate would stop early.
+    reads = _reconcile_then_adjacency()[:read_turns]
+    for read in reads:
+        read.usage = Usage(
+            input_tokens=10,
+            output_tokens=5,
+            cache_read_input_tokens=10_000,
+            cache_creation_input_tokens=100,
+        )
+    result, client, _sub, _emitter = _run(
+        [*reads, _message([_tool_use(EMIT_TOOL, _good_new_op_emit())])],
+        model=model,
+        max_cost_usd=cap,
+    )
+
+    assert isinstance(result, DraftCreated)
+    assert len(client.calls) == read_turns + 1
+    assert all(call["model"] == model for call in client.calls)
+    assert result.trace["forced_finalize"] == forced_finalize
+    assert result.trace["cost_usd"] == expected_cost
 
 
 def test_api_error_degrades_to_forced_finalize():

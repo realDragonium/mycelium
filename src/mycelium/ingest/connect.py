@@ -27,7 +27,6 @@ from .. import (
     tracing,
     when_expression,
 )
-from ..ai.pricing import price
 from ..ask.substrate import SubstrateReader
 from . import prompts
 from .config import IngestConfig
@@ -357,7 +356,6 @@ def config_from_settings() -> IngestConfig:
     """The ingest loop's tunables, from the connect action's saved settings."""
     limits = product_settings.get(product_settings.ConnectSettings)
     selected = model_settings.get(ACTION)
-    rates = price(selected.provider, selected.model)
     return replace(
         IngestConfig(),
         model=selected.model,
@@ -370,8 +368,6 @@ def config_from_settings() -> IngestConfig:
         request_timeout_s=limits.request_timeout_s,
         thinking=limits.thinking,
         max_cost_usd=limits.max_cost_usd,
-        input_per_mtok=rates.input if rates else None,
-        output_per_mtok=rates.output if rates else None,
         trace_dir=str(tracing.default_trace_dir()),
     )
 

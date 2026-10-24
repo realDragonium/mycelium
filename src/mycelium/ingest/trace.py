@@ -20,6 +20,7 @@ from typing import Any
 from .. import agentloop
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
 from ..ai import Provider
+from ..ai.pricing import Price
 from ..tracing import SpanRecorder
 
 
@@ -80,12 +81,8 @@ class TraceBuilder:
     def add_usage(self, usage: Any) -> None:
         agentloop.add_usage(self, usage)
 
-    def cost_usd(
-        self, input_per_mtok: float | None, output_per_mtok: float | None
-    ) -> float | None:
-        if input_per_mtok is None or output_per_mtok is None:
-            return None
-        return agentloop.cost_usd(self.tokens, input_per_mtok, output_per_mtok)
+    def cost_usd(self, price: Price | None) -> float | None:
+        return agentloop.cost_usd(self.tokens, price)
 
     def build(
         self,
@@ -93,8 +90,7 @@ class TraceBuilder:
         outcome: str,
         latency_ms: float,
         floor: dict,
-        input_per_mtok: float | None,
-        output_per_mtok: float | None,
+        price: Price | None,
     ) -> dict:
         tokens = dict(self.tokens)
         tokens["total"] = tokens["input"] + tokens["output"]
@@ -116,7 +112,7 @@ class TraceBuilder:
             "gaps": self.gaps,
             "floor": floor,
             "tokens": tokens,
-            "cost_usd": self.cost_usd(input_per_mtok, output_per_mtok),
+            "cost_usd": self.cost_usd(price),
             "forced_finalize": self.forced_finalize,
             "degraded": self.degraded,
             "notes": self.notes,

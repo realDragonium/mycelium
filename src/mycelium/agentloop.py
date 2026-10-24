@@ -25,6 +25,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .ai.pricing import Price
+from .ai.types import Usage
+
 _TRACE_WRITE_LOCK = threading.Lock()
 
 #: Cap on a serialized tool_result fed back to the model.
@@ -238,18 +241,17 @@ def add_usage(trace: Any, usage: Any) -> None:
     )
 
 
-def cost_usd(
-    tokens: dict[str, int], input_per_mtok: float, output_per_mtok: float
-) -> float:
-    # Claude's input count excludes cached tokens; it bills cache writes at
-    # 1.25x and cache reads at 0.1x the input rate.
-    billed_input = (
-        tokens["input"] + 1.25 * tokens["cache_creation"] + 0.1 * tokens["cache_read"]
-    )
-    return round(
-        billed_input / 1_000_000 * input_per_mtok
-        + tokens["output"] / 1_000_000 * output_per_mtok,
-        6,
+def cost_usd(tokens: Mapping[str, int], price: Price | None) -> float | None:
+    """The estimated cost of a trace's token counts; None for an unpriced model."""
+    if price is None:
+        return None
+    return price.cost_usd(
+        Usage(
+            input_tokens=tokens["input"],
+            output_tokens=tokens["output"],
+            cache_read_input_tokens=tokens["cache_read"],
+            cache_creation_input_tokens=tokens["cache_creation"],
+        )
     )
 
 

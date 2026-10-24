@@ -53,6 +53,7 @@ import ingest_eval_scoring as scoring
 from pydantic import BaseModel, ConfigDict, JsonValue
 from typing_extensions import TypeIs
 
+from mycelium.ai import Usage, pricing
 from mycelium.ai.types import CLAUDE_EFFORT, ClaudeEffort
 
 if TYPE_CHECKING:
@@ -68,14 +69,6 @@ RESULTS = Path(
 )
 DEFAULT_MODEL = "claude-sonnet-4-6"
 JUDGE_MODEL = "claude-sonnet-5-5"
-
-#: USD per million tokens: input, output, cache read, cache write.
-PRICES: dict[str, tuple[float, float, float, float]] = {
-    "claude-sonnet-4-6": (3.0, 15.0, 0.30, 3.75),
-    "claude-sonnet-5-5": (2.0, 10.0, 0.20, 2.50),
-    "claude-opus-5-5": (4.0, 20.0, 0.40, 5.00),
-    "claude-haiku-5-5": (0.10, 0.50, 0.01, 0.125),
-}
 
 
 def _toml(path: Path) -> dict[str, object]:
@@ -384,13 +377,17 @@ class _Record(_View):
 
 
 def cost(model: str, tokens: _Tokens) -> float:
-    rate_in, rate_out, rate_read, rate_write = PRICES[model]
-    return (
-        tokens.input * rate_in
-        + tokens.output * rate_out
-        + tokens.cache_read * rate_read
-        + tokens.cache_creation * rate_write
-    ) / 1_000_000
+    price = pricing.price("claude", model)
+    if price is None:
+        raise SystemExit(f"no list price for {model}")
+    return price.cost_usd(
+        Usage(
+            input_tokens=tokens.input,
+            output_tokens=tokens.output,
+            cache_read_input_tokens=tokens.cache_read,
+            cache_creation_input_tokens=tokens.cache_creation,
+        )
+    )
 
 
 def _graph(record: _Record) -> scoring.DraftGraph:

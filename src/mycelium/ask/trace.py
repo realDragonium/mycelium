@@ -18,7 +18,7 @@ from pydantic import JsonValue
 
 from .. import agentloop, ai_prompts
 from ..agentloop import ToolCallRecord, write_record  # noqa: F401 — re-exported
-from ..ai import Provider, Usage
+from ..ai import Provider
 from ..ai.pricing import Price
 from ..tracing import SpanRecorder
 
@@ -91,16 +91,7 @@ class TraceBuilder:
             )
 
     def cost_usd(self, price: Price | None) -> float | None:
-        if price is None:
-            return None
-        return price.cost_usd(
-            Usage(
-                input_tokens=self.tokens["input"],
-                output_tokens=self.tokens["output"],
-                cache_read_input_tokens=self.tokens["cache_read"],
-                cache_creation_input_tokens=self.tokens["cache_creation"],
-            )
-        )
+        return agentloop.cost_usd(self.tokens, price)
 
     def build(
         self,

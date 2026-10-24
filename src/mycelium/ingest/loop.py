@@ -35,10 +35,7 @@ from .. import ai, ai_prompts, link_rules, tracing, when_expression
 from ..agentloop import (
     append_tool_error as _append_tool_error,
 )
-from ..agentloop import (
-    check_budget,
-    cost_usd,
-)
+from ..agentloop import check_budget
 from ..agentloop import (
     first_tool_use as _first_tool_use,
 )
@@ -375,7 +372,7 @@ def _execute(
 
 
 def _spent(trace: TraceBuilder, config: IngestConfig) -> float:
-    return trace.cost_usd(config.input_per_mtok, config.output_per_mtok) or 0.0
+    return trace.cost_usd(config.price) or 0.0
 
 
 def _note_turn(
@@ -397,16 +394,14 @@ def _reserve(ctx: _RunContext, config: IngestConfig) -> float:
     like the dearest so far, then the forced emit. Forcing the tool choice
     invalidates the cached history: that turn writes the whole history to the
     cache again."""
-    if config.input_per_mtok is None or config.output_per_mtok is None:
+    price = config.price
+    if price is None:
         return 0.0
-    emit = {
-        "input": 0,
-        "cache_read": 0,
-        "cache_creation": ctx.history_tokens,
-        "output": ctx.largest_output_tokens,
-    }
-    return ctx.largest_turn_usd + cost_usd(
-        emit, config.input_per_mtok, config.output_per_mtok
+    return ctx.largest_turn_usd + price.cost_usd(
+        ai.Usage(
+            cache_creation_input_tokens=ctx.history_tokens,
+            output_tokens=ctx.largest_output_tokens,
+        )
     )
 
 
@@ -415,7 +410,7 @@ def _cost_reached(
 ) -> str | None:
     """The spending cap, checked before each turn; an unpriced model has no
     cap."""
-    if config.max_cost_usd is None or config.input_per_mtok is None:
+    if config.max_cost_usd is None or config.price is None:
         return None
     spent = _spent(trace, config)
     return "cost_cap" if spent + reserve_usd >= config.max_cost_usd else None
@@ -1174,8 +1169,7 @@ def _build_trace(trace: TraceBuilder, outcome: str, ctx: _RunContext) -> dict:
         outcome=outcome,
         latency_ms=latency_ms,
         floor=_floor_state(ctx.reads_after_vocab),
-        input_per_mtok=config.input_per_mtok,
-        output_per_mtok=config.output_per_mtok,
+        price=config.price,
     )
     tracing.emit_trace(
         trace.spans,

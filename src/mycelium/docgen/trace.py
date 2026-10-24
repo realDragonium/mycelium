@@ -136,16 +136,7 @@ class TraceBuilder:
         )
 
     def cost_usd(self, price: Price | None) -> float | None:
-        if price is None:
-            return None
-        return price.cost_usd(
-            Usage(
-                input_tokens=self.tokens["input"],
-                output_tokens=self.tokens["output"],
-                cache_read_input_tokens=self.tokens["cache_read"],
-                cache_creation_input_tokens=self.tokens["cache_creation"],
-            )
-        )
+        return agentloop.cost_usd(self.tokens, price)
 
     def progress(
         self,

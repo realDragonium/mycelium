@@ -318,8 +318,6 @@ def test_stops_reading_while_another_turn_and_the_final_emit_fit_under_the_cap()
         config=IngestConfig(
             trace_log_path=None,
             max_cost_usd=0.04,
-            input_per_mtok=3.0,
-            output_per_mtok=15.0,
         ),
     )
 
