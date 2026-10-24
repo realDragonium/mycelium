@@ -419,3 +419,173 @@ def test_an_edit_waits_for_its_new_label_and_its_confirmation_instead_of_reading
     _sweep(T0 + timedelta(minutes=2))
     (item,) = client.get("/api/documentation/plans/public").json()["items"]
     assert "Now: 'Admins can export invoices as CSV or PDF.'" in item["rationale"]
+
+
+# --- recovery and automatic delivery ---------------------------------------------
+
+
+def _slot(slot: str, text: str) -> None:
+    from mycelium import guidelines, prompt_store
+
+    prompt_store.save(
+        prompt_store.connection(),
+        type=guidelines.TYPE,
+        name=f"public/{slot}",
+        text=text,
+    )
+
+
+REFUSAL = {
+    "outcome": "nothing_written",
+    "reason": "the document failed review: conformance: Steps - no steps",
+    "trace": {"summary": {"turns": 1}},
+    "review": {
+        "exposure": {"status": "pass", "findings": []},
+        "conformance": {
+            "status": "fail",
+            "findings": [{"where": "Steps", "problem": "no steps"}],
+        },
+        "attempts": 2,
+        "passed": False,
+    },
+}
+
+
+def test_a_refused_revision_is_retried_with_the_review_notes_then_given_up(client):
+    from mycelium import server
+
+    _profile("auto-revise", "external-technical")
+    _slot("recovery", "ai")
+    _document_id, statement = _document()
+    prompts: list[str] = []
+
+    def refuse(prompt, *, guideline_set, document_type):
+        prompts.append(prompt)
+        return REFUSAL
+
+    doc_runs.RUNNER = refuse
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+    _sweep(T0)
+    first = _sweep(T0 + timedelta(hours=1))[0]
+    for minute in range(1, 5):
+        _sweep(T0 + timedelta(hours=1, minutes=minute))
+
+    assert len(prompts) == 3
+    (entry,) = client.get("/api/documentation/maintenance").json()["entries"]
+    last = docs_store.serialize_run(
+        docs_store.get_run(server._drafts_db(), entry["run_id"])
+    )
+    assert (last["attempt"], last["recovery"]) == (2, "gave_up")
+    assert last["review_notes"] == [
+        {"check": "conformance", "where": "Steps", "problem": "no steps"}
+    ]
+    assert last["recovery_note"].startswith("Gave up after 2 automatic retries")
+    assert docs_store.get_run(server._drafts_db(), first)["recovery"] == "retried"
+
+
+def test_a_failed_run_is_left_for_a_person_without_ai_recovery(client):
+    _profile("auto-revise", "external-technical")
+    _document_id, statement = _document()
+    prompts: list[str] = []
+
+    def refuse(prompt, *, guideline_set, document_type):
+        prompts.append(prompt)
+        return REFUSAL
+
+    doc_runs.RUNNER = refuse
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+    _sweep(T0)
+    for minute in range(3):
+        _sweep(T0 + timedelta(hours=1, minutes=minute))
+
+    assert len(prompts) == 1
+
+
+def test_a_reviewed_revision_is_delivered_automatically_and_retried(
+    client, monkeypatch
+):
+    from mycelium import server
+
+    _profile(None, "external-technical")
+    _slot("delivery", "auto")
+    _slot("delivery_destination", "docs")
+    _slot("recovery", "ai")
+    _document()
+    published: list[tuple[str, str, int]] = []
+    outcomes = iter([RuntimeError("GitHub is unavailable")])
+
+    def publish(conn, document_id, destination, revision):
+        if (failure := next(outcomes, None)) is not None:
+            raise failure
+        published.append((document_id, destination, revision))
+
+    monkeypatch.setattr(publication, "publish", publish)
+    run = doc_runs.start_run(
+        prompt="Export invoices",
+        guideline_set="public",
+        document_type="how-to",
+        created_by=None,
+        conn=server._drafts_db(),
+    )
+    doc_runs.wait_all()
+    _sweep(T0)
+    failed = docs_store.serialize_run(docs_store.get_run(server._drafts_db(), run))
+    assert (failed["delivery"], failed["delivery_error"]) == (
+        None,
+        "GitHub is unavailable",
+    )
+    _sweep(T0 + timedelta(minutes=1))
+    _sweep(T0 + timedelta(minutes=2))
+
+    document = docs_store.get_run(server._drafts_db(), run)["document_id"]
+    assert published == [(document, "docs", _revision(document))]
+    assert docs_store.get_run(server._drafts_db(), run)["delivery"] == "published"
+
+
+def test_people_deliver_a_new_document_unless_delivery_is_automatic(
+    client, monkeypatch
+):
+    from mycelium import server
+
+    _profile(None, "external-technical")
+    _slot("delivery_destination", "docs")
+    _document()
+    published: list[str] = []
+    monkeypatch.setattr(
+        publication,
+        "publish",
+        lambda conn, document_id, destination, revision: published.append(document_id),
+    )
+    run = doc_runs.start_run(
+        prompt="Export invoices",
+        guideline_set="public",
+        document_type="how-to",
+        created_by=None,
+        conn=server._drafts_db(),
+    )
+    doc_runs.wait_all()
+    _sweep(T0)
+
+    assert published == []
+    assert docs_store.get_run(server._drafts_db(), run)["delivery"] == "none"
+
+
+def test_an_interrupted_claim_is_tried_again_while_ai_recovers(client):
+    from mycelium import server
+
+    _profile("auto-revise", "external-technical")
+    _slot("recovery", "ai")
+    document, statement = _document()
+    _edit(statement, "Admins can export invoices as CSV or PDF.")
+    _sweep(T0)
+    server._drafts_db().execute(
+        "UPDATE document_maintenance SET action = 'auto-revise', acted_at = ?",
+        (timestamps.of(T0),),
+    )
+    server._drafts_db().commit()
+
+    document_maintenance.mark_interrupted(server._drafts_db())
+    _sweep(T0 + timedelta(hours=1))
+    _sweep(T0 + timedelta(hours=1, minutes=1))
+
+    assert _revision(document) == 2
