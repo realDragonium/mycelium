@@ -446,9 +446,9 @@ minute or two; poll sparingly.
   is off) — the draft waits for a curator; report the assessment.
 - `status: failed` — failed attempts are retried by a sweep for about two and
   a half hours; a curator can start one at once with **Run again**.
-- `status: paused` — the monthly AI budget stopped the review. It is not a
-  failure: the sweep resumes it once the budget allows (a budget change or the
-  next month); tell the operator.
+- `status: paused` — an earlier version's monthly AI budget stopped the
+  review. It is not a failure: the sweep resumes it; tell the operator if it
+  stays paused.
 - No assessment — review is off, or on without a model or reviewer account
   configured. The draft waits for a curator; tell the operator which, if you
   can tell.

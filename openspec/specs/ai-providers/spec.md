@@ -1,7 +1,7 @@
 # ai-providers Specification
 
 ## Purpose
-Configure which language-model provider and model each AI action uses, keep provider credentials on the server, let people edit each action's behavioural instructions, and record and budget the tokens of every model call.
+Configure which language-model provider and model each AI action uses, keep provider credentials on the server, let people edit each action's behavioural instructions, and record the tokens of every model call.
 
 ## Requirements
 
@@ -250,7 +250,7 @@ The system SHALL count usage in tokens, a call's total being its input, cache-re
 - **THEN** the usage report counts it as 1,500 input, 4,000 cached, 200 output and 5,700 tokens in total
 
 ### Requirement: Usage report
-The system SHALL serve an admin-only `GET /api/ai-usage?days=N`, with `days` from 1 to 366 and default 30, returning the totals (calls, failed calls, and input, cached, output and total tokens), tokens per UTC day, the same token counts per action and per model, the ten runs or drafts that used the most tokens, and this month's budget.
+The system SHALL serve an admin-only `GET /api/ai-usage?days=N`, with `days` from 1 to 366 and default 30, returning the totals (calls, failed calls, and input, cached, output and total tokens), tokens per UTC day, the same token counts per action and per model, and the ten runs or drafts that used the most tokens. Mycelium SHALL keep no budget of its own: spend and spend limits are on each provider's billing dashboard.
 
 #### Scenario: Out-of-range window
 - **WHEN** an admin requests `GET /api/ai-usage?days=400`
@@ -259,34 +259,6 @@ The system SHALL serve an admin-only `GET /api/ai-usage?days=N`, with `days` fro
 #### Scenario: Non-admin
 - **WHEN** a reader requests `GET /api/ai-usage`
 - **THEN** the request is refused with 403
-
-### Requirement: Monthly AI budget
-The system SHALL support an `ai_budget` settings section with `monthly_limit_tokens` (default 0, meaning no budget), `warn_percent` (1 to 100, default 80) and `pause_background` (default false), count tokens per UTC calendar month, and report `warning` once usage reaches `warn_percent` and `paused` once usage reaches 100% with pausing on.
-
-#### Scenario: Budget banner
-- **WHEN** the monthly limit is 20,000,000 tokens and 17,000,000 have been used this month
-- **THEN** `GET /api/ai-usage/budget` returns `percent` 85 and `warning` true to an admin
-- **AND** returns `null` to a non-admin
-
-#### Scenario: No budget
-- **WHEN** `monthly_limit_tokens` is 0
-- **THEN** `GET /api/ai-usage/budget` returns `null`
-
-### Requirement: Budget pauses only background actions
-The system SHALL, while the budget is paused, refuse model calls from `audience_labelling`, `draft_review` and `connect` before any request is sent, and MUST NOT pause ask, ingest, documentation, documentation planning, alias discovery or embeddings; a budget that cannot be read MUST NOT block any call.
-
-#### Scenario: Paused review run
-- **WHEN** a draft review run starts while the budget is paused
-- **THEN** the run is saved as `paused` with the budget reason and makes no provider request
-- **AND** the review sweep resumes it once the budget allows, without using a retry
-
-#### Scenario: Paused labelling batch
-- **WHEN** the audience labeller's batch is refused by the budget
-- **THEN** the batch is not recorded as failed and stays due
-
-#### Scenario: Interactive work continues
-- **WHEN** the budget is paused and a user calls `ask`
-- **THEN** the question is answered normally
 
 ### Requirement: Editable AI instructions
 The system SHALL keep editable behavioural instructions for `ask`, `ingest`, `docgen`, `document_review`, `draft_review`, `alias_discovery`, `audience_labelling`, `documentation_planning` and `connect`, shared by both providers, readable by every authenticated caller and saveable only by a caller whose real role is writer or admin.
@@ -391,12 +363,23 @@ The system SHALL, once, on the first start of an instance with saved settings bu
 - **THEN** `connect` is saved on `claude-sonnet-4-6`, the log says so, and `claude-sonnet-4-6` is in the Claude catalog
 
 ### Requirement: Upgrade replaces dollar limits
-The system SHALL, on start and on restoring an archive, replace a saved dollar limit by its token field: `ai_budget.monthly_limit_usd` by `monthly_limit_tokens`, and `max_cost_usd` by `max_draft_tokens` for draft review and by `max_run_tokens` for connect. A value still at its shipped default ($0, $1 and $0.50) SHALL take the token default; any other value SHALL become 0, meaning no limit, with a log warning naming the old amount.
+The system SHALL, on start and on restoring an archive, replace a saved dollar limit by its token field: `max_cost_usd` by `max_draft_tokens` for draft review and by `max_run_tokens` for connect. A value still at its shipped default ($1 and $0.50) SHALL take the token default; any other value SHALL become 0, meaning no limit, with a log warning naming the old amount. A saved monthly dollar budget SHALL be dropped with the AI budget.
 
 #### Scenario: A set monthly budget
 - **WHEN** an instance with `monthly_limit_usd` 50 upgrades
-- **THEN** `monthly_limit_tokens` is 0 and the log says the $50 budget became no limit
+- **THEN** no `ai_budget` section remains and the log says the $50 budget was removed
 
 #### Scenario: A default review cap
 - **WHEN** an instance with draft review `max_cost_usd` 1.0 upgrades
 - **THEN** `max_draft_tokens` is 300,000
+
+### Requirement: Upgrade drops the AI budget
+The system SHALL, on start and on restoring an archive, drop a saved `ai_budget` settings section and a dismissed `budget` setup step, logging a warning that names the removed monthly limit when one was set, in tokens or in dollars.
+
+#### Scenario: A set monthly budget
+- **WHEN** an instance with `monthly_limit_tokens` 5,000,000 upgrades
+- **THEN** no `ai_budget` section remains and the log says the budget of 5,000,000 tokens was removed
+
+#### Scenario: An older archive
+- **WHEN** an admin restores an archive with an `ai_budget` section and the `budget` setup step dismissed
+- **THEN** the restore succeeds without the section, and the other dismissed steps stay dismissed

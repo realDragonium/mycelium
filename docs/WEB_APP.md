@@ -53,9 +53,9 @@ One screen, one section per task. `#/settings` opens Account & tokens.
 | People | Members & invites | `#/settings/members` | Admins: roles, suspension, invites, service accounts and their tokens |
 | AI | Models | `#/settings/models` | The model catalog (which models can be chosen, per provider); provider, model and reasoning effort per action |
 | | Prompts | `#/settings/prompts` | Each action's instructions, with history; marks edited prompts behind the shipped default |
-| | Draft review | `#/settings/review` | Automatic review mode, where it runs (Claude, OpenAI or External agent), reviewer, model, whether reviews may apply and whether only clean approvals apply automatically; review the backlog oldest first, with an optional spending limit, pause and resume |
-| | Limits | `#/settings/limits` | Token, time and operation budgets per action; concurrent runs; the quiet period and daily cap for automatic document revisions |
-| | AI usage | `#/settings/usage` | Admins: tokens used in the last 7, 30 or 90 days per day, action and model, with totals and the runs that used the most linked to their run, plan or draft; the optional monthly token budget. Mycelium keeps no prices; spend is on each provider's billing dashboard. See [AI usage and budget](AI_MODELS.md#ai-usage-and-budget) |
+| | Draft review | `#/settings/review` | Automatic review mode, where it runs (Claude, OpenAI or External agent), reviewer, model, whether reviews may apply and whether only clean approvals apply automatically; review the backlog oldest first until none is waiting, with pause, resume and the tokens it used |
+| | Limits | `#/settings/limits` | Token, time and operation limits per action that stop a runaway run; concurrent runs; the quiet period and daily cap for automatic document revisions |
+| | AI usage | `#/settings/usage` | Admins: tokens used in the last 7, 30 or 90 days per day, action and model, with totals and the runs that used the most linked to their run, plan or draft. Mycelium keeps no prices and sets no budget; spend and spend limits are on each provider's billing dashboard. See [AI usage](AI_MODELS.md#ai-usage) |
 | Publishing | Documentation | `#/settings/documentation` | GitHub connection (disconnecting asks first), publishing destinations, writing profiles, their audience, maintenance and planning policies and templates |
 | | Audiences | `#/settings/audiences` | Who documents are written for and which audiences each includes; per audience, visible and unlabelled statements; labelling status, backfill progress and tokens used; statements by audience and label state, including curator labels whose text changed since the decision; external grants waiting for confirmation, grouped by concept, confirmed or rejected one by one, per concept, or by reviewing a random sample and accepting the rest (counted on the Audiences link); recently edited statements whose confirmed external grant stayed in force, with old and new text, to confirm or narrow. See [Audiences](AUDIENCES.md) |
 
@@ -83,7 +83,6 @@ Each step links to the section that completes it:
 | A writing profile with an audience | A profile names an audience explicitly |
 | GitHub connection and destination (optional) | A publishing destination exists, outside quarantine (which refuses GitHub delivery) |
 | Draft review mode | Review settings were saved, or review is on |
-| Monthly AI budget (optional) | A monthly limit is set |
 
 Statuses are read from saved settings and counts; credentials are checked for
 presence only, never with a provider request. A dismissed step can be restored
@@ -103,8 +102,6 @@ Banners above every screen report conditions that last until an operator acts:
 
 An open tab rechecks these two every minute while it is visible, and when it
 regains focus, so a server restart shows without reloading the page.
-- **AI budget** (admins): this month's tokens passed the monthly budget's warning
-  percentage.
 - **Background AI work is waiting** (admins): automatic draft review, audience
   labelling or automatic document revision is on but its provider has no
   credentials. Those workers wait without starting runs until credentials are

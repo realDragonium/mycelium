@@ -405,18 +405,11 @@ The system SHALL, after automatically applying a draft whose assessment lists co
 - **THEN** an open knowledge gap references the draft and that statement
 
 ### Requirement: Retry sweep
-The system SHALL, every 60 seconds while the mode is not `off`, credentials are present and the AI budget does not pause draft review, retry a submitted draft's latest attempt that failed without recording a review, once 5 minutes times 2 to the power of its retry count have passed since it finished, at most 5 retries, and only while that failure is under 160 minutes old. Each retry SHALL be a fresh first attempt. `MYCELIUM_DISABLE_REVIEW_SWEEP=1` SHALL disable the sweep.
+The system SHALL, every 60 seconds while the mode is not `off` and credentials are present, retry a submitted draft's latest attempt that failed without recording a review, once 5 minutes times 2 to the power of its retry count have passed since it finished, at most 5 retries, and only while that failure is under 160 minutes old. Each retry SHALL be a fresh first attempt. `MYCELIUM_DISABLE_REVIEW_SWEEP=1` SHALL disable the sweep.
 
 #### Scenario: Failure older than the window
 - **WHEN** a draft's latest attempt failed more than 160 minutes ago, as in a restored copy of another instance
 - **THEN** the sweep does not retry it and the draft is listed in the backlog
-
-### Requirement: Budget-paused attempts
-The system SHALL mark an attempt stopped by the monthly AI budget as `paused` rather than failed, without consuming a retry or triggering a rerun, and the sweep SHALL resume it with its attempt and retry counts once the budget allows.
-
-#### Scenario: Budget exhausted mid-month
-- **WHEN** an attempt starts after the month's AI budget is spent
-- **THEN** its status is `paused` and it is not in the backlog
 
 ### Requirement: Interrupted attempts
 The system SHALL, at startup, mark attempts left `running` as `failed` so the sweep retries them, except attempts an unfinished agent task still serves, and SHALL restore the actual outcome (`applied`, `rejected` or `needs_human`) from durable review and application receipts for attempts that recorded one before the interruption. No startup step SHALL start model work or replay an uncommitted application.
@@ -430,7 +423,7 @@ The system SHALL, at startup, mark attempts left `running` as `failed` so the sw
 - **THEN** the attempt is still `running` and the task can be claimed
 
 ### Requirement: Review backlog
-The system SHALL let an admin list through `GET /api/draft-review/backlog` the submitted drafts the current configuration has not reached, oldest first and without alias-suggestion-only drafts, as `{draft_ids, estimated_tokens, job}`: their number times the 30-day mean run's tokens (`null` without one) and the latest job. `POST /api/draft-review/backlog`, with an optional `budget_tokens` above 0, SHALL start that job and return `{job}`, refused while the mode is `off` or a job is unfinished.
+The system SHALL let an admin list through `GET /api/draft-review/backlog` the submitted drafts the current configuration has not reached, oldest first and without alias-suggestion-only drafts, as `{draft_ids, external_agent, job}` with the latest job. `POST /api/draft-review/backlog` SHALL start that job and return `{job}`, refused while the mode is `off` or a job is unfinished.
 
 #### Scenario: Switching review on
 - **WHEN** an admin turns review on with three drafts submitted while it was off and posts the backlog
@@ -572,15 +565,8 @@ The system SHALL produce a `reject` assessment without a model call when an oper
 - **WHEN** two pending drafts replace the same statement's text and the newer one is applied first
 - **THEN** the older draft is rejected as stale, while the newer one applies whatever the order
 
-### Requirement: Backlog review job
-The system SHALL run a started backlog review in one background job, held in the server process and forgotten on restart, that reviews one draft at a time and each at most once, and before each draft SHALL finish when no waiting draft is left, or pause with a `detail` saying why when the job's tokens plus those of the mean review run would pass `budget_tokens` or the monthly AI budget pauses draft review.
-
-#### Scenario: Budget reached
-- **WHEN** a job with `budget_tokens` 1,500 has used 1,000 and a review uses 1,000 on average
-- **THEN** the job stops before the next draft with a detail saying it stopped at the backlog budget
-
 ### Requirement: Backlog job control
-The system SHALL report a backlog job's `status` (`running`, `paused`, `finished`), `budget_tokens`, `used_tokens`, `reviewed`, `remaining`, `detail`, `started_at` and `finished_at`, SHALL pause it after the draft under review on `POST /api/draft-review/backlog/pause`, and SHALL continue it on `POST /api/draft-review/backlog/resume`.
+The system SHALL report a backlog job's `status` (`running`, `paused`, `finished`), `used_tokens`, `reviewed`, `remaining`, `detail`, `started_at` and `finished_at`, SHALL pause it after the draft under review on `POST /api/draft-review/backlog/pause`, and SHALL continue it on `POST /api/draft-review/backlog/resume`.
 
 #### Scenario: Pause and resume
 - **WHEN** an admin pauses a running backlog job reviewing three drafts after the first
@@ -643,3 +629,17 @@ The system SHALL, under `auto_apply` `with_corrections`, apply a `changes_sugges
 #### Scenario: Corrected draft lands
 - **WHEN** the reviewer returns `changes_suggested` editing one statement's text with `auto_apply` `with_corrections`
 - **THEN** the edited text is applied and the attempt ends `applied`
+
+### Requirement: Backlog review without a budget
+The system SHALL run a started backlog review in one background job, held in the server process and forgotten on restart, that reviews one draft at a time and each at most once, and before each draft SHALL finish when no waiting draft is left, or pause with a `detail` saying why when review can no longer run, as when it is switched off or loses its credentials. The job SHALL set no token budget; each review is bounded by `max_draft_tokens`.
+
+#### Scenario: Runs to the end
+- **WHEN** an admin starts a backlog job over three waiting drafts whose reviews use 1,000 tokens each
+- **THEN** the job finishes with `reviewed: 3` and `used_tokens: 3000`
+
+### Requirement: Attempts an earlier budget paused
+The system SHALL resume, in the retry sweep, an attempt an earlier version's monthly AI budget left `paused`, keeping its attempt and retry counts and its previous failure. A paused attempt SHALL NOT count as backlog.
+
+#### Scenario: Upgrading with a paused review
+- **WHEN** an instance upgrades with a submitted draft whose latest attempt is `paused`
+- **THEN** the next sweep reviews the draft again with the same attempt and retry counts

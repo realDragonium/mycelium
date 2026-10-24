@@ -148,13 +148,6 @@ The system SHALL bound each connect run by the saved connect limits: batch size 
 - **WHEN** the tokens used so far plus the reserve reach the token cap
 - **THEN** the run stops reading and forces its final emit
 
-### Requirement: Connect pass budget and model
-The system SHALL run the connect pass on the model selected for the `connect` action, refusing the run while that action has no model chosen, with its instructions from the saved `connect` prompt followed by a fixed contract, meter its calls as `connect`, append its trace to `connect_trace.jsonl` in the data directory, and refuse the run while the monthly AI budget pauses background actions.
-
-#### Scenario: Budget pauses background actions
-- **WHEN** the monthly budget is spent with background pausing on and a caller requests a connect run
-- **THEN** the call is refused with the pause reason and no draft is created
-
 ### Requirement: Curation item shape
 The system SHALL give each claimed item `id` (the statement id for `isolated` and `unnamed`, the gap id for `rephrase` and `gap`), `kind`, `text` (the statement's or the gap's), `statement` (`id`, `kind`, `text` and `concepts` as `{id, name}`, or null for a gap about no statement) and `neighbours`: up to five nearest statements as `{id, kind, text, score}`, excluding the item's own statement.
 
@@ -370,3 +363,10 @@ The system SHALL report in `GET /api/knowledge-health` an `uncovered_by_profile`
 #### Scenario: Profile with undocumented statements
 - **WHEN** the `public` profile's audience may see 12 statements no `public` document cites
 - **THEN** `uncovered_by_profile` reports 12 for `public`
+
+### Requirement: Connect pass model
+The system SHALL run the connect pass on the model selected for the `connect` action, refusing the run while that action has no model chosen, with its instructions from the saved `connect` prompt followed by a fixed contract, meter its calls as `connect`, and append its trace to `connect_trace.jsonl` in the data directory.
+
+#### Scenario: No model chosen
+- **WHEN** a caller requests a connect run while the `connect` action has no model saved
+- **THEN** the call is refused naming the missing model and no draft is created
