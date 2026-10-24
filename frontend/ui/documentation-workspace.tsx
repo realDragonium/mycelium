@@ -72,7 +72,7 @@ interface PlanItem {
   id: string; action: 'create' | 'update'; title: string; document_type: string; anchor_entity_id: string | null; anchor_name: string | null;
   document_id: string | null; rationale: string; priority: 'high' | 'medium' | 'low'; statement_ids: string[];
   state: 'proposed' | 'approved' | 'dismissed'; run: { id: string; status: string; queue_position: number | null; document_id: string | null; review_notes: boolean } | null;
-  maintenance: boolean; start_error: string | null;
+  maintenance: boolean; start_error: string | null; given_up: string | null;
   review: { decision: 'approve' | 'dismiss' | null; reason: string; reviewer: string | null; at: string; failures: number } | null;
 }
 interface PlanSummary {
@@ -585,7 +585,8 @@ function DocumentationPlanner({ options, profile }: { options: DocumentationOpti
             <strong>{item.title}</strong>
             <p className="docw-meta">{item.maintenance ? 'Bring up to date' : item.action === 'create' ? 'New' : 'Update'} {item.document_type} · {PRIORITIES[item.priority]}{item.anchor_entity_id && <> · about <Link to={{ view: 'entity', id: item.anchor_entity_id }}>{item.anchor_name || docEntityName(item.anchor_entity_id)}</Link></>}{item.document_id && <> · updates <a href={'#/documentation?document=' + encodeURIComponent(item.document_id)}>the existing document</a></>}</p>
             <p className={item.maintenance ? 'docw-brief' : undefined}>{item.rationale}</p>
-            {item.state === 'proposed' && item.start_error && <p className="docw-meta">Could not start: {item.start_error}</p>}
+            {item.given_up && <p role="status" className="docw-meta">{item.given_up}</p>}
+            {item.state === 'proposed' && item.start_error && !item.given_up && <p className="docw-meta">Could not start: {item.start_error}</p>}
             <details><summary>{item.statement_ids.length} {item.maintenance ? 'changed statements' : 'statements it would mainly draw on'}</summary><DocumentationSources ids={item.statement_ids} /></details>
             {item.state === 'proposed' && options.can_generate && <div className="docw-actions"><button type="button" disabled={!canAct} onClick={() => approve([item.id])}>Approve</button><button type="button" disabled={!canAct} onClick={() => act(() => docPost(`plan-items/${encodeURIComponent(item.id)}/dismiss`, {}))}>Dismiss</button></div>}
             {item.review && <p className="docw-meta">{item.review.decision === 'approve' ? 'Approved by AI review' : item.review.decision === 'dismiss' ? 'Dismissed by AI review' : 'Not reviewed'}{item.review.reviewer && <> ({item.review.reviewer})</>}: {item.review.reason}{item.review.decision === 'approve' && item.state === 'proposed' && ' · starts when the active-run limit has room'}</p>}
