@@ -82,6 +82,7 @@ def ask(
 
     if model_settings.get("ask").external_agent:
         raise AskIsExternal(ASK_EXTERNAL)
+    model_settings.require("ask")
     config = for_depth(AskConfig.from_env(), depth)
     if config.trace_log_path is None:
         config = replace(
@@ -131,10 +132,12 @@ def ingest(text: str) -> dict[str, Any]:
     a wall-clock budget; on exhaustion it degrades to a forced emit (or
     `nothing_to_ingest`) rather than raising.
     """
+    from .. import model_settings
     from ..ingest import IngestConfig, external, run_ingest
 
     if external.external("ingest"):
         return external.queue("ingest", external.LoopState(text=text), _requester())
+    model_settings.require("ingest")
     config = IngestConfig.from_env()
     if config.trace_log_path is None:
         config = replace(

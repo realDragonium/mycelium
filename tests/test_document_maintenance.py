@@ -17,6 +17,13 @@ from mycelium import (
     timestamps,
 )
 from mycelium.docgen import publication
+from settings_helpers import assume_configured_models
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
+
 
 #: Recent, because the list leaves out entries older than a month.
 T0 = datetime.now(UTC)

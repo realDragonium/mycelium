@@ -15,6 +15,13 @@ from audience_corpus import (
 from mycelium import agent_tasks, doc_runs, docs_store, prompt_store, store, timestamps
 from mycelium.docgen import loop
 from mycelium.docgen.schema import ReviewCheck, ReviewRecord
+from settings_helpers import assume_configured_models
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
+
 
 NOW = datetime(2026, 1, 1, tzinfo=UTC)
 

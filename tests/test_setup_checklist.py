@@ -7,6 +7,7 @@ import pytest
 from mycelium import (
     audiences,
     auth,
+    model_settings,
     product_settings,
     quarantine,
     server,
@@ -38,7 +39,7 @@ def test_a_fresh_instance_lists_what_is_left(client):
     steps = _steps(client)
     assert {key: step["status"] for key, step in steps.items()} == {
         "credentials": "todo",
-        "models": "done",
+        "models": "todo",
         "audiences": "todo",
         "profile": "todo",
         "github": "todo",
@@ -46,6 +47,7 @@ def test_a_fresh_instance_lists_what_is_left(client):
         "budget": "todo",
     }
     assert "used by Ask" in steps["credentials"]["detail"]
+    assert steps["models"]["detail"].startswith("Choose a model for Ask, Ingestion")
     assert (steps["github"]["optional"], steps["github"]["section"]) == (
         True,
         "documentation",
@@ -78,6 +80,9 @@ def test_steps_complete_from_saved_settings(client, monkeypatch):
     _profile(None, "external-technical")
     set_review_controls(mode="off")
     set_product(product_settings.AIBudgetSettings(monthly_limit_usd=50.0))
+    for action in model_settings.ACTIONS:
+        if action != "draft_review":
+            save_model(action, claude_model="claude-sonnet-5-5")
 
     steps = _steps(client)
     assert {key for key, step in steps.items() if step["status"] == "todo"} == {
@@ -87,14 +92,14 @@ def test_steps_complete_from_saved_settings(client, monkeypatch):
 
 
 def test_dismissed_steps_count_as_settled(client):
-    for step in ("credentials", "audiences", "profile", "github", "review"):
+    for step in ("credentials", "models", "audiences", "profile", "github", "review"):
         assert (
             client.put(f"/api/setup/steps/{step}", json={"dismissed": True}).status_code
             == 200
         )
     view = client.put("/api/setup/steps/budget", json={"dismissed": True}).json()
     assert view["complete"] is True
-    assert {step["status"] for step in view["steps"]} == {"done", "dismissed"}
+    assert {step["status"] for step in view["steps"]} == {"dismissed"}
 
     view = client.put("/api/setup/steps/budget", json={"dismissed": False}).json()
     assert view["complete"] is False

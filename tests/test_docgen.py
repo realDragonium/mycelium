@@ -289,7 +289,7 @@ def _config(**overrides) -> DocgenConfig:
         trace_dir="",
         trace_log_path=None,
         limits=DocgenSettings(**{"thinking": False, **limits}),
-        **overrides,
+        **{"model": "claude-sonnet-4-6", **overrides},
     )
 
 

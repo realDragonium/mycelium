@@ -336,7 +336,7 @@ def test_combined_retrieval_reduces_model_round_trips_for_the_same_evidence():
             "Why?",
             client=FakeAnthropic(turns),
             substrate=substrate,
-            config=AskConfig(trace_dir=""),
+            config=AskConfig(model="claude-haiku-4-5", trace_dir=""),
         )
         outcomes.append(result)
         assert result.trace["floor"]["satisfied"]

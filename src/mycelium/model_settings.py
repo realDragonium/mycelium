@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from typing import Literal
@@ -13,6 +14,8 @@ from .ai import Provider, ReasoningEffort
 from .ai.pricing import price, provider_of
 from .ai.types import ClaudeEffort
 from .model_credentials import claude_configuration_error
+
+logger = logging.getLogger(__name__)
 
 Action = Literal[
     "ask",
@@ -51,8 +54,29 @@ AGENT_ACTIONS: frozenset[Action] = frozenset(
 #: Who reviews a document an outside agent wrote: the server's reviewer on
 #: the action's provider, or an agent other than the writer.
 AgentReview = Literal["server", "agent"]
-#: Labelling reads every statement, so it defaults to a small model.
-AUDIENCE_LABELLING_MODEL = "claude-haiku-5-5"
+PROVIDERS: tuple[Provider, ...] = ("claude", "openai")
+ACTION_NAMES: dict[Action, str] = {
+    "ask": "Ask",
+    "ingest": "Ingestion",
+    "docgen": "Document generation",
+    "draft_review": "Draft review",
+    "alias_discovery": "Alias discovery",
+    "audience_labelling": "Audience labelling",
+    "documentation_planning": "Documentation planning",
+    "connect": "Connecting statements",
+}
+#: The Claude models actions ran on when no model was saved for them, before
+#: models came from the catalog. Only an upgrade reads them, to save them
+#: explicitly so no action changes model; a fresh instance has no models.
+_FORMER_CLAUDE_DEFAULTS: dict[Action, str] = {
+    "ask": "claude-haiku-4-5",
+    "ingest": "claude-sonnet-4-6",
+    "docgen": "claude-sonnet-4-6",
+    "alias_discovery": "claude-sonnet-4-6",
+    "audience_labelling": "claude-haiku-5-5",
+    "documentation_planning": "claude-sonnet-4-6",
+    "connect": "claude-sonnet-4-6",
+}
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS model_settings (
     action TEXT PRIMARY KEY,
@@ -75,6 +99,9 @@ class Selection(BaseModel):
     #: calling `provider`, which then only reviews documents agents wrote.
     external_agent: bool = False
     agent_review: AgentReview = "server"
+
+    def model_for(self, provider: Provider) -> str:
+        return self.claude_model if provider == "claude" else self.openai_model
 
     def effort_for(self, provider: Provider) -> ReasoningEffort | None:
         return (
@@ -121,9 +148,19 @@ class ActionView(ModelSnapshot):
     providers: list[ProviderAvailability]
 
 
+class CatalogModel(BaseModel):
+    provider: Provider
+    model: str
+    #: Whether the built-in price table knows the model; without a price its
+    #: runs record no cost.
+    priced: bool
+
+
 class SettingsView(BaseModel):
     can_configure: bool
     actions: list[ActionView]
+    #: The models an admin made selectable, per provider in their order.
+    catalog: list[CatalogModel]
 
 
 class Unavailable(ValueError):
@@ -135,25 +172,25 @@ class Conflict(errors.Conflict):
 
 
 def defaults(action: Action) -> Selection:
-    from .ask.config import DEFAULT_MODEL as ASK_MODEL
-    from .ingest.config import DEFAULT_MODEL as INGEST_MODEL
-
+    """An action nobody configured: it has no model, so it cannot run."""
     return Selection(
         provider="openai" if action == "draft_review" else "claude",
-        claude_model=""
-        if action == "draft_review"
-        else ASK_MODEL
-        if action == "ask"
-        else AUDIENCE_LABELLING_MODEL
-        if action == "audience_labelling"
-        else INGEST_MODEL,
+        claude_model="",
+        openai_model="",
+    )
+
+
+def former_default(action: Action) -> Selection:
+    return Selection(
+        provider="openai" if action == "draft_review" else "claude",
+        claude_model=_FORMER_CLAUDE_DEFAULTS.get(action, ""),
         openai_model="",
     )
 
 
 def legacy_selection(action: Action) -> dict[str, str]:
     """Capture legacy values without hiding invalid configuration during migration."""
-    default = defaults(action)
+    default = former_default(action)
     if action in (
         "alias_discovery",
         "audience_labelling",
@@ -184,6 +221,75 @@ def legacy_selection(action: Action) -> dict[str, str]:
         claude = os.environ.get(prefix + "_MODEL") or fallback
         openai = os.environ.get(prefix + "_OPENAI_MODEL", "")
     return {"provider": provider, "claude_model": claude, "openai_model": openai}
+
+
+def adopt_catalog(conn: sqlite3.Connection, *, upgrading: bool) -> None:
+    """Once per instance, before models come only from the catalog: save the
+    model an upgraded action without a saved selection ran on, then seed the
+    catalog with every model a saved selection names."""
+    from . import product_settings
+
+    if upgrading:
+        saved = {
+            row["action"] for row in conn.execute("SELECT action FROM model_settings")
+        }
+        for action in ACTIONS:
+            if action in saved:
+                continue
+            selection = former_default(action)
+            conn.execute(
+                "INSERT INTO model_settings VALUES (?, 1, ?)",
+                (action, selection.model_dump_json()),
+            )
+            logger.warning(
+                "saved %s model %s for %s, which ran on it by default",
+                _PROVIDER_NAMES[selection.provider],
+                selection.claude_model or "(none)",
+                ACTION_NAMES[action],
+            )
+    try:
+        current = product_settings.get(product_settings.ModelCatalogSettings, conn=conn)
+    except Unavailable:
+        current = product_settings.ModelCatalogSettings()
+    models: dict[Provider, list[str]] = {
+        "claude": list(current.claude),
+        "openai": list(current.openai),
+    }
+    seeded: list[str] = []
+    for row in conn.execute("SELECT body_json FROM model_settings ORDER BY action"):
+        try:
+            selection = Selection.model_validate_json(row["body_json"])
+        except ValidationError:
+            continue
+        pairs: tuple[tuple[Provider, str], ...] = (
+            ("claude", selection.claude_model),
+            ("openai", selection.openai_model),
+        )
+        for provider, model in pairs:
+            # An id saved under the wrong provider stays refused at run time
+            # and never enters the catalog.
+            if (
+                model
+                and model not in models[provider]
+                and provider_of(model)
+                in (
+                    None,
+                    provider,
+                )
+            ):
+                models[provider].append(model)
+                seeded.append(model)
+    if not seeded:
+        return
+    catalog = product_settings.ModelCatalogSettings(
+        claude=tuple(models["claude"]), openai=tuple(models["openai"])
+    )
+    conn.execute(
+        "INSERT INTO product_settings VALUES (?, 1, ?) ON CONFLICT(section) DO UPDATE "
+        "SET revision = revision + 1, body_json = excluded.body_json",
+        (catalog.kind, catalog.model_dump_json()),
+    )
+    logger.info("added %s to the model catalog", ", ".join(seeded))
 
 
 def get(action: Action, *, conn: sqlite3.Connection | None = None) -> ModelSnapshot:
@@ -256,16 +362,87 @@ def model_warning(provider: Provider, model: str) -> str | None:
         return str(exc)
 
 
+def _action_phrase(action: Action) -> str:
+    return ACTION_NAMES[action] if action == "ask" else ACTION_NAMES[action].lower()
+
+
+def missing_model(action: Action, provider: Provider) -> str:
+    name = _PROVIDER_NAMES[provider]
+    article = "an" if name[0] in "AEIOU" else "a"
+    return f"Choose {article} {name} model for {_action_phrase(action)} in AI settings."
+
+
+def model_error(action: Action, selected: Selection) -> str | None:
+    """Why `action` cannot run on `selected`: it needs a model it lacks."""
+    model = (
+        selected.claude_model
+        if selected.provider == "claude"
+        else selected.openai_model
+    )
+    if selected.needs_provider(action) and not model:
+        return missing_model(action, selected.provider)
+    return None
+
+
+def require(action: Action) -> ModelSnapshot:
+    """`action`'s selection, refused while it needs a model it lacks."""
+    selected = get(action)
+    if reason := model_error(action, selected):
+        raise ValueError(reason)
+    return selected
+
+
 def credentials_error(action: Action) -> str | None:
-    """Why `action` cannot reach its provider, or None when it can. Checks
-    presence only, so it costs no request."""
+    """Why `action` cannot run: no model, or no credentials for its
+    provider. Checks presence only, so it costs no request."""
     try:
         selected = get(action)
     except Unavailable as exc:
         return str(exc)
     if not selected.needs_provider(action):
         return None
-    return provider_availability(selected.provider).reason
+    return (
+        model_error(action, selected) or provider_availability(selected.provider).reason
+    )
+
+
+def catalog(conn: sqlite3.Connection | None = None) -> dict[Provider, tuple[str, ...]]:
+    from . import product_settings
+
+    saved = product_settings.get(product_settings.ModelCatalogSettings, conn=conn)
+    return {provider: saved.models(provider) for provider in PROVIDERS}
+
+
+def models_in_use(
+    conn: sqlite3.Connection, provider: Provider
+) -> dict[str, list[Action]]:
+    """The actions each `provider` model is saved for and could run on: the
+    selected provider's model, and both of documentation's, since a document
+    can be generated on either provider."""
+    used: dict[str, list[Action]] = {}
+    for action in ACTIONS:
+        try:
+            selected = get(action, conn=conn)
+        except Unavailable:
+            continue
+        model = selected.model_for(provider)
+        if model and (selected.provider == provider or action == "docgen"):
+            used.setdefault(model, []).append(action)
+    return used
+
+
+def refuse_removing_used(
+    conn: sqlite3.Connection, provider: Provider, removed: set[str]
+) -> None:
+    used = models_in_use(conn, provider)
+    blocked = [
+        f"'{model}' is used by "
+        + ", ".join(ACTION_NAMES[action] for action in used[model])
+        for model in sorted(removed)
+        if model in used
+    ]
+    if blocked:
+        raise ValueError("; ".join(blocked) + ". Choose another model for them first.")
 
 
 def editable(
@@ -303,10 +480,21 @@ def action_view(action: Action) -> ActionView:
     )
 
 
+def catalog_view() -> list[CatalogModel]:
+    return [
+        CatalogModel(
+            provider=provider, model=model, priced=price(provider, model) is not None
+        )
+        for provider, models in catalog().items()
+        for model in models
+    ]
+
+
 def view(principal: auth.Principal) -> SettingsView:
     return SettingsView(
         can_configure=principal.is_admin,
         actions=[action_view(action) for action in ACTIONS],
+        catalog=catalog_view(),
     )
 
 
@@ -327,6 +515,18 @@ def save_in_transaction(
     )
     if error is None and desired == before and current.source == "saved":
         return current
+    offered = catalog(conn)
+    for provider in PROVIDERS:
+        model = desired.model_for(provider)
+        if (
+            model
+            and model != before.model_for(provider)
+            and model not in offered[provider]
+        ):
+            raise ValueError(
+                f"'{model}' is not in the {_PROVIDER_NAMES[provider]} model "
+                "catalog. Add it in AI settings first."
+            )
     conn.execute(
         "INSERT INTO model_settings(action, revision, body_json) VALUES (?, ?, ?) "
         "ON CONFLICT(action) DO UPDATE SET revision = excluded.revision, body_json = excluded.body_json",
@@ -348,7 +548,7 @@ def save(
         request.claude_model if request.provider == "claude" else request.openai_model
     )
     if not selected_model and request.needs_provider(action):
-        raise ValueError("Choose a model ID for the selected provider.")
+        raise ValueError(missing_model(action, request.provider))
     check_model_id("claude", request.claude_model)
     check_model_id("openai", request.openai_model)
     conn = prompt_store.connection()

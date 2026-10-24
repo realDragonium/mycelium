@@ -347,3 +347,43 @@ def test_newest_fixture_has_the_current_schema(tmp_path, fresh_schema):
         "migration is written, capture the new shape with "
         "`uv run python scripts/capture_migration_fixture.py`"
     )
+
+
+def test_upgrade_keeps_every_action_on_its_model_and_seeds_the_catalog(
+    tmp_path, caplog
+):
+    """This build has no built-in models. An instance captured before the
+    later actions existed ran them on the old defaults; the upgrade saves
+    those explicitly, and the catalog offers every saved model."""
+    from mycelium import model_settings
+
+    fixture = next(f for f in FIXTURES if f.name == "v20-docgen-run-summary")
+    data_dir = tmp_path / "data"
+    _load(fixture, data_dir)
+
+    with caplog.at_level("WARNING", logger="mycelium.model_settings"):
+        _start(data_dir)
+
+    assert {
+        action: model_settings.get(action).model for action in model_settings.ACTIONS
+    } == {
+        "ask": "claude-haiku-4-5",
+        "ingest": "claude-sonnet-4-6",
+        "docgen": "claude-sonnet-4-6",
+        "draft_review": "",
+        "alias_discovery": "claude-sonnet-4-6",
+        "audience_labelling": "claude-haiku-5-5",
+        "documentation_planning": "claude-sonnet-4-6",
+        "connect": "claude-sonnet-4-6",
+    }
+    assert all(
+        model_settings.get(action).source == "saved"
+        for action in model_settings.ACTIONS
+    )
+    assert model_settings.catalog() == {
+        "claude": ("claude-sonnet-4-6", "claude-haiku-4-5", "claude-haiku-5-5"),
+        "openai": (),
+    }
+    assert (
+        "Audience labelling" in caplog.text and "Connecting statements" in caplog.text
+    )

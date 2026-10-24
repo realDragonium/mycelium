@@ -22,8 +22,13 @@ from mycelium import (
 from mycelium.docgen.config import DocgenConfig, model_choices, resolve_provider
 from mycelium.docgen.loop import _execute
 from mycelium.docgen.schema import DocumentWritten, NothingWritten
-from settings_helpers import save_model
+from settings_helpers import assume_configured_models, save_model
 from test_docgen import FakeGapReporter, _substrate
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
 
 
 def _call(

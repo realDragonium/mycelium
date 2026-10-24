@@ -192,7 +192,7 @@ def label_batches(conn: sqlite3.Connection, *, call: Call = _call) -> int | None
     try:
         if not live:
             raise ValueError("No audiences are configured.")
-        selected = model_settings.get("audience_labelling")
+        selected = model_settings.require("audience_labelling")
         config = ai.ModelConfig(
             provider=selected.provider,
             model=selected.model,

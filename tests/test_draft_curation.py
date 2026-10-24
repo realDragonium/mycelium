@@ -22,7 +22,7 @@ from mycelium.draft_review_store import Assessment
 from mycelium.ingest import loop as ingest_loop
 from mycelium.ingest.tools import EMIT_TOOL
 from mycelium.server import runtime
-from settings_helpers import save_model, set_review_controls
+from settings_helpers import assume_configured_models, save_model, set_review_controls
 from test_ingest import (
     FakeAnthropic,
     FakeSubstrate,
@@ -35,6 +35,12 @@ from test_ingest import (
 )
 from test_internal_draft_review import _assessment, _draft
 from test_reviewed_application import _app
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
+
 
 TEXT = "Single sign-on (SSO) is required in the Admin console."
 

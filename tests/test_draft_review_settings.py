@@ -22,6 +22,7 @@ from mycelium import (
     draft_review_settings as settings,
 )
 from mycelium.server import draft_application, runtime
+from settings_helpers import assume_configured_models, offer_models
 from test_backup import _seed_substrate
 from test_internal_draft_review import (
     _assessment,
@@ -34,12 +35,31 @@ from test_internal_draft_review import (
 from test_internal_draft_review import running_app as running_app
 
 
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
+
+
 @pytest.fixture
 def configured_app(running_app, monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "fixture-openai-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-claude-key")
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_MODEL", "gpt-fixture")
     monkeypatch.setenv("MYCELIUM_DRAFT_REVIEW_PROVIDER", "openai")
+    indexed = range(len(model_settings.ACTIONS))
+    offer_models(
+        "claude",
+        *(f"claude-{index}" for index in indexed),
+        *("claude-9", "claude-fixture", "claude-new", "new-claude"),
+        *("claude-sonnet-5-5", "chosen-model", "repaired-claude"),
+        *("claude-one", "claude-two", "configured-model"),
+    )
+    offer_models(
+        "openai",
+        *(f"gpt-{index}" for index in indexed),
+        *("gpt-new", "new-model", "changed-gpt", "stale-model"),
+        *("chosen-model", "repaired-gpt", "configured-model"),
+    )
     _set_review_model("gpt-fixture")
     return running_app
 
@@ -703,7 +723,7 @@ def test_empty_legacy_review_model_cannot_create_a_run(configured_app):
             "UPDATE model_settings SET body_json = ? WHERE action = 'draft_review'",
             (selection.model_dump_json(),),
         )
-    with pytest.raises(ValueError, match="Choose a model ID"):
+    with pytest.raises(ValueError, match="Choose an OpenAI model for draft review"):
         _request(draft_id)
     assert draft_review_store.latest(server._drafts_db(), draft_id) is None
 

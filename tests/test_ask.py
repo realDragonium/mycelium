@@ -138,7 +138,7 @@ def _run(responses, results=None, *, question="why does it retry?", **config_ove
     cfg = AskConfig(
         limits=AskSettings(**{"thinking": True, **limits}),
         trace_log_path=None,
-        **config_over,
+        **{"model": "claude-haiku-4-5", **config_over},
     )
     result = run_ask(question, client=client, substrate=substrate, config=cfg)
     return result, client, substrate
@@ -358,7 +358,7 @@ def test_quick_depth_config_drops_floor_and_tightens_caps():
         for_depth,
     )
 
-    base = AskConfig()
+    base = AskConfig(model="claude-haiku-4-5")
     assert for_depth(base, "standard") is base  # unchanged
 
     quick = for_depth(base, "quick")
@@ -372,6 +372,7 @@ def test_quick_depth_config_drops_floor_and_tightens_caps():
     )
     # ceilings only: an already-tighter budget still wins
     tight = AskConfig(
+        model="claude-haiku-4-5",
         limits=AskSettings(
             op_cap=3,
             wall_clock_s=10.0,
@@ -637,7 +638,7 @@ def test_trace_written_to_jsonl_file(tmp_path):
     ]
     client = FakeAnthropic(responses)
     substrate = FakeSubstrate({"recon": [{"id": "stm_1", "text": "x"}]})
-    cfg = AskConfig(trace_log_path=str(log))
+    cfg = AskConfig(model="claude-haiku-4-5", trace_log_path=str(log))
     run_ask("why?", client=client, substrate=substrate, config=cfg)
 
     lines = log.read_text().strip().splitlines()

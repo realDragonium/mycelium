@@ -160,7 +160,9 @@ def start(
     if settings.mode == "off":
         raise ValueError("internal draft review is off")
     if not settings.model:
-        raise ValueError("Choose a model ID before starting an internal draft review.")
+        raise ValueError(
+            model_settings.missing_model("draft_review", settings.provider)
+        )
     # Checked before a run is recorded: without credentials every attempt
     # fails, and a restored copy would otherwise fill up with failed runs.
     if reason := credentials_error(settings):

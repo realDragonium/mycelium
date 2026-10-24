@@ -29,16 +29,7 @@ Status = Literal["done", "todo", "dismissed"]
 #: The settings screen each step is completed on.
 Section = Literal["models", "audiences", "documentation", "review", "usage"]
 
-ACTION_NAMES: dict[model_settings.Action, str] = {
-    "ask": "Ask",
-    "ingest": "Ingestion",
-    "docgen": "Document generation",
-    "draft_review": "Draft review",
-    "alias_discovery": "Alias discovery",
-    "audience_labelling": "Audience labelling",
-    "documentation_planning": "Documentation planning",
-    "connect": "Connecting statements",
-}
+ACTION_NAMES = model_settings.ACTION_NAMES
 PROVIDER_NAMES: dict[Provider, str] = {"claude": "Claude", "openai": "OpenAI"}
 MODES: dict[str, str] = {
     "off": "Off",

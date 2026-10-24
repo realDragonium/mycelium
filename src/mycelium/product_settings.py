@@ -10,6 +10,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StringConstraints,
     TypeAdapter,
     ValidationError,
     field_validator,
@@ -21,9 +22,11 @@ from . import (
     github_connections,
     github_credentials,
     guidelines,
+    model_settings,
     prompt_store,
     store,
 )
+from .ai import Provider
 from .github_connections import Connection as GitHubConnection
 from .model_settings import Conflict, Unavailable
 
@@ -312,6 +315,33 @@ class DocumentationSettings(SettingsModel):
         return self
 
 
+ModelId = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)
+]
+
+
+class ModelCatalogSettings(SettingsModel):
+    """The models an admin made selectable, per provider, in their order.
+    Every model choice picks from these."""
+
+    kind: Literal["model_catalog"] = "model_catalog"
+    claude: tuple[ModelId, ...] = Field(default=(), strict=False)
+    openai: tuple[ModelId, ...] = Field(default=(), strict=False)
+
+    def models(self, provider: Provider) -> tuple[str, ...]:
+        return self.claude if provider == "claude" else self.openai
+
+    @model_validator(mode="after")
+    def validate_models(self) -> ModelCatalogSettings:
+        for provider in model_settings.PROVIDERS:
+            models = self.models(provider)
+            if len(set(models)) != len(models):
+                raise ValueError("A provider lists a model more than once.")
+            for model in models:
+                model_settings.check_model_id(provider, model)
+        return self
+
+
 Section = Literal[
     "ask",
     "ingest",
@@ -327,6 +357,7 @@ Section = Literal[
     "ai_budget",
     "setup",
     "media",
+    "model_catalog",
 ]
 Body = Annotated[
     AskSettings
@@ -342,7 +373,8 @@ Body = Annotated[
     | DocumentationSettings
     | AIBudgetSettings
     | SetupSettings
-    | MediaSettings,
+    | MediaSettings
+    | ModelCatalogSettings,
     Field(discriminator="kind"),
 ]
 BODY: TypeAdapter[Body] = TypeAdapter(Body)
@@ -361,6 +393,7 @@ DEFAULTS: tuple[Body, ...] = (
     AIBudgetSettings(),
     SetupSettings(),
     MediaSettings(),
+    ModelCatalogSettings(),
 )
 
 
@@ -414,7 +447,8 @@ T = TypeVar(
     | DocumentationSettings
     | AIBudgetSettings
     | SetupSettings
-    | MediaSettings,
+    | MediaSettings
+    | ModelCatalogSettings,
 )
 
 
@@ -491,6 +525,16 @@ def save(request: SaveSettings, principal: auth.Principal) -> Snapshot:
         current = editable(request.settings, db)
         if current.revision != request.revision:
             raise Conflict("Settings changed; reload before saving.")
+        if isinstance(request.settings, ModelCatalogSettings) and isinstance(
+            current.settings, ModelCatalogSettings
+        ):
+            for provider in model_settings.PROVIDERS:
+                model_settings.refuse_removing_used(
+                    db,
+                    provider,
+                    set(current.settings.models(provider))
+                    - set(request.settings.models(provider)),
+                )
         if (
             current.settings == request.settings
             and current.revision
@@ -540,7 +584,8 @@ def _legacy(default: Body, conn: sqlite3.Connection) -> Body:
         | DocumentationMaintenanceSettings
         | ConnectSettings
         | SetupSettings
-        | MediaSettings,
+        | MediaSettings
+        | ModelCatalogSettings,
     ):
         return default
     if isinstance(default, DocumentationSettings):

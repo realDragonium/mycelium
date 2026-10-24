@@ -686,8 +686,8 @@ def start(guideline_set: str, *, created_by: str | None) -> str:
 
     planned = target(guideline_set, documentation_profiles.capture())
     selected = model_settings.get("documentation_planning")
-    if not selected.external_agent and not selected.model:
-        raise Unavailable("Choose a documentation planning model in AI settings.")
+    if reason := model_settings.model_error("documentation_planning", selected):
+        raise Unavailable(reason)
     drafts = drafts_store.connection()
     with _start_lock:
         if doc_plans.active_plan(drafts, guideline_set) is not None:

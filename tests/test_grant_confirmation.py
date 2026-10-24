@@ -18,6 +18,13 @@ from mycelium import (
 )
 from mycelium.audiences import Audience
 from product_settings_helpers import connection as product_connection
+from settings_helpers import assume_configured_models
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
+
 
 INTERNAL = "internal-technical"
 EXTERNAL = "external-technical"

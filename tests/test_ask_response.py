@@ -10,6 +10,12 @@ from mycelium import ask, server
 from mycelium.ask.events import AskEvent, current_stream
 from mycelium.ask.schema import Interpretation
 from mycelium.ask.transport import respond
+from settings_helpers import assume_configured_models
+
+
+@pytest.fixture(autouse=True)
+def _configured_models(monkeypatch):
+    assume_configured_models(monkeypatch)
 
 
 @pytest.fixture(params=["answered", "needs_clarification"])
@@ -38,7 +44,9 @@ def result(request):
 @pytest.mark.parametrize("verbose", [False, True])
 def test_tool_response(monkeypatch, result, verbose):
     monkeypatch.setattr(
-        ask.AskConfig, "from_env", lambda: ask.AskConfig(trace_log_path="unused")
+        ask.AskConfig,
+        "from_env",
+        lambda: ask.AskConfig(model="claude-haiku-4-5", trace_log_path="unused"),
     )
     monkeypatch.setattr(ask, "run_ask", lambda question, *, config: result)
     arguments = {"verbose": True} if verbose else {}

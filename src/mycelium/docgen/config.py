@@ -1,10 +1,8 @@
 """Tunables for the documentation-generation loop.
 
-Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Task budgets come from saved AI settings.
-
-Claude remains the default, with the same built-in model as ingest. GPT uses an
-explicitly configured model ID. A generation
+The model is the one saved for the `docgen` action in AI settings for the
+chosen provider, picked from the admin's model catalog; there is no built-in
+default. Task budgets come from saved AI settings. A generation
 run surveys the substrate before it writes a word, so the op cap and wall
 clock are sized well beyond a single `ask` question.
 
@@ -27,7 +25,6 @@ from typing import Final, Literal, TypedDict
 from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort, pricing
 from ..guidelines import SET_NAME
-from ..ingest.config import DEFAULT_MODEL
 
 #: The generation doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
@@ -62,11 +59,7 @@ def model_choices() -> list[ModelChoice]:
         config = DocgenConfig.from_env(provider=resolve_provider(provider))
         reason = None
         if not config.model:
-            reason = (
-                "Choose an OpenAI documentation model in AI settings."
-                if provider == "openai"
-                else "Choose a Claude documentation model in AI settings."
-            )
+            reason = model_settings.missing_model("docgen", config.provider)
         else:
             reason = model_settings.provider_availability(config.provider).reason
         choices.append(
@@ -95,7 +88,7 @@ def model_choices() -> list[ModelChoice]:
 
 @dataclass(frozen=True)
 class DocgenConfig:
-    model: str = DEFAULT_MODEL
+    model: str = ""
     provider: Provider = "claude"
     reasoning_effort: ReasoningEffort | None = None
     #: The set this instance prefers when the request named none. It is a

@@ -330,6 +330,8 @@ def scan(request: ScanRequest, principal: auth.Principal) -> ScanResult:
     inputs = _inputs(conn, request.statement_ids)
     if selected.external_agent:
         return _queue(inputs, instructions, principal)
+    if reason := model_settings.model_error("alias_discovery", selected):
+        raise ValueError(reason)
     with server.model_loop_slot(), ai.usage.attributed("alias_discovery"):
         result = ai.structured(
             ai.StructuredTask(

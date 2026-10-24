@@ -1,8 +1,35 @@
 """Saved model configuration for isolated workflow tests."""
 
-from mycelium import auth, draft_review_settings, model_settings, prompt_store, store
+from mycelium import (
+    auth,
+    draft_review_settings,
+    model_settings,
+    product_settings,
+    prompt_store,
+    store,
+)
 from mycelium.ai import Provider
 from mycelium.draft_review_store import AutoApply, Mode
+
+
+def offer_models(provider: Provider, *models: str) -> None:
+    """Add `models` to the catalog, as an admin does before choosing them."""
+    if not prompt_store.is_configured():
+        conn = prompt_store.connect(":memory:")
+        prompt_store.migrate(conn)
+        prompt_store.use_connection(conn)
+    db = prompt_store.connection()
+    current = product_settings.editable(product_settings.ModelCatalogSettings(), db)
+    assert isinstance(current.settings, product_settings.ModelCatalogSettings)
+    offered = current.settings.models(provider)
+    added = offered + tuple(m for m in dict.fromkeys(models) if m and m not in offered)
+    product_settings.save(
+        product_settings.SaveSettings(
+            revision=current.revision,
+            settings=current.settings.model_copy(update={provider: added}),
+        ),
+        auth.LOCAL_ADMIN,
+    )
 
 
 def save_model(
@@ -16,6 +43,10 @@ def save_model(
         conn = prompt_store.connect(":memory:")
         prompt_store.migrate(conn)
         prompt_store.use_connection(conn)
+    if claude_model:
+        offer_models("claude", claude_model)
+    if openai_model:
+        offer_models("openai", openai_model)
     current = model_settings.get(action)
     model_settings.save(
         action,
@@ -51,3 +82,10 @@ def set_review_controls(
             "UPDATE draft_review_settings SET revision = revision + 1, body_json = ?",
             (controls.model_dump_json(),),
         )
+
+
+def assume_configured_models(monkeypatch) -> None:
+    """Treat every action nobody configured as configured with the Claude
+    model it ran on before the catalog, as on an upgraded instance. A fresh
+    server then saves those models and offers them in its catalog."""
+    monkeypatch.setattr(model_settings, "defaults", model_settings.former_default)

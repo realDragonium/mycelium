@@ -27,11 +27,13 @@ from mycelium.docgen.destinations import (
 )
 from mycelium.docgen.schema import RevisionTarget
 from product_settings_helpers import import_product_environment
+from settings_helpers import assume_configured_models
 
 
 @pytest.fixture(autouse=True)
 def _anthropic_credentials(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+    assume_configured_models(monkeypatch)
 
 
 @pytest.fixture

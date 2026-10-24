@@ -65,7 +65,11 @@ def _connect(ops, *, known=(), **config):
         client=client,
         substrate=FakeSubstrate({"get_statements": _statements}),
         emitter=emitter,
-        config=IngestConfig(trace_log_path=None, limits=IngestSettings(**config)),
+        config=IngestConfig(
+            trace_log_path=None,
+            model="claude-sonnet-4-6",
+            limits=IngestSettings(**config),
+        ),
     )
     return result, emitter, client
 
@@ -213,7 +217,7 @@ def test_leaves_a_statement_it_finds_badly_phrased_unlinked():
         client=client,
         substrate=FakeSubstrate({"get_statements": _statements}),
         emitter=emitter,
-        config=IngestConfig(trace_log_path=None),
+        config=IngestConfig(model="claude-sonnet-4-6", trace_log_path=None),
     )
 
     assert emitter.queued[0][2] == {"links": [_edge("stm_invoice", "stm_export")]}
@@ -317,6 +321,7 @@ def test_stops_reading_while_another_turn_and_the_final_emit_fit_under_the_cap()
         substrate=FakeSubstrate(),
         emitter=FakeEmitter(),
         config=IngestConfig(
+            model="claude-sonnet-4-6",
             trace_log_path=None,
             max_cost_usd=0.04,
         ),

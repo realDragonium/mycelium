@@ -18,11 +18,13 @@ from mycelium import doc_runs, docs_store
 from mycelium.docgen import publication
 from mycelium.docgen.schema import CurrentDocument, RevisionTarget
 from product_settings_helpers import import_product_environment
+from settings_helpers import assume_configured_models
 
 
 @pytest.fixture(autouse=True)
 def _anthropic_credentials(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fixture-key")
+    assume_configured_models(monkeypatch)
 
 
 TARGET = json.dumps(

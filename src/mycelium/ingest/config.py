@@ -1,11 +1,9 @@
 """Tunables for the `ingest` write-harness loop.
 
-Model choices use saved per-action settings, with legacy environment values imported
-once on upgrade. Task budgets come from saved AI settings.
-
-The model default is **Sonnet** (`claude-sonnet-4-6`) — one model, one context
-drives extract -> reconcile -> classify -> link -> emit. The id is config,
-never hardcoded in logic; choose it in AI settings.
+The model is the one saved for the `ingest` action in AI settings, picked from
+the admin's model catalog; there is no built-in default. One model, one
+context drives extract -> reconcile -> classify -> link -> emit. Task budgets
+come from saved AI settings.
 
 `ingest` runs hotter than `ask`: it reconciles *every* extracted candidate
 against the substrate, so the op cap and wall clock are larger.
@@ -21,9 +19,6 @@ from typing import Final
 from .. import model_settings, product_settings, tracing
 from ..ai import Provider, ReasoningEffort, pricing
 
-#: Current Sonnet model id (confirmed against Anthropic's model catalog).
-DEFAULT_MODEL = "claude-sonnet-4-6"
-
 #: The reasoning doctrine the inner model reads, shipped beside this package.
 _DEFAULT_DOCTRINE_PATH = str(Path(__file__).resolve().parent / "doctrine.md")
 
@@ -35,7 +30,7 @@ DOCTRINE_NAME: Final = "ingest"
 
 @dataclass(frozen=True)
 class IngestConfig:
-    model: str = DEFAULT_MODEL
+    model: str = ""
     provider: Provider = "claude"
     reasoning_effort: ReasoningEffort | None = None
     limits: product_settings.IngestSettings = field(
