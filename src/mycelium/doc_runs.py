@@ -7,7 +7,10 @@ crash can leave a row unfinished once the worker starts.
 
 A run admitted while the bound is full waits, unstarted, in `_waiting` and
 starts in admission order as running ones finish. The wait lives in this
-process, so a restart fails waiting runs with the running ones.
+process, so at startup `resume_after_restart` admits every unfinished run again
+in its original order. A running run starts from scratch, which is safe because
+its only lasting effect is its final document write; a run that had already
+written its document is finished as written.
 
 The runner hands back the DOCUMENT — slug, title, body — and this module
 persists it. That is what lets the whole executor be
@@ -64,6 +67,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 RUNNER: Callable[..., Any] | None = None
+QUARANTINE_RESTART_ERROR = (
+    "Interrupted by a server restart; this server runs in quarantine, so it was "
+    "not started again. Retry starts it again."
+)
 _spawn_lock = threading.Lock()
 _threads: dict[str, threading.Thread] = {}
 _waiting: dict[str, Callable[[sqlite3.Connection], None]] = {}
@@ -85,6 +92,7 @@ def start_run(
     anchor_entity_id: str | None = None,
     start_from_destination: bool = False,
     review_notes: Sequence[ReviewNote] = (),
+    restart_run_id: str | None = None,
 ) -> str:
     """Admit a run, deciding first which document it writes.
 
@@ -92,6 +100,7 @@ def start_run(
     even when an unpublished internal revision would otherwise refuse it.
     `review_notes` brief the writer, and only the writer, with what an earlier
     review found.
+    `restart_run_id` re-admits an unfinished run without changing its identity.
 
     `provider="agent"`, or no provider while documentation is set to External
     agent, queues the run for an outside agent (`docgen.external`) instead
@@ -148,21 +157,40 @@ def start_run(
         )
 
     with _spawn_lock:
-        run_id = docs_store.create_run(
-            conn,
-            prompt=prompt,
-            guideline_set=guideline_set,
-            document_type=document_type,
-            created_by=created_by,
-            provider="agent" if agent else config.provider,
-            model=config.model if review == "server" else None,
-            reasoning_effort=config.reasoning_effort if review == "server" else None,
-            target_document_id=None if target is None else target.document.id,
-            target_revision=None if target is None else target.revision,
-            anchor_entity_id=anchor_entity_id,
-            revision_base=None if target is None else target.base,
-            review_notes=review_notes,
-        )
+        if restart_run_id is None:
+            run_id = docs_store.create_run(
+                conn,
+                prompt=prompt,
+                guideline_set=guideline_set,
+                document_type=document_type,
+                created_by=created_by,
+                provider="agent" if agent else config.provider,
+                model=config.model if review == "server" else None,
+                reasoning_effort=config.reasoning_effort
+                if review == "server"
+                else None,
+                target_document_id=None if target is None else target.document.id,
+                target_revision=None if target is None else target.revision,
+                anchor_entity_id=anchor_entity_id,
+                revision_base=None if target is None else target.base,
+                review_notes=review_notes,
+            )
+        else:
+            run_id = restart_run_id
+            docs_store.readmit_run(
+                conn,
+                run_id,
+                guideline_set=guideline_set,
+                document_type=document_type,
+                provider="agent" if agent else config.provider,
+                model=config.model if review == "server" else None,
+                reasoning_effort=config.reasoning_effort
+                if review == "server"
+                else None,
+                target_document_id=None if target is None else target.document.id,
+                target_revision=None if target is None else target.revision,
+                revision_base=None if target is None else target.base,
+            )
 
         def launch(conn: sqlite3.Connection) -> None:
             _launch(
@@ -221,6 +249,60 @@ def start_run(
             _fail_start(conn, run_id, exc, manual_document)
             raise
         return run_id
+
+
+def resume_after_restart(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Admit again, under their own ids and in admission order, the runs a
+    previous process left unfinished. Returns (re-admitted, failed); a run
+    that had already written its document is finished as written and counts
+    as neither."""
+    readmitted = 0
+    failed = 0
+    for row in docs_store.reset_unfinished(conn):
+        run_id = str(row["id"])
+        if (document_id := docs_store.document_written_by(conn, run_id)) is not None:
+            docs_store.finish_run(
+                conn, run_id, outcome="document_written", document_id=document_id
+            )
+            continue
+        manual = row["draft_body"] is not None
+        try:
+            anchored = row["anchor_entity_id"] is not None
+            review_notes: Sequence[ReviewNote] = (
+                json.loads(str(row["review_notes"])) if row["review_notes"] else ()
+            )
+            start_run(
+                restart_run_id=run_id,
+                conn=conn,
+                prompt=str(row["prompt"]),
+                guideline_set=row["guideline_set"],
+                document_type=row["document_type"],
+                created_by=row["created_by"],
+                provider=row["provider"],
+                anchor_entity_id=row["anchor_entity_id"],
+                target_document_id=None if anchored else row["target_document_id"],
+                expected_revision=None if anchored else row["target_revision"],
+                start_from_destination=(
+                    not anchored and row["revision_base"] == "destination"
+                ),
+                review_notes=review_notes,
+                manual_document=ManualDocument(
+                    title=str(row["draft_title"]), body=str(row["draft_body"])
+                )
+                if manual
+                else None,
+            )
+            readmitted += 1
+        except Exception as exc:  # noqa: BLE001 — each invalid run is isolated
+            error = (
+                "Interrupted by a server restart and not started again: "
+                f"{str(exc).rstrip('.')}. "
+                + ("Edit the document again." if manual else "Retry starts it again.")
+            )
+            docs_store.finish_run(conn, run_id, outcome="failed", error=error)
+            failed += 1
+            logger.warning("documentation run %s was not restarted: %s", run_id, exc)
+    return readmitted, failed
 
 
 def _agent_pair(
@@ -385,7 +467,7 @@ def _fail_start(
             draft_title=manual_document.title if manual_document else None,
             draft_body=manual_document.body if manual_document else None,
         )
-    except Exception:  # noqa: BLE001 — startup orphan sweep is the backstop
+    except Exception:  # noqa: BLE001 — startup restart sweep is the backstop
         logger.exception("could not finalize failed start of %s", run_id)
 
 
@@ -789,7 +871,7 @@ def _execute_run(
             if conn is None:
                 # The connect above failed; one fresh attempt so the row is
                 # not left 'running' holding a capacity slot. If this fails
-                # too, the startup orphan sweep is the backstop.
+                # too, the startup restart sweep is the backstop.
                 conn = own_conn = docs_store.connect(db_path)
             docs_store.finish_run(
                 conn,

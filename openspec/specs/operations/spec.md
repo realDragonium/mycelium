@@ -66,12 +66,12 @@ The system MUST refuse to start, before listening, when the email domain policy 
 - **WHEN** `MYCELIUM_JIT_DOMAINS` names a domain that `MYCELIUM_ALLOWED_EMAIL_DOMAINS` does not allow
 - **THEN** `mycelium-http` exits without ever listening
 
-### Requirement: Interrupted work is marked on restart
-The system SHALL, on startup, mark documentation runs, documentation plans and document maintenance that a previous process left unfinished as failed or interrupted, and SHALL log how many documentation runs were orphaned.
+### Requirement: Interrupted work is resumed or marked on restart
+The system SHALL, on startup, admit documentation runs that a previous process left unfinished again, mark documentation plans and document maintenance it left unfinished as failed or interrupted, and SHALL log how many documentation runs were admitted again and how many failed.
 
 #### Scenario: Restart during a documentation run
 - **WHEN** the server restarts while a documentation run is running
-- **THEN** that run is marked failed as orphaned by restart, and a warning reports the count
+- **THEN** that run starts again, and a warning reports the counts of runs admitted again and failed
 
 ### Requirement: Server info endpoint
 The system SHALL answer `GET /api/server-info` without authentication and without the host check, on the event loop rather than a worker thread, with `base_url`, `mcp_url`, `auth_enabled`, `partial_restore`, `quarantine` and `state`, exposing no secrets.

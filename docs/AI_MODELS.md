@@ -229,8 +229,15 @@ There is one shared counting gate; changing its limit does not create a second
 pool. The active-run limit counts started unfinished runs, including
 those waiting for shared capacity. A run admitted over it is queued, with its
 place in line (`queue_position`), and starts in admission order as running
-ones finish. The queue is held in the server process, so a restart fails
-queued runs as it fails running ones.
+ones finish. The queue is held in the server process, so on startup the
+server admits every unfinished run again in its original order: a queued run
+keeps its place and a running one starts over, keeping its run id. A run's
+only lasting effect is its final document write, so starting over repeats
+model calls but nothing else; a run that had already written its document is
+finished as written. A restarted run uses the current documentation model and
+writing profile, as **Retry** does. A run that cannot be admitted again, for
+example because its model has no key now, fails with an error saying so;
+**Retry** starts it again. In quarantine no run is started again: each fails.
 
 Documentation settings selects the default guideline set and configures named
 GitHub destinations using an owner, repository, base branch, and path template.

@@ -147,12 +147,16 @@ The system SHALL list the newest 100 runs through `list_documentation_runs` with
 - **WHEN** a run's document failed review
 - **THEN** `get_documentation_run` returns the refused `draft_title` and `draft_body` beside the findings in `error`
 
-### Requirement: Restart fails unfinished runs
-The system SHALL mark every unfinished documentation run, queued or running, as `failed` with error `orphaned by restart` when the server starts, except a run waiting for an outside agent, which keeps waiting.
+### Requirement: Restart admits unfinished runs again
+The system SHALL, when the server starts, admit every unfinished documentation run again under its own run id and in its original admission order, a running one from scratch, with the current documentation model and writing profile; a run that had already written its document SHALL be finished as `document_written`, and a run that cannot be admitted again SHALL fail with an error that names the reason and says Retry starts it again. A run waiting for an outside agent keeps waiting. In quarantine no run is admitted again; each fails with an error saying so.
 
 #### Scenario: Server restarts mid-run
-- **WHEN** the server restarts while a run is running and another is queued
-- **THEN** both runs report `status` `failed` with error `orphaned by restart`
+- **WHEN** the server restarts while a run is running and another is queued behind it
+- **THEN** the running run starts again first and the queued run keeps its place behind it
+
+#### Scenario: A run cannot be admitted again
+- **WHEN** the server restarts while a run is queued and its documentation model has no key any more
+- **THEN** the run reports `status` `failed` with an error naming the missing key and saying Retry starts it again
 
 #### Scenario: Server restarts while an agent run waits
 - **WHEN** the server restarts while a run is `waiting_for_agent`
@@ -338,7 +342,7 @@ The system MUST NOT start an automatic revision before the document's changes ha
 - **THEN** a single automatic revision starts 30 minutes after the last change
 
 ### Requirement: Automatic republishing
-The system SHALL publish a successful automatic revision of a previously published document to the same destination, updating its open pull request or opening a new one, and leave a never-published document internal; a refused, failed or restart-interrupted automatic revision or publication is reported, not retried.
+The system SHALL publish a successful automatic revision of a previously published document to the same destination, updating its open pull request or opening a new one, and leave a never-published document internal; a refused or failed automatic revision, one a restart interrupted before its run was admitted, or an interrupted publication is reported, not retried.
 
 #### Scenario: Published document auto-revised
 - **WHEN** an automatic revision of a document with an open pull request is written

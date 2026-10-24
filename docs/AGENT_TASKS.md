@@ -170,8 +170,8 @@ review's findings.
   does not call a model while the setting is on.
 
 Tasks live in the drafts database with documentation runs and plans. They are
-in backups and survive a restart: a run or plan waiting for an agent is not
-failed as orphaned.
+in backups and survive a restart: a run or plan waiting for an agent keeps
+waiting.
 
 ## Adding a kind
 
