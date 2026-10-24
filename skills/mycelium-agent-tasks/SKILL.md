@@ -1,6 +1,6 @@
 ---
 name: mycelium-agent-tasks
-description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, approves or dismisses another agent's plan items, labels statements' audiences, turns ingested text or unconnected statements into a draft, finds concept aliases, or reviews a submitted draft (approve, approve with corrections, reject or ask a person), submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect, discover aliases or review drafts for a server that has no provider key. Needs a real writer or admin token.
+description: Do the model work a Mycelium server queues for outside agents when an action is set to External agent instead of a server model. Claims tasks with claim_agent_task, writes documentation from audience-scoped reads (read_for_agent_task), reviews another agent's document, proposes a writing profile's documentation plan, approves or dismisses another agent's plan items, labels statements' audiences, confirms or rejects another labeller's waiting external grants, turns ingested text or unconnected statements into a draft, finds concept aliases, or reviews a submitted draft (approve, approve with corrections, reject or ask a person), submits the result with submit_agent_task, fixes refused submissions from their findings and releases what it cannot finish. Use when asked to work Mycelium's agent task queue, or to write documentation, label audiences, ingest, connect, discover aliases or review drafts for a server that has no provider key. Needs a real writer or admin token.
 ---
 
 # Working Mycelium's agent task queue
@@ -23,8 +23,8 @@ the token can claim.
 
 1. **Claim one task.** `claim_agent_task(kind, limit=1)`. `kind` is
    `documentation`, `document_review`, `documentation_planning`,
-   `plan_review`, `audience_labelling`, `ingest`, `connect`, `alias_discovery` or
-   `draft_review`. An empty `tasks` list means nothing is waiting; `note`
+   `plan_review`, `audience_labelling`, `audience_review`, `ingest`,
+   `connect`, `alias_discovery` or `draft_review`. An empty `tasks` list means nothing is waiting; `note`
    says when waiting reviews were held back because they are your own work.
    You hold the task for 30 minutes (`expires_at`); calling
    `claim_agent_task(kind, limit=0)` renews it. Each task has:
@@ -97,6 +97,14 @@ repeated or unknown item is refused.
 once, with audience ids from the brief and a reason. The server applies them
 as its own labeller's are applied, and new external grants may wait for a
 curator's confirmation.
+
+**`audience_review`.** Another labeller's grants are waiting to show
+statements to external audiences. For each `statement_id` and `audience_id`
+pair in `brief.input`, `confirm` only when the audience's description allows
+the statement, otherwise `reject`; when in doubt, reject. Give every decision
+a short reason (at most 500 characters): it is recorded on the label as a
+curator's decision would be. Decide every pair exactly once. You are never
+given grants you labelled.
 
 **`ingest` and `connect`.** Follow `brief.instructions` as the ingest or
 connect model would: reconcile every candidate with reads, search around it,
