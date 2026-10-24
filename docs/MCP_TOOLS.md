@@ -77,7 +77,7 @@ decision, and the rest runs in-process.
 | `get_agent_task` | Follows work the caller queued for an outside agent, such as an `ingest` that returned `waiting_for_agent`: status, findings and the draft it made. |
 | `revise_document` | Revises a generated document. `update_sources` briefs the run with the cited statements that changed. A delivered document's revision starts from GitHub edits; when both sides changed it is refused unless `start_from_destination` is passed. |
 | `request_documentation_plan` | Starts the same plan as **Documents → Plan** for a writing profile, on the server's model or as a `documentation_planning` agent task. An agent keeping documentation current needs to ask which documents are missing, not only write the ones it already knows. Writers and admins only. See [Documentation planning](DOCUMENTATION_PLANNING.md). |
-| `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile. Merging stays with the destination repository. Writers and admins only. |
+| `deliver_document` | Opens or updates the document's GitHub pull request, as **Create / update GitHub PR** does. Refused unless the document's writing profile lets agents deliver (off by default), so publishing outside the instance stays a person's decision until a writer hands it to agents for that profile, and refused for a destination the profile does not publish to. Merging stays with the destination repository. Writers and admins only. |
 
 ### Uploading media
 

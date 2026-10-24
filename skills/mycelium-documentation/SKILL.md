@@ -36,10 +36,15 @@ code or from memory: a missing fact is a knowledge gap to fill first.
   templates, `ready` and `issues`. Pass one when the request or the operator
   names it, or the audience makes it clear (a customer-facing page needs a
   profile that writes for an external audience); otherwise the run chooses
-  among the ready profiles. The starter profile is `kb-authoring`.
-- **Type** (`document_type`) is a template of that profile; the starter
-  profile has `tutorial`, `how-to`, `reference`, `explanation` and
-  `troubleshooting`. Pass it when the request makes it clear: "how do I"
+  among the ready profiles. A fresh instance has `kb-authoring`; profiles
+  made from the starters are often `help-center` (external non-technical:
+  short how-tos, troubleshooting, light explanations) and `internal-guide`
+  (internal non-technical: reference, explanations, how-tos and
+  troubleshooting with conditions, edge cases and limits). A question from
+  support or sales about what a customer can do is an internal-guide
+  document; a page customers read is a help-center one.
+- **Type** (`document_type`) is a template of that profile; the profile
+  listing names them. Pass it when the request makes it clear: "how do I"
   is a how-to, "what are the limits" a reference, "why does" an
   explanation, "it fails when" troubleshooting.
 - **Anchor** (`anchor_entity_id`) names the one concept the document is
@@ -181,7 +186,10 @@ limits.
   `deliver_document(document_id, destination, expected_revision)` only when
   the operator asked and the document's writing profile has **Agents may
   deliver** on; otherwise the call is refused, and the operator publishes from
-  the document (**Create / update GitHub PR**). Merging the pull request is
+  the document (**Create / update GitHub PR**). A profile that names its
+  destinations (`destinations` in the profile listing) publishes only there,
+  so an internal guide is not sent to the public help site; pick one of
+  those. Merging the pull request is
   the destination repository's decision, never yours.
 - **Missing facts.** Fill them in the knowledge base, then run the request
   again.

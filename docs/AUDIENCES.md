@@ -27,6 +27,14 @@ and no audience can include itself through others. Instances seeded before
 includes existed get the seeded includes once on startup, on seeded audiences
 whose saved text predates the field.
 
+Where a profile's documents are published is the profile's own setting: it
+can name the destinations it publishes to, so documents for an internal
+audience never reach an external site ([GitHub
+publication](DOCUMENTATION_MODELS.md#github-publication)). The starters
+**Help center** and **Internal guide** are written for external
+non-technical and internal non-technical readers ([Guideline
+sets](GUIDELINE_SETS.md#starters)).
+
 A profile without a chosen audience writes for the default: internal technical
 while it exists, otherwise the first internal audience. Only an administrator
 can change the audience of an existing profile. If a profile's chosen audience

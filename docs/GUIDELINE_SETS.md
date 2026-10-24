@@ -40,7 +40,7 @@ with theirs.
 
 - `<set>` is the variant's name, kebab-case: `kb-authoring`, `internal-doc`.
   It is the shared prefix that makes a set greppable in a listing.
-- `<slot>` is what the row is for. Five shapes:
+- `<slot>` is what the row is for:
   - `guidance` — the set-wide instructions: how to research, what counts as
     a fact, how to mark uncertainty, what "done" means. Exactly one per set.
   - `exposure` — the set-wide disclosure boundary: what a finished document
@@ -55,6 +55,14 @@ with theirs.
     date: `manual` (the default when the row is absent), `propose` or
     `auto-revise`; see [Documentation](DOCUMENTATION_MODELS.md). At most one
     per set.
+  - `planning`, `plan_review` and `delivery` — the planning policy, who
+    decides proposed plan items, and whether agents may deliver; see
+    [Documentation planning](DOCUMENTATION_PLANNING.md). A missing row reads
+    as the default (`off`, `person`, `people`).
+  - `destinations` — the names of the documentation destinations the set's
+    documents may be published to, one per line. Without one they may be
+    published to any destination. Only an admin changes it on an existing
+    set.
   - a **document type** — `tutorial`, `how-to`, `reference`, `explanation`,
     `troubleshooting`, … — the template for producing that type. As many as
     the set supports.
@@ -96,9 +104,45 @@ that is not configured, or a type that set has no template for, is refused at
 the door by `request_documentation` instead of failing minutes later inside a
 background run.
 
+## Starters
+
+Three starters ship, each a directory under `src/mycelium/guidelines/`
+listed in `guidelines.STARTERS`:
+
+| Starter | Written for | Templates |
+|---|---|---|
+| `kb-authoring` (Knowledge base) | the profile's audience, default internal | `tutorial`, `how-to`, `reference`, `explanation`, `troubleshooting` |
+| `help-center` (Help center) | external non-technical: people using the product | `how-to`, `troubleshooting`, `explanation` |
+| `internal-guide` (Internal guide) | internal non-technical: support, sales, customer success | `reference`, `explanation`, `how-to`, `troubleshooting` |
+
+The help center writes short, task-oriented articles: the common path, limits
+stated plainly where the reader meets them, no internals and few edge cases.
+The internal guide writes the fuller picture a colleague needs to answer a
+customer: conditions beside the behaviour they govern, exact limits, edge
+cases, and who can change what. Each has its own disclosure rules, matching
+its audience: the help center withholds internal process and commercial
+detail, the internal guide permits it and withholds technical internals.
+
+In **Settings → Documentation**, **New from starter…** opens a new profile
+filled with a starter's guidance, disclosure rules and templates, writing for
+the starter's audience; nothing is stored until it is saved, under any name.
+An administrator can **Reset to starter…** an existing profile: its guidance,
+disclosure rules and templates are replaced in the editor, its audience,
+policies and destinations stay, and saving appends new versions (templates
+the starter does not have are retired, which is why it is an administrator's
+action). `GET /api/documentation/starters` returns the starters' texts.
+
+Starter guidance is written for the server-side writer: the run already
+gathers, files gaps and emits, so a starter says what the document contains,
+how it reads and how long it is, and never asks the reader a question, names
+a file or path, or walks through tool calls. It names no row either, since a
+starter can be saved under any profile name.
+
 ## Sets that exist
 
-**`kb-authoring`** — seven rows, and the one set that ships. Its sources are
+Only `kb-authoring` is seeded.
+
+**`kb-authoring`** — seven rows, and the set a fresh instance starts with. Its sources are
 under `src/mycelium/guidelines/kb-authoring/`: one file for set-wide guidance,
 one for the exposure boundary, and the files under `templates/` for `tutorial`,
 `how-to`, `reference`, `explanation` and `troubleshooting`. Substrate-first:
@@ -112,8 +156,7 @@ an operator to run. An instance with an empty store has nothing to generate
 against, and that is not a state worth supporting.
 
 The guidance is written for a generation run, whose only handle on the set is
-the store — so it names each template as the sibling row it is, reaches for no
-file, and carries no skill frontmatter. The `mycelium-documentation` skill in
+the store — so it reaches for no file and carries no skill frontmatter. The `mycelium-documentation` skill in
 `skills/` does not read it at all: it asks the server for a run through
 `request_documentation`, so a skill-requested document follows whatever set the
 instance has configured.

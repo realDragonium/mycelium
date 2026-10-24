@@ -154,6 +154,15 @@ binding. Use `{slug}` in the path template, for example `docs/{slug}.md`.
 Server administrators provide bindings through `MYCELIUM_GITHUB_CREDENTIALS`;
 no credential values are stored by the browser.
 
+A writing profile can name the destinations its documents publish to
+(**Publish only to** in its editor; only an administrator changes it on an
+existing profile). Its documents can then be published only there, by
+people, agents and automatic revisions alike, and the document offers only
+those; a profile that names none publishes anywhere, as profiles saved
+before the setting existed do. This keeps an internal guide out of a public
+help site's repository. A destination's path template can lay profiles out
+side by side with `{guideline_set}`, for example `docs/{guideline_set}/{slug}.md`.
+
 Open a document, select its destination, and choose **Create / update GitHub PR**.
 Publication is explicit. Failures leave the internal document saved and can be
 retried without another AI run. Later updates preserve the recorded repository,
