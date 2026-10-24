@@ -11,7 +11,7 @@ CREATE TABLE invites (
     accepted_at TEXT,
     accepted_by TEXT REFERENCES users(id)
 );
-INSERT INTO "invites" VALUES('026e8112-e9e4-4504-ae4a-33a8152fb473','bea@example.com','writer','Oo8sWu8Jc-tR-R4hCUd8iXT6ehVX0JT2','a2fed785-51f1-4740-bbd4-9680263c8dad','2026-10-24T15:36:57.056677+00:00',NULL,NULL,NULL);
+INSERT INTO "invites" VALUES('bc2b2aa8-4968-498d-be0b-09396cbd0c64','bea@example.com','writer','7zE4NTrM2R8xhUIra5Mu0Cr0ZjCkmsiK','a06e4f03-827f-4f07-8cfa-77a3c7376302','2026-10-24T16:00:07.320882+00:00',NULL,NULL,NULL);
 CREATE TABLE mcp_tokens (
     id           TEXT PRIMARY KEY,
     user_id      TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -25,8 +25,8 @@ CREATE TABLE mcp_tokens (
     client_id    TEXT REFERENCES oauth_clients(client_id) ON DELETE SET NULL,
     expires_at   TEXT
 );
-INSERT INTO "mcp_tokens" VALUES('1baf8235-eada-4031-9721-f4a1717aef3f','a2fed785-51f1-4740-bbd4-9680263c8dad','laptop','e90881','6b0bf0fb6fbdc7df3503bab885a054ef51bd1110bd8215127afd39a231a36ba7','writer','2026-10-24T15:36:57.056647+00:00',NULL,NULL,NULL,NULL);
-INSERT INTO "mcp_tokens" VALUES('9f7a564d-98df-4e93-9b7f-0ddab0e5ebc3','a2fed785-51f1-4740-bbd4-9680263c8dad','OAuth: Claude','b72b37','e7b5efad0636bfdf705df3ddba6b993b81d770cb262e3dbc1455342bc9627ccb','admin','2026-10-24T15:36:57.056733+00:00',NULL,NULL,'client-1','2026-08-01T01:00:00+00:00');
+INSERT INTO "mcp_tokens" VALUES('b9d26ca2-0676-40a0-b92b-01dc30759b87','a06e4f03-827f-4f07-8cfa-77a3c7376302','laptop','d9f8f1','9a6bd75f8bc46471be172433a3d4a333dff17e9c34b0cf7269ce334024f33b23','writer','2026-10-24T16:00:07.320853+00:00',NULL,NULL,NULL,NULL);
+INSERT INTO "mcp_tokens" VALUES('421bf129-f619-4067-a1a4-e0d7233f3da5','a06e4f03-827f-4f07-8cfa-77a3c7376302','OAuth: Claude','50df39','3e17ae301a1ca13e6107c57839fbdb53cf508c47b4aedf1493e31907b85fd70a','admin','2026-10-24T16:00:07.320932+00:00',NULL,NULL,'client-1','2026-08-01T01:00:00+00:00');
 CREATE TABLE oauth_clients (
     client_id     TEXT PRIMARY KEY,
     client_name   TEXT,
@@ -69,7 +69,7 @@ CREATE TABLE oauth_refresh_tokens (
     expires_at TEXT NOT NULL,
     used_at    TEXT
 );
-INSERT INTO "oauth_refresh_tokens" VALUES('e70c89db5c853604405bce9ee77e86161aa3daa3bae38cdd6d7cc12d6ee2a87e','9f7a564d-98df-4e93-9b7f-0ddab0e5ebc3','2026-08-01T00:00:00+00:00','2026-08-31T00:00:00+00:00',NULL);
+INSERT INTO "oauth_refresh_tokens" VALUES('e70c89db5c853604405bce9ee77e86161aa3daa3bae38cdd6d7cc12d6ee2a87e','421bf129-f619-4067-a1a4-e0d7233f3da5','2026-08-01T00:00:00+00:00','2026-08-31T00:00:00+00:00',NULL);
 CREATE TABLE users (
     id            TEXT PRIMARY KEY,
     type          TEXT NOT NULL CHECK (type IN ('human', 'service')),
@@ -85,7 +85,7 @@ CREATE TABLE users (
     UNIQUE (oidc_issuer, oidc_subject),
     UNIQUE (email)
 );
-INSERT INTO "users" VALUES('a2fed785-51f1-4740-bbd4-9680263c8dad','human','ada@example.com','Ada','admin','active',NULL,NULL,'2026-10-24T15:36:57.056599+00:00',NULL,NULL);
+INSERT INTO "users" VALUES('a06e4f03-827f-4f07-8cfa-77a3c7376302','human','ada@example.com','Ada','admin','active',NULL,NULL,'2026-10-24T16:00:07.320809+00:00',NULL,NULL);
 CREATE INDEX mcp_tokens_user   ON mcp_tokens (user_id);
 CREATE INDEX mcp_tokens_hash   ON mcp_tokens (hash);
 CREATE INDEX mcp_tokens_client ON mcp_tokens (client_id);
