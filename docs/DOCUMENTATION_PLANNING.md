@@ -5,16 +5,18 @@ documentation**. The planner proposes which documents the profile's audience
 needs; nothing is written until you, or the profile's
 [AI reviewer](#reviewing-by-ai), approve an item. An agent with a writer or
 admin token starts the same plan over MCP with
-`request_documentation_plan(guideline_set)`.
+`request_documentation_plan(guideline_set)` and reads it, with its items,
+reviews and uncovered statements, with `get_documentation_plan(guideline_set)`.
 
 ## What the planner reads
 
-One model call per plan, through the **documentation planning** action. It has
+One model call per plan by default, through the **documentation planning**
+action (see [Large backlogs](#large-backlogs) for more). It has
 its own model (**Settings → Models**), instructions (**Settings → Prompts**) and
 limits (**Settings → Limits**: tokens, timeout, retries, how many concepts and
-key statements the overview carries, how many uncovered statements a plan
-places, how many items a plan keeps, the coverage and re-plan thresholds, and
-how many items one batch approval starts).
+key statements the overview carries, how many uncovered statements and items
+one planning call places and keeps, how many calls a plan makes, the coverage
+and re-plan thresholds, and how many items one batch approval starts).
 
 The call gets the profile's audience description, its templates, its existing
 documents (type, concept, out-of-date or not, and the opening of each), a
@@ -57,11 +59,14 @@ A statement is uncovered for a profile when its audience may see it and no
 document of the profile cites it. The plan page counts them and lists the
 first 50, capabilities and procedures and the most connected first; knowledge
 health counts them per profile. **Dismiss** one the profile should never
-document: it stops counting for that profile, and no plan is offered it.
+document: it stops counting for that profile, and no plan is offered it. The
+dismissed statements the audience may still see are listed below; **Undo
+dismissal** (`POST /api/documentation/plans/{profile}/uncovered/{statement}/restore`,
+writers and admins) counts one as uncovered again.
 
-Each plan is offered up to **Uncovered statements per plan** of them (40 by
-default), those no earlier plan of the profile was offered first, so a large
-backlog is worked through over several plans. The planner places each one a
+Each planning call is offered up to **Uncovered statements per planning call**
+of them (40 by default), those no earlier plan of the profile was offered
+first, so a large backlog is worked through over several calls or plans. The planner places each one a
 reader needs: as an `update` listing it, for the existing document it
 belongs in, or in a `create` that groups it with related statements.
 Approving an update that lists statements its document does not cite starts
@@ -75,6 +80,18 @@ that goes out of date, with the changed statements as its rationale. It can be
 approved with others; approving briefs the revision with what changed by then.
 These items stay with the profile across re-plans until the document's next
 revision.
+
+## Large backlogs
+
+**Planning calls per plan** (Settings → Limits → Documentation planning; 1 by
+default) lets one plan make more calls while statements no plan was offered
+remain. Each call gets the next batch, the same overview, and the items earlier
+calls proposed (`already_proposed`), which it does not propose again; an
+update of a document an earlier call updates adds its statements to that item.
+Each call keeps up to **Proposed documents per planning call**, and the plan
+records how many calls it made and their tokens together. While planning is
+set to External agent, each call is its own `documentation_planning` task,
+which any agent may claim.
 
 ## Reviewing
 
@@ -123,7 +140,10 @@ planning is set to External agent, a `plan_review` task
 claim. The reviewer reads the audience description, the profile's templates
 and documents, and each item with the statements it draws on that the
 audience may see. A review that fails, or an agent's that is refused too
-often, marks its items "not reviewed" for a person and is not retried.
+often, marks its items "not reviewed" for a person. When the profile retries
+failed AI work ([below](#when-ai-work-fails)), the next sweeps review those
+items again, up to the retry attempts, and then leave them for a person with
+how often the review failed.
 
 ## Planning by itself
 
@@ -140,7 +160,31 @@ while the active-run limit has room; each run is reviewed like any other.
 The sweep waits while the profile has a plan running, while its latest plan
 still has a proposed item or a run that has not finished, while the planning
 model has no credentials, and after its own last plan failed, until a person
-plans. An item whose run could not start stays proposed for a person.
+plans. An item whose run could not start stays proposed for a person, with
+the reason. When the profile retries failed AI work, both are tried again
+instead.
+
+## When AI work fails
+
+A profile's **When AI work fails** setting (its editor under **Settings →
+Documentation**) is `person` by default, also for profiles saved before it
+existed: failed AI work waits for a person, as described above. Set to `ai`,
+the maintenance sweep retries it, up to **Retry attempts for failed AI work**
+(Settings → Limits → Documentation maintenance; 2 by default), then gives up
+with a reason a person can read:
+
+| Failed work | Retried by | After the last attempt |
+|---|---|---|
+| An automatic plan | The next sweep plans again | The plan page says automatic planning gave up; it plans by itself again once someone plans |
+| A plan review | The next sweep reviews the undecided items again | The items wait for a person, with how often the review failed; they no longer hold up automatic planning |
+| A plan item whose run could not start | The next sweep starts it again | The item stays proposed with the reason; it no longer holds up automatic planning |
+| A run that wrote nothing (plan item, automatic revision, or a request) | A new run of the same request, briefed with the review's notes when the review refused it | The run shows how many automatic retries it had and the last reason |
+| An automatic revision that could not start or was cut off by a restart | The next sweep claims the revision again | The document stays out of date for someone to revise |
+| An automatic publication | The next sweep publishes again | The run shows the publication error |
+
+The plan item or automatic revision follows each retry, as it follows a
+person's **Retry**. A person's retry starts the count again. Runs that
+finished before an upgrade to this version are not retried.
 Plans, items and dismissals live with documentation runs in
 `mycelium-drafts.db` and are included in instance backups. A plan running
 when the server restarts is marked failed.

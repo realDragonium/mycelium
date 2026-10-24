@@ -100,6 +100,12 @@ nothing and was not a manual edit.
 
 Do not retry a refusal caused by missing knowledge: fill the gap first.
 
+A profile whose `recovery` is `ai` retries failed runs itself, with the notes
+when the review refused them, a bounded number of times. The run then shows
+`retry_of`, `attempt` and, once it gave up, `recovery: gave_up` with
+`recovery_note`. Do not retry such a run in parallel; retry it only after it
+gave up, and only on the operator's word.
+
 ## Revise a document
 
 1. `get_generated_document(document_id)` for `current_revision`, `stale` and
@@ -127,17 +133,21 @@ Relay the choice to the operator: keep the GitHub edits with
 The planner proposes documents for one profile's audience; nothing is
 written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
 
-1. `GET /api/documentation/plans/{guideline_set}` shows the latest plan:
+1. `get_documentation_plan(guideline_set)` over MCP (or
+   `GET /api/documentation/plans/{guideline_set}`) shows the latest plan:
    `items` (each `create` or `update`, with title, type, concept, rationale,
    priority and the statements it would draw on), `stale` (out-of-date
    documents), `coverage` (concepts with many visible statements and no
    document), `uncovered_statements` and `uncovered` (statements the
    audience may see that no document of the profile cites), and
-   `replan_hint` when enough new knowledge became visible.
+   `replan_hint` when enough new knowledge became visible. `recovery_note`,
+   an item's `start_error` and its `review.failures` say what failed AI work
+   was retried or given up, and why.
 2. To plan again, call `request_documentation_plan(guideline_set)` over MCP
-   (or `POST /api/documentation/plans/{guideline_set}`): one model call, or
-   a `documentation_planning` task for an agent while planning is set to
-   External agent. Each plan is offered a batch of the uncovered statements and
+   (or `POST /api/documentation/plans/{guideline_set}`): one model call (up
+   to the planning-calls limit for a large backlog), or a
+   `documentation_planning` task per call for an agent while planning is set
+   to External agent. Each plan is offered a batch of the uncovered statements and
    places them in updates of existing documents or in new ones; approving
    such an update briefs its revision with the statements to add. Re-planning
    is manual unless the profile's `planning` policy is `propose` or `write`
@@ -157,7 +167,9 @@ written until an item is approved (`docs/DOCUMENTATION_PLANNING.md`).
    later plans do not offer it again, and
    `POST /api/documentation/plans/{guideline_set}/uncovered/{statement_id}/dismiss`
    stops a statement the profile should never document counting as
-   uncovered. Dismiss only on the operator's word.
+   uncovered; `…/uncovered/{statement_id}/restore` undoes that (the plan's
+   `dismissed_uncovered` lists them). Dismiss or restore only on the
+   operator's word.
 
 ## Maintenance
 
@@ -175,13 +187,19 @@ enough of them were offered to no plan and leaves the items for approval,
 and `write` also starts the items' runs within the batch and active-run
 limits.
 
+A profile's `recovery` policy says who recovers failed AI work: `person` (the
+default) or `ai`, which retries failed plans, plan reviews, items that could
+not start, runs that wrote nothing and automatic publications up to the
+retry-attempts limit, then gives up with a reason. Report what gave up.
+
 ## Not here
 
 - **Publishing** a document as a GitHub pull request: call
   `deliver_document(document_id, destination, expected_revision)` only when
-  the operator asked and the document's writing profile has **Agents may
-  deliver** on; otherwise the call is refused, and the operator publishes from
-  the document (**Create / update GitHub PR**). Merging the pull request is
+  the operator asked and the document's writing profile's `delivery` is
+  `agents` or `auto`; otherwise the call is refused, and the operator publishes
+  from the document (**Create / update GitHub PR**). Under `auto` the server
+  publishes every reviewed revision itself; do not deliver it again. Merging the pull request is
   the destination repository's decision, never yours.
 - **Missing facts.** Fill them in the knowledge base, then run the request
   again.
